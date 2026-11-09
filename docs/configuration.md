@@ -27,7 +27,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
 | `--disable-exec` | `false` | Disable pod terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP `exec_pod` |
-| `--disable-helm-write` | `false` | Disable Helm write operations |
+| `--disable-helm-write` | `false` | Disable release writes, per-release source updates, values previews and `manage_helm`; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
 | `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
@@ -95,6 +95,15 @@ existing deployments are unaffected.
 ignored with `--disable-exec`, `--mcp-read-only`, or disabled MCP. The CLI
 flag overrides the config key, including `--mcp-exec-tools=false`. Helm
 operators use `mcp.execTools: true`. See [exec_pod](mcp.md#exec_pod).
+
+`--mcp-http-tools`, `"mcpHttpTools": true`, or Helm `mcp.httpTools: true` opts in
+to [curl_service](mcp.md#curl_service), independently of `exec_pod`. It defaults
+to false, needs in-cluster Radar with writable MCP, and is not affected by
+`--disable-exec`. Each call needs `get services/proxy` on the target Service, as the caller or, without auth, as Radar's ServiceAccount. The
+CLI flag overrides the config key, including `--mcp-http-tools=false`.
+Catalog-only modes omit the tool unless `--fake-in-cluster` is set.
+`/api/capabilities.mcpHttpTools` and `/api/config.effective.mcpHttpTools` report
+the effective state (older Radar versions omit them: treat absent as off), and startup logs explain a suppressed opt-in.
 
 MCP is enabled with read and write tools by default. `--no-mcp` disables all
 MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
@@ -364,6 +373,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `argoCdInsecureTls` | Skip TLS verification for argocd-server (self-signed default installs). Scoped to the Argo CD client only. |
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. Same rule as `prometheusHeaders`: requires `prometheusUrl`. |
 | `mcpExecTools` | Opt in to `exec_pod` (`--mcp-exec-tools`, default false) |
+| `mcpHttpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`, default false) |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
 

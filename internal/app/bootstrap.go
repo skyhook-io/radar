@@ -102,6 +102,7 @@ type AppConfig struct {
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
 	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -118,6 +119,7 @@ func SetGlobals(cfg AppConfig) {
 	// Init-only write, before any goroutine reads it; later reads happen under
 	// clientMu and assume no concurrent mutation.
 	k8s.ForceInCluster = cfg.FakeInCluster
+	mcppkg.SetHTTPToolsEnabled(cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster())
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
 	portforward.SetAutoDisabled(cfg.DisableAutoPortForward)
@@ -526,6 +528,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		MCP:                       &cfg.MCPEnabled,
 		MCPReadOnly:               &cfg.MCPReadOnly,
 		MCPExecTools:              &cfg.MCPExecTools,
+		MCPHTTPTools:              &cfg.MCPHTTPTools,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -590,6 +593,13 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 	mcppkg.SetExecToolsEnabled(mcpExecTools)
 	serverCfg.MCPExecTools = mcpExecTools
+	mcpHTTPTools := cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster()
+	if cfg.MCPHTTPTools && !mcpHTTPTools {
+		log.Printf("[mcp] curl_service opt-in suppressed (MCP enabled=%t, read-only=%t, in-cluster=%t)", cfg.MCPEnabled, cfg.MCPReadOnly, k8s.IsInCluster())
+	}
+	effectiveCfg.MCPHTTPTools = &mcpHTTPTools
+	mcppkg.SetHTTPToolsEnabled(mcpHTTPTools)
+	serverCfg.MCPHTTPTools = mcpHTTPTools
 	if cfg.MCPEnabled {
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP

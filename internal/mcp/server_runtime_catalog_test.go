@@ -16,6 +16,7 @@ import (
 
 func TestRuntimeCatalogUsesRequestEligibility(t *testing.T) {
 	enableExecToolsForTest(t)
+	enableHTTPToolsForTest(t)
 	defer k8s.SetTestLocalMode()()
 	t.Setenv("RADAR_CLOUD_MODE", "false")
 	existing := listRegisteredToolsWith(t, true)

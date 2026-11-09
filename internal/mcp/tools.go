@@ -391,11 +391,23 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
-			"Request values, history, operations, or " +
-			"revision comparisons with `include`; returned values are key-aware redacted. " +
+			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=versions for exact upgrade versions, include=notes for bounded untrusted notes. Request values, history, operations, or " +
+			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
+			"manage_helm merges deployed values, which may differ after failure; check history/values_diff. " +
 			"Without Helm's Secrets it returns {summary, observed}, built from the release's objects.",
-		Annotations: readOnly,
+		// include=versions contacts the release's chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "get_helm_chart",
+		Description: "List a Helm chart's versions in a configured source, newest first, before installing it; " +
+			"`latest` is the newest non-prerelease. Pass the repository and chart manage_helm install will use. " +
+			"Read live from the source; versions are what it advertises, not a check that one installs. " +
+			"For an installed release use get_helm_release include=versions.",
+		// Contacts the configured chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
+	}, logToolCall("get_helm_chart", handleGetHelmChart))
 
 	// --- Packages tool (read-only) ---
 	//
@@ -612,6 +624,14 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
 	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))
 
+	if !k8s.ForceDisableHelmWrite {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name:        "manage_helm",
+			Description: "Install/upgrade/rollback/uninstall native Helm as the caller. Install needs an exact version (get_helm_chart lists them) and configured source; refuses existing history. Upgrade can reuse a complete stored chart without a source; version omission requires latest/deployed agreement. Other upgrades need a confirmed configured source. dry_run previews upgrades (identical merge rules) and rollbacks (live takeover/retention checks; rollback claims existing objects unchecked); expected_revision checks for stale edits, not an atomic lock. Upgrade merges last deployed overrides (latest failed/superseded if none deployed). Latest get_helm_release values may differ: inspect history/values_diff after failure. Maps merge, lists replace; hidden-credential container replacement is refused unless replace_values=true replaces ALL overrides. Change GitOps dependencies in git. Uninstall without confirm previews resources; return the reviewed token to delete. Coordinate writers: Helm has no atomic revision-conditioned uninstall. Hooks may run; operations take minutes and can outlive client timeouts. Inspect get_helm_release before retrying; use wait_for for readiness. Never pass literal credentials.",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
+		}, logToolCall("manage_helm", handleManageHelm))
+	}
+
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
@@ -619,6 +639,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(requires 'replicas' parameter), 'rollback' reverts to a previous revision " +
 			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions). " +
 			"Use list_resources or get_dashboard first to identify the target. " +
+			"Roll back a native Helm release's workload as the release (manage_helm rollback where available); a workload rollback leaves Helm's record stale. " +
 			"On a Rollout, 'rollback' rewrites the pod template and so starts a new rollout that re-runs every " +
 			"canary step, pause, and analysis — to revert traffic now use manage_rollout abort, or follow the " +
 			"rollback with manage_rollout promote-full.",
@@ -718,6 +739,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 
+	if includeExec && httpToolsEnabled.Load() && k8s.IsInCluster() {
+		registerHTTPTools(server, paramRegistry, &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)})
+	}
 	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
 	if includeExec && execToolsEnabled.Load() {
 		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{

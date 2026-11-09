@@ -7,7 +7,10 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/Masterminds/semver/v3"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/repo"
 )
@@ -47,15 +50,115 @@ func (c *Client) sourceVersionsWithIndexes(source ChartSourceCandidate, chartNam
 		}
 		return capVersions(sortVersionsDesc(versions)), nil
 	}
-	lister := c.newRegistryClient()
+	tags, err := c.ociSourceTags(selected)
+	if err != nil {
+		return nil, err
+	}
+	return capVersions(sortVersionsDesc(tags)), nil
+}
+
+// ociSourceTags lists the registry's tags live; OCI has no index to cache.
+// The registry client bounds every request with ociProbeTimeout.
+func (c *Client) ociSourceTags(selected ChartSourceCandidate) ([]string, error) {
+	lister := c.ociTags
+	if lister == nil {
+		lister = c.newRegistryClient()
+	}
 	if lister == nil {
 		return nil, fmt.Errorf("%w: selected OCI registry could not be reached", errSourceUnavailable)
 	}
 	tags, err := lister.Tags(strings.TrimPrefix(selected.Reference, "oci://"))
+	if err != nil && SourceTimedOut(err) {
+		return nil, fmt.Errorf("%w: %w: could not read versions from the selected OCI source", errSourceUnavailable, errSourceTimedOut)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not read versions from the selected OCI source", errSourceUnavailable)
 	}
-	return capVersions(sortVersionsDesc(tags)), nil
+	return tags, nil
+}
+
+// ReleaseVersions lists the chart versions a configured source advertises.
+type ReleaseVersions struct {
+	Source   ChartSourceCandidate `json:"source"`
+	Versions []string             `json:"versions"` // newest first, prereleases included
+	// Latest is the newest non-prerelease version, the one Helm picks when no
+	// version is given; empty when the source offers only prereleases.
+	Latest    string `json:"latest,omitempty"`
+	Truncated bool   `json:"truncated"`
+}
+
+// freshVersionsTimeout matches the upgrade path's source fetch, so a source an
+// upgrade can read can also be listed; large indexes (Bitnami's is ~28 MB) need it.
+var freshVersionsTimeout = 30 * time.Second
+
+// FreshReleaseVersionsAsUser reads the release as the caller, then lists its
+// chart's versions from the source an upgrade would use: a freshly downloaded
+// classic index (never the local cache, which can be cold or stale) or the
+// registry's OCI tags. Unlike AvailableVersionsAsUser, which returns an empty
+// list when no source is usable, it returns an error saying why.
+func (c *Client) FreshReleaseVersionsAsUser(namespace, name string, user *pkgauth.User) (*ReleaseVersions, error) {
+	cfg, err := c.getActionConfigForUser(namespace, user)
+	if err != nil {
+		return nil, err
+	}
+	return c.freshReleaseVersionsWith(cfg, name)
+}
+
+func (c *Client) freshReleaseVersionsWith(cfg *action.Configuration, name string) (*ReleaseVersions, error) {
+	op, err := releaseReadContext(cfg, name)
+	if err != nil {
+		return nil, err
+	}
+	source, issue, message := upgradeSourceState(op)
+	if issue != "" {
+		return nil, fmt.Errorf("no usable chart source for this release: %s", message)
+	}
+	chartName := op.Latest.Chart.Metadata.Name
+	selected, err := c.exactConfiguredSource(*source, chartName)
+	if err != nil {
+		return nil, err
+	}
+	return c.freshSourceVersions(selected, chartName)
+}
+
+// ChartVersions lists the versions a source the install path accepts
+// advertises for a chart, so each can be requested with the same repository.
+// It doesn't check that a listed version downloads or installs.
+// Like the UI's chart browser, it needs no Kubernetes permission: it reads
+// only operator-configured sources.
+func (c *Client) ChartVersions(repository, chartName string) (*ReleaseVersions, error) {
+	selected, err := c.configuredInstallSource(&InstallRequest{Repository: repository, ChartName: chartName})
+	if err != nil {
+		return nil, err
+	}
+	return c.freshSourceVersions(selected, chartName)
+}
+
+// freshSourceVersions reads a selected source live: a classic index downloaded
+// within the last minute (never Radar's repository cache, which can be cold or
+// days old) or the registry's OCI tags.
+func (c *Client) freshSourceVersions(selected ChartSourceCandidate, chartName string) (*ReleaseVersions, error) {
+	var err error
+	var versions []string
+	if selected.Type == "repository" {
+		if versions, err = c.recentIndexVersions(selected, chartName); err != nil {
+			return nil, fmt.Errorf("%w: %w", errSourceUnavailable, err)
+		}
+	} else if versions, err = c.ociSourceTags(selected); err != nil {
+		return nil, err
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("the selected source lists no versions of chart %s", chartName)
+	}
+	sorted := sortVersionsDesc(versions)
+	result := &ReleaseVersions{Source: selected, Versions: capVersions(sorted), Truncated: len(sorted) > maxAvailableVersions}
+	for _, v := range sorted {
+		if parsed, err := semver.NewVersion(v); err == nil && parsed.Prerelease() == "" {
+			result.Latest = v
+			break
+		}
+	}
+	return result, nil
 }
 
 func (c *Client) sourceSuggestions(chartName, version string, recorded *ChartSourceCandidate) []ChartSourceSuggestion {

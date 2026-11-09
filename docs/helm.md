@@ -212,3 +212,16 @@ When an HTTP repository index advertises a SHA-256 checksum, Radar checks the do
 If the download does not match, refresh the repository and retry. If it still fails, contact the repository maintainer. A stale index and a changed archive can both cause a mismatch.
 
 Existing local Helm flows still accept repositories that omit checksums. Prepared installs for Cloud enrollment continue to require one. A checksum checks agreement with the index; it does not prove who published the chart. OCI pulls keep their registry digest handling. If an HTTP index lists an OCI chart URL, Radar also checks its advertised SHA-256 against the downloaded chart archive.
+
+### Agent operations
+
+External MCP clients can install, upgrade, roll back and uninstall releases with
+[`manage_helm`](mcp.md#manage_helm), as the caller and behind the same permission
+preflight as the UI. Upgrade and rollback have an advisory preview, and uninstall
+is a preview followed by a confirmation. `get_helm_release` adds the stored chart's
+defaults and schema, upgrade versions and install notes.
+
+MCP can't register sources. An MCP install needs a source already configured for
+Radar (locally, `helm repo add NAME URL`). A version change needs a confirmed
+source on the release; a same-version values change can reuse a complete stored
+chart.

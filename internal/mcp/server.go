@@ -98,7 +98,7 @@ func NewReadOnlyHandler() http.Handler {
 // preview. Removing it here enforces the boundary for every agent client.
 func newApplyServer() *mcpsdk.Server {
 	server := newServer(true, false, investigation.GeneralGuidance(true))
-	server.RemoveTools("delete_resource")
+	server.RemoveTools("delete_resource", "manage_helm")
 	excludeApplicationEvidence(server)
 	return server
 }

@@ -101,6 +101,59 @@ handoffs select this endpoint automatically. Existing client configurations
 using `/mcp` must be updated. Startup output and `/api/capabilities`
 (`mcpEnabled`, `mcpReadOnly`) describe the effective mode.
 
+## curl_service
+
+`curl_service` sends one HTTP GET to a Service from in-cluster Radar, with the
+same implementation as the UI's Service Curl button. It is off by default; enable
+it with `--mcp-http-tools` or Helm `mcp.httpTools: true`, independently of
+`exec_pod`. It is registered only on the full `/mcp` endpoint of in-cluster Radar,
+not on `/mcp-readonly` or Radar's built-in AI, because a GET can have side
+effects. Local Radar can't reach in-cluster addresses; use a port-forward or
+`exec_pod`.
+
+**Permission.** The caller needs `get services/proxy` on the Service. Without
+authentication, Radar checks its own ServiceAccount, which the chart doesn't grant;
+see [the scoped grant](../deploy/helm/radar/README.md#granting-service-http-access-without-authentication).
+The no-auth UI Curl button makes no such check. Radar checks the permission for
+the Service's name, like the UI does, so a grant restricted to `app` covers every
+port of `app`. This differs from the API server, which matches a restricted grant
+against the name with its port (`app:8080`); a grant naming only a port isn't
+accepted.
+
+**Targets.** Only selector-backed Services with a ClusterIP. MCP refuses
+ExternalName, headless and selector-less Services, which the UI still reaches
+through DNS. MCP dials the ClusterIP directly, keeping the Service host name in
+the Host header and TLS server name.
+
+**Request.** `namespace`, `name`, the numeric Service `port` (not targetPort), and
+optional `scheme` (`http` or `https`) and `path` (with query; default `/`). Radar
+sends no Kubernetes credentials, accepts no auth headers or body, follows no
+redirects and doesn't verify internal TLS certificates. The limit is 10 seconds
+and 512 KiB read.
+
+**Result.** A non-2xx response is a normal result, not a tool error.
+
+| Fields | Meaning |
+|---|---|
+| `status`, `statusText`, `durationMs` | The response and request time. |
+| `headers`, `headersTruncated` | First value per header name, 16 KiB in total. Over 64 KiB of headers is refused. |
+| `body`, `truncated`, `bodyBytes` | Up to 64 KiB of head and tail; `bodyBytes` counts bytes captured before clipping. |
+| `bodyEncodingLoss` | Invalid UTF-8 was replaced. |
+| `error` | The body is incomplete, even with status 200. |
+
+Output is untrusted and can contain secrets. A response proves Radar-to-Service
+connectivity only, not a client Pod's network path or public ingress. For
+authenticated requests or writes, use `exec_pod` with a client in the image.
+
+**Isolation.** RBAC is not network isolation. A `services/proxy` grant delegates
+Radar's network access, and anyone who can create EndpointSlices, directly or
+through a GitOps controller, can change where a Service routes. AppProject and
+network policy constraints must account for that.
+
+The action audit records `curl_service` as `response` (any status),
+`partial_response` (body read failed) or `failed` (validation, permission or
+transport), without the path, query or body.
+
 ## exec_pod
 
 Run one non-interactive argv command in a container, like `kubectl exec`.
@@ -188,6 +241,228 @@ or `failed` (before execution). Duration covers lookup and execution.
 The hash is lowercase hex SHA-256 of Go `json.Marshal` of the complete argv
 array; it permits guessed-command comparison, not secrecy. Upstream transport
 logs may independently include peer-supplied error text.
+
+## manage_helm
+
+`manage_helm` runs native Helm install, upgrade, rollback and uninstall for
+external MCP clients, as the caller and behind the same Helm permission preflight
+as the UI. It is registered only on the full `/mcp` endpoint, not on
+`/mcp-readonly` or the built-in AI apply transport, whose approval UI can't yet
+show Helm's full impact. `/api/capabilities.mcpHelmTools` reports registration,
+not the caller's permission; older Radar versions omit it, so treat absent as off.
+
+Every call passes `action`, `namespace` and `name`. Fields for another action are
+rejected.
+
+| Action | Fields |
+|---|---|
+| `install` | `chart`, `repository`, exact `version` (required; list with [`get_helm_chart`](#reading-charts-versions-and-notes)); `values` |
+| `upgrade` | `version`, `repository`, `values`, `replace_values`, `dry_run`, `expected_revision` |
+| `rollback` | `revision` (required); `dry_run`, `expected_revision` |
+| `uninstall` | `confirm` (omit to preview) |
+
+A call returns when Helm finishes, which can take minutes and run hooks.
+`state: completed` means the Helm action returned, not that workloads are ready;
+use `get_helm_release` and `wait_for`. After a timeout or disconnect, inspect the
+release before retrying.
+
+### Guards
+
+- Releases owned by a detected Flux HelmRelease are refused; change them in git.
+  Detection is cache-based and best-effort when Flux visibility is restricted.
+- Upgrade, rollback and uninstall are refused while the release is pending or
+  uninstalling. An operator recovers a stranded release with the UI or Helm CLI.
+- `expected_revision` refuses an upgrade or rollback if the latest revision
+  differs. It is not a lock, and neither is the uninstall confirmation: Helm has
+  no revision-conditioned writes, so coordinate with other release writers,
+  including Radar UI users. When two upgrades or rollbacks race for the same
+  revision, Helm's release storage accepts one; the other fails before changing
+  anything, and the error says so.
+- `values` must never contain literal credentials or redacted output;
+  `[REDACTED]` placeholders are refused. Errors are redacted, since Helm errors can
+  echo chart text or values: Helm's own errors also mask the sensitive values
+  stored in the release's revisions and those in the call's `values`.
+- A failure after Helm started may have changed resources; inspect before
+  retrying.
+
+### Sources and setup
+
+Install needs a source configured by Radar's configuration owner, and refuses any
+existing release history, including failed and uninstalled releases. It refreshes
+the index itself, so no warmed cache is needed. Each install or upgrade downloads
+its own copy for checksum verification, so several at once from a large
+repository that throttles parallel downloads can time out; the refusal applies
+nothing and says to retry. MCP can't register sources,
+confirm a release's source or create namespaces.
+
+- **Local:** `helm repo add NAME URL` in the Helm configuration Radar uses.
+- **In-cluster:** `helm.ociSources` for OCI, or an operator-mounted repository
+  config for classic repositories, plus `rbac.helm: true`. UI repository writes
+  are disabled in this mode.
+- **Radar Cloud:** source changes need the owner, and pod-local repository
+  settings are lost when the Pod is replaced. The chart rejects `helm.ociSources`
+  with `cloud.enabled`.
+
+`--disable-helm-write` removes `manage_helm` and disables Helm release writes,
+per-release source updates and values previews. Without authentication it also
+blocks global repository/OCI changes and index refresh. Signed-in global source
+management continues, but adding a repository bound to a release is refused. The
+Cloud installation flow is unaffected. In the chart, set
+`extraArgs: ["--disable-helm-write"]`.
+
+### Upgrade
+
+`values` merge on the server into the overrides of the last deployed revision (the
+latest failed or superseded one if none is deployed). Omitted map keys are kept,
+lists are replaced whole, and nulls or type changes can remove values. A partial
+override can't replace a map or list that contains a hidden credential.
+`replace_values: true` replaces all overrides; with `values: {}` it resets them.
+
+- A same-version upgrade reuses the complete stored chart and needs no source.
+  Helm doesn't store subcharts that were disabled at install, so turning one on
+  this way succeeds without adding it; enabling a subchart needs a confirmed
+  source.
+- A different version, an explicit `repository`, or a stored chart missing
+  subchart bodies needs a confirmed source on the release. `repository` only
+  asserts the saved source; it can't select a new one.
+- Omitting `version` keeps the stored version only when the latest and deployed
+  revisions use the same chart. After a failed version change, name the version or
+  roll back first.
+- A version the source doesn't have fails with a pointer to
+  [`include=versions`](#reading-charts-versions-and-notes) (`get_helm_chart` for
+  an install).
+
+**Preview.** `dry_run: true` uses the same chart selection, merge and
+caller-authorized `lookup` as execution, but writes nothing and runs no hooks. It
+returns `chartVersion`, `currentRevision`, `baselineRevision`, and:
+
+- `valuesDiff`: the redacted diff of stored overrides (16 KiB head/tail), not of
+  effective defaults. A change only to hidden values can be invisible.
+- `added`, `changed`, `removed`: resource identities by API group, kind, namespace
+  and name, so an API-version change shows in `changed`. `changed` compares whole
+  objects, so a `helm.sh/chart` label bump marks every object. Hooks are excluded,
+  and a retention policy can keep a removed resource.
+- `parseErrors`: content that couldn't be parsed, so the comparison is incomplete.
+
+Each resource list holds at most 100 items, with `Count` and `Truncated`
+companions, as in the rollback and uninstall previews. The preview doesn't check
+admission, hooks or readiness, and later lookups or random template output can
+differ. To execute, repeat the inputs with `dry_run: false`
+and `expected_revision` set to `currentRevision`. A completed upgrade returns
+`revision`, `baselineRevision` and `chartVersion`.
+
+### Rollback
+
+Take `revision` from `get_helm_release include=history`. Rollback re-applies that
+revision's stored manifest and values without re-rendering. Unlike upgrade, it
+overwrites any live object the target declares and stamps this release's
+ownership on it without checking the current owner.
+
+**Preview.** `dry_run: true` writes nothing. It returns `targetRevision`,
+`currentRevision`, the target's `chartVersion`, and:
+
+- `added`, `changed`, `removed` and `valuesDiff`: an exact comparison of the two
+  stored revisions, without hooks. `parseErrors` marks it incomplete.
+- `rollbackHooks`: the target's pre-rollback and post-rollback hooks with their
+  effective `deletePolicies` and `lastPhase` (from the hook's last run recorded in
+  that revision). A failing pre-rollback hook stops the
+  rollback. Hook contents aren't listed.
+- Live reads as the caller, for at most 100 affected objects; `liveChecked`
+  counts the reads that succeeded, including ones that found no object:
+  - `takeovers`: live objects not recorded as this release's. `owner` is the other
+    release as `namespace/name`, or empty unless the object records both the
+    release name and namespace. The message tells the agent to get approval for
+    each takeover specifically.
+  - `kept`: the part of `removed` whose live `helm.sh/resource-policy` is exactly
+    `keep`. Helm deletes the rest, except that retention is unknown for removed
+    objects in `liveUnknown`.
+  - `liveUnknown`: objects that couldn't be read (denied, kind not served, past the
+    cap).
+
+Live reads are a snapshot. To execute, repeat with `dry_run: false` and
+`expected_revision` set to `currentRevision`; rollback without `dry_run` executes
+directly. A completed rollback returns `revision`, `targetRevision` and
+`chartVersion`.
+
+### Uninstall
+
+Without `confirm`, uninstall returns a preview with `revision`, a `confirm` token
+and the release status. Pass the token back as `confirm` to execute. It expires
+after five minutes, is bound to the caller, cluster and release state, and is
+single-use: a retried confirm, such as after a client timeout, is refused. If the
+release changed, preview again.
+
+The preview follows Helm's own rules:
+
+- `resources`: the objects Helm deletes.
+- `kept`: objects whose manifest document carries `helm.sh/resource-policy`. Helm
+  reads it per document, so a List item's own annotation doesn't count, and it
+  also leaves a document whose policy has any other value.
+- `deleteHooks`: pre-delete and post-delete hooks with events, effective
+  `deletePolicies` (`before-hook-creation` when none is declared) and `lastPhase`.
+  A failing pre-delete hook stops the uninstall before anything is deleted.
+- `historyOnly: true`: the release is already uninstalled with history kept, so
+  uninstall only purges that history.
+
+History is purged once Helm has requested the deletions, even if a post-delete
+hook then fails, so rollback is impossible afterwards while deletion (finalizers)
+may still be running; the preview's `message` says so, and an error after that
+point says the release and its history are gone.
+
+The preview isn't a data-loss analysis: controller-created objects, StatefulSet
+PVCs and external data aren't listed, and hook contents aren't enumerated.
+
+### Reading charts, versions and notes
+
+- **`include=chart`** reads the stored chart; nothing is fetched. `chartContext`
+  lists up to 100 `valuePaths` (8 KiB); pass one, or any known narrower pointer,
+  as `chart_path` (a JSON pointer) for its `defaultValue` (up to 16 KiB, else
+  `valueError`), child paths and directly addressable `schema` fragment (8 KiB).
+  There is no cursor for a truncated path list. Stored defaults aren't effective
+  values: storage can omit dependency bodies and contain coalesced dependency
+  defaults, so a missing default doesn't prove a setting is unsupported. The
+  schema fragment is documentation, not a complete validation schema; no `schema`
+  and no `schemaError` means the chart stored none.
+- **`include=versions`** lists up to 50 versions an upgrade can target, newest
+  first, from the release's confirmed source (`availableVersions`: `source`,
+  `versions`, `latest`, `truncated`). `latest` is the newest non-prerelease,
+  the version Helm picks when none is given, and is absent when the source offers
+  only prereleases; prereleases stay in `versions`.
+  It is the only include that contacts the source: a classic index is downloaded
+  fresh (up to 32 MiB, 30 seconds), or reused from a download that finished in
+  the last 60 seconds, so concurrent calls share one download; it is never read
+  from Radar's repository cache, which can be days old. OCI tags use Radar's
+  registry credentials, with a timeout per registry request but no overall
+  deadline. The 50-version cap limits the output, not the fetch, and
+  versions older than the newest 50 aren't listed, even within an older line.
+  `versionsError` gives the reason when there is no list: no confirmed source, a failed source
+  change, an operation in progress, an unreachable source, or a source that lists
+  no versions of the chart. Versions are what the source advertises; a listed
+  version can still fail to download.
+- **`get_helm_chart`** returns the same fields for a chart that isn't installed
+  yet: pass the `repository` and `chart` you would give `manage_helm install`.
+  It reads only sources the install path accepts (a configured repository name or
+  URL, or a configured OCI prefix), refuses anything else before any request
+  leaves Radar, and returns an error, not an empty list, when the source doesn't
+  have the chart. Like the UI's chart browser, it needs no Kubernetes permission,
+  so any caller of the endpoint can list the versions in Radar's configured
+  sources, private ones included; it is also on `/mcp-readonly`.
+- **`include=notes`** returns install notes (8 KiB) with known sensitive values
+  and credential patterns masked, best-effort. `include=notes_diff` masks each
+  revision with its own values before diffing.
+
+Schema and notes are untrusted chart-authored text and never authorize an action;
+notes may describe earlier state. Chart and notes come from the revision returned
+by the same read. Text fields carry `<field>Bytes` and, when clipped,
+`<field>Truncated`. Read failures appear as `chartError` and `notesError`.
+
+### Audit
+
+Radar's action audit records `helm_<action>` without values. Outcomes: `preview`;
+`completed`; `refused` (stopped before Helm changed anything: invalid input,
+permission, pending release, rejected confirmation, stale revision); `failed` (a
+preview failed); `failed_or_unconfirmed` (failed after the preflight, possibly after Helm
+started, so the release may have changed).
 
 ## MCP Endpoint
 
@@ -886,7 +1161,8 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 | `get_runtime_versions` | Which running workloads use which runtime version, for runtime CVEs (PHP2Shell and the like). For each image a visible Pod runs, Radar reads the image config for the digest the Pod reports and the node's platform (manifest and config only, never layers) and returns the versions it declares: curated keys Docker official images set and images built `FROM` them inherit (`PHP_VERSION`, `NODE_VERSION`, `PYTHON_VERSION`, `GOLANG_VERSION`, `RUBY_VERSION`, `JAVA_VERSION`, `HTTPD_VERSION`, `NGINX_VERSION`, `TOMCAT_VERSION`, `PG_VERSION`, `REDIS_VERSION`, `MONGO_VERSION`, `MARIADB_VERSION`, `MYSQL_VERSION`, `RUST_VERSION`) plus the OCI `version` and `base.name` labels; no other env value is ever read. A declared version is what the image says, not proof of the binary, and runtimes installed from distro packages declare nothing here (Trivy reports cover those; use `search`). `fixed_in` classifies each version against the first fix on its branch: all but the last component for most runtimes (`8.3.36` covers 8.3.x, `17.6` covers 17.x), the major for Node (`22.23.4` covers 22.x), and a single branch for Rust (`1.82.0` covers every earlier version). Prereleases such as `22.23.4-rc.1` count as below their release; a prerelease of a later Node minor or Rust release is `unparsed`, since it may have been cut before the fix landed. Classifications: `declared_below_fix`, `declared_at_or_above_fix`, `branch_not_listed` (no fix was given for that branch, such as an end-of-life line; not a sign it is unaffected), `unparsed`. An image `status` other than `ok` (`no_declaration`, `auth_required`, `not_found`, `rate_limited`, `blocked`, `error`, `not_checked`) means unknown, not absent. `resolvedFrom: spec` or `tag` means the kubelet reported no registry digest, so the image named in the Pod spec is shown without a fix verdict; `platformAssumed` means the node's platform wasn't readable and linux/amd64 was used, so no fix verdict is emitted. Missing runtime declarations stay visible as `no_declaration`, counted as unknown; unsupported or distro version formats remain `unparsed`. Only Pods the caller may list are read. Each image is looked up with its Pods' own pull secrets one at a time, then anonymously; node registry credentials are not used, so images pulled only with node identity may remain unreadable; Radar's own registry credentials are used only when Radar runs locally with auth off. A result read with a credential is cached for that credential only, an anonymous one for everyone. Credentialed lookups require HTTPS, including token exchanges and redirects. The call returns within a 40-second lookup budget. Registry use is bounded: at most 4 lookups run at once across callers and 200 attempts per call, 429s are not retried and pause that registry for 5 minutes, configs over 1 MiB are refused, and only the registry a Pod names may sit on a private or (outside the cluster) loopback address; link-local addresses, and redirects or token endpoints elsewhere on internal addresses, are refused. Behind an HTTP proxy, HTTPS goes through a CONNECT tunnel to the checked address; requests that can't be pinned that way are refused when Radar runs in-cluster. `fixed_in` needs `runtime`. Unknown runtime names and unsupported fixed-release formats return input errors. Manifest GETs can consume registry pull quotas shared with workloads, including Docker Hub account or egress-IP limits; a cold inventory can spend multiple manifest requests per image. Transient lookup failures are cached for 30 seconds. | `namespace` (optional), `runtime` (optional, e.g. `php`), `fixed_in` (optional, comma-separated, e.g. `8.2.35,8.3.36,8.4.27,8.5.12`), `limit` (optional, default 50, max 200) |
 | `list_packages` | Installed packages (Helm releases, label-managed workloads, CRDs, Argo Applications, Flux HelmReleases + Kustomizations) with source provenance, versions, and health, in one call. Response includes `sourceLegend` for the stable source codes. | `namespace` (optional), `source` (optional: `H`/`helm`, `L`/`labels`, `C`/`crds`, `A`/`argocd`, `F`/`fluxcd`), `chart` (optional substring) |
 | `list_helm_releases` | List Helm releases with status, resource health, storage namespace, Flux ownership, current `lastOperation`, and a capped `operations` trail when Helm history indicates failed upgrades, rollback-after-failure, rollbacks, or stuck pending operations. Use this first for Helm deployment debugging. When the caller can't read all of Helm's release Secrets, it returns `{summary, releases, observed, storageDenied, objectCoverage}` instead of an array: `observed` rows come from labels and annotations on objects the caller can read, and have no status; `get_helm_release` returns one of them with its objects. See [Without access to Secrets](helm.md#without-access-to-secrets). | `namespace` (optional) |
-| `get_helm_release` | Returns the release with its owned resources, `hooks` with their outcome, `history` (the newest ten stored revisions; `include=history` returns them all) and the user-supplied `values` (redacted). Detailed Helm release info with owned resources, resource health, Flux ownership, current `lastOperation`, `operationInsight` (active/recovered state, likely resource to inspect, suggested compare), hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when still available. Use `include=history,operations` for the full Helm revision trail; `include=values` for key-aware redacted user values; `include=diff,values_diff,notes_diff,resource_diff` for revision comparison. Manifest `diff` redacts Secret values while preserving key changes; `notes_diff` uses pattern-based redaction. For releases with `storageNamespace`, pass that value as `namespace`. Without access to Helm's Secrets it returns `{summary, observed, unavailable}`: the release as its objects describe it, with no status or history (see [Without access to Secrets](helm.md#without-access-to-secrets)). | `namespace` (required: Helm storage namespace), `name` (required), `include` (optional: `values,history,operations,diff,values_diff,notes_diff,resource_diff`), `diff_revision_1` (required when `include` contains a diff token) / `diff_revision_2` (optional, defaults to current) |
+| `get_helm_release` | Returns the release with its owned resources, `hooks` with their outcome, `history` (the newest ten stored revisions; `include=history` returns them all) and the user-supplied `values` (redacted). Detailed Helm release info with owned resources, resource health, Flux ownership, current `lastOperation`, `operationInsight` (active/recovered state, likely resource to inspect, suggested compare), hooks, and failed/running hook diagnostics with live Job/Pod/Event/redacted-log evidence when still available. Use `include=history,operations` for the full Helm revision trail; `include=values` for key-aware redacted user values; `include=chart,notes,versions` for [stored chart defaults, install notes and upgrade versions](#reading-charts-versions-and-notes); `include=diff,values_diff,notes_diff,resource_diff` for revision comparison. Manifest `diff` redacts Secret values while preserving key changes; `notes_diff` uses pattern-based redaction. For releases with `storageNamespace`, pass that value as `namespace`. Without access to Helm's Secrets it returns `{summary, observed, unavailable}`: the release as its objects describe it, with no status or history (see [Without access to Secrets](helm.md#without-access-to-secrets)). | `namespace` (required: Helm storage namespace), `name` (required), `include` (optional: `chart,notes,versions,values,history,operations,diff,values_diff,notes_diff,resource_diff`), `chart_path` (optional JSON pointer with `include=chart`), `diff_revision_1` (required when `include` contains a diff token) / `diff_revision_2` (optional, defaults to current) |
+| `get_helm_chart` | [Versions of a chart in a configured source](#reading-charts-versions-and-notes) before it is installed, newest first, with the newest stable as `latest`. | `repository`, `chart` (both required) |
 | `list_namespaces` | List all namespaces with status | (none) |
 | `get_subject_permissions` | Effective RBAC permissions of a ServiceAccount / User / Group. Without `verb`/`resource`, returns the existing bindings, deduplicated flat rules, and (for SAs) Pods using it. With both fields, runs an authoritative SubjectAccessReview for a ServiceAccount and returns a focused allow/deny result; this requires the caller itself to have `create subjectaccessreviews.authorization.k8s.io`. | `kind` (required: `ServiceAccount`, `User`, or `Group`), `namespace` (required for ServiceAccount; omit for User/Group), `name` (required), `verb` + `resource` (optional pair; ServiceAccount only), `group`, `resource_namespace` (defaults to subject namespace; explicitly empty for a cluster-scoped or cluster-wide API request, not aggregation of namespace-local grants), `subresource`, `resource_name` (optional check refinements) |
 | `query_prometheus` | Execute PromQL against the cluster's Prometheus (auto-discovered or `--prometheus-url`; works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). `type=instant` returns current values; `type=range` returns time-series history with automatic step adjustment. Empty results include a bounded list of related active metric names when a metric family can be inferred. Oversized results return a label-cardinality summary + suggested `topk` rewrite instead of raw data. Backend qualifications appear in bounded `warnings` and `infos`, with `annotationsOmitted` for overflow and `partial` when stores did not all answer; common PromQL errors include corrective hints. Every response carries `selectors`, the vector selectors the query reads (metric + label matchers), with `selectorsUnknown: true` when the query could not be tokenized and its scope must be treated as unbounded. | `query` (required), `type` (optional: `instant` default, `range`), `since` (optional, e.g. `30m`, `1h`, `24h`, `7d`; default `1h`), `start` / `end` (optional RFC3339, override `since`), `step` (optional, auto-calculated when omitted), `max_points` (optional, default 300, max 600), `timeout` (optional seconds, default 30, max 180) |
@@ -1317,19 +1593,21 @@ tokens are not Secret references.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
+| `manage_helm` | [Native Helm install, upgrade, rollback and uninstall](#manage_helm), with an advisory preview for upgrade and rollback and a preview-then-confirm uninstall. | `action`, `namespace`, `name`; per action `chart`, `repository`, `version`, `values`, `replace_values`, `dry_run`, `expected_revision`, `revision`, `confirm` |
 | `apply_resource` | Create or update a Kubernetes resource from YAML. Supports multi-document YAML, per-document partial-failure results, server-side dry-run preview, and SSA ownership-conflict reporting. | `yaml` (required), `mode` (optional: `apply` or `create`, default `apply`), `dry_run` (optional, default false), `namespace` (optional, override), `verify` (optional, default true: real mutations return post-mutation state, submitted-vs-live diff, workload rollout/pods, and related issues; dry runs return a preview diff), `force` (optional, default false: take SSA field ownership from other managers) |
 | `patch_resource` | Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. Use for precise field/list edits when you know the exact path and do not want to rewrite the full manifest or take broad server-side-apply ownership. Strategic patch is for built-in Kubernetes kinds and name-keyed list edits, such as changing one container. | `kind` (required), `name` (required), `namespace` (required for namespaced resources), `group` (optional), `patch_type` (optional: `json` default, `merge`, or `strategic`), `patch` (required JSON string), `dry_run` (optional), `verify` (optional, default true: real mutations return compact post-patch state and JSON Patch field checks; dry runs return a preview diff) |
-| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
+| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, DaemonSet, or Argo Rollout. Note: `scale` is not supported for DaemonSets. Roll back a native Helm release's workload as the release with `manage_helm` rollback where it's available: rolling back the workload alone leaves Helm's record stale, and the next upgrade reapplies the old template. On a Rollout, `rollback` rewrites the pod template and therefore starts a **new** rollout that re-runs every canary step, pause, and analysis — use `manage_rollout` `abort` to revert traffic immediately, or follow the rollback with `promote-full`. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback — enumerate with `get_resource include=revisions`) |
 | `manage_rollout` | Drive an Argo Rollout's progressive delivery — the verbs with no Deployment equivalent. `abort` reverts traffic to the last stable version at once without touching spec and stays aborted until retried (the incident-response verb); `retry` clears an abort; `promote` clears the current pause to advance one step; `promote-full` skips all remaining steps, pauses, and analysis (emergency hotfix) — it waits for the controller to observe the current pod template first, so straight after a rollback it may report that the controller has not caught up, which is safe to retry; `skip-step` advances exactly one canary step (canary only). Rollback / restart / scale go through `manage_workload` with `kind=rollout`. | `action` (required: `abort`, `retry`, `promote`, `promote-full`, `skip-step`), `namespace` (required), `name` (required) |
 | `manage_cronjob` | Trigger, suspend, or resume a CronJob | `action` (required: `trigger`, `suspend`, `resume`), `namespace` (required), `name` (required) |
 | `manage_gitops` | Manage Argo CD and Flux resources — sync, refresh, terminate, suspend, resume, rollback (Argo), reconcile (Flux), reconcile-with-source (Flux) | `action` (required), `tool` (required: `argocd` or `fluxcd`), `namespace` (required), `name` (required), `kind` (FluxCD only). For `sync`: `revision` (single-source; omit to deploy the last-compared revision; a different revision is refused while auto-sync is on unless `dry_run`), `prune` (default false), `dry_run`, `force`, `apply_only`, `sync_options` (omit to use the Application's own; a list replaces them). For `rollback` (Argo only): `history_id` (required; the first history entry is 0), `prune`, `dry_run`; refused while the Application has auto-sync enabled; before Argo CD 2.12, rollback across a single-source/multi-source change or of a multi-source entry can deploy the wrong revisions or render nothing; with prune, it can delete resources. This warning applies when the current Application uses `spec.sources` too; Radar does not refuse on controller-version grounds. Per-action input validation rejects flags that don't apply to the action (e.g. `force` on `suspend`) so callers fail loudly instead of silently. |
 | `manage_node` | Cordon, uncordon, or drain a Kubernetes node. A drain waits by default until the evicted pods are deleted, and reports `outcome` as `complete`, `incomplete`, `unconfirmed` or `started`. Incomplete/unconfirmed results return `partial`: check `errors`, observed `pendingPods`, `unconfirmedPods` and `verificationError`. Expected DaemonSet, static and terminal exclusions are listed in `skippedPods` with `expectedSkip: true`; they do not prevent completion. Completion confirms required workload removal, not overall shutdown safety | `action` (required: `cordon`, `uncordon`, `drain`), `name` (required), `delete_empty_dir_data` (optional, default true), `force` (optional), `wait_for_deletion` (optional, default true), `timeout` (optional, seconds; default 2 minutes when waiting, 60 otherwise) |
 
-Optional write tool (off by default):
+Optional write tools (off by default):
 
 | Tool | Description | Parameters |
 | --- | --- | --- |
 | `exec_pod` | [One non-interactive container command](#exec_pod), enabled by `--mcp-exec-tools` | `namespace`, `name`, `command` (required argv array); `kind`, `container`, `timeout_seconds` (optional) |
+| `curl_service` | [One credential-free in-cluster Service GET](#curl_service), enabled by `--mcp-http-tools` | `namespace`, `name`, numeric `port`; optional `scheme`, `path` |
 
 ### Naming a new tool parameter
 

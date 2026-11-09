@@ -453,7 +453,8 @@ trend charts remain unavailable for Kubecost.
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
 | `disableExec` | Turn off pod exec through Radar for everyone on this cluster. See [Turning exec off](#turning-exec-off) | `false` |
-| `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires exec access. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
+| `mcp.execTools` | Opt in to `exec_pod` (`--mcp-exec-tools`); requires pods/exec. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with `--disable-exec` or `--mcp-read-only` | `false` |
+| `mcp.httpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`); requires get services/proxy. With auth off, every reachable client shares Radar’s ServiceAccount permissions. Ignored with disabled or read-only MCP; independent of exec | `false` |
 | `usageReporting.enabled` | Anonymous daily usage stats: views, actions and MCP tools used, plus this cluster's version, platform, node-count range and known integrations. Off unless `true`; Radar never asks in a cluster ([what is sent](https://radarhq.io/docs/configuration/usage-stats)) | unset |
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
@@ -596,8 +597,13 @@ Disabled by default for security:
 
 ### MCP container commands
 
-`mcp.execTools` registers `exec_pod`; `rbac.podExec` grants Radar's ServiceAccount
-exec permission. These are separate controls:
+`mcp.execTools` registers `exec_pod`, and `mcp.httpTools` independently registers
+`curl_service`; both default off. `rbac.podExec` grants Radar's ServiceAccount exec
+permission, but not the `get services/proxy` that Service GETs need on the target
+Service (as the signed-in caller, or as Radar's ServiceAccount without auth). The
+chart doesn't grant that by default; see
+[the scoped Service HTTP grant](#granting-service-http-access-without-authentication).
+The table below covers exec only:
 
 | `mcp.execTools` | `rbac.podExec` | Result |
 |---|---|---|
@@ -613,6 +619,50 @@ no SA exec rule and execution uses the forwarded caller token. The chart's SA
 rule grants `create pods/exec` (SPDY); WebSocket also needs `get pods/exec`.
 `disableExec` (`--disable-exec`), read-only mode and disabled MCP suppress registration regardless
 of either value. See [the exec contract](../../../docs/mcp.md#exec_pod).
+
+### Granting Service HTTP access without authentication
+
+For a no-auth Radar listener, enable `mcp.httpTools` and explicitly grant Radar's
+ServiceAccount `get services/proxy` on the intended target. For example, this
+namespace Role permits only the Service named `app` in `team-a`. Replace the
+ServiceAccount name and namespace with those used by your Radar installation.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: radar-service-http
+  namespace: team-a
+rules:
+  - apiGroups: [""]
+    resources: ["services/proxy"]
+    resourceNames: ["app"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: radar-service-http
+  namespace: team-a
+subjects:
+  - kind: ServiceAccount
+    name: radar
+    namespace: radar
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: radar-service-http
+```
+
+Radar checks the grant for the Service's name, so `resourceNames: ["app"]` covers
+every port of `app`; a name with a port, such as `app:8080`, isn't accepted.
+Every reachable unauthenticated MCP client shares this access; with
+authentication, each signed-in caller needs the grant instead. Prefer a namespace
+Role to `rbac.additionalRules`: those rules extend a ClusterRole, so a
+`resourceNames` restriction there matches that name in every namespace. The grant
+delegates Radar-to-Service network access; it doesn't control where a Service
+routes. On a shared cluster, constrain who can change EndpointSlices, directly or
+through GitOps controllers, and use network policy.
 
 ### Turning exec off
 
