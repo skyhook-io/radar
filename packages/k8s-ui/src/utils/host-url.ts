@@ -101,6 +101,7 @@ interface ListenerSpec {
 export interface GatewayObject {
   metadata?: { namespace?: string; name?: string }
   spec?: { listeners?: ListenerSpec[] }
+  status?: { listeners?: Array<{ name?: string; conditions?: Array<{ type?: string; status?: string }> }> }
 }
 
 export interface GatewayLookup extends GatewayRef {
@@ -126,8 +127,9 @@ function refKey(ref: ParentRef, routeNamespace: string): string {
   return [ref.namespace ?? routeNamespace, ref.name, ref.sectionName ?? '', ref.port ?? ''].join('/')
 }
 
-/** Gateway parents named in spec.parentRefs, plus those only status.parents
- * names (attachments the controller made, such as default Gateways). */
+/** Gateway parents named in spec.parentRefs. A route without any (attached to
+ * default Gateways by its controller) uses the parents its status reports;
+ * otherwise status entries can be left over from removed parents. */
 function routeParentRefs(route: any): ParentRef[] {
   const routeNamespace = route?.metadata?.namespace ?? ''
   const refs: ParentRef[] = []
@@ -139,8 +141,9 @@ function routeParentRefs(route: any): ParentRef[] {
     seen.add(key)
     refs.push(ref)
   }
-  for (const ref of route?.spec?.parentRefs ?? []) add(ref)
-  for (const parent of route?.status?.parents ?? []) add(parent?.parentRef)
+  const specRefs: ParentRef[] = route?.spec?.parentRefs ?? []
+  if (specRefs.length > 0) specRefs.forEach(add)
+  else for (const parent of route?.status?.parents ?? []) add(parent?.parentRef)
   return refs
 }
 
@@ -168,14 +171,23 @@ function listenerHostSpecificity(listenerHost: string | undefined, host: string)
   return -1
 }
 
-function listenerAdmitsRoute(listener: ListenerSpec, gatewayNamespace: string, routeNamespace: string): boolean {
+type Admission = 'yes' | 'no' | 'maybe'
+
+function listenerAdmitsRoute(listener: ListenerSpec, gatewayNamespace: string, routeNamespace: string): Admission {
   const kinds = listener.allowedRoutes?.kinds
   if (kinds && kinds.length > 0 && !kinds.some(k => (k.group ?? GATEWAY_GROUP) === GATEWAY_GROUP && k.kind === 'HTTPRoute')) {
-    return false
+    return 'no'
   }
-  // A Selector depends on namespace labels Radar doesn't read here; it counts as admitting.
   const from = listener.allowedRoutes?.namespaces?.from ?? 'Same'
-  return from !== 'Same' || gatewayNamespace === routeNamespace
+  if (from === 'All') return 'yes'
+  if (from === 'Same') return gatewayNamespace === routeNamespace ? 'yes' : 'no'
+  // Selector: depends on namespace labels Radar doesn't read here.
+  return 'maybe'
+}
+
+function listenerRejected(gateway: GatewayObject, name: string | undefined): boolean {
+  const status = (gateway.status?.listeners ?? []).find(l => l.name === name)
+  return (status?.conditions ?? []).some(c => c.type === 'Accepted' && c.status === 'False')
 }
 
 function routeRejectedBy(route: any, ref: ParentRef, routeNamespace: string): boolean {
@@ -186,20 +198,26 @@ function routeRejectedBy(route: any, ref: ParentRef, routeNamespace: string): bo
     && (p.conditions ?? []).some((c: any) => c.type === 'Accepted' && c.status === 'False'))
 }
 
-function routeLiteralPaths(route: any): { literals: string[]; servesRoot: boolean } {
+// Gateway API Exact and PathPrefix values are literal paths, never patterns.
+const GATEWAY_PATH = /^\/[\x21-\x7e]*$/
+
+/** Paths a browser's plain GET reaches. A match that needs another method, a
+ * header or a query parameter isn't one. */
+function routeBrowserPaths(route: any): { literals: string[]; servesRoot: boolean } {
   const literals: string[] = []
   let servesRoot = false
   for (const rule of route?.spec?.rules ?? []) {
     const matches = rule?.matches ?? []
     if (matches.length === 0) servesRoot = true
     for (const match of matches) {
+      if ((match?.method && match.method !== 'GET') || match?.headers?.length || match?.queryParams?.length) continue
       if (!match?.path) {
         servesRoot = true
         continue
       }
       const type = match.path.type ?? 'PathPrefix'
-      const value = match.path.value ?? '/'
-      if ((type === 'PathPrefix' || type === 'Exact') && LITERAL_PATH.test(value)) literals.push(value)
+      const value: string = match.path.value ?? '/'
+      if ((type === 'PathPrefix' || type === 'Exact') && GATEWAY_PATH.test(value) && !/[?#]/.test(value)) literals.push(value)
     }
   }
   return { literals, servesRoot }
@@ -214,8 +232,9 @@ function pickPort(listeners: ListenerSpec[], preferred: number): number {
  * What to offer for an HTTPRoute hostname, or null for an empty or wildcard
  * hostname. The scheme comes from the Gateway listeners the route can attach
  * to and that would serve this host: https when any of them is HTTPS. When a
- * Gateway can't be read and none of the others has an HTTPS listener for the
- * host, the scheme is unknown and only the hostname is offered.
+ * Gateway can't be read, or a listener admits the route only through a
+ * namespace selector, and no certain HTTPS listener was found, the scheme is
+ * unknown and only the hostname is offered.
  */
 export function routeHostTarget(hostname: string | undefined | null, route: any, gateways: GatewayLookup[] | undefined): HostTarget | null {
   const host = normalizeHost(hostname)
@@ -226,7 +245,7 @@ export function routeHostTarget(hostname: string | undefined | null, route: any,
 
   const lookups = new Map(gateways.map(g => [`${g.namespace}/${g.name}`, g]))
   let unread = false
-  const candidates: ListenerSpec[] = []
+  const candidates: Array<ListenerSpec & { admission: Admission }> = []
   for (const ref of refs) {
     const namespace = ref.namespace ?? routeNamespace
     const lookup = lookups.get(`${namespace}/${ref.name}`)
@@ -236,12 +255,13 @@ export function routeHostTarget(hostname: string | undefined | null, route: any,
       continue
     }
     if (routeRejectedBy(route, ref, routeNamespace)) continue
-    const listeners = lookup.gateway.spec?.listeners ?? []
+    const gateway = lookup.gateway
+    const listeners = (gateway.spec?.listeners ?? []).filter(l => !listenerRejected(gateway, l.name))
     const attached = listeners.filter(l =>
       (!ref.sectionName || l.name === ref.sectionName)
       && (ref.port === undefined || Number(l.port) === Number(ref.port))
       && (l.protocol === 'HTTP' || l.protocol === 'HTTPS')
-      && listenerAdmitsRoute(l, namespace, routeNamespace)
+      && listenerAdmitsRoute(l, namespace, routeNamespace) !== 'no'
       && listenerHostSpecificity(l.hostname, host) >= 0)
     // A request goes to the most specific listener on its port; a route on a
     // less specific one never sees this host there.
@@ -251,22 +271,24 @@ export function routeHostTarget(hostname: string | undefined | null, route: any,
         !attached.includes(other)
         && Number(other.port) === Number(l.port)
         && listenerHostSpecificity(other.hostname, host) > mine)
-      if (!shadowed) candidates.push(l)
+      if (!shadowed) candidates.push({ ...l, admission: listenerAdmitsRoute(l, namespace, routeNamespace) })
     }
   }
 
-  const https = candidates.filter(l => l.protocol === 'HTTPS')
-  const http = candidates.filter(l => l.protocol === 'HTTP')
+  const sure = (protocol: string) => candidates.filter(l => l.protocol === protocol && l.admission === 'yes')
+  const unsure = (protocol: string) => candidates.some(l => l.protocol === protocol && l.admission === 'maybe')
+  const https = sure('HTTPS')
+  const http = sure('HTTP')
   let origin: string
   if (https.length > 0) {
     const port = pickPort(https, 443)
     origin = `https://${host}${port === 443 ? '' : `:${port}`}`
-  } else if (!unread && http.length > 0) {
+  } else if (!unread && !unsure('HTTPS') && http.length > 0) {
     const port = pickPort(http, 80)
     origin = `http://${host}${port === 80 ? '' : `:${port}`}`
   } else {
     return { kind: 'hostname', hostname: host }
   }
-  const { literals, servesRoot } = routeLiteralPaths(route)
+  const { literals, servesRoot } = routeBrowserPaths(route)
   return { kind: 'url', url: `${origin}${choosePath(literals, servesRoot)}` }
 }

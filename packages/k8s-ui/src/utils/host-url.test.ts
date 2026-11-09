@@ -121,6 +121,43 @@ describe('routeHostTarget', () => {
     expect(routeHostTarget('store.example.com', route([]), [])).toEqual({ kind: 'hostname', hostname: 'store.example.com' })
   })
 
+  it('treats a namespace selector as unknown admission', () => {
+    const r = route([{ name: 'edge', namespace: 'infra' }])
+    const g = gw('infra', 'edge', [
+      listener('http', 'HTTP', 80, { allowedRoutes: { namespaces: { from: 'All' } } }),
+      listener('https', 'HTTPS', 443, { allowedRoutes: { namespaces: { from: 'Selector' } } }),
+    ])
+    expect(routeHostTarget('store.example.com', r, [g])).toEqual({ kind: 'hostname', hostname: 'store.example.com' })
+  })
+
+  it('ignores a listener the Gateway rejected', () => {
+    const g = gw('shop', 'main', [listener('http', 'HTTP', 80), listener('https', 'HTTPS', 443)])
+    g.gateway!.status = { listeners: [{ name: 'https', conditions: [{ type: 'Accepted', status: 'False' }] }] }
+    expect(routeHostTarget('store.example.com', route([{ name: 'main' }]), [g])).toEqual({ kind: 'url', url: 'http://store.example.com' })
+  })
+
+  it('ignores a leftover status parent the spec no longer names', () => {
+    const r = route([{ name: 'plain' }], { status: { parents: [{ parentRef: { name: 'old' }, conditions: [{ type: 'Accepted', status: 'True' }] }] } })
+    const plain = gw('shop', 'plain', [listener('http', 'HTTP', 80)])
+    const old = gw('shop', 'old', [listener('https', 'HTTPS', 443)])
+    expect(routeHostTarget('store.example.com', r, [plain, old])).toEqual({ kind: 'url', url: 'http://store.example.com' })
+  })
+
+  it('keeps literal Gateway paths and skips matches a browser GET cannot reach', () => {
+    const plus = route([{ name: 'main' }], { rules: [{ matches: [{ path: { type: 'Exact', value: '/foo+bar' } }] }] })
+    expect(routeHostTarget('store.example.com', plus, [bothListeners])).toEqual({ kind: 'url', url: 'https://store.example.com/foo+bar' })
+    const post = route([{ name: 'main' }], { rules: [
+      { matches: [{ path: { type: 'Exact', value: '/' }, method: 'POST' }] },
+      { matches: [{ path: { type: 'Exact', value: '/admin' }, method: 'GET' }] },
+    ] })
+    expect(routeHostTarget('store.example.com', post, [bothListeners])).toEqual({ kind: 'url', url: 'https://store.example.com/admin' })
+    const header = route([{ name: 'main' }], { rules: [
+      { matches: [{ headers: [{ name: 'x-canary', value: '1' }] }] },
+      { matches: [{ path: { type: 'PathPrefix', value: '/shop' } }] },
+    ] })
+    expect(routeHostTarget('store.example.com', header, [bothListeners])).toEqual({ kind: 'url', url: 'https://store.example.com/shop' })
+  })
+
   it('waits while a parent Gateway is loading', () => {
     expect(routeHostTarget('store.example.com', route([{ name: 'main' }]), [{ namespace: 'shop', name: 'main', status: 'loading' }])).toEqual({ kind: 'loading' })
   })
@@ -141,16 +178,20 @@ describe('routeHostTarget', () => {
 })
 
 describe('routeGateways', () => {
-  it('reads Gateway parents from spec and status, ignoring other parent kinds', () => {
+  it('reads Gateway parents from spec, ignoring other parent kinds and leftover status entries', () => {
     const r = {
       metadata: { namespace: 'shop' },
       spec: { parentRefs: [{ name: 'main' }, { name: 'main', sectionName: 'https' }, { name: 'edge', namespace: 'infra' }, { name: 'svc', group: '', kind: 'Service' }] },
-      status: { parents: [{ parentRef: { name: 'default-gw', namespace: 'gw-system' } }] },
+      status: { parents: [{ parentRef: { name: 'old-gw', namespace: 'gw-system' } }] },
     }
     expect(routeGateways(r)).toEqual([
       { namespace: 'shop', name: 'main' },
       { namespace: 'infra', name: 'edge' },
-      { namespace: 'gw-system', name: 'default-gw' },
     ])
+  })
+
+  it('uses status parents for a route without parentRefs', () => {
+    const r = { metadata: { namespace: 'shop' }, spec: {}, status: { parents: [{ parentRef: { name: 'default-gw', namespace: 'gw-system' } }] } }
+    expect(routeGateways(r)).toEqual([{ namespace: 'gw-system', name: 'default-gw' }])
   })
 })
