@@ -91,6 +91,22 @@ func TestParseMessageWholeEmptyAndIgnoredVariants(t *testing.T) {
 	}
 }
 
+// Volcano frames its verdict differently, and its gang-scheduling message is
+// not a list of node clauses.
+func TestParseMessageVolcano(t *testing.T) {
+	total, reasons := ParseMessage("Node: 0/21 nodes are unavailable: 1 Insufficient cpu, 16 node(s) didn't match Pod's node affinity/selector, 4 Insufficient pods.")
+	if total != 21 || len(reasons) != 3 {
+		t.Fatalf("Volcano node verdict = %d/%+v, want 21 nodes and three reasons", total, reasons)
+	}
+	if reasons[0].Class != InsufficientResource || reasons[0].Resource != "cpu" || reasons[0].NodeCount != 1 {
+		t.Errorf("first clause lost its count: %+v", reasons[0])
+	}
+	gang := "pod group is not ready, 1 Pending, 1 minAvailable; Pending: 1 Unschedulable"
+	if total, reasons := ParseMessage(gang); total != 0 || len(reasons) != 1 || reasons[0] != (Reason{Class: Other, Raw: gang}) {
+		t.Errorf("gang message = %d/%+v, want it whole, as one unclassified reason", total, reasons)
+	}
+}
+
 func TestParseTaint(t *testing.T) {
 	tests := []struct {
 		clause, key, value string

@@ -33,7 +33,9 @@ type Reason struct {
 }
 
 var (
-	nodesAvailablePattern = regexp.MustCompile(`(\d+)/(\d+)\s+nodes? are available`)
+	// kube-scheduler says "0/5 nodes are available:"; Volcano says
+	// "Node: 0/5 nodes are unavailable:".
+	nodesAvailablePattern = regexp.MustCompile(`(\d+)/(\d+)\s+nodes? are (?:un)?available`)
 	leadingCountPattern   = regexp.MustCompile(`^\s*(\d+)\s+`)
 	insufficientPattern   = regexp.MustCompile(`Insufficient\s+([A-Za-z0-9./_-]+)`)
 	taintPattern          = regexp.MustCompile(`\{([^}]*)\}`)
@@ -51,14 +53,24 @@ func ParseMessage(message string) (totalNodes int, reasons []Reason) {
 		message = before
 	}
 
-	if match := nodesAvailablePattern.FindStringSubmatch(message); match != nil {
-		totalNodes, _ = strconv.Atoi(match[2])
+	match := nodesAvailablePattern.FindStringSubmatchIndex(message)
+	if match == nil {
+		// Without the per-node frame the message is one statement, not a list
+		// of node clauses: Volcano's gang-scheduling "pod group is not ready,
+		// 1 Pending, …; Pending: 1 Unschedulable" says nothing about nodes.
+		whole := NormalizeClause(message)
+		if IsIgnoredClause(whole) {
+			return 0, nil
+		}
+		if reason, ok := classifyClause(whole); ok && reason.Class == VolumeBinding {
+			return 0, []Reason{reason}
+		}
+		return 0, []Reason{{Class: Other, Raw: whole}}
 	}
+	totalNodes, _ = strconv.Atoi(message[match[4]:match[5]])
 
-	clauses := message
-	if _, rest, ok := strings.Cut(message, ":"); ok {
-		clauses = rest
-	}
+	clauses := message[match[1]:]
+	clauses = strings.TrimPrefix(strings.TrimSpace(clauses), ":")
 	clauses = strings.TrimRight(strings.TrimSpace(clauses), ".")
 	if clauses == "" {
 		return totalNodes, nil
