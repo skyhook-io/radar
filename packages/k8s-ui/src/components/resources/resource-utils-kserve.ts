@@ -23,10 +23,23 @@ function truncateMiddle(value: string, max = 44): string {
 // KSERVE INFERENCESERVICE UTILITIES
 // ============================================================================
 
-// KServe sets Stopped=True when a model's owner stops it: it isn't serving, by
-// choice. That is a state, not a failure.
+const READINESS_CONDITIONS = ['Ready', 'PredictorReady', 'TransformerReady', 'ExplainerReady', 'CanaryPredictorReady']
+
+// The owner asked KServe to stop the model (the serving.kserve.io/stop
+// annotation) and KServe reports it stopped. Mirrors the server's Issues rule.
+export function isInferenceServiceStopRequested(resource: any): boolean {
+  return String(resource?.metadata?.annotations?.['serving.kserve.io/stop'] ?? '').toLowerCase() === 'true' &&
+    findCondition(resource, 'Stopped')?.status === 'True'
+}
+
+// Not serving by choice, with no readiness failure of its own: a state, not an
+// outage. A failed resume can keep Stopped=True while a component reports a
+// real error, so that error must still show.
 export function isInferenceServiceStopped(resource: any): boolean {
-  return findCondition(resource, 'Stopped')?.status === 'True'
+  return isInferenceServiceStopRequested(resource) && READINESS_CONDITIONS.every((type) => {
+    const c = findCondition(resource, type)
+    return c?.status !== 'False' || c.reason === 'Stopped'
+  })
 }
 
 export function getInferenceServiceStatus(resource: any): StatusBadge {

@@ -3,6 +3,7 @@ import { renderToString } from 'react-dom/server'
 import { GenericRenderer, genericConditionTone } from './GenericRenderer'
 
 const resource = { apiVersion: 'serving.kserve.io/v1beta1', kind: 'InferenceService', metadata: { name: 'fraud-score' } }
+const stopRequested = { ...resource, metadata: { ...resource.metadata, annotations: { 'serving.kserve.io/stop': 'true' } } }
 const cond = (type: string, status: string) => ({ type, status })
 
 describe('genericConditionTone', () => {
@@ -23,11 +24,13 @@ describe('genericConditionTone', () => {
   })
 
   it('follows a deliberate stop on readiness that is False because of it', () => {
-    const stopped = { ...resource, status: { conditions: [cond('Stopped', 'True')] } }
+    const stopped = { ...stopRequested, status: { conditions: [cond('Stopped', 'True')] } }
     const stoppedReady = { type: 'Ready', status: 'False', reason: 'Stopped' }
     expect(genericConditionTone(stopped, stoppedReady)).toBe('neutral')
     expect(genericConditionTone(stopped, { type: 'Ready', status: 'False', reason: 'MinimumReplicasUnavailable' })).toBe('fail')
     expect(genericConditionTone(resource, stoppedReady)).toBe('fail')
+    const unrequested = { ...resource, status: { conditions: [cond('Stopped', 'True')] } }
+    expect(genericConditionTone(unrequested, stoppedReady)).toBe('fail')
   })
 
   it('reads Stopped as a state only on KServe resources', () => {
@@ -38,8 +41,8 @@ describe('genericConditionTone', () => {
 })
 
 describe('GenericRenderer conditions', () => {
-  const render = (conditions: object[]) =>
-    renderToString(<GenericRenderer data={{ ...resource, status: { conditions } }} />)
+  const render = (conditions: object[], base: object = resource) =>
+    renderToString(<GenericRenderer data={{ ...base, status: { conditions } }} />)
   const chipClass = (html: string, type: string, status: string) => {
     const at = html.indexOf(`>${type}<`)
     const chip = html.slice(at).match(/<span class="([^"]*badge-sm[^"]*)">([^<]*)</)
@@ -53,10 +56,16 @@ describe('GenericRenderer conditions', () => {
   })
 
   it('shows a deliberately stopped model as stopped, not failed', () => {
-    const html = render([cond('Stopped', 'True'), { type: 'Ready', status: 'False', reason: 'Stopped' }])
+    const html = render([cond('Stopped', 'True'), { type: 'Ready', status: 'False', reason: 'Stopped' }], stopRequested)
     expect(html).toContain("This model is stopped and isn&#x27;t serving requests.")
     expect(html).not.toContain('bg-red-500/10')
     expect(chipClass(html, 'Ready', 'False')).not.toContain('status-red')
+  })
+
+  it("doesn't call a failed resume stopped", () => {
+    const html = render([cond('Stopped', 'True'), { type: 'PredictorReady', status: 'False', reason: 'ReconcileFailed' }, { type: 'Ready', status: 'False', reason: 'Stopped' }], stopRequested)
+    expect(html).not.toContain('isn&#x27;t serving requests')
+    expect(chipClass(html, 'PredictorReady', 'False')).toContain('status-red')
   })
 
   it('keeps a failed positive condition red', () => {

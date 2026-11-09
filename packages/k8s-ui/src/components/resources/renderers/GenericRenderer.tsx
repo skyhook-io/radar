@@ -5,7 +5,7 @@ import { Section, PropertyList, Property, isInvertedPolarityCondition } from '..
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
 import { isApiGroup } from '../resource-utils-cnpg'
-import { getInferenceServiceStatus, isInferenceServiceStopped } from '../resource-utils-kserve'
+import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
@@ -339,7 +339,7 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
 function isKServeStopState(resource: any, cond: any): boolean {
   if (!isApiGroup(resource?.apiVersion, 'serving.kserve.io')) return false
   if (cond.type === 'Stopped') return true
-  return cond.status === 'False' && cond.reason === 'Stopped' && isInferenceServiceStopped(resource)
+  return cond.status === 'False' && cond.reason === 'Stopped' && isInferenceServiceStopRequested(resource)
 }
 const WARNING_CONDITION_TYPES = new Set(['Degraded', 'Warning', 'ScalingLimited'])
 const POSITIVE_CONDITION_TYPES = new Set(['Ready', 'Available', 'Healthy', 'Initialized', 'Complete'])

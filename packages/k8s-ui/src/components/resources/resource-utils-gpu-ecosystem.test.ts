@@ -120,12 +120,19 @@ describe('GPU ecosystem API contracts', () => {
     }).text).toBe('Invalid spec')
   })
 
-  it('shows a deliberately stopped InferenceService as a neutral state, after load failures', () => {
+  it('shows a deliberately stopped InferenceService as a neutral state, unless something else failed', () => {
+    const metadata = { annotations: { 'serving.kserve.io/stop': 'true' } }
     const stopped = [{ type: 'Stopped', status: 'True' }, { type: 'Ready', status: 'False', reason: 'Stopped' }]
-    expect(getInferenceServiceStatus({ status: { conditions: stopped } })).toMatchObject({ text: 'Stopped', level: 'neutral' })
+    expect(getInferenceServiceStatus({ metadata, status: { conditions: stopped } })).toMatchObject({ text: 'Stopped', level: 'neutral' })
     expect(getInferenceServiceStatus({
-      status: { conditions: stopped, modelStatus: { transitionStatus: 'BlockedByFailedLoad' } },
+      metadata, status: { conditions: stopped, modelStatus: { transitionStatus: 'BlockedByFailedLoad' } },
     }).text).toBe('Load failed')
+    // A resume that failed: still Stopped=True, but a component reports its own error.
+    expect(getInferenceServiceStatus({
+      metadata, status: { conditions: [...stopped, { type: 'PredictorReady', status: 'False', reason: 'ReconcileFailed' }] },
+    }).level).not.toBe('neutral')
+    // The stop annotation was removed: not an intentional stop any more.
+    expect(getInferenceServiceStatus({ status: { conditions: stopped } }).level).not.toBe('neutral')
   })
 
   it('reads the inline replicas field in both served LLMInferenceService versions', () => {
