@@ -600,12 +600,13 @@ func unschedulableAction(reasons []SchedulingReason, sc schedulingContext) strin
 		// never matched against it, so they may be the pod's targets. A clause
 		// Radar can't classify (such as a DRA claim failure) could be the real
 		// blocker on the matching nodes, so it gets the general advice instead.
-		if !unclassified {
-			if early := dominantReason(reasons, func(r SchedulingReason) bool {
-				return !schedAfterNodeAffinity[r.Class] && r.Class != SchedNodeAffinitySelector
-			}); early != nil {
-				return moreThan(2, "Some nodes were rejected before the nodeSelector/affinity check. If they're the pod's target nodes, "+targetNodesAction(*early)+" Otherwise, "+lowerFirst(actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector})))
-			}
+		if unclassified {
+			return ""
+		}
+		if early := dominantReason(reasons, func(r SchedulingReason) bool {
+			return !schedAfterNodeAffinity[r.Class] && r.Class != SchedNodeAffinitySelector
+		}); early != nil {
+			return moreThan(2, "Some nodes were rejected before the nodeSelector/affinity check. If they're the pod's target nodes, "+targetNodesAction(*early)+" Otherwise, "+lowerFirst(actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector})))
 		}
 	}
 	base := dominantAction(reasons, func(SchedulingReason) bool { return true })

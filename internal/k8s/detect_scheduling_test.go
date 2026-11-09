@@ -647,8 +647,11 @@ func TestUnschedulableActionEdgeCases(t *testing.T) {
 	// An unclassified clause (a DRA claim failure) may be the matching nodes'
 	// blocker, so the taint branch must not claim the answer.
 	dra := []SchedulingReason{{Class: SchedNodeAffinitySelector, NodeCount: 10}, {Class: SchedOther, NodeCount: 2}, {Class: SchedUntoleratedTaint, NodeCount: 3}}
-	if got := unschedulableAction(dra, sc); hasSubstr(got, "If they're the pod's target nodes") {
+	if got := unschedulableAction(dra, sc); got != "" {
 		t.Errorf("unclassified count should fall back to general advice: %q", got)
+	}
+	if _, action := diagnoseUnschedulable(&corev1.Pod{}, "0/15 nodes are available: 10 node(s) didn't match Pod's node affinity/selector, 2 cannot allocate all claims, 3 node(s) had untolerated taint(s).", nil); action != genericUnschedulableAction {
+		t.Errorf("want the general next step, got %q", action)
 	}
 	gke := &corev1.Pod{Spec: corev1.PodSpec{SchedulerName: "gke.io/optimize-utilization-scheduler"}}
 	if !usesDefaultScheduler(gke) {
