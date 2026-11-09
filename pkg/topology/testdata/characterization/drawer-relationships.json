@@ -5058,15 +5058,29 @@
           "unreadable": 1
         },
         "manager": {
-          "state": "claimed",
-          "lead": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+          "state": "agree",
+          "lead": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
           "direct": {
             "object": {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
             "claims": [
               {
                 "manager": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
                 "source": "flux-kustomize-labels",
-                "check": "omitted"
+                "check": "omitted",
+                "weak": true
+              }
+            ]
+          },
+          "via": {
+            "object": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+            "recorders": [
+              {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+            ],
+            "claims": [
+              {
+                "manager": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+                "source": "flux-kustomize-labels",
+                "check": "recorded"
               }
             ]
           }

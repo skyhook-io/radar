@@ -30,7 +30,7 @@ and scope; it never proves that no external controller or writer exists.
 | Where to inspect a list row or search hit next | `summaryContext.managedBy` | One controller-first lead, with `source` identifying its evidence and `omitted` qualifying incomplete reads. See [selection rules](#the-top-controller). |
 | Source hints for request changes | rightsizing `managedBy: {tool, signal}` | Controller owner, GitOps/Helm metadata, `addonmanager` mode ([rightsizing](mcp.md#managedby--source-hints-for-request-changes)) |
 
-The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager". The Applications view's `sourceRef` is each workload's `View.Manager` lead under the summary rules below, read with Radar's own access because its rows are shared by every caller with the same namespaces. A row whose workloads don't all lead to one source, without two of them leading to different ones, takes the single Argo CD Application or Flux Kustomization whose list names every workload in it, if there is one.
+The four `managedBy` fields answer different questions; read `manager` for "which GitOps manager". The Applications view's `sourceRef` is each workload's `View.Manager` lead under the summary rules below, read with Radar's own access because its rows are shared by every caller with the same namespaces. Each response then withholds a GitOps source, with the delivery state read from it, from a caller who can't get that Application, Kustomization or HelmRelease. A row whose workloads don't all lead to one source, without two of them leading to different ones, takes the single Argo CD Application or Flux Kustomization whose list names every workload in it, if there is one.
 
 Topology draws a manages edge from a GitOps manager to what its status records: an Application's `status.resources`, a Kustomization's or HelmRelease's inventory. A HelmRelease that records no inventory draws them by the same origin-label rule the resource tree uses.
 
@@ -87,9 +87,9 @@ characters names the tracking ID's Application.
 
 When the object's evidence doesn't settle it, the walk follows the controller chain (Pod → ReplicaSet → Deployment) to
 the nearest ancestor whose evidence does: **via**. Weak claims don't stop the walk: copied ones, and metadata a
-controller-owned object inherits (an instance label from its template, Helm annotations from its Deployment). If nothing
-settles it and the object makes no claim of its own, the nearest ancestor claim answers as **via**, **claimed**; other
-claims on the way stay in **between**. A walk that can't follow an owner says so (**stop**), and a manager the request
+controller-owned object inherits (an instance label from its template, Helm annotations from its Deployment, Flux
+origin labels copied from its controller). If nothing settles it and the object makes no claim of its own, the nearest
+ancestor claim answers as **via**, **claimed**; other claims on the way stay in **between**. A walk that can't follow an owner says so (**stop**), and a manager the request
 read differently earlier (still loading, or another incarnation) leaves the answer incomplete.
 
 On the wire (`relationships.ownership.manager`) the answer carries the state and the evidence that answered. Which

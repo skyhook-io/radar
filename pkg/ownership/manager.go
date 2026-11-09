@@ -261,9 +261,16 @@ func (v *View) managerEvidence(ref resourceid.Ref) ManagerEvidence {
 }
 
 // inherited reports whether a claim from source is metadata a controller
-// copies onto the objects it creates.
+// copies onto the objects it creates. Flux stamps its origin labels on what it
+// applies, and controllers copy labels from their own metadata or template, so
+// on a controller-owned object they name its ancestor's manager, which may not
+// be the nearest one.
 func inherited(source gitops.ClaimSource) bool {
-	return source == gitops.ClaimArgoInstanceLabel || source == gitops.ClaimHelmRelease
+	switch source {
+	case gitops.ClaimArgoInstanceLabel, gitops.ClaimHelmRelease, gitops.ClaimFluxKustomization, gitops.ClaimFluxHelmRelease:
+		return true
+	}
+	return false
 }
 
 func (v *View) checkClaim(claimed resourceid.Ref, recorders []resourceid.Ref, found RecordingManagersAnswer) ClaimCheck {
