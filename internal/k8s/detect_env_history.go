@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,7 +62,11 @@ type StaleSecretEnvCheck struct {
 	AffectedPods       int
 	ContainerStartedAt time.Time
 	SecretChangedAt    time.Time
-	Message            string
+	// OrderOnly is set when every change Radar observed to the key since the
+	// container started only reordered the value's comma-separated entries,
+	// and Radar's history covers that whole time.
+	OrderOnly bool
+	Message   string
 }
 
 const (
@@ -260,7 +265,7 @@ func groupStaleSecretEnvChecks(checks []StaleSecretEnvCheck) []StaleSecretEnvChe
 	for _, check := range checks {
 		key := check.Namespace + "\x00" + check.Container + "\x00" + check.EnvName + "\x00" +
 			check.ReferenceKind + "\x00" + check.EvidenceSource + "\x00" + check.Prefix + "\x00" +
-			check.SecretName + "\x00" + check.Key
+			check.SecretName + "\x00" + check.Key + "\x00" + strconv.FormatBool(check.OrderOnly)
 		current := byKey[key]
 		if current == nil {
 			current = &group{check: check, pods: make(map[string]bool)}
@@ -380,8 +385,8 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			Age:               timeutil.FormatAgeShort(now.Sub(pod.CreationTimestamp.Time)),
 			AgeSeconds:        int64(now.Sub(pod.CreationTimestamp.Time).Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
-			Cause:             "A running container that references a Secret key in its environment started before Radar observed that key change.",
-			Action:            "Restart the pod so its containers re-read Secret-backed environment variables.",
+			Cause:             staleSecretEnvNotReadyCause(issueChecks),
+			Action:            staleSecretEnvNotReadyAction(issueChecks),
 			RequiredReads:     secretReads(pod.Namespace),
 			Degraded: staleSecretEnvDegraded(
 				"A not-Ready container may be running stale Secret-backed environment values; restart the pod to refresh them.",
@@ -424,12 +429,12 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			Reason:        "StaleSecretEnv",
 			Message:       staleSecretEnvReadyDetectionMessage(group.subject, currentChecks),
 			Fingerprint:   "stale-secret-env",
-			Cause:         "Radar observed Secret keys referenced by these Ready containers' environment change after the containers started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
-			Action:        staleSecretEnvReadyAction(group.subject),
+			Cause:         staleSecretEnvReadyCause(currentChecks),
+			Action:        staleSecretEnvReadyAction(group.subject, currentChecks),
 			RequiredReads: secretReads(group.subject.namespace),
 			Degraded: staleSecretEnvDegraded(
 				fmt.Sprintf("Running containers of %s/%s may hold stale Secret-backed environment values.", group.subject.kind, group.subject.name),
-				staleSecretEnvReadyAction(group.subject)),
+				staleSecretEnvReadyAction(group.subject, nil)),
 		}
 		if !group.subject.created.IsZero() && !group.subject.created.After(now) {
 			age := now.Sub(group.subject.created)
@@ -764,6 +769,18 @@ func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, checks [
 		podName = check.PodName
 	}
 	facts := staleSecretEnvFacts(checks)
+	// The Issues list truncates the message, so order-only leads.
+	if staleSecretEnvOrderOnly(checks) {
+		const tail = "Running containers keep the old order until they restart."
+		switch {
+		case subject.kind == "Pod":
+			return fmt.Sprintf("Only the order of entries changed in Secret data that Ready %s/%s reads as env: %s. %s", subject.kind, subject.name, facts, tail)
+		case len(pods) == 1:
+			return fmt.Sprintf("Only the order of entries changed in Secret data that a Ready pod (%s) of %s/%s reads as env: %s. %s", podName, subject.kind, subject.name, facts, tail)
+		default:
+			return fmt.Sprintf("Only the order of entries changed in Secret data that %d Ready pods of %s/%s read as env: %s. %s", len(pods), subject.kind, subject.name, facts, tail)
+		}
+	}
 	switch {
 	case subject.kind == "Pod":
 		return fmt.Sprintf("%s/%s is Ready, and a running container in it started before Radar observed a Secret key it references change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, facts)
@@ -772,6 +789,21 @@ func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, checks [
 	default:
 		return fmt.Sprintf("%s/%s has %d Ready pods with running containers that started before Radar observed Secret keys they reference change: %s. Kubernetes reads Secret-backed env values only when a container starts.", subject.kind, subject.name, len(pods), facts)
 	}
+}
+
+// staleSecretEnvOrderOnly reports whether every check is order-only. The
+// per-container cap drops order-only checks first, so this holds for every
+// key Radar found, not just the ones listed.
+func staleSecretEnvOrderOnly(checks []StaleSecretEnvCheck) bool {
+	if len(checks) == 0 {
+		return false
+	}
+	for _, check := range checks {
+		if !check.OrderOnly {
+			return false
+		}
+	}
+	return true
 }
 
 const maxStaleSecretEnvMessageFacts = 3
@@ -791,7 +823,7 @@ func staleSecretEnvFacts(checks []StaleSecretEnvCheck) string {
 	byKey := make(map[string]*fact)
 	var keys []string
 	for _, check := range checks {
-		key := check.SecretName + "\x00" + check.Key + "\x00" + check.Container + "\x00" + check.EnvName
+		key := check.SecretName + "\x00" + check.Key + "\x00" + check.Container + "\x00" + check.EnvName + "\x00" + strconv.FormatBool(check.OrderOnly)
 		current := byKey[key]
 		if current == nil {
 			current = &fact{check: check, pods: make(map[string]bool)}
@@ -806,7 +838,13 @@ func staleSecretEnvFacts(checks []StaleSecretEnvCheck) string {
 			current.changedAt = check.SecretChangedAt
 		}
 	}
-	sort.Strings(keys)
+	// Real changes lead, so the "+N more" tail never hides one behind reorders.
+	sort.Slice(keys, func(i, j int) bool {
+		if a, b := byKey[keys[i]].check.OrderOnly, byKey[keys[j]].check.OrderOnly; a != b {
+			return b
+		}
+		return keys[i] < keys[j]
+	})
 	clauses := make([]string, 0, maxStaleSecretEnvMessageFacts+1)
 	for i, key := range keys {
 		if i == maxStaleSecretEnvMessageFacts {
@@ -818,13 +856,34 @@ func staleSecretEnvFacts(checks []StaleSecretEnvCheck) string {
 		if len(f.pods) > 1 {
 			started = fmt.Sprintf("%d %s containers started at or before %s and reference", len(f.pods), f.check.Container, f.startedAt.UTC().Format(time.RFC3339))
 		}
+		if f.check.OrderOnly {
+			clauses = append(clauses, fmt.Sprintf("%s Secret/%s key %s as env %s; Radar observed that key's comma-separated entries reordered at %s, with none added or removed",
+				started, f.check.SecretName, f.check.Key, f.check.EnvName, f.changedAt.UTC().Format(time.RFC3339)))
+			continue
+		}
 		clauses = append(clauses, fmt.Sprintf("%s Secret/%s key %s as env %s; Radar observed that key change at %s",
 			started, f.check.SecretName, f.check.Key, f.check.EnvName, f.changedAt.UTC().Format(time.RFC3339)))
 	}
 	return strings.Join(clauses, "; ")
 }
 
-func staleSecretEnvReadyAction(subject staleSecretEnvSubject) string {
+const staleSecretEnvOrderCheck = "Only the order of entries changed. Check whether %s treats the new order differently, for example as a failover or priority order. If it doesn't, no restart is needed. If it does, "
+
+func staleSecretEnvReadyAction(subject staleSecretEnvSubject, checks []StaleSecretEnvCheck) string {
+	if staleSecretEnvOrderOnly(checks) {
+		app := fmt.Sprintf("%s/%s", subject.kind, subject.name)
+		if subject.kind == "Pod" {
+			app = "the app in " + app
+		}
+		prefix := fmt.Sprintf(staleSecretEnvOrderCheck, app)
+		if subject.restartable {
+			return prefix + fmt.Sprintf("confirm no rollout is already replacing the affected pods, then restart %s/%s.", subject.kind, subject.name)
+		}
+		if subject.kind == "Pod" {
+			return prefix + fmt.Sprintf("confirm no replacement is already in progress, then replace Pod/%s through its owning controller (or recreate it if standalone).", subject.name)
+		}
+		return prefix + fmt.Sprintf("confirm no replacement is already in progress, then use %s/%s's normal controller workflow to replace the affected pods.", subject.kind, subject.name)
+	}
 	if subject.restartable {
 		return fmt.Sprintf("Confirm no rollout is already replacing the affected pods, then restart %s/%s so its containers re-read Secret-backed environment variables.", subject.kind, subject.name)
 	}
@@ -832,6 +891,27 @@ func staleSecretEnvReadyAction(subject staleSecretEnvSubject) string {
 		return fmt.Sprintf("Confirm no replacement is already in progress, then replace Pod/%s through its owning controller (or recreate it if standalone) so its containers re-read Secret-backed environment variables.", subject.name)
 	}
 	return fmt.Sprintf("Confirm no replacement is already in progress, then use %s/%s's normal controller workflow to replace the affected pods so they re-read Secret-backed environment variables.", subject.kind, subject.name)
+}
+
+func staleSecretEnvReadyCause(checks []StaleSecretEnvCheck) string {
+	if staleSecretEnvOrderOnly(checks) {
+		return "Radar observed only the order of comma-separated entries change in Secret keys these Ready containers read as environment variables, after the containers started. Kubernetes does not refresh Secret-backed environment variables in running containers, so they keep the old order."
+	}
+	return "Radar observed Secret keys referenced by these Ready containers' environment change after the containers started; Kubernetes does not refresh Secret-backed environment variables in running containers."
+}
+
+func staleSecretEnvNotReadyCause(checks []StaleSecretEnvCheck) string {
+	if staleSecretEnvOrderOnly(checks) {
+		return "A running container that references a Secret key in its environment started before Radar observed that key's comma-separated entries reordered, with none added or removed."
+	}
+	return "A running container that references a Secret key in its environment started before Radar observed that key change."
+}
+
+func staleSecretEnvNotReadyAction(checks []StaleSecretEnvCheck) string {
+	if staleSecretEnvOrderOnly(checks) {
+		return fmt.Sprintf(staleSecretEnvOrderCheck, "the app") + "restart the pod so its containers re-read Secret-backed environment variables."
+	}
+	return "Restart the pod so its containers re-read Secret-backed environment variables."
 }
 
 func podHasSecretEnvReference(pod *corev1.Pod) bool {
@@ -1003,6 +1083,7 @@ func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, even
 		return nil
 	}
 	changesBySecret := secretDataChangesBySecret(changes)
+	completeSince := envHistoryCompleteSince(time.Now())
 	exists := make(map[string]bool)
 	checked := make(map[string]bool)
 	var out []StaleSecretEnvCheck
@@ -1017,45 +1098,83 @@ func findStaleSecretEnvChecksUpTo(cache *ResourceCache, pods []*corev1.Pod, even
 				continue
 			}
 			startedAt := status.State.Running.StartedAt.Time
-			containerChecks := 0
-			for _, env := range container.Env {
-				if containerChecks >= perContainer {
-					break
+			var containerChecks []StaleSecretEnvCheck
+			add := func(envName, referenceKind, prefix, secretName, key string, change secretKeyChange) {
+				changedAt, orderOnly, stale := change.since(startedAt, completeSince)
+				if !stale {
+					return
 				}
+				// Unlike order-only copy, this needs no complete history: a
+				// reorder of Rook's monitor sets is no evidence of a stale
+				// value, so the Issue reads as if the reorder never happened.
+				if change.onlyReorderedSince(startedAt) && isRookMonOrderInsensitiveKey(cachedSecret(cache, pod.Namespace, secretName), key) {
+					return
+				}
+				containerChecks = append(containerChecks, newStaleSecretEnvCheck(pod, container.Name, envName, referenceKind, prefix, secretName, key, startedAt, changedAt, orderOnly))
+			}
+			for _, env := range container.Env {
 				if env.ValueFrom == nil || env.ValueFrom.SecretKeyRef == nil {
 					continue
 				}
 				ref := env.ValueFrom.SecretKeyRef
-				changedAt, ok := changes[secretDataKey{namespace: pod.Namespace, name: ref.Name, key: ref.Key}]
-				if !ok || !startedAt.Before(changedAt) || !secretExists(cache, pod.Namespace, ref.Name, exists, checked) {
+				change, ok := changes[secretDataKey{namespace: pod.Namespace, name: ref.Name, key: ref.Key}]
+				if !ok || !secretExists(cache, pod.Namespace, ref.Name, exists, checked) {
 					continue
 				}
-				out = append(out, newStaleSecretEnvCheck(pod, container.Name, env.Name, "secretKeyRef", "", ref.Name, ref.Key, startedAt, changedAt))
-				containerChecks++
+				add(env.Name, "secretKeyRef", "", ref.Name, ref.Key, change)
 			}
 			for _, envFrom := range container.EnvFrom {
-				if containerChecks >= perContainer {
-					break
-				}
 				if envFrom.SecretRef == nil || !secretExists(cache, pod.Namespace, envFrom.SecretRef.Name, exists, checked) {
 					continue
 				}
 				identity := pod.Namespace + "\x00" + envFrom.SecretRef.Name
 				for _, change := range changesBySecret[identity] {
-					if containerChecks >= perContainer {
-						break
-					}
-					if !startedAt.Before(change.changedAt) || envFromKeyOverridden(container, envFrom.Prefix+change.key) {
+					if envFromKeyOverridden(container, envFrom.Prefix+change.key) {
 						continue
 					}
-					out = append(out, newStaleSecretEnvCheck(pod, container.Name, envFrom.Prefix+change.key, "envFrom", envFrom.Prefix, envFrom.SecretRef.Name, change.key, startedAt, change.changedAt))
-					containerChecks++
+					add(envFrom.Prefix+change.key, "envFrom", envFrom.Prefix, envFrom.SecretRef.Name, change.key, change.secretKeyChange)
 				}
 			}
+			// The cap may only drop order-only checks, so "every check is
+			// order-only" stays a statement about every changed key.
+			sort.SliceStable(containerChecks, func(i, j int) bool {
+				return !containerChecks[i].OrderOnly && containerChecks[j].OrderOnly
+			})
+			if len(containerChecks) > perContainer {
+				containerChecks = containerChecks[:perContainer]
+			}
+			out = append(out, containerChecks...)
 		}
 	}
 	sortStaleSecretEnvChecks(out)
 	return out
+}
+
+func cachedSecret(cache *ResourceCache, namespace, name string) *corev1.Secret {
+	secret, err := cache.Secrets().Secrets(namespace).Get(name)
+	if err != nil {
+		return nil
+	}
+	return secret
+}
+
+// envHistoryCompleteSince is the earliest time from which Radar holds every
+// change it observed: after this process started watching, after anything
+// the store evicted, and inside the env-history lookback. A container that
+// started earlier may have missed a change Radar never saw.
+func envHistoryCompleteSince(now time.Time) time.Time {
+	started := timeline.ObservationStart()
+	if started.IsZero() {
+		return now
+	}
+	since := now.Add(-envHistoryContextMaxLookback)
+	if started.After(since) {
+		since = started
+	}
+	if evicted := timeline.HistoryEvictedThrough(); evicted.After(since) {
+		since = evicted
+	}
+	return since
 }
 
 func findStaleSecretEnvChecksWithManagedFields(cache *ResourceCache, pods []*corev1.Pod, events []timeline.TimelineEvent) []StaleSecretEnvCheck {
@@ -1161,16 +1280,57 @@ func sortStaleSecretEnvChecks(out []StaleSecretEnvCheck) {
 	})
 }
 
-type secretDataChange struct {
-	key       string
-	changedAt time.Time
+// secretKeyChange is what Radar observed for one Secret key: the latest
+// change of any kind, and the latest one that did more than reorder the
+// value's comma-separated entries. Each is a maximum of its own, so the
+// event order doesn't matter.
+type secretKeyChange struct {
+	changedAt     time.Time
+	realChangedAt time.Time
 }
 
-func secretDataChangesBySecret(changes map[secretDataKey]time.Time) map[string][]secretDataChange {
+func (c *secretKeyChange) observe(at time.Time, orderOnly bool) {
+	if at.After(c.changedAt) {
+		c.changedAt = at
+	}
+	if !orderOnly && at.After(c.realChangedAt) {
+		c.realChangedAt = at
+	}
+}
+
+// since classifies the key for a container that started at startedAt. A key
+// whose only changes after the start were reorders is order-only, but only
+// when Radar's history is complete since the container started; otherwise an
+// earlier change Radar never saw may also apply, and it reads as a change.
+func (c secretKeyChange) since(startedAt, completeSince time.Time) (changedAt time.Time, orderOnly, stale bool) {
+	switch {
+	case !startedAt.Before(c.changedAt):
+		return time.Time{}, false, false
+	case startedAt.Before(c.realChangedAt):
+		return c.realChangedAt, false, true
+	case startedAt.Before(completeSince):
+		return c.changedAt, false, true
+	default:
+		return c.changedAt, true, true
+	}
+}
+
+// onlyReorderedSince reports whether every change Radar observed after
+// startedAt only reordered the value's entries.
+func (c secretKeyChange) onlyReorderedSince(startedAt time.Time) bool {
+	return startedAt.Before(c.changedAt) && !startedAt.Before(c.realChangedAt)
+}
+
+type secretDataChange struct {
+	key string
+	secretKeyChange
+}
+
+func secretDataChangesBySecret(changes map[secretDataKey]secretKeyChange) map[string][]secretDataChange {
 	out := make(map[string][]secretDataChange)
-	for identity, changedAt := range changes {
+	for identity, change := range changes {
 		secret := identity.namespace + "\x00" + identity.name
-		out[secret] = append(out[secret], secretDataChange{key: identity.key, changedAt: changedAt})
+		out[secret] = append(out[secret], secretDataChange{key: identity.key, secretKeyChange: change})
 	}
 	for secret := range out {
 		sort.Slice(out[secret], func(i, j int) bool { return out[secret][i].key < out[secret][j].key })
@@ -1178,7 +1338,11 @@ func secretDataChangesBySecret(changes map[secretDataKey]time.Time) map[string][
 	return out
 }
 
-func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, prefix, secretName, key string, startedAt, changedAt time.Time) StaleSecretEnvCheck {
+func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, prefix, secretName, key string, startedAt, changedAt time.Time, orderOnly bool) StaleSecretEnvCheck {
+	message := fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; Kubernetes does not refresh env %s in a running container.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName)
+	if orderOnly {
+		message = fmt.Sprintf("Container %s started at %s, before Radar observed the comma-separated entries of Secret/%s key %s reordered at %s, with none added or removed. Env %s in the running container keeps the old order, which matters only if the app treats the new order differently.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName)
+	}
 	return StaleSecretEnvCheck{
 		Namespace:          pod.Namespace,
 		PodName:            pod.Name,
@@ -1191,7 +1355,8 @@ func newStaleSecretEnvCheck(pod *corev1.Pod, container, envName, referenceKind, 
 		Key:                key,
 		ContainerStartedAt: startedAt,
 		SecretChangedAt:    changedAt,
-		Message:            fmt.Sprintf("Container %s started at %s, before Radar observed Secret/%s key %s change at %s; Kubernetes does not refresh env %s in a running container.", container, startedAt.UTC().Format(time.RFC3339), secretName, key, changedAt.UTC().Format(time.RFC3339), envName),
+		OrderOnly:          orderOnly,
+		Message:            message,
 	}
 }
 
@@ -1307,12 +1472,13 @@ func secretsWithObservedDataWrites(events []timeline.TimelineEvent) map[string]b
 	return out
 }
 
-func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]time.Time {
-	out := make(map[secretDataKey]time.Time)
+func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]secretKeyChange {
+	out := make(map[secretDataKey]secretKeyChange)
 	for _, event := range events {
 		if event.Kind != "Secret" || event.Source != timeline.SourceInformer || event.EventType != timeline.EventTypeUpdate || event.Diff == nil || event.Timestamp.IsZero() {
 			continue
 		}
+		reordered := reorderedKeysByField(event.Diff.Fields)
 		for _, field := range event.Diff.Fields {
 			if !isSecretDataModificationPath(field.Path) {
 				continue
@@ -1321,14 +1487,15 @@ func latestSecretDataChanges(events []timeline.TimelineEvent) map[secretDataKey]
 			if len(keys) == 0 {
 				keys = stringValues(field.OldValue)
 			}
+			modified := strings.HasSuffix(field.Path, " (modified keys)")
 			for _, key := range keys {
 				if key == "" {
 					continue
 				}
 				identity := secretDataKey{namespace: event.Namespace, name: event.Name, key: key}
-				if event.Timestamp.After(out[identity]) {
-					out[identity] = event.Timestamp
-				}
+				change := out[identity]
+				change.observe(event.Timestamp, modified && reordered[keyListFieldBase(field.Path)][key])
+				out[identity] = change
 			}
 		}
 	}
@@ -1412,5 +1579,8 @@ func staleSecretEnvIssueChecks(pod *corev1.Pod, checks []StaleSecretEnvCheck) ([
 }
 
 func staleSecretEnvDetectionMessage(checks []StaleSecretEnvCheck) string {
+	if staleSecretEnvOrderOnly(checks) {
+		return fmt.Sprintf("Only the order of entries changed in Secret data that this not-Ready pod's running containers read as env: %s. Check whether the order matters to the app before restarting the pod.", staleSecretEnvFacts(checks))
+	}
 	return fmt.Sprintf("The pod is not Ready, and running containers in it started before Radar observed Secret keys they reference change: %s. Restart the pod to refresh them.", staleSecretEnvFacts(checks))
 }
