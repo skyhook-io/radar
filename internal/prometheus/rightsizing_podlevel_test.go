@@ -155,6 +155,12 @@ func TestComputeRightsizing_PodLevelRequest(t *testing.T) {
 		if got := rowFor(resp.Rows, "sidecar", "memory").PodLevelRequest; got == nil || *got != "128Mi" {
 			t.Errorf("memory podLevelRequest = %v, want 128Mi", got)
 		}
+		if got := rowFor(resp.Rows, "app", "cpu").PodLevelRequestValue; got == nil || *got != 0.2 {
+			t.Errorf("cpu podLevelRequestValue = %v, want 0.2 cores", got)
+		}
+		if got := rowFor(resp.Rows, "app", "memory").PodLevelRequestValue; got == nil || *got != 128*1024*1024 {
+			t.Errorf("memory podLevelRequestValue = %v, want 128Mi in bytes", got)
+		}
 		class, impact := ClassifyWorkload(resp.Rows, 2, false)
 		if class != ClassReview || impact.CPUChange != 0 || impact.MemoryChange != 0 {
 			t.Errorf("class=%s impact=%+v, want review with no impact", class, impact)
@@ -237,7 +243,8 @@ func TestBuildScanRow_PodLevelRequest(t *testing.T) {
 		restarts: map[scanKey]float64{key: 0}, terminations: map[scanKey]terminationEvidence{}, errors: map[string]error{},
 	}
 	memory := buildScanRow(workload.containers[0], "memory", key, rightsizingMinSamples, workload, evidence)
-	if memory.Fit != FitPodLevelRequest || memory.RecommendedReq != nil || memory.PodLevelRequest == nil || *memory.PodLevelRequest != "128Mi" {
+	if memory.Fit != FitPodLevelRequest || memory.RecommendedReq != nil || memory.PodLevelRequest == nil || *memory.PodLevelRequest != "128Mi" ||
+		memory.PodLevelRequestValue == nil || *memory.PodLevelRequestValue != 128*1024*1024 {
 		t.Errorf("memory row = %+v", memory)
 	}
 	cpu := buildScanRow(workload.containers[0], "cpu", key, rightsizingMinSamples, workload, evidence)

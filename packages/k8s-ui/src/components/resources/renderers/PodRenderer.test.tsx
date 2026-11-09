@@ -631,9 +631,13 @@ describe('PodRenderer OOMKilled limit hint', () => {
     expect(afterOOM(render('48Mi'), '48Mi')).toBe(true)
   })
 
-  it('shows the container limit, not the pod limit, when the container sets one', () => {
+  it('shows both limits when the container and the pod each set one', () => {
     const html = render('256Mi', '96Mi')
     expect(afterOOM(html, '96Mi')).toBe(true)
-    expect(afterOOM(html, '256Mi')).toBe(false)
+    expect(afterOOM(html, '256Mi')).toBe(true)
+  })
+
+  it('shows only the container limit when the pod sets none', () => {
+    expect(afterOOM(render(undefined, '96Mi'), '96Mi')).toBe(true)
   })
 })

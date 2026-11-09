@@ -185,4 +185,14 @@ describe('pod-level request below one container\'s usage', () => {
   it('says nothing about overuse when the container stayed under the pod request', () => {
     expect(podLevelOverUseNote(podLevel(0.15, '150m'))).toBeUndefined()
   })
+
+  it('does not ask to raise the request when an HPA scales on it', () => {
+    const note = podLevelOverUseNote({ ...podLevel(0.44, '440m'), hpaManaged: true })
+    expect(note).toContain('440m')
+    expect(note).not.toBe(podLevelOverUseNote(podLevel(0.44, '440m')))
+  })
+
+  it('stays quiet before six hours of samples', () => {
+    expect(podLevelOverUseNote({ ...podLevel(0.44, '440m'), sampleCount: 1, coverage: 0 })).toBeUndefined()
+  })
 })

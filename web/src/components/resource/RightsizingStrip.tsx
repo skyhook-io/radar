@@ -379,6 +379,7 @@ function podLevelRequestExplanation(row: RightsizingRow, podLevelRequest: string
 export function podLevelOverUseNote(row: RightsizingRow): string | undefined {
   if (
     row.fit !== 'pod_level_request' ||
+    row.sampleCount < RIGHTSIZING_MIN_SAMPLES ||
     !row.observed ||
     !row.podLevelRequest ||
     row.podLevelRequestValue == null ||
@@ -386,8 +387,17 @@ export function podLevelOverUseNote(row: RightsizingRow): string | undefined {
   )
     return undefined
   const resource = row.resource === 'cpu' ? 'CPU' : 'memory'
-  return `This container alone used ${row.observed.formatted} (${row.observed.name}), more than the pod's ${row.podLevelRequest} ${resource} request, so the pod uses more than it reserves. Radar can't size pod-level requests yet; raise spec.resources.requests.${row.resource} to cover what the pod uses.`
+  const finding = `This container alone used ${row.observed.formatted} (${row.observed.name}), more than the pod's ${row.podLevelRequest} ${resource} request, so the pod uses more than it reserves. Radar can't size pod-level requests yet;`
+  // An HPA scaling on this resource divides usage by the pod request, so
+  // raising it changes scaling; Radar never suggests that unreviewed.
+  return row.hpaManaged
+    ? `${finding} the HPA scales on this request, so review its target before raising spec.resources.requests.${row.resource}.`
+    : `${finding} raise spec.resources.requests.${row.resource} to cover what the pod uses.`
 }
+
+// Mirrors rightsizingMinSamples (six hours of 5-minute samples) in
+// internal/prometheus/rightsizing.go: below it Radar draws no conclusion.
+const RIGHTSIZING_MIN_SAMPLES = 72
 
 function confidenceLabel(row: RightsizingRow) {
   return `${row.confidence[0].toUpperCase()}${row.confidence.slice(1)} confidence`
