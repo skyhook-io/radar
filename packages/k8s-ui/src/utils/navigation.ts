@@ -51,6 +51,8 @@ const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
   'scheduling.k8s.io/podgroup': 'podgroups',
   'metrics.k8s.io/podmetrics': 'pods',
   'metrics.k8s.io/nodemetrics': 'nodes',
+  // Multus's plural is hyphenated, which English rules cannot recover.
+  'k8s.cni.cncf.io/networkattachmentdefinition': 'network-attachment-definitions',
 }
 
 const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
@@ -59,6 +61,7 @@ const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
   'metrics.k8s.io/nodes': 'NodeMetrics',
   'scheduling.k8s.io/podgroups': 'PodGroup',
   'elbv2.k8s.aws/ingressclassparams': 'IngressClassParams',
+  'k8s.cni.cncf.io/network-attachment-definitions': 'NetworkAttachmentDefinition',
 }
 
 // Dynamic map built from API discovery — populated by initNavigationMap().

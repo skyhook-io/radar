@@ -15,6 +15,8 @@ import { resolvedEnvFromKey } from '../../../utils/env-from'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import { NamespaceLimitRangeLink } from './LimitRangeRenderer'
+import { SecondaryNetworksSection } from './SecondaryNetworksSection'
+import type { NetworkAttachmentLookups } from '../../../utils/multus'
 import type {
   PodEnvironmentResponse,
   PodEnvironmentRevealResponse,
@@ -119,6 +121,10 @@ interface PodRendererProps {
   /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
    *  is pending or unreadable, which leaves the contextual link unrendered. */
   namespaceLimitRangeNames?: string[] | null
+  /** Lookup results for the NetworkAttachmentDefinitions this Pod names, by
+   *  `networkAttachmentKey`. Absent when the host didn't wire the lookup, which
+   *  leaves the names unlinked. */
+  networkAttachmentLookups?: NetworkAttachmentLookups
   /** Host-read Secrets Store CSI facts for this Pod's namespace. Undefined
    *  omits the section; the section also renders nothing for a Pod with no
    *  Secrets Store CSI volumes. */
@@ -311,6 +317,7 @@ export function PodRenderer({
   policyLoading,
   policyError,
   namespaceLimitRangeNames,
+  networkAttachmentLookups,
   secretsStore,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
@@ -517,6 +524,8 @@ export function PodRenderer({
           } />
         </PropertyList>
       </Section>
+
+      <SecondaryNetworksSection pod={data} attachmentLookups={networkAttachmentLookups} onNavigate={onNavigate} />
 
       {/* Init Containers - shown only when present */}
       {initContainers.length > 0 && (

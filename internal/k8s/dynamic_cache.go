@@ -469,6 +469,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// disambiguates everywhere downstream.
 	{Group: "nvidia.com", Versions: []string{"v1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
 	{Group: "nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nvidiadrivers", Kind: "NVIDIADriver", Namespaced: false},
+	{Group: "k8s.cni.cncf.io", Versions: []string{"v1"}, Resource: "network-attachment-definitions", Kind: "NetworkAttachmentDefinition", Namespaced: true},
 	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
 	// this list. They are warmed up conditionally — only when Kyverno is
 	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding
