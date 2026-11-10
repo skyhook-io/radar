@@ -46,6 +46,9 @@ var (
 	runtimeAuthRecoveryRetryLimit atomic.Int32
 	// Failed automatic retries since the last connect, Retry, or switch.
 	runtimeAuthRecoveryFailures atomic.Int32
+	// Bumped by each reset, so a probe that started before a Retry or
+	// switch doesn't count against the next attempt's budget.
+	runtimeAuthRecoveryResets atomic.Uint64
 )
 
 // SetAutomaticRetryLimit stops automatic reconnects after limit consecutive
@@ -62,6 +65,7 @@ func automaticRetriesStopped() bool {
 // resetAutomaticRetries is called when the user retries or switches context,
 // and on every successful connect.
 func resetAutomaticRetries() {
+	runtimeAuthRecoveryResets.Add(1)
 	runtimeAuthRecoveryFailures.Store(0)
 }
 
@@ -128,6 +132,7 @@ func runRuntimeAuthRecovery() {
 		}
 		contextName := status.Context
 		observedGen := currentOperationGen()
+		observedResets := runtimeAuthRecoveryResets.Load()
 		ctx, cancel := context.WithTimeout(context.Background(), connectionTestOperationTimeout())
 		err := getRuntimeAuthProbe()(ctx)
 		cancel()
@@ -147,7 +152,7 @@ func runRuntimeAuthRecovery() {
 			}
 		}
 		if err != nil {
-			if recordAutomaticRetryFailure() {
+			if recordAutomaticRetryFailure(observedResets) {
 				return
 			}
 			interval = nextRuntimeAuthRecoveryInterval(interval, err, maxInterval, hungInterval)
@@ -162,7 +167,7 @@ func runRuntimeAuthRecovery() {
 		}
 		if switchErr != nil {
 			log.Printf("[k8s] Automatic reconnect failed for context %q: %v", SanitizeForLog(contextName), switchErr)
-			if recordAutomaticRetryFailure() {
+			if recordAutomaticRetryFailure(observedResets) {
 				return
 			}
 			interval = nextRuntimeAuthRecoveryInterval(interval, switchErr, maxInterval, hungInterval)
@@ -176,7 +181,10 @@ func runRuntimeAuthRecovery() {
 
 // recordAutomaticRetryFailure counts a failed automatic retry and reports
 // whether automatic retries have now stopped.
-func recordAutomaticRetryFailure() bool {
+func recordAutomaticRetryFailure(observedResets uint64) bool {
+	if runtimeAuthRecoveryResets.Load() != observedResets {
+		return false
+	}
 	runtimeAuthRecoveryFailures.Add(1)
 	if !automaticRetriesStopped() {
 		return false

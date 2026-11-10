@@ -1734,3 +1734,32 @@ func TestRuntimeAuthRecoveryKeepsRetryingWithoutLimit(t *testing.T) {
 		t.Fatal("server mode stopped retrying")
 	}
 }
+
+func TestRuntimeAuthRecoveryProbeFromBeforeRetryDoesNotCount(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
+	SetAutomaticRetryLimit(1)
+	started, release := make(chan struct{}), make(chan struct{})
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		if probes.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return errors.New("getting credentials: exec: executable kubelogin failed with exit code 1")
+	})
+
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "desktop-context", ErrorType: "auth"})
+	<-started
+	resetAutomaticRetries() // the user clicked Retry while that probe ran
+	close(release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for probes.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("a probe from before Retry used up the retry budget")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

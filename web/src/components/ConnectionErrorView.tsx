@@ -383,7 +383,9 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying, back, var
   const awsProfile = contextsLoading ? undefined : matchedContext?.awsProfile
   const since = outageSinceLabel(connection.disconnectedAt)
   const { localTerminal, kubectl } = useCapabilitiesContext()
-  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile, variant === 'connection' && !connection.autoRetryStopped, kubectl)
+  // After a refused switch the terminal opens on the current cluster's
+  // kubeconfig, which may not hold the target context, so that screen is copy-only.
+  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile, variant === 'connection' && !connection.autoRetryStopped, kubectl === true && variant === 'connection')
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
