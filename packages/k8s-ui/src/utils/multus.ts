@@ -1,3 +1,4 @@
+import type { RelatedRead } from '../components/kueue/related-read'
 import { validateRFC1123Label, validateRFC1123Subdomain } from './validators'
 
 export const MULTUS_NETWORKS_ANNOTATION = 'k8s.v1.cni.cncf.io/networks'
@@ -56,9 +57,10 @@ export interface PodNetworks {
   rows: NetworkAttachmentRow[]
 }
 
-export type NetworkAttachmentLookup = 'found' | 'missing' | 'forbidden' | 'unavailable' | 'unchecked'
+/** What Radar's read of a definition found, or `unchecked` when the Pod names more than the host reads. */
+export type NetworkAttachmentLookup = RelatedRead | { state: 'unchecked' }
 
-/** Lookup results by `networkAttachmentKey`. A missing key means the lookup has not finished. */
+/** Lookup results by `networkAttachmentKey`. A missing key makes no claim. */
 export type NetworkAttachmentLookups = Record<string, NetworkAttachmentLookup>
 
 interface PodWithAnnotations {

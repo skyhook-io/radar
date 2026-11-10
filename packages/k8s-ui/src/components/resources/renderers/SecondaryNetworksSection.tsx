@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Network } from 'lucide-react'
 import { AlertBanner, Property, PropertyList, ResourceLink, Section } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
+import { unreadReason } from '../../kueue/related-read'
 import {
   MULTUS_NETWORKS_ANNOTATION,
   MULTUS_NETWORK_STATUS_ANNOTATION,
@@ -27,17 +28,17 @@ interface SecondaryNetworksSectionProps {
 }
 
 function lookupNote(lookup: NetworkAttachmentLookup | undefined, namespace: string): string | null {
-  switch (lookup) {
-    case 'missing':
+  switch (lookup?.state) {
+    case undefined:
+    case 'loading':
+    case 'found':
+      return null
+    case 'not_found':
       return `No NetworkAttachmentDefinition with this name in namespace ${namespace}.`
-    case 'forbidden':
-      return 'You don’t have permission to read this NetworkAttachmentDefinition.'
-    case 'unavailable':
-      return 'Could not check whether this NetworkAttachmentDefinition exists.'
     case 'unchecked':
       return 'Not checked: this Pod names more definitions than Radar looks up at once.'
     default:
-      return null
+      return `NetworkAttachmentDefinition not read: ${unreadReason(lookup)}.`
   }
 }
 
@@ -96,7 +97,7 @@ function NetworkAttachmentCard({
     <div className="card-inner">
       <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="break-all text-xs font-medium text-theme-text-primary">
-          {ref && lookup === 'found' ? (
+          {ref && lookup?.state === 'found' ? (
             <ResourceLink
               name={ref.name}
               namespace={ref.namespace}

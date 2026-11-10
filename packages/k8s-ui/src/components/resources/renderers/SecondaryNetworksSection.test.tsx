@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { describe, expect, it, vi } from 'vitest'
 import { SecondaryNetworksSection } from './SecondaryNetworksSection'
+import { unreadReason } from '../../kueue/related-read'
 import {
   MULTUS_NETWORKS_ANNOTATION,
   MULTUS_NETWORK_STATUS_ANNOTATION,
@@ -79,7 +80,7 @@ describe('SecondaryNetworksSection', () => {
 
   it('links a definition only once it is known to exist, with its exact API group', async () => {
     const onNavigate = vi.fn()
-    const lookups: NetworkAttachmentLookups = { 'apps/macvlan-conf': 'found', 'shared/vlan-100': 'found' }
+    const lookups: NetworkAttachmentLookups = { 'apps/macvlan-conf': { state: 'found', object: {} }, 'shared/vlan-100': { state: 'found', object: {} } }
     await render(
       <SecondaryNetworksSection
         pod={pod({ [MULTUS_NETWORKS_ANNOTATION]: 'macvlan-conf,shared/vlan-100' })}
@@ -101,19 +102,23 @@ describe('SecondaryNetworksSection', () => {
     )
   })
 
-  it('keeps a definition unlinked and explains why when it is missing, forbidden, unchecked or unavailable', async () => {
+  it('keeps a definition unlinked and explains why when it is missing, unread, unconfirmed or unchecked', async () => {
+    const denied = { state: 'unavailable', code: 'user_forbidden' } as const
+    const radarDenied = { state: 'unavailable', code: 'radar_forbidden' } as const
+    const unconfirmed = { state: 'unconfirmed' } as const
     await render(
       <SecondaryNetworksSection
-        pod={pod({ [MULTUS_NETWORKS_ANNOTATION]: 'gone,hidden,unknown,later' })}
-        attachmentLookups={{ 'apps/gone': 'missing', 'apps/hidden': 'forbidden', 'apps/unknown': 'unavailable', 'apps/later': 'unchecked' }}
+        pod={pod({ [MULTUS_NETWORKS_ANNOTATION]: 'gone,hidden,blocked,unknown,later' })}
+        attachmentLookups={{ 'apps/gone': { state: 'not_found' }, 'apps/hidden': denied, 'apps/blocked': radarDenied, 'apps/unknown': unconfirmed, 'apps/later': { state: 'unchecked' } }}
         onNavigate={() => undefined}
       />,
       container => {
-        expect(buttons(container).filter(button => ['gone', 'hidden', 'unknown', 'later'].includes(button.textContent ?? ''))).toHaveLength(0)
+        expect(buttons(container).filter(button => ['gone', 'hidden', 'blocked', 'unknown', 'later'].includes(button.textContent ?? ''))).toHaveLength(0)
         const text = container.textContent ?? ''
         expect(text).toContain('No NetworkAttachmentDefinition with this name in namespace apps.')
-        expect(text).toContain('You don’t have permission to read this NetworkAttachmentDefinition.')
-        expect(text).toContain('Could not check whether this NetworkAttachmentDefinition exists.')
+        expect(text).toContain(unreadReason(denied))
+        expect(text).toContain(unreadReason(radarDenied))
+        expect(text).toContain(unreadReason(unconfirmed))
         expect(text).toContain('Not checked: this Pod names more definitions than Radar looks up at once.')
       },
     )
@@ -121,7 +126,7 @@ describe('SecondaryNetworksSection', () => {
 
   it('makes no claim about a definition whose lookup is pending or not wired', async () => {
     await render(
-      <SecondaryNetworksSection pod={pod({ [MULTUS_NETWORKS_ANNOTATION]: 'pending' })} attachmentLookups={{}} onNavigate={() => undefined} />,
+      <SecondaryNetworksSection pod={pod({ [MULTUS_NETWORKS_ANNOTATION]: 'pending' })} attachmentLookups={{ 'apps/pending': { state: 'loading' } }} onNavigate={() => undefined} />,
       container => {
         expect(buttons(container).some(button => button.textContent === 'pending')).toBe(false)
         expect(container.textContent).not.toContain('NetworkAttachmentDefinition')
@@ -150,7 +155,7 @@ describe('SecondaryNetworksSection', () => {
     await render(
       <SecondaryNetworksSection
         pod={pod({ [MULTUS_NETWORKS_ANNOTATION]: JSON.stringify([{ name: '../secrets' }]) })}
-        attachmentLookups={{ 'apps/../secrets': 'found' }}
+        attachmentLookups={{ 'apps/../secrets': { state: 'found', object: {} } }}
         onNavigate={() => undefined}
       />,
       container => {
