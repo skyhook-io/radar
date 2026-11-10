@@ -382,7 +382,7 @@ func diagnoseWorkload(ctx context.Context, input diagnoseInput, expectedOwner *o
 	if podsErr != nil && !podsNotListable && !podsCacheWarming {
 		return nil, podsErr
 	}
-	issueSummary, issueRows := computeMCPIssueContext(ctx, cache, canonicalGroup, canonicalKind, input.Namespace, input.Name, true)
+	issueSummary, issueRows, _ := computeMCPIssueContext(ctx, cache, canonicalGroup, canonicalKind, input.Namespace, input.Name, true)
 	resCtx := buildMCPResourceContextWithStaleChecks(
 		ctx,
 		obj,

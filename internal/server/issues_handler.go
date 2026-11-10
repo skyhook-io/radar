@@ -320,6 +320,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		namespaces = []string{namespace}
 	}
 
+	subjectCache, _, _ := provider.CacheIdentity()
 	evidenceWithheld := map[string]bool{}
 	var unchecked []issuesapi.UncheckedSource
 	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
@@ -335,6 +336,10 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		},
 	}, group, kind, namespace, name)
+	if k8s.GetResourceCache() != subjectCache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	if related == nil {
 		related = []issues.Issue{}
 	}
@@ -352,19 +357,27 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
 		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
 	}
+	if kind == "Node" && group == "" && namespace == "" && s.canRead(r, "", "nodes", "", "list") {
+		resp.NodeCertificateReport = provider.NodeCertificateReport(name)
+	}
 	if withheld.Issues > 0 {
 		resp.Withheld = &withheld
 	}
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		resp.Visibility = k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces))
 	}
+	if k8s.GetResourceCache() != subjectCache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	s.writeJSON(w, resp)
 }
 
 // ResourceIssuesResponse is /api/issues/resource with ?coverage=1.
 type ResourceIssuesResponse struct {
-	SchedulingReport *k8s.CronJobSchedulingEvidence `json:"scheduling_report,omitempty"`
-	Issues           []issues.Issue                 `json:"issues"`
+	NodeCertificateReport *k8s.NodeCertificateReport     `json:"node_certificate_report,omitempty"`
+	SchedulingReport      *k8s.CronJobSchedulingEvidence `json:"scheduling_report,omitempty"`
+	Issues                []issues.Issue                 `json:"issues"`
 	// Whether the issues engine reads the subject's kind: ok, syncing,
 	// notWatched, or unknownKind (discovery doesn't serve the kind, as when a
 	// link made on one cluster opens on another). Anything but ok makes an

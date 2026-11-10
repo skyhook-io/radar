@@ -1236,9 +1236,16 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 
 	var issueSummary *resourcecontext.IssueSummary
 	var issueRows []issues.Issue
+	var nodeCertificateReport *k8s.NodeCertificateReport
 	if !skipContext || includes["issues"] {
 		gvk := rawObj.GetObjectKind().GroupVersionKind()
-		issueSummary, issueRows = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+		issueSummary, issueRows, nodeCertificateReport = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+	}
+	if nodeCertificateReport != nil {
+		node, ok := rawObj.(*corev1.Node)
+		if !ok || nodeCertificateReport.UID != string(node.UID) {
+			nodeCertificateReport = nil
+		}
 	}
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
@@ -1304,13 +1311,16 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 	//     or template-divergence warning upgrades this to {resource, warnings})
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
-	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges {
+	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges && nodeCertificateReport == nil {
 		return toJSONResult(resourceData)
 	}
 
 	result := map[string]any{"resource": resourceData}
 	if tier == resourcecontext.TierDiagnostic {
 		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected. Graph-derived networking/scaling relationships were not collected; an empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
+	}
+	if nodeCertificateReport != nil {
+		result["nodeCertificateReport"] = nodeCertificateReport
 	}
 	if includes["issues"] {
 		attachRelatedIssueDetails(result, issueRows)

@@ -943,6 +943,7 @@ export interface CronJobSchedulingEvidence {
 }
 
 export interface SubjectIssuesResponse {
+	node_certificate_report?: NodeCertificateReport;
   scheduling_report?: CronJobSchedulingEvidence;
   issues: Issue[];
   coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
@@ -950,6 +951,19 @@ export interface SubjectIssuesResponse {
   visibility?: { state?: string; impact?: string };
   /** Checks about this resource Radar couldn't make for the caller. */
   unchecked_sources?: UncheckedSource[];
+}
+
+export interface NodeCertificateReport {
+  uid: string;
+  event_id?: string;
+  state: 'reported' | 'unverified' | 'ok';
+  reason: string;
+  message: string;
+  last_reported_at: string;
+  expires_at?: string;
+  not_before?: string;
+  history_incomplete?: boolean;
+  validity_unknown?: boolean;
 }
 
 export function useSubjectIssues(
