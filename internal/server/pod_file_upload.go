@@ -429,11 +429,12 @@ func (s *Server) handlePodFileUpload(w http.ResponseWriter, r *http.Request) {
 
 	tmpName := uploadTempName(stdout.String())
 	var exitErr k8sexec.CodeExitError
-	if !errors.As(streamErr, &exitErr) && tmpName != "" {
-		// The command's status never arrived, so whether its trap ran is
-		// unknown. Removing the temp file again is harmless either way: a
-		// commit that already happened moved it, and one that has not yet
-		// will now fail and leave the destination as it was.
+	if tmpName != "" && (!errors.As(streamErr, &exitErr) || exitErr.Code >= 128) {
+		// Either the command's status never arrived, or a signal such as
+		// SIGKILL (an OOM kill) ended the shell, which skips its EXIT trap. In
+		// both cases the temp file may still be there. Removing it again is
+		// harmless: a commit that already happened moved it, and one that has
+		// not yet will now fail and leave the destination as it was.
 		s.cleanupUploadTemp(client, config, namespace, podName, container, dir, tmpName)
 	}
 

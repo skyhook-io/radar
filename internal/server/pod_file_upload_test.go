@@ -444,6 +444,27 @@ func TestPodFileUploadCleansUpAfterTransportFailure(t *testing.T) {
 	}
 }
 
+// A shell killed by a signal (SIGKILL, an OOM kill) exits 128+n without
+// running its EXIT trap, so the server removes the temp file itself.
+func TestPodFileUploadCleansUpAfterKilledShell(t *testing.T) {
+	h := uploadServer(t, true, func(_ context.Context, req uploadExec, opts remotecommand.StreamOptions) error {
+		if req.isCleanup() {
+			return nil
+		}
+		fmt.Fprint(opts.Stdout, "tmp=.radar-upload.Kk7Ll6\n")
+		_, _ = io.Copy(io.Discard, opts.Stdin)
+		return k8sexec.CodeExitError{Code: 137, Err: errors.New("command terminated with exit code 137")}
+	})
+	postUpload(t, uploadURL(h.ts, "/data", "a", false), []byte("x"))
+	execs := h.recorded()
+	if len(execs) != 2 || !execs[1].isCleanup() {
+		t.Fatalf("execs = %+v, want upload then cleanup", execs)
+	}
+	if got := execs[1].command[4:]; got[0] != "/data" || got[1] != ".radar-upload.Kk7Ll6" {
+		t.Errorf("cleanup args = %q", got)
+	}
+}
+
 // A command that exited ran its own trap; and a temp name that does not look
 // like one the script makes is never handed to rm.
 func TestPodFileUploadSkipsCleanupWhenUnneededOrUnsafe(t *testing.T) {
