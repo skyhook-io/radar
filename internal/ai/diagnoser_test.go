@@ -491,6 +491,39 @@ func TestAgentExitError_Classifies(t *testing.T) {
 	}
 }
 
+// Only Cursor's exact policy sentences get the policy message; any other
+// Cursor failure, or the same words from another agent, keeps today's text.
+func TestAgentExitError_CursorRunEverythingPolicy(t *testing.T) {
+	for _, detail := range []string{
+		"Your team administrator has disabled the 'Run Everything' option.",
+		"Please run without '--force' to approve commands individually.",
+		"Error: Your team administrator has disabled the 'Run Everything' option.\nPlease run without '--force' to approve commands individually.",
+	} {
+		got := agentExitError("cursor-agent", "cursor-agent login", detail, "").Error()
+		const want = "Cursor refused to start because a Cursor policy on this account turns off Run Everything, which Radar needs to run investigations through Cursor.\n"
+		if !strings.HasPrefix(got, want) {
+			t.Errorf("detail %q → %q, want it to start with %q", detail, got, want)
+		}
+		if first, _, _ := strings.Cut(detail, "\n"); !strings.Contains(got, first) {
+			t.Errorf("detail %q → %q, want Cursor's own text kept", detail, got)
+		}
+	}
+	for _, c := range []struct{ name, detail string }{
+		{"cursor-agent", "run everything is disabled"},
+		{"cursor-agent", "Error: --force is not supported"},
+		{"cursor-agent", "panic: nil pointer"},
+		{"claude", "Your team administrator has disabled the 'Run Everything' option."},
+	} {
+		got := agentExitError(c.name, "login", c.detail, "").Error()
+		if strings.Contains(got, "Cursor policy") {
+			t.Errorf("%s detail %q → %q, must not read as a Cursor policy block", c.name, c.detail, got)
+		}
+		if !strings.Contains(got, "stopped unexpectedly") {
+			t.Errorf("%s detail %q → %q, want today's fallback", c.name, c.detail, got)
+		}
+	}
+}
+
 // TestClaudeResultText covers the tool_result.content shapes: a plain JSON string
 // (pinned in the format test), an MCP content array, multipart text, and a raw
 // JSON object passed through.
