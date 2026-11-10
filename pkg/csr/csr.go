@@ -67,16 +67,34 @@ func (s State) Label() string {
 	return string(s)
 }
 
-// Level maps the state onto Radar's health vocabulary. Waiting for an approver
-// or a signer is degraded, not failed.
-func (s State) Level() health.Level {
-	switch s {
+// waitingStuckAfter matches the UI's PENDING_STUCK_MINUTES for Pods.
+const waitingStuckAfter = 5 * time.Minute
+
+// Level maps the request onto Radar's health vocabulary. Waiting for an
+// approver or a signer reads like a pending Pod: neutral at first, degraded
+// once it has waited waitingStuckAfter, counted from creation while pending
+// and from approval once approved. A missing time counts as no wait.
+func (s Status) Level(obj map[string]any, now time.Time) health.Level {
+	switch s.State {
 	case StateIssued:
 		return health.LevelHealthy
-	case StatePending, StateApproved:
-		return health.LevelDegraded
 	case StateDenied, StateFailed:
 		return health.LevelUnhealthy
+	case StatePending, StateApproved:
+		since := ""
+		if s.State == StatePending {
+			metadata, _ := obj["metadata"].(map[string]any)
+			since, _ = metadata["creationTimestamp"].(string)
+		} else if s.Condition != nil {
+			since = s.Condition.LastUpdateTime
+			if since == "" {
+				since = s.Condition.LastTransitionTime
+			}
+		}
+		if t, err := time.Parse(time.RFC3339, since); err == nil && now.Sub(t) >= waitingStuckAfter {
+			return health.LevelDegraded
+		}
+		return health.LevelNeutral
 	}
 	return health.LevelUnknown
 }

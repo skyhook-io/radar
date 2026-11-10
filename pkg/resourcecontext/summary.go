@@ -168,7 +168,7 @@ func unstructuredHealth(u *unstructured.Unstructured) string {
 		return ""
 	}
 	if csr.IsObject(u.Object) {
-		return levelToString(csr.StatusOf(u.Object).State.Level())
+		return levelToString(csr.StatusOf(u.Object).Level(u.Object, time.Now()))
 	}
 	if u.GroupVersionKind().Group == "opentelemetry.io" {
 		switch u.GetKind() {

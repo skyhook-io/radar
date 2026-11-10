@@ -2,7 +2,7 @@
 // mirrors pkg/csr; pkg/csr/testdata/states.json holds the cases both must agree on.
 
 import type { StatusBadge, HealthLevel } from './resource-utils'
-import { healthColors } from './resource-utils'
+import { healthColors, minutesSince, PENDING_STUCK_MINUTES } from './resource-utils'
 import { isApiGroup } from './resource-utils-cnpg'
 
 export const CSR_GROUP = 'certificates.k8s.io'
@@ -42,13 +42,23 @@ const STATE_LABELS: Record<CSRState, string> = {
   failed: 'Failed',
 }
 
-// Waiting for an approver or a signer is degraded, not failed.
-const STATE_LEVELS: Record<CSRState, HealthLevel> = {
-  pending: 'degraded',
-  approved: 'degraded',
+const FINAL_LEVELS: Record<'issued' | 'denied' | 'failed', HealthLevel> = {
   issued: 'healthy',
   denied: 'unhealthy',
   failed: 'unhealthy',
+}
+
+/**
+ * Waiting for an approver or a signer reads like a pending Pod: neutral at
+ * first, degraded once it has waited PENDING_STUCK_MINUTES, counted from
+ * creation while pending and from approval once approved.
+ */
+export function getCertificateSigningRequestLevel(status: CSRStatus, csr: any): HealthLevel {
+  if (status.state !== 'pending' && status.state !== 'approved') return FINAL_LEVELS[status.state]
+  const since = status.state === 'pending'
+    ? csr?.metadata?.creationTimestamp
+    : status.condition?.lastUpdateTime ?? status.condition?.lastTransitionTime
+  return minutesSince(since) >= PENDING_STUCK_MINUTES ? 'degraded' : 'neutral'
 }
 
 export function isCertificateSigningRequest(data: any): boolean {
@@ -90,9 +100,9 @@ export function getCertificateSigningRequestState(csr: any): CSRStatus {
 }
 
 export function getCertificateSigningRequestStatus(csr: any): StatusBadge {
-  const { state } = getCertificateSigningRequestState(csr)
-  const level = STATE_LEVELS[state]
-  return { text: STATE_LABELS[state], color: healthColors[level], level }
+  const status = getCertificateSigningRequestState(csr)
+  const level = getCertificateSigningRequestLevel(status, csr)
+  return { text: STATE_LABELS[status.state], color: healthColors[level], level }
 }
 
 /** The deciding condition's reason and message, for a tooltip or banner. */

@@ -191,12 +191,12 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
 // also flags at once: fatal *container* states (CrashLoopBackOff, ImagePull,
 // InvalidImageName, OOMKilled, …) and Unschedulable (the scheduler tried and
 // could not place the pod).
-const PENDING_STUCK_MINUTES = 5
+export const PENDING_STUCK_MINUTES = 5
 const TERMINATING_STUCK_MINUTES = 10
 
 // minutesSince returns minutes elapsed since an ISO timestamp, or 0 when it's
 // missing/invalid — so "unknown age" is treated as not-yet-stuck (benign).
-function minutesSince(timestamp?: string): number {
+export function minutesSince(timestamp?: string): number {
   if (!timestamp) return 0
   const t = new Date(timestamp).getTime()
   if (Number.isNaN(t)) return 0

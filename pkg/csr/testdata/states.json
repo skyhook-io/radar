@@ -5,6 +5,15 @@
       "csr": { "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-new" } },
       "state": "pending",
       "label": "Pending approval",
+      "level": "neutral",
+      "conditionType": "",
+      "certificatePresent": false
+    },
+    {
+      "name": "pending for longer than a stuck Pod",
+      "csr": { "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-old", "creationTimestamp": "2020-01-01T00:00:00Z" }, "status": {} },
+      "state": "pending",
+      "label": "Pending approval",
       "level": "degraded",
       "conditionType": "",
       "certificatePresent": false
@@ -14,7 +23,7 @@
       "csr": { "apiVersion": "certificates.k8s.io/v1", "kind": "CertificateSigningRequest", "metadata": { "name": "csr-waiting" }, "status": {} },
       "state": "pending",
       "label": "Pending approval",
-      "level": "degraded",
+      "level": "neutral",
       "conditionType": "",
       "certificatePresent": false
     },
@@ -38,7 +47,7 @@
       },
       "state": "approved",
       "label": "Approved, not issued",
-      "level": "degraded",
+      "level": "neutral",
       "conditionType": "Approved",
       "certificatePresent": false
     },
@@ -104,7 +113,7 @@
       },
       "state": "pending",
       "label": "Pending approval",
-      "level": "degraded",
+      "level": "neutral",
       "conditionType": "",
       "certificatePresent": true
     },
@@ -131,7 +140,7 @@
       },
       "state": "pending",
       "label": "Pending approval",
-      "level": "degraded",
+      "level": "neutral",
       "conditionType": "",
       "certificatePresent": false
     }

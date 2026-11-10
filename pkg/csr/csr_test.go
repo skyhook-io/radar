@@ -49,10 +49,10 @@ func TestStatusCrossLanguage(t *testing.T) {
 			if got.Condition != nil {
 				conditionType = got.Condition.Type
 			}
-			if got.State != v.State || got.State.Label() != v.Label || string(got.State.Level()) != v.Level ||
+			if got.State != v.State || got.State.Label() != v.Label || string(got.Level(v.CSR, time.Now())) != v.Level ||
 				conditionType != v.ConditionType || got.CertificatePresent != v.CertificatePresent {
 				t.Fatalf("got state=%s label=%q level=%s condition=%q certificate=%v; want state=%s label=%q level=%s condition=%q certificate=%v",
-					got.State, got.State.Label(), got.State.Level(), conditionType, got.CertificatePresent,
+					got.State, got.State.Label(), got.Level(v.CSR, time.Now()), conditionType, got.CertificatePresent,
 					v.State, v.Label, v.Level, v.ConditionType, v.CertificatePresent)
 			}
 		})
