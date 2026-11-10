@@ -430,6 +430,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "k8s.cni.cncf.io"
+    resources: ["network-attachment-definitions"]
+    scope: Namespaced
+    collection: "multus"
+    decision: grant
+    reason: "spec.config is the CNI plugin configuration. The Network Plumbing spec defines no credential fields in it. Whereabouts docs still list etcd_username/etcd_password in the ipam block, but Whereabouts ignores them since its etcd backend was removed (July 2022)."
+    source: "https://github.com/k8snetworkplumbingwg/multi-net-spec/tree/master/v1.3; https://github.com/k8snetworkplumbingwg/whereabouts/commit/c26343d2c18fa6f3337e9e62577fc15c97eed75c"
   - group: "kaito.sh"
     resources: ["ragengines","workspaces"]
     scope: Namespaced
