@@ -124,6 +124,8 @@ export interface OmnibarProps {
    *  note says part of the scope wasn't searched, so an empty result is then
    *  qualified rather than reported as no match. */
   note?: OmnibarNote
+  /** The connected server supports searching Event reasons and messages. */
+  eventContentSearch?: boolean
   /** Bounded modifier value sets to autocomplete (e.g. { ns: [...], kind: [...] }). */
   modifierOptions?: Record<string, string[]>
   /** Namespaces to seed as removable `ns:` pills when the launcher opens empty
@@ -185,6 +187,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     isError = false,
     isPlaceholderData = false,
     note,
+    eventContentSearch = false,
     modifierOptions,
     seedNamespaces,
     loadRecents,
@@ -653,7 +656,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
         leftSlot={<Search className={hero ? 'w-5 h-5 shrink-0 text-theme-text-tertiary' : 'w-3.5 h-3.5 shrink-0 text-theme-text-tertiary'} />}
         rightSlot={
           <div className="flex items-center gap-1.5 shrink-0">
-            <SearchSyntaxHelp />
+            <SearchSyntaxHelp eventContentSearch={eventContentSearch} />
             {!hero && !text && pills.length === 0 && (
               <kbd className="text-[10px] text-theme-text-tertiary bg-theme-surface px-1 py-0.5 rounded border border-theme-border-light">
                 {mac ? '⌘' : 'Ctrl+'}K
