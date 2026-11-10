@@ -3,8 +3,10 @@ import {
   canBulkRestartKind,
   canBulkScaleKind,
   canPatchWorkloadKind,
+  canPauseDeployment,
   canSetWorkloadImages,
   intersectWorkloadWrites,
+  isPausedDeployment,
 } from './bulk-workload-actions'
 import type { Capabilities, WorkloadWritePermissions } from '../types/core'
 
@@ -94,5 +96,33 @@ describe('bulk workload action gating', () => {
       statefulSets: true,
       rollouts: false,
     })
+  })
+})
+
+describe('Deployment pause', () => {
+  const canPatch = writes({ deployments: true, statefulSets: true, daemonSets: true, rollouts: true })
+
+  it('needs the feature, patch permission and a Deployment in the apps group', () => {
+    expect(canPauseDeployment({ name: 'deployments', group: 'apps' }, canPatch, true)).toBe(true)
+    expect(canPauseDeployment({ name: 'Deployments', group: 'apps' }, canPatch, true)).toBe(true)
+    expect(canPauseDeployment({ name: 'deployments', group: 'apps' }, canPatch, false)).toBe(false)
+    expect(canPauseDeployment({ name: 'deployments', group: 'apps' }, writes(), true)).toBe(false)
+    expect(canPauseDeployment({ name: 'deployments', group: 'apps' }, undefined, true)).toBe(false)
+    expect(canPauseDeployment({ name: 'deployments', group: 'vendor.io' }, canPatch, true)).toBe(false)
+    expect(canPauseDeployment({ name: 'statefulsets', group: 'apps' }, canPatch, true)).toBe(false)
+    expect(canPauseDeployment({ name: 'daemonsets', group: 'apps' }, canPatch, true)).toBe(false)
+    expect(canPauseDeployment({ name: 'rollouts', group: 'argoproj.io' }, canPatch, true)).toBe(false)
+  })
+
+  it('reports paused only for a built-in Deployment with spec.paused true', () => {
+    const paused = { apiVersion: 'apps/v1', kind: 'Deployment', spec: { paused: true } }
+
+    expect(isPausedDeployment(paused)).toBe(true)
+    expect(isPausedDeployment({ ...paused, spec: { paused: false } })).toBe(false)
+    expect(isPausedDeployment({ ...paused, spec: {} })).toBe(false)
+    expect(isPausedDeployment({ ...paused, spec: { paused: 'true' } })).toBe(false)
+    expect(isPausedDeployment({ ...paused, apiVersion: 'vendor.io/v1' })).toBe(false)
+    expect(isPausedDeployment({ ...paused, kind: 'Rollout', apiVersion: 'argoproj.io/v1alpha1' })).toBe(false)
+    expect(isPausedDeployment(undefined)).toBe(false)
   })
 })

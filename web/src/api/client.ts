@@ -5417,6 +5417,63 @@ export function useRestartWorkload() {
   });
 }
 
+function useSetDeploymentPaused(
+  action: "pause" | "resume",
+  meta: { errorMessage: string; successMessage: string },
+) {
+  const queryClient = useQueryClient();
+  const { guard } = useRadarFeature("deploymentPause");
+
+  return useMutation({
+    mutationFn: ({
+      kind,
+      namespace,
+      name,
+    }: {
+      kind: string;
+      namespace: string;
+      name: string;
+    }) =>
+      guard(async () => {
+        const response = await apiFetch(
+          `${getApiBase()}/workloads/${kind}/${namespace}/${name}/${action}`,
+          {
+            method: "POST",
+          },
+        );
+        if (!response.ok) {
+          const error = await readErrorBody(response);
+          throw new Error(error.error || `HTTP ${response.status}`);
+        }
+        return response.json();
+      }),
+    meta,
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["resources", variables.kind],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["resource", variables.kind, variables.namespace, variables.name],
+      });
+      queryClient.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
+export function usePauseDeployment() {
+  return useSetDeploymentPaused("pause", {
+    errorMessage: "Failed to pause rollout",
+    successMessage: "Rollout paused",
+  });
+}
+
+export function useResumeDeployment() {
+  return useSetDeploymentPaused("resume", {
+    errorMessage: "Failed to resume rollout",
+    successMessage: "Rollout resumed",
+  });
+}
+
 export function fetchWorkloadImages(
   kind: string,
   namespace: string,
@@ -5584,6 +5641,39 @@ export function useWorkloadRevisions(
   });
 }
 
+// A rollout can start long after its request returned, as when a resume releases
+// a held template, so nothing in the request says when its revision exists. The
+// controller records the Deployment's revision only after creating that ReplicaSet.
+// deploymentRevision is undefined until the resource loads, and empty on a loaded
+// Deployment with no revision yet, which is how one created paused starts out.
+export function useRefreshRevisionsOnNewRollout(
+  kind: string,
+  namespace: string,
+  name: string,
+  deploymentRevision: string | undefined,
+) {
+  const queryClient = useQueryClient();
+  const seen = useRef(deploymentRevision);
+
+  useEffect(() => {
+    const previous = seen.current;
+    seen.current = deploymentRevision;
+    if (previous === undefined || deploymentRevision === undefined || previous === deploymentRevision) return;
+    queryClient.invalidateQueries({
+      queryKey: ["workload-revisions", kind, namespace, name],
+    });
+  }, [queryClient, kind, namespace, name, deploymentRevision]);
+}
+
+// The server's paused-refusal text is written for API and agent callers; in the
+// UI the way out is the Resume rollout button on the same page.
+export function rollbackErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
+  if (body.error_code === "workload_paused") {
+    return "This Deployment is paused. Click Resume rollout, then roll back.";
+  }
+  return body.error || `HTTP ${status}`;
+}
+
 export function useRollbackWorkload() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -5607,8 +5697,7 @@ export function useRollbackWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new Error(rollbackErrorMessage(await readErrorBody(response), response.status));
       }
       return response.json();
     },

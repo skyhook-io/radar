@@ -835,6 +835,32 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 	return nil
 }
 
+// SetDeploymentPaused sets spec.paused on a Deployment, as kubectl rollout pause
+// and resume do. The API server treats a patch to the value already set as a
+// no-op, so a repeated call succeeds and changes nothing without a prior read.
+func (m *WorkloadManager) SetDeploymentPaused(ctx context.Context, namespace, name string, paused bool) error {
+	if m.dynClient == nil {
+		return fmt.Errorf("dynamic client not initialized")
+	}
+	if m.discovery == nil {
+		return fmt.Errorf("resource discovery not initialized")
+	}
+
+	deploymentGVR, ok := m.discovery.GetGVR("deployments")
+	if !ok {
+		return fmt.Errorf("deployments resource not found")
+	}
+
+	patch := fmt.Sprintf(`{"spec":{"paused":%t}}`, paused)
+	if _, err := m.dynClient.Resource(deploymentGVR).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
+	); err != nil {
+		return fmt.Errorf("failed to patch deployment: %w", err)
+	}
+
+	return nil
+}
+
 // ScaleWorkload scales a Deployment, StatefulSet, or Rollout to the specified replica count.
 func (m *WorkloadManager) ScaleWorkload(ctx context.Context, kind, namespace, name string, replicas int32) error {
 	if m.dynClient == nil {
@@ -1304,7 +1330,7 @@ func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace,
 // ErrWorkloadPaused: a paused Deployment would hold a restored template without
 // rolling it out, so a rollback that reports success would change nothing.
 // kubectl rollout undo refuses for the same reason.
-var ErrWorkloadPaused = errors.New("workload is paused; resume it first (kubectl rollout resume, or set spec.paused to false) and retry, because a paused Deployment holds a new template without rolling it out")
+var ErrWorkloadPaused = errors.New("the Deployment is paused, so a rollback would not roll out; resume it, then roll back")
 
 // deploymentRollbackKeptAnnotations are the Deployment annotations a rollback keeps
 // from the live object; every other annotation is restored from the target

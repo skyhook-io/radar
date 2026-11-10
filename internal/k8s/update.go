@@ -127,6 +127,11 @@ func RestartWorkloadWithClient(ctx context.Context, kind, namespace, name string
 	return getWorkloadManagerWithClient(client).RestartWorkload(ctx, kind, namespace, name)
 }
 
+// SetDeploymentPausedWithClient sets spec.paused on a Deployment using the provided client.
+func SetDeploymentPausedWithClient(ctx context.Context, namespace, name string, paused bool, client dynamic.Interface) error {
+	return getWorkloadManagerWithClient(client).SetDeploymentPaused(ctx, namespace, name, paused)
+}
+
 func GetWorkloadImagesWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) (*WorkloadImageInventory, error) {
 	return getWorkloadManagerWithClient(client).GetWorkloadImages(ctx, kind, namespace, name)
 }

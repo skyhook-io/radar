@@ -637,7 +637,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +
 			"(requires 'replicas' parameter), 'rollback' reverts to a previous revision " +
-			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions). " +
+			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions), " +
+			"'pause' holds a Deployment's rollouts until 'resume' (Deployments only; rollback is refused while paused). " +
 			"Use list_resources or get_dashboard first to identify the target. " +
 			"Roll back a native Helm release's workload as the release (manage_helm rollback where available); a workload rollback leaves Helm's record stale. " +
 			"On a Rollout, 'rollback' rewrites the pod template and so starts a new rollout that re-runs every " +

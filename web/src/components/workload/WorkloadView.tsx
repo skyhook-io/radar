@@ -25,6 +25,7 @@ import {
   isDiagnoseKind,
   isRolloutKind,
   canSetWorkloadImages,
+  canPauseDeployment,
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
@@ -65,10 +66,13 @@ import {
   useSuspendCronJob,
   useResumeCronJob,
   useRestartWorkload,
+  usePauseDeployment,
+  useResumeDeployment,
   fetchWorkloadImages,
   fetchResourceWithRelationships,
   useSetWorkloadImages,
   useWorkloadRevisions,
+  useRefreshRevisionsOnNewRollout,
   useRollbackWorkload,
   useRolloutAction,
   useRolloutCapabilities,
@@ -327,6 +331,8 @@ function useActionsBarProps(
 
   const deleteMutation = useDeleteResource()
   const restartWorkloadMutation = useRestartWorkload()
+  const pauseDeploymentMutation = usePauseDeployment()
+  const resumeDeploymentMutation = useResumeDeployment()
   const setWorkloadImagesMutation = useSetWorkloadImages()
   const rollbackMutation = useRollbackWorkload()
   // Only the revision dialog drives this one, and it explains a failed promote in place
@@ -349,6 +355,9 @@ function useActionsBarProps(
   const canSetImages = isRolloutShape
     ? imageUpdatesSupported && isRollout && !rolloutCapabilitiesPending && rolloutCapabilities?.setImage === true
     : !workloadWritesPending && canSetWorkloadImages({ name: kind, group }, workloadWrites, imageUpdatesSupported)
+  const { support: deploymentPauseSupport } = useRadarFeature('deploymentPause')
+  const canPauseDeployments = !workloadWritesPending &&
+    canPauseDeployment({ name: kind, group }, workloadWrites, deploymentPauseSupport === 'supported')
   const loadImages = useCallback(
     (params: { kind: string; namespace: string; name: string }) =>
       queryClient.fetchQuery({
@@ -435,6 +444,16 @@ function useActionsBarProps(
           restartWorkloadMutation.mutate(params)
       : undefined,
     isRestarting: restartWorkloadMutation.isPending,
+    onPauseDeployment: canPauseDeployments
+      ? (params: Parameters<typeof pauseDeploymentMutation.mutate>[0]) =>
+          pauseDeploymentMutation.mutate(params)
+      : undefined,
+    onResumeDeployment: canPauseDeployments
+      ? (params: Parameters<typeof resumeDeploymentMutation.mutate>[0]) =>
+          resumeDeploymentMutation.mutate(params)
+      : undefined,
+    isPausingDeployment: pauseDeploymentMutation.isPending,
+    isResumingDeployment: resumeDeploymentMutation.isPending,
     onLoadImages: canSetImages ? loadImages : undefined,
     onSetImages: canSetImages
       ? (params: Parameters<typeof setWorkloadImagesMutation.mutateAsync>[0]) =>
@@ -593,6 +612,12 @@ export function WorkloadView({
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
+  useRefreshRevisionsOnNewRollout(
+    apiKind.toLowerCase(),
+    namespace,
+    name,
+    resource ? resource.metadata?.annotations?.['deployment.kubernetes.io/revision'] ?? '' : undefined,
+  )
   const resourceGroup = useMemo(
     () => (resource?.apiVersion ? apiVersionToGroup(resource.apiVersion) : undefined),
     [resource?.apiVersion],
