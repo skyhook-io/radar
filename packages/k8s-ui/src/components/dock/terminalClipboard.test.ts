@@ -81,46 +81,11 @@ describe('setupTerminalClipboard — selection reporting (no copy-on-select)', (
   })
 })
 
-describe('setupTerminalClipboard — ⌘C copy on macOS', () => {
-  beforeEach(() => setPlatform('MacIntel'))
-
-  it('copies the selection on ⌘C and swallows the event', () => {
-    const xterm = makeXterm({ selection: 'cmd-c-text' })
-    setupTerminalClipboard(xterm as never, makeElement() as never)
-    const e = { type: 'keydown', metaKey: true, key: 'c', preventDefault: vi.fn() }
-    const result = xterm._key(e)
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('cmd-c-text')
-    expect(e.preventDefault).toHaveBeenCalled()
-    expect(result).toBe(false)
-  })
-
-  it('leaves Ctrl+C alone so it still sends SIGINT', () => {
-    const xterm = makeXterm({ selection: 'x' })
-    setupTerminalClipboard(xterm as never, makeElement() as never)
-    const result = xterm._key({ type: 'keydown', ctrlKey: true, key: 'c', preventDefault: vi.fn() })
-    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
-    expect(result).toBe(true)
-  })
-
-  it('does not treat ⌘⇧C as copy (leaves the chord for the browser)', () => {
-    const xterm = makeXterm({ selection: 'x' })
-    setupTerminalClipboard(xterm as never, makeElement() as never)
-    const result = xterm._key({ type: 'keydown', metaKey: true, shiftKey: true, key: 'C', preventDefault: vi.fn() })
-    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
-    expect(result).toBe(true)
-  })
-
-  it('does nothing on ⌘C with no selection', () => {
-    const xterm = makeXterm({ selection: '' })
-    setupTerminalClipboard(xterm as never, makeElement() as never)
-    const result = xterm._key({ type: 'keydown', metaKey: true, key: 'c', preventDefault: vi.fn() })
-    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
-    expect(result).toBe(true)
-  })
-})
-
-describe('setupTerminalClipboard — no copy keybinding off macOS', () => {
-  it('does not attach a key handler on Linux/Windows (Copy button only)', () => {
+describe('setupTerminalClipboard - key handler', () => {
+  // xterm keeps one custom key handler; attachTerminalKeys owns it, so a second
+  // registration here would silently replace the find and ⌘C keys.
+  it.each(['MacIntel', 'Linux x86_64'])('never attaches a key handler (%s)', (platform) => {
+    setPlatform(platform)
     const xterm = makeXterm({ selection: 'x' })
     setupTerminalClipboard(xterm as never, makeElement() as never)
     expect(xterm.attachCustomKeyEventHandler).not.toHaveBeenCalled()
