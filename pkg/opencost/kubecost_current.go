@@ -62,7 +62,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 	}
 
 	out := &CostSummary{Available: true, Currency: opts.Currency, Window: window, Source: "kubecost", HourlyCostBasis: HourlyCostBasisAllocated}
-	var totalAlloc, totalUsage, unallocated float64
+	var totalAlloc, totalUsage, unallocated, totalStorage float64
 	sawIdleRow := false
 	for key, allocation := range kubecostAllocationRows(resp) {
 		if allocation == nil {
@@ -109,7 +109,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 			HourlyCost:       allocation.TotalCost / hours,
 			CPUCost:          cpu,
 			MemoryCost:       ram,
-			StorageCost:      allocation.PVCost / hours,
+			StorageCost:      knownCost(allocation.PVCost / hours),
 			NetworkCost:      (allocation.NetworkCost + allocation.LoadBalancerCost) / hours,
 			CPUUsageCost:     cpuUsage,
 			MemoryUsageCost:  ramUsage,
@@ -128,7 +128,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 		}
 		roundNamespaceCost(&row)
 		out.TotalHourlyCost += row.HourlyCost
-		out.TotalStorageCost += row.StorageCost
+		totalStorage += *row.StorageCost
 		out.TotalNetworkCost += row.NetworkCost
 		out.TotalIdleCost += row.IdleCost
 		out.TotalUnusedRequestCost += row.IdleCost
@@ -140,7 +140,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 	}
 	sort.Slice(out.Namespaces, func(i, j int) bool { return out.Namespaces[i].HourlyCost > out.Namespaces[j].HourlyCost })
 	out.TotalHourlyCost = roundTo(out.TotalHourlyCost, 4)
-	out.TotalStorageCost = roundTo(out.TotalStorageCost, 4)
+	out.TotalStorageCost = knownCost(roundTo(totalStorage, 4))
 	out.TotalNetworkCost = roundTo(out.TotalNetworkCost, 4)
 	out.TotalIdleCost = roundTo(out.TotalIdleCost, 4)
 	out.TotalUnusedRequestCost = roundTo(out.TotalUnusedRequestCost, 4)
@@ -623,7 +623,7 @@ func roundNamespaceCost(row *NamespaceCost) {
 	row.HourlyCost = roundTo(row.HourlyCost, 4)
 	row.CPUCost = roundTo(row.CPUCost, 4)
 	row.MemoryCost = roundTo(row.MemoryCost, 4)
-	row.StorageCost = roundTo(row.StorageCost, 4)
+	row.StorageCost = mapCost(row.StorageCost, round4)
 	row.NetworkCost = roundTo(row.NetworkCost, 4)
 	row.CPUUsageCost = roundTo(row.CPUUsageCost, 4)
 	row.MemoryUsageCost = roundTo(row.MemoryUsageCost, 4)

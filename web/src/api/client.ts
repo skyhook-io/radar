@@ -1160,7 +1160,8 @@ export interface OpenCostNamespaceCost {
   hourlyCost: number;
   cpuCost: number;
   memoryCost: number;
-  storageCost?: number;
+  // null: the namespace has volumes whose cost could not be calculated.
+  storageCost?: number | null;
   cpuUsageCost?: number;
   memoryUsageCost?: number;
   efficiency?: number;
@@ -1195,7 +1196,8 @@ export interface OpenCostSummary {
   currency?: string;
   window?: string;
   totalHourlyCost?: number;
-  totalStorageCost?: number;
+  // null: at least one namespace's storage cost is unknown.
+  totalStorageCost?: number | null;
   totalIdleCost?: number;
   clusterEfficiency?: number;
   namespaceScope?: string[];

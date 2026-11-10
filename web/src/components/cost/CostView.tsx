@@ -57,6 +57,8 @@ interface CostViewProps {
 }
 
 const SYSTEM_COST_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease'])
+const STORAGE_UNKNOWN_HINT =
+  "Storage cost couldn't be calculated, so totals here leave it out. It needs volume sizes in Prometheus: kube_persistentvolume_capacity_bytes from kube-state-metrics."
 
 export function CostView(props: CostViewProps) {
   const { pathname } = useLocation()
@@ -170,7 +172,8 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
   const totalCpu = namespaces.reduce((sum, ns) => sum + ns.cpuCost, 0)
   const totalMem = namespaces.reduce((sum, ns) => sum + ns.memoryCost, 0)
   const totalStorage = data.totalStorageCost ?? 0
-  const hasStorage = totalStorage > 0
+  const storageUnknown = data.totalStorageCost === null
+  const hasStorage = namespaces.some((ns) => (ns.storageCost ?? 0) > 0)
   const hasSystemNamespaces = namespaces.some((ns) => isSystemCostNamespace(ns.name))
 
   // Compute split percentages (CPU + Memory + optional Storage)
@@ -277,11 +280,20 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                 <span className="w-2.5 h-2.5 rounded-sm bg-amber-500" />
                 Memory {formatProjectedMonthlyRate(totalMem, currency)}
               </span>
-              {hasStorage && (
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-teal-500" />
-                  Storage {formatProjectedMonthlyRate(totalStorage, currency)}
-                </span>
+              {storageUnknown ? (
+                <Tooltip content={STORAGE_UNKNOWN_HINT}>
+                  <span className="flex items-center gap-1.5 cursor-help">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-teal-500" />
+                    Storage unknown
+                  </span>
+                </Tooltip>
+              ) : (
+                hasStorage && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-teal-500" />
+                    Storage {formatProjectedMonthlyRate(totalStorage, currency)}
+                  </span>
+                )
               )}
             </div>
           </div>
@@ -294,7 +306,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
               className="h-full bg-amber-500 transition-all duration-300"
               style={{ width: `${memPct}%` }}
             />
-            {hasStorage && (
+            {hasStorage && !storageUnknown && (
               <div
                 className="h-full bg-teal-500 transition-all duration-300"
                 style={{ width: `${storagePct}%` }}
@@ -492,9 +504,15 @@ function NamespaceCostRow({
         <span className="text-[11px] text-theme-text-tertiary tabular-nums text-right">
           {formatProjectedMonthlyCost(ns.cpuCost, currency)} /{' '}
           {formatProjectedMonthlyCost(ns.memoryCost, currency)}
-          {hasStorage &&
+          {ns.storageCost === null ? (
+            <Tooltip content={STORAGE_UNKNOWN_HINT}>
+              <span className="cursor-help"> / storage unknown</span>
+            </Tooltip>
+          ) : (
+            hasStorage &&
             (ns.storageCost ?? 0) > 0 &&
-            ` / ${formatProjectedMonthlyCost(ns.storageCost ?? 0, currency)}`}
+            ` / ${formatProjectedMonthlyCost(ns.storageCost ?? 0, currency)}`
+          )}
         </span>
       </button>
 

@@ -93,7 +93,7 @@ type costTotals struct {
 	NodeMonthlyProjection      *nullableCost `json:"nodeMonthlyProjection,omitempty"`
 	UnallocatedCost            *nullableCost `json:"unallocatedHourlyCost,omitempty"`
 	UnusedRequestCost          *float64      `json:"unusedRequestHourlyCost,omitempty"`
-	StorageCost                float64       `json:"storageHourlyCost,omitempty"`
+	StorageCost                *nullableCost `json:"storageHourlyCost,omitempty"`
 	NetworkCost                float64       `json:"networkHourlyCost,omitempty"`
 	ClusterEfficiency          *nullableCost `json:"efficiencyPercent,omitempty"`
 }
@@ -112,12 +112,12 @@ func (c nullableCost) MarshalJSON() ([]byte, error) {
 }
 
 type namespaceCostRow struct {
-	Name        string  `json:"name"`
-	HourlyCost  float64 `json:"hourlyCost"`
-	CPUCost     float64 `json:"cpuHourlyCost"`
-	MemoryCost  float64 `json:"memoryHourlyCost"`
-	StorageCost float64 `json:"storageHourlyCost,omitempty"`
-	NetworkCost float64 `json:"networkHourlyCost,omitempty"`
+	Name        string        `json:"name"`
+	HourlyCost  float64       `json:"hourlyCost"`
+	CPUCost     float64       `json:"cpuHourlyCost"`
+	MemoryCost  float64       `json:"memoryHourlyCost"`
+	StorageCost *nullableCost `json:"storageHourlyCost,omitempty"`
+	NetworkCost float64       `json:"networkHourlyCost,omitempty"`
 	// Pointer: nil drops it when usage is unavailable, while a measured 0 stays.
 	UnusedRequestCost *float64 `json:"unusedRequestHourlyCost,omitempty"`
 	// Pointer, not omitempty: 0% is a measurement on a row using nothing.
@@ -398,7 +398,7 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 	}
 	resp.Totals.UnallocatedCost = &nullableCost{value: summary.TotalUnallocatedCost}
 	resp.Totals.UnusedRequestCost = measuredUnusedRequestCost(summary)
-	resp.Totals.StorageCost = roundHourly(summary.TotalStorageCost)
+	resp.Totals.StorageCost = storageCostField(summary.TotalStorageCost)
 	resp.Totals.NetworkCost = roundHourly(summary.TotalNetworkCost)
 	// Cluster efficiency is derived only from rows that HAVE usage evidence, so
 	// when none of them do the 0 it lands on is an absence, not a measurement.
@@ -413,7 +413,7 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 			HourlyCost:        roundHourly(row.HourlyCost),
 			CPUCost:           roundHourly(row.CPUCost),
 			MemoryCost:        roundHourly(row.MemoryCost),
-			StorageCost:       roundHourly(row.StorageCost),
+			StorageCost:       storageCostField(row.StorageCost),
 			NetworkCost:       roundHourly(row.NetworkCost),
 			UnusedRequestCost: measuredValue(row.IdleCost, row.UsageUnavailable),
 			Efficiency:        measuredValue(row.Efficiency, row.UsageUnavailable),
@@ -426,6 +426,15 @@ func costSummaryView(ctx context.Context, input getCostInput, limit int) (costRe
 	}
 	resp.Guidance = append(resp.Guidance, costSplitGuidance(summary, len(summary.NamespaceScope) > 0)...)
 	return resp, nil
+}
+
+// storageCostField omits a measured zero, as before storage could be unknown,
+// and says null when the source could not price a volume.
+func storageCostField(cost *float64) *nullableCost {
+	if cost != nil && roundHourly(*cost) == 0 {
+		return nil
+	}
+	return &nullableCost{value: cost}
 }
 
 // measuredUnusedRequestCost is nil when no row has usage evidence, like
@@ -444,6 +453,9 @@ func costSplitGuidance(summary *pkgopencost.CostSummary, scoped bool) []string {
 		parts = append(parts, "On this source namespace rows and allocatedHourlyCost count CPU, memory and storage allocation only; GPU and network cost are not in them.")
 	}
 	parts = append(parts, costWasteExplainer)
+	if summary.TotalStorageCost == nil {
+		parts = append(parts, "storageHourlyCost is null where volume cost could not be calculated, usually because Prometheus lacks kube_persistentvolume_capacity_bytes from kube-state-metrics. Hourly totals on those rows leave storage out; this is not the same as no storage.")
+	}
 	if summary.TotalUnallocatedCost == nil {
 		if scoped {
 			parts = append(parts, "unallocatedHourlyCost is null: unrequested node capacity belongs to the cluster, not to a namespace.")

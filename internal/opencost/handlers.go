@@ -287,7 +287,6 @@ func FilterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	}
 	filtered := make([]pkgopencost.NamespaceCost, 0, len(resp.Namespaces))
 	resp.TotalHourlyCost = 0
-	resp.TotalStorageCost = 0
 	resp.TotalNetworkCost = 0
 	resp.TotalIdleCost = 0
 	// Unrequested node capacity cannot be attributed to a namespace, so a
@@ -296,14 +295,19 @@ func FilterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	resp.TotalNodeCost = nil
 	resp.TotalUnusedRequestCost = 0
 	resp.HourlyCostBasis = pkgopencost.HourlyCostBasisAllocated
-	var allocated, usage float64
+	var allocated, usage, storage float64
+	storageMeasured := true
 	for _, row := range resp.Namespaces {
 		if _, ok := allow[row.Name]; !ok {
 			continue
 		}
 		filtered = append(filtered, row)
 		resp.TotalHourlyCost += row.HourlyCost
-		resp.TotalStorageCost += row.StorageCost
+		if row.StorageCost == nil {
+			storageMeasured = false
+		} else {
+			storage += *row.StorageCost
+		}
 		resp.TotalNetworkCost += row.NetworkCost
 		resp.TotalIdleCost += row.IdleCost
 		resp.TotalUnusedRequestCost += row.IdleCost
@@ -313,6 +317,10 @@ func FilterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 		}
 	}
 	resp.Namespaces = filtered
+	resp.TotalStorageCost = nil
+	if storageMeasured {
+		resp.TotalStorageCost = &storage
+	}
 	resp.TotalAllocatedCost = resp.TotalHourlyCost
 	if sourceAvailable && len(filtered) == 0 {
 		resp.Available = false
