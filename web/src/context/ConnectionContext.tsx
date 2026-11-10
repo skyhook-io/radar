@@ -205,7 +205,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       // forever (focus refetch is globally off). Refetching the resource
       // detail keys is at most the open drawer, so it stays cheap.
       queryClient.invalidateQueries({
-        predicate: (q) => q.state.status === 'error' || q.queryKey[0] === 'resource',
+        // Capabilities answered while connecting are a restricted placeholder
+        // (the server skips RBAC checks until connected), so refetch them too.
+        predicate: (q) => q.state.status === 'error' || q.queryKey[0] === 'resource' || q.queryKey[0] === 'capabilities',
       })
     }
   }, [queryClient])

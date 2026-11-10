@@ -92,7 +92,7 @@ function getAuthHints(context: string, awsProfile?: string, kubectlInstalled = f
         title: 'Authentication Failed',
         hints: [
           'Radar could not get Kubernetes credentials for this context',
-          'Re-authenticate with your cloud provider and try again',
+          'Sign in again the way you usually do for this cluster, then use Retry Connection',
         ],
       }
       // kubectl runs the same credential command and prints its real error,
