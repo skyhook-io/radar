@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -669,5 +670,68 @@ func TestPickTrackingArgoApplication(t *testing.T) {
 	remote := app("team", true, "https://prod.example.com")
 	if got := pick([]*unstructured.Unstructured{remote}, remote); got != "" {
 		t.Errorf("a remote Application's status names objects in another cluster: got %q", got)
+	}
+}
+
+func TestGitOpsWriteEvidenceUsesServerManager(t *testing.T) {
+	target := evidenceTarget(t, nil, nil)
+	target.SetAnnotations(map[string]string{"argocd.argoproj.io/tracking-id": "argocd_server:apps/Deployment:prod/api"})
+	app := evidenceArgoApp(map[string]any{"automated": map[string]any{"selfHeal": true}}, nil)
+	app.SetAPIVersion("argoproj.io/v1alpha1")
+	app.SetKind("Application")
+	app.SetNamespace("argocd")
+	app.SetName("server")
+	app.SetUID("app-server")
+	app.Object["spec"].(map[string]any)["destination"] = map[string]any{"server": "https://kubernetes.default.svc", "namespace": "prod"}
+	app.Object["status"] = map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "api"}}}
+	conflict := target.DeepCopy()
+	conflict.SetName("conflict")
+	conflict.SetUID("uid-conflict")
+	conflict.SetAnnotations(map[string]string{"argocd.argoproj.io/tracking-id": "argocd_other:apps/Deployment:prod/conflict"})
+	negative := target.DeepCopy()
+	negative.SetName("negative")
+	negative.SetUID("uid-negative")
+	negative.SetAnnotations(nil)
+	app.Object["status"].(map[string]any)["resources"] = append(app.Object["status"].(map[string]any)["resources"].([]any), map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "conflict"})
+	seedCNPGWorkspace(t, []k8s.APIResource{
+		{Group: "apps", Version: "v1", Kind: "Deployment", Name: "deployments", Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}},
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch", "delete"}},
+	}, target, conflict, negative, app)
+	if _, err := k8s.GetDynamicResourceCache().ListBlocking(schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}, "", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/gitops/write-evidence", strings.NewReader(`{"kind":"Deployment","group":"apps","namespace":"prod","name":"api","paths":["spec.replicas"],"owner":{"kind":"Application","group":"argoproj.io","namespace":"argocd","name":"wrong-client"}}`))
+	w := httptest.NewRecorder()
+	(&Server{}).handleGitOpsWriteEvidence(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("response = %d %s", w.Code, w.Body.String())
+	}
+	var resp gitOpsWriteEvidenceResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Manager == nil || resp.Manager.State != "agree" || resp.Manager.Lead == nil || resp.Manager.Lead.Name != "server" {
+		t.Fatalf("manager = %+v", resp.Manager)
+	}
+	if resp.Owner == nil || resp.Owner.Name != "server" || resp.Policy == nil || !*resp.Policy.SelfHeal || !resp.OwnerTracksTarget {
+		t.Fatalf("owner = %+v, policy = %+v, tracks = %t", resp.Owner, resp.Policy, resp.OwnerTracksTarget)
+	}
+	for _, name := range []string{"conflict", "negative"} {
+		t.Run(name+" ignores client hint", func(t *testing.T) {
+			req := gitOpsWriteEvidenceRequest{writeEvidenceRef: writeEvidenceRef{Kind: "Deployment", Group: "apps", Namespace: "prod", Name: name}, Owner: &writeEvidenceRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "wrong-client"}}
+			r := httptest.NewRequest(http.MethodPost, "/api/gitops/write-evidence", strings.NewReader(mustJSON(t, req)))
+			w := httptest.NewRecorder()
+			(&Server{}).handleGitOpsWriteEvidence(w, r)
+			var resp gitOpsWriteEvidenceResponse
+			if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+				t.Fatalf("response = %d %s", w.Code, w.Body.String())
+			}
+			if resp.Manager == nil || resp.Manager.Lead != nil || resp.Owner != nil || resp.Policy != nil || resp.PolicyError != "" {
+				t.Fatalf("client hint resurrected: %+v", resp)
+			}
+			if name == "conflict" && resp.Manager.State != "disagree" || name == "negative" && resp.Manager.State != "none" && resp.Manager.State != "unknown" {
+				t.Fatalf("manager state = %s", resp.Manager.State)
+			}
+		})
 	}
 }

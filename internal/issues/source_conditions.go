@@ -1,7 +1,9 @@
 package issues
 
 import (
+	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -10,6 +12,8 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -138,8 +142,22 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		}
 
 		for _, u := range items {
+			if gvr.Group == "" && kind == "Pod" {
+				phase, _, _ := unstructured.NestedString(u.Object, "status", "phase")
+				if phase == "Succeeded" {
+					continue
+				}
+			}
+			// Unmanaged collectors retain their last condition while the operator
+			// deliberately stops reconciling; it is not a current managed failure.
+			if gvr.Group == "opentelemetry.io" && kind == "OpenTelemetryCollector" {
+				management, _, _ := unstructured.NestedString(u.Object, "spec", "managementState")
+				if management == "unmanaged" {
+					continue
+				}
+			}
 			if gvr.Group == "kafka.strimzi.io" && kind == "KafkaConnector" {
-				out = append(out, detectStrimziConnectorIssues(gvr, u)...)
+				out = append(out, StrimziConnectorIssues(gvr, u)...)
 				continue
 			}
 			if ownedSubjects[resourceKey(gvr.Group, kind, u.GetNamespace(), u.GetName())] {
@@ -157,20 +175,26 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			if cnpgSuppressesGenericConditions(gvr.Group, kind, u) {
 				continue
 			}
-			condition, ok := conditions.FindFalseConditionWithTime(u)
+			condTypes := conditions.DefaultFalseConditionTypes
+			if gvr.Group == "serving.kserve.io" && kind == "InferenceService" {
+				condTypes = append(slices.Clone(condTypes), "PredictorReady", "TransformerReady", "ExplainerReady", "CanaryPredictorReady")
+				stopped, _ := conditions.Find(u, "Stopped")
+				if strings.EqualFold(u.GetAnnotations()["serving.kserve.io/stop"], "true") && stopped.Status == "True" {
+					// Skip only acknowledged stop conditions; independent component failures remain actionable.
+					condTypes = slices.DeleteFunc(condTypes, func(condType string) bool {
+						if condType != "Ready" && condType != "PredictorReady" && condType != "TransformerReady" && condType != "ExplainerReady" && condType != "CanaryPredictorReady" {
+							return false
+						}
+						condition, _ := conditions.Find(u, condType)
+						return condition.Status == "False" && condition.Reason == "Stopped"
+					})
+				}
+			}
+			condition, ok := findActionableCondition(u, condTypes...)
 			if !ok {
 				continue
 			}
 			condType, reason, msg := condition.Type, condition.Reason, condition.Message
-			// Noise-floor suppression: a False Ready/Available on an object that
-			// is suspended, still reconciling, or whose controller hasn't yet
-			// observed the current spec is NOT a failure — it's in-flight.
-			// Emitting a warning for it is the canonical alert-fatigue trap,
-			// since auto-refresh keeps it permanently lit. Skip those; keep
-			// genuinely-failed objects.
-			if isTransientCRDCondition(u, reason) {
-				continue
-			}
 			severity := SeverityWarning
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
@@ -234,6 +258,14 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 
 func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
 	switch gvr.Group {
+	case "cert-manager.io":
+		if kind == "Certificate" {
+			return detectCertificateRenewalFailure(gvr, u, time.Now())
+		}
+	case "flagger.app":
+		if kind == "Canary" {
+			return detectFlaggerCanaryIssues(gvr, u)
+		}
 	case "gateway.networking.k8s.io":
 		return detectGatewayConditionIssues(gvr, kind, u)
 	case "apiregistration.k8s.io":
@@ -262,11 +294,59 @@ func detectGatewayConditionIssues(gvr schema.GroupVersionResource, kind string, 
 }
 
 func detectObjectConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, severity Severity, condTypes ...string) []Issue {
-	condition, ok := conditions.FindFalseConditionWithTime(u, condTypes...)
-	if !ok || isTransientCRDCondition(u, condition.Reason) {
+	condition, ok := findActionableCondition(u, condTypes...)
+	if !ok {
 		return nil
 	}
 	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condition.Type, condition.Reason), condition.Message, condition.LastTransitionTime, condition.HasLastTransitionTime, "", u.GetCreationTimestamp().Time)}
+}
+
+func findActionableCondition(u *unstructured.Unstructured, condTypes ...string) (conditions.FalseCondition, bool) {
+	if len(condTypes) == 0 {
+		condTypes = conditions.DefaultFalseConditionTypes
+	}
+	now := time.Now()
+	// Spec edits do not prove recovery. Keep older failures as a qualified fallback.
+	var stale, deleting conditions.FalseCondition
+	hasStale, hasDeletingFallback := false, false
+	for len(condTypes) > 0 {
+		condition, found := conditions.FindFalseConditionWithTime(u, condTypes...)
+		if !found {
+			break
+		}
+		current, _ := conditions.Find(u, condition.Type)
+		paused := condition.Type == "Synced" && condition.Reason == "ReconcilePaused" && u.GetAnnotations()["crossplane.io/paused"] == "true"
+		if current.Status == "False" && !paused && !isTransientCRDCondition(u, condition.Reason) {
+			isDeleting := condition.Type == "Ready" && condition.Reason == "Deleting"
+			deletion := u.GetDeletionTimestamp()
+			expectedDeletion := false
+			if isDeleting && deletion != nil && !deletion.IsZero() {
+				age := now.Sub(deletion.Time)
+				expectedDeletion = age >= -health.NodeRemovalWarningAfter && age < health.NodeRemovalWarningAfter
+			}
+			if !expectedDeletion {
+				isStale := u.GetGeneration() > 0 && condition.ObservedGeneration > 0 && condition.ObservedGeneration < u.GetGeneration()
+				if isStale {
+					condition.Message = strings.TrimSpace(fmt.Sprintf("Condition was last reported for generation %d; current resource generation is %d. %s", condition.ObservedGeneration, u.GetGeneration(), condition.Message))
+				}
+				switch {
+				case isDeleting:
+					// A specific failure is more actionable than the deletion summary.
+					deleting, hasDeletingFallback = condition, true
+				case !isStale:
+					return condition, true
+				case !hasStale:
+					stale, hasStale = condition, true
+				}
+			}
+		}
+		// Skip the whole type so an older representation cannot revive an expected condition.
+		condTypes = slices.DeleteFunc(slices.Clone(condTypes), func(candidateType string) bool { return candidateType == condition.Type })
+	}
+	if hasStale {
+		return stale, true
+	}
+	return deleting, hasDeletingFallback
 }
 
 // gwListenerCond is one listener's failing condition within a gateway group.
@@ -299,9 +379,21 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 	groups := map[string]*routeGroup{}
 	var order []string
 
+	// A controller can leave a status.parents entry behind after its parent was
+	// removed from spec.parentRefs; that stale entry must not raise a warning
+	// while the route's current parent is healthy. Keep only status entries that
+	// still describe a parent the route attaches to (see gatewayStatusParentCounts).
+	routeNS := u.GetNamespace()
+	specParents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+	attachedByDefault := routeUsesDefaultGateways(u)
+
 	for _, parent := range parents {
 		pm, ok := parent.(map[string]any)
 		if !ok {
+			continue
+		}
+		ref, _ := pm["parentRef"].(map[string]any)
+		if !gatewayStatusParentCounts(ref, specParents, routeNS, attachedByDefault) {
 			continue
 		}
 		gwLabel, gwKey, section := gatewayParentRef(pm)
@@ -371,6 +463,29 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 		out = append(out, issue)
 	}
 	return out
+}
+
+// gatewayStatusParentCounts reports whether a route's status.parents entry still
+// describes a parent the route attaches to. A parent matching a current
+// spec.parentRef always counts. A route that opts into default Gateways also
+// attaches to Gateways it does not name in spec, so an unmatched entry counts
+// only when it could be such a default attachment — i.e. it references a Gateway;
+// an unmatched non-Gateway entry (a mesh Service the spec dropped) is a leftover
+// and is ignored. Mirrors the route-status evidence rule in the shared UI
+// (resource-utils routeParentEvidence).
+func gatewayStatusParentCounts(ref map[string]any, specParents []any, routeNamespace string, attachedByDefault bool) bool {
+	if configrefs.GatewayParentRefInSpec(ref, specParents, routeNamespace) {
+		return true
+	}
+	return attachedByDefault && len(ref) > 0 && configrefs.GatewayParentIsGateway(ref)
+}
+
+// routeUsesDefaultGateways reports whether the route opts into attaching to
+// default Gateways (Gateway API spec.useDefaultGateways). Such routes record
+// Gateway parents in status that are not listed in spec.parentRefs.
+func routeUsesDefaultGateways(u *unstructured.Unstructured) bool {
+	v, found, _ := unstructured.NestedString(u.Object, "spec", "useDefaultGateways")
+	return found && v != "" && v != "None"
 }
 
 // gatewayRouteMessage renders a collapsed gateway group's message. When every

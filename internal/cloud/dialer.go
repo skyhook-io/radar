@@ -2,7 +2,6 @@ package cloud
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -40,13 +39,14 @@ func dial(ctx context.Context, cfg Config, selfUpgrade bool) (*yamux.Session, er
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
-	if cfg.InsecureSkipVerify {
-		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested via --cloud-insecure-skip-verify for a self-signed hub
-	}
+	dialer.TLSClientConfig = hubTLSConfig(cfg.CA, cfg.InsecureSkipVerify)
 	ws, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {
 		if resp != nil {
 			defer resp.Body.Close()
+			if cfg.Enrolled && resp.StatusCode == http.StatusUnauthorized {
+				return nil, &handshakeStatusError{err: errEnrolledTokenRejected}
+			}
 			return nil, handshakeRejectionError(resp.StatusCode, err)
 		}
 		return nil, fmt.Errorf("ws dial: %w", err)

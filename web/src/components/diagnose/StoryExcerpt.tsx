@@ -4,13 +4,23 @@ import {
   TerminalBlock,
   TerminalBlockLabel,
 } from "@skyhook-io/k8s-ui";
-import { InventoryRow } from "./investigationEvidence/bodies/inventory";
+import {
+  InventoryRow,
+  type NamedInventoryRow,
+} from "./investigationEvidence/bodies/inventory";
 import { RankingRow } from "./investigationEvidence/bodies/ranking";
 import { PostureFindingRow } from "./investigationEvidence/bodies/posture";
 import { MetricsBody } from "./investigationEvidence/bodies/metrics";
 import type { StoryExcerpt as Excerpt } from "./investigationEvidence/excerpt";
 import type { InvestigationEvidenceData } from "./investigationEvidence";
 import type { MetricsChangeCoverage } from "./investigationMetrics";
+
+// A name a partial listing lacks is unknown where the listing did not look,
+// not absent.
+const unread = (entry: NamedInventoryRow) =>
+  entry.notRead !== undefined ||
+  entry.readOnlyIn !== undefined ||
+  entry.readUnnamed !== undefined;
 
 /** The inline slice of a placed card, rendered from Radar's record. */
 export function StoryExcerpt({
@@ -20,6 +30,7 @@ export function StoryExcerpt({
   open,
   canExpand,
   changeCoverage,
+  chartId,
 }: {
   excerpt: Excerpt;
   data: InvestigationEvidenceData;
@@ -27,6 +38,8 @@ export function StoryExcerpt({
   open: boolean;
   canExpand: boolean;
   changeCoverage?: MetricsChangeCoverage;
+  /** Panel id for the card header's aria-controls when the chart folds. */
+  chartId?: string;
 }) {
   const padding = prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2";
   switch (excerpt.kind) {
@@ -64,16 +77,25 @@ export function StoryExcerpt({
                 <p
                   key={entry.key}
                   data-story-inventory-absent={
-                    entry.matches === 0 ? "" : undefined
+                    entry.matches === 0 && !unread(entry) ? "" : undefined
                   }
+                  data-story-inventory-unread={unread(entry) ? "" : undefined}
                   className={clsx(
                     "px-2.5 py-1.5 font-mono text-xs text-theme-text-secondary",
                     index > 0 && "border-t border-theme-border/60",
                   )}
                 >
-                  {entry.matches === 0
-                    ? `Not in this listing: ${entry.label}`
-                    : `${entry.label}: ${entry.matches} entries match in this listing`}
+                  {entry.readUnnamed
+                    ? entry.readUnnamed.namespace
+                      ? `${entry.label}: not in this listing, which read ${entry.readUnnamed.count} namespaces without naming them all; ${entry.readUnnamed.namespace} may not have been one`
+                      : `${entry.label}: not in the ${entry.readUnnamed.count} namespaces read`
+                    : entry.notRead
+                      ? `${entry.label}: ${entry.notRead} was not read`
+                      : entry.readOnlyIn
+                        ? `${entry.label}: not in the namespaces read (${entry.readOnlyIn.slice(0, 3).join(", ")}${entry.readOnlyIn.length > 3 ? ` and ${entry.readOnlyIn.length - 3} more` : ""})`
+                        : entry.matches === 0
+                          ? `Not in this listing: ${entry.label}`
+                          : `${entry.label}: ${entry.matches} entries match in this listing`}
                 </p>
               ),
             )}
@@ -110,9 +132,15 @@ export function StoryExcerpt({
       );
     case "chart":
       return data.type === "metrics" ? (
-        <div data-story-metrics className={padding}>
-          <MetricsBody data={data} changeCoverage={changeCoverage} />
-        </div>
+        <Collapse open={open} mountLazily id={chartId}>
+          <div data-story-metrics className={padding}>
+            <MetricsBody
+              data={data}
+              changeCoverage={changeCoverage}
+              size={excerpt.size}
+            />
+          </div>
+        </Collapse>
       ) : null;
   }
 }

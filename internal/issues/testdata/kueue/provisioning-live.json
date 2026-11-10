@@ -1,0 +1,545 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T04:28:03Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 2,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "ff03ace4-346a-4f4c-af06-9d8948795758"
+        },
+        "name": "job-capacity-revoked-b74c8",
+        "namespace": "gpu-night-843-prov",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "capacity-revoked",
+            "uid": "ff03ace4-346a-4f4c-af06-9d8948795758"
+          }
+        ],
+        "resourceVersion": "130801109",
+        "uid": "7d8c9e94-48a5-4baa-9407-1ae9b833df55"
+      },
+      "spec": {
+        "active": false,
+        "priority": 0,
+        "queueName": "prov"
+      },
+      "status": {
+        "accumulatedPastExecutionTimeSeconds": 72,
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T04:31:03Z",
+            "message": "Reset to Pending after eviction. Previously: Rejected",
+            "name": "gpu-night-843-prov",
+            "podSetUpdates": [
+              {
+                "annotations": {
+                  "autoscaling.x-k8s.io/consume-provisioning-request": "job-capacity-revoked-b74c8-gpu-night-843-prov-1",
+                  "autoscaling.x-k8s.io/provisioning-class-name": "check-capacity.autoscaling.x-k8s.io"
+                },
+                "name": "main"
+              }
+            ],
+            "state": "Pending"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T04:31:03Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-843-prov\" (RAD-843 fixture provider: the nodes were reclaimed)",
+            "observedGeneration": 2,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T04:31:03Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-843-prov\" (RAD-843 fixture provider: the nodes were reclaimed)",
+            "observedGeneration": 2,
+            "reason": "DeactivatedDueToAdmissionCheck",
+            "status": "True",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T04:31:03Z",
+            "message": "The workload has no reservation and not all checks ready",
+            "observedGeneration": 2,
+            "reason": "NoReservationUnsatisfiedChecks",
+            "status": "False",
+            "type": "Admitted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T04:31:03Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-843-prov\" (RAD-843 fixture provider: the nodes were reclaimed)",
+            "observedGeneration": 2,
+            "reason": "DeactivatedDueToAdmissionCheck",
+            "status": "False",
+            "type": "Requeued"
+          }
+        ],
+        "schedulingStats": {
+          "evictions": [
+            {
+              "count": 1,
+              "reason": "Deactivated",
+              "underlyingCause": "AdmissionCheck"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "Workload",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T04:28:02Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 2,
+        "labels": {
+          "kueue.x-k8s.io/job-uid": "e50f475a-e1cf-45b1-a81b-7373ed1e63b1"
+        },
+        "name": "job-provisioning-fails-fc66c",
+        "namespace": "gpu-night-843-prov",
+        "ownerReferences": [
+          {
+            "apiVersion": "batch/v1",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Job",
+            "name": "provisioning-fails",
+            "uid": "e50f475a-e1cf-45b1-a81b-7373ed1e63b1"
+          }
+        ],
+        "resourceVersion": "130800999",
+        "uid": "64fed0dc-ad44-4b33-9dd1-4bfa3ae1c0ec"
+      },
+      "spec": {
+        "active": false,
+        "priority": 0,
+        "queueName": "prov"
+      },
+      "status": {
+        "admissionChecks": [
+          {
+            "lastTransitionTime": "2026-11-03T04:30:57Z",
+            "message": "Reset to Pending after eviction. Previously: Rejected",
+            "name": "gpu-night-843-prov",
+            "requeueAfterSeconds": 5,
+            "retryCount": 1,
+            "state": "Pending"
+          }
+        ],
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T04:30:57Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-843-prov\" (RAD-843 fixture provider: no capacity for 1 node (attempt 2))",
+            "observedGeneration": 2,
+            "reason": "Pending",
+            "status": "False",
+            "type": "QuotaReserved"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T04:30:57Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-843-prov\" (RAD-843 fixture provider: no capacity for 1 node (attempt 2))",
+            "observedGeneration": 2,
+            "reason": "DeactivatedDueToAdmissionCheck",
+            "status": "True",
+            "type": "Evicted"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T04:30:57Z",
+            "message": "The workload is deactivated due to AdmissionCheck in Rejected state: \"gpu-night-843-prov\" (RAD-843 fixture provider: no capacity for 1 node (attempt 2))",
+            "observedGeneration": 2,
+            "reason": "DeactivatedDueToAdmissionCheck",
+            "status": "False",
+            "type": "Requeued"
+          }
+        ],
+        "schedulingStats": {
+          "evictions": [
+            {
+              "count": 1,
+              "reason": "AdmissionCheck",
+              "underlyingCause": ""
+            },
+            {
+              "count": 1,
+              "reason": "Deactivated",
+              "underlyingCause": "AdmissionCheck"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "capacity-revoked",
+        "namespace": "gpu-night-843-prov",
+        "uid": "ff03ace4-346a-4f4c-af06-9d8948795758",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T04:28:03Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "prov",
+          "radar.skyhook.io/fixture": "gpu-night"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "provisioning-fails",
+        "namespace": "gpu-night-843-prov",
+        "uid": "e50f475a-e1cf-45b1-a81b-7373ed1e63b1",
+        "ownerReferences": null,
+        "creationTimestamp": "2026-11-03T04:28:02Z",
+        "labels": {
+          "kueue.x-k8s.io/queue-name": "prov",
+          "radar.skyhook.io/fixture": "gpu-night"
+        }
+      }
+    },
+    {
+      "apiVersion": "autoscaling.x-k8s.io/v1",
+      "kind": "ProvisioningRequest",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T04:28:18Z",
+        "generation": 3,
+        "labels": {
+          "kueue.x-k8s.io/managed": "true"
+        },
+        "name": "job-capacity-revoked-b74c8-gpu-night-843-prov-1",
+        "namespace": "gpu-night-843-prov",
+        "ownerReferences": [
+          {
+            "apiVersion": "kueue.x-k8s.io/v1beta2",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Workload",
+            "name": "job-capacity-revoked-b74c8",
+            "uid": "7d8c9e94-48a5-4baa-9407-1ae9b833df55"
+          }
+        ],
+        "resourceVersion": "130801090",
+        "uid": "41e4e7c8-7efb-40c0-948e-efeb45ab81d8"
+      },
+      "spec": {
+        "parameters": {},
+        "podSets": [
+          {
+            "count": 1,
+            "podTemplateRef": {
+              "name": "ppt-job-capacity-revoked-b74c8-gpu-night-843-prov-1-main"
+            }
+          }
+        ],
+        "provisioningClassName": "check-capacity.autoscaling.x-k8s.io"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T04:30:53Z",
+            "message": "RAD-843 fixture provider: capacity booked",
+            "observedGeneration": 1,
+            "reason": "Provisioned",
+            "status": "True",
+            "type": "Provisioned"
+          },
+          {
+            "lastTransitionTime": "2026-11-03T04:30:53Z",
+            "message": "RAD-843 fixture provider: the nodes were reclaimed",
+            "observedGeneration": 1,
+            "reason": "CapacityRevoked",
+            "status": "True",
+            "type": "CapacityRevoked"
+          }
+        ],
+        "provisioningClassDetails": null
+      }
+    },
+    {
+      "apiVersion": "autoscaling.x-k8s.io/v1",
+      "kind": "ProvisioningRequest",
+      "metadata": {
+        "creationTimestamp": "2026-11-03T04:29:49Z",
+        "generation": 2,
+        "labels": {
+          "kueue.x-k8s.io/managed": "true"
+        },
+        "name": "job-provisioning-fails-fc66c-gpu-night-843-prov-2",
+        "namespace": "gpu-night-843-prov",
+        "ownerReferences": [
+          {
+            "apiVersion": "kueue.x-k8s.io/v1beta2",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Workload",
+            "name": "job-provisioning-fails-fc66c",
+            "uid": "64fed0dc-ad44-4b33-9dd1-4bfa3ae1c0ec"
+          }
+        ],
+        "resourceVersion": "130800991",
+        "uid": "8bcd13c9-11f2-493d-90e2-b237fbcc12bb"
+      },
+      "spec": {
+        "parameters": {},
+        "podSets": [
+          {
+            "count": 1,
+            "podTemplateRef": {
+              "name": "ppt-job-provisioning-fails-fc66c-gpu-night-843-prov-2-main"
+            }
+          }
+        ],
+        "provisioningClassName": "check-capacity.autoscaling.x-k8s.io"
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T04:30:53Z",
+            "message": "RAD-843 fixture provider: no capacity for 1 node (attempt 2)",
+            "observedGeneration": 1,
+            "reason": "CapacityUnavailable",
+            "status": "True",
+            "type": "Failed"
+          }
+        ],
+        "provisioningClassDetails": null
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T04:28:02Z",
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night"
+        },
+        "name": "prov",
+        "namespace": "gpu-night-843-prov",
+        "resourceVersion": "130801116",
+        "uid": "f8c10ea3-a00a-4be3-bfdb-f47661765237"
+      },
+      "spec": {
+        "clusterQueue": "gpu-night-843-prov",
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T04:28:18Z",
+            "message": "Can submit new workloads to localQueue",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-843-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-843-default",
+            "resources": [
+              {
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 0,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T04:28:18Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night"
+        },
+        "name": "gpu-night-843-prov",
+        "resourceVersion": "130801117",
+        "uid": "9bc7477e-4b06-4e97-8ac9-145c394524ac"
+      },
+      "spec": {
+        "admissionChecksStrategy": {
+          "admissionChecks": [
+            {
+              "name": "gpu-night-843-prov"
+            }
+          ]
+        },
+        "flavorFungibility": {
+          "whenCanBorrow": "MayStopSearch",
+          "whenCanPreempt": "TryNextFlavor"
+        },
+        "namespaceSelector": {
+          "matchLabels": {
+            "kubernetes.io/metadata.name": "gpu-night-843-prov"
+          }
+        },
+        "preemption": {
+          "borrowWithinCohort": {
+            "policy": "Never"
+          },
+          "reclaimWithinCohort": "Never",
+          "withinClusterQueue": "Never"
+        },
+        "queueingStrategy": "BestEffortFIFO",
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu",
+              "memory"
+            ],
+            "flavors": [
+              {
+                "name": "gpu-night-843-default",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "1"
+                  },
+                  {
+                    "name": "memory",
+                    "nominalQuota": "1Gi"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "None"
+      },
+      "status": {
+        "admittedWorkloads": 0,
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T04:28:18Z",
+            "message": "Can admit new workloads",
+            "observedGeneration": 1,
+            "reason": "Ready",
+            "status": "True",
+            "type": "Active"
+          }
+        ],
+        "flavorsReservation": [
+          {
+            "name": "gpu-night-843-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "flavorsUsage": [
+          {
+            "name": "gpu-night-843-default",
+            "resources": [
+              {
+                "borrowed": "0",
+                "name": "cpu",
+                "total": "0"
+              },
+              {
+                "borrowed": "0",
+                "name": "memory",
+                "total": "0"
+              }
+            ]
+          }
+        ],
+        "pendingWorkloads": 0,
+        "reservingWorkloads": 0
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "AdmissionCheck",
+      "metadata": {
+        "annotations": {},
+        "creationTimestamp": "2026-11-03T04:28:01Z",
+        "finalizers": [
+          "kueue.x-k8s.io/resource-in-use"
+        ],
+        "generation": 1,
+        "labels": {
+          "radar.skyhook.io/fixture": "gpu-night"
+        },
+        "name": "gpu-night-843-prov",
+        "resourceVersion": "130798208",
+        "uid": "3edb3311-4703-4c8d-b2a7-0ebb7dbf13a2"
+      },
+      "spec": {
+        "controllerName": "kueue.x-k8s.io/provisioning-request",
+        "parameters": {
+          "apiGroup": "kueue.x-k8s.io",
+          "kind": "ProvisioningRequestConfig",
+          "name": "gpu-night-843-prc"
+        }
+      },
+      "status": {
+        "conditions": [
+          {
+            "lastTransitionTime": "2026-11-03T04:28:01Z",
+            "message": "The admission check is active",
+            "observedGeneration": 1,
+            "reason": "Active",
+            "status": "True",
+            "type": "Active"
+          }
+        ]
+      }
+    }
+  ]
+}

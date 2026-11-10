@@ -90,7 +90,7 @@ export function TopologyControls({
   return (
     // Layout-neutral (positioned by the host's overlay bar): `relative` anchors
     // its own dropdowns; `pointer-events-auto` inside the pointer-events-none bar.
-    <div className="relative flex items-center gap-2 pointer-events-auto">
+    <div className="relative flex items-center gap-2 pointer-events-auto phone:flex-wrap phone:gap-1.5">
       {/* Freshness/liveness status — backed for legibility over the canvas but
           borderless + divided off, so it reads as a status, not another control. */}
       {leadingSlot && (

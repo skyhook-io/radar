@@ -89,6 +89,13 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 	}
 	adapter.Clients.Proxy = cnpgRuntimeClient(adapter.config)
 	adapter.Clients.Exec = cnpgsvc.NewExec(adapter.Clients.Typed, adapter.config)
+	if k8s.ForceDisableExec {
+		// Session reads and cancel/terminate actions run psql through this
+		// client; a forbidden error surfaces as "exec denied" in both.
+		adapter.Clients.Exec = func(context.Context, string, string, string, []string, string) ([]byte, error) {
+			return nil, errExecDisabled
+		}
+	}
 	current := func() bool { return operation != nil && operation.Err() == nil }
 	boundBudget := func(ctx context.Context) *syncBudget {
 		budget := newSyncBudget(ctx)

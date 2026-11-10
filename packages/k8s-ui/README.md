@@ -2,6 +2,13 @@
 
 Shared, source-distributed Kubernetes UI components used by Radar.
 
+## Toast updates
+
+`useToast().showToast(message, { id })` updates an existing toast with that ID
+in place and restarts its dismiss timer. Omit `id` for independent toasts.
+Set `duration: 0` to keep a progress toast visible until its result replaces it;
+omit `duration` on the result to use the normal dismiss time.
+
 ## Local terminal metadata
 
 `LocalTerminalTab` accepts optional `onSessionInfo` and `toolbarExtra` props.
@@ -42,6 +49,12 @@ resolve: {
 
 webpack 5 hosts need the same mapping in `resolve.alias`. Without it the build fails to resolve the worker import.
 
+## Resource read coverage
+
+`ResourceReadCoverage` describes the scope an answer covers (and `narrowedBy`, when the caller's access, Radar's pin or what Radar collects narrowed it), what Radar read of it, and coded gaps naming what it did not read and why. `READ_ACTIONS` / `readActionFor` say what resolves each code. `ResourceCoverage` additionally permits `unknown` in UI adapters for older Radar instances. It does not describe object freshness or count truncation.
+
+Pass list coverage through `ResourceQueryResult.coverage`, and per-kind count coverage through `ResourcesView.resourceCoverage` / `ResourcesSidebar.resourceCoverage`. Counts stay useful for sizing; a partial count displays as a lower bound and a partial zero does not hide a kind as empty; a category total is a lower bound when any of its kinds is partial or narrowed by what Radar collects. A complete list whose scope Radar's collection narrowed (`narrowedBy: ["namespace_collection"]`) gets a neutral note naming the collected namespaces. Unknown or absent coverage keeps the presentation that predates coverage. Partial list notices name the affected namespaces when the gap names at most three; larger or unnamed sets keep the compact wording. Loaded list counts retain their coverage when cached. `GitOpsTableView` accepts aggregate `coverageStatus` and `countsPartial` keys; hosts must combine coverage across every cluster/source contributing to the view, and a host that passes no `coverageStatus` gets the unqualified view. Keep source-specific metadata in the host rather than repeating it on every row.
+
 ## Resource kind views and certainty
 
 `ResourcesView.renderKindView(kind)` optionally replaces a kind's table while
@@ -70,3 +83,11 @@ tooltip. `certaintyGlyph` and `certaintyValueLabel` expose the same vocabulary.
 `ActionConfirmDialog` adds context, reviewed writes and optional typed acknowledgement to the simpler `ConfirmDialog`. Hosts own loading, permission checks, stale-fact validation and result classification. Its `result` binds the state (`error`, `unknown` or `partial`), message and optional heading; unknown and partial results lock another submit. Retain that result outside the dialog across dismissal and remount, and clear it only after explicitly reviewing current state. The component does not infer outcomes from HTTP status. Remount it when changing the reviewed target or action, so acknowledgement and disclosure state start fresh. The default error heading makes no claim about whether a write occurred; use a stronger result title only when the producer proves it.
 
 Existing CNPG primitive exports remain available and delegate to these shared implementations.
+
+`PrinterColumnDef.jsonPath` optionally carries source provenance from newer Radar servers. The UI does not evaluate it: values still come from the server's table converter. Without it, printer-cell tones stay generic. Crossplane pause qualification only recognizes exact Ready/Synced condition paths and corroborated annotation/condition evidence; same-named unrelated columns retain their normal tones. `ConditionTone` also supports opt-in `neutral`; `defaultConditionTone` retains its original return vocabulary. `ComposedRefStatus.pauseState` optionally supplies recorded Crossplane pause context for a composed-resource row.
+
+`ForceDeleteConfirmDialog.resourceData` optionally supplies the current object for Crossplane pause context. Paused MR/XR/Claim shapes holding a known Crossplane finalizer receive a cleanup warning; the prop does not change confirmation or force-delete behavior. YAML operation context uses the existing baseline and predicted manifests; removing a pause annotation requests resumption rather than proving it.
+
+`YamlReview.mode` distinguishes Apply, strict Create and Update (default: `apply`). Hosts using strict creation should pass `create` so an unpreviewable new document does not imply unknown live pause state. Crossplane operation context reports what the server preview actually keeps or clears; unsupported dry-run documents retain conditional uncertainty rather than treating submitted YAML as a live baseline.
+
+For a single editor target, `YamlReview.resourceData` may retain its raw condition evidence when the review YAML intentionally omits status. `EditableYamlView` binds that snapshot to its preview. It is not used to classify unrelated documents in a batch. Generic Apply with neither a known Crossplane shape nor raw acknowledged pause does not infer a resource’s controller from the annotation alone.

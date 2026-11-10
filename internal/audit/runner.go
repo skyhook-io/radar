@@ -62,8 +62,13 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
-		input.ClusterVersion = opts.ClusterVersion
+		if opts.ClusterVersion != "" {
+			input.ClusterVersion = opts.ClusterVersion
+		}
 		input.ServedAPIs = opts.ServedAPIs
+	}
+	if input.ClusterVersion == "" {
+		input.ClusterVersion = k8s.GetServerVersion()
 	}
 
 	// Crossplane Managed Resources / Composites / Claims live in the dynamic

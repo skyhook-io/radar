@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CompareResourcePicker, refToParam, type CompareResourceRef } from '@skyhook-io/k8s-ui'
+import { CompareResourcePicker, refToParam, resourceCoverageNotice, resourceNarrowedNotice, type CompareResourceRef } from '@skyhook-io/k8s-ui'
 import { useCompareCandidates } from './useCompareCandidates'
 import { useNavCustomization } from '../../context/NavCustomization'
 
@@ -30,7 +30,7 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const kindLower = kind.toLowerCase()
-  const { candidates, isPending, error } = useCompareCandidates(kindLower, group, open)
+  const { candidates, coverage, isPending, error } = useCompareCandidates(kindLower, group, open)
   const { crossClusterCompareHref, onHostNavigate } = useNavCustomization()
 
   const onCompareTo = useCallback(() => setOpen(true), [])
@@ -65,6 +65,8 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
       onClose={() => setOpen(false)}
       source={source}
       candidates={candidates}
+      coverageNote={resourceCoverageNotice(coverage)}
+      scopeNote={resourceNarrowedNotice(coverage)}
       loading={open && isPending}
       error={open ? error : null}
       onPick={handlePick}

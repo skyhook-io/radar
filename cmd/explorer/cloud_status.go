@@ -264,7 +264,13 @@ func printCloudStatusWithStyle(out io.Writer, target cloudinstall.RadarTarget, s
 	if runtime.CloudModeUnresolved {
 		fmt.Fprintln(out, "Cloud mode: configured from a referenced value (value not inspected)")
 	}
-	if runtime.CloudURL != "" {
+	if runtime.UsesEnrollment() {
+		if runtime.HubURL != "" {
+			fmt.Fprintf(out, "Hub: %s (joins with an enrollment key)\n", runtime.HubURL)
+		} else if runtime.HubURLUnresolved {
+			fmt.Fprintln(out, "Hub: configured from a referenced value (value not inspected)")
+		}
+	} else if runtime.CloudURL != "" {
 		fmt.Fprintf(out, "Hub: %s\n", runtime.CloudURL)
 	} else if runtime.CloudURLUnresolved {
 		fmt.Fprintln(out, "Hub: configured from a referenced value (value not inspected)")
@@ -456,6 +462,14 @@ func checkHubTunnelStatus(ctx context.Context, kc kubernetes.Interface, target c
 			next:    "complete the Cloud settings above, then run this command again.",
 		}
 	}
+	if runtime.UsesEnrollment() {
+		// Radar holds the token it got by joining in memory only, so there
+		// is nothing here to ask the Hub with.
+		return hubTunnelResult{
+			summary: "not checked - this Radar joins the Hub with an enrollment key",
+			next:    fmt.Sprintf("check its log, which says whether it joined and, if not, why: kubectl -n %s logs deploy/%s", target.Namespace, target.DeploymentName),
+		}
+	}
 	if runtime.CloudURL == "" {
 		return hubTunnelResult{
 			summary: "not checked — the Hub URL cannot be read from the Deployment",
@@ -591,6 +605,9 @@ func evaluateHubTunnelStatus(status *cloud.AgentStatusResponse, err error) hubTu
 }
 
 func missingCloudConfiguration(runtime cloudinstall.DeploymentRuntime) []string {
+	if runtime.UsesEnrollment() {
+		return missingEnrollmentConfiguration(runtime)
+	}
 	var missing []string
 	if !runtime.CloudURLConfigured || (runtime.CloudURL == "" && !runtime.CloudURLUnresolved) {
 		missing = append(missing, "Hub URL")
@@ -642,4 +659,17 @@ func cloudOwnershipLabel(target cloudinstall.RadarTarget) string {
 	default:
 		return "unknown"
 	}
+}
+
+func missingEnrollmentConfiguration(runtime cloudinstall.DeploymentRuntime) []string {
+	var missing []string
+	if !runtime.HubURLConfigured || (runtime.HubURL == "" && !runtime.HubURLUnresolved) {
+		missing = append(missing, "Hub URL")
+	}
+	if !runtime.CloudModeConfigured {
+		missing = append(missing, "Cloud mode")
+	} else if !runtime.CloudMode && !runtime.CloudModeUnresolved {
+		missing = append(missing, "enabled Cloud mode")
+	}
+	return missing
 }

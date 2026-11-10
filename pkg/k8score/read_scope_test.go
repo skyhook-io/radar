@@ -200,3 +200,26 @@ func TestAssessKindReadIsPerNamespace(t *testing.T) {
 		t.Fatalf("whole kind = %d, %v", len(whole), ok)
 	}
 }
+
+func TestCachedObjectFoundBeforeSync(t *testing.T) {
+	synced := false
+	rc := &ResourceCache{enabledResources: map[string]bool{Pods: true}, kindStores: map[string]map[string]kindStore{Pods: {"": podStore(t, &synced, pod("alpha", "present"))}}}
+	obj, found := rc.CachedObject(Pods, "alpha", "present")
+	if !found || obj.(*corev1.Pod).Name != "present" {
+		t.Fatalf("hit before sync: %v %v", obj, found)
+	}
+	obj.(*corev1.Pod).Name = "changed"
+	if again, _ := rc.CachedObject(Pods, "alpha", "present"); again.(*corev1.Pod).Name != "present" {
+		t.Fatal("lookup exposed the store object")
+	}
+	if _, found := rc.CachedObject(Pods, "alpha", "missing"); found {
+		t.Fatal("unexpected hit")
+	}
+	if _, _, ok := rc.ReadableObject(Pods, "alpha", "missing"); ok {
+		t.Fatal("miss before sync became authoritative")
+	}
+	synced = true
+	if _, found, ok := rc.ReadableObject(Pods, "alpha", "missing"); found || !ok {
+		t.Fatal("miss after sync must establish absence")
+	}
+}

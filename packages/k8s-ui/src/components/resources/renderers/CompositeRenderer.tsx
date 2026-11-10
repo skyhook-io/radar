@@ -1,5 +1,5 @@
 import { clsx } from 'clsx'
-import { Layers, GitBranch, Box, ChevronRight, Pause } from 'lucide-react'
+import { Layers, GitBranch, Box, ChevronRight } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
 import {
@@ -11,9 +11,11 @@ import {
   getCrossplaneResourceRefs,
   getBoundXRRef,
   isClaim,
-  isCrossplanePaused,
+  getCrossplaneConditionTone,
+  getCrossplanePauseState,
   type CrossplaneResourceRef,
 } from '../resource-utils-crossplane'
+import { CrossplanePauseNotice, CrossplanePauseChip } from './CrossplanePauseContext'
 import { kindToPluralWithGroup } from '../../../utils/navigation'
 import type { StatusBadge } from '../resource-utils'
 
@@ -33,6 +35,7 @@ export interface ComposedRefStatus {
   ref: CrossplaneResourceRef
   /** undefined means we haven't fetched yet (or the host doesn't support it) */
   status?: StatusBadge
+  pauseState?: ReturnType<typeof getCrossplanePauseState>
   /** true while the fetch is in flight */
   loading?: boolean
   /** 404 — composed resource not created yet (normal during reconciliation) */
@@ -98,20 +101,12 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses, compo
   const resourceRefs = composedRefs ?? getCrossplaneResourceRefs(data)
   const claim = isClaim(data)
   const boundXR = claim ? getBoundXRRef(data) : null
-  const paused = isCrossplanePaused(data)
   const alertVariant = status.level === 'unhealthy' || status.level === 'alert' ? status.level : null
   const operationalIssuesShown = useOperationalIssuesShown()
 
   return (
     <>
-      {paused && (
-        <AlertBanner
-          variant="warning"
-          icon={Pause}
-          title="Reconciliation paused"
-          message="The crossplane.io/paused annotation is set. Composed resources will not be reconciled until the annotation is removed."
-        />
-      )}
+      <CrossplanePauseNotice data={data} />
 
       {alertVariant && reason && !operationalIssuesShown && (
         <AlertBanner
@@ -190,7 +185,7 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses, compo
         )}
       </Section>
 
-      <ConditionsSection conditions={data?.status?.conditions} />
+      <ConditionsSection conditions={data?.status?.conditions} getConditionTone={condition => getCrossplaneConditionTone(data, condition)} />
     </>
   )
 }
@@ -263,6 +258,7 @@ function ComposedRefRow({
         <span className="text-xs text-theme-text-tertiary truncate max-w-[8rem] shrink-0 text-right">{ref_.namespace}</span>
       )}
       <StatusCellInline statusEntry={statusEntry} />
+      <CrossplanePauseChip state={statusEntry?.pauseState ?? null} compact />
       <ChevronRight className="w-3.5 h-3.5 text-theme-text-tertiary shrink-0" />
     </div>
   )

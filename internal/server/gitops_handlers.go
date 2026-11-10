@@ -22,6 +22,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/finalizers"
@@ -29,6 +30,7 @@ import (
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -99,6 +101,10 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 // build. Topology is a deterministic projection of the informer cache, so
 // the short TTL has no semantic effect.
 func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, error) {
+	session, err := k8s.BeginOwnershipRead(req.Cache)
+	if err != nil {
+		return nil, nil, err
+	}
 	opts := topology.DefaultBuildOptions()
 	opts.Namespaces = req.AllowedNamespaces
 	opts.IncludeReplicaSets = true
@@ -114,6 +120,7 @@ func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstr
 	}
 
 	return gitopstree.NewBuilder(req.Cache, topo).
+		WithOwnership(session).
 		WithAllowedNamespaces(req.AllowedNamespaces).
 		WithReadCheck(func(ref gitopstree.ResourceRef) bool {
 			return s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false)
@@ -127,7 +134,12 @@ func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstr
 // status doesn't drift if an upstream error message gets reworded.
 func (s *Server) writeGitOpsBuildError(w http.ResponseWriter, req *gitopsRequest, err error) {
 	switch {
-	case errors.Is(err, k8s.ErrUnknownDynamicKind):
+	case errors.Is(err, context.Canceled):
+		// The client left mid-build; there is no one to answer.
+		return
+	case errors.Is(err, ownership.ErrCachesReplaced), errors.Is(err, ownership.ErrNotConnected):
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed or is not ready; retry the resource tree.")
+	case errors.Is(err, k8s.ErrUnknownDynamicKind), errors.Is(err, gitopstree.ErrNotGitOpsResource):
 		s.writeError(w, http.StatusBadRequest, err.Error())
 	case apierrors.IsNotFound(err):
 		s.writeError(w, http.StatusNotFound, err.Error())
@@ -263,6 +275,8 @@ func argoAPIHealthFailure(err error, tokenSet bool) string {
 		return "the connection is still being set up"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "the request timed out"
+	case errors.Is(err, portforward.ErrAutoDisabled):
+		return "it isn't reachable directly from this machine, and automatic port-forwarding is turned off. Set its URL in Settings → Argo CD"
 	case errors.Is(err, argocd.ErrUnreachable):
 		// Before ErrNotFound: a URL that 404s on /api/version is not an Argo
 		// CD server, which is not the same as Argo not knowing the app.

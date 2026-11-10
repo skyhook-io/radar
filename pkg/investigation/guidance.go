@@ -38,28 +38,36 @@ WHICH TOOL
 - Helm: list_helm_releases, get_helm_release.
 `
 
+const guidanceWriteTools = "- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_gitops, manage_cronjob, manage_node"
+const guidanceFixDiscipline = ". Fix the diagnosed cause, ideally by undoing what broke it; stopgaps only if a fix must wait.\n"
+
 // GuidanceWriteRouting routes fixes to the write tools. A proxy in front of a
 // full server can hide its write tools (Radar Hub does for read-only
 // organizations) while still listing other vendors' write tools, so the line
 // conditions each Kubernetes write tool on that tool being listed rather than
 // on write tools in general.
-const GuidanceWriteRouting = "- Fixes, each only if listed: patch_resource, apply_resource; manage_workload to restart, scale or roll back; manage_rollout, manage_cronjob, manage_node. Fix the diagnosed cause, ideally by restoring what changed and broke; stopgaps only if it can't be fixed now.\n"
+const GuidanceWriteRouting = guidanceWriteTools + guidanceFixDiscipline
+
+// GuidanceWriteRoutingExec includes the optional in-container command tool.
+const GuidanceWriteRoutingExec = "- Pod checks: exec_pod if listed.\n" + GuidanceWriteRouting
 
 // GuidanceSignals says how to read what Radar returns.
 const GuidanceSignals = `READING RADAR'S SIGNALS
 - An issues row naming a mechanism and an action is the leading hypothesis; start from its incident_parent if any. Confirm it with a targeted read; don't re-derive it. If it points at another resource, follow it. Conclude only when the evidence names the resource, explains the mechanism and accounts for the symptom; keep other findings separate.
 - Use changes attached to issues; get_changes when absent or for another window or scope. Reuse logs from diagnose; fetch more only for a specific gap.
 - issue_timing started_after_resource_was_healthy: a healthy window preceded the failure; look for what changed. started_at_resource_creation means the resource, or its owner workload, started failing during creation or first reconciliation. Compare resource_created_at with the incident window. Timing alone doesn't prove cause. Prefer timing_summary when present.
-- issues is live state; get_cluster_audit is configuration posture.
+- issues is live state; get_cluster_audit is posture, partly live.
 - After a fix, wait_for its rollout within a time limit, then recheck issues. Sleep only for time that must pass (a rate window, a scrape interval). Check the symptom only if they don't cover it.
 `
 
 // GeneralGuidanceReadOnly is the general guidance for a surface without write
-// tools; GeneralGuidanceFull adds the write-tool routing. Both end with the
+// tools; GeneralGuidanceFull adds write-tool routing, and GeneralGuidanceExec
+// also routes to optional container commands. All end with the
 // evidence rule and the untrusted-data rule Radar's own investigation agent
 // follows.
 const (
 	GeneralGuidanceReadOnly = GuidanceRouting + "\n" + GuidanceSignals + "\n" + ResultDiscipline + " " + UntrustedClusterData
+	GeneralGuidanceExec     = GuidanceRouting + GuidanceWriteRoutingExec + "\n" + GuidanceSignals + "\n" + ResultDiscipline + " " + UntrustedClusterData
 	GeneralGuidanceFull     = GuidanceRouting + GuidanceWriteRouting + "\n" + GuidanceSignals + "\n" + ResultDiscipline + " " + UntrustedClusterData
 )
 

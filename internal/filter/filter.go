@@ -12,7 +12,8 @@
 // Two compile entry points:
 //
 //	CompileObjectFilter — bindings shaped to a K8s object:
-//	  kind, apiVersion, metadata, spec, status, labels, annotations
+//	  object, kind, apiVersion, metadata, spec, status, labels, annotations,
+//	  report (Trivy Operator findings; empty for every other object)
 //
 //	CompileIssueFilter — bindings shaped to an issues.Issue:
 //	  severity, source, category, category_group, kind, group, ns,
@@ -82,6 +83,7 @@ func (f *Filter) Match(activation map[string]any) (bool, error) {
 // drift. Hub's TestCelEnv_ObjectDeclarations exercises the bindings
 // from its side; radar's filter_test.go does the same here.
 var envObject = mustNewEnv(
+	cel.Variable("object", cel.DynType),
 	cel.Variable("kind", cel.StringType),
 	cel.Variable("apiVersion", cel.StringType),
 	cel.Variable("metadata", cel.DynType),
@@ -89,6 +91,9 @@ var envObject = mustNewEnv(
 	cel.Variable("status", cel.DynType),
 	cel.Variable("labels", cel.MapType(cel.StringType, cel.StringType)),
 	cel.Variable("annotations", cel.MapType(cel.StringType, cel.StringType)),
+	// A projection of a Trivy Operator report's findings (see
+	// internal/search.trivyReportProjection), never the raw object.
+	cel.Variable("report", cel.DynType),
 )
 
 // envIssue is the CEL environment for /api/issues filters. The shape
@@ -127,7 +132,7 @@ func mustNewEnv(opts ...cel.EnvOption) *cel.Env {
 
 // CompileObjectFilter compiles a CEL expression that runs against a
 // K8s object's bindings (kind, metadata, spec, status, labels,
-// annotations). Returns the compiler's diagnostic verbatim on parse
+// annotations, report). Returns the compiler's diagnostic verbatim on parse
 // or type-check failure — that's what the agent retries against.
 func CompileObjectFilter(expr string) (*Filter, error) {
 	return compileWith(envObject, expr)

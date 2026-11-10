@@ -19,6 +19,7 @@ import {
   type ComposedHighlight,
   type ComposedNotes,
   type ReleaseNotes,
+  MAX_CARDS,
 } from './releaseNotes'
 import type { UsageDataStatus } from '../../api/usage-data'
 import { UsageDataAsk } from '../usage-data/UsageDataAsk'
@@ -142,7 +143,8 @@ interface DialogView {
 /**
  * Opens after an upgrade when the releases the user hasn't seen have enough to
  * show; otherwise the nav rail's unread dot carries them.
- * `?whats-new` (or `?whats-new=v1.15.0`) opens it on demand for previews, and
+ * `?whats-new` previews the newest authored release; `?whats-new=v1.15`
+ * (or `v1.15.0`) selects a release, and
  * `&whats-new-from=v1.14.0` previews it as composed for an upgrade from that version.
  */
 export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
@@ -205,16 +207,16 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
 
   useEffect(() => {
     if (previewParam === null) return
-    const target = releaseNotesFor(previewParam)?.version ?? currentVersion ?? RELEASE_NOTES[0]?.version
+    const single = releaseNotesFor(previewParam) ?? RELEASE_NOTES[0]
+    const target = single?.version
     if (!target) return
     const upgrade = previewFrom ? unreadReleases(target, previewFrom, true) : []
     if (upgrade.length > 0) {
       show({ notes: composeReleaseNotes(upgrade), since: previewFrom, to: target, acknowledges: false })
       return
     }
-    const single = releaseNotesFor(previewParam) ?? latestReleaseNotesFor(currentVersion) ?? RELEASE_NOTES[0]
     if (single) show({ notes: composeReleaseNotes([single]), since: null, to: single.version, acknowledges: false })
-  }, [previewParam, previewFrom, currentVersion, show])
+  }, [previewParam, previewFrom, show])
 
   useEffect(() => {
     if (!state || lastSeen === undefined || previewParam !== null || decidedRef.current) return
@@ -275,8 +277,11 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
 
   if (isCloud) return null
 
+  // A full grid wraps most descriptions a line longer at the default width.
+  const width = view?.notes.highlights.length === MAX_CARDS ? 'w-[840px]' : 'w-[760px]'
+
   return (
-    <DialogPortal open={open} onClose={close} ariaLabelledBy={titleId} className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[min(840px,calc(100vh-4rem))] flex flex-col overflow-hidden rounded-xl">
+    <DialogPortal open={open} onClose={close} ariaLabelledBy={titleId} className={clsx(width, 'max-w-[calc(100vw-2rem)] max-h-[min(980px,calc(100vh-4rem))] flex flex-col overflow-hidden rounded-xl')}>
       {view && (
         <WhatsNewContent
           titleId={titleId}

@@ -36,10 +36,11 @@ const (
 	upgradeSourceObjectCollectionTimeout = 10 * time.Second
 	upgradeNodeRuntimeCollectionTimeout  = 20 * time.Second
 	upgradeNodeEvidenceResponseLimit     = 8 << 20
-	upgradeAPIMetricsCollectionTimeout   = 10 * time.Second
 	upgradeAPIMetricsResponseLimit       = upgradereadiness.APIMetricsResponseLimit
 	upgradeAPIMetricsLineBuffer          = upgradereadiness.APIMetricsLineLimit
 )
+
+var upgradeAPIMetricsCollectionTimeout = 10 * time.Second
 
 // A busy API server's /metrics exceeds 16 MiB, so the stream is filtered to the
 // lines the deprecated-API check parses instead of being held whole.

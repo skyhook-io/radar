@@ -8,6 +8,7 @@ import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '.
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
+import { artifactHubPublisher, isArtifactHubOfficial } from '../../utils/artifacthub'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 
 interface ChartBrowserProps {
@@ -123,8 +124,8 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
+      {/* Toolbar. Phones: the controls wrap and search takes its own row. */}
+      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0 phone:flex-wrap phone:gap-2 phone:px-3">
         <div className="flex items-center gap-2 text-theme-text-secondary">
           <Package className="w-5 h-5" />
           <span className="font-medium">Charts</span>
@@ -213,7 +214,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
 
         {/* ArtifactHub filters */}
         {chartSource === 'artifacthub' && (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 phone:flex-wrap phone:gap-x-3 phone:gap-y-2">
             <label className="flex items-center gap-1.5 text-sm text-theme-text-secondary">
               <input
                 type="checkbox"
@@ -251,7 +252,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
         )}
 
         {/* Search */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative phone:order-last phone:basis-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
           <Input
             placeholder={chartSource === 'local' ? "Search charts..." : "Search ArtifactHub..."}
@@ -548,7 +549,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <div className="flex items-center gap-2 mt-0.5 text-xs text-theme-text-tertiary">
             <span className="flex items-center gap-1">
               <Building2 className="w-3 h-3" />
-              {chart.repository.organizationName || chart.repository.name}
+              {artifactHubPublisher(chart.repository)}
             </span>
             <span className="flex items-center gap-1">
               <Globe className="w-3 h-3" />
@@ -630,12 +631,12 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           </Tooltip>
 
           {/* Official */}
-          <Tooltip content={chart.repository.official ? 'Official package' : 'Community package'}>
+          <Tooltip content={isArtifactHubOfficial(chart) ? 'Official package' : 'Community package'}>
             <span className={clsx(
               'p-1.5 rounded',
-              chart.repository.official ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
+              isArtifactHubOfficial(chart) ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
             )}>
-              <Star className={clsx('w-4 h-4', chart.repository.official && 'fill-current')} />
+              <Star className={clsx('w-4 h-4', isArtifactHubOfficial(chart) && 'fill-current')} />
             </span>
           </Tooltip>
         </div>

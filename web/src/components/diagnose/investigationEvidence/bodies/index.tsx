@@ -1,3 +1,4 @@
+import { getCrossplanePauseState, isManagedResource, isComposite } from "@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane";
 import type { MetricsChangeCoverage } from "../../investigationMetrics";
 import type {
   InvestigationEvidenceData,
@@ -109,6 +110,7 @@ export function evidenceHasDetails(
     case "resource": {
       const replicas = data.resourceContext?.workloadSummary?.replicas;
       return Boolean(
+        ((isManagedResource(data.resource) || isComposite(data.resource) || getCrossplanePauseState(data.resource) === "acknowledged") && getCrossplanePauseState(data.resource)) ||
         investigationResourceEvidenceHasDetails(data.resource) ||
         replicas?.desired !== undefined ||
         data.resourceContext?.statusSummary?.conditions?.length ||

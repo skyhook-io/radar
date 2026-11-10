@@ -1,0 +1,647 @@
+{
+  "alpha and argocd": [
+    {
+      "object": "ConfigMap alpha/cfg",
+      "subject": "present",
+      "children": [
+        "Pod alpha/web-1-b"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "ConfigMap alpha/shared",
+      "subject": "present",
+      "references": [
+        "found Widget.example.io alpha/w1",
+        "found Widget.example.io alpha/w2"
+      ],
+      "owner": "several, none a controller",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "ConfigMap alpha/versioned",
+      "subject": "present",
+      "references": [
+        "found Widget.example.io alpha/w1"
+      ],
+      "owner": "reference 0: found Widget.example.io alpha/w1",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Event alpha/e1",
+      "subject": "excluded"
+    },
+    {
+      "object": "Node n1",
+      "subject": "present",
+      "children": [
+        "ClusterWidget.example.io cw1"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Node n2",
+      "subject": "present",
+      "references": [
+        "unresolvable"
+      ],
+      "owner": "reference 0: unresolvable",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "PersistentVolume pv1",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Pod alpha/dangling",
+      "subject": "present",
+      "references": [
+        "gone ReplicaSet.apps alpha/gone"
+      ],
+      "owner": "reference 0: gone ReplicaSet.apps alpha/gone",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Pod alpha/replaced",
+      "subject": "present",
+      "references": [
+        "replaced ReplicaSet.apps alpha/web-old"
+      ],
+      "owner": "reference 0: replaced ReplicaSet.apps alpha/web-old",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Pod alpha/web-1-a",
+      "subject": "present",
+      "references": [
+        "found ReplicaSet.apps alpha/web-1"
+      ],
+      "owner": "reference 0: found ReplicaSet.apps alpha/web-1",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "controllerChain": "Deployment.apps alpha/web"
+    },
+    {
+      "object": "Pod alpha/web-1-b",
+      "subject": "present",
+      "references": [
+        "found ReplicaSet.apps alpha/web-1",
+        "found ConfigMap alpha/cfg"
+      ],
+      "owner": "reference 0: found ReplicaSet.apps alpha/web-1",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "controllerChain": "Deployment.apps alpha/web"
+    },
+    {
+      "object": "Pod alpha/wrong-coordinates",
+      "subject": "present",
+      "references": [
+        "gone Deployment.apps alpha/nope"
+      ],
+      "owner": "reference 0: gone Deployment.apps alpha/nope",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Pod beta/stray",
+      "subject": "denied"
+    },
+    {
+      "object": "Deployment.apps alpha/web",
+      "subject": "present",
+      "children": [
+        "ReplicaSet.apps alpha/web-1 (controller)",
+        "Widget.example.io alpha/w1"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "ReplicaSet.apps alpha/web-1",
+      "subject": "present",
+      "references": [
+        "found Deployment.apps alpha/web"
+      ],
+      "owner": "reference 0: found Deployment.apps alpha/web",
+      "children": [
+        "Pod alpha/web-1-a (controller)",
+        "Pod alpha/web-1-b (controller)"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "controllerChain": "Deployment.apps alpha/web"
+    },
+    {
+      "object": "ReplicaSet.apps alpha/web-old",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Application.argoproj.io argocd/by-name",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "members": [
+        "PersistentVolume pv1",
+        "Deployment.apps alpha/web"
+      ],
+      "membership": "recorded; 0 missing, 2 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/elsewhere",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "membership": "remote; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/elsewhere-by-name",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "membership": "remote; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/empty",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/empty-list",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/malformed",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/new",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/no-destination-namespace",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "members": [
+        "ConfigMap alpha/cfg",
+        "Node n1"
+      ],
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/nowhere",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/web",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ],
+      "members": [
+        "ConfigMap alpha/cfg",
+        "Node n1",
+        "Deployment.apps alpha/web",
+        "Node.example.io alpha/n1",
+        "Widget.example.io alpha/w1"
+      ],
+      "membership": "recorded; 1 missing, 1 withheld, 1 unknown; not read: kind_unknown Unserved.example.io/alpha"
+    },
+    {
+      "object": "Job.batch alpha/j1",
+      "subject": "present",
+      "references": [
+        "unknown (kind_unknown Widget.example.io/)"
+      ],
+      "owner": "reference 0: unknown (kind_unknown Widget.example.io/)",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "ClusterWidget.example.io cw1",
+      "subject": "present",
+      "references": [
+        "found Node n1"
+      ],
+      "owner": "reference 0: found Node n1",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Gadget.example.io beta/g1",
+      "subject": "denied"
+    },
+    {
+      "object": "Node.example.io alpha/n1",
+      "subject": "present",
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Summary.example.io alpha/s1",
+      "subject": "unavailable kind_not_watchable"
+    },
+    {
+      "object": "Widget.example.io alpha/w1",
+      "subject": "present",
+      "references": [
+        "found Deployment.apps alpha/web"
+      ],
+      "owner": "reference 0: found Deployment.apps alpha/web",
+      "children": [
+        "ConfigMap alpha/shared",
+        "ConfigMap alpha/versioned"
+      ],
+      "childrenCoverage": [
+        "not read: kind_unknown Widget.example.io/",
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "Widget.example.io alpha/w2",
+      "subject": "present",
+      "children": [
+        "ConfigMap alpha/shared"
+      ],
+      "childrenCoverage": [
+        "narrowed to what the caller may read"
+      ]
+    },
+    {
+      "object": "HelmRelease.helm.toolkit.fluxcd.io flux-system/chart",
+      "subject": "denied"
+    },
+    {
+      "object": "HelmRelease.helm.toolkit.fluxcd.io flux-system/legacy",
+      "subject": "denied"
+    },
+    {
+      "object": "HelmRelease.helm.toolkit.fluxcd.io flux-system/no-id",
+      "subject": "denied"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/apps",
+      "subject": "denied"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/bad-id",
+      "subject": "denied"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/empty",
+      "subject": "denied"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/remote",
+      "subject": "denied"
+    }
+  ],
+  "everything": [
+    {
+      "object": "ConfigMap alpha/cfg",
+      "subject": "present",
+      "children": [
+        "Pod alpha/web-1-b"
+      ]
+    },
+    {
+      "object": "ConfigMap alpha/shared",
+      "subject": "present",
+      "references": [
+        "found Widget.example.io alpha/w1",
+        "found Widget.example.io alpha/w2"
+      ],
+      "owner": "several, none a controller"
+    },
+    {
+      "object": "ConfigMap alpha/versioned",
+      "subject": "present",
+      "references": [
+        "found Widget.example.io alpha/w1"
+      ],
+      "owner": "reference 0: found Widget.example.io alpha/w1"
+    },
+    {
+      "object": "Event alpha/e1",
+      "subject": "excluded"
+    },
+    {
+      "object": "Node n1",
+      "subject": "present",
+      "children": [
+        "ClusterWidget.example.io cw1",
+        "Gadget.example.io beta/g1 (controller)"
+      ]
+    },
+    {
+      "object": "Node n2",
+      "subject": "present",
+      "references": [
+        "unresolvable"
+      ],
+      "owner": "reference 0: unresolvable"
+    },
+    {
+      "object": "PersistentVolume pv1",
+      "subject": "present"
+    },
+    {
+      "object": "Pod alpha/dangling",
+      "subject": "present",
+      "references": [
+        "gone ReplicaSet.apps alpha/gone"
+      ],
+      "owner": "reference 0: gone ReplicaSet.apps alpha/gone"
+    },
+    {
+      "object": "Pod alpha/replaced",
+      "subject": "present",
+      "references": [
+        "replaced ReplicaSet.apps alpha/web-old"
+      ],
+      "owner": "reference 0: replaced ReplicaSet.apps alpha/web-old"
+    },
+    {
+      "object": "Pod alpha/web-1-a",
+      "subject": "present",
+      "references": [
+        "found ReplicaSet.apps alpha/web-1"
+      ],
+      "owner": "reference 0: found ReplicaSet.apps alpha/web-1",
+      "controllerChain": "Deployment.apps alpha/web"
+    },
+    {
+      "object": "Pod alpha/web-1-b",
+      "subject": "present",
+      "references": [
+        "found ReplicaSet.apps alpha/web-1",
+        "found ConfigMap alpha/cfg"
+      ],
+      "owner": "reference 0: found ReplicaSet.apps alpha/web-1",
+      "controllerChain": "Deployment.apps alpha/web"
+    },
+    {
+      "object": "Pod alpha/wrong-coordinates",
+      "subject": "present",
+      "references": [
+        "gone Deployment.apps alpha/nope"
+      ],
+      "owner": "reference 0: gone Deployment.apps alpha/nope"
+    },
+    {
+      "object": "Pod beta/stray",
+      "subject": "present",
+      "references": [
+        "gone ReplicaSet.apps beta/web-1"
+      ],
+      "owner": "reference 0: gone ReplicaSet.apps beta/web-1",
+      "controllerChain": "Pod beta/stray, stopped by gone ReplicaSet.apps beta/web-1"
+    },
+    {
+      "object": "Deployment.apps alpha/web",
+      "subject": "present",
+      "children": [
+        "ReplicaSet.apps alpha/web-1 (controller)",
+        "Widget.example.io alpha/w1"
+      ]
+    },
+    {
+      "object": "ReplicaSet.apps alpha/web-1",
+      "subject": "present",
+      "references": [
+        "found Deployment.apps alpha/web"
+      ],
+      "owner": "reference 0: found Deployment.apps alpha/web",
+      "children": [
+        "Pod alpha/web-1-a (controller)",
+        "Pod alpha/web-1-b (controller)"
+      ],
+      "controllerChain": "Deployment.apps alpha/web"
+    },
+    {
+      "object": "ReplicaSet.apps alpha/web-old",
+      "subject": "present"
+    },
+    {
+      "object": "Application.argoproj.io argocd/by-name",
+      "subject": "present",
+      "members": [
+        "PersistentVolume pv1",
+        "Pod beta/stray",
+        "Deployment.apps alpha/web",
+        "Gadget.example.io beta/g1"
+      ],
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/elsewhere",
+      "subject": "present",
+      "membership": "remote; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/elsewhere-by-name",
+      "subject": "present",
+      "membership": "remote; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/empty",
+      "subject": "present",
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/empty-list",
+      "subject": "present",
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/malformed",
+      "subject": "present",
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/new",
+      "subject": "present",
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/no-destination-namespace",
+      "subject": "present",
+      "members": [
+        "ConfigMap alpha/cfg",
+        "Node n1"
+      ],
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/nowhere",
+      "subject": "present",
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Application.argoproj.io argocd/web",
+      "subject": "present",
+      "members": [
+        "ConfigMap alpha/cfg",
+        "Node n1",
+        "Deployment.apps alpha/web",
+        "Gadget.example.io beta/g1",
+        "Node.example.io alpha/n1",
+        "Widget.example.io alpha/w1"
+      ],
+      "membership": "recorded; 1 missing, 0 withheld, 1 unknown; not read: kind_unknown Unserved.example.io/alpha"
+    },
+    {
+      "object": "Job.batch alpha/j1",
+      "subject": "present",
+      "references": [
+        "unknown (kind_unknown Widget.example.io/)"
+      ],
+      "owner": "reference 0: unknown (kind_unknown Widget.example.io/)"
+    },
+    {
+      "object": "ClusterWidget.example.io cw1",
+      "subject": "present",
+      "references": [
+        "found Node n1"
+      ],
+      "owner": "reference 0: found Node n1"
+    },
+    {
+      "object": "Gadget.example.io beta/g1",
+      "subject": "present",
+      "references": [
+        "found Node n1"
+      ],
+      "owner": "reference 0: found Node n1"
+    },
+    {
+      "object": "Node.example.io alpha/n1",
+      "subject": "present"
+    },
+    {
+      "object": "Summary.example.io alpha/s1",
+      "subject": "unavailable kind_not_watchable"
+    },
+    {
+      "object": "Widget.example.io alpha/w1",
+      "subject": "present",
+      "references": [
+        "found Deployment.apps alpha/web"
+      ],
+      "owner": "reference 0: found Deployment.apps alpha/web",
+      "children": [
+        "ConfigMap alpha/shared",
+        "ConfigMap alpha/versioned"
+      ],
+      "childrenCoverage": [
+        "not read: kind_unknown Widget.example.io/"
+      ]
+    },
+    {
+      "object": "Widget.example.io alpha/w2",
+      "subject": "present",
+      "children": [
+        "ConfigMap alpha/shared"
+      ]
+    },
+    {
+      "object": "HelmRelease.helm.toolkit.fluxcd.io flux-system/chart",
+      "subject": "present",
+      "members": [
+        "ConfigMap alpha/cfg",
+        "Deployment.apps alpha/web"
+      ],
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "HelmRelease.helm.toolkit.fluxcd.io flux-system/legacy",
+      "subject": "present",
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "HelmRelease.helm.toolkit.fluxcd.io flux-system/no-id",
+      "subject": "present",
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/apps",
+      "subject": "present",
+      "members": [
+        "ConfigMap alpha/shared",
+        "Node n1",
+        "PersistentVolume pv1",
+        "Deployment.apps alpha/web",
+        "ClusterWidget.example.io cw1",
+        "Widget.example.io alpha/w1"
+      ],
+      "membership": "recorded; 0 missing, 0 withheld, 1 unknown; not read: kind_unknown Unserved.example.io/alpha"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/bad-id",
+      "subject": "present",
+      "membership": "unreadable; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/empty",
+      "subject": "present",
+      "membership": "recorded; 0 missing, 0 withheld, 0 unknown"
+    },
+    {
+      "object": "Kustomization.kustomize.toolkit.fluxcd.io flux-system/remote",
+      "subject": "present",
+      "membership": "remote; 0 missing, 0 withheld, 0 unknown"
+    }
+  ]
+}

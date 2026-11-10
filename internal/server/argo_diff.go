@@ -112,8 +112,8 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// uses — namespace access plus per-kind SARs for cluster-scoped kinds and
 	// Secrets. A user who can see the Application but lacks `get` on the target
 	// (a Secret they can't read) is denied here, still before any Argo call.
-	if status, msg, ok := s.preflightResourceGet(r, normalizeKind(kind), resourceNamespace, resourceName, group); !ok {
-		s.writeError(w, status, msg)
+	if failure := s.preflightResourceGet(r, normalizeKind(kind), resourceNamespace, resourceName, group); failure != nil {
+		s.writeReadFailure(w, kind, failure, nil)
 		return
 	}
 

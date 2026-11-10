@@ -1,5 +1,7 @@
 package images
 
+import "github.com/google/go-containerregistry/pkg/authn"
+
 // FileNode represents a file or directory in the image filesystem
 type FileNode struct {
 	Name        string      `json:"name"`
@@ -38,6 +40,16 @@ type InspectRequest struct {
 	Namespace       string
 	PodName         string   // Optional: pod name to auto-discover pull secrets
 	PullSecretNames []string // Optional: explicit pull secret names
+	keychain        authn.Keychain
+	// guarded sends every registry request through the network guard; set
+	// for authenticated callers.
+	guarded bool
+	// nodeOnly: the Pod's node holds this image without having pulled it
+	// from a registry.
+	nodeOnly bool
+	// tagFallback is the request for the tag the caller named, used when the
+	// registry no longer has the digest Image was pinned to.
+	tagFallback *InspectRequest
 }
 
 // ImageMetadata contains lightweight metadata about an image (without downloading layers)

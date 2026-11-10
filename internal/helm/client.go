@@ -35,7 +35,6 @@ import (
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
-	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/kube"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
@@ -60,6 +59,16 @@ var repositoryRefreshErrorURL = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.-]*://[^
 
 // HTTP client for ArtifactHub requests
 var httpClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if !sameHTTPOrigin(via[0].URL, req.URL) {
+			req.Header.Del("Authorization")
+			req.Header.Del("Cookie")
+		}
+		return nil
+	},
 	Timeout: 30 * time.Second,
 }
 
@@ -72,6 +81,10 @@ type Client struct {
 	// leave it nil and use locateChartPath, which wires Helm's registry client
 	// for OCI references.
 	chartPathLocator func(*action.Configuration, string, string) (string, error)
+	// ociTags is a test seam for OCI tag listing; production uses the registry client.
+	ociTags ociTagLister
+	// listings shares recent classic-index downloads between version listings.
+	listings recentIndexes
 	// restConfig, when set, is the explicit rest.Config all actions target —
 	// used by callers that resolve the cluster themselves before Radar's k8s
 	// singleton is up (the CLI install driver), so Helm can't diverge onto a
@@ -377,6 +390,22 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true)
 }
 
+// ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
+// which namespaces' storage was read and which the caller was refused, rather
+// than skipping refused namespaces silently. A refusal everywhere is a result
+// here (nothing read, something denied), not an error. A cluster-wide read
+// (nil namespaces) reports itself as "" in read or denied.
+func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User) (rows []HelmRelease, read, denied []string, err error) {
+	if namespaces != nil && len(namespaces) == 0 {
+		return []HelmRelease{}, nil, nil, nil
+	}
+	client, err := c.storageClient(user)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), namespaces)
+}
+
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
 func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
@@ -420,8 +449,8 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 	fluxMap := fluxHelmReleaseMap(ctx)
 	all := make([]HelmRelease, 0)
 	var lastForbidden, firstFailure error
-	var failed []string
-	var failures []error
+	var failed, deniedScopes []string
+	var failures, denials []error
 	authorized := false
 	for index, ns := range scopes {
 		if err := ctx.Err(); err != nil {
@@ -447,6 +476,8 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		}
 		if denied(err) {
 			lastForbidden = err
+			deniedScopes = append(deniedScopes, ns)
+			denials = append(denials, err)
 			continue
 		}
 		if !keepGoing {
@@ -456,6 +487,16 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		failures = append(failures, err)
 		if firstFailure == nil {
 			firstFailure = err
+		}
+	}
+	// With keepGoing, a namespace the caller was denied is part of the answer
+	// once another was read: those releases weren't checked, and a caller that
+	// sees them elsewhere must be told.
+	if keepGoing && authorized && len(deniedScopes) > 0 {
+		failed = append(failed, deniedScopes...)
+		failures = append(failures, denials...)
+		if firstFailure == nil {
+			firstFailure = denials[0]
 		}
 	}
 	if firstFailure != nil {
@@ -649,6 +690,10 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		return nil, fmt.Errorf("failed to get helm release %s/%s: %w", namespace, name, err)
 	}
 
+	if rel.Chart == nil || rel.Chart.Metadata == nil || rel.Info == nil {
+		return nil, fmt.Errorf("release has no usable stored chart or status; ask an operator to recover it")
+	}
+
 	// Get release history
 	historyAction := action.NewHistory(actionConfig)
 	historyAction.Max = releaseHistoryMax
@@ -808,6 +853,9 @@ func getValuesWith(actionConfig *action.Configuration, name string, allValues bo
 	result := &HelmValues{UserSupplied: userSupplied}
 
 	if allValues {
+		if rel.Chart == nil || rel.Chart.Metadata == nil {
+			return nil, fmt.Errorf("release revision %d has no usable stored chart for computed values", rel.Version)
+		}
 		computed, err := chartutil.CoalesceValues(rel.Chart, rel.Config)
 		if err != nil {
 			return nil, fmt.Errorf("failed to compute helm release values: %w", err)
@@ -900,15 +948,26 @@ func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 in
 
 // GetNotesDiff returns a release notes diff between two revisions.
 func (c *Client) GetNotesDiff(namespace, name string, revision1, revision2 int) (*NotesDiff, error) {
-	return c.getNotesDiff(namespace, name, revision1, revision2, nil)
+	return c.getNotesDiff(namespace, name, revision1, revision2, nil, nil)
 }
 
 // GetNotesDiffAsUser is GetNotesDiff with K8s impersonation.
 func (c *Client) GetNotesDiffAsUser(namespace, name string, revision1, revision2 int, user *pkgauth.User) (*NotesDiff, error) {
-	return c.getNotesDiff(namespace, name, revision1, revision2, user)
+	return c.getNotesDiff(namespace, name, revision1, revision2, user, nil)
 }
 
-func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, user *pkgauth.User) (*NotesDiff, error) {
+// GetRedactedNotesDiffAsUser masks each revision before adding diff prefixes.
+// redact must mask known sensitive values from a notes string; nil is refused.
+// It receives raw values, first computed then user-supplied for each revision,
+// and must accept already-masked text. A values-read error returns no diff.
+func (c *Client) GetRedactedNotesDiffAsUser(namespace, name string, revision1, revision2 int, user *pkgauth.User, redact func(string, map[string]any) string) (*NotesDiff, error) {
+	if redact == nil {
+		return nil, fmt.Errorf("notes redactor is required")
+	}
+	return c.getNotesDiff(namespace, name, revision1, revision2, user, redact)
+}
+
+func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, user *pkgauth.User, redact func(string, map[string]any) string) (*NotesDiff, error) {
 	rel1, err := c.getReleaseRevisionAsUser(namespace, name, revision1, user)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision1, err)
@@ -917,11 +976,17 @@ func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get release revision %d: %w", revision2, err)
 	}
-	return &NotesDiff{
-		Revision1: revision1,
-		Revision2: revision2,
-		Diff:      computeDiff(releaseNotes(rel1), releaseNotes(rel2), revision1, revision2),
-	}, nil
+	notes := []string{releaseNotes(rel1), releaseNotes(rel2)}
+	if redact != nil {
+		for i, rel := range []*release.Release{rel1, rel2} {
+			values, err := c.GetValuesRevisionAsUser(namespace, name, true, rel.Version, user)
+			if err != nil {
+				return nil, fmt.Errorf("could not read revision %d values to redact notes: %w", rel.Version, err)
+			}
+			notes[i] = redact(redact(notes[i], values.Computed), values.UserSupplied)
+		}
+	}
+	return &NotesDiff{Revision1: revision1, Revision2: revision2, Diff: computeDiff(notes[0], notes[1], revision1, revision2)}, nil
 }
 
 // computeRedactedManifestDiff diffs two manifests with every Secret's data and
@@ -1800,26 +1865,38 @@ type renderedResource struct {
 
 func parseManifestResourceObjects(manifest, defaultNamespace string) ([]renderedResource, int) {
 	resources := []renderedResource{}
-	manifests := releaseutil.SplitManifests(manifest)
 	parseErrorCount := 0
-
-	for _, m := range manifests {
-		m = strings.TrimSpace(m)
-		if m == "" {
-			continue
+	var appendObject func(*unstructured.Unstructured)
+	appendObject = func(obj *unstructured.Unstructured) {
+		// Kubernetes' decoder treats any present items key as a list, so an empty
+		// rendered loop (items: null) is an empty List, not an unidentified object.
+		if items, ok := obj.Object["items"]; ok && items == nil {
+			return
 		}
-		jsonBytes, err := yaml.YAMLToJSON([]byte(m))
-		if err != nil {
+		// Helm's resource builder flattens List and typed-list documents recursively.
+		// Do not silently report their children as absent from a preview.
+		if obj.IsList() {
+			items := obj.Object["items"].([]any)
+			for _, item := range items {
+				child, ok := item.(map[string]any)
+				if !ok {
+					parseErrorCount++
+					continue
+				}
+				itemObject := &unstructured.Unstructured{Object: child}
+				// Match Kubernetes' typed-list decoder; partially specified types
+				// stay invalid instead of having an inferred field filled in.
+				if itemObject.GetKind() == "" && itemObject.GetAPIVersion() == "" {
+					itemObject.SetKind(strings.TrimSuffix(obj.GetKind(), "List"))
+					itemObject.SetAPIVersion(obj.GetAPIVersion())
+				}
+				appendObject(itemObject)
+			}
+			return
+		}
+		if obj.GetKind() == "" || obj.GetName() == "" || obj.GetAPIVersion() == "" {
 			parseErrorCount++
-			continue
-		}
-		var obj unstructured.Unstructured
-		if err := json.Unmarshal(jsonBytes, &obj.Object); err != nil {
-			parseErrorCount++
-			continue
-		}
-		if obj.GetKind() == "" || obj.GetName() == "" {
-			continue
+			return
 		}
 		apiGroup := ""
 		if group, _, ok := strings.Cut(obj.GetAPIVersion(), "/"); ok {
@@ -1836,14 +1913,31 @@ func parseManifestResourceObjects(manifest, defaultNamespace string) ([]rendered
 				Name:       obj.GetName(),
 				Namespace:  obj.GetNamespace(),
 			},
-			Object: &obj,
+			Object: obj,
 		})
 	}
-
-	sort.Slice(resources, func(i, j int) bool {
-		return resourceRefKey(resources[i].Ref) < resourceRefKey(resources[j].Ref)
-	})
-
+	for _, m := range releaseutil.SplitManifests(manifest) {
+		if strings.TrimSpace(m) == "" {
+			continue
+		}
+		encoded, err := yaml.YAMLToJSON([]byte(m))
+		if err != nil {
+			parseErrorCount++
+			continue
+		}
+		// Helm's resource builder skips null documents, including templates
+		// that render only comments when their resource condition is false.
+		if string(encoded) == "null" {
+			continue
+		}
+		var obj unstructured.Unstructured
+		if err := json.Unmarshal(encoded, &obj.Object); err != nil {
+			parseErrorCount++
+			continue
+		}
+		appendObject(&obj)
+	}
+	sort.Slice(resources, func(i, j int) bool { return resourceRefKey(resources[i].Ref) < resourceRefKey(resources[j].Ref) })
 	return resources, parseErrorCount
 }
 
@@ -2559,43 +2653,100 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVer
 // the supplied user values (WYSIWYG — ResetValues, no merge with prior overrides).
 // The plain upgradeWith path keeps ResetThenReuseValues for the blind carry-over case.
 func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, sendProgress func(phase, message, detail string)) error {
-	getAction := action.NewGet(actionConfig)
-	rel, err := getAction.Run(name)
+	_, _, err := c.runValuesUpgrade(actionConfig, name, targetVersion, repositoryName, newValues, valuesUpgradeOptions{replace: true}, sendProgress)
+	return err
+}
+
+type valuesUpgradeOptions struct {
+	replace          bool
+	dryRun           bool
+	allowStoredChart bool
+	expectedRevision int
+}
+
+func (c *Client) runValuesUpgrade(actionConfig *action.Configuration, name, targetVersion, repositoryName string, newValues map[string]any, options valuesUpgradeOptions, sendProgress func(phase, message, detail string)) (before, after *release.Release, err error) {
+	started := false
+	defer func() {
+		if err != nil && !started {
+			err = &OperationPreflightError{Err: err}
+		}
+	}()
+
+	op, err := releaseContext(actionConfig, name)
 	if err != nil {
-		return fmt.Errorf("failed to get current release: %w", err)
+		return nil, nil, fmt.Errorf("read release before upgrade: %w", err)
+	}
+	rel := op.Latest
+	if options.expectedRevision != 0 && rel.Version != options.expectedRevision {
+		return nil, nil, fmt.Errorf("release is now revision %d, expected %d; inspect it and preview again", rel.Version, options.expectedRevision)
+	}
+	if !options.replace {
+		if newValues == nil {
+			newValues = map[string]any{}
+		}
+		if err := validateOverrideReplacement(op.Baseline.Config, newValues); err != nil {
+			return nil, nil, err
+		}
+	}
+	if rel.Chart == nil || rel.Chart.Metadata == nil || op.Baseline.Chart == nil || op.Baseline.Chart.Metadata == nil {
+		return nil, nil, fmt.Errorf("release has no usable stored chart; ask an operator to recover it")
+	}
+	if failedSourceChange(op) {
+		return nil, nil, errSourceRequired
+	}
+	if targetVersion == "" {
+		if rel.Chart.Metadata.Version != op.Baseline.Chart.Metadata.Version || chartSourceBinding(rel.Chart) != chartSourceBinding(op.Baseline.Chart) {
+			return nil, nil, fmt.Errorf("latest revision %d uses chart %s with different version or content from deployed baseline revision %d (%s); choose an exact version to retry, or explicitly rollback to revision %d before editing values", rel.Version, rel.Chart.Metadata.Version, op.Baseline.Version, op.Baseline.Chart.Metadata.Version, op.Baseline.Version)
+		}
+		targetVersion = rel.Chart.Metadata.Version
 	}
 
-	source, sourceErr := c.normalUpgradeSource(actionConfig, rel, repositoryName)
-	if sourceErr != nil {
-		return sourceErr
+	var source *ChartSourceCandidate
+	if options.allowStoredChart && targetVersion == rel.Chart.Metadata.Version && repositoryName == "" && validateStoredChartDependencyBodies(rel.Chart, rel, op.Baseline) == nil {
+		if confirmed, ok := confirmedChartSource(rel); ok {
+			source = confirmed
+		}
+	} else {
+		source, err = c.normalUpgradeSource(actionConfig, rel, repositoryName)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	targetChart, err := c.chartForUpgradeTarget(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
-	upgradeAction.Labels = boundChartSourceLabels(rel.Labels, source, targetChart)
-	upgradeAction.ResetValues = true // WYSIWYG: apply only the edited values
+	if source != nil {
+		upgradeAction.Labels = boundChartSourceLabels(rel.Labels, source, targetChart)
+	}
+	upgradeAction.ResetValues = options.replace
+	upgradeAction.ResetThenReuseValues = !options.replace
+	if options.dryRun {
+		upgradeAction.DryRun = true
+		upgradeAction.DryRunOption = "server"
+	}
 
 	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", rel.Chart.Metadata.Name, targetVersion), "")
 
 	if err := releaseSourceUnchanged(actionConfig, rel); err != nil {
-		return err
+		return nil, nil, err
 	}
-	_, err = upgradeAction.Run(name, targetChart, newValues)
+	started = true
+	next, err := upgradeAction.Run(name, targetChart, newValues)
 	if err != nil {
-		return fmt.Errorf("upgrade failed: %w", err)
+		return nil, nil, fmt.Errorf("upgrade failed: %w", err)
 	}
 
 	sendProgress("complete", fmt.Sprintf("Successfully upgraded %s to %s", name, targetVersion), "")
-	return nil
+	return op.Baseline, next, nil
 }
 
 func (c *Client) chartForUpgradeTarget(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) (*chart.Chart, error) {
@@ -2625,9 +2776,18 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 		targetVersion = currentVersion
 	}
 
+	evidence := []*release.Release{rel}
+	if actionConfig != nil {
+		op, err := releaseReadContext(actionConfig, rel.Name)
+		if err != nil {
+			return nil, err
+		}
+		evidence = append(evidence, op.Baseline)
+	}
+
 	reconstructingStoredChart := false
 	if targetVersion == currentVersion {
-		if err := validateChartDependencyBodies(rel.Chart); err == nil {
+		if err := validateStoredChartDependencyBodies(rel.Chart, evidence...); err == nil {
 			return rel.Chart, nil
 		}
 		reconstructingStoredChart = true
@@ -2635,7 +2795,7 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 
 	loaded, err := load(actionConfig, rel, targetVersion, repositoryName, sendProgress)
 	if err != nil {
-		if errors.Is(err, errSourceRequired) {
+		if errors.Is(err, errSourceRequired) || errors.Is(err, errChartDigest) {
 			return nil, err
 		}
 		if reconstructingStoredChart {
@@ -2647,6 +2807,9 @@ func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configurat
 		return nil, fmt.Errorf("cannot use chart %s version %s: the package declares subcharts but does not include them, so rendering it would delete the resources those subcharts created. The chart needs fixing where it is published: %w", rel.Chart.Metadata.Name, targetVersion, err)
 	}
 	if reconstructingStoredChart {
+		if err := validateStoredChartDependencyBodies(loaded, evidence...); err != nil {
+			return nil, fmt.Errorf("reconstructed chart still lacks previously rendered subcharts: %w", err)
+		}
 		if err := storedChartMatchesReconstructed(rel.Chart, loaded); err != nil {
 			return nil, fmt.Errorf("cannot edit values for this release: Radar found %s version %s in a configured Helm repository, but that copy does not match the chart this release was installed from, so applying it could replace your release with a different chart. Add the repository this release came from so Radar can pick the right one: %w", rel.Chart.Metadata.Name, targetVersion, err)
 		}
@@ -2743,6 +2906,63 @@ func canonicalMatch(label string, stored, loaded any) error {
 	}
 	if !bytes.Equal(storedJSON, loadedJSON) {
 		return fmt.Errorf("%s differ from the installed release", label)
+	}
+	return nil
+}
+
+// validateStoredChartDependencyBodies also checks rendered provenance: Helm permits
+// undeclared vendored subcharts, but release storage drops all child chart bodies.
+// Both latest and deployed manifests matter after a failed upgrade.
+func validateStoredChartDependencyBodies(ch *chart.Chart, releases ...*release.Release) error {
+	if err := validateChartDependencyBodies(ch); err != nil {
+		return err
+	}
+	paths := []string{}
+	for _, rel := range releases {
+		if rel == nil {
+			continue
+		}
+		// A deliberate version change may remove subcharts. Evidence from another
+		// version cannot require the target chart to keep those dependencies.
+		if rel.Chart != nil && rel.Chart.Metadata != nil && rel.Chart.Metadata.Version != ch.Metadata.Version {
+			continue
+		}
+		for _, line := range strings.Split(rel.Manifest, "\n") {
+			if strings.HasPrefix(line, "# Source: ") {
+				paths = append(paths, strings.TrimSpace(strings.TrimPrefix(line, "# Source: ")))
+			}
+		}
+		for _, hook := range rel.Hooks {
+			if hook != nil {
+				paths = append(paths, hook.Path)
+			}
+		}
+	}
+	for _, source := range paths {
+		parts := strings.Split(source, "/")
+		node := ch
+		for i := 1; i+1 < len(parts) && parts[i] == "charts"; i += 2 {
+			var child *chart.Chart
+			for _, candidate := range node.Dependencies() {
+				if candidate == nil || candidate.Metadata == nil {
+					continue
+				}
+				matches := candidate.Metadata.Name == parts[i+1]
+				for _, declared := range node.Metadata.Dependencies {
+					if declared != nil && declared.Alias == parts[i+1] && declared.Name == candidate.Metadata.Name {
+						matches = true
+					}
+				}
+				if matches {
+					child = candidate
+					break
+				}
+			}
+			if child == nil {
+				return fmt.Errorf("previously rendered dependency body %q is missing", strings.Join(parts[:i+2], "/"))
+			}
+			node = child
+		}
 	}
 	return nil
 }
@@ -3128,7 +3348,7 @@ func (c *Client) ListRepositories() ([]HelmRepository, error) {
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return []HelmRepository{}, nil
 		}
 		return nil, fmt.Errorf("failed to load repo file: %w", err)
@@ -3176,7 +3396,7 @@ func (c *Client) UpdateRepository(repoName string) error {
 	}
 
 	// Create chart repository and download index
-	chartRepo, err := repo.NewChartRepository(repoEntry, getter.All(c.settings))
+	chartRepo, err := repo.NewChartRepository(repoEntry, c.repositoryGetters(repoEntry))
 	if err != nil {
 		return fmt.Errorf("failed to create chart repository %q: %s", repoName, repositoryRefreshErrorURL.ReplaceAllString(err.Error(), "<redacted>"))
 	}
@@ -3213,7 +3433,7 @@ func (c *Client) SearchCharts(query string, allVersions bool) (*ChartSearchResul
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return &ChartSearchResult{Charts: []ChartInfo{}}, nil
 		}
 		return nil, fmt.Errorf("failed to load repo file: %w", err)
@@ -3365,22 +3585,32 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 		chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 	}
 
-	cp, err := c.locateChartPath(nil, chartURL, chartVersion.Version)
+	var loadedChart *chart.Chart
+	if registry.IsOCI(chartURL) {
+		cp, locateErr := c.locateChartPath(nil, chartURL, chartVersion.Version)
+		if locateErr != nil {
+			return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
+		}
+		loadedChart, err = loadChartWithDigest(cp, chartVersion.Digest)
+	} else {
+		body, fetchErr := c.getRepositoryChart(repoEntry, chartURL)
+		if fetchErr != nil {
+			log.Printf("[helm] Could not download chart details for %s/%s; showing repository index information: %v", repoName, chartName, fetchErr)
+			return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
+		}
+		if err := verifyChartDigest(body.Bytes(), chartVersion.Digest); err != nil {
+			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, withChartDigestGuidance(err, false))
+		}
+		loadedChart, err = loader.LoadArchive(body)
+	}
 	if err != nil {
-		// If we can't download, return basic info from index
-		return &ChartDetail{
-			ChartInfo: chartVersionToInfo(chartVersion, repoName),
-		}, nil
+		if errors.Is(err, errChartDigest) {
+			return nil, fmt.Errorf("chart %s version %s: %w", chartName, chartVersion.Version, withChartDigestGuidance(err, false))
+		}
+		return &ChartDetail{ChartInfo: chartVersionToInfo(chartVersion, repoName)}, nil
 	}
 
-	chart, err := loader.Load(cp)
-	if err != nil {
-		return &ChartDetail{
-			ChartInfo: chartVersionToInfo(chartVersion, repoName),
-		}, nil
-	}
-
-	return chartDetailFromChart(chart, chartVersionToInfo(chartVersion, repoName)), nil
+	return chartDetailFromChart(loadedChart, chartVersionToInfo(chartVersion, repoName)), nil
 }
 
 func chartDetailFromChart(chart *chart.Chart, info ChartInfo) *ChartDetail {
@@ -3442,8 +3672,9 @@ func (c *Client) InstallAsUser(req *InstallRequest, user *pkgauth.User) (*HelmRe
 }
 
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
-
 	var chartURL string
+	var indexDigest string
+	var downloadEntry *repo.Entry
 	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
@@ -3457,6 +3688,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, err
 		}
 	} else if isRepoURL {
+		downloadEntry = &repo.Entry{URL: req.Repository}
 		// Direct URL - fetch the repository index to find the chart
 		repoURL := strings.TrimSuffix(req.Repository, "/")
 
@@ -3514,6 +3746,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
@@ -3537,6 +3770,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			}
 		}
 
+		downloadEntry = repoEntry
 		if repoEntry == nil {
 			return nil, fmt.Errorf("repository %s not found", req.Repository)
 		}
@@ -3570,6 +3804,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
@@ -3593,19 +3828,31 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 	}
 	req.resolvedSource = resolvedSource
 
-	cp, err := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
-	if err != nil {
-		return nil, fmt.Errorf("failed to locate chart: %w", err)
+	var loadedChart *chart.Chart
+	if registry.IsOCI(chartURL) {
+		cp, locateErr := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
+		if locateErr != nil {
+			return nil, fmt.Errorf("failed to locate chart: %w", locateErr)
+		}
+		loadedChart, err = loadChartWithDigest(cp, indexDigest)
+	} else {
+		body, fetchErr := c.getRepositoryChart(downloadEntry, chartURL)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("failed to download chart: %w", fetchErr)
+		}
+		if err := verifyChartDigest(body.Bytes(), indexDigest); err != nil {
+			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
+		}
+		loadedChart, err = loader.LoadArchive(body)
 	}
-	chart, err := loader.Load(cp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load chart: %w", err)
+		return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 	}
 
 	if mode != installFresh {
 		log.Printf("[helm] install %q/%q: prior release record exists, recovering via %s", req.Namespace, req.ReleaseName, recoveryMode(mode))
 	}
-	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
+	rel, err := runInstallOrUpgrade(actionConfig, req, loadedChart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
@@ -3641,6 +3888,8 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	}
 
 	var chartURL string
+	var indexDigest string
+	var downloadEntry *repo.Entry
 	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
@@ -3655,6 +3904,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		}
 		sendProgress("resolving", "Resolving chart from OCI registry...", chartURL)
 	} else if isRepoURL {
+		downloadEntry = &repo.Entry{URL: req.Repository}
 		sendProgress("fetching", "Fetching repository index...", req.Repository)
 
 		repoURL := strings.TrimSuffix(req.Repository, "/")
@@ -3711,6 +3961,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		chartURL = chartVersion.URLs[0]
 		if !isAbsoluteChartURL(chartURL) {
@@ -3733,6 +3984,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			}
 		}
 
+		downloadEntry = repoEntry
 		if repoEntry == nil {
 			return nil, fmt.Errorf("repository %s not found", req.Repository)
 		}
@@ -3765,6 +4017,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
 		resolvedVersion = chartVersion.Version
+		indexDigest = chartVersion.Digest
 
 		chartURL = chartVersion.URLs[0]
 		if !isAbsoluteChartURL(chartURL) {
@@ -3799,47 +4052,30 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 			return nil, fmt.Errorf("failed to locate chart: %w", err)
 		}
 		sendProgress("loading", "Loading chart...", chartPath)
-		loadedChart, err = loader.Load(chartPath)
+		loadedChart, err = loadChartWithDigest(chartPath, indexDigest)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load chart: %w", err)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 	} else {
-		// Preserve the existing direct HTTP path. Helm's ChartDownloader loads all
-		// locally registered indexes and can fail because an unrelated cache entry
-		// is stale or missing.
-		chartResp, err := httpClient.Get(chartURL)
+		body, fetchErr := c.getRepositoryChart(downloadEntry, chartURL)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("failed to download chart: %w", fetchErr)
+		}
+		sendProgress("loading", "Loading chart...", "")
+		if err := verifyChartDigest(body.Bytes(), indexDigest); err != nil {
+			return nil, fmt.Errorf("chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
+		}
+		loadedChart, err = loader.LoadArchive(body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to download chart: %w", err)
-		}
-		defer chartResp.Body.Close()
-		if chartResp.StatusCode != 200 {
-			return nil, fmt.Errorf("failed to download chart: server returned %d", chartResp.StatusCode)
+			return nil, fmt.Errorf("failed to load chart %s version %s: %w", req.ChartName, resolvedVersion, withChartDigestGuidance(err, isRepoURL))
 		}
 
-		tmpChart, err := os.CreateTemp("", "helm-chart-*.tgz")
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temp file for chart: %w", err)
-		}
-		defer os.Remove(tmpChart.Name())
-		defer tmpChart.Close()
-
-		if _, err := tmpChart.ReadFrom(chartResp.Body); err != nil {
-			return nil, fmt.Errorf("failed to write chart to temp file: %w", err)
-		}
-		tmpChart.Close()
-
-		sendProgress("loading", "Loading chart...", tmpChart.Name())
-
-		loadedChart, err = loader.Load(tmpChart.Name())
-		if err != nil {
-			return nil, fmt.Errorf("failed to load chart: %w", err)
-		}
 	}
 
 	switch mode {
 	case installFresh:
 		sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
-		if req.CreateNamespace {
+		if createsNamespace(req) {
 			sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
 		}
 	case installReplace:
@@ -4050,6 +4286,7 @@ type artifactHubPackage struct {
 	Version               string                     `json:"version"`
 	AppVersion            string                     `json:"app_version,omitempty"`
 	Deprecated            bool                       `json:"deprecated"`
+	Official              bool                       `json:"official"`
 	Signed                bool                       `json:"signed"`
 	HasValuesSchema       bool                       `json:"has_values_schema"`
 	SecurityReportSummary *artifactHubSecurityReport `json:"security_report_summary,omitempty"`
@@ -4060,12 +4297,14 @@ type artifactHubPackage struct {
 }
 
 type artifactHubRepo struct {
-	Name              string `json:"name"`
-	URL               string `json:"url"`
-	Official          bool   `json:"official"`
-	VerifiedPublisher bool   `json:"verified_publisher"`
-	OrganizationName  string `json:"organization_name,omitempty"`
-	DisplayName       string `json:"organization_display_name,omitempty"`
+	Name                    string `json:"name"`
+	URL                     string `json:"url"`
+	Official                bool   `json:"official"`
+	VerifiedPublisher       bool   `json:"verified_publisher"`
+	OrganizationName        string `json:"organization_name,omitempty"`
+	OrganizationDisplayName string `json:"organization_display_name,omitempty"`
+	UserAlias               string `json:"user_alias,omitempty"`
+	DisplayName             string `json:"display_name,omitempty"`
 }
 
 type artifactHubSecurityReport struct {
@@ -4114,6 +4353,7 @@ func convertArtifactHubPackage(pkg artifactHubPackage) ArtifactHubChart {
 		AppVersion:  pkg.AppVersion,
 		Description: pkg.Description,
 		Deprecated:  pkg.Deprecated,
+		Official:    pkg.Official,
 		Stars:       pkg.Stars,
 		License:     pkg.License,
 		UpdatedAt:   pkg.TS,
@@ -4121,11 +4361,14 @@ func convertArtifactHubPackage(pkg artifactHubPackage) ArtifactHubChart {
 		HasSchema:   pkg.HasValuesSchema,
 		OrgCount:    pkg.ProductionOrgsCount,
 		Repository: ArtifactHubRepository{
-			Name:              pkg.Repository.Name,
-			URL:               pkg.Repository.URL,
-			Official:          pkg.Repository.Official,
-			VerifiedPublisher: pkg.Repository.VerifiedPublisher,
-			OrganizationName:  pkg.Repository.OrganizationName,
+			Name:                    pkg.Repository.Name,
+			URL:                     pkg.Repository.URL,
+			Official:                pkg.Repository.Official,
+			VerifiedPublisher:       pkg.Repository.VerifiedPublisher,
+			OrganizationName:        pkg.Repository.OrganizationName,
+			OrganizationDisplayName: pkg.Repository.OrganizationDisplayName,
+			UserAlias:               pkg.Repository.UserAlias,
+			DisplayName:             pkg.Repository.DisplayName,
 		},
 	}
 

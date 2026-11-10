@@ -4,6 +4,7 @@ import {
   INVESTIGATION_HISTORY_MIN_WIDTH,
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canRerunInvestigation,
+  consentSubject,
   investigationHistoryIsPersistent,
   investigationHeaderPresentation,
   openInvestigationEvidenceResource,
@@ -38,6 +39,27 @@ describe("canRerunInvestigation", () => {
     expect(canRerunInvestigation("investigation", run("done"), false)).toBe(
       true,
     );
+  });
+
+  it("re-runs a finished question-only run from its question", () => {
+    const questionOnly = {
+      ...run("done"),
+      kind: "",
+      group: "",
+      namespace: "",
+      name: "",
+      question: "checkout is slow",
+    };
+    expect(canRerunInvestigation("investigation", questionOnly, false)).toBe(
+      true,
+    );
+    expect(
+      canRerunInvestigation(
+        "investigation",
+        { ...questionOnly, question: undefined },
+        false,
+      ),
+    ).toBe(false);
   });
 
   it("stays hidden on the investigations list", () => {
@@ -373,5 +395,37 @@ describe("canInvestigateFurther", () => {
         true,
       ),
     ).toBe(false);
+  });
+});
+
+describe("consentSubject", () => {
+  it("names a question run by its question and where it starts", () => {
+    expect(
+      consentSubject({
+        kind: "",
+        group: "",
+        namespace: "",
+        name: "",
+        question: "checkout is slow",
+        namespaces: [],
+        lookBack: "1h",
+      }),
+    ).toEqual({
+      title: "“checkout is slow”",
+      detail: "All namespaces · last 1h",
+      question: true,
+    });
+  });
+
+  it("names a resource run by its resource", () => {
+    expect(
+      consentSubject({
+        kind: "Deployment",
+        group: "apps",
+        namespace: "shop",
+        name: "api",
+      }),
+    ).toEqual({ title: "Deployment shop/api", detail: undefined });
+    expect(consentSubject(null)).toBeUndefined();
   });
 });

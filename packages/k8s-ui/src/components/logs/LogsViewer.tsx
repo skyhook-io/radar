@@ -43,7 +43,7 @@ export interface LogsViewerProps {
 // Kubernetes' answers that there are no logs to show, such as "no earlier run".
 // They describe the pod, not a failure in Radar, so they are shown like an
 // empty pane rather than as an error.
-const CLUSTER_ANSWER_CODES = new Set(['no_previous_run', 'logs_unavailable'])
+const CLUSTER_ANSWER_CODES = new Set(['no_previous_run', 'logs_unavailable', 'container_not_started'])
 
 function isClusterAnswerCode(code: unknown): boolean {
   return typeof code === 'string' && CLUSTER_ANSWER_CODES.has(code)
@@ -56,7 +56,14 @@ function clusterAnswerOf(err: unknown): string | null {
   return isClusterAnswerCode(data.error_code) ? err.message : null
 }
 
-export function LogsViewer({
+// Keyed by pod: everything the viewer remembers (the container, Previous, the
+// auto-start latch, a manual Stop) belongs to one pod, and a host that swaps
+// the pod without remounting would carry it over to the next one.
+export function LogsViewer(props: LogsViewerProps) {
+  return <PodLogsViewer key={`${props.namespace}/${props.podName}`} {...props} />
+}
+
+function PodLogsViewer({
   namespace: _namespace,
   podName,
   containers,
@@ -74,6 +81,8 @@ export function LogsViewer({
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
   const [logRange, setLogRange] = useState('500')
   const [showPrevious, setShowPrevious] = useState(false)
+  // What an open stream says it is waiting for, e.g. a container to start.
+  const [streamNotice, setStreamNotice] = useState<string | null>(null)
   const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
@@ -109,6 +118,7 @@ export function LogsViewer({
     setIsLoading(true)
     setFetchError(null)
     setEmptyMessage(null)
+    setStreamNotice(null)
     try {
       const data = await fetchLogs({ container: selectedContainer, tailLines, sinceSeconds, previous: showPrevious })
       if (seq !== loadSeqRef.current) return
@@ -171,6 +181,7 @@ export function LogsViewer({
     setIsLoading(false)
     setFetchError(null)
     setEmptyMessage(null)
+    setStreamNotice(null)
     // The stream replays the last N lines (TailLines + Follow); clear first so
     // they don't duplicate lines already in the buffer (the snapshot on the
     // manual path, or an earlier stream on restart).
@@ -184,6 +195,10 @@ export function LogsViewer({
           content: data.content || '',
           container: data.container || selectedContainer,
         }),
+        onNotice: (data: unknown) => {
+          const notice = typeof data === 'object' && data !== null && 'notice' in data && typeof data.notice === 'string' ? data.notice : ''
+          setStreamNotice(notice || null)
+        },
       },
       'Log stream connection failed',
     )
@@ -191,6 +206,7 @@ export function LogsViewer({
 
   const handleStopStreaming = useCallback(() => {
     userStoppedRef.current = true
+    setStreamNotice(null)
     stopStreaming()
   }, [stopStreaming])
 
@@ -220,24 +236,28 @@ export function LogsViewer({
     }
   }, [podName, selectedContainer, overrideDownload, showError, showSuccess])
 
+  // Previous and the range describe what a snapshot loads, so they stay
+  // locked from the moment a stream starts opening, not only once it is open.
+  const streamBusy = isStreaming || connecting
+
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
       <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} />
 
-      <Tooltip content={isStreaming ? 'Stop streaming to view the previous instance' : "Show logs from the pod's previous instance (if it was restarted). Useful for troubleshooting crashed containers."} position="bottom">
-        <label className={`flex items-center gap-1.5 text-xs ${palette.textSecondary} ${isStreaming ? 'opacity-50 cursor-not-allowed' : ''}`}>
+      <Tooltip content={streamBusy ? 'Stop streaming to view the previous instance' : "Show logs from the pod's previous instance (if it was restarted). Useful for troubleshooting crashed containers."} position="bottom">
+        <label className={`flex items-center gap-1.5 text-xs ${palette.textSecondary} ${streamBusy ? 'opacity-50 cursor-not-allowed' : ''}`}>
           <input
             type="checkbox"
             checked={showPrevious}
             onChange={(e) => setShowPrevious(e.target.checked)}
-            disabled={isStreaming}
+            disabled={streamBusy}
             className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
           />
           <span className={`border-b border-dotted ${isDark ? 'border-slate-500' : 'border-slate-400'}`}>Previous</span>
         </label>
       </Tooltip>
 
-      <LogRangeSelect value={logRange} onChange={setLogRange} isDark={isDark} disabled={isStreaming} />
+      <LogRangeSelect value={logRange} onChange={setLogRange} isDark={isDark} disabled={streamBusy} />
     </>
   )
 
@@ -260,13 +280,13 @@ export function LogsViewer({
       getRetainedEntries={getRetainedEntries}
       isLoading={isLoading || isConnecting}
       errorMessage={entries.length === 0 ? fetchError || (!emptyMessage && !streamAnswer ? streamError : null) : null}
-      isStreaming={isStreaming}
+      isStreaming={streamBusy}
       onStartStream={createStream ? handleStartStreaming : undefined}
       onStopStream={handleStopStreaming}
       onRefresh={loadLogs}
       onDownload={downloadLogs}
       onClear={clear}
-      emptyMessage={emptyMessage ?? streamAnswer ?? undefined}
+      emptyMessage={emptyMessage ?? streamAnswer ?? streamNotice ?? undefined}
       toolbarExtra={renderToolbarExtra}
       forceDark={forceDark}
       defaultDark={defaultDark}

@@ -449,6 +449,7 @@ type ArtifactHubChart struct {
 	LogoURL     string                `json:"logoUrl,omitempty"`
 	HomeURL     string                `json:"homeUrl,omitempty"`
 	Deprecated  bool                  `json:"deprecated,omitempty"`
+	Official    bool                  `json:"official,omitempty"`
 	Repository  ArtifactHubRepository `json:"repository"`
 	Stars       int                   `json:"stars"`
 	License     string                `json:"license,omitempty"`
@@ -463,11 +464,14 @@ type ArtifactHubChart struct {
 
 // ArtifactHubRepository contains repository info from ArtifactHub
 type ArtifactHubRepository struct {
-	Name              string `json:"name"`
-	URL               string `json:"url"`
-	Official          bool   `json:"official,omitempty"`
-	VerifiedPublisher bool   `json:"verifiedPublisher,omitempty"`
-	OrganizationName  string `json:"organizationName,omitempty"`
+	Name                    string `json:"name"`
+	URL                     string `json:"url"`
+	Official                bool   `json:"official,omitempty"`
+	VerifiedPublisher       bool   `json:"verifiedPublisher,omitempty"`
+	OrganizationName        string `json:"organizationName,omitempty"`
+	OrganizationDisplayName string `json:"organizationDisplayName,omitempty"`
+	UserAlias               string `json:"userAlias,omitempty"`
+	DisplayName             string `json:"displayName,omitempty"`
 }
 
 // ArtifactHubSecurity contains security report summary

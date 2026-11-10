@@ -51,6 +51,7 @@ import {
   type StatusTone,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
+import { isGpuCountKey } from "@skyhook-io/k8s-ui/utils/extended-resources";
 import {
   formatCPUString,
   formatMemoryString,
@@ -302,6 +303,16 @@ export function sortedResourceEntries(
 }
 
 /** "8 CPU · 32Gi" style compact one-liner for a quantity observation. */
+// CPU and memory read by their units; every other quantity is a bare number
+// without its resource name.
+function labeledQuantity(resource: string, value: string): string {
+  const quantity = formatQuantity(resource, value);
+  if (resource === "cpu" || resource === "memory") return quantity;
+  if (resource === "pods") return `${quantity} ${quantity === "1" ? "pod" : "pods"}`;
+  if (isGpuCountKey(resource)) return `gpu ${quantity}`;
+  return `${resource} ${quantity}`;
+}
+
 export function quantityText(
   observation: CapacityQuantityObservation | undefined,
   options?: { max?: number },
@@ -312,7 +323,7 @@ export function quantityText(
   const max = options?.max ?? 4;
   const shown = entries
     .slice(0, max)
-    .map(([resource, value]) => formatQuantity(resource, value));
+    .map(([resource, value]) => labeledQuantity(resource, value));
   if (entries.length > max) shown.push(`+${entries.length - max}`);
   return shown.join(" · ");
 }
@@ -1048,6 +1059,7 @@ export function KpiTile({
   attention = false,
   linkLabel,
   onClick,
+  className,
 }: {
   label: string;
   value: ReactNode;
@@ -1057,6 +1069,7 @@ export function KpiTile({
   attention?: boolean;
   linkLabel?: string;
   onClick?: () => void;
+  className?: string;
 }) {
   const clickable = Boolean(onClick);
   return (
@@ -1078,9 +1091,9 @@ export function KpiTile({
         clickable
           ? "cursor-pointer transition-colors hover:border-theme-border-light hover:bg-theme-hover/40"
           : ""
-      }`}
+      } ${className ?? ""}`}
     >
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 phone:flex-wrap phone:gap-y-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           {label}
         </span>
@@ -1128,10 +1141,11 @@ export function KeyValueRows({ rows }: { rows: [string, ReactNode][] }) {
       {rows.map(([label, value], index) => (
         <div
           key={`${label}-${index}`}
-          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0"
+          // Phones: a value too long for the row moves under its label and breaks inside it.
+          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0 phone:flex-wrap phone:gap-y-0.5"
         >
           <span className="text-sm text-theme-text-secondary">{label}</span>
-          <span className="text-right font-mono text-sm text-theme-text-primary">
+          <span className="text-right font-mono text-sm text-theme-text-primary phone:ml-auto phone:min-w-0 phone:[overflow-wrap:anywhere]">
             {value}
           </span>
         </div>
@@ -1157,7 +1171,8 @@ export function TokenGroup({
       <div className="flex flex-wrap gap-1">
         {values.length > 0 ? (
           values.map((value) => (
-            <Badge key={value} tone="structural" size="sm">
+            // Phones: a value wider than the row breaks inside its chip instead of being clipped.
+            <Badge key={value} tone="structural" size="sm" className="phone:[overflow-wrap:anywhere]">
               {value}
             </Badge>
           ))

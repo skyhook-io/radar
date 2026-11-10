@@ -54,7 +54,7 @@ type CheckInput struct {
 	// coverage. Visible warnings establish failure even with partial coverage;
 	// a Failed volume's phase establishes it without any.
 	PVDeletionEventsComplete bool
-	// ClusterVersion is the K8s server version (e.g. "1.30"). Used for deprecated API checks.
+	// ClusterVersion is the K8s server version (e.g. "1.30"). Used for resource defaulting and deprecated API checks.
 	ClusterVersion string
 	// ServedAPIs lists API group/versions the cluster still serves (e.g. ["apps/v1", "batch/v1beta1"]).
 	// Used to detect deprecated APIs. Callers populate from discovery client.

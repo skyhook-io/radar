@@ -31,6 +31,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -56,6 +58,45 @@ func useTestResourceCache(t *testing.T, client *fake.Clientset) {
 	k8s.ResetResourceCache()
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatalf("initialize test resource cache: %v", err)
+	}
+}
+
+// testNamespaces is a Namespace for each name. A real cluster has one for
+// every namespace that holds objects, and Radar tells a caller who can see
+// every namespace when a namespace they named doesn't exist.
+func testNamespaces(names ...string) []runtime.Object {
+	out := make([]runtime.Object, 0, len(names))
+	for _, name := range names {
+		out = append(out, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	return out
+}
+
+// addPackageNamespaces adds Namespaces to the package fixture's cluster for
+// one test, and waits until its cache holds them.
+func addPackageNamespaces(t *testing.T, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		if _, err := testFakeClient.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = testFakeClient.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{})
+		})
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for _, name := range names {
+		for {
+			if cache := k8s.GetResourceCache(); cache != nil && cache.Namespaces() != nil {
+				if _, err := cache.Namespaces().Get(name); err == nil {
+					break
+				}
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("namespace %s never reached the cache", name)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 }
 
@@ -613,12 +654,12 @@ func TestSmokeListPods(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var body []any
+	var body testResourceListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if len(body) < 1 {
+	if len(body.Items) < 1 {
 		t.Error("expected at least 1 pod")
 	}
 }
@@ -678,12 +719,12 @@ func TestSmokeListDeployments(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 
-	var body []any
+	var body testResourceListEnvelope
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
-	if len(body) < 1 {
+	if len(body.Items) < 1 {
 		t.Error("expected at least 1 deployment")
 	}
 }
@@ -869,8 +910,11 @@ func TestSmokeListResources(t *testing.T) {
 	for _, kind := range kinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
-			var body []any
+			var body testResourceListEnvelope
 			assertOK(t, get(t, "/api/resources/"+kind), &body)
+			if body.Coverage.Status != "complete" || body.Items == nil {
+				t.Fatalf("expected complete list envelope, got %+v", body)
+			}
 		})
 	}
 }
@@ -882,16 +926,19 @@ func TestSmokeListResourcesCaseInsensitive(t *testing.T) {
 	for _, kind := range kinds {
 		kind := kind
 		t.Run(kind, func(t *testing.T) {
-			var body []any
+			var body testResourceListEnvelope
 			assertOK(t, get(t, "/api/resources/"+kind), &body)
+			if body.Coverage.Status != "complete" || body.Items == nil {
+				t.Fatalf("expected complete list envelope, got %+v", body)
+			}
 		})
 	}
 }
 
 func TestSmokeListResourcesNamespaceFilter(t *testing.T) {
-	var body []any
+	var body testResourceListEnvelope
 	assertOK(t, get(t, "/api/resources/deployments?namespace=default"), &body)
-	if len(body) == 0 {
+	if len(body.Items) == 0 {
 		t.Error("expected at least 1 deployment in namespace=default")
 	}
 }
@@ -1799,9 +1846,7 @@ func TestSmokeCloudMode_SettingsPutRejectsUserScoped(t *testing.T) {
 }
 
 // TestSmokeCloudMode_PprofNotMounted verifies that /debug/pprof/* is not
-// registered under cloud-mode. The pprof heap endpoint would otherwise
-// leak the in-memory K8s cache (every Secret, ConfigMap, Pod spec) through
-// the Cloud tunnel. This test constructs a fresh server with
+// registered under cloud-mode. This test constructs a fresh server with
 // RADAR_CLOUD_MODE set before Server.setupRoutes reads it, so the
 // pprof-gate conditional fires.
 func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
@@ -1839,6 +1884,93 @@ func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
 				}
 			}
 			// 404 is also acceptable (no frontend handler in some test configs).
+		})
+	}
+}
+
+func TestSmokePprofGating(t *testing.T) {
+	enabled, disabled := true, false
+	for _, tt := range []struct {
+		name     string
+		address  string
+		auth     bool
+		dev      bool
+		cloud    bool
+		override *bool
+		want     bool
+	}{
+		{name: "default listener", want: true},
+		{name: "IPv4 loopback", address: "127.0.0.1", want: true},
+		{name: "IPv4 loopback range", address: "127.0.0.2", want: true},
+		{name: "IPv6 loopback", address: "::1", want: true},
+		{name: "IPv4-mapped IPv6 loopback", address: "::ffff:127.0.0.1", want: true},
+		{name: "localhost", address: "localhost", want: true},
+		{name: "IPv4 wildcard", address: "0.0.0.0"},
+		{name: "IPv6 wildcard", address: "::"},
+		{name: "specific shared address", address: "192.168.1.5"},
+		{name: "authenticated shared", address: "0.0.0.0", auth: true, want: true},
+		{name: "authenticated loopback", address: "127.0.0.1", auth: true, want: true},
+		{name: "local dev", address: "127.0.0.1", dev: true, want: true},
+		{name: "shared dev", address: "0.0.0.0", dev: true},
+		{name: "explicit shared opt in", address: "0.0.0.0", override: &enabled, want: true},
+		{name: "explicit local opt out", address: "127.0.0.1", override: &disabled},
+		{name: "explicit authenticated opt out", address: "0.0.0.0", auth: true, override: &disabled},
+		{name: "explicit dev opt out", address: "127.0.0.1", dev: true, override: &disabled},
+		{name: "cloud default", address: "0.0.0.0", cloud: true},
+		{name: "cloud overrides local auth dev opt in", address: "127.0.0.1", auth: true, dev: true, cloud: true, override: &enabled},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RADAR_CLOUD_MODE", fmt.Sprint(tt.cloud))
+			cfg := Config{ListenAddress: tt.address, DevMode: tt.dev, EnablePprof: tt.override, DiagConfig: &DiagConfig{}}
+			if tt.auth {
+				cfg.AuthConfig = auth.Config{Mode: "proxy"}
+			}
+			srv := New(cfg)
+			defer srv.Stop()
+			for _, path := range []string{"/debug/pprof", "/debug/pprof/", "/debug/pprof/cmdline"} {
+				req := httptest.NewRequest(http.MethodGet, "http://localhost"+path, nil)
+				req.Header.Set("X-Forwarded-User", "pprof-test")
+				rec := httptest.NewRecorder()
+				handler := srv.Handler()
+				if tt.cloud {
+					handler = cloud.AuthenticatedTunnelHandler(handler)
+				}
+				handler.ServeHTTP(rec, req)
+				if tt.want && tt.auth && path == "/debug/pprof/cmdline" {
+					if rec.Code != http.StatusForbidden {
+						t.Fatalf("cmdline: expected 403, got %d", rec.Code)
+					}
+				} else if tt.want {
+					if rec.Code != http.StatusOK {
+						t.Fatalf("%s: expected 200, got %d", path, rec.Code)
+					}
+					if path != "/debug/pprof/cmdline" && !strings.Contains(rec.Body.String(), "Types of profiles available") {
+						t.Fatalf("%s: missing pprof index", path)
+					}
+				} else if strings.Contains(rec.Body.String(), "Types of profiles available") ||
+					(rec.Code == http.StatusOK && !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html")) {
+					t.Fatalf("%s: profiling served while disabled", path)
+				}
+				if tt.auth && tt.want {
+					unauth := httptest.NewRecorder()
+					srv.Handler().ServeHTTP(unauth, httptest.NewRequest(http.MethodGet, "http://localhost"+path, nil))
+					if unauth.Code != http.StatusUnauthorized {
+						t.Fatalf("%s: unauthenticated status = %d, want 401", path, unauth.Code)
+					}
+				}
+			}
+			rec := httptest.NewRecorder()
+			srv.handleDiagnostics(rec, httptest.NewRequest(http.MethodGet, "/api/diagnostics", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("diagnostics status = %d, want 200", rec.Code)
+			}
+			var snap DiagnosticsSnapshot
+			if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+				t.Fatal(err)
+			}
+			if snap.Config == nil || snap.Config.Pprof != tt.want {
+				t.Fatalf("diagnostics config = %+v, want pprof %v", snap.Config, tt.want)
+			}
 		})
 	}
 }

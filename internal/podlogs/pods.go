@@ -1,6 +1,7 @@
 package podlogs
 
 import (
+	"reflect"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
@@ -9,10 +10,34 @@ import (
 
 // ContainerInfo contains compact per-container runtime status for the UI.
 type ContainerInfo struct {
-	Name         string `json:"name"`
-	Init         bool   `json:"init,omitempty"`
-	Ready        bool   `json:"ready"`
-	RestartCount int32  `json:"restartCount"`
+	Name string `json:"name"`
+	Init bool   `json:"init,omitempty"`
+	// A native sidecar: an init container with restartPolicy Always, which
+	// keeps running beside the application instead of finishing first.
+	Sidecar      bool  `json:"sidecar,omitempty"`
+	Ready        bool  `json:"ready"`
+	RestartCount int32 `json:"restartCount"`
+	// State is the current run's state: waiting, running or terminated.
+	State string `json:"state,omitempty"`
+	// Reason is the waiting or terminated reason, such as PodInitializing,
+	// CrashLoopBackOff, Completed or Error.
+	Reason string `json:"reason,omitempty"`
+	// Started reports a container past its startup probe; for a native
+	// sidecar it means it no longer holds up Pod initialization.
+	Started bool `json:"started,omitempty"`
+}
+
+func containerInfo(cs corev1.ContainerStatus) ContainerInfo {
+	info := ContainerInfo{Name: cs.Name, Ready: cs.Ready, RestartCount: cs.RestartCount, Started: cs.Started != nil && *cs.Started}
+	switch {
+	case cs.State.Waiting != nil:
+		info.State, info.Reason = "waiting", cs.State.Waiting.Reason
+	case cs.State.Running != nil:
+		info.State = "running"
+	case cs.State.Terminated != nil:
+		info.State, info.Reason = "terminated", cs.State.Terminated.Reason
+	}
+	return info
 }
 
 // PodInfo contains compact runtime status about a pod for workload views.
@@ -48,25 +73,6 @@ func IsPodReady(pod *corev1.Pod) bool {
 	return true
 }
 
-// ContainerRestartCount reports how many times the named container (regular or
-// init) has restarted, or 0 when the pod has no status for it.
-func ContainerRestartCount(pod *corev1.Pod, name string) int32 {
-	if pod == nil {
-		return 0
-	}
-	for _, status := range pod.Status.InitContainerStatuses {
-		if status.Name == name {
-			return status.RestartCount
-		}
-	}
-	for _, status := range pod.Status.ContainerStatuses {
-		if status.Name == name {
-			return status.RestartCount
-		}
-	}
-	return 0
-}
-
 // ContainerTerminated reports whether the named container's current run ended.
 func ContainerTerminated(pod *corev1.Pod, name string) bool {
 	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses, pod.Status.EphemeralContainerStatuses} {
@@ -88,31 +94,30 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 	for _, c := range pod.Spec.Containers {
 		containers = append(containers, c.Name)
 	}
+	sidecars := map[string]bool{}
+	for _, c := range pod.Spec.InitContainers {
+		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+			sidecars[c.Name] = true
+		}
+	}
 	for _, cs := range pod.Status.InitContainerStatuses {
-		containerStatuses = append(containerStatuses, ContainerInfo{
-			Name:         cs.Name,
-			Init:         true,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
+		info := containerInfo(cs)
+		info.Init, info.Sidecar = true, sidecars[cs.Name]
+		containerStatuses = append(containerStatuses, info)
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
-		containerStatuses = append(containerStatuses, ContainerInfo{
-			Name:         cs.Name,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
+		containerStatuses = append(containerStatuses, containerInfo(cs))
 	}
 	verdict := health.Pod(pod, now)
 	displayLevel := health.PodDisplayLevel(pod, now)
 	if displayLevel != verdict.Level {
+		// The display floor escalated the pod (unschedulable / stuck-terminating),
+		// so its explanation must describe that cause, not a lower-severity base
+		// reason. A deliberately held pod carries a benign "SchedulingGated" reason;
+		// overwrite it here so an escalated pod isn't mislabelled as merely held.
 		verdict.Level = displayLevel
-		if verdict.Reason == "" {
-			verdict.Reason = health.PodProblemReason(pod, now)
-		}
-		if verdict.Message == "" {
-			verdict.Message = health.PodProblemMessage(pod)
-		}
+		verdict.Reason = health.PodProblemReason(pod, now)
+		verdict.Message = health.PodProblemMessage(pod)
 	}
 	restartCount, lastTerminationReason := health.PodRestartContext(pod)
 	createdAt := ""
@@ -138,6 +143,29 @@ func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 		StepName:              annotations["workflows.argoproj.io/node-name"],
 		StepPhase:             labels["workflows.argoproj.io/phase"],
 	}
+}
+
+// SentPodInfo is the Pod info a log stream last sent per Pod, so a status
+// change (an init container finishing, an app container starting) can be sent
+// as pod_updated.
+type SentPodInfo map[string]PodInfo
+
+func NewSentPodInfo(infos []PodInfo) SentPodInfo {
+	sent := make(SentPodInfo, len(infos))
+	for _, info := range infos {
+		sent[info.Name] = info
+	}
+	return sent
+}
+
+// Changed records info as sent and reports whether it differs from the last
+// info sent for that Pod.
+func (s SentPodInfo) Changed(info PodInfo) bool {
+	if previous, ok := s[info.Name]; ok && reflect.DeepEqual(previous, info) {
+		return false
+	}
+	s[info.Name] = info
+	return true
 }
 
 func BuildPodInfos(pods []*corev1.Pod) []PodInfo {

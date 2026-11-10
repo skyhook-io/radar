@@ -182,6 +182,15 @@ export function useDock() {
 }
 
 /**
+ * Whether the dock's content is on screen. A collapsed dock keeps its tabs
+ * mounted and the selected one still reports itself active. Safe without a
+ * DockProvider ancestor (treated as shown).
+ */
+export function useDockContentVisible(): boolean {
+  return useContext(DockContext)?.isExpanded ?? true
+}
+
+/**
  * Reserved vertical space at the bottom of the viewport for the dock, in px.
  * Drawers and main-content spacers subtract this so they don't sit behind the dock.
  * Maximized returns 0 — the dock covers everything by design.

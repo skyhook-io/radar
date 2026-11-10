@@ -95,21 +95,36 @@ describe('composeReleaseNotes', () => {
 
   it('turns highlights past the cards into lines ahead of the improvements, within the line cap', () => {
     const notes = composeReleaseNotes([
-      entry('v1.16.0', [7, 7, 7, 7, 7, 2], ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']),
+      entry('v1.16.0', [7, 7, 7, 7, 7, 7, 7, 2], ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']),
       entry('v1.15.0', [1], ['old']),
     ])
     expect(notes.highlights).toHaveLength(MAX_CARDS)
     expect(notes.lines).toHaveLength(MAX_LINES)
-    expect(notes.lines.slice(0, 2).map(l => l.text)).toEqual(['v1.16.0-5', 'v1.15.0-0'])
+    expect(notes.lines.slice(0, 2).map(l => l.text)).toEqual(['v1.16.0-7', 'v1.15.0-0'])
     expect(notes.lines.map(l => l.text)).not.toContain('old')
   })
 
-  it('scores the dialog by the cards it shows', () => {
+  it('scores the dialog by the strongest cards it shows', () => {
     expect(composeReleaseNotes([entry('v1.16.0', [4, 4, 4, 4, 4, 10])]).score).toBe(10 + 4 * 4)
+    expect(composeReleaseNotes([entry('v1.16.0', [5, 3, 3, 3, 3, 3, 3])]).score).toBe(5 + 3 * 4)
+  })
+
+  it("doesn't count cards past the strongest five toward opening", () => {
+    const notes = composeReleaseNotes([entry('v1.16.0', [4, 4, 4, 4, 4, 4, 4])])
+    expect(notes.highlights).toHaveLength(MAX_CARDS)
+    expect(notes.score).toBeLessThan(AUTO_OPEN_SCORE)
   })
 })
 
 describe('whatsNewToOpen', () => {
+  it.each(['v1.18.0', 'v1.18.1'])('announces the shipped v1.18 notes on upgrade to %s', version => {
+    const notes = whatsNewToOpen(version, 'v1.17.0', true)
+    expect(notes?.versions).toEqual(['v1.18.0'])
+    expect(notes?.score).toBeGreaterThanOrEqual(AUTO_OPEN_SCORE)
+    expect(whatsNewToOpen(version, 'v1.18.0', true)).toBeNull()
+    expect(whatsNewToOpen(version, null, false)).toBeNull()
+  })
+
   it('opens when the unseen releases show enough, and not for a quiet release', () => {
     const list = [entry('v1.15.0', [9, 8, 7, 7, 7]), entry('v1.16.0', [6, 5, 4])]
     expect(whatsNewToOpen('v1.15.0', 'v1.14.1', true, list)?.score).toBe(38)
@@ -141,6 +156,8 @@ describe('nextSeenVersion', () => {
 describe('release notes lookup', () => {
   it('matches an exact version with or without the v prefix', () => {
     expect(releaseNotesFor('2.0.0', catalog)?.version).toBe('v2.0.0')
+    expect(releaseNotesFor('v2.0', catalog)?.version).toBe('v2.0.0')
+    expect(releaseNotesFor('2.0', catalog)?.version).toBe('v2.0.0')
     expect(releaseNotesFor(undefined, catalog)).toBeUndefined()
   })
 

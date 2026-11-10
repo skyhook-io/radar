@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -420,6 +421,52 @@ func TestMiddleware_ProxyHeaders_GroupsTrimmed(t *testing.T) {
 	}
 }
 
+// Proxies that forward Kubernetes impersonation headers send one
+// Impersonate-Group header per group, often starting with
+// system:authenticated.
+func TestMiddleware_ProxyHeaders_RepeatedGroupHeaders(t *testing.T) {
+	cfg := proxyConfig()
+	cfg.GroupsHeader = "Impersonate-Group"
+	handler := Authenticate(cfg)(http.HandlerFunc(echoUser))
+
+	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
+	req.Header.Set("X-Forwarded-User", "ws:alice@example.com")
+	req.Header.Add("Impersonate-Group", "system:authenticated")
+	req.Header.Add("Impersonate-Group", "oidc:ws:platform-team")
+	req.Header.Add("Impersonate-Group", "oidc:ws, oidc:sre")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	var user User
+	json.NewDecoder(rec.Body).Decode(&user)
+	want := []string{"system:authenticated", "oidc:ws:platform-team", "oidc:ws", "oidc:sre"}
+	if !slices.Equal(user.Groups, want) {
+		t.Errorf("groups = %v, want %v", user.Groups, want)
+	}
+}
+
+func TestMiddleware_ProxyHeaders_RepeatedGroupHeadersStillRejectReserved(t *testing.T) {
+	cfg := proxyConfig()
+	cfg.GroupsHeader = "Impersonate-Group"
+	handler := Authenticate(cfg)(http.HandlerFunc(echoUser))
+
+	req := httptest.NewRequest("GET", "/api/resources/pods", nil)
+	req.Header.Set("X-Forwarded-User", "alice")
+	req.Header.Add("Impersonate-Group", "system:authenticated")
+	req.Header.Add("Impersonate-Group", "system:masters")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
 func TestUserFromContext_NoUser(t *testing.T) {
 	ctx := context.Background()
 	user := UserFromContext(ctx)
@@ -449,8 +496,7 @@ func TestIsExemptPath(t *testing.T) {
 		{"/api/health/detailed", true},
 		{"/auth/login", true},
 		{"/auth/callback", true},
-		// Static assets are exempt; /debug/* (pprof) is not — it leaks the
-		// in-memory K8s cache and must require auth whenever auth is on.
+		// Static assets are exempt; process diagnostics must require auth.
 		{"/", true},
 		{"/index.html", true},
 		{"/assets/main.js", true},
@@ -879,5 +925,39 @@ func TestMiddleware_NoRevoker_SkipsCheck(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200 when no revoker configured", rec.Code)
+	}
+}
+
+func TestAuditLogActionOptionalFieldsAreGeneric(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/example", nil)
+	base := `[audit] user="local-kubeconfig" groups=[] action="example" path="/api/example" kind="ConfigMap" api_group="" ns="shop" name="web" container="app" variable="TOKEN" source="test" outcome="done"`
+	code := 0
+	for _, tc := range []struct {
+		name          string
+		executable    string
+		argumentCount int
+		commandHash   string
+		code          *int
+		duration      time.Duration
+		suffix        string
+	}{
+		{name: "unset"},
+		{name: "command metadata", executable: "printf", argumentCount: 1, commandHash: "digest", suffix: ` executable="printf" argumentCount=1 commandHash="digest"`},
+		{name: "zero exit", code: &code, suffix: ` exitCode=0`},
+		{name: "duration", duration: time.Second, suffix: ` duration=1s`},
+		{name: "all", executable: "true", commandHash: "digest", code: &code, duration: time.Second, suffix: ` executable="true" argumentCount=0 commandHash="digest" exitCode=0 duration=1s`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output.Reset()
+			AuditLogAction(request, AuditActionDetails{Kind: "ConfigMap", Action: "example", Namespace: "shop", Name: "web", Container: "app", Variable: "TOKEN", Source: "test", Outcome: "done", Executable: tc.executable, ArgumentCount: tc.argumentCount, CommandHash: tc.commandHash, ExitCode: tc.code, Duration: tc.duration})
+			_, line, found := strings.Cut(output.String(), "[audit]")
+			if !found || "[audit]"+strings.TrimSuffix(line, "\n") != base+tc.suffix {
+				t.Fatalf("line=%q want=%q", output.String(), base+tc.suffix)
+			}
+		})
 	}
 }

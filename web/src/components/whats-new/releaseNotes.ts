@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Bot, Database, GitCompareArrows, HardDrive, Hourglass, Layers, Network, RefreshCcw, Scale, ScrollText, SlidersHorizontal, Undo2 } from 'lucide-react'
+import { Activity, BellOff, Bot, Boxes, Braces, Database, GitCompareArrows, HardDrive, Hourglass, Layers, MessageCircleQuestionMark, Network, RefreshCcw, Scale, ScanSearch, ScrollText, Search, ShieldAlert, SlidersHorizontal, Undo2 } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -41,12 +41,194 @@ export interface ReleaseNotes {
 
 export const CHANGELOG_URL = 'https://radarhq.io/changelog'
 
+// Read .agents/skills/whats-new/SKILL.md before authoring or regrouping notes.
 // One entry per release that has something to announce. A user sees the
 // entries for the releases they haven't seen yet, composed into one dialog, so
 // a patch upgrade, or one that skips releases, still gets them. Every minor and
 // major release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.20.0',
+    highlights: [
+      {
+        id: 'crd-schema-browser',
+        icon: Braces,
+        title: 'Explore CRDs and their schemas',
+        description: 'CRDs now have a sidebar row and a schema browser. Search fields, paste a path from an API error, and read types, defaults and validation rules.',
+        leadDescription: "CustomResourceDefinitions now have a sidebar row, and typing crd finds them in Cmd-K. The drawer and a full Schema tab show each version's fields in a tree like kubectl explain, with types, defaults and validation rules. Paste a path from an API server error to find the field and see the rules on its parents.",
+        importance: 8,
+        path: '/resources/customresourcedefinitions?apiGroup=apiextensions.k8s.io',
+        cta: 'Open CRDs',
+      },
+      {
+        id: 'rollbacks-safer-syncs',
+        icon: Undo2,
+        title: 'Reliable rollbacks and safer Argo CD syncs',
+        description: "Argo CD rollback works and reports what it deployed; Deployment rollback matches kubectl. Syncs keep the Application's options and leave pruning off.",
+        importance: 7,
+        path: '/gitops',
+        cta: 'Open GitOps',
+      },
+      {
+        id: 'kueue-support',
+        icon: Layers,
+        title: 'Deep Kueue support',
+        description: 'Browse queue Workloads, admission history and Kueue-reported pending positions. Issues flag rejected checks and broken queues, not quota waits.',
+        importance: 7,
+      },
+      {
+        id: 'issues-more-failures',
+        icon: ShieldAlert,
+        title: 'Issues explain more failures',
+        description: 'Failed cert-manager renewals, evicted Pods with their node, surge deadlocks on ReadWriteOnce volumes, and webhooks that may block Pod creation.',
+        importance: 6,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'deeper-operator-support',
+        icon: Boxes,
+        title: 'Deeper Strimzi, Ray, JobSet and KServe support',
+        description: 'See failed connector tasks even when Ready, JobSet members in Topology and current Ray Pod logs. KServe flags failed components, not planned stops.',
+        importance: 6,
+      },
+      {
+        id: 'application-evidence',
+        icon: Database,
+        title: 'Collect RabbitMQ, NATS and Vault evidence locally',
+        description: "On local Radar, collect one Pod's RabbitMQ alarms, NATS consumer counters or Vault seal state from a default plaintext endpoint.",
+        importance: 6,
+      },
+      {
+        id: 'otel-flagger',
+        icon: Activity,
+        title: 'Deeper OpenTelemetry and Flagger support',
+        description: 'Flagger Issues name missing targets, metric templates and provider Secrets. AI diagnosis reads Collectors and Canaries through current workloads.',
+        importance: 5,
+      },
+    ],
+    improvements: [
+      // The grid fills row by row: pair lines of similar length.
+      'Switching to an unreachable context keeps your current cluster; Cannot Connect says since when',
+      'Issue rows and Investigate buttons show recent local investigations; see an example before your first',
+      'Limit what Radar can reach with rbac.namespaces, disableExec and --disable-auto-port-forward',
+      'GitOps trees show operator-created workloads; drawers link webhooks, issuers and Secrets',
+      'get_changes includes RBAC and Node edits; search finds resources by a pasted IP or ip:port',
+      'Issues link a missing Secret to its SealedSecret',
+    ],
+  },
+  {
+    version: 'v1.19.0',
+    highlights: [
+      {
+        id: 'investigate-a-question',
+        icon: MessageCircleQuestionMark,
+        title: 'Start an AI investigation from a question',
+        description: 'Describe what you see, like "checkout is slow", with or without a resource, and choose where to start and how far back to look.',
+        leadDescription: "When Radar runs locally, investigations no longer need a resource to start. On the Investigations page, describe what you are seeing, choose the namespaces to start in and how far back to look, and optionally pin a resource by typing @. Or type a symptom into the Omnibar to open the composer with your words. Findings now lead with the verdict and show more of the metrics charts the agent cited inline, and Radar's routine read limits no longer crowd out the open questions.",
+        importance: 9,
+      },
+      {
+        id: 'mcp-delete-exec-tools',
+        icon: Bot,
+        title: 'New MCP tools: delete and exec',
+        description: "delete_resource previews a deletion's likely impact and requires confirmation before deleting. Opt-in exec_pod runs one command in a container.",
+        importance: 7,
+      },
+      {
+        id: 'read-coverage',
+        icon: ScanSearch,
+        title: "Answers say what Radar couldn't see",
+        description: "Resource tables, search and MCP tools say when an answer is partial and why, so neither you nor an agent reads a gap as absence.",
+        importance: 6,
+      },
+      {
+        id: 'issues-new-checks',
+        icon: ShieldAlert,
+        title: 'New issue checks',
+        description: 'Issues now flag expired TLS certificates in use, dropped Traefik routes, Pods stuck on readiness gates, blocked Argo CD auto-sync and failed canaries.',
+        importance: 6,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'issues-fewer-false-alarms',
+        icon: BellOff,
+        title: 'Fewer false alarms',
+        description: 'Issues stop flagging completed Pods, in-budget Deployment rollout dips, expected pause and deletion conditions, and recovered Cluster API Machines.',
+        importance: 6,
+      },
+      {
+        id: 'custom-resource-changes',
+        icon: GitCompareArrows,
+        title: 'Custom-resource history names changed fields',
+        description: 'Change history names the custom-resource fields that changed, with values when safe to show. get_changes for a kind also returns creates and deletes.',
+        importance: 5,
+      },
+    ],
+    improvements: [
+      'The Delete dialog previews owned objects, GitOps cleanup and storage at risk',
+      'Phone layouts for Home, Issues, Resources, Topology, Helm and Capacity',
+      'Native views for OpenTelemetry Operator collectors and Flagger canaries',
+      'Related Resources and Managed By tell owners apart from GitOps managers',
+      'Investigations check Claude Code and Codex sign-in, and let you stop a run when all slots are busy',
+      'The install script verifies checksums; Helm installs check repository checksums when published',
+      'Windows desktop updates work again; --no-version-check turns off automatic checks',
+    ],
+  },
+  {
+    version: 'v1.18.0',
+    highlights: [
+      {
+        id: 'trivy-cve-search',
+        icon: Search,
+        title: 'Investigate CVEs across your cluster',
+        description: 'Search Trivy findings by CVE, package or image, including in resource tables. MCP agents can inventory declared runtime versions.',
+        leadDescription: 'With Trivy Operator installed, search globally or within report tables by CVE, package, failed check ID or image to find matching scan reports, then open a report for installed and fixed package versions. Partial searches say what could not be checked. MCP agents can also inventory runtime versions declared by running images and compare supported versions with a fixed release. Missing or unreadable declarations stay unknown; image metadata does not verify a fix.',
+        importance: 8,
+      },
+      {
+        id: 'mcp-guidance-waits-controls',
+        icon: Bot,
+        title: 'More capable agents through MCP',
+        description: 'MCP agents get built-in tool guidance and can wait for rollouts, readiness or deletion. An optional read-only mode exposes only read tools.',
+        importance: 5,
+      },
+      {
+        id: 'investigation-change-evidence',
+        icon: GitCompareArrows,
+        title: 'See more of what changed',
+        description: 'Investigations show more spec edits, NetworkPolicy changes, Secret rotations and stale env readers, and flag incomplete history.',
+        importance: 5,
+      },
+      {
+        id: 'workload-blockers',
+        icon: Network,
+        title: 'Better issue detection and warnings',
+        description: 'Issues catch more network, storage and scheduling problems, add diagnostic context, and flag checks that could not complete.',
+        importance: 5,
+        path: '/issues',
+        cta: 'Open Issues',
+      },
+      {
+        id: 'log-viewer-improvements',
+        icon: ScrollText,
+        title: 'Log viewer improvements',
+        description: 'Keep your place in fast-moving logs, select text without auto-scroll, and wait for containers to start with clearer status messages.',
+        importance: 4,
+      },
+    ],
+    improvements: [
+      'Resource tables remember your column order for each kind',
+      'Open terminals and browse files in native sidecars',
+      'Node drains keep results visible and name remaining Pods',
+      'Audits recognize shared Pod CPU and memory budgets',
+      'Helm upgrades need a confirmed source; find public sources on ArtifactHub',
+      'Prometheus reconnects automatically when it appears',
+      'Argo CD views confirm when a local resource is missing',
+    ],
+  },
   {
     version: 'v1.17.0',
     highlights: [
@@ -217,7 +399,7 @@ export function releaseNotesFor(
 ): ReleaseNotes | undefined {
   if (!version) return undefined
   const normalized = version.startsWith('v') ? version : `v${version}`
-  return catalog.find(notes => notes.version === normalized)
+  return catalog.find(notes => notes.version === normalized || releaseLine(notes.version) === normalized)
 }
 
 /** The release line a catalog entry covers, e.g. v1.15 for v1.15.0: its patches show the same notes. */
@@ -262,11 +444,13 @@ export function unreadReleases(
 // skipped releases sees the best of them, weighted toward the newest; older
 // releases than this list covers are left to the changelog.
 export const RELEASE_WEIGHTS = [1, 0.75, 0.5]
-export const MAX_CARDS = 5
+export const MAX_CARDS = 7
+// Auto-open weighs only the strongest cards, so a release can't clear the bar
+// on a long list of minor ones.
+export const SCORED_CARDS = 5
 export const MAX_LINES = 8
-// The dialog opens by itself only when the cards it shows add up to this.
-// A release of mostly 4-6s stays behind the unread dot; one with a few solid
-// features, or a skipped release with them, opens it.
+// A fuller set of useful improvements can merit an announcement even without
+// a single release-defining feature.
 export const AUTO_OPEN_SCORE = 25
 
 export interface ComposedHighlight extends ReleaseHighlight {
@@ -285,7 +469,7 @@ export interface ComposedNotes {
   /** The first one leads the dialog at full width. */
   highlights: ComposedHighlight[]
   lines: ComposedLine[]
-  /** Sum of the shown highlights' scores. */
+  /** Sum of the strongest shown highlights' scores, up to SCORED_CARDS. */
   score: number
   /** False when older unseen releases were left out. */
   complete: boolean
@@ -308,7 +492,7 @@ export function composeReleaseNotes(releases: ReleaseNotes[]): ComposedNotes {
     versions: shown.map(notes => notes.version),
     highlights,
     lines,
-    score: highlights.reduce((sum, h) => sum + h.score, 0),
+    score: highlights.slice(0, SCORED_CARDS).reduce((sum, h) => sum + h.score, 0),
     complete: shown.length === releases.length,
   }
 }

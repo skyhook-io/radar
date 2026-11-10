@@ -13,6 +13,7 @@ const (
 	reasonCrashLoop          = "CrashLoopBackOff"
 	reasonHighRestart        = "HighRestartCount"
 	reasonReadinessProbeFail = "ReadinessProbeFailed"
+	reasonReadinessGateFail  = "ReadinessGatesNotReady"
 )
 
 // highRestartThreshold is the cumulative per-container RestartCount above which
@@ -409,4 +410,93 @@ func IsPodUnschedulable(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// PodHasSchedulingGates reports whether a pod is deliberately held by one or more
+// scheduling gates. A non-empty spec.schedulingGates means a controller is blocking
+// scheduling on purpose (Kueue admission, topology assignment, a custom gate, …); it
+// is set at creation and can only be removed, and removing one of several does not
+// release the pod. The spec field is used rather than the PodScheduled=SchedulingGated
+// condition because it is authoritative and present before the scheduler writes any
+// condition.
+func PodHasSchedulingGates(pod *corev1.Pod) bool {
+	return pod != nil && len(pod.Spec.SchedulingGates) > 0
+}
+
+// SchedulingGateNames returns the names of the pod's scheduling gates, in order.
+func SchedulingGateNames(pod *corev1.Pod) []string {
+	if pod == nil || len(pod.Spec.SchedulingGates) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(pod.Spec.SchedulingGates))
+	for _, g := range pod.Spec.SchedulingGates {
+		names = append(names, g.Name)
+	}
+	return names
+}
+
+// PodReadinessGateFailure reports a declared gate that has not passed and still
+// blocks a running Pod after its containers became ready. A nil Pod has no failure.
+// Both readiness transitions get the probe path's five-minute grace. Missing transition times
+// use creation only for grace, never as evidence of failure onset. Onset is
+// known only when both transitions are dated. With no transition or creation
+// time, no grace is assumed. Up to five minutes of clock skew gets grace;
+// farther-future timestamps establish neither grace nor onset.
+// Unknown gate health still blocks readiness when the kubelet reports that explicitly.
+func PodReadinessGateFailure(pod *corev1.Pod, now time.Time) (since time.Time, failing bool) {
+	if pod == nil || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning || len(pod.Spec.ReadinessGates) == 0 {
+		return time.Time{}, false
+	}
+	var ready, containersReady *corev1.PodCondition
+	for i := range pod.Status.Conditions {
+		c := &pod.Status.Conditions[i]
+		switch c.Type {
+		case corev1.PodReady:
+			ready = c
+		case corev1.ContainersReady:
+			containersReady = c
+		}
+	}
+	if ready == nil || ready.Status != corev1.ConditionFalse || ready.Reason != reasonReadinessGateFail || containersReady == nil || containersReady.Status != corev1.ConditionTrue {
+		return time.Time{}, false
+	}
+	recent, future := false, false
+	for _, c := range []*corev1.PodCondition{ready, containersReady} {
+		transition := c.LastTransitionTime.Time
+		if transition.IsZero() {
+			transition = pod.CreationTimestamp.Time
+		}
+		if !transition.IsZero() {
+			future = future || transition.After(now)
+			recent = recent || (!transition.After(now.Add(5*time.Minute)) && now.Sub(transition) < 5*time.Minute)
+		}
+	}
+	if recent {
+		return time.Time{}, false
+	}
+	for _, gate := range pod.Spec.ReadinessGates {
+		found := false
+		for _, c := range pod.Status.Conditions {
+			if c.Type == gate.ConditionType {
+				found = true
+				if c.Status != corev1.ConditionTrue {
+					failing = true
+				}
+				break
+			}
+		}
+		if !found {
+			failing = true
+		}
+	}
+	if !failing {
+		return time.Time{}, false
+	}
+	if !future && !ready.LastTransitionTime.IsZero() && !containersReady.LastTransitionTime.IsZero() {
+		since = ready.LastTransitionTime.Time
+		if containersReady.LastTransitionTime.After(since) {
+			since = containersReady.LastTransitionTime.Time
+		}
+	}
+	return since, true
 }

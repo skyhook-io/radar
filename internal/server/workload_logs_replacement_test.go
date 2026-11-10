@@ -21,6 +21,8 @@ import (
 )
 
 func TestWorkloadLogsStreamReplacesActivePodUID(t *testing.T) {
+	setWorkloadLogDiscoveryInterval(t, 100*time.Millisecond)
+
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "replace-0", Namespace: "replace", UID: "old", Labels: map[string]string{"app": "replace"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
 	cluster := fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "replace"}}, &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "replace", Namespace: "replace"}, Spec: appsv1.StatefulSetSpec{Selector: &metav1.LabelSelector{MatchLabels: pod.Labels}}}, pod)
 	useTestResourceCache(t, cluster)
@@ -107,7 +109,7 @@ func TestWorkloadLogsStreamReplacesActivePodUID(t *testing.T) {
 		t.Fatal("no replacement follow request")
 	}
 	// An old worker finishing must not remove the replacement's active handle.
-	time.Sleep(5500 * time.Millisecond)
+	time.Sleep(3 * workloadLogDiscoveryInterval)
 	if count := opens.Load(); count != 2 {
 		t.Fatalf("replacement follow was reopened while active: %d requests", count)
 	}

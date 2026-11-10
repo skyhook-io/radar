@@ -1097,6 +1097,12 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 			}
 		}
 
+		if portforward.AutoDisabled() {
+			lastErr = "Automatic port-forwarding is turned off, so Radar can't reach Caretta's metrics store from this machine. Set a metrics URL for this cluster in Settings → Metrics."
+			log.Printf("[caretta] %s", lastErr)
+			break
+		}
+
 		// Start a new managed port-forward
 		log.Printf("[caretta] Starting port-forward to %s/%s:%d (targetPort=%d)", info.namespace, info.name, info.port, info.targetPort)
 		connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, info.namespace, info.name, info.targetPort, contextName)
@@ -1124,7 +1130,10 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 	// this class of bug invisible.
 	portforward.Stop(portforward.OwnerTraffic)
 	errMsg := noBackendWarning(noData, unreachable)
-	if len(noData) == 0 && len(unreachable) == 0 && lastErr != "" {
+	if portforward.AutoDisabled() && len(noData) == 0 && len(unreachable) == 0 && lastErr != "" {
+		// The turned-off forward is the whole reason; it already says what to do.
+		errMsg = lastErr
+	} else if len(noData) == 0 && len(unreachable) == 0 && lastErr != "" {
 		// Keep the underlying error, but say what was being attempted. On its own
 		// something like a port-forward RBAC denial reads as an unrelated
 		// permissions problem rather than "Caretta's metrics store wasn't found".

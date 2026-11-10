@@ -17,6 +17,7 @@ import (
 // CronJobSchedulingEvidence describes retained evidence, not a new health condition.
 type CronJobSchedulingEvidence struct {
 	UID                    string     `json:"uid"`
+	EventID                string     `json:"event_id,omitempty"`
 	State                  string     `json:"state"`
 	Reason                 string     `json:"reason"`
 	Message                string     `json:"message"`
@@ -93,18 +94,7 @@ func readCronJobSchedulingHistory(namespace string, cronjobs []*batchv1.CronJob,
 }
 
 func (h *cronJobSchedulingHistory) noteTruncation(rows []timeline.TimelineEvent, limit int) {
-	if len(rows) < limit {
-		return
-	}
-	oldest := rows[0].Timestamp
-	for _, row := range rows {
-		if row.Timestamp.Before(oldest) {
-			oldest = row.Timestamp
-		}
-	}
-	if oldest.After(h.incompleteBefore) {
-		h.incompleteBefore = oldest
-	}
+	h.incompleteBefore = historyQueryBoundary(h.incompleteBefore, rows, limit)
 }
 
 func cronJobHistoryEvent(row timeline.TimelineEvent) *corev1.Event {
@@ -193,7 +183,7 @@ func assessCronJobScheduling(cronjobs []*batchv1.CronJob, live []*corev1.Event, 
 			if !changed.IsZero() && reported.Truncate(time.Second).Equal(changed.Truncate(time.Second)) && reportSequences[latest] > 0 && editSequences[cj.UID] > 0 {
 				beforeEdit = reportSequences[latest] <= editSequences[cj.UID]
 			}
-			evidence := CronJobSchedulingEvidence{UID: string(cj.UID), State: "reported", Reason: d.Reason, Message: d.Message, LastReportedAt: reported, HistoryIncomplete: history.unavailable}
+			evidence := CronJobSchedulingEvidence{UID: string(cj.UID), EventID: string(latest.UID), State: "reported", Reason: d.Reason, Message: d.Message, LastReportedAt: reported, HistoryIncomplete: history.unavailable}
 			if beforeEdit {
 				if cj.Status.LastScheduleTime != nil && cj.Status.LastScheduleTime.After(changed) {
 					continue

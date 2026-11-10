@@ -7,9 +7,11 @@ import {
   Info,
   SquareArrowOutUpRight,
 } from "lucide-react";
+import { getCrossplaneConditionTone } from "@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane";
 import { defaultConditionTone, displayKind } from "@skyhook-io/k8s-ui";
 import type {
   InvestigationEvidenceData,
+  InvestigationKubernetesResource,
   InvestigationEvidenceGroup,
   InvestigationEvidenceObservation,
   InvestigationEvidenceSource,
@@ -149,8 +151,11 @@ export function ResourceFact({
 export function conditionStatusTone(condition: {
   type: string;
   status: string;
-}): "healthy" | "degraded" | "unhealthy" | "unknown" {
-  switch (defaultConditionTone(condition)) {
+  reason?: string;
+}, resource?: InvestigationKubernetesResource): "healthy" | "degraded" | "unhealthy" | "unknown" | "neutral" {
+  switch (getCrossplaneConditionTone(resource, condition) ?? defaultConditionTone(condition)) {
+    case "neutral":
+      return "neutral";
     case "ok":
       return "healthy";
     case "warning":

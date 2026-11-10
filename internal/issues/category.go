@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -38,7 +39,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			// Pod Security admission (built-in PSA) is NOT a webhook — don't
 			// mislabel it as such.
 			return issuesapi.CategoryPodSecurityViolation
-		case "WebhookDenied", "WebhookUnavailable":
+		case "WebhookDenied", "WebhookUnavailable", "CreateTimeout":
 			return issuesapi.CategoryAdmissionWebhookBlocking
 		case "RBACForbidden":
 			return issuesapi.CategoryRBACForbidden
@@ -56,7 +57,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		// config/resource reference.
 		switch in.Reason {
 		case "Missing backend Service", "Missing backend Service port",
-			"Missing ALB action annotation", "Invalid ALB action annotation":
+			"Missing ALB action annotation", "Invalid ALB action annotation",
+			k8s.TraefikRouterMissingServiceReason, k8s.TraefikRouterMissingMiddlewareReason:
 			return issuesapi.CategoryIngressBackendMissing
 		case "Missing IngressClass":
 			return issuesapi.CategoryIngressClassMissing
@@ -76,12 +78,27 @@ func Classify(in classifyInput) issuesapi.Category {
 
 	case SourceCondition:
 		switch in.Reason {
+		case ReasonCertificateRenewalFailed:
+			return issuesapi.CategoryCertificateRenewalFailed
 		case ReasonKarpenterNodePoolNotReady,
 			ReasonKarpenterNodeClassNotReady,
 			ReasonKarpenterNodeClassNotFound,
 			ReasonKarpenterNodeClassKindNotInstalled,
 			ReasonKarpenterNodeClaimProvisioningFailed:
 			return issuesapi.CategoryNodeProvisioningFail
+		}
+		switch in.Reason {
+		case ReasonKueueResourceUnavailable,
+			ReasonKueueNamespaceNotEligible,
+			ReasonKueueLocalQueueMissing,
+			ReasonKueueClusterQueueMissing,
+			ReasonKueueClusterQueueInactive,
+			ReasonKueueInvalidWorkload,
+			ReasonKueueAdmissionCheckRejected,
+			ReasonKueueDeactivatedByKueue:
+			return issuesapi.CategoryQueueAdmissionBlocked
+		case ReasonKueueRequeuingLimitExceeded, ReasonKueueMaximumExecutionTimeExceeded:
+			return issuesapi.CategoryBatchRunStopped
 		}
 		// Generic CRD .status.conditions[]=False fallback. Discriminate the
 		// well-known controller families by API group.
@@ -159,6 +176,17 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryOperatorConditionFail
 		case g == "external-secrets.io":
 			return issuesapi.CategorySecretSyncFailed
+		case g == "bitnami.com":
+			// Only a SealedSecret whose Synced condition is False failed to
+			// PRODUCE its Secret (e.g. "no key could decrypt") — that is the
+			// secret-production failure the producer root-cause link keys on, the
+			// same bucket as External Secrets. Any other condition type (Ready,
+			// Available, …) or other bitnami.com kind is generic: don't mislabel
+			// it "secret sync failed" or make it a secret-producer root.
+			if in.Kind == "SealedSecret" && conditionTypeFromReason(in.Reason) == "Synced" {
+				return issuesapi.CategorySecretSyncFailed
+			}
+			return issuesapi.CategoryOperatorConditionFail
 		case g == "keda.sh":
 			return issuesapi.CategoryHPALimitedOrFailed
 		case strings.Contains(g, "karpenter"):
@@ -185,6 +213,15 @@ func Classify(in classifyInput) issuesapi.Category {
 	return issuesapi.CategoryUnknown
 }
 
+// conditionTypeFromReason extracts the condition type from a condTypeReason-encoded
+// string: "Synced: UnsealError" or "Ready=False" → "Synced" / "Ready".
+func conditionTypeFromReason(reason string) string {
+	if i := strings.IndexAny(reason, ":="); i >= 0 {
+		return strings.TrimSpace(reason[:i])
+	}
+	return strings.TrimSpace(reason)
+}
+
 // classifyProblem handles the broad source=problem channel (radar's per-kind
 // detection). Split out to keep Classify readable.
 func classifyProblem(in classifyInput) issuesapi.Category {
@@ -206,6 +243,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryInvalidConfiguration
 	case k8s.NetworkPolicyDenyAllIngressReason:
 		return issuesapi.CategoryNetworkPolicyDenied
+	case k8s.TLSCertificateExpiredReason, k8s.TLSCertificateNotYetValidReason, k8s.TLSCertificateExpiringReason:
+		return issuesapi.CategoryCertificateNotReady
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":
@@ -219,6 +258,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		if in.Reason == "OOMKilled" {
 			return issuesapi.CategoryOOMKilled
 		}
+		if in.Reason == health.PodEvictedReason {
+			return issuesapi.CategoryPodEvicted
+		}
 		switch in.Reason {
 		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ImageInspectError":
 			return issuesapi.CategoryImagePullFailed
@@ -231,7 +273,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryHighRestart
 		case "LivenessProbeFailed", "LivenessProbeInvalid":
 			return issuesapi.CategoryLivenessProbeFail
-		case "ReadinessProbeFailed", "ReadinessProbeInvalid":
+		case "ReadinessProbeFailed", "ReadinessProbeInvalid", "ReadinessGatesNotReady":
 			return issuesapi.CategoryReadinessFailed
 		case "InitContainerStalled":
 			return issuesapi.CategoryInitContainerFailed
@@ -268,9 +310,9 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		if in.Reason == "Rollout stuck" || in.Reason == "ReplicaFailure" {
 			return issuesapi.CategoryRolloutStalled
 		}
-		// Stable reason literal emitted by sharedRWOVolumeConflicts —
-		// a multi-replica Deployment mounting a ReadWriteOnce volume.
-		if in.Reason == "ReadWriteOnce volume shared across replicas" {
+		// A multi-replica Deployment mounting a single-node volume. Only the
+		// ReadWriteOncePod form reaches issues; ReadWriteOnce is info posture.
+		if in.Reason == k8s.SharedRWOPVolumeReason || in.Reason == k8s.SharedRWOVolumeReason {
 			return issuesapi.CategoryVolumeAccessModeConflict
 		}
 		// "{avail}/{desired} available" / "{ready}/{desired} ready" /
@@ -284,6 +326,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 
 	case "Node":
 		switch in.Reason {
+		case k8s.NodeCertificateIssueReason:
+			return issuesapi.CategoryCertificateNotReady
 		case "NotReady", "MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable":
 			return issuesapi.CategoryNodeNotReady
 		}
@@ -317,11 +361,11 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryUnknown
 
 	case "Job":
-		// DetectProblems only emits Job problems for genuine failures: a
-		// JobFailed condition (reason e.g. BackoffLimitExceeded /
-		// DeadlineExceeded, or the "Failed" fallback) or a stuck-active job
-		// ("Running for … with no completions"). All map to the batch
-		// workload-failure category rather than being discarded.
+		// DetectProblems only emits Job problems for a genuine terminal
+		// failure: a JobFailed condition (reason e.g. BackoffLimitExceeded /
+		// DeadlineExceeded, or the "Failed" fallback). It maps to the batch
+		// workload-failure category. (A deleting Job is classified as
+		// terminating earlier, before this switch.)
 		return issuesapi.CategoryJobFailed
 
 	case "CronJob":
@@ -404,8 +448,12 @@ func classifyGitOpsReason(reason string, fallback issuesapi.Category) issuesapi.
 		return issuesapi.CategoryGitOpsRenderFailed
 	case "InvalidSpecError":
 		return issuesapi.CategoryGitOpsSpecInvalid
-	case "OperationFailed", "SyncError", "StuckDriftLoop":
+	case "OperationFailed", "SyncError", "StuckDriftLoop", "RollbackRevisionMismatch":
 		return issuesapi.CategoryGitOpsOperationFailed
+	case "AutoSyncBlockedEmpty":
+		return issuesapi.CategoryGitOpsSyncFailed
+	case "SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning":
+		return issuesapi.CategoryGitOpsResourceWarning
 	case "OutOfSync", "OutOfSyncManual":
 		return issuesapi.CategoryGitOpsOutOfSync
 	case "GitOpsControllerStalled", "GitOpsComparisonsStale", "ComparisonStale":

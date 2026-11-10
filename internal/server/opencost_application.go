@@ -209,7 +209,8 @@ func (s *Server) parseOpenCostApplicationRequest(w http.ResponseWriter, r *http.
 			unsupported = append(unsupported, ref)
 			continue
 		}
-		if status, _, ok := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, "apps"); !ok {
+		if failure := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, "apps"); failure != nil {
+			status := readStatusFor(failure.code)
 			unavailable = append(unavailable, pkgopencost.ApplicationWorkloadStatus{
 				ApplicationWorkloadRef: ref,
 				Reason:                 openCostUnavailableReasonForHTTPStatus(status),

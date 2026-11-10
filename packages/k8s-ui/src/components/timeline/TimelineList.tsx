@@ -216,6 +216,10 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     const singleEvents: TimelineEvent[] = []
 
     for (const item of items) {
+      if (item.id === selectedEventId) {
+        singleEvents.push(item)
+        continue
+      }
       if (foldPerResource?.(item)) {
         const key = `fold:${item.kind}:${item.namespace}:${item.name}`
         const existing = groups.get(key) || []
@@ -344,7 +348,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (older.length > 0) groups.push({ label: 'Older', items: aggregateEvents(older) })
 
     return groups
-  }, [filteredActivity, compact, foldPerResource])
+  }, [filteredActivity, compact, foldPerResource, selectedEventId])
 
   // Visible-window reporting: rows carry their time span in data attributes;
   // on scroll (rAF-throttled) and whenever the row set changes, the span of

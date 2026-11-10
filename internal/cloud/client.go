@@ -13,6 +13,7 @@ package cloud
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -32,6 +33,19 @@ type Config struct {
 	// authenticated, so a network attacker could impersonate the hub. Leave
 	// false for any hub with a publicly trusted certificate.
 	InsecureSkipVerify bool
+
+	// CA, when set, is the system roots plus an extra CA bundle, for the
+	// tunnel's TLS verification.
+	CA *x509.CertPool
+
+	// Enrolled marks a token this Radar obtained by enrolling. A token the
+	// Hub rejects (401) ends Run with ErrTokenRejected instead of retrying
+	// forever, so the caller can enroll again for a new one.
+	Enrolled bool
+
+	// OnConnected, when set, is called each time a tunnel session opens. It
+	// runs on Run's goroutine and must not block.
+	OnConnected func()
 
 	// Token is the cluster bearer token issued by the Cloud install wizard.
 	// Format: rhc_<random>.
@@ -131,9 +145,17 @@ func Run(ctx context.Context, cfg Config) error {
 		sess, err := dial(ctx, cfg, advertised)
 		if err != nil {
 			failures++
+			if cfg.Enrolled && errors.Is(err, errEnrolledTokenRejected) {
+				return ErrTokenRejected
+			}
 			log.Printf("[cloud] dial failed: %v (retry in %s)", err, backoff)
 			if failures == warnAfterFailures {
-				log.Printf("[cloud] WARN: %s", escalationWarning(failures, err))
+				warning := escalationWarning(failures, err)
+				var answered *handshakeStatusError
+				if cfg.Enrolled && !errors.As(err, &answered) {
+					warning = fmt.Sprintf("%d consecutive failures: %v. Check that this cluster can reach the Hub's agent address %s", failures, err, cfg.URL)
+				}
+				log.Printf("[cloud] WARN: %s", warning)
 			}
 			if !sleep(ctx, backoff) {
 				return ctx.Err()
@@ -145,6 +167,9 @@ func Run(ctx context.Context, cfg Config) error {
 
 		log.Printf("[cloud] connected to Radar Cloud; serving streams")
 		connectedAt := time.Now()
+		if cfg.OnConnected != nil {
+			cfg.OnConnected()
+		}
 
 		if cfg.SelfUpgradeAvailable != nil {
 			go watchSelfUpgradeAdvertisement(ctx, cfg.SelfUpgradeAvailable, advertised, sess, selfUpgradeRecheckInterval)
@@ -174,6 +199,12 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 const selfUpgradeRecheckInterval = 3 * time.Minute
+
+// ErrTokenRejected ends Run for an enrolled token the Hub answered 401 to.
+// The caller joins again with the key, which lands on the same cluster entry.
+var ErrTokenRejected = errors.New("the Hub rejected this cluster's token")
+
+var errEnrolledTokenRejected = errors.New("the Hub rejected this cluster's token (401)")
 
 // warnAfterFailures is how many consecutive dial failures escalate to a WARN.
 // A var so a test can reach the escalation without sitting through the
