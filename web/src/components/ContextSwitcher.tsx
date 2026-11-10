@@ -85,7 +85,9 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         id: p.context.name,
         name: p.raw,
         nameQualifier: visibleContextQualifier(p.nameQualifier, p.context.source, hasMultipleSources),
-        secondary: p.provider ? p.raw : undefined,
+        // The full context under any shortened name: OpenShift writes one context
+        // per project for the same server, and only this line tells them apart.
+        secondary: p.raw !== p.clusterName ? p.raw : undefined,
         badge: p.region || undefined,
         sourceLabel: hasMultipleSources ? p.context.source : undefined,
         group: { key: groupKey, label: groupLabel },

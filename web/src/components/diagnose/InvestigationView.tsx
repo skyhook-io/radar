@@ -128,6 +128,7 @@ import {
   rerunOpening,
 } from "./target";
 import { parseContextName } from "../../utils/context-name";
+import { Tooltip } from "../ui/Tooltip";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { diagnosisHasStoryShape } from "./investigationStory";
 import { assessmentStateLabel, verdictSentence } from "./verdictText";
@@ -2012,9 +2013,17 @@ export function InvestigationView({
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
           <span className="min-w-0 flex-1">
             This investigation ran on{" "}
-            <span className="font-medium text-theme-text-primary">
-              {parseContextName(run.context).clusterName}
-            </span>
+            <Tooltip
+              content={
+                parseContextName(run.context).clusterName !== run.context
+                  ? run.context
+                  : ""
+              }
+            >
+              <span className="font-medium text-theme-text-primary">
+                {parseContextName(run.context).clusterName}
+              </span>
+            </Tooltip>
             . It is read-only because its agent session was closed after a
             cluster switch.
           </span>
