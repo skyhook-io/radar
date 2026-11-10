@@ -1330,7 +1330,7 @@ func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace,
 // ErrWorkloadPaused: a paused Deployment would hold a restored template without
 // rolling it out, so a rollback that reports success would change nothing.
 // kubectl rollout undo refuses for the same reason.
-var ErrWorkloadPaused = errors.New("workload is paused; resume it first (kubectl rollout resume, or set spec.paused to false) and retry, because a paused Deployment holds a new template without rolling it out")
+var ErrWorkloadPaused = errors.New("the Deployment is paused, so a rollback would not roll out; resume it, then roll back")
 
 // deploymentRollbackKeptAnnotations are the Deployment annotations a rollback keeps
 // from the live object; every other annotation is restored from the target

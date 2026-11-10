@@ -4909,13 +4909,25 @@ func (s *Server) handleRollbackWorkload(w http.ResponseWriter, r *http.Request) 
 		if status == http.StatusInternalServerError {
 			log.Printf("[rollback] Failed to rollback %s %s/%s to revision %d: %v", kind, namespace, name, req.Revision, err)
 		}
-		s.writeError(w, status, err.Error())
+		s.writeWorkloadRollbackError(w, status, err)
 		return
 	}
 
 	s.writeJSON(w, map[string]string{
 		"message": fmt.Sprintf("Rollback to revision %d initiated", req.Revision),
 	})
+}
+
+// errCodeWorkloadPaused lets the UI point at its own Resume control instead of
+// showing the server's text, which is written for API and agent callers.
+const errCodeWorkloadPaused = "workload_paused"
+
+func (s *Server) writeWorkloadRollbackError(w http.ResponseWriter, status int, err error) {
+	if errors.Is(err, k8score.ErrWorkloadPaused) {
+		s.writeErrorCode(w, status, errCodeWorkloadPaused, err.Error())
+		return
+	}
+	s.writeError(w, status, err.Error())
 }
 
 // workloadRollbackErrorStatus maps a Deployment/StatefulSet/DaemonSet rollback

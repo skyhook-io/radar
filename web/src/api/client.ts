@@ -5665,6 +5665,15 @@ export function useRefreshRevisionsOnNewRollout(
   }, [queryClient, kind, namespace, name, deploymentRevision]);
 }
 
+// The server's paused-refusal text is written for API and agent callers; in the
+// UI the way out is the Resume rollout button on the same page.
+export function rollbackErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
+  if (body.error_code === "workload_paused") {
+    return "This Deployment is paused. Click Resume rollout, then roll back.";
+  }
+  return body.error || `HTTP ${status}`;
+}
+
 export function useRollbackWorkload() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -5688,8 +5697,7 @@ export function useRollbackWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new Error(rollbackErrorMessage(await readErrorBody(response), response.status));
       }
       return response.json();
     },

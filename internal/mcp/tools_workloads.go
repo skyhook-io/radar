@@ -203,6 +203,9 @@ func rollbackResult(kind, namespace, name string, revision int64, err error) (ma
 			"revision": revision,
 		}, nil
 	}
+	if errors.Is(err, k8score.ErrWorkloadPaused) {
+		return nil, fmt.Errorf("rollback failed: %w (manage_workload action=resume)", err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("rollback failed: %w", err)
 	}
