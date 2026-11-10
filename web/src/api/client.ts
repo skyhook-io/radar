@@ -35,6 +35,7 @@ import type {
 import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
+import { applyTabPick, cleanPick, ownsTabPick, pruneTabPick, withActives, writeTabPick } from '../utils/namespacePick'
 import type {
   Topology,
   ClusterInfo,
@@ -7537,8 +7538,20 @@ export function useSwitchContext() {
 // ============================================================================
 
 export interface NamespaceScope {
+  /**
+   * This tab's pick. Outside --namespace-scope it is the tab's own (see
+   * utils/namespacePick); the server's remembered pick only seeds it.
+   */
   actives: string[];
   kubeconfigNamespace: string;
+  /** Context the scope was read under. Absent from servers older than per-tab picks. */
+  context?: string;
+  /**
+   * True when the server drops its own pick to `accessibleNamespaces` on this
+   * read; a tab drops its pick under the same rule. Absent from servers older
+   * than per-tab picks.
+   */
+  accessChecked?: boolean;
   /**
    * 'cluster-wide' — no per-user pick; user can list across namespaces.
    * 'namespace'    — per-user view filter pinned to one or more namespaces.
@@ -7562,7 +7575,11 @@ export interface NamespaceScope {
 export function useNamespaceScope() {
   return useQuery<NamespaceScope>({
     queryKey: ["namespace-scope"],
-    queryFn: () => fetchJSON("/cluster/namespace-scope"),
+    queryFn: async ({ signal }) => {
+      const apiBase = getApiBase();
+      const scope = await fetchJSON<NamespaceScope>("/cluster/namespace-scope", signal);
+      return applyTabPick(scope, apiBase);
+    },
     staleTime: 30000,
   });
 }
@@ -7625,9 +7642,34 @@ export async function refreshAfterNamespaceSwitch(
   await queryClient.invalidateQueries({ predicate: notScope }, { cancelRefetch: false });
 }
 
+// Per apiBase, the last namespace switch this tab started, and the newest one
+// whose answer it applied. Answers can arrive out of order: an older switch
+// must not overwrite a newer one that already landed, but it still applies
+// while the newer one is in flight, in case that one is refused.
+const startedNamespaceSwitch = new Map<string, number>();
+const appliedNamespaceSwitch = new Map<string, number>();
+
+export interface NamespaceSwitchStart {
+  seq: number;
+  apiBase: string;
+  context: string | undefined;
+}
+
+/** True while `start` is the newest namespace switch this tab has applied. */
+export function isAppliedNamespaceSwitch(start: NamespaceSwitchStart | undefined): boolean {
+  return !start || appliedNamespaceSwitch.get(start.apiBase) === start.seq;
+}
+
+/** Records `start` as applied unless a newer switch already landed. */
+function claimNamespaceSwitch(start: NamespaceSwitchStart): boolean {
+  if (start.seq < (appliedNamespaceSwitch.get(start.apiBase) ?? 0)) return false;
+  appliedNamespaceSwitch.set(start.apiBase, start.seq);
+  return true;
+}
+
 export function useSetActiveNamespace() {
   const queryClient = useQueryClient();
-  return useMutation<NamespaceScope, Error, { namespaces: string[] }>({
+  return useMutation<NamespaceScope, Error, { namespaces: string[] }, NamespaceSwitchStart>({
     meta: {
       // Surface 403s (RBAC drift, denied bookmark) and network errors via the
       // global toast. Without this, App.tsx call sites that mutate without
@@ -7671,7 +7713,9 @@ export function useSetActiveNamespace() {
           const error = await readErrorBody(response);
           throw new Error(error.error || `HTTP ${response.status}`);
         }
-        return response.json();
+        // Awaited so a body lost in transfer reaches the catch below.
+        const scope: NamespaceScope = await response.json();
+        return scope;
       } catch (error) {
         clearTimeout(timeoutId);
         debugNamespaceLog("mutation:error", {
@@ -7694,10 +7738,45 @@ export function useSetActiveNamespace() {
             { cause: error },
           );
         }
+        // A network failure can hide a write the server already made; its
+        // scope says whether the pick landed. A refused pick (HTTP error) did
+        // not land.
+        if (!isRescope && error instanceof TypeError) {
+          const applied = await reconcileNamespaceSwitch(namespaces);
+          if (applied) {
+            debugNamespaceLog("mutation:network-error-but-applied", { namespaces });
+            return applied;
+          }
+        }
         throw error;
       }
     },
-    onSuccess: (scope) => {
+    onMutate: () => {
+      const apiBase = getApiBase();
+      const seq = (startedNamespaceSwitch.get(apiBase) ?? 0) + 1;
+      startedNamespaceSwitch.set(apiBase, seq);
+      const context = queryClient.getQueryData<NamespaceScope>(["namespace-scope"])?.context;
+      return { seq, apiBase, context };
+    },
+    onSuccess: (response, { namespaces }, start) => {
+      let scope = response;
+      if (ownsTabPick(response)) {
+        // The response renders the server's stored pick after the write, which
+        // another tab can change in between, and its context is read after the
+        // write too. Record what this tab asked for, under the context it
+        // asked in.
+        const context = start.context ?? response.context;
+        const cached = queryClient.getQueryData<NamespaceScope>(["namespace-scope"]);
+        // A context switch landed meanwhile: the tab starts again from the
+        // server's pick for the new context.
+        if (getApiBase() !== start.apiBase || (cached && cached.context !== context) || response.context !== context) return;
+        if (!claimNamespaceSwitch(start)) return;
+        const picked = pruneTabPick(response, cleanPick(namespaces));
+        writeTabPick(start.apiBase, context, picked);
+        scope = withActives(response, picked);
+      } else {
+        claimNamespaceSwitch(start);
+      }
       debugNamespaceLog("mutation:success-before-scope-cache-write", {
         actives: scope.actives,
         mode: scope.mode,
