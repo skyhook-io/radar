@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	"os/exec"
 	pathpkg "path"
 	"reflect"
 	"runtime"
@@ -1541,6 +1542,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
+	if caps.LocalTerminal {
+		_, err := exec.LookPath("kubectl")
+		caps.Kubectl = err == nil
+	}
 	caps.LocalShell = "posix"
 	if runtime.GOOS == "windows" {
 		caps.LocalShell = "powershell"
@@ -5003,6 +5008,7 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		// Lets the browser stand down its auto-retry for the whole auth-loss
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
+		"autoRetryStopped": status.AutoRetryStopped,
 	}
 	// Context enumeration re-reads kubeconfig files (under the client write
 	// lock in multi-file mode) — too expensive for the UI's perpetual

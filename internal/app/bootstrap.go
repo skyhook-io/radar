@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -38,6 +37,9 @@ import (
 )
 
 var clusterConnectionProbe = k8s.TestClusterConnection
+
+// Replaced in tests to observe when boot starts subsystem init.
+var initAllSubsystems = k8s.InitAllSubsystems
 
 // AppConfig holds all parsed configuration for the Radar application.
 type AppConfig struct {
@@ -666,9 +668,11 @@ func CreateServer(cfg AppConfig) *server.Server {
 // Progress is broadcast via SSE so the browser can show updates.
 // Callbacks must be registered via RegisterCallbacks before calling this.
 //
-// The /version connectivity check runs in parallel with subsystem init
-// (RBAC checks + informer sync) so neither blocks the other. If the
-// connectivity check fails, subsystem init is canceled immediately.
+// The /version connectivity check runs first, as a context switch does.
+// Subsystem init (discovery, RBAC checks, informers) starts only after it
+// passes: each of those calls runs the exec credential plugin, so starting
+// them alongside a failing check ran a broken or browser-based plugin dozens
+// of times at once.
 func InitializeCluster() {
 	log.Printf("── Kubernetes initialization · %s ─────────────────────────", k8s.SanitizeForLog(k8s.GetContextName()))
 
@@ -684,19 +688,10 @@ func InitializeCluster() {
 		ProgressMsg: "Testing cluster connectivity...",
 	})
 
-	// Run connectivity check and subsystem init in parallel.
-	// Subsystem init (RBAC + informers) makes API calls that implicitly
-	// verify connectivity, so starting them together saves ~1-2s.
-	// If /version fails, we cancel subsystem init via context.
 	// Derived from the operation context so a context switch or retry
-	// cancels our goroutines immediately.
+	// cancels this attempt immediately.
 	ctx, cancel := context.WithCancel(k8s.OperationContext())
 	defer cancel()
-
-	// Gate: subsystem progress messages only update the UI after /version
-	// confirms connectivity. Before that the user sees "Testing cluster
-	// connectivity..." / "Retrying cluster connectivity..." from CheckClusterAccess.
-	var connected atomic.Bool
 
 	// Exec credential plugins (EKS, GKE) may need 7-10s on first invocation
 	// to refresh SSO/OAuth tokens. Give them a longer deadline so the retry
@@ -707,33 +702,9 @@ func InitializeCluster() {
 		versionDeadline = 25 * time.Second
 	}
 	versionCtx, versionCancel := context.WithTimeout(ctx, versionDeadline)
-
-	versionErr := make(chan error, 1)
-	go func() {
-		defer versionCancel()
-		versionErr <- CheckClusterAccess(versionCtx)
-	}()
-
-	subsystemErr := make(chan error, 1)
-	go func() {
-		subsystemErr <- k8s.InitAllSubsystems(ctx, func(msg string) {
-			if connected.Load() {
-				k8s.SetConnectionStatus(k8s.ConnectionStatus{
-					State:       k8s.StateConnecting,
-					Context:     k8s.GetContextName(),
-					ProgressMsg: msg,
-				})
-			}
-		})
-	}()
-
-	// Wait for connectivity check first
-	if err := <-versionErr; err != nil {
-		cancel() // Cancel subsystem init — RBAC goroutines will see ctx.Err()
-
-		// Update status IMMEDIATELY so the UI shows the error page.
-		// Don't wait for subsystem drain — exec credential plugins serialize
-		// API calls, so draining 20+ RBAC checks can take 30+ seconds.
+	err := CheckClusterAccess(versionCtx)
+	versionCancel()
+	if err != nil {
 		errorType := k8s.ClassifyError(err)
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
@@ -742,15 +713,8 @@ func InitializeCluster() {
 			ErrorType: errorType,
 		})
 		log.Printf("[ops] InitializeCluster FAILED: %v (errorType=%s, %v elapsed)", err, errorType, time.Since(clusterStart))
-
-		// Drain subsystem goroutine in background to prevent goroutine leak.
-		// Cleanup is handled by the next context switch or retry.
-		go func() {
-			<-subsystemErr
-		}()
 		return
 	}
-	connected.Store(true)
 	k8s.LogTiming(" Cluster access check: %v", time.Since(clusterStart))
 
 	// Connectivity confirmed — kick off progress updates for remaining init
@@ -760,8 +724,13 @@ func InitializeCluster() {
 		ProgressMsg: "Loading workloads...",
 	})
 
-	// Connectivity confirmed — wait for subsystem init to finish
-	if err := <-subsystemErr; err != nil {
+	if err := initAllSubsystems(ctx, func(msg string) {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{
+			State:       k8s.StateConnecting,
+			Context:     k8s.GetContextName(),
+			ProgressMsg: msg,
+		})
+	}); err != nil {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),

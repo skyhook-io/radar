@@ -407,6 +407,7 @@ var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
 var ErrReconnectSuperseded = errors.New("reconnect superseded by a newer operation")
 
 func PerformContextSwitch(newContext string) error {
+	resetAutomaticRetries()
 	return performContextSwitch(newContext, 0, false, nil)
 }
 
@@ -489,6 +490,7 @@ type checkedSwitch struct {
 // never holds up another operation. Disconnected sessions switch as before:
 // there is no working cluster to protect.
 func PerformCheckedContextSwitch(ctx context.Context, newContext string) error {
+	resetAutomaticRetries()
 	if !shouldCheckBeforeSwitch(newContext) {
 		return performContextSwitch(newContext, 0, false, nil)
 	}

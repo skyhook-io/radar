@@ -468,6 +468,8 @@ func SetTestPolicyReportIndex(idx *policyreports.Index) *policyreports.Index {
 func ResetTestState() {
 	// Join the old recovery worker before replacing hooks or state it may still use.
 	runtimeAuthRecoveryOwed.Store(false)
+	runtimeAuthRecoveryRetryLimit.Store(0)
+	runtimeAuthRecoveryFailures.Store(0)
 	deadline := time.Now().Add(connectionTestOperationTimeout() + time.Second)
 	for runtimeAuthRecoveryActive.Load() {
 		select {

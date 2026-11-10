@@ -17,6 +17,8 @@ export interface ConnectionState {
   // When this context stopped working (RFC 3339). Set by the server while
   // disconnected; older servers never send it.
   disconnectedAt?: string
+  // The server stopped reconnecting on its own and waits for Retry (desktop).
+  autoRetryStopped?: boolean
   // Per-kind readiness while the initial informer sync runs ('connecting'
   // with informers started). Drives the progressive app shell — absent once
   // connected or before informers exist.
@@ -282,6 +284,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       errorType: data.errorType,
       progressMessage: data.progressMessage,
       disconnectedAt: data.disconnectedAt,
+      autoRetryStopped: data.autoRetryStopped,
       syncStatus: data.syncStatus,
     })
     if (becameConnected) {
