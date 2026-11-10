@@ -1544,6 +1544,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = advertisedFeatures()
+	// handlePodFileUpload refuses in Radar Cloud; hide the control to match.
+	caps.Features.PodFileUpload = !cloudMode()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)

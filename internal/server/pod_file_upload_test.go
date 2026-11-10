@@ -258,6 +258,33 @@ func TestPodFileUploadRefusedWhenExecDisabled(t *testing.T) {
 	}
 }
 
+// Radar Cloud does not offer uploads yet: the capability is off and the
+// handler refuses before any exec.
+func TestPodFileUploadOffInCloudMode(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
+	h := uploadServer(t, true, func(context.Context, uploadExec, remotecommand.StreamOptions) error {
+		t.Error("exec ran in Cloud mode")
+		return nil
+	})
+	status, e, _ := postUpload(t, uploadURL(h.ts, "/tmp", "a", false), []byte("x"))
+	if status != http.StatusForbidden || e.Code != uploadCodeCloud {
+		t.Errorf("got %d %q, want 403 %s", status, e.Code, uploadCodeCloud)
+	}
+
+	for mode, want := range map[string]bool{"true": false, "false": true} {
+		t.Setenv("RADAR_CLOUD_MODE", mode)
+		w := httptest.NewRecorder()
+		h.srv.handleCapabilities(w, httptest.NewRequest(http.MethodGet, "/api/capabilities", nil))
+		var caps k8s.Capabilities
+		if err := json.Unmarshal(w.Body.Bytes(), &caps); err != nil {
+			t.Fatal(err)
+		}
+		if caps.Features.PodFileUpload != want {
+			t.Errorf("RADAR_CLOUD_MODE=%s: podFileUpload=%v, want %v", mode, caps.Features.PodFileUpload, want)
+		}
+	}
+}
+
 func TestPodFileUploadRejectsBadInput(t *testing.T) {
 	h := uploadServer(t, true, func(context.Context, uploadExec, remotecommand.StreamOptions) error {
 		t.Error("exec ran for invalid input")

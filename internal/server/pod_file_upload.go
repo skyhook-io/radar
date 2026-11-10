@@ -65,6 +65,7 @@ const (
 
 const (
 	uploadCodeDisabled         = "exec_disabled"
+	uploadCodeCloud            = "uploads_unavailable"
 	uploadCodeBadRequest       = "bad_request"
 	uploadCodeTooLarge         = "file_too_large"
 	uploadCodeLengthRequired   = "length_required"
@@ -330,6 +331,13 @@ func (c *cappedBuffer) String() string { return c.buf.String() }
 // container's own OS user.
 // POST /api/pods/{ns}/{name}/files/upload?container=X&dir=/path&name=file[&overwrite=true]
 func (s *Server) handlePodFileUpload(w http.ResponseWriter, r *http.Request) {
+	// Not offered through Radar Cloud until the hub's handling of a long
+	// streaming request body is checked; handleCapabilities hides it there too.
+	if cloudMode() {
+		s.writePodFileError(w, http.StatusForbidden, uploadCodeCloud,
+			"Uploading files into pods isn't available in Radar Cloud.")
+		return
+	}
 	if k8s.ForceDisableExec {
 		s.writePodFileError(w, http.StatusForbidden, uploadCodeDisabled,
 			"Exec is turned off on this Radar (--disable-exec), and uploading runs over exec.")
