@@ -3,13 +3,18 @@ import { Section, PropertyList, Property, ConditionsSection, AlertBanner, Resour
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
 import { gatewayBackendResourceRef, gatewayParentResourceRef } from '../../../utils/gateway-references'
+import { routeHostTarget, type GatewayLookup } from '../../../utils/host-url'
+import { HostLinkActions } from '../../ui/HostLinkActions'
 
 interface HTTPRouteRendererProps {
   data: any
   onNavigate?: (ref: ResourceRef) => void
+  /** The route's parent Gateways as the host read them (see `routeGateways`).
+   * Without them a hostname can only be copied, since its scheme is unknown. */
+  parentGateways?: GatewayLookup[]
 }
 
-export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) {
+export function HTTPRouteRenderer({ data, onNavigate, parentGateways }: HTTPRouteRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const parentRefs = spec.parentRefs || []
@@ -66,10 +71,17 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
             label="Hostnames"
             value={
               hostnames.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {hostnames.map((h: string) => (
-                    <Badge key={h} tone="structural">{h}</Badge>
-                  ))}
+                <div className="flex flex-col items-start gap-1">
+                  {hostnames.map((h: string) => {
+                    const target = routeHostTarget(h, data, parentGateways)
+                    return (
+                      <div key={h} className="flex max-w-full items-center gap-1">
+                        <Badge tone="structural" className="min-w-0 break-all">{h}</Badge>
+                        {target?.kind === 'url' && <HostLinkActions url={target.url} />}
+                        {target?.kind === 'hostname' && <HostLinkActions hostname={target.hostname} />}
+                      </div>
+                    )
+                  })}
                 </div>
               ) : (
                 <span className="text-xs text-theme-text-tertiary">Any</span>

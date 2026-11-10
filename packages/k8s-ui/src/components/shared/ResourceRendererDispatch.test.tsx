@@ -1204,3 +1204,60 @@ it('gives Diagnose the CRD health the header badge shows', () => {
   expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }], { deletionTimestamp: '2026-01-01T00:00:00Z' }))).toBe('problem')
   expect(diagnoseHealthHint('customresourcedefinitions', crd([]))).toBe('unknown')
 })
+
+describe('Gateway API route plural collision', () => {
+  const routeData = (apiVersion: string, kind: string) => ({
+    apiVersion,
+    kind,
+    metadata: { name: 'shop', namespace: 'default' },
+    spec: { parentRefs: [{ name: 'main-gw' }], hostnames: ['shop.example.com'], collisionProbe: COLLISION_PROBE },
+    status: {},
+  })
+  const render = (kind: string, data: any) => {
+    const reads: string[] = []
+    const overrides: RendererOverrides = {
+      HTTPRouteRenderer: ({ data }) => {
+        reads.push(data.metadata.name)
+        return <span>gateway-lookup-override</span>
+      },
+    }
+    const html = renderToString(
+      <ResourceRendererDispatch
+        resource={{ kind, namespace: 'default', name: 'shop' }}
+        data={data}
+        onCopy={() => {}}
+        copied={null}
+        rendererOverrides={overrides}
+        showCommonSections={false}
+      />,
+    )
+    return { html, reads }
+  }
+
+  it('gives a foreign httproutes resource the generic renderer, with no Gateway lookups or host buttons', () => {
+    const { html, reads } = render('httproutes', routeData('routes.example.io/v1', 'HTTPRoute'))
+    expect(reads).toEqual([])
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('gives a foreign grpcroutes resource the generic renderer, with no Copy button', () => {
+    const { html } = render('grpcroutes', routeData('routes.example.io/v1', 'GRPCRoute'))
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('keeps the Gateway API renderers for gateway.networking.k8s.io routes', () => {
+    const http = render('httproutes', routeData('gateway.networking.k8s.io/v1', 'HTTPRoute'))
+    expect(http.reads).toEqual(['shop'])
+    const grpc = render('grpcroutes', routeData('gateway.networking.k8s.io/v1', 'GRPCRoute'))
+    expect(grpc.html).toContain('aria-label="Copy hostname shop.example.com"')
+  })
+
+  it('reads no route status for a foreign httproutes or grpcroutes resource', () => {
+    for (const kind of ['httproutes', 'grpcroutes']) {
+      expect(getResourceStatus(kind, { apiVersion: 'routes.example.io/v1', status: {} })).toBeNull()
+      expect(getResourceStatus(kind, { apiVersion: 'gateway.networking.k8s.io/v1', status: {} })).not.toBeNull()
+    }
+  })
+})

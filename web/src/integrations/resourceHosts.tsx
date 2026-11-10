@@ -32,6 +32,7 @@ import { NamespaceRenderer } from '../components/resources/renderers/NamespaceRe
 import { CAPIClusterRenderer } from '../components/resources/renderers/CAPIClusterRenderer'
 import { HPARenderer } from '../components/resources/renderers/HPARenderer'
 import { PVCRenderer } from '../components/resources/renderers/PVCRenderer'
+import { HTTPRouteRenderer } from '../components/resources/renderers/HTTPRouteRenderer'
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
@@ -47,6 +48,7 @@ import {
 
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
+  { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
