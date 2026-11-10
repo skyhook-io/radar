@@ -315,8 +315,8 @@ radar --prometheus-url https://metrics.example.com \
 ```
 
 The same labels scope the Caretta, Beyla and Istio traffic map when it reads a
-store you configured, so each Radar draws only its own cluster's flows from a
-shared backend. Without them the map uses the labels automatic matching proves for
+store you configured, so each Radar keeps to its own cluster's flows in a shared
+backend. Without them the map uses the labels automatic matching proves for
 this cluster. `--prometheus-single-cluster` adds no traffic filtering. See
 [Traffic map in a shared metrics store](configuration.md#traffic-map-in-a-shared-metrics-store).
 
