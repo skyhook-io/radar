@@ -403,6 +403,25 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying, back, var
     openLocalTerminal({ initialCommand: command, title: 'Auth' })
   }
 
+  // A startup setting kept Radar from connecting, and the error names the
+  // setting to change. Settings are read at startup, so retrying or switching
+  // context can't clear it: only the message, no recovery actions.
+  if (connection.errorType === 'settings') {
+    return (
+      <div className="flex-1 flex items-start justify-center pt-12 px-8">
+        <div className="max-w-xl w-full flex flex-col items-center text-center">
+          <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center mb-5">
+            <ServerOff className="w-8 h-8 text-red-400" />
+          </div>
+          <h2 className="text-xl font-semibold text-theme-text-primary mb-6">Settings Need a Change</h2>
+          <div className="w-full bg-theme-surface border border-theme-border rounded-lg p-4 text-left">
+            <p className="text-sm text-theme-text-secondary break-words">{connection.error}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex-1 flex items-start justify-center pt-12 px-8">
       <div className="max-w-xl w-full">

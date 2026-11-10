@@ -51,11 +51,11 @@ describe('application resource hosts', () => {
       'CustomResourceDefinitionRenderer', 'RayJobRenderer', 'JobRenderer', 'JobSetRenderer', 'RayServiceRenderer', 'RayClusterRenderer',
       'KueueWorkloadRenderer', 'LocalQueueRenderer', 'ClusterQueueRenderer', 'CAPIClusterRenderer', 'PodRenderer', 'KarpenterNodePoolRenderer',
       'NodeRenderer', 'ServiceRenderer', 'WorkloadRenderer', 'CompositeRenderer', 'ServiceAccountRenderer',
-      'RoleRenderer', 'RoleBindingRenderer', 'NamespaceRenderer', 'HPARenderer', 'PVCRenderer',
+      'RoleRenderer', 'RoleBindingRenderer', 'NamespaceRenderer', 'HPARenderer', 'PVCRenderer', 'HTTPRouteRenderer',
       'RolloutRenderer', 'KyvernoPolicyCoverage', 'KyvernoPolicyQueued', 'CNPGObjectStoreRenderer',
       'VeleroBSLRenderer', 'VeleroBackupRenderer', 'VeleroRestoreRenderer', 'CNPGClusterRenderer',
       'CNPGDatabaseRenderer', 'CNPGPublicationRenderer', 'CNPGSubscriptionRenderer', 'CNPGImageCatalogRenderer',
-      'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer',
+      'FluxHelmReleaseRenderer', 'OpenTelemetryCollectorRenderer', 'ValidatingAdmissionPolicyRenderer', 'ValidatingAdmissionPolicyBindingRenderer', 'SecretProviderClassRenderer',
     ].sort())
     const inherited = [{ id: 'local', label: 'Local', render: () => null }]
     expect(resourceDetailSlots({ kind: 'Pod', group: '', namespace: 'db', name: 'pg-1' }, inherited).extraTabs).toEqual(inherited)

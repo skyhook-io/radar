@@ -397,8 +397,8 @@ func main() {
 	if *namespaceScope && len(resolvedRBACNamespaces) > 0 {
 		log.Fatalf("--namespace-scope cannot be combined with --rbac-namespaces")
 	}
-	if len(resolvedNamespaces) > *maxScopeCandidates {
-		log.Fatalf("--namespaces lists %d namespaces but the RBAC probe fanout cap is %d; raise --max-scope-candidates (or RADAR_MAX_SCOPE_CANDIDATES) to cover all of them", len(resolvedNamespaces), *maxScopeCandidates)
+	if err := app.CheckNamespaceCount(resolvedNamespaces, *maxScopeCandidates); err != nil {
+		log.Fatalf("%v", err)
 	}
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,

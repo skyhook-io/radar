@@ -192,6 +192,17 @@ describe('ConnectionErrorView kubeconfig guidance', () => {
   })
 })
 
+describe('ConnectionErrorView settings error', () => {
+  it('shows the message itself and no action a restart is needed to clear', () => {
+    const markup = renderError('settings', 'prod')
+
+    expect(markup).toContain('safe error')
+    expect(markup).not.toContain('id="connection-raw-error"')
+    expect(markup).not.toContain('Retry Connection')
+    expect(markup).not.toContain('Switch context')
+  })
+})
+
 describe('ConnectionErrorView after a refused switch', () => {
   const connection = { state: 'disconnected' as const, context: 'staging-eu', errorType: 'auth', error: 'safe error' }
 

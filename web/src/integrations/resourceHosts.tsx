@@ -32,6 +32,7 @@ import { NamespaceRenderer } from '../components/resources/renderers/NamespaceRe
 import { CAPIClusterRenderer } from '../components/resources/renderers/CAPIClusterRenderer'
 import { HPARenderer } from '../components/resources/renderers/HPARenderer'
 import { PVCRenderer } from '../components/resources/renderers/PVCRenderer'
+import { HTTPRouteRenderer } from '../components/resources/renderers/HTTPRouteRenderer'
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
@@ -39,6 +40,7 @@ import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRe
 import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBackupRenderer'
 import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
+import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
 import {
   ValidatingAdmissionPolicyBindingRenderer,
   ValidatingAdmissionPolicyRenderer,
@@ -46,6 +48,7 @@ import {
 
 export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
+  { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
@@ -64,6 +67,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
+  { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
   { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },
   cnpgResourceHost,
   crdResourceHost,

@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -188,9 +189,15 @@ func TestNamespaceScope_ListFailureKeepsSavedPick(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET namespace-scope: %v", err)
 	}
+	var body NamespaceScopeResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("namespace-scope status = %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("namespace-scope status = %d (decode: %v), want 200", resp.StatusCode, decodeErr)
+	}
+	// A browser tab keeping its own pick must not drop it on this list either.
+	if body.AccessChecked {
+		t.Error("accessChecked = true after a failed LIST, want false")
 	}
 	if got := srv.getActiveNamespaceForUser(req); len(got) != 1 || got[0] != "broken" {
 		t.Errorf("saved pick after failed LIST = %v, want [broken]", got)
@@ -208,12 +215,44 @@ func TestNamespaceScope_DiscoveryFailureKeepsSavedPick(t *testing.T) {
 	env.srv.setActiveNamespaceForUser(aliceReq, []string{"default"})
 
 	resp := env.authGet(t, "/api/cluster/namespace-scope", "alice", "")
+	var body NamespaceScopeResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("namespace-scope status = %d, want 200", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("namespace-scope status = %d (decode: %v), want 200", resp.StatusCode, decodeErr)
+	}
+	if body.AccessChecked {
+		t.Error("accessChecked = true after a failed access check, want false")
 	}
 	if got := env.srv.getActiveNamespaceForUser(aliceReq); len(got) != 1 || got[0] != "default" {
 		t.Errorf("saved pick after failed access check = %v, want [default]", got)
+	}
+}
+
+// A completed access check that leaves a picked namespace out is evidence the
+// pick is no longer readable: the server drops its copy and tells browser tabs
+// they may drop theirs.
+func TestNamespaceScope_RevokedAccessDropsPick(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	fakeNamespaceAPIServer(t, http.StatusOK, http.StatusForbidden, "default", "broken")
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"broken"}})
+	aliceReq := requestWithUser("GET", "/api/cluster/namespace-scope", &auth.User{Username: "alice"})
+	env.srv.setActiveNamespaceForUser(aliceReq, []string{"default"})
+
+	resp := env.authGet(t, "/api/cluster/namespace-scope", "alice", "")
+	var body NamespaceScopeResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("namespace-scope status = %d (decode: %v), want 200", resp.StatusCode, decodeErr)
+	}
+	if !body.AccessChecked || slices.Contains(body.AccessibleNamespaces, "default") {
+		t.Errorf("accessChecked = %v, accessible = %v; want true without default", body.AccessChecked, body.AccessibleNamespaces)
+	}
+	if got := env.srv.getActiveNamespaceForUser(aliceReq); len(got) != 0 {
+		t.Errorf("saved pick after access was revoked = %v, want none", got)
 	}
 }
 
@@ -230,5 +269,35 @@ func TestParseNamespacesForUser_DiscoveryFailureKeepsSavedPick(t *testing.T) {
 	}
 	if got := env.srv.getActiveNamespaceForUser(aliceReq); len(got) != 1 || got[0] != "default" {
 		t.Errorf("saved pick after failed access check = %v, want [default]", got)
+	}
+}
+
+// With the namespace LIST denied and no namespace to fall back on, Radar has no
+// list at all: like a failed lookup, it must not tell tabs to drop their pick.
+func TestNamespaceScope_NoNamespaceListIsNotAnAccessCheck(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	prevNs := k8s.SetTestContextNamespace("")
+	t.Cleanup(func() { k8s.SetTestContextNamespace(prevNs) })
+	fakeNamespaceAPIServer(t, http.StatusForbidden, http.StatusForbidden)
+
+	srv := New(Config{DevMode: true})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() {
+		ts.Close()
+		srv.Stop()
+	})
+	resp, err := http.Get(ts.URL + "/api/cluster/namespace-scope")
+	if err != nil {
+		t.Fatalf("GET namespace-scope: %v", err)
+	}
+	var body NamespaceScopeResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("namespace-scope status = %d (decode: %v), want 200", resp.StatusCode, decodeErr)
+	}
+	if body.AccessChecked || len(body.AccessibleNamespaces) != 0 {
+		t.Errorf("accessChecked = %v, accessible = %v; want false with no list", body.AccessChecked, body.AccessibleNamespaces)
 	}
 }

@@ -171,3 +171,35 @@ func TestAppReferencesFromEnvChecks_BoundsDuplicateOccurrences(t *testing.T) {
 		t.Fatalf("unexpected bounded duplicate reference: %+v", ref)
 	}
 }
+
+func TestAppReferencesFromEnvChecks_KeepsNotesWithDifferentHistoryCoverageApart(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 22, 6, 47, 0, 0, time.UTC)
+	note := func(pod string, incomplete bool) k8s.StaleSecretEnvCheck {
+		return k8s.StaleSecretEnvCheck{
+			Namespace: "rook-ceph", PodName: pod, Container: "mon", ReferenceKind: "secretKeyRef",
+			EvidenceSource: "managed_fields_mtime", SecretName: "rook-ceph-config",
+			ContainerStartedAt: startedAt, SecretChangedAt: startedAt.Add(time.Hour),
+			HistoryIncomplete: incomplete, Message: pod,
+		}
+	}
+	got := AppReferencesFromEnvChecks(nil, nil, nil, []k8s.StaleSecretEnvCheck{note("mon-a", false), note("mon-z", true)})
+	if got == nil || len(got.StaleSecretEnv) != 2 {
+		t.Fatalf("notes merged across history coverage: %+v", got)
+	}
+}
+
+func TestAppReferencesFromEnvChecks_SortsNoRestartNotesLast(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 22, 6, 47, 0, 0, time.UTC)
+	row := func(secret string, note bool) k8s.StaleSecretEnvCheck {
+		return k8s.StaleSecretEnvCheck{
+			Namespace: "rook-ceph", PodName: "mon-a", Container: "mon", ReferenceKind: "secretKeyRef",
+			EvidenceSource: "managed_fields_mtime", SecretName: secret,
+			ContainerStartedAt: startedAt, SecretChangedAt: startedAt.Add(time.Hour),
+			NoRestartNeeded: note, Message: secret,
+		}
+	}
+	got := AppReferencesFromEnvChecks(nil, nil, nil, []k8s.StaleSecretEnvCheck{row("rook-ceph-config", true), row("s1", false)})
+	if got == nil || len(got.StaleSecretEnv) != 2 || got.StaleSecretEnv[0].Secret.Name != "s1" {
+		t.Fatalf("no-restart note not sorted last: %+v", got)
+	}
+}

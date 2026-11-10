@@ -138,7 +138,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"get_dashboard or issues first. " +
 			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
-	}, logToolCall("list_resources", handleListResources))
+	}, logToolCall("list_resources", stopsWhenCallerLeaves(handleListResources)))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
@@ -1236,9 +1236,16 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 
 	var issueSummary *resourcecontext.IssueSummary
 	var issueRows []issues.Issue
+	var nodeCertificateReport *k8s.NodeCertificateReport
 	if !skipContext || includes["issues"] {
 		gvk := rawObj.GetObjectKind().GroupVersionKind()
-		issueSummary, issueRows = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+		issueSummary, issueRows, nodeCertificateReport = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+	}
+	if nodeCertificateReport != nil {
+		node, ok := rawObj.(*corev1.Node)
+		if !ok || nodeCertificateReport.UID != string(node.UID) {
+			nodeCertificateReport = nil
+		}
 	}
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
@@ -1304,13 +1311,16 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 	//     or template-divergence warning upgrades this to {resource, warnings})
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
-	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges {
+	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges && nodeCertificateReport == nil {
 		return toJSONResult(resourceData)
 	}
 
 	result := map[string]any{"resource": resourceData}
 	if tier == resourcecontext.TierDiagnostic {
 		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected. Graph-derived networking/scaling relationships were not collected; an empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
+	}
+	if nodeCertificateReport != nil {
+		result["nodeCertificateReport"] = nodeCertificateReport
 	}
 	if includes["issues"] {
 		attachRelatedIssueDetails(result, issueRows)
@@ -2613,9 +2623,10 @@ type mcpMetrics struct {
 }
 
 type mcpClusterInfo struct {
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Version  string `json:"version"`
+	Name              string `json:"name"`                        // kubeconfig context, or "in-cluster"
+	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
+	Platform          string `json:"platform"`
+	Version           string `json:"version"`
 }
 
 type mcpNodeSummary = health.NodeFleetCounts
@@ -2785,6 +2796,15 @@ func mcpHelmDashboardPriority(r helm.HelmRelease) int {
 	return helm.ReleasePriority(r)
 }
 
+func mcpClusterInfoFromInfo(info *k8s.ClusterInfo) mcpClusterInfo {
+	return mcpClusterInfo{
+		Name:              info.DisplayName(),
+		KubeconfigCluster: info.KubeconfigCluster(),
+		Platform:          info.Platform,
+		Version:           info.KubernetesVersion,
+	}
+}
+
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
 	d := mcpDashboard{
 		ResourceCounts: make(map[string]int),
@@ -2795,11 +2815,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 	// Cluster info
 	if info, err := k8s.GetClusterInfo(ctx); err == nil {
-		d.Cluster = mcpClusterInfo{
-			Name:     info.Cluster,
-			Platform: info.Platform,
-			Version:  info.KubernetesVersion,
-		}
+		d.Cluster = mcpClusterInfoFromInfo(info)
 	}
 
 	now := time.Now()

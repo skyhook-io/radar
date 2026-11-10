@@ -10,7 +10,7 @@ import { clsx } from 'clsx'
 import { formatCPUMillicores, formatMemoryMiB } from '../../utils/format'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { HomeAgentBlock } from './HomeAgentBlock'
-import { assetUrl, pluralize, parseContextName, CertaintyGlyph } from '@skyhook-io/k8s-ui'
+import { assetUrl, pluralize, parseContextName, CertaintyGlyph, MiddleEllipsis } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { mcpEndpointUrl } from '../../api/config'
 import { parseMajorMinor } from '../../utils/version'
@@ -219,12 +219,11 @@ export function ClusterHealthCard({
   //     has no meaningful kubeconfig context — bootstrap sets it to
   //     the literal "in-cluster" sentinel. Fall back to the platform
   //     label ("Google Kubernetes Engine") which IS recognizable.
-  //  3. Last resort: the literal cluster.name, or "Cluster".
+  //  3. Last resort: the raw cluster.name, or "Cluster".
   // When the card is rendered embedded (cloud mode), the H2 itself is
   // suppressed below — the hub shell already shows the cluster name in
   // its top bar.
-  const parsedContext = parseContextName(cluster.name || '')
-  const rawHeadline = parsedContext.clusterName || cluster.name || 'Cluster'
+  const { raw: rawName, location, headline: rawHeadline } = clusterIdentity(cluster)
   const headlineName = isInCluster ? platformInfo.name : rawHeadline
 
   return (
@@ -251,17 +250,19 @@ export function ClusterHealthCard({
               // the visible text falls back to the platform label. Render no
               // tooltip in that case; local mode keeps it so users can hover
               // to see the full kubeconfig context path.
-              <Tooltip content={isInCluster ? '' : cluster.name} wrapperClassName="!block min-w-0">
-              <h2 className="text-xl font-semibold text-theme-text-primary truncate leading-tight mb-1.5">
-                {headlineName}
+              <Tooltip content={isInCluster ? '' : rawName} wrapperClassName="!block min-w-0">
+              <h2 aria-label={isInCluster ? headlineName : rawName} className="text-xl font-semibold text-theme-text-primary leading-tight mb-1.5">
+                {/* Generated contexts often share a long prefix and differ only at the end.
+                    MiddleEllipsis exposes only the cut text to screen readers; aria-label keeps the full name. */}
+                <MiddleEllipsis text={headlineName} />
               </h2>
               </Tooltip>
             )}
             <div className="flex flex-col gap-0.5 text-xs text-theme-text-tertiary">
-              {(parsedContext.account || parsedContext.region) && (
-                <Tooltip content={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')} wrapperClassName="min-w-0">
+              {location && (
+                <Tooltip content={location} wrapperClassName="min-w-0">
                 <span className="truncate font-mono">
-                  {[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}
+                  {location}
                 </span>
                 </Tooltip>
               )}
@@ -520,6 +521,17 @@ export function ClusterHealthCard({
       </div>
     </div>
   )
+}
+
+// `name` is the kubeconfig context. A renamed cloud context
+// (`aws eks update-kubeconfig --alias`) no longer parses, but its kubeconfig
+// cluster entry still carries the account and region.
+export function clusterIdentity(cluster: Pick<DashboardResponse['cluster'], 'name' | 'kubeconfigCluster'>) {
+  const raw = cluster.name || ''
+  const parsed = parseContextName(raw)
+  const located = parsed.provider ? parsed : parseContextName(cluster.kubeconfigCluster || '')
+  const location = [located.account, located.region].filter(Boolean).join(' · ')
+  return { raw, headline: parsed.clusterName || raw || 'Cluster', location }
 }
 
 // How many minors the running version trails the newest one the upgrade-impact

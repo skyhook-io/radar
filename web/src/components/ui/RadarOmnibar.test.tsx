@@ -11,12 +11,13 @@ vi.mock('../diagnose/DiagnoseContext', () => ({ useDiagnose: () => ({ available:
 vi.mock('../../hooks/useRecentResources', () => ({ loadRecentResources: () => [], recordRecentResource: vi.fn() }))
 vi.mock('../../api/apiResources', async (importOriginal) => ({ ...(await importOriginal<object>()), useAPIResources: () => ({ data: [] }) }))
 vi.mock('./command-items', async (importOriginal) => ({ ...(await importOriginal<object>()), useCommandItems: () => [] }))
-const caps = vi.hoisted(() => ({ data: undefined as undefined | { authEnabled?: boolean } }))
+const caps = vi.hoisted(() => ({ data: undefined as undefined | { authEnabled?: boolean; features?: { searchCoverage?: boolean; searchEventContent?: boolean } } }))
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useNamespaceScope: () => ({ data: undefined }),
   useContexts: () => ({ data: [] }),
   useCapabilities: () => caps,
+  useRadarFeature: () => ({ support: caps.data ? (caps.data.features?.searchEventContent ? 'supported' : 'unsupported') : 'unknown' }),
 }))
 
 import { RadarOmnibar } from './RadarOmnibar'
@@ -33,10 +34,11 @@ const failed: SearchCoverageEntry[] = [{ kind: 'SpStall', group: 'stall.sp-live.
 beforeEach(() => {
   vi.useFakeTimers()
   Element.prototype.scrollIntoView = vi.fn()
-  caps.data = undefined
+  caps.data = { features: { searchEventContent: true } }
   searches = 0
   vi.stubGlobal('fetch', vi.fn(async (input: string) => {
     const url = new URL(input, 'http://localhost')
+    if (url.pathname.endsWith('/version-check')) return new Response(JSON.stringify({ currentVersion: 'dev' }), { status: 200 })
     if (!url.pathname.endsWith('/search')) throw new Error(`Unexpected request: ${input}`)
     searches++
     return new Response(JSON.stringify({ hits: [], total: 0, searched: 0, total_matched: 0, coverage: coverageOf(unsearched) }), { status: 200 })
@@ -162,6 +164,57 @@ describe('RadarOmnibar namespace notes', () => {
       await typeQuery(`ns:payments-prd web${'authEnabled' in data ? 's' : ''}`)
       expect(page()).toContain("Namespace 'payments-prd' wasn't found in what you can see.")
     }
+  })
+})
+
+describe('RadarOmnibar Event search', () => {
+  it.each(['CertificateExpirationWarning', 'kind:Event CertificateExpirationWarning', 'k:ev CertificateExpirationWarning'])('explains an older server without offering unsupported Event text search: %s', async (query) => {
+    caps.data = { features: { searchCoverage: true } }
+    unsearched = []
+    await typeQuery(query)
+    expect(page()).toContain('Update the connected Radar server to search Event reasons and messages.')
+    expect([...document.body.querySelectorAll('button')].some((b) => b.textContent === 'Search Events')).toBe(false)
+  })
+
+  it('waits for server support instead of guessing while capabilities load', async () => {
+    caps.data = undefined
+    unsearched = []
+    await typeQuery('CertificateExpirationWarning')
+    expect(page()).not.toContain('Search Events')
+    expect(page()).not.toContain('Update the connected Radar server')
+  })
+  it('opts an empty broad search into Events and preserves its namespace and reason', async () => {
+    unsearched = []
+    const requests: string[] = []
+    vi.mocked(fetch).mockImplementation(async (input) => {
+      const query = new URL(String(input), 'http://localhost').searchParams.get('q') ?? ''
+      requests.push(query)
+      const hits = query.includes('kind:Event')
+        ? [{ score: 1, kind: 'Event', namespace: 'prod', name: 'certificate-warning', matched: [{ token: 'CertificateExpirationWarning', site: 'content:reason', score: 12 }], snippets: [{ path: 'reason', text: 'CertificateExpirationWarning' }] }]
+        : []
+      return new Response(JSON.stringify({ hits, total: hits.length, total_matched: hits.length, coverage: coverageOf([]) }), { status: 200 })
+    })
+    await typeQuery('ns:prod')
+    act(() => host.querySelector('input')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })))
+    await typeQuery('CertificateExpirationWarning')
+    expect(page()).toContain("Kubernetes Events aren't included in a broad search.")
+    const button = [...document.body.querySelectorAll('button')].find((b) => b.textContent === 'Search Events')
+    expect(button).toBeDefined()
+    act(() => button?.click())
+    await advance(300)
+    await advance(100)
+    expect(requests.at(-1)).toBe('ns:prod kind:Event CertificateExpirationWarning')
+    expect(page()).toContain('certificate-warning')
+    expect(page()).toContain('in event')
+    expect(page()).not.toContain('in spec')
+    expect(host.querySelector('input')!.value).toBe('CertificateExpirationWarning')
+    expect([...document.body.querySelectorAll('button')].some((b) => b.textContent === 'Search Events')).toBe(false)
+  })
+
+  it.each(['kind:Pod CertificateExpirationWarning', 'k:events renewal', 'kind:"Event" renewal'])('does not redirect an explicitly scoped search: %s', async (query) => {
+    unsearched = []
+    await typeQuery(query)
+    expect(page()).not.toContain('Search Events')
   })
 })
 

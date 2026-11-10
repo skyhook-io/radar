@@ -182,6 +182,7 @@ type FeatureCapabilities struct {
 	ResourceReadCoverage  bool `json:"resourceReadCoverage"`
 	SearchCoverage        bool `json:"searchCoverage"`
 	ApplicationEvidence   bool `json:"applicationEvidence"`
+	SearchEventContent    bool `json:"searchEventContent"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
@@ -1219,7 +1220,8 @@ func mergeScopeCandidates(ctxNs, flagNs string, accessible []string, authoritati
 
 func mergeScopeCandidateLists(ctxNs string, flagNamespaces []string, accessible []string, authoritative bool) (out []string, dropped int) {
 	seen := map[string]bool{}
-	out = make([]string, 0, MaxScopeCandidates)
+	// MaxScopeCandidates is operator-set and can be huge; size by the input.
+	out = make([]string, 0, min(MaxScopeCandidates, 1+len(flagNamespaces)+len(accessible)))
 	atCap := false
 	add := func(ns string) {
 		if ns == "" || seen[ns] {
