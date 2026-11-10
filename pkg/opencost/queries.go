@@ -15,9 +15,11 @@ const (
 	nodeRAMHourlyCostExpr           = `max by (node) (node_ram_hourly_cost)`
 	// node_gpu_hourly_cost is exported for every node, GPU or not, so GPU
 	// spend is the count times the rate.
-	nodeGPUHourlyCostExpr          = `sum(max by (node) (node_gpu_count) * on (node) max by (node) (node_gpu_hourly_cost))`
+	nodeGPUHourlyCostExpr = `sum(max by (node) (node_gpu_count) * on (node) max by (node) (node_gpu_hourly_cost))`
 	// pv_hourly_cost is a per-GiB rate, so it has to be scaled by the volume
 	// size to get the volume's hourly cost.
 	persistentVolumeHourlyCostExpr = `(max by (persistentvolume) (pv_hourly_cost) * on (persistentvolume) max by (persistentvolume) (kube_persistentvolume_capacity_bytes) / 1073741824)`
-	persistentVolumeClaimRef       = `max by (persistentvolume, namespace) (label_replace(kube_persistentvolume_claim_ref, "namespace", "$1", "claim_namespace", "(.+)"))`
+	// unsizedPersistentVolumeExpr lists priced volumes whose size is unknown.
+	unsizedPersistentVolumeExpr = `(max by (persistentvolume) (pv_hourly_cost) unless on (persistentvolume) kube_persistentvolume_capacity_bytes)`
+	persistentVolumeClaimRef    = `max by (persistentvolume, namespace) (label_replace(kube_persistentvolume_claim_ref, "namespace", "$1", "claim_namespace", "(.+)"))`
 )
