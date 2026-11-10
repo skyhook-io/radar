@@ -71,7 +71,7 @@ func TestComputeKubecostSummaryFallsBackFromNullHourAndNormalizesActualDuration(
 		t.Fatalf("namespaces = %d, want 1", len(resp.Namespaces))
 	}
 	row := resp.Namespaces[0]
-	if row.Name != "demo" || row.HourlyCost != 2.75 || row.CPUCost != 1 || row.MemoryCost != 1 || row.StorageCost != 0.5 || row.NetworkCost != 0.25 {
+	if row.Name != "demo" || row.HourlyCost != 2.75 || row.CPUCost != 1 || row.MemoryCost != 1 || row.StorageCost == nil || *row.StorageCost != 0.5 || row.NetworkCost != 0.25 {
 		t.Fatalf("unexpected normalized row: %#v", row)
 	}
 	if row.CPUUsageCost != 0.5 || row.MemoryUsageCost != 0.25 || row.IdleCost != 1.25 || row.Efficiency != 37.5 {

@@ -37,15 +37,17 @@ const (
 
 // CostSummary is the response for the /api/opencost/summary endpoint.
 type CostSummary struct {
-	TotalNodeCost    *float64 `json:"-"`
-	Available        bool     `json:"available"`
-	Reason           string   `json:"reason,omitempty"` // Set when available=false; see the Reason* constants above.
-	Source           string   `json:"source,omitempty"`
-	DataThrough      string   `json:"dataThrough,omitempty"`
-	Currency         string   `json:"currency"`
-	Window           string   `json:"window,omitempty"`
-	TotalHourlyCost  float64  `json:"totalHourlyCost,omitempty"`
-	TotalStorageCost float64  `json:"totalStorageCost,omitempty"`
+	TotalNodeCost   *float64 `json:"-"`
+	Available       bool     `json:"available"`
+	Reason          string   `json:"reason,omitempty"` // Set when available=false; see the Reason* constants above.
+	Source          string   `json:"source,omitempty"`
+	DataThrough     string   `json:"dataThrough,omitempty"`
+	Currency        string   `json:"currency"`
+	Window          string   `json:"window,omitempty"`
+	TotalHourlyCost float64  `json:"totalHourlyCost,omitempty"`
+	// TotalStorageCost is null when any row's storage cost is unknown. A
+	// missing field means a server that predates the distinction.
+	TotalStorageCost *float64 `json:"totalStorageCost"`
 	TotalNetworkCost float64  `json:"totalNetworkCost,omitempty"`
 	TotalIdleCost    float64  `json:"totalIdleCost,omitempty"`
 	// TotalIdleCost adds two different things: node capacity no workload
@@ -69,16 +71,18 @@ type CostSummary struct {
 // default aggregation; the struct is also used for controller and pod
 // rows — Kind disambiguates (empty = namespace).
 type NamespaceCost struct {
-	Name            string  `json:"name"`
-	Kind            string  `json:"kind,omitempty"`      // "namespace" (default if empty) | "controller" | "pod"
-	Namespace       string  `json:"namespace,omitempty"` // populated for controller/pod rows
-	HourlyCost      float64 `json:"hourlyCost"`
-	CPUCost         float64 `json:"cpuCost"`
-	MemoryCost      float64 `json:"memoryCost"`
-	StorageCost     float64 `json:"storageCost,omitempty"`
-	NetworkCost     float64 `json:"networkCost,omitempty"`
-	CPUUsageCost    float64 `json:"cpuUsageCost,omitempty"`
-	MemoryUsageCost float64 `json:"memoryUsageCost,omitempty"`
+	Name       string  `json:"name"`
+	Kind       string  `json:"kind,omitempty"`      // "namespace" (default if empty) | "controller" | "pod"
+	Namespace  string  `json:"namespace,omitempty"` // populated for controller/pod rows
+	HourlyCost float64 `json:"hourlyCost"`
+	CPUCost    float64 `json:"cpuCost"`
+	MemoryCost float64 `json:"memoryCost"`
+	// StorageCost is null when the namespace has priced volumes whose size
+	// is unknown, so it cannot read as having no storage.
+	StorageCost     *float64 `json:"storageCost"`
+	NetworkCost     float64  `json:"networkCost,omitempty"`
+	CPUUsageCost    float64  `json:"cpuUsageCost,omitempty"`
+	MemoryUsageCost float64  `json:"memoryUsageCost,omitempty"`
 	// UsageUnavailable prevents missing Kubecost usage from being treated as zero when scoped totals are recomputed.
 	UsageUnavailable bool    `json:"-"`
 	Efficiency       float64 `json:"efficiency,omitempty"` // 0-100

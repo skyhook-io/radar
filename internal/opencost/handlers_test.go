@@ -252,6 +252,31 @@ func TestFilterCostSummaryDropsClusterLevelUnallocatedCost(t *testing.T) {
 	}
 }
 
+func TestFilterCostSummaryKeepsUnknownStorageUnknown(t *testing.T) {
+	known := 0.5
+	newSummary := func() *pkgopencost.CostSummary {
+		return &pkgopencost.CostSummary{
+			Available: true,
+			Namespaces: []pkgopencost.NamespaceCost{
+				{Name: "sized", HourlyCost: 1.5, CPUCost: 0.5, MemoryCost: 0.5, StorageCost: &known},
+				{Name: "unsized", HourlyCost: 1, CPUCost: 0.5, MemoryCost: 0.5},
+			},
+		}
+	}
+
+	resp := newSummary()
+	FilterCostSummary(resp, []string{"sized"})
+	if resp.TotalStorageCost == nil || *resp.TotalStorageCost != 0.5 {
+		t.Fatalf("scope with only sized volumes: TotalStorageCost=%v, want 0.5", resp.TotalStorageCost)
+	}
+
+	resp = newSummary()
+	FilterCostSummary(resp, []string{"sized", "unsized"})
+	if resp.TotalStorageCost != nil {
+		t.Fatalf("scope with an unsized volume: TotalStorageCost=%v, want unknown", *resp.TotalStorageCost)
+	}
+}
+
 func TestFilterCostSummaryExcludesUnavailableUsageFromEfficiency(t *testing.T) {
 	resp := &pkgopencost.CostSummary{
 		Available:         true,

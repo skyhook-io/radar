@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -249,8 +250,9 @@ func TestRollbackResult(t *testing.T) {
 		t.Fatalf("no-op message = %q", msg)
 	}
 
-	if _, err := rollbackResult("deployments", "ns", "web", 2, k8score.ErrWorkloadPaused); err == nil || !strings.Contains(err.Error(), "rollback failed") {
-		t.Fatalf("paused rollback error = %v, want a failure", err)
+	paused := fmt.Errorf("Deployment ns/web: %w", k8score.ErrWorkloadPaused)
+	if _, err := rollbackResult("deployments", "ns", "web", 2, paused); err == nil || !errors.Is(err, k8score.ErrWorkloadPaused) || !strings.Contains(err.Error(), "action=resume") {
+		t.Fatalf("paused rollback error = %v, want a failure that names action=resume", err)
 	}
 
 	resp, err = rollbackResult("deployments", "ns", "web", 2, nil)

@@ -279,9 +279,12 @@ func TestToolCatalogContextBudget(t *testing.T) {
 		// 992 bytes without new tool names; release version listing adds 155 more,
 		// and rollback preview plus workload-to-release rollback routing 291 more.
 		// get_helm_chart (chart versions before install) adds 707.
-		// Measured 73,640 after merging main; retain 33 bytes headroom.
+		// manage_workload pause and resume add 122.
+		// Measured 73,762; retain 33 bytes headroom.
+		// Every tool description and schema is sent to each MCP client and spends
+		// its context, so the cap makes any growth a deliberate choice.
 		// Opt-in Service curl and exec remain a separate allowance below.
-		maxCatalogBytes         = 73673
+		maxCatalogBytes         = 73795
 		maxToolDescriptionBytes = 3200
 	)
 

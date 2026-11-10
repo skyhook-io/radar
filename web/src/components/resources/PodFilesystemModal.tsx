@@ -13,6 +13,20 @@ import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
 import { PodFilePreview, PREVIEW_BYTE_CAP } from './PodFilePreview'
+import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
+import { useRadarFeature } from '../../api/client'
+import {
+  canShowUpload,
+  fileMountHint,
+  isValidUploadName,
+  oversizeMessage,
+  PodFileUploadError,
+  UPLOAD_CANCELLED,
+  uploadBlockedHint,
+  uploadPodFile,
+  uploadTarget,
+} from './pod-file-upload'
+import { isUploadBusy, PodFileUploadButton, PodFileUploadNotices, PodFileUploadStatus, type UploadState } from './PodFileUploadPanel'
 
 interface PodFilesystem {
   root: FileNode
@@ -128,6 +142,8 @@ interface PodFilesystemModalProps {
   containers: string[]
   initialContainer?: string
   onSwitchToImageFiles?: (containerName: string) => void
+  /** The pod object; its volume mounts tell where uploads cannot work. */
+  pod?: unknown
 }
 
 export function PodFilesystemModal({
@@ -138,30 +154,57 @@ export function PodFilesystemModal({
   containers,
   initialContainer,
   onSwitchToImageFiles,
+  pod,
 }: PodFilesystemModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [currentPath, setCurrentPath] = useState('/')
   const [filesystem, setFilesystem] = useState<PodFilesystem | null>(null)
+  // The container the shown listing came from; it lags selectedContainer
+  // while a switch is loading.
+  const [listedContainer, setListedContainer] = useState<string | null>(null)
+  const loadSeq = useRef(0)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // The file being viewed in place of the listing; null shows the directory.
   const [previewFile, setPreviewFile] = useState<FileNode | null>(null)
   const toast = useToast()
 
+  const { canExec } = useNamespacedCapabilities(namespace)
+  const { support: uploadSupport, guard: guardUpload } = useRadarFeature('podFileUpload')
+  const uploadEnabled = canShowUpload({ canExec, featureSupported: uploadSupport === 'supported' })
+  const [upload, setUpload] = useState<UploadState>({ phase: 'idle' })
+  const [dragging, setDragging] = useState(false)
+  const pendingFile = useRef<File | null>(null)
+  const uploadAbort = useRef<AbortController | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const currentPathRef = useRef(currentPath)
+  useEffect(() => { currentPathRef.current = currentPath }, [currentPath])
+  const uploadRef = useRef(upload)
+  useEffect(() => { uploadRef.current = upload }, [upload])
+  // Uploads that had sent every byte when the dialog closed or the container
+  // changed. The container may already be committing them, so they run on and
+  // report through a toast instead of being cancelled.
+  const detachedUploads = useRef(new Set<AbortController>())
+
   const loadDirectory = useCallback(async (dirPath: string) => {
+    const seq = ++loadSeq.current
     setPreviewFile(null)
     setIsLoading(true)
     setError(null)
     try {
       const result = await fetchPodFiles(namespace, podName, selectedContainer, dirPath)
+      if (seq !== loadSeq.current) return
       setFilesystem(result)
       setCurrentPath(dirPath)
+      setListedContainer(selectedContainer)
     } catch (err) {
+      if (seq !== loadSeq.current) return
       setError(err instanceof Error ? err.message : 'Failed to list files')
     } finally {
-      setIsLoading(false)
+      if (seq === loadSeq.current) setIsLoading(false)
     }
   }, [namespace, podName, selectedContainer])
 
@@ -177,6 +220,7 @@ export function PodFilesystemModal({
     if (!open) {
       setSearchQuery('')
       setFilesystem(null)
+      setListedContainer(null)
       setError(null)
       setIsLoading(false)
       setCurrentPath('/')
@@ -184,6 +228,157 @@ export function PodFilesystemModal({
       setSelectedContainer(initialContainer || containers[0] || '')
     }
   }, [open, initialContainer, containers])
+
+  // Leaving the dialog or the container abandons an upload that has not
+  // finished sending; the server then writes nothing. One that is already
+  // saving is left to finish.
+  useEffect(() => {
+    if (!open) return
+    const detached = detachedUploads.current
+    return () => {
+      const abort = uploadAbort.current
+      if (abort && uploadRef.current.phase === 'saving') detached.add(abort)
+      else abort?.abort()
+      uploadAbort.current = null
+      pendingFile.current = null
+      setUpload({ phase: 'idle' })
+    }
+  }, [open, selectedContainer])
+
+  const blockedHint = useMemo(
+    () => (uploadEnabled ? uploadBlockedHint(pod, selectedContainer, currentPath) : null),
+    [uploadEnabled, pod, selectedContainer, currentPath],
+  )
+
+  const sendFile = useCallback(async (file: File, dir: string, overwrite: boolean) => {
+    const abort = new AbortController()
+    uploadAbort.current = abort
+    setUpload({ phase: 'uploading', name: file.name, dir, sent: 0, total: file.size })
+    try {
+      const result = await guardUpload(() => uploadPodFile({
+        namespace,
+        podName,
+        container: selectedContainer,
+        dir,
+        file,
+        name: file.name,
+        overwrite,
+        signal: abort.signal,
+        onProgress: (sent, total) => {
+          if (abort.signal.aborted) return
+          // Every byte is out; what remains is the container committing it.
+          setUpload(sent >= total
+            ? { phase: 'saving', name: file.name, dir }
+            : { phase: 'uploading', name: file.name, dir, sent, total })
+        },
+      }))
+      if (detachedUploads.current.delete(abort)) {
+        toast.showSuccess(result.replaced ? 'File replaced' : 'File uploaded', result.path)
+        return
+      }
+      if (uploadAbort.current !== abort) return
+      setUpload({ phase: 'saved', path: result.path, replaced: result.replaced })
+      if (dir === currentPathRef.current) loadDirectory(dir)
+    } catch (err) {
+      if (detachedUploads.current.delete(abort)) {
+        toast.showError(`Could not upload ${file.name}`, err instanceof Error ? err.message : String(err))
+        return
+      }
+      if (uploadAbort.current !== abort) return
+      if (err instanceof PodFileUploadError && err.code === UPLOAD_CANCELLED) {
+        setUpload({ phase: 'idle' })
+        return
+      }
+      setUpload({ phase: 'error', name: file.name, message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      if (uploadAbort.current === abort) uploadAbort.current = null
+    }
+  }, [guardUpload, namespace, podName, selectedContainer, loadDirectory, toast])
+
+  const listingReady = !isLoading && !!filesystem?.root && listedContainer === selectedContainer
+
+  const startUpload = useCallback((file: File) => {
+    if (!listingReady) return
+    const dir = currentPath
+    if (!isValidUploadName(file.name)) {
+      setUpload({ phase: 'error', name: file.name, message: 'That file name cannot be used in the container.' })
+      return
+    }
+    const oversize = oversizeMessage(file.size)
+    if (oversize) {
+      setUpload({ phase: 'error', name: file.name, message: oversize })
+      return
+    }
+    const filePath = dir === '/' ? `/${file.name}` : `${dir}/${file.name}`
+    const mounted = fileMountHint(pod, selectedContainer, filePath)
+    if (mounted) {
+      setUpload({ phase: 'error', name: file.name, message: mounted.reason })
+      return
+    }
+    const target = uploadTarget(filesystem?.root, file.name)
+    if (target.kind === 'refuse') {
+      setUpload({ phase: 'error', name: file.name, message: target.reason })
+      return
+    }
+    if (target.kind === 'replace') {
+      pendingFile.current = file
+      setUpload({ phase: 'confirm', name: file.name, dir, size: file.size })
+      return
+    }
+    sendFile(file, dir, false)
+  }, [listingReady, currentPath, pod, selectedContainer, filesystem, sendFile])
+
+  const confirmReplace = useCallback(() => {
+    const file = pendingFile.current
+    pendingFile.current = null
+    if (file && upload.phase === 'confirm') sendFile(file, upload.dir, true)
+  }, [sendFile, upload])
+
+  const cancelUpload = useCallback(() => {
+    pendingFile.current = null
+    const abort = uploadAbort.current
+    uploadAbort.current = null
+    abort?.abort()
+    setUpload({ phase: 'idle' })
+  }, [])
+
+  const uploadHere = uploadEnabled && !previewFile && listingReady && !blockedHint && !isUploadBusy(upload)
+  // A file dropped anywhere in the dialog must never reach the browser, which
+  // would open it in place of Radar; only a drop on the listing uploads it.
+  const ownsFileDrag = (e: React.DragEvent) => uploadEnabled && e.dataTransfer.types.includes('Files')
+  const overList = (e: React.DragEvent) => !!listRef.current?.contains(e.target as Node)
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!ownsFileDrag(e)) return
+    e.preventDefault()
+    const accept = uploadHere && overList(e)
+    e.dataTransfer.dropEffect = accept ? 'copy' : 'none'
+    if (accept !== dragging) setDragging(accept)
+  }
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+  }
+  const handleDrop = (e: React.DragEvent) => {
+    setDragging(false)
+    if (!ownsFileDrag(e)) return
+    e.preventDefault()
+    if (!overList(e)) return
+    if (!uploadHere) {
+      if (blockedHint) setUpload({ phase: 'error', name: 'the file', message: blockedHint.reason })
+      return
+    }
+    const items = Array.from(e.dataTransfer.items ?? [])
+    if (items.some((item) => item.webkitGetAsEntry?.()?.isDirectory)) {
+      setUpload({ phase: 'error', name: 'folder', message: 'Folders cannot be uploaded; drop a single file.' })
+      return
+    }
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length !== 1) {
+      setUpload({ phase: 'error', name: `${files.length} files`, message: 'Drop one file at a time.' })
+      return
+    }
+    startUpload(files[0])
+  }
 
   // ESC steps back one level: out of a file to its listing, then out of the
   // dialog. One listener owns both so the two can never race.
@@ -225,7 +420,12 @@ export function PodFilesystemModal({
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
@@ -270,6 +470,29 @@ export function PodFilesystemModal({
                 {namespace}/{podName}
               </p>
             </div>
+          )}
+
+          {uploadEnabled && !previewFile && showFilesystem && (
+            <>
+              <PodFileUploadButton
+                blocked={blockedHint}
+                busy={isUploadBusy(upload)}
+                loading={!listingReady}
+                onClick={() => fileInputRef.current?.click()}
+              />
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                aria-hidden="true"
+                tabIndex={-1}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  e.target.value = ''
+                  if (file) startUpload(file)
+                }}
+              />
+            </>
           )}
 
           {/* Container selector */}
@@ -347,7 +570,27 @@ export function PodFilesystemModal({
             />
           </div>
         ) : (
-        <div className="flex-1 min-h-0 overflow-y-auto p-4">
+        <div
+          ref={listRef}
+          className={clsx('relative flex-1 min-h-0 overflow-y-auto p-4', dragging && 'ring-2 ring-inset ring-accent')}
+        >
+          {uploadEnabled && showFilesystem && (
+            <>
+              <PodFileUploadNotices namespace={namespace} blocked={blockedHint} onNavigateAway={onClose} />
+              <PodFileUploadStatus
+                state={upload}
+                onConfirmReplace={confirmReplace}
+                onCancel={cancelUpload}
+                onDismiss={() => setUpload({ phase: 'idle' })}
+              />
+            </>
+          )}
+          {dragging && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-theme-base/80 text-sm font-medium text-theme-text-primary">
+              Drop to upload into {currentPath}
+            </div>
+          )}
+
           {/* Loading */}
           {isLoading && <PaneLoader label="Loading files…" className="h-full" />}
 

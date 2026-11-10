@@ -186,6 +186,7 @@ type FeatureCapabilities struct {
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
+	DeploymentPause       bool `json:"deploymentPause"`
 	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
 	ResourceIssueCoverage bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
 	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
@@ -226,6 +227,7 @@ type FeatureCapabilities struct {
 	// GET /api/kueue/clusterqueues/{name}/workloads and
 	// /api/kueue/localqueues/{namespace}/{name}/workloads
 	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
+	PodFileUpload       bool `json:"podFileUpload"` // POST /api/pods/{namespace}/{name}/files/upload
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

@@ -178,6 +178,7 @@ export interface FeatureCapabilities {
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
+  deploymentPause?: boolean
   resourceIssues?: boolean
   resourceIssueCoverage?: boolean
   podEnvironment?: boolean
@@ -200,6 +201,7 @@ export interface FeatureCapabilities {
   // Workload Pod info marks native sidecars (containerStatuses[].sidecar).
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
+  podFileUpload?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

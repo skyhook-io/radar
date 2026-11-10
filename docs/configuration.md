@@ -119,6 +119,38 @@ only its own setting. Contradictory flags, or contradictory settings within the
 config file, are errors. See [MCP configuration](mcp.md#enabling--disabling) for
 examples, boolean parsing and alternate entrypoints.
 
+## Pod file uploads
+
+The pod file browser can upload a file into the directory it shows. Uploads
+run over `pods/exec`, so they follow the exec permission rather than a switch of
+their own: anyone who can exec into a pod could already write files through the
+terminal. `--disable-exec` turns uploads off along with the terminal.
+
+- **Who can write.** The exec runs as the requesting user, so in auth-enabled
+  mode the user's own RBAC decides. Inside the container the file is written as
+  the container's OS user.
+- **How it writes.** The body streams to a temp file in the same directory, and
+  is renamed into place only after every byte arrived. A cancelled, cut-off or
+  failed upload leaves the destination untouched and removes the temp file. A
+  replaced file keeps its owner and permissions, without setuid, setgid or
+  sticky; when the container's user cannot keep the owner, the upload is
+  refused instead.
+- **What it needs.** The container needs `/bin/sh` and `/proc` plus `mktemp`,
+  `cat`, `wc`, `ln`, `mv`, `chmod`, `ls` and `rm`. Replacing a file owned by
+  another user also needs `chown`. Distroless and scratch images are refused
+  with an explanation, and a missing command is named. For an image that can't
+  take uploads, `kubectl cp` still works if the image has `tar`.
+- **What it refuses.** Symlinks, directories and special files as destinations;
+  a directory reached through a symlink (the error names its real location);
+  replacing an existing file without the user confirming it; files mounted on
+  their own (a `subPath` ConfigMap or Secret); and files over 100 MiB (413). At
+  most four uploads run at once per Radar process, and an upload whose data
+  stops arriving for two minutes is ended (408). A proxy in front of Radar may
+  have a smaller request size limit of its own; raise it to allow uploads.
+
+Changes apply to the running container only and are lost when it is recreated,
+unless they land on a volume that outlives it.
+
 ## HTTP Listener
 
 Radar listens on `127.0.0.1:9280` by default, so an unauthenticated local
