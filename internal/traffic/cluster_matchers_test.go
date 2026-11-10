@@ -33,6 +33,14 @@ func stubScope(t *testing.T, fn func(metric string) (string, promclient.SeriesIs
 	return &calls
 }
 
+// stubSpans stands in for the count of cluster names in the traffic.
+func stubSpans(t *testing.T, spans bool, err error) {
+	t.Helper()
+	prev := trafficSpansClusters
+	trafficSpansClusters = func(context.Context, string, string) (bool, error) { return spans, err }
+	t.Cleanup(func() { trafficSpansClusters = prev })
+}
+
 func clusterA(string) (string, promclient.SeriesIsolation, error) {
 	return `cluster="a"`, promclient.SeriesIsolation{Mode: promclient.SeriesIsolationVerified, Labels: map[string]string{"cluster": "a"}}, nil
 }
@@ -354,32 +362,44 @@ func TestCarettaEmptyMapClusterWarning(t *testing.T) {
 	}
 }
 
-// When Radar can't work out the cluster, the map shows what the store has and
-// says it may mix clusters, rather than hiding it.
+// When Radar can't work out the cluster, the map shows what the store has. It
+// says the map may mix clusters only when the traffic carries two or more
+// cluster names.
 func TestMixedClustersNote(t *testing.T) {
 	useConfiguredStore(t)
 	unverified := promclient.SeriesIsolation{Mode: promclient.SeriesIsolationUnverified}
+	mismatch := func(string) (string, promclient.SeriesIsolation, error) {
+		return "", unverified, promclient.ErrScopeMismatch
+	}
 	for _, tc := range []struct {
 		name     string
 		resolve  func(string) (string, promclient.SeriesIsolation, error)
+		spans    bool
+		spansErr error
 		clusters map[string]bool
 		note     bool
 	}{
-		{"ambiguous", func(string) (string, promclient.SeriesIsolation, error) {
+		{name: "two cluster names", resolve: func(string) (string, promclient.SeriesIsolation, error) {
 			return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
-		}, map[string]bool{"a": true, "b": true}, true},
-		{"nothing proves the cluster", func(string) (string, promclient.SeriesIsolation, error) { return "", unverified, nil }, map[string]bool{"b": true}, true},
-		{"cluster unlabeled in kube-state-metrics, traffic labeled", func(string) (string, promclient.SeriesIsolation, error) {
-			return "", unverified, promclient.ErrScopeMismatch
-		}, map[string]bool{"a": true, "b": true}, true},
+		}, clusters: map[string]bool{"a": true, "b": true}, note: true},
+		// The check already found at most one cluster name in the traffic.
+		{name: "nothing proves the cluster, one cluster name", resolve: func(string) (string, promclient.SeriesIsolation, error) { return "", unverified, nil },
+			clusters: map[string]bool{"b": true}, note: false},
+		{name: "kube-state-metrics unlabeled, traffic under one cluster name", resolve: mismatch,
+			clusters: map[string]bool{"a": true}, note: false},
+		{name: "kube-state-metrics unlabeled, traffic under two cluster names", resolve: mismatch, spans: true,
+			clusters: map[string]bool{"a": true, "b": true}, note: true},
+		{name: "counting the cluster names failed", resolve: mismatch, spansErr: errors.New("timeout"),
+			clusters: map[string]bool{"a": true}, note: true},
 		// A store holding this cluster without cluster labels, like a dedicated
 		// Prometheus: the map reads the unlabeled series, as it always has.
-		{"cluster unlabeled everywhere", func(string) (string, promclient.SeriesIsolation, error) {
+		{name: "cluster unlabeled everywhere", resolve: func(string) (string, promclient.SeriesIsolation, error) {
 			return `cluster=""`, unverified, nil
-		}, map[string]bool{"": true}, false},
+		}, clusters: map[string]bool{"": true}, note: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stubScope(t, tc.resolve)
+			stubSpans(t, tc.spans, tc.spansErr)
 			resp, err := newScopedBeyla(&beylaStore{l4: tc.clusters}).GetFlows(t.Context(), FlowOptions{})
 			if err != nil || len(resp.Flows) != len(tc.clusters) {
 				t.Fatalf("GetFlows: %v, %d flows", err, len(resp.Flows))

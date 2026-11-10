@@ -105,6 +105,25 @@ func (client *Client) ResolveTrafficScope(ctx context.Context, metric, selector 
 	return client.resolveScope(ctx, trafficAnchorNamespace(cache), trafficScopeProbe(metric, selector), nil, cache)
 }
 
+// TrafficSpansClusters reports whether one traffic metric's series (selector
+// narrows them) carry more than one cluster identity across the whole store,
+// read from the labels ClusterIdentityLabels names. Series without any of
+// those labels count as one identity of their own.
+func (client *Client) TrafficSpansClusters(ctx context.Context, metric, selector string) (bool, error) {
+	if client == nil {
+		return false, errors.New("Prometheus client not initialized")
+	}
+	return trafficSpansClusters(ctx, client, metric, selector)
+}
+
+func trafficSpansClusters(ctx context.Context, q seriesQuerier, metric, selector string) (bool, error) {
+	_, err := readScopePartition(ctx, q, trafficScopeProbe(metric, selector), "")
+	if errors.Is(err, ErrScopeAmbiguous) {
+		return true, nil
+	}
+	return false, err
+}
+
 func trafficScopeProbe(metric, selector string) scopeProbe {
 	return scopeProbe{
 		metric: metric, selectors: []string{selector}, singlePartition: true, allowUnlabeledProof: true,

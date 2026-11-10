@@ -39,6 +39,16 @@ var resolveTrafficScope = func(ctx context.Context, metric, selector string) (st
 	return client.ResolveTrafficScope(ctx, metric, selector, k8s.GetResourceCache())
 }
 
+// trafficSpansClusters reports whether metric's series carry more than one
+// cluster identity. A variable so tests can stand in for the Prometheus client.
+var trafficSpansClusters = func(ctx context.Context, metric, selector string) (bool, error) {
+	client, err := promclient.ClientForOperation()
+	if err != nil {
+		return false, err
+	}
+	return client.TrafficSpansClusters(ctx, metric, selector)
+}
+
 // scopeForMetric decides how to keep metric's traffic queries to this cluster.
 // selector is the source's own matcher fragment for the metric (may be empty).
 // filter is false when the source reads a store Radar found on its own, such
@@ -59,9 +69,10 @@ func scopeForMetric(ctx context.Context, metric, selector string, filter bool) (
 		// series without one.
 		return clusterScope{matchers: matchers, labels: iso.Labels}, nil
 	case err == nil && iso.Mode == promclient.SeriesIsolationUnverified:
-		// Nothing proves which cluster this is. A store holding one identity
-		// may still hold another cluster's traffic, so say so.
-		return clusterScope{mixed: true}, nil
+		// Nothing proves which cluster this is, but the check already found the
+		// traffic under at most one cluster identity (more is ErrScopeAmbiguous),
+		// so there is no other cluster's traffic to warn about.
+		return clusterScope{}, nil
 	case err == nil:
 		// An operator declared the store single-cluster.
 		return clusterScope{}, nil
@@ -77,9 +88,19 @@ func scopeForMetric(ctx context.Context, metric, selector string, filter bool) (
 				return clusterScope{matchers: m, labels: iso.Labels, mixed: errors.Is(err, promclient.ErrScopeAmbiguous)}, nil
 			}
 		}
-		// No labels proven: this cluster's kube-state-metrics carry none while
-		// the traffic does, or no proof at all. Radar can't tell clusters apart.
-		return clusterScope{mixed: true}, nil
+		// No labels proven. Ambiguity means the traffic carries several cluster
+		// identities. On a mismatch this cluster's kube-state-metrics carry no
+		// cluster label while the traffic does: it may hold one cluster, labeled
+		// only where traffic is scraped, or several, so count them.
+		if errors.Is(err, promclient.ErrScopeAmbiguous) {
+			return clusterScope{mixed: true}, nil
+		}
+		spans, sErr := trafficSpansClusters(ctx, metric, selector)
+		if sErr != nil {
+			log.Printf("[traffic] Could not count the clusters in %s series: %v", metric, sErr)
+			return clusterScope{mixed: true}, nil
+		}
+		return clusterScope{mixed: spans}, nil
 	}
 	log.Printf("[traffic] Could not check which cluster %s series belong to: %v", metric, err)
 	return clusterScope{}, err

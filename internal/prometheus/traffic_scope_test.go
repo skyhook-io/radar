@@ -81,6 +81,39 @@ func TestTrafficScopeWithoutProof(t *testing.T) {
 	}
 }
 
+// The multi-cluster note counts cluster names only from the cluster identity
+// labels, so a region or environment label never splits one cluster in two.
+func TestTrafficSpansClusters(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		series []prom.Series
+		want   bool
+	}{
+		{"one cluster name", []prom.Series{vec(map[string]string{"cluster": "a"}, 9)}, false},
+		{"no cluster label", []prom.Series{vec(nil, 9)}, false},
+		{"two cluster names", []prom.Series{vec(map[string]string{"cluster": "a"}, 4), vec(map[string]string{"cluster": "b"}, 5)}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
+				return &prom.QueryResult{Series: tc.series}, nil
+			}}
+			got, err := trafficSpansClusters(context.Background(), q, "beyla_network_flow_bytes_total", `job="beyla"`)
+			if err != nil || got != tc.want {
+				t.Fatalf("got %v, %v; want %v", got, err, tc.want)
+			}
+			for _, query := range q.queries {
+				if !strings.Contains(query, "count by ("+strings.Join(ClusterIdentityLabels(), ",")+")") || !strings.Contains(query, `job="beyla"`) {
+					t.Errorf("query should group by the cluster identity labels only, under the selector: %s", query)
+				}
+			}
+		})
+	}
+	failing := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) { return nil, errors.New("timeout") }}
+	if _, err := trafficSpansClusters(context.Background(), failing, "m", ""); err == nil {
+		t.Error("a failed query must surface as an error")
+	}
+}
+
 func TestResolveTrafficScopeUsesOperatorLabels(t *testing.T) {
 	c := &Client{workloadScope: &prom.WorkloadMetricsScope{ClusterLabels: map[string]string{"cluster": "east"}}}
 	m, iso, err := c.ResolveTrafficScope(context.Background(), "caretta_links_observed", "", nil)

@@ -813,8 +813,10 @@ flows, Beyla HTTP, Istio HTTP and Istio TCP metrics. Caretta's own store and
 stores Radar discovers in the cluster are read unfiltered. When the store has
 traffic but none of it carries this cluster's labels, the map says so rather
 than showing "no traffic yet". When Radar can't work out which cluster the
-traffic comes from, the map shows it with a note that it may include other
-clusters' traffic.
+traffic comes from, the map shows it, with a note that it may include other
+clusters' traffic when the traffic carries more than one cluster name in
+`cluster`, `cluster_name`, `k8s_cluster_name`, `kubernetes_cluster` or
+`cluster_id`.
 
 | Run mode | How to configure an explicit override |
 |---|---|

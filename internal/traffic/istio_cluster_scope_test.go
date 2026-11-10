@@ -174,12 +174,12 @@ func TestIstioEmptyMapClusterWarnings(t *testing.T) {
 	}
 }
 
-// Nothing proves the cluster: the flows draw with the note. A TCP read that
-// failed stays retried under the note.
+// The traffic carries two cluster names and nothing proves which is this one:
+// the flows draw with the note. A TCP read that failed stays retried under it.
 func TestIstioMixedClustersNote(t *testing.T) {
 	useConfiguredStore(t)
 	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
-		return "", promclient.SeriesIsolation{Mode: promclient.SeriesIsolationUnverified}, nil
+		return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
 	})
 	resp, err := scopedIstio(&istioStore{http: map[string]bool{"a": true, "b": true}}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
@@ -269,9 +269,9 @@ func TestIstioMissingFamilyNoteSurvivesMixedNote(t *testing.T) {
 		if metric == istioTCPMetric {
 			return clusterA(metric)
 		}
-		return "", promclient.SeriesIsolation{Mode: promclient.SeriesIsolationUnverified}, nil
+		return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
 	})
-	resp, err := scopedIstio(&istioStore{http: map[string]bool{"a": true}, tcp: map[string]bool{"": true}}).GetFlows(t.Context(), FlowOptions{})
+	resp, err := scopedIstio(&istioStore{http: map[string]bool{"a": true, "b": true}, tcp: map[string]bool{"": true}}).GetFlows(t.Context(), FlowOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
