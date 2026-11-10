@@ -61,8 +61,10 @@
       "properties": {
         "create": { "type": "boolean" },
         "additionalRules": { "type": "array", "items": { "type": "object" } },
+        "namespaces": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, "description": "Limit Radar's ServiceAccount and the Radar Cloud bindings to these namespaces. Leave unset for cluster-wide access." },
         "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
         "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user." },
+        "viewAdmissionPolicies": { "type": "boolean", "description": "Allow reading native ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding resources. Auto-enabled under auth or cloud mode." },
         "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
         "podLogs": { "type": "boolean" },
         "portForward": { "type": "boolean" },
@@ -89,6 +91,7 @@
             "envoyGateway": { "type": "boolean" },
             "externalDns": { "type": "boolean" },
             "externalSecrets": { "type": "boolean" },
+            "flagger": { "type": "boolean", "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)." },
             "flux": { "type": "boolean" },
             "gatewayApi": { "type": "boolean" },
             "gcpMonitoring": { "type": "boolean" },
@@ -101,6 +104,7 @@
             "kured": { "type": "boolean" },
             "kyverno": { "type": "boolean" },
             "mariadb": { "type": "boolean" },
+            "multus": { "type": "boolean" },
             "nginx": { "type": "boolean" },
             "openshift": { "type": "boolean" },
             "opentelemetry": { "type": "boolean" },
@@ -108,6 +112,7 @@
             "reflector": { "type": "boolean" },
             "reloader": { "type": "boolean" },
             "sealedSecrets": { "type": "boolean" },
+            "secretsStoreCsi": { "type": "boolean" },
             "strimzi": { "type": "boolean" },
             "tekton": { "type": "boolean" },
             "traefik": { "type": "boolean" },
@@ -122,6 +127,7 @@
         }
       }
     },
+    "disableExec": { "type": "boolean", "description": "Turn off pod exec through Radar for everyone on this cluster. Wins over rbac.podExec and mcp.execTools." },
     "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
     "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
     "podSecurityContext": { "type": "object" },
@@ -139,6 +145,14 @@
       "type": "string",
       "pattern": "^$|^/?[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*/?$",
       "description": "Optional URL path prefix served by Radar itself, e.g. /radar. Use when ingress forwards the subpath without stripping it. Path segments accept letters, digits, '-', '_', '.' and '~', and no segment may be '.' or '..' — matching the server's --base-path validation, so an invalid value fails at install time instead of crash-looping the pod."
+    },
+    "allowedHosts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(\\*|(\\*\\.)?[^\\s/:@*,.][^\\s/:@*,]*)$"
+      },
+      "description": "Hostnames besides localhost, IP addresses and Kubernetes Service names that Radar answers when auth.mode is none, e.g. radar.internal. Ingress and HTTPRoute hostnames are added automatically. Exact names, or *.example.com for names under a domain; \"*\" turns the check off."
     },
     "trustedOrigins": {
       "type": "array",
@@ -338,7 +352,24 @@
         },
         "systemRbac": { "type": "boolean" },
         "aiRbac": { "type": "boolean" },
-        "insecureSkipVerify": { "type": "boolean" }
+        "insecureSkipVerify": { "type": "boolean" },
+        "hubURL": {
+          "type": "string",
+          "pattern": "^(https?://.*)?$",
+          "description": "Hub address for joining with an enrollment key. Must start with https:// (http:// only for localhost)."
+        },
+        "enrollment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "existingSecretKey": { "type": "string" }
+          }
+        },
+        "clusterNamePrefix": { "type": "string" },
+        "clusterNameSuffix": { "type": "string" },
+        "caBundle": { "type": "string" }
       }
     },
     "usageReporting": {
@@ -352,7 +383,9 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": { "type": "boolean" },
+        "execTools": { "type": "boolean" },
+        "httpTools": { "type": "boolean" }
       }
     },
     "cost": {

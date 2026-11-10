@@ -45,8 +45,8 @@ var configuredImage string
 // version-matched image never exists on the registry - without this, every
 // in-cluster test from a locally-built binary ImagePullBackOffs. Released
 // binaries keep their exact version-matched default and never consult it.
-// Returns "" when the release lookup fails, which falls through to
-// DefaultImageRef so the (informative) pull error still names the situation.
+// Uses the latest stable tag when version checks are disabled or the release
+// lookup fails.
 var LatestReleaseImage func() string
 
 // SetConfiguredImage records the operator's --reachability-image override so

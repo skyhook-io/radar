@@ -28,6 +28,12 @@ tests:
       - contains:
           path: rules
           content:
+            apiGroups: ["admissionregistration.k8s.io"]
+            resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
             apiGroups: ["storage.k8s.io"]
             resources: ["storageclasses"]
             verbs: ["get", "list", "watch"]

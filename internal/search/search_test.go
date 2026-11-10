@@ -3,6 +3,8 @@ package search
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -12,9 +14,28 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/readplan"
+	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
 type fakeProvider struct {
+	observations map[schema.GroupVersionResource]k8score.DynamicResourceObservation
+	// namespaceObservations override observations for one namespace's reads.
+	namespaceObservations map[schema.GroupVersionResource]map[string]k8score.DynamicResourceObservation
+	warmed                []schema.GroupVersionResource
+	warmNamespaces        []string
+	warmFunc              func(context.Context, schema.GroupVersionResource, string) error
+	typedReasons          map[string]string
+	unlistable            []k8score.APIResource
+	// typedNamespaceReasons give a typed kind's reason per namespace.
+	typedNamespaceReasons map[string]map[string]string
+	listErrors            map[string]error
+	dynamicErrors         map[string]error
+	warmError             error
+	catalogErr            error
 	typed                 map[string][]runtime.Object
 	typedErr              map[string]error
 	dynamic               map[schema.GroupVersionResource][]*unstructured.Unstructured
@@ -25,13 +46,23 @@ type fakeProvider struct {
 	// filterDynamicByNamespace makes ListDynamic honor its namespace argument
 	// the way the real cache does.
 	filterDynamicByNamespace bool
+	// existingNamespaces, when non-nil, are the namespaces on the cluster;
+	// nil means existence is unknown.
+	existingNamespaces []string
 }
 
-func (f *fakeProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
-	if err := f.typedErr[kind]; err != nil {
+func (f *fakeProvider) KnownMissingNamespaces(names []string) []string {
+	if f.existingNamespaces == nil {
+		return nil
+	}
+	return slices.DeleteFunc(slices.Clone(names), func(ns string) bool { return slices.Contains(f.existingNamespaces, ns) })
+}
+
+func (f *fakeProvider) ListTyped(resource string, namespaces []string) ([]runtime.Object, error) {
+	if err := f.typedErr[resource]; err != nil {
 		return nil, err
 	}
-	return f.typed[kind], nil
+	return f.typed[resource], f.listErrors[resource]
 }
 
 func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
@@ -40,7 +71,7 @@ func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionRes
 		return nil, fmt.Errorf("list %s in %s: forbidden", gvr.Resource, namespace)
 	}
 	if !f.filterDynamicByNamespace || namespace == "" {
-		return f.dynamic[gvr], nil
+		return f.dynamic[gvr], f.dynamicErrors[namespace]
 	}
 	var out []*unstructured.Unstructured
 	for _, u := range f.dynamic[gvr] {
@@ -48,15 +79,98 @@ func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionRes
 			out = append(out, u)
 		}
 	}
-	return out, nil
+	return out, f.dynamicErrors[namespace]
 }
 
-func (f *fakeProvider) WatchedDynamic() []schema.GroupVersionResource {
-	out := make([]schema.GroupVersionResource, 0, len(f.dynamic))
-	for g := range f.dynamic {
-		out = append(out, g)
+func (f *fakeProvider) DynamicResources() ([]schema.GroupVersionResource, error) {
+	if f.catalogErr != nil {
+		return nil, f.catalogErr
 	}
-	return out
+	seen := map[schema.GroupVersionResource]bool{}
+	for gvr := range f.dynamic {
+		seen[gvr] = true
+	}
+	for gvr := range f.kinds {
+		seen[gvr] = true
+	}
+	out := make([]schema.GroupVersionResource, 0, len(seen))
+	for gvr := range seen {
+		out = append(out, gvr)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out, nil
+}
+func (f *fakeProvider) PlanTyped(kind string, namespaces []string) readplan.Plan {
+	extent := readplan.NamespaceSet
+	if namespaces == nil {
+		extent = readplan.AllNamespaces
+	}
+	if isClusterScopedKind(kind) {
+		extent = readplan.Cluster
+	}
+	plan := readplan.Plan{}
+	targets := namespaces
+	if extent != readplan.NamespaceSet {
+		targets = []string{""}
+	}
+	for _, ns := range targets {
+		reason := readreason.Code(f.typedNamespaceReasons[kind][ns])
+		if reason == "" {
+			reason = readreason.Code(f.typedReasons[kind])
+		}
+		state := readplan.Readable
+		if reason == readreason.RadarNamespaceNotCollected {
+			state = readplan.OutsideCollection
+		} else if reason != "" {
+			state = readplan.Gap
+		}
+		part := readplan.Partition{Extent: extent, Verdict: readplan.Verdict{State: state, Code: reason}}
+		if extent == readplan.NamespaceSet {
+			part.Namespaces = []string{ns}
+		}
+		if reason == readreason.RadarNamespaceNotCollected && namespaces == nil {
+			plan.CollectionLimited = true
+		}
+		plan.Partitions = append(plan.Partitions, part)
+	}
+	return plan
+}
+func (f *fakeProvider) PlanDynamic(gvr schema.GroupVersionResource, namespaces []string, clusterScoped bool) readplan.Plan {
+	plan := readplan.Dynamic(f, gvr, namespaces, clusterScoped)
+	for i := range plan.Partitions {
+		if plan.Partitions[i].Verdict.Code == readreason.KindNotWatchable && f.NamespaceObservation(gvr, "").ReasonCode == "direct_read_only" {
+			plan.Partitions[i].Verdict.Code = readreason.KindNotSearchable
+		}
+	}
+	return plan
+}
+func (f *fakeProvider) UnlistableKinds() []k8score.APIResource                     { return f.unlistable }
+func (f *fakeProvider) PrepareDynamicObservations(_ []schema.GroupVersionResource) {}
+func (f *fakeProvider) DynamicCacheStopped() bool                                  { return false }
+
+func (f *fakeProvider) NamespaceObservation(gvr schema.GroupVersionResource, namespace string) k8score.DynamicResourceObservation {
+	if o, ok := f.namespaceObservations[gvr][namespace]; ok && namespace != "" {
+		return o
+	}
+	if o, ok := f.observations[gvr]; ok {
+		if namespace != "" && o.Scope == k8score.DynamicObservationScopeExplicitNamespaces && !slices.Contains(o.Namespaces, namespace) && !slices.Contains(o.UnansweredNamespaces, namespace) {
+			o.State, o.ReasonCode = k8score.DynamicObservationUnwatched, "not_observed"
+		}
+		return o
+	}
+	return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced}
+}
+func (f *fakeProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error {
+	f.warmed = append(f.warmed, gvr)
+	f.warmNamespaces = append(f.warmNamespaces, namespace)
+	if f.warmFunc != nil {
+		return f.warmFunc(ctx, gvr, namespace)
+	}
+	if f.warmError != nil {
+		return f.warmError
+	}
+	f.observations[gvr] = k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced}
+	return nil
 }
 
 func (f *fakeProvider) KindForGVR(gvr schema.GroupVersionResource) string {
@@ -239,6 +353,10 @@ func TestSearch_DefaultSkipsEvents(t *testing.T) {
 			"events": {&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "redis-event", Namespace: "ns"}}},
 		},
 	}
+	eventGVR := schema.GroupVersionResource{Group: "events.k8s.io", Version: "v1", Resource: "events"}
+	p.dynamic = map[schema.GroupVersionResource][]*unstructured.Unstructured{eventGVR: {{Object: map[string]any{"kind": "Event", "apiVersion": "events.k8s.io/v1", "metadata": map[string]any{"name": "redis-event-new", "namespace": "ns"}}}}}
+	p.kinds = map[schema.GroupVersionResource]string{eventGVR: "Event"}
+
 	res, _ := Search(context.Background(), p, Parse("redis"), Options{Include: IncludeNone})
 	if len(res.Hits) != 0 {
 		t.Fatalf("default search should skip events, got %+v", res.Hits)
@@ -320,11 +438,11 @@ func TestSearch_DynamicClusterScopedCRDRequiresAccess(t *testing.T) {
 	}
 	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
 		Include: IncludeNone,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			if kind != "NodePool" || group != "karpenter.sh" || resource != "nodepools" {
 				t.Fatalf("unexpected SAR tuple: kind=%q group=%q resource=%q", kind, group, resource)
 			}
-			return false
+			return false, true
 		},
 	})
 	if len(res.Hits) != 0 {
@@ -350,10 +468,10 @@ func TestSearch_DynamicClusterScopedCRDListsAtClusterScopeWhenAllowed(t *testing
 		namespaced: map[schema.GroupVersionResource]bool{gvr: false},
 	}
 	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
-		Include:    IncludeNone,
-		Namespaces: []string{"team-a", "team-b"},
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools"
+		Include:   IncludeNone,
+		Selection: readscope.Selection{Namespaces: []string{"team-a", "team-b"}},
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools", true
 		},
 	})
 	if len(res.Hits) != 1 {

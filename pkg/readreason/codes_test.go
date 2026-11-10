@@ -22,14 +22,15 @@ func TestCodeWireValues(t *testing.T) {
 		RadarKindNotCollected:      "radar_kind_not_collected",
 		KindUnknown:                "kind_unknown",
 		KindNotWatchable:           "kind_not_watchable",
+		KindNotSearchable:          "kind_not_searchable",
 		OutsideNamespacePin:        "outside_namespace_pin",
-		OutsideNamespaceSelection:  "outside_namespace_selection",
 		UserNamespaceNotVisible:    "user_namespace_not_visible",
 		NamespaceNotFound:          "namespace_not_found",
 		NamespaceRequired:          "namespace_required",
 		ObjectNotFound:             "object_not_found",
 		ListTooLarge:               "list_too_large",
 		FilterEvalFailed:           "filter_eval_failed",
+		FindingsScanIncomplete:     "findings_scan_incomplete",
 		ClusterConnecting:          "cluster_connecting",
 		ClusterDisconnected:        "cluster_disconnected",
 		ConnectionChanged:          "connection_changed",
@@ -92,8 +93,9 @@ func TestPrimaryPrefersWhatAResolvesFirst(t *testing.T) {
 	}
 }
 
-// actionsFixture is the table the web UI mirrors; its test reads the same
-// file. READREASON_UPDATE=1 rewrites it after a deliberate change.
+// actionsFixture is the action table in a form consumers in other languages,
+// such as the web UI, can mirror and test against. READREASON_UPDATE=1
+// rewrites it after a deliberate change.
 const actionsFixture = "testdata/actions.json"
 
 func TestActionsFixtureMatchesTable(t *testing.T) {

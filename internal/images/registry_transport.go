@@ -17,6 +17,9 @@ import (
 // errBlockedAddress marks a registry request refused by the network guard.
 var errBlockedAddress = errors.New("registry address not allowed")
 
+// errCredentialsOverHTTP is the guard refusing to send credentials in clear.
+var errCredentialsOverHTTP = fmt.Errorf("%w: registry credentials require HTTPS", errBlockedAddress)
+
 // maxRegistryResponseBytes bounds every response body read from a registry
 // for a config lookup: manifests, indexes, token responses and the config
 // blob. Real ones are kilobytes; this stops a hostile or broken registry from
@@ -59,7 +62,7 @@ func isNamed(ctx context.Context, host, port string) bool {
 //   - loopback: never in-cluster (it is Radar's own Pod), and locally only
 //     for the registry endpoint the Pod named (a local dev registry);
 //   - private ranges: only for the registry endpoint (host and port) the Pod
-//     named.
+//     named, unless anyPrivate is set.
 //
 // Direct connections dial the checked address. Through an HTTP proxy, HTTPS
 // requests are tunneled with a CONNECT to the checked address, so the proxy
@@ -68,7 +71,23 @@ func isNamed(ctx context.Context, host, port string) bool {
 // proxy) is refused in-cluster and left to the proxy locally, where the proxy
 // is the user's own.
 type guardedTransport struct {
-	requireTLS     bool
+	requireTLS bool
+	// tlsForCredentials refuses only plain-HTTP requests that may carry
+	// credentials: the node, too, follows a registry's redirect to an HTTP
+	// download URL, and the client sends no credentials there.
+	tlsForCredentials bool
+	// uncapped lifts the response size cap, for layer downloads: a layer
+	// can be gigabytes. go-containerregistry still bounds manifest and token
+	// bodies and checks each blob's size and digest.
+	uncapped bool
+	// anyPrivate allows private addresses on every request, not only the
+	// named registry: self-hosted registries often serve tokens or blobs
+	// from a second internal host.
+	anyPrivate bool
+	// pinnedOnly refuses proxied requests Radar can't pin to a checked
+	// address, outside a cluster too: with auth on, the caller is not the
+	// proxy's owner.
+	pinnedOnly     bool
 	inCluster      bool
 	proxy          func(*http.Request) (*url.URL, error)
 	resolver       *net.Resolver
@@ -128,8 +147,8 @@ func newGuardedTransportWith(inCluster bool, proxy func(*http.Request) (*url.URL
 type proxyRouteKey struct{}
 
 func (g *guardedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if g.requireTLS && req.URL.Scheme != "https" {
-		return nil, fmt.Errorf("%w: registry credentials require HTTPS", errBlockedAddress)
+	if req.URL.Scheme != "https" && (g.requireTLS || g.tlsForCredentials && mayCarryCredentials(req)) {
+		return nil, errCredentialsOverHTTP
 	}
 	ctx := req.Context()
 	host, port := req.URL.Hostname(), req.URL.Port()
@@ -145,7 +164,7 @@ func (g *guardedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	// endpoints are requests too.
 	ips, lookupErr := g.lookup(ctx, host)
 	if lookupErr != nil {
-		if proxyURL != nil && !g.inCluster {
+		if proxyURL != nil && !g.inCluster && !g.pinnedOnly {
 			return g.send(g.unpinned, req)
 		}
 		if proxyURL != nil {
@@ -155,7 +174,7 @@ func (g *guardedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	}
 	named := isNamed(ctx, host, port)
 	for _, ip := range ips {
-		if !registryIPAllowed(ip, g.inCluster, named) {
+		if !g.ipAllowed(ip, named) {
 			return nil, fmt.Errorf("%w: %s", errBlockedAddress, host)
 		}
 	}
@@ -165,15 +184,21 @@ func (g *guardedTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	if req.URL.Scheme == "https" && proxyURL.Scheme == "http" {
 		return g.send(g.pinned, req.WithContext(context.WithValue(ctx, proxyRouteKey{}, proxyURL)))
 	}
-	if !g.inCluster {
+	if !g.inCluster && !g.pinnedOnly {
 		return g.send(g.unpinned, req)
 	}
 	return nil, fmt.Errorf("%w: %s can't be pinned through the proxy", errBlockedAddress, host)
 }
 
+// mayCarryCredentials reports a request with credentials in a header, or a
+// POST: a pull only POSTs to exchange a refresh token, sent in the body.
+func mayCarryCredentials(req *http.Request) bool {
+	return req.Header.Get("Authorization") != "" || (req.Method != http.MethodGet && req.Method != http.MethodHead)
+}
+
 func (g *guardedTransport) send(rt *http.Transport, req *http.Request) (*http.Response, error) {
 	resp, err := rt.RoundTrip(req)
-	if err != nil || resp.Body == nil {
+	if err != nil || resp.Body == nil || g.uncapped {
 		return resp, err
 	}
 	resp.Body = &cappedBody{ReadCloser: resp.Body, left: maxRegistryResponseBytes}
@@ -197,7 +222,7 @@ func (g *guardedTransport) dialContext(ctx context.Context, network, addr string
 	proxyURL, _ := ctx.Value(proxyRouteKey{}).(*url.URL)
 	lastErr := fmt.Errorf("%w: %s", errBlockedAddress, host)
 	for _, ip := range ips {
-		if !registryIPAllowed(ip, g.inCluster, named) {
+		if !g.ipAllowed(ip, named) {
 			continue
 		}
 		target := net.JoinHostPort(ip.String(), port)
@@ -281,6 +306,13 @@ func (g *guardedTransport) lookup(ctx context.Context, host string) ([]net.IP, e
 	return ips, nil
 }
 
+func (g *guardedTransport) ipAllowed(ip net.IP, named bool) bool {
+	if g.anyPrivate && ip != nil && (ip.IsPrivate() || isSharedAddressSpace(ip)) {
+		return true
+	}
+	return registryIPAllowed(ip, g.inCluster, named)
+}
+
 // registryIPAllowed is the address policy; see guardedTransport.
 func registryIPAllowed(ip net.IP, inCluster, namedRegistry bool) bool {
 	switch {
@@ -334,4 +366,18 @@ func (b *cappedBody) Read(p []byte) (int, error) {
 // isBlocked reports whether err came from the network guard.
 func isBlocked(err error) bool {
 	return errors.Is(err, errBlockedAddress)
+}
+
+// refusedByRegistryClient reports go-containerregistry's own refusal of a
+// redirect or token server at a private or link-local IP literal, made
+// before the request reaches the network guard.
+func refusedByRegistryClient(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "SSRF protection:") || strings.Contains(msg, "is a private or link-local address")
+}
+
+// isRefused reports a registry request refused by the network guard or by
+// go-containerregistry's own checks.
+func isRefused(err error) bool {
+	return err != nil && (isBlocked(err) || refusedByRegistryClient(err))
 }

@@ -83,10 +83,45 @@ else
 fi
 
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${FILENAME}"
+CHECKSUMS_URL="https://github.com/${REPO}/releases/download/v${VERSION}/checksums.txt"
 TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' 0
+trap 'exit 1' INT TERM
 
 echo "Downloading ${DOWNLOAD_URL}..."
 curl -fsSL "$DOWNLOAD_URL" -o "${TMP_DIR}/${FILENAME}"
+
+echo "Downloading ${CHECKSUMS_URL}..."
+curl -fsSL "$CHECKSUMS_URL" -o "${TMP_DIR}/checksums.txt"
+
+echo "Verifying SHA-256 checksum..."
+EXPECTED_SHA=$(awk -v f="$FILENAME" '{ sub(/\r$/, "", $2); if ($2 == f || $2 == "*"f) { print $1; exit } }' "${TMP_DIR}/checksums.txt")
+if [ -z "$EXPECTED_SHA" ]; then
+  echo "Failed to find checksum for ${FILENAME} in checksums.txt" >&2
+  exit 1
+fi
+
+EXPECTED_SHA=$(printf '%s' "$EXPECTED_SHA" | tr '[:upper:]' '[:lower:]')
+
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_SHA=$(sha256sum "${TMP_DIR}/${FILENAME}" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  ACTUAL_SHA=$(shasum -a 256 "${TMP_DIR}/${FILENAME}" | awk '{print $1}')
+elif command -v openssl >/dev/null 2>&1; then
+  ACTUAL_SHA=$(openssl dgst -sha256 "${TMP_DIR}/${FILENAME}" | awk '{print $NF}')
+else
+  echo "Error: no SHA-256 verification tool (sha256sum, shasum, openssl) found" >&2
+  exit 1
+fi
+
+ACTUAL_SHA=$(printf '%s' "$ACTUAL_SHA" | tr '[:upper:]' '[:lower:]')
+
+if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+  echo "Checksum verification failed for ${FILENAME}" >&2
+  echo "Expected: ${EXPECTED_SHA}" >&2
+  echo "Actual:   ${ACTUAL_SHA}" >&2
+  exit 1
+fi
 
 # Extract
 cd "$TMP_DIR"

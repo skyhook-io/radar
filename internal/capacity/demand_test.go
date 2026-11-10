@@ -419,6 +419,25 @@ func TestDemandSchedulerConditionRetainsReasonWithoutOverclaimingLifecycleState(
 	}
 }
 
+// Volcano's gang-scheduling message says nothing about nodes, so it must not
+// classify the demand.
+func TestDemandSchedulerVolcanoGangMessageStaysUnknown(t *testing.T) {
+	asOf := time.Date(2026, time.July, 13, 12, 0, 0, 0, time.UTC)
+	pod := demandTestPod("gang", "500m")
+	gang := "pod group is not ready, 1 Pending, 1 minAvailable; Pending: 1 Unschedulable"
+	pod.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable,
+		Message: gang, LastTransitionTime: metav1.NewTime(asOf.Add(-time.Minute)),
+	}}
+	group := BuildDemandGroups(DemandInput{GeneratedAt: asOf, Pods: []*corev1.Pod{pod}})[0]
+	if group.State != capacityapi.DemandUnknown {
+		t.Fatalf("state = %q, want unknown", group.State)
+	}
+	if len(group.SchedulerReasons) != 1 || group.SchedulerReasons[0].Code != "Other" || group.SchedulerReasons[0].Message != gang {
+		t.Fatalf("scheduler reasons = %#v, want the whole message as one unclassified reason", group.SchedulerReasons)
+	}
+}
+
 func TestDemandSchedulerStateUsesSchedulingGatesAsCurrentTruth(t *testing.T) {
 	asOf := time.Date(2026, time.July, 13, 12, 0, 0, 0, time.UTC)
 	pod := demandTestPod("gated", "500m")

@@ -3,6 +3,41 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: "opentelemetry.io"
+    resources: ["opentelemetrycollectors", "instrumentations"]
+    scope: Namespaced
+    collection: "opentelemetry"
+    decision: withhold
+    reason: "Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no caller grants."
+    source: "https://github.com/open-telemetry/opentelemetry-operator/tree/989089bf5c75d78fdc6004147f97d972fc436bd4/apis"
+  - group: "flagger.app"
+    resources: ["canaries", "metrictemplates"]
+    scope: Namespaced
+    collection: "flagger"
+    decision: withhold
+    reason: "Canary webhooks and MetricTemplate provider headers can contain inline credentials. Native visibility adds no caller grants."
+    source: "https://github.com/fluxcd/flagger/tree/c781cdc199d44cf84e21e90aedd8ff14c1df450e/pkg/apis/flagger/v1beta1"
+  - group: "secrets-store.csi.x-k8s.io"
+    resources: ["secretproviderclasses"]
+    scope: Namespaced
+    collection: "secretsStoreCsi"
+    decision: withhold
+    reason: "spec.parameters is free-form, provider-defined configuration; the driver does not constrain what a provider accepts there. Native visibility adds no caller grants."
+    source: "https://github.com/kubernetes-sigs/secrets-store-csi-driver/tree/v1.6.1/apis/v1"
+  - group: "secrets-store.csi.x-k8s.io"
+    resources: ["secretproviderclasspodstatuses"]
+    scope: Namespaced
+    collection: "secretsStoreCsi"
+    decision: grant
+    reason: "Mount state only: Pod and class names, node, target path and provider object IDs/versions. No secret values or provider parameters."
+    source: "https://github.com/kubernetes-sigs/secrets-store-csi-driver/tree/v1.6.1/apis/v1"
+  - group: "core.strimzi.io"
+    resources: ["strimzipodsets"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Pod templates can contain credentials; cached ownership discovery adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-StrimziPodSet-reference"
   - group: "scheduling.k8s.io"
     resources: ["priorityclasses"]
     scope: Cluster
@@ -10,6 +45,13 @@ entries:
     decision: existing
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "internal/k8s/dynamic_cache.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "kafka.strimzi.io"
+    resources: ["kafkaconnects"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Kafka Connect configuration can contain credentials; cached relationship discovery adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaConnect-reference"
   - group: "kafka.strimzi.io"
     resources: ["kafkaconnectors"]
     scope: Namespaced
@@ -38,6 +80,13 @@ entries:
     decision: existing
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "admissionregistration.k8s.io"
+    resources: ["validatingadmissionpolicies","validatingadmissionpolicybindings"]
+    scope: Cluster
+    collection: ""
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on alongside admission webhook configurations, under its existing tier gates."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); cloud-rbac-cluster-read.yaml"
   - group: "amd.com"
     resources: ["deviceconfigs"]
     scope: Namespaced
@@ -388,6 +437,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "k8s.cni.cncf.io"
+    resources: ["network-attachment-definitions"]
+    scope: Namespaced
+    collection: "multus"
+    decision: grant
+    reason: "spec.config is the CNI plugin configuration. The Network Plumbing spec defines no credential fields in it. Whereabouts docs still list etcd_username/etcd_password in the ipam block, but Whereabouts ignores them since its etcd backend was removed (July 2022)."
+    source: "https://github.com/k8snetworkplumbingwg/multi-net-spec/tree/master/v1.3; https://github.com/k8snetworkplumbingwg/whereabouts/commit/c26343d2c18fa6f3337e9e62577fc15c97eed75c"
   - group: "kaito.sh"
     resources: ["ragengines","workspaces"]
     scope: Namespaced

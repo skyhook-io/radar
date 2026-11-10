@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -100,7 +102,15 @@ func TestTopologyMemo_GitOpsTreeAfterSwitch(t *testing.T) {
 
 	useTestResourceCache(t, clusterWithDeployment("new-cluster-api"))
 	s.finalizePostContextSwitch()
-	_, _, _ = s.buildGitOpsTree(httptest.NewRequest(http.MethodGet, "/", nil), staleReq)
+	_, _, err := s.buildGitOpsTree(httptest.NewRequest(http.MethodGet, "/", nil), staleReq)
+	if !errors.Is(err, ownership.ErrCachesReplaced) {
+		t.Fatalf("stale request was not refused: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	s.writeGitOpsBuildError(rec, staleReq, err)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("stale request status = %d, want 503", rec.Code)
+	}
 
 	freshReq := &gitopsRequest{Kind: "Deployment", Namespace: "demo", Name: "new-cluster-api", Cache: k8s.GetResourceCache()}
 	_, _, _ = s.buildGitOpsTree(httptest.NewRequest(http.MethodGet, "/", nil), freshReq)

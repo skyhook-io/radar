@@ -18,6 +18,8 @@ import { Tooltip } from '../ui/Tooltip'
 interface OwnedResourcesProps {
   resources: HelmOwnedResource[]
   onNavigate?: NavigateToResource
+  /** Follows the count, saying what the list claims about these resources. */
+  summaryLabel?: string
 }
 
 function getIconForKind(kind: string) {
@@ -69,7 +71,7 @@ function computeHealthSummary(resources: HelmOwnedResource[]) {
   return { healthy, warning, error, unknown, total: resources.length }
 }
 
-export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
+export function OwnedResources({ resources, onNavigate, summaryLabel = 'created by this release' }: OwnedResourcesProps) {
   const [healthFilter, setHealthFilter] = useState<HealthFilter>('all')
 
   if (!resources || resources.length === 0) {
@@ -100,7 +102,7 @@ export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
       <div className="flex items-center justify-between">
         <div className="text-sm text-theme-text-secondary">
           {healthFilter === 'all' ? (
-            <>{pluralize(resources.length, 'resource')} created by this release</>
+            <>{pluralize(resources.length, 'resource')} {summaryLabel}</>
           ) : (
             <span className="flex items-center gap-2">
               Showing {filteredResources.length} of {resources.length} resources

@@ -1,6 +1,8 @@
+import { HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
+import { getGenericResourceStatus } from '../resources/generic-status'
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
+import { ResourceRendererDispatch, diagnoseHealthHint, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
 import { getCellFilterValue } from '../resources/resource-utils'
 import type { ResourceRef } from '../../types'
 
@@ -34,6 +36,40 @@ describe('ResourceRendererDispatch', () => {
 
     expect(html).toContain('HorizontalPodAutoscaler,ScaledObject')
     expect(html).not.toContain('VerticalPodAutoscaler')
+  })
+
+  describe('ValidatingAdmissionPolicy dispatch', () => {
+    it('uses dedicated renderers only for the exact native API group', () => {
+      const nativePolicy = renderKind('validatingadmissionpolicies', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicy',
+        metadata: { name: 'native', generation: 1 },
+        spec: { validations: [{ expression: 'true', message: 'native validation' }] },
+      })
+      expect(nativePolicy).toContain('Failure Policy')
+      expect(nativePolicy).toContain('native validation')
+
+      const nativeBinding = renderKind('validatingadmissionpolicybindings', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicyBinding',
+        metadata: { name: 'native-binding' },
+        spec: { policyName: 'native', validationActions: ['Warn'] },
+      })
+      expect(nativeBinding).toContain('Validation Actions')
+      expect(nativeBinding).toContain('effective scope')
+
+      for (const kind of ['validatingadmissionpolicies', 'validatingadmissionpolicybindings']) {
+        const foreign = renderKind(kind, {
+          apiVersion: 'policies.example.io/v1',
+          kind: 'ForeignPolicy',
+          metadata: { name: 'foreign' },
+          spec: { collisionProbe: COLLISION_PROBE },
+        })
+        expect(foreign).toContain(COLLISION_PROBE)
+        expect(foreign).not.toContain('Failure Policy')
+        expect(foreign).not.toContain('Validation Actions')
+      }
+    })
   })
 
   it('does not block manual replica scaling for VPA-only relationships', () => {
@@ -1027,11 +1063,11 @@ describe('Kueue Workload detail dispatch', () => {
 describe('Kueue queue detail dispatch', () => {
   it.each(['localqueues', 'clusterqueues'])('curates supported %s and preserves foreign and future versions', (kind) => {
     for (const version of ['v1beta1', 'v1beta2']) {
-      expect(renderKind(kind, { apiVersion: `kueue.x-k8s.io/${version}`, spec: {} })).toContain('Queue Status')
+      expect(renderKind(kind, { apiVersion: `kueue.x-k8s.io/${version}`, spec: {} })).toContain('Reported by controller')
     }
     for (const apiVersion of ['example.com/v1', 'fake.kueue.x-k8s.io/v1', 'kueue.x-k8s.io/v99']) {
       const html = renderKind(kind, { apiVersion, spec: { foreignField: 'preserved-value' } })
-      expect(html).not.toContain('Queue Status')
+      expect(html).not.toContain('Reported by controller')
       expect(html).toContain('preserved-value')
     }
   })
@@ -1133,6 +1169,95 @@ describe('Flux kind collisions', () => {
       const foreign = { ...resource, apiVersion }
       expect(renderKind(kind, foreign, 'test')).toContain('custom-value')
       expect(getResourceStatus(kind, foreign)?.text).toBe('VendorReady')
+    }
+  })
+})
+
+describe('Strimzi KafkaConnector exact group', () => {
+  const data = {apiVersion: 'kafka.strimzi.io/v1', kind: 'KafkaConnector', metadata: {name:'connector',generation:1}, spec: {class:'Example'}, status:{observedGeneration:1,conditions:[{type:'Ready',status:'True'}],connectorStatus:{connector:{state:'RUNNING'},tasks:[{id:0,state:'FAILED'}]}}}
+  it('shows failed tasks despite Ready=True', () => {
+    expect(getResourceStatus('kafkaconnectors', data)?.text).toBe('Tasks failed')
+    expect(renderKind('kafkaconnectors', data)).toContain('Reported Runtime')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['other.io/v1', 'fake.kafka.strimzi.io/v1']) {
+      const other = {...data,apiVersion}
+      expect(getResourceStatus('kafkaconnectors',other)?.text).not.toBe('Tasks failed')
+      expect(renderKind('kafkaconnectors',other)).not.toContain('Reported Runtime')
+    }
+  })
+})
+
+it('keeps foreign customresourcedefinitions on generic renderer and status', () => {
+  const data = { apiVersion: 'foreign.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'foreign' }, spec: { example: 'generic-sentinel' }, status: { conditions: [{ type: 'Established', status: 'True' }] } }
+  const html = renderToString(<ResourceRendererDispatch resource={{ kind: 'customresourcedefinitions', name: 'foreign', namespace: '' }} data={data} onCopy={() => {}} copied={null} showCommonSections={false} />)
+  expect(html).toContain('generic-sentinel')
+  expect(html).not.toContain('Names &amp; conversion')
+  expect(getGenericResourceStatus(data)).toEqual({ text: 'Established', tone: 'unknown' })
+  expect(getResourceStatus('customresourcedefinitions', data)).toEqual({ text: 'Established', color: HEALTH_BADGE_COLORS.unknown })
+})
+
+it('gives Diagnose the CRD health the header badge shows', () => {
+  const crd = (conditions: any[], extra: any = {}) => ({ apiVersion: 'apiextensions.k8s.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'widgets.example.io', ...extra }, status: { conditions } })
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }]))).toBe('healthy')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'NamesAccepted', status: 'False', reason: 'ListKindConflict' }]))).toBe('problem')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }], { deletionTimestamp: '2026-01-01T00:00:00Z' }))).toBe('problem')
+  expect(diagnoseHealthHint('customresourcedefinitions', crd([]))).toBe('unknown')
+})
+
+describe('Gateway API route plural collision', () => {
+  const routeData = (apiVersion: string, kind: string) => ({
+    apiVersion,
+    kind,
+    metadata: { name: 'shop', namespace: 'default' },
+    spec: { parentRefs: [{ name: 'main-gw' }], hostnames: ['shop.example.com'], collisionProbe: COLLISION_PROBE },
+    status: {},
+  })
+  const render = (kind: string, data: any) => {
+    const reads: string[] = []
+    const overrides: RendererOverrides = {
+      HTTPRouteRenderer: ({ data }) => {
+        reads.push(data.metadata.name)
+        return <span>gateway-lookup-override</span>
+      },
+    }
+    const html = renderToString(
+      <ResourceRendererDispatch
+        resource={{ kind, namespace: 'default', name: 'shop' }}
+        data={data}
+        onCopy={() => {}}
+        copied={null}
+        rendererOverrides={overrides}
+        showCommonSections={false}
+      />,
+    )
+    return { html, reads }
+  }
+
+  it('gives a foreign httproutes resource the generic renderer, with no Gateway lookups or host buttons', () => {
+    const { html, reads } = render('httproutes', routeData('routes.example.io/v1', 'HTTPRoute'))
+    expect(reads).toEqual([])
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('gives a foreign grpcroutes resource the generic renderer, with no Copy button', () => {
+    const { html } = render('grpcroutes', routeData('routes.example.io/v1', 'GRPCRoute'))
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('keeps the Gateway API renderers for gateway.networking.k8s.io routes', () => {
+    const http = render('httproutes', routeData('gateway.networking.k8s.io/v1', 'HTTPRoute'))
+    expect(http.reads).toEqual(['shop'])
+    const grpc = render('grpcroutes', routeData('gateway.networking.k8s.io/v1', 'GRPCRoute'))
+    expect(grpc.html).toContain('aria-label="Copy hostname shop.example.com"')
+  })
+
+  it('reads no route status for a foreign httproutes or grpcroutes resource', () => {
+    for (const kind of ['httproutes', 'grpcroutes']) {
+      expect(getResourceStatus(kind, { apiVersion: 'routes.example.io/v1', status: {} })).toBeNull()
+      expect(getResourceStatus(kind, { apiVersion: 'gateway.networking.k8s.io/v1', status: {} })).not.toBeNull()
     }
   })
 })

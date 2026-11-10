@@ -1,15 +1,14 @@
 import { AlertBanner } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io/k8s-ui'
+import { FetchResult, compareVersions, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
-import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
 import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress, useHelmPreviewValues, useHelmSourceVersions, useRadarFeature, HelmSourceSelectionError } from '../../api/client'
+import { useHelmRelease, useHelmManifest, useHelmValues, useHelmUpgradeInfo, useHelmReleaseVersions, useHelmUninstall, upgradeWithProgress, rollbackWithProgress, useHelmPreviewValues, useHelmSourceVersions, useRadarFeature, HelmSourceSelectionError, isHelmReleaseReadDenied } from '../../api/client'
 import { ValuesDiffPreview } from './ValuesDiffPreview'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -26,6 +25,8 @@ import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
 import { OwnedResources } from './OwnedResources'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
+import { HelmDrawerFrame } from './HelmDrawerFrame'
+import { ObservedHelmReleaseDrawer } from './ObservedHelmReleaseDrawer'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 
@@ -142,18 +143,29 @@ export function upgradePickerVersions(available: string[] | undefined, current: 
   return entries.length > 1 ? entries : null
 }
 
-const MIN_WIDTH = 500
-const MAX_WIDTH_PERCENT = 0.8
-const DEFAULT_WIDTH = 1000
 export const DEFAULT_SHOW_EFFECTIVE_VALUES = false
 
 export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true, rightInset = 0 }: HelmReleaseDrawerProps) {
+  // A row built without Helm's storage says so, which spares a read that would
+  // only be refused. A shared link doesn't, so it learns from the refusal.
+  const { error } = useHelmRelease(effectiveHelmStorageNamespace(release), release.name, { enabled: !release.observed })
+  const { support } = useRadarFeature('helmInventory')
+  const observed = release.observed || (support === 'supported' && isHelmReleaseReadDenied(error))
+  return (
+    <HelmDrawerFrame onClose={onClose} isOpen={isOpen} rightInset={rightInset}>
+      {observed ? (
+        <ObservedHelmReleaseDrawer release={release} onClose={onClose} onNavigateToResource={onNavigateToResource} />
+      ) : (
+        <FullHelmRelease release={release} onClose={onClose} onNavigateToResource={onNavigateToResource} />
+      )}
+    </HelmDrawerFrame>
+  )
+}
+
+function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmReleaseDrawerProps, 'release' | 'onClose' | 'onNavigateToResource'>) {
   const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
-  const [drawerWidth, setDrawerWidth] = useState(DEFAULT_WIDTH)
-  const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? DEFAULT_WIDTH : window.innerWidth))
-  const [isResizing, setIsResizing] = useState(false)
   const [selectedRevision, setSelectedRevision] = useState<number | undefined>(undefined)
   const [showEffectiveValues, setShowEffectiveValues] = useState(DEFAULT_SHOW_EFFECTIVE_VALUES)
   const [rollbackRevision, setRollbackRevision] = useState<number | null>(null)
@@ -167,14 +179,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [selectedSourceUpgrade, setSelectedSourceUpgrade] = useState<SourceUpgradeSelection | null>(null)
   const selectedSourceRef = useRef<SourceUpgradeSelection | null>(null)
   const [adjustValues, setAdjustValues] = useState(false)
+  // Phones upgrade with the existing values. An adjustment already open when
+  // a phone rotates to portrait stays visible, since its edits would
+  // otherwise apply unseen.
+  const isPhone = usePhoneLayout()
   const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
   const [upgradeYamlError, setUpgradeYamlError] = useState<string | null>(null)
   const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
   const [upgradePreview, setUpgradePreview] = useState<ValuesPreviewResponse | null>(null)
   const [upgradePreviewRequest, setUpgradePreviewRequest] = useState<UpgradePreviewRequest | null>(null)
   const [showUpgradePreview, setShowUpgradePreview] = useState(false)
-  const resizeStartX = useRef(0)
-  const resizeStartWidth = useRef(DEFAULT_WIDTH)
   const targetVersionRef = useRef('')
   const editedUpgradeYamlRef = useRef('')
   const helmNamespace = effectiveHelmStorageNamespace(release)
@@ -275,59 +289,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     setUpgradeProgress([])
     setIsUpgrading(false)
   }, [releaseKey])
-
-  // ESC key handler
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
-
-  useEffect(() => {
-    const handleWindowResize = () => setViewportWidth(window.innerWidth)
-    handleWindowResize()
-    window.addEventListener('resize', handleWindowResize)
-    return () => window.removeEventListener('resize', handleWindowResize)
-  }, [])
-
-  const minDrawerWidth = Math.min(MIN_WIDTH, viewportWidth)
-  const maxDrawerWidth = viewportWidth < MIN_WIDTH ? viewportWidth : Math.max(MIN_WIDTH, viewportWidth * MAX_WIDTH_PERCENT)
-  const renderedDrawerWidth = Math.max(minDrawerWidth, Math.min(drawerWidth, maxDrawerWidth))
-
-  // Resize handlers
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    setIsResizing(true)
-    resizeStartX.current = e.clientX
-    resizeStartWidth.current = renderedDrawerWidth
-  }, [renderedDrawerWidth])
-
-  useEffect(() => {
-    if (!isResizing) return
-
-    document.body.style.cursor = 'ew-resize'
-    document.body.style.userSelect = 'none'
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaX = resizeStartX.current - e.clientX
-      const newWidth = resizeStartWidth.current + deltaX
-      const viewport = window.innerWidth
-      const minWidth = Math.min(MIN_WIDTH, viewport)
-      const maxWidth = viewport < MIN_WIDTH ? viewport : Math.max(MIN_WIDTH, viewport * MAX_WIDTH_PERCENT)
-      setDrawerWidth(Math.max(minWidth, Math.min(newWidth, maxWidth)))
-    }
-    const handleMouseUp = () => setIsResizing(false)
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isResizing])
 
   const copyToClipboard = useCallback((text: string, key: string) => {
     navigator.clipboard.writeText(text)
@@ -594,9 +555,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     void runUpgrade(upgradePreviewRequest.targetVersion, upgradePreviewRequest.values, upgradePreviewRequest.repositoryName, selection)
   }
 
-  const headerHeight = 49
-  const dockInset = useDockReservedHeight()
-
   const tabs: { id: TabId; label: string; icon: typeof Package }[] = [
     { id: 'overview', label: 'Overview', icon: Package },
     { id: 'history', label: 'History', icon: History },
@@ -607,24 +565,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   ]
 
   return (
-    <div
-      className={clsx(
-        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
-        TRANSITION_DRAWER,
-        isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
-      )}
-      style={{ width: renderedDrawerWidth, top: headerHeight, right: rightInset, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
-    >
-      {/* Resize handle */}
-      <div
-        onMouseDown={handleResizeStart}
-        className={clsx(
-          'absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 hover:bg-blue-500/50 transition-colors',
-          'hidden sm:block',
-          isResizing && 'bg-blue-500/50'
-        )}
-      />
-
+    <>
       {/* Header */}
       <div className="border-b border-theme-border shrink-0">
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -1006,7 +947,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             )}
           </div>
         )}
-        {upgradeProgress.length === 0 && canHelmWrite && (
+        {upgradeProgress.length === 0 && canHelmWrite && (!isPhone || adjustValues) && (
           <div className="mt-3 border-t border-theme-border pt-3">
             <Tooltip content="Edit the user-supplied Helm values that Radar will pass to this upgrade.">
               <button
@@ -1125,7 +1066,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         sourceIssue={upgradeSourceIssue}
         sourceError={upgradeInfo?.error}
       />
-    </div>
+    </>
   )
 }
 

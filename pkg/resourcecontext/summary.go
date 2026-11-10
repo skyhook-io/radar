@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/csr"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // SummaryOptions configures the compact per-result enrichment produced by
@@ -21,8 +22,8 @@ import (
 // the per-result digest in here.
 type SummaryOptions struct {
 	// ManagedBy is the compact owner/GitOps pointer attached to the summary.
-	// Callers derive this from topology.Relationships via
-	// ManagedByFromOwner; nil leaves the field absent.
+	// Callers project the canonical controller or manager answer; nil leaves
+	// the field absent. Omitted distinguishes incomplete from settled absence.
 	ManagedBy *ManagedByRef
 
 	// IssueCount is the count of internal issue-engine findings scoped to
@@ -39,6 +40,8 @@ type SummaryOptions struct {
 
 	// Scanned, for a security-scan report, names the object it scanned.
 	Scanned *ScannedRef
+	// Omitted qualifies fields relative to the summary, including partial values.
+	Omitted []OmittedField
 }
 
 // BuildSummary produces the compact per-result ResourceSummaryContext
@@ -53,21 +56,24 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryConte
 	if health == "" {
 		health = deriveHealth(obj)
 	}
-	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil {
+	pause := CrossplanePauseFor(obj)
+	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil && pause == "" && len(opts.Omitted) == 0 {
 		return nil
 	}
 	return &ResourceSummaryContext{
-		ManagedBy:  opts.ManagedBy,
-		Health:     health,
-		IssueCount: opts.IssueCount,
-		Scanned:    opts.Scanned,
+		CrossplanePause: pause,
+		ManagedBy:       opts.ManagedBy,
+		Health:          health,
+		IssueCount:      opts.IssueCount,
+		Scanned:         opts.Scanned,
+		Omitted:         opts.Omitted,
 	}
 }
 
-// ManagedByFromOwner assembles a compact ManagedByRef from raw owner
-// fields (typically pulled out of topology.Relationships in the handler).
-// Returns nil when ownerKind or ownerName is empty so callers don't
-// have to guard the assignment.
+// ManagedByFromOwner formats an identity; it establishes no ownership or
+// management evidence. Use ControllerSummary for controller/spec references
+// and ManagerSummary for a canonical manager answer. Returns nil when
+// ownerKind or ownerName is empty.
 //
 // Source classification:
 //   - "argocd" for argoproj.io kinds (Application, ApplicationSet, Rollout)
@@ -80,12 +86,16 @@ func ManagedByFromOwner(ownerKind, ownerGroup, ownerNamespace, ownerName string)
 	if ownerKind == "" || ownerName == "" {
 		return nil
 	}
-	return &ManagedByRef{
+	ref := &ManagedByRef{
 		Kind:      ownerKind,
 		Source:    sourceForOwner(ownerKind, ownerGroup),
 		Name:      ownerName,
 		Namespace: ownerNamespace,
 	}
+	if b, builtin := resourceid.BuiltinForKind(ownerKind); ref.Source == "native" && (!builtin || b.Group != ownerGroup) {
+		ref.Group = ownerGroup
+	}
+	return ref
 }
 
 func sourceForOwner(ownerKind, group string) string {
@@ -159,6 +169,20 @@ func unstructuredHealth(u *unstructured.Unstructured) string {
 	}
 	if csr.IsObject(u.Object) {
 		return levelToString(csr.StatusOf(u.Object).State.Level())
+	}
+	if u.GroupVersionKind().Group == "opentelemetry.io" {
+		switch u.GetKind() {
+		case "OpenTelemetryCollector":
+			return levelToString(health.OpenTelemetryCollector(u).Level)
+		case "Instrumentation":
+			return levelToString(health.OpenTelemetryInstrumentation(u).Level)
+		}
+	}
+	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "Canary" {
+		return levelToString(health.FlaggerCanary(u).Level)
+	}
+	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "MetricTemplate" {
+		return "neutral"
 	}
 	conditions, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !found || len(conditions) == 0 {

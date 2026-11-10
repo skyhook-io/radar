@@ -257,6 +257,19 @@ helm upgrade --install radar skyhook/radar \
   -n radar -f values.yaml
 ```
 
+Without authentication Radar answers only hostnames it can trust not to be a
+rebound attacker page: `localhost`, IP addresses, Kubernetes Service names
+(`radar`, `radar.<namespace>`, `radar.<namespace>.svc`), and the ingress and
+HTTPRoute hostnames, which the chart adds for you. If you reach
+Radar by another name (a second DNS name, an external load balancer hostname,
+the Gateway listener hostname when `httpRoute.hostnames` is empty), add it to
+`allowedHosts`; otherwise requests fail with *Radar without
+authentication answers only ...* naming the host. A wildcard ingress host such
+as `*.example.com` is added as is and covers the names under it. Keep the
+ingress forwarding the original `Host`: a controller that rewrites it to the
+Service name or an IP bypasses this check. See
+[HTTP Listener](configuration.md#http-listener).
+
 ### Subpath Ingress (No Strip-Prefix)
 
 If your ingress forwards `/radar/...` to the Radar service as `/radar/...`, set `basePath` to the same prefix:
@@ -418,6 +431,7 @@ Some features require additional permissions. Most are disabled by default for s
 | Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Webhooks view | `rbac.viewWebhooks: true` | `false` | Show admission webhook configurations. Off by default because they expose the cluster's admission-control posture; auto-enabled when auth or cloud mode enforces each user's own RBAC |
+| Admission policies view | `rbac.viewAdmissionPolicies: true` | `false` | Show native ValidatingAdmissionPolicies and ValidatingAdmissionPolicyBindings. Off by default because they expose admission-control coverage and gaps; auto-enabled when auth or cloud mode enforces each user's own RBAC |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | `false` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Enable only for a trusted no-auth audience; authenticated users need this permission on their own Kubernetes identity |
 | Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
 
@@ -482,7 +496,7 @@ Radar decides what it can read at startup, so RBAC changes take effect when the 
 
 You see what you have access to — Radar doesn't require cluster-admin. Whatever your ServiceAccount (or the impersonated user, when auth is enabled) can list, Radar shows. Resource types you can't list show an actionable denied-state instead of a misleading "0 / None found": for a core cluster-scoped kind (Node, PV, StorageClass, and the like) your identity can't read, Radar shows a copyable `ClusterRole` + `ClusterRoleBinding` request to hand to a cluster admin (reason `rbac_denied`), and distinguishes that from a kind Radar's own ServiceAccount can't read, where a user-level grant wouldn't help (reason `unavailable`, no snippet). The "Your access on this cluster" dialog lists the core cluster-scoped kinds being hidden alongside your effective rules. Namespaces you can't access don't appear.
 
-A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespace.
+A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespaces. With the Helm chart, set `rbac.namespaces` to the namespaces Radar may read; the chart binds Radar's role and, in Radar Cloud, each Cloud role only there. See the chart README's [Limit Radar to selected namespaces](../deploy/helm/radar/README.md#limit-radar-to-selected-namespaces). The manual setup below is for `rbac.create: false`.
 
 **Stalled API requests.** If a read from the Kubernetes API stalls without the connection resetting (for example, a proxy whose upstream dropped silently), Radar ends it after 60 seconds with no data and retries, instead of freezing that resource's data until a restart. Slow transfers that keep making progress are never cut, and log streams, exec and port-forward are unaffected.
 
@@ -632,6 +646,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.helm` | Enable Helm write operations | `false` |
 | `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.viewWebhooks` | Show admission webhook configurations | `false` |
+| `rbac.viewAdmissionPolicies` | Show native validating admission policies and bindings | `false` |
 | `rbac.viewNodeRuntime` | Inspect kubelet metrics and effective configuration for upgrade impact | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | `get/list/watch` on every API group and resource, including core Secrets; overrides per-group flags | `false` |
@@ -655,6 +670,17 @@ kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 ```
 
 If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades. If it does and exec still fails, see the next section: the terminal uses the same address check as changes.
+
+### Requests fail with "Radar without authentication answers only ..."
+
+Without authentication, Radar refuses requests addressed to a hostname it does
+not know, so that a web page cannot reach it by pointing its own hostname at
+Radar's address. The message names the hostname. Add it to `allowedHosts` in
+the Helm chart (outside Helm, `--allowed-hosts` or `RADAR_ALLOWED_HOSTS`), or
+enable authentication. The chart already allows its Service names and the
+ingress and HTTPRoute hostnames you set; names it cannot know include a Gateway
+listener hostname, a load balancer hostname and a custom cluster domain. See
+[HTTP Listener](configuration.md#http-listener).
 
 ### Node drain requests time out
 

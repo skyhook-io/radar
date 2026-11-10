@@ -1,6 +1,9 @@
 package topology
 
 import (
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,6 +35,8 @@ func TestAddGitOpsManagedResourceEdgesPreservesArgoAPIGroup(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 	if len(edges) != 1 || edges[0].Target != "job/ml/train/batch.volcano.sh" {
 		t.Fatalf("Argo edges = %+v, want only the exact Volcano Job", edges)
@@ -59,6 +64,8 @@ func TestAddGitOpsManagedResourceEdgesTreatsArgoGroupAsExact(t *testing.T) {
 			[]*unstructured.Unstructured{app},
 			map[string]string{"argocd/training": "application/argocd/training"},
 			map[string]string{"application/argocd/training": "ml"},
+			nil,
+			nil,
 			nil,
 			nil,
 		)
@@ -93,6 +100,8 @@ func TestAddGitOpsManagedResourceEdgesParsesFluxIdentityFromRight(t *testing.T) 
 		nil,
 		[]*unstructured.Unstructured{ks},
 		map[string]string{"flux-system/training": "kustomization/flux-system/training"},
+		nil,
+		nil,
 	)
 	if len(edges) != 1 || edges[0].Target != "job/ml/train_run/batch.volcano.sh" {
 		t.Fatalf("Flux edges = %+v, want only the exact underscore-named Volcano Job", edges)
@@ -134,54 +143,120 @@ func TestAddGitOpsManagedResourceEdgesIgnoresRemoteDestinations(t *testing.T) {
 		nil,
 		[]*unstructured.Unstructured{remoteKs},
 		map[string]string{"flux-system/fleet-prod": "kustomization/flux-system/fleet-prod"},
+		nil,
+		nil,
 	)
 	if len(edges) != 1 || edges[0].Source != "application/argocd/sealed-hub" {
 		t.Fatalf("manages edges = %+v, want only the in-cluster Application's", edges)
 	}
 }
 
-// HelmReleases have no inventory, so topology links one to the workloads whose
-// Helm labels name it. A release applied to another cluster installed nothing
-// here, so a local workload whose labels name it is not its own.
-func TestBuildLinksOnlyLocalHelmReleasesByLabel(t *testing.T) {
+// A HelmRelease manages what its status inventory records. Older
+// helm-controllers record none; then Flux's origin labels name its members,
+// wherever they live, except Helm hooks and objects a controller generated.
+// The chart's instance label makes no claim, and a release applied to another
+// cluster installed nothing here.
+func TestBuildLinksHelmReleasesByInventoryElseOriginLabels(t *testing.T) {
 	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
-	release := func(name string, remote bool) *unstructured.Unstructured {
+	release := func(name string, spec, status map[string]any) *unstructured.Unstructured {
 		obj := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
-			"metadata": map[string]any{"namespace": "apps", "name": name},
-			"spec":     map[string]any{},
+			"metadata": map[string]any{"namespace": "flux-system", "name": name},
+			"spec":     spec,
 		}}
-		if remote {
-			obj.Object["spec"] = map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}
+		if status != nil {
+			obj.Object["status"] = status
 		}
 		return obj
 	}
+	inventory := func(ids ...string) map[string]any {
+		entries := []any{}
+		for _, id := range ids {
+			entries = append(entries, map[string]any{"id": id, "v": "v1"})
+		}
+		return map[string]any{"inventory": map[string]any{"entries": entries}}
+	}
+	origin := func(name string) map[string]string {
+		return map[string]string{"helm.toolkit.fluxcd.io/name": name, "helm.toolkit.fluxcd.io/namespace": "flux-system"}
+	}
+	deployment := func(name string, labels map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: name, Labels: labels}}
+	}
+	hook := deployment("hook", origin("labelled"))
+	hook.Annotations = map[string]string{"helm.sh/hook": "post-install"}
+	generated := deployment("generated", origin("labelled"))
+	controller := true
+	generated.OwnerReferences = []metav1.OwnerReference{{APIVersion: "example.io/v1", Kind: "Operand", Name: "op", UID: "op", Controller: &controller}}
+
 	dynamic := &genericIdentityDynamic{
-		watched:   []schema.GroupVersionResource{hrGVR},
-		kinds:     map[schema.GroupVersionResource]string{hrGVR: "HelmRelease"},
-		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{hrGVR: {release("local", false), release("remote", true)}},
+		watched: []schema.GroupVersionResource{hrGVR},
+		kinds:   map[schema.GroupVersionResource]string{hrGVR: "HelmRelease"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{hrGVR: {
+			release("recorded", map[string]any{}, inventory("apps_listed_apps_Deployment")),
+			release("empty", map[string]any{}, inventory()),
+			release("labelled", map[string]any{}, nil),
+			release("remote", map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}, nil),
+		}},
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
-	deployment := func(name, release string) *appsv1.Deployment {
-		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: name, Labels: map[string]string{
-			"helm.toolkit.fluxcd.io/name": release, "helm.toolkit.fluxcd.io/namespace": "apps",
-		}}}
-	}
-	provider := &mockProvider{deployments: []*appsv1.Deployment{deployment("web", "local"), deployment("api", "remote")}}
+	provider := &mockProvider{deployments: []*appsv1.Deployment{
+		deployment("listed", nil),
+		deployment("stale", origin("empty")),
+		deployment("web", origin("labelled")),
+		deployment("instance", map[string]string{"app.kubernetes.io/instance": "labelled"}),
+		deployment("api", origin("remote")),
+		hook,
+		generated,
+	}}
 	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	targets := map[string]string{}
+	got := map[string][]string{}
 	for _, e := range topo.Edges {
 		if strings.HasPrefix(e.Source, "helmrelease/") {
-			targets[e.Target] = e.Source
+			got[e.Target] = append(got[e.Target], e.Source)
 		}
 	}
-	if targets["deployment/apps/web"] != "helmrelease/apps/local" {
-		t.Fatalf("local release edges = %v, want it to manage deployment/apps/web", targets)
+	want := map[string][]string{
+		"deployment/apps/listed": {"helmrelease/flux-system/recorded"},
+		"deployment/apps/web":    {"helmrelease/flux-system/labelled"},
 	}
-	if src, ok := targets["deployment/apps/api"]; ok {
-		t.Fatalf("remote release %s claimed a local workload", src)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("HelmRelease edges = %v, want %v", got, want)
+	}
+}
+
+// A HelmRelease's auto neighborhood reaches what its inventory records, in
+// another namespace too, as well as its chart source.
+func TestHelmReleaseNeighborhoodReachesRecordedWorkloads(t *testing.T) {
+	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
+	release := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"namespace": "flux-system", "name": "podinfo"},
+		"spec":     map[string]any{"targetNamespace": "apps"},
+		"status":   map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "apps_podinfo_apps_Deployment", "v": "v1"}}}},
+	}}
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{hrGVR},
+		kinds:     map[schema.GroupVersionResource]string{hrGVR: "HelmRelease"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{hrGVR: {release}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	provider := &mockProvider{deployments: []*appsv1.Deployment{
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "podinfo"}},
+		{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "unrelated", Labels: map[string]string{"app.kubernetes.io/instance": "podinfo"}}},
+	}}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	sub := BuildNeighborhood(topo, ResourceRef{Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo", Group: "helm.toolkit.fluxcd.io"}, NeighborhoodOptions{Profile: ProfileAuto, Hops: 1})
+	got := map[string]bool{}
+	for _, n := range sub.Nodes {
+		got[n.ID] = true
+	}
+	if !got["deployment/apps/podinfo"] || got["deployment/apps/unrelated"] {
+		t.Fatalf("HelmRelease neighborhood = %v, want its recorded Deployment and not the instance-label match", slices.Sorted(maps.Keys(got)))
 	}
 }

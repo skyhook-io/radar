@@ -37,6 +37,56 @@ jobs:
             exit 1
           fi
 
+      - name: Reject mismatched and missing checksums before installation
+        run: |
+          fixture_dir=$(mktemp -d)
+          mkdir -p "$fixture_dir/bin" "$fixture_dir/archive"
+          printf '#!/bin/sh\nexit 0\n' > "$fixture_dir/archive/kubectl-radar"
+          tar -czf "$fixture_dir/release.tar.gz" -C "$fixture_dir/archive" kubectl-radar
+          cat > "$fixture_dir/bin/curl" <<'EOF'
+          #!/bin/sh
+          while [ "$#" -gt 0 ]; do
+            case "$1" in
+              -o) output=$2; shift 2 ;;
+              -w) shift 2 ;;
+              https://*) url=$1; shift ;;
+              *) shift ;;
+            esac
+          done
+          case "$url" in
+            */releases/latest)
+              printf 'https://github.com/skyhook-io/radar/releases/tag/v0.0.0'
+              ;;
+            */checksums.txt)
+              filename=$(cat "$FIXTURE_DIR/filename")
+              if [ "$CHECKSUM_CASE" = missing ]; then filename=other.tar.gz; fi
+              printf '%064d  %s\n' 0 "$filename" > "$output"
+              ;;
+            *)
+              printf '%s' "${url##*/}" > "$FIXTURE_DIR/filename"
+              cp "$FIXTURE_DIR/release.tar.gz" "$output"
+              ;;
+          esac
+          EOF
+          chmod +x "$fixture_dir/bin/curl"
+          for scenario in mismatch missing; do
+            install_dir="$fixture_dir/$scenario-install"
+            if PATH="$fixture_dir/bin:$PATH" FIXTURE_DIR="$fixture_dir" CHECKSUM_CASE="$scenario" \
+              INSTALL_DIR="$install_dir" sh ./install.sh > "$fixture_dir/$scenario.log" 2>&1; then
+              echo "Expected $scenario checksum to fail the install" >&2
+              exit 1
+            fi
+            cat "$fixture_dir/$scenario.log"
+            case "$scenario" in
+              mismatch) grep -Fq 'Checksum verification failed for' "$fixture_dir/$scenario.log" ;;
+              missing) grep -Fq 'Failed to find checksum for' "$fixture_dir/$scenario.log" ;;
+            esac
+            if [ -e "$install_dir" ]; then
+              echo "Rejected install should not have created the install directory" >&2
+              exit 1
+            fi
+          done
+
       - name: Install latest release
         run: |
           sh ./install.sh

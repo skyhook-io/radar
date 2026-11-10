@@ -21,7 +21,7 @@ import {
   getXRDKind,
 } from '../resource-utils-crossplane'
 
-function StatusBadge({ resource, getStatus }: { resource: any; getStatus: (r: any) => { text: string; color: string } }) {
+export function CrossplaneStatusCell({ resource, getStatus = getCrossplaneStatus }: { resource: any; getStatus?: (r: any) => { text: string; color: string } }) {
   const status = getStatus(resource)
   const reason = getCrossplaneStatusReason(resource)
   const badge = (
@@ -35,7 +35,7 @@ function StatusBadge({ resource, getStatus }: { resource: any; getStatus: (r: an
 export function ManagedResourceCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status':
-      return <StatusBadge resource={resource} getStatus={getCrossplaneStatus} />
+      return <CrossplaneStatusCell resource={resource} getStatus={getCrossplaneStatus} />
     case 'external': {
       const name = getExternalName(resource)
       if (!name) return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -60,7 +60,7 @@ export function ManagedResourceCell({ resource, column }: { resource: any; colum
 export function CompositeResourceCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status':
-      return <StatusBadge resource={resource} getStatus={getCrossplaneStatus} />
+      return <CrossplaneStatusCell resource={resource} getStatus={getCrossplaneStatus} />
     case 'composition': {
       const ref = getCompositionRef(resource)
       if (!ref) return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -82,7 +82,7 @@ export function CompositeResourceCell({ resource, column }: { resource: any; col
 export function CrossplaneProviderCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status':
-      return <StatusBadge resource={resource} getStatus={getProviderStatus} />
+      return <CrossplaneStatusCell resource={resource} getStatus={getProviderStatus} />
     case 'package': {
       const pkg = getProviderPackage(resource)
       return (
@@ -108,7 +108,7 @@ export function CrossplaneProviderCell({ resource, column }: { resource: any; co
 export function CrossplaneProviderConfigCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status':
-      return <StatusBadge resource={resource} getStatus={getProviderConfigStatus} />
+      return <CrossplaneStatusCell resource={resource} getStatus={getProviderConfigStatus} />
     case 'credentials':
       return <span className="text-sm text-theme-text-secondary">{getProviderConfigCredentialsSource(resource)}</span>
     default:

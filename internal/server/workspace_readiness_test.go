@@ -54,7 +54,7 @@ func TestWorkspaceTypedSourcesRequireInitialSync(t *testing.T) {
 		}
 	})
 	k8s.ResetResourceCache()
-	if err := k8s.InitTestPromotedSyncingCache(client, 5*time.Second, 3*time.Second, nil); err != nil {
+	if err := k8s.InitTestPromotedSyncingCache(client, 5*time.Second, time.Second, nil); err != nil {
 		t.Fatal(err)
 	}
 	cache := k8s.GetResourceCache()

@@ -1,0 +1,14 @@
+{
+  "description": "Whether Kueue holds a Workload in its pending queues, so Radar asks the visibility API for its position. Read by pkg/schedulinginsight (Go) and packages/k8s-ui resource-utils-kueue (TS).",
+  "cases": [
+    {"name": "no conditions", "workload": {"spec": {"queueName": "q"}}, "awaiting": true},
+    {"name": "quota not reserved", "workload": {"spec": {"queueName": "q"}, "status": {"conditions": [{"type": "QuotaReserved", "status": "False", "reason": "Pending"}]}}, "awaiting": true},
+    {"name": "evicted and requeued", "workload": {"spec": {"queueName": "q"}, "status": {"conditions": [{"type": "Evicted", "status": "True", "reason": "Preempted"}, {"type": "QuotaReserved", "status": "False", "reason": "Pending"}]}}, "awaiting": true},
+    {"name": "explicitly active", "workload": {"spec": {"queueName": "q", "active": true}}, "awaiting": true},
+    {"name": "quota reserved", "workload": {"spec": {"queueName": "q"}, "status": {"conditions": [{"type": "QuotaReserved", "status": "True"}]}}, "awaiting": false},
+    {"name": "admitted", "workload": {"spec": {"queueName": "q"}, "status": {"conditions": [{"type": "QuotaReserved", "status": "True"}, {"type": "Admitted", "status": "True"}]}}, "awaiting": false},
+    {"name": "finished", "workload": {"spec": {"queueName": "q"}, "status": {"conditions": [{"type": "Finished", "status": "True", "reason": "Succeeded"}]}}, "awaiting": false},
+    {"name": "deactivated", "workload": {"spec": {"queueName": "q", "active": false}, "status": {"conditions": [{"type": "QuotaReserved", "status": "False"}]}}, "awaiting": false},
+    {"name": "admitted condition unknown", "workload": {"spec": {"queueName": "q"}, "status": {"conditions": [{"type": "Admitted", "status": "Unknown"}]}}, "awaiting": true}
+  ]
+}

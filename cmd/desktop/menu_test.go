@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	versionpkg "github.com/skyhook-io/radar/internal/version"
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 )
@@ -80,12 +81,36 @@ func TestCreateMenuOffMacUsesNoRolesAndKeepsFileQuit(t *testing.T) {
 	}
 }
 
-func TestCreateMenuHelpMenuKeepsUpdateAction(t *testing.T) {
-	appMenu := createMenu(&DesktopApp{}, "test", "linux")
-	helpMenu := findSubmenu(t, appMenu, "Help")
+func TestCreateMenuUpdateActionMatchesVersionCheckSetting(t *testing.T) {
+	t.Setenv("RADAR_DISABLE_VERSION_CHECK", "")
+	previousDisabled := versionpkg.IsDisabled()
+	t.Cleanup(func() { versionpkg.SetDisabled(previousDisabled) })
 
-	if !containsLabel(helpMenu, "Check for Updates...") {
-		t.Fatalf("Help menu is missing Check for Updates action")
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		for _, tc := range []struct {
+			name        string
+			flag        bool
+			env         string
+			wantVisible bool
+		}{
+			{"default", false, "", true},
+			{"flag or config opt-out", true, "", true},
+			{"environment opt-out", false, "1", true},
+			{"true environment opt-out", false, "true", true},
+			{"environment leaves checks enabled", false, "0", true},
+		} {
+			t.Run(goos+"/"+tc.name, func(t *testing.T) {
+				t.Setenv("RADAR_DISABLE_VERSION_CHECK", tc.env)
+				versionpkg.SetDisabled(tc.flag)
+				helpMenu := findSubmenu(t, createMenu(&DesktopApp{}, "test", goos), "Help")
+				if got := containsLabel(helpMenu, "Check for Updates..."); got != tc.wantVisible {
+					t.Errorf("update action visible = %v, want %v", got, tc.wantVisible)
+				}
+				if helpMenu.Items[0].Type == menu.SeparatorType {
+					t.Error("Help menu starts with a separator")
+				}
+			})
+		}
 	}
 }
 

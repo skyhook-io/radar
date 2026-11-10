@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 )
 
@@ -157,6 +158,11 @@ func (m *Manager) discover(ctx context.Context, snap probeSnapshot) (string, *ac
 
 	if m.inCluster() {
 		return "", nil, fmt.Errorf("%w: argocd-server service found but not reachable in-cluster (if it serves a self-signed certificate, set argoCdInsecureTls)", ErrUnreachable)
+	}
+
+	if portforward.AutoDisabled() {
+		log.Printf("[argocd] No candidate reachable in-cluster; automatic port-forwarding is turned off, not attempting port-forward")
+		return "", nil, fmt.Errorf("%w: %w", ErrUnreachable, portforward.ErrAutoDisabled)
 	}
 
 	var lastErr error

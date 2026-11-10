@@ -52,7 +52,7 @@ import {
 } from "../../api/client";
 import { useConnection } from "../../context/ConnectionContext";
 import { useTimelineSource } from "../../context/TimelineSource";
-import { apiVersionToGroup, buildWorkloadPath, kindToPluralWithGroup } from "../../utils/navigation";
+import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath, withCrossViewParams } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
@@ -484,21 +484,18 @@ function AppDetailRoute({
   const openWorkloadResource = useCallback(
     (resource: SelectedResource) => {
       const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? "")
-      if (pluralKind.toLowerCase() !== "pods") {
+      // The peek never covers the inline workload view: opening it drops
+      // ?workload so the app overview sits behind it. A single-workload app
+      // has no app overview and puts ?workload straight back, which would hide
+      // the peek, so its resources open on their own page instead.
+      if (pluralKind.toLowerCase() !== "pods" && !singleWorkloadKey) {
         onOpenResource(resource);
         return;
       }
 
-      const [pathname, rawSearch = ""] = buildWorkloadPath({
-        ...resource,
-        kind: pluralKind,
-      }).split("?");
-      const params = new URLSearchParams(rawSearch);
-      const activeNamespaces = searchParams.get("namespaces");
-      if (activeNamespaces) params.set("namespaces", activeNamespaces);
-      navigate({ pathname, search: params.toString() });
+      navigate(withCrossViewParams(relatedResourcePath(resource), searchParams.toString()));
     },
-    [navigate, onOpenResource, searchParams],
+    [navigate, onOpenResource, searchParams, singleWorkloadKey],
   );
   const openSource = useCallback(
     (source: AppSourceRef) => {

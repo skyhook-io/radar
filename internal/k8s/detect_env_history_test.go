@@ -1511,7 +1511,7 @@ func TestStaleSecretEnvReadySubjectKeepsOwnerIdentityAndSafeAction(t *testing.T)
 	if subject.group != "batch" || subject.kind != "Job" || subject.name != "report" || subject.restartable {
 		t.Fatalf("non-restartable Job owner must retain stable owner identity without restart capability: %+v", subject)
 	}
-	if action := staleSecretEnvReadyAction(subject); !strings.Contains(action, "Job/report's normal controller workflow") ||
+	if action := staleSecretEnvReadyAction(subject, nil); !strings.Contains(action, "Job/report's normal controller workflow") ||
 		strings.Contains(action, "restart Job/") {
 		t.Fatalf("non-restartable controller received unsafe workload guidance: %q", action)
 	}
@@ -1706,7 +1706,7 @@ func TestStaleSecretEnvMessagesStateObservedFacts(t *testing.T) {
 
 	t.Run("per-check context names facts without claiming the env value", func(t *testing.T) {
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "shop"}}
-		got := newStaleSecretEnvCheck(pod, "app", "DB_PASSWORD", "secretKeyRef", "", "db", "password", early, changedAt).Message
+		got := newStaleSecretEnvCheck(pod, "app", "DB_PASSWORD", "secretKeyRef", "", "db", "password", early, changedAt, false).Message
 		want := "Container app started at 2026-10-16T14:59:41Z, before Radar observed Secret/db key password change at 2026-10-16T15:19:41Z; Kubernetes does not refresh env DB_PASSWORD in a running container."
 		if got != want {
 			t.Fatalf("message:\n got %q\nwant %q", got, want)

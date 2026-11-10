@@ -1,13 +1,25 @@
-import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
+import { CRDVersionsCell } from './renderers/crd-cells'
+import { getCRDColumnValue } from './resource-utils-crd'
+import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
+import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getFlaggerColumnValue } from './resource-utils-flagger'
+import type { ResourceCoverage } from '../../types/resource-coverage'
+import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
+import React, { useState, useMemo, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
+import { createPortal } from 'react-dom'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
+import { CrossplaneDeleteNotice } from '../ui/CrossplaneOperationNotice'
 import { Badge } from '../ui/Badge'
 import { PaneLoader } from '../ui/PaneLoader'
+import { DialogPortal } from '../ui/DialogPortal'
 import { RestrictedState } from '../ui/RestrictedState'
 import { FetchResult } from '../ui/FetchResult'
 import { Input } from '../ui/Input'
 import { ColumnPickerList } from './ColumnPickerList'
 import { applyColumnOrder, sanitizeColumnOrder } from './column-order'
+import { orderResourceColumns, resolveColumnPins, sanitizePinnedColumns, toggleResourceColumnPin } from './column-pinning'
 import type { TopPodMetrics, TopNodeMetrics, ContainerResourceMetrics } from '../../types'
 import {
   Search,
@@ -32,6 +44,7 @@ import {
   ListChecks,
   Minus,
   Scale,
+  PanelLeft,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -148,6 +161,7 @@ import {
   SEVERITY_DOT_COLOR,
   healthColors,
 } from './resource-utils'
+import { TRIVY_GROUP, searchTrivyFindings, type TrivyFindingMatch, type TrivyFindingsSearch } from './resource-utils-trivy'
 import { getGenericResourceStatus } from './generic-status'
 import { ActiveFilterBar } from './ActiveFilterBar'
 import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
@@ -156,7 +170,7 @@ import {
   printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
 } from './printer-columns'
 import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
-import { pluralize } from '../../utils/pluralize'
+import { englishPlural, isEnglishPlural, pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { formatRelativeAgeTime, parseQuantityToNumber } from '../../utils/format'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
@@ -203,8 +217,9 @@ import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell, Volum
 import { isVeleroResource } from './resource-utils-velero'
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell, CNPGObjectStoreCell, CNPGDeclarativeCell, CNPGImageCatalogCell } from './renderers/cnpg-cells'
 import { isApiGroup, CNPG_GROUP } from './resource-utils-cnpg'
-import { ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
-import { isManagedResource, isComposite } from './resource-utils-crossplane'
+import { CrossplaneStatusCell, ManagedResourceCell, CompositeResourceCell, CrossplaneProviderCell, CrossplaneProviderConfigCell, CompositionCell, XRDCell } from './renderers/crossplane-cells'
+import { getCrossplaneStatus, isManagedResource, isComposite, getCrossplanePauseState } from './resource-utils-crossplane'
+import { CrossplanePauseChip } from './renderers/CrossplanePauseContext'
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
 import { KnativeServiceCell, ConfigurationCell as KnativeConfigurationCell, RevisionCell as KnativeRevisionCell, RouteCell as KnativeRouteCell, BrokerCell, TriggerCell, EventTypeCell, PingSourceCell, ApiServerSourceCell, ContainerSourceCell, SinkBindingCell, ChannelCell, InMemoryChannelCell, SubscriptionCell, SequenceCell, ParallelCell, DomainMappingCell, ServerlessServiceCell, KnativeIngressCell, KnativeCertificateCell } from './renderers/knative-cells'
 import { IngressRouteCell, MiddlewareCell, TraefikServiceCell, ServersTransportCell, TLSOptionCell } from './renderers/traefik-cells'
@@ -217,7 +232,7 @@ import { CalicoInfraCell, CalicoPolicyCell } from './renderers/calico-cells'
 import { isCalicoPolicyResource, isCoreNetworkPolicyKind } from './resource-utils-calico'
 import { useRegisterShortcut, useRegisterShortcuts, type KeyboardShortcut } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
-import type { SelectedKindInfo, SidebarCategoryWorkspace } from './ResourcesSidebar'
+import type { SelectedKindInfo, SidebarCategoryWorkspace, SidebarDisplayState } from './ResourcesSidebar'
 import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick, type NamespacedRef } from '../compare'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 
@@ -340,9 +355,28 @@ const COMPARE_COLUMN_STYLE: React.CSSProperties = {
   maxWidth: COMPARE_COLUMN_WIDTH,
 }
 
+// Phones: the leading columns (compare marker, selection checkbox, then Name
+// when it is the first column) stay in place while the rest of the table
+// scrolls sideways, so every row stays identifiable. The opaque background
+// keeps scrolled cells from showing through; on phones it hides the selection
+// tint on these cells, where a tap opens the full-screen detail anyway.
+// The offset rides a CSS variable that only the phone classes read, so the
+// desktop header (position: relative) never moves.
+const CHECKBOX_COLUMN_WIDTH = 40
+const PHONE_PINNED_CELL = 'phone:sticky phone:left-[var(--pin-left)] phone:z-[1] phone:bg-theme-surface'
+const PHONE_PINNED_HEAD = 'phone:sticky phone:left-[var(--pin-left)] phone:z-[3]'
+const PHONE_NAME_MAX_VW = 45
+function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean | undefined, column: 'compare' | 'checkbox' | 'name'): React.CSSProperties {
+  const compare = compareMode ? COMPARE_COLUMN_WIDTH : 0
+  const checkbox = showCheckbox ? CHECKBOX_COLUMN_WIDTH : 0
+  const left = column === 'compare' ? 0 : column === 'checkbox' ? compare : compare + checkbox
+  return { '--pin-left': `${left}px` } as React.CSSProperties
+}
+
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+  'connectCluster', 'connectorClass', 'connectorTasks',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -446,6 +480,17 @@ function headerLabelWidth(label: string): number {
   }
   headerLabelWidthCache.set(label, width)
   return width
+}
+
+function snapshotHeaderWidths(container: HTMLElement | null): Record<string, number> | undefined {
+  const ths = container?.querySelectorAll<HTMLElement>('thead th[data-column-key]')
+  if (!ths) return undefined
+  const snapped: Record<string, number> = {}
+  ths.forEach(th => {
+    const key = th.dataset.columnKey
+    if (key) snapped[key] = th.getBoundingClientRect().width
+  })
+  return snapped
 }
 
 /**
@@ -553,6 +598,53 @@ const DEFAULT_COLUMNS: Column[] = [
 ]
 
 const KNOWN_COLUMNS: Record<string, Column[]> = {
+  kafkaconnectors: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Operator Snapshot', width: 'w-44 shrink-0', tooltip: 'Operator-reported connector and task state, not a live runtime check.' },
+    { key: 'connectCluster', label: 'KafkaConnect', width: 'min-w-32' },
+    { key: 'connectorClass', label: 'Class', width: 'min-w-48' },
+    { key: 'connectorTasks', label: 'Tasks / Max', width: 'w-28 shrink-0', tooltip: 'Reported tasks / configured maximum. A smaller count is not itself a failure.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  opentelemetrycollectors: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Reconciliation', width: 'w-40 shrink-0', tooltip: 'Operator reconciliation only, not Pod health or telemetry delivery.' },
+    { key: 'mode', label: 'Mode', width: 'w-28 shrink-0' },
+    { key: 'reportedPods', label: 'Reported Pods', width: 'w-32 shrink-0', tooltip: 'Last reported ready/total snapshot. Total is observed Pods for Deployment/StatefulSet, desired scheduled Pods for DaemonSet. Inspect the owned workload for current readiness.' },
+    { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
+    { key: 'image', label: 'Image', width: 'min-w-48' },
+    { key: 'management', label: 'Management', width: 'w-28 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  instrumentations: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Configuration', width: 'w-36 shrink-0' },
+    { key: 'endpoint', label: 'OTLP Endpoint', width: 'min-w-48' },
+    { key: 'sampler', label: 'Sampler', width: 'w-40 shrink-0' },
+    { key: 'samplerArgument', label: 'Sampler Argument', width: 'w-32 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  canaries: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Rollout State', width: 'w-40 shrink-0', tooltip: 'Last recorded rollout outcome, with requested suspension separate from a failed result. Not a latest-generation guarantee.' },
+    { key: 'strategy', label: 'Strategy', width: 'w-36 shrink-0' },
+    { key: 'target', label: 'Canary Target', width: 'min-w-40' },
+    { key: 'canaryWeight', label: 'Reported Weight', width: 'w-36 shrink-0', tooltip: 'Last reported canary routing weight, not measured traffic. Blue/green and A/B strategies are not weighted.' },
+    { key: 'suspended', label: 'Suspend Requested', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  metrictemplates: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Configuration', width: 'w-36 shrink-0' },
+    { key: 'provider', label: 'Provider', width: 'w-32 shrink-0' },
+    { key: 'address', label: 'Provider Address', width: 'min-w-48' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
   pods: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
@@ -665,7 +757,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   jobs: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'completions', label: 'Completions', width: 'w-32' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -945,6 +1037,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'cohort', label: 'Cohort', width: 'w-32', tooltip: 'Queues in this cohort can share unused quota, subject to borrowing and lending limits' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads in this ClusterQueue waiting for admission, across namespaces; inspect workload status for the blocker' },
+    { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads holding a quota reservation in this ClusterQueue, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads admitted through this ClusterQueue, across namespaces; admission does not mean their pods are running' },
     { key: 'flavors', label: 'Flavors', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -955,6 +1048,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40' },
     { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads submitted to this LocalQueue that are waiting for ClusterQueue admission' },
+    { key: 'reservingWorkloads', label: 'Reserving', width: 'w-24', tooltip: 'Workloads from this LocalQueue holding a quota reservation, admitted ones included, so it is not added to Admitted' },
     { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads from this LocalQueue admitted to its ClusterQueue; their pods may still be waiting to run' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1653,6 +1747,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'renewTime', label: 'Last Renewed', width: 'w-32', tooltip: 'Time since the recorded renewal; red means it exceeds leaseDurationSeconds. Check holder health and API connectivity' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
+  customresourcedefinitions: [
+    { key: 'name', label: 'Name' },
+    { key: 'kind', label: 'Kind', width: 'w-56' },
+    { key: 'scope', label: 'Scope', width: 'w-32' },
+    { key: 'versions', label: 'Served Versions', width: 'w-64' },
+    { key: 'status', label: 'Status', width: 'w-36' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   priorityclasses: [
     { key: 'name', label: 'Name' },
     { key: 'value', label: 'Value', width: 'w-24', tooltip: 'Higher values receive scheduling preference; Pods can still be preempted by Pods with higher priority' },
@@ -1734,7 +1836,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Applied git revision' },
     { key: 'inventory', label: 'Resources', width: 'w-24', tooltip: 'Number of managed resources' },
-    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since the last recorded reconciliation attempt; falls back to the last Ready transition. Neither guarantees success.' },
+    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since Flux last applied, or last tried to apply if that did not succeed; falls back to the last Ready transition.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmreleases: [
@@ -1745,7 +1847,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'message', label: 'Message', width: 'w-64', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
     { key: 'revision', label: 'Rev', width: 'w-16', tooltip: 'Helm release revision number' },
-    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
+    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Deployment time of the currently deployed release, or the last Ready status change when that time is unavailable.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   alerts: [
@@ -2857,6 +2959,11 @@ function isCuratedUnboundedGroup(key: string, group: string): boolean {
  * cannot occupy one. See CORE_API_GROUPS.
  */
 const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
+  kafkaconnectors: ['kafka.strimzi.io'],
+  opentelemetrycollectors: ['opentelemetry.io'],
+  instrumentations: ['opentelemetry.io'],
+  canaries: ['flagger.app'],
+  metrictemplates: ['flagger.app'],
   challenges: ['acme.cert-manager.io'],
   orders: ['acme.cert-manager.io'],
   compositeresourcedefinitions: ['apiextensions.crossplane.io'],
@@ -3138,12 +3245,12 @@ function buildPrinterColumn(def: PrinterColumnDef, index: number, table: Printer
       // A column the vendor named Ready/Healthy/Established carries the only
       // scannable signal these kinds have — they have no curated Status column.
       // Rendering it as grey text would leave a screen of uniform "True".
-      const tone = printerCellTone(def, value)
+      const tone = printerCellTone(def, value, resource)
       if (tone) {
         return (
           // The value, not the column's description — the header tooltip
           // carries that. A cell tooltip exists to reveal a truncated value.
-          <Tooltip content={text}>
+          <Tooltip content={tone === 'neutral' ? `${text} · ${String(value).trim().toLowerCase() === 'false' ? 'Controller recorded reconciliation paused' : 'Last reported readiness while reconciliation is paused'}` : text}>
             <span className={clsx('badge', healthColors[tone])}>{text}</span>
           </Tooltip>
         )
@@ -3295,8 +3402,9 @@ interface ColumnSettings {
    *  load tell a column they hid from one that did not exist yet. Absent on
    *  blobs written before this field. */
   known?: string[]
-  /** Optional display order for movable columns, including hidden ones. */
+  /** Full display order, including hidden columns. Older saves omit Name. */
   order?: string[]
+  pinned?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -3372,6 +3480,7 @@ interface ResourcesViewData {
 export const ResourcesViewDataContext = React.createContext<ResourcesViewData>({})
 
 export interface ResourceQueryResult {
+  coverage?: ResourceCoverage
   resourceName?: string
   group?: string
   data?: any[]
@@ -3407,6 +3516,7 @@ interface ResourcesViewProps {
   resourceQueries?: ResourceQueryResult[]
   // Lightweight counts for sidebar badges (from /api/resource-counts)
   resourceCounts?: Record<string, number | null>
+  resourceCoverage?: Record<string, ResourceCoverage>
   resourceForbidden?: string[]
   /** Per-kind reason a forbidden kind is hidden ("rbac_denied" | "unavailable"),
    *  keyed by the same count key as resourceForbidden. Drives RestrictedState copy. */
@@ -3560,6 +3670,7 @@ const DEFAULT_KIND_INFO: SelectedKindInfo = { name: 'pods', kind: 'Pod', group: 
 export const LOADED_RESOURCE_COUNT_TTL_MS = 5 * 60 * 1000
 
 interface LoadedResourceCount {
+  coverage?: ResourceCoverage
   count: number
   expiresAt: number
 }
@@ -3669,6 +3780,22 @@ export function deriveSidebarResourceCounts(
   return results
 }
 
+export function deriveSidebarResourceCoverage(
+  resourceCounts: Record<string, number | null> | undefined,
+  resourceCoverage: Record<string, ResourceCoverage> | undefined,
+  loadedCountCache: LoadedResourceCountCache,
+  now = Date.now(),
+): Record<string, ResourceCoverage> {
+  const result: Record<string, ResourceCoverage> = { ...resourceCoverage }
+  for (const key of Object.keys(resourceCounts ?? {})) {
+    if (!(key in result)) result[key] = { status: 'unknown' }
+  }
+  for (const [key, cached] of Object.entries(loadedCountCache)) {
+    if (!(key in result) && cached.expiresAt > now) result[key] = cached.coverage ?? { status: 'unknown' }
+  }
+  return result
+}
+
 const FILTER_INTENT_PARAMS = [...RESOURCE_LIST_FILTER_PARAMS, 'resource']
 
 /**
@@ -3703,6 +3830,7 @@ export function ResourcesView({
   apiResources: apiResourcesProp,
   resourceQueries: resourceQueriesProp,
   resourceCounts: resourceCountsProp,
+  resourceCoverage: resourceCoverageProp,
   resourceForbidden: resourceForbiddenProp,
   resourceReasons,
   resourceUnavailable: resourceUnavailableProp,
@@ -3751,6 +3879,15 @@ export function ResourcesView({
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
+  // Phones: the 224px kind list would leave the table a sliver, so it lives in
+  // a drawer over the table, opened from the toolbar and closed by a pick.
+  const isPhone = usePhoneLayout()
+  const [kindsDrawerOpen, setKindsDrawerOpen] = useState(false)
+  // The drawer unmounts its sidebar on close; keep its display settings here.
+  const [drawerSidebarState, setDrawerSidebarState] = useState<SidebarDisplayState>(() => ({ showEmptyKinds: false, favoritesExpanded: pinned.length > 0 }))
+  useEffect(() => {
+    if (!isPhone) setKindsDrawerOpen(false)
+  }, [isPhone])
   // Sync selectedKind from URL when the URL changes (browser back, external sidebar navigation).
   // Deps are URL-derived only — including selectedKind.name/group would race against pending
   // navigation: a sidebar click flips state before navigate() lands, this effect re-reads the
@@ -3833,7 +3970,10 @@ export function ResourcesView({
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [columnOrder, setColumnOrder] = useState<string[] | null>(null)
+  const [pinnedColumns, setPinnedColumns] = useState<string[]>([])
   const [showColumnPicker, setShowColumnPicker] = useState(false)
+  const columnPickerPanelRef = useRef<HTMLDivElement>(null)
+  const [columnPickerPosition, setColumnPickerPosition] = useState<React.CSSProperties>({})
   const [customColumns, setCustomColumns] = useState<CustomColumnDef[]>([])
   const [customColumnDraft, setCustomColumnDraft] = useState<CustomColumnDef>({ source: 'label', path: '' })
   // Per-instance so two ResourcesView tables on one page (e.g. fleet compare)
@@ -3934,6 +4074,24 @@ export function ResourcesView({
   const resizeStartWidth = useRef(0)
   const [resizeLineX, setResizeLineX] = useState<number | null>(null)
   const tableContainerRef = useRef<HTMLDivElement>(null)
+  const [tableScroller, setTableScroller] = useState<HTMLElement | null>(null)
+  const [tableViewportWidth, setTableViewportWidth] = useState(0)
+  const captureTableScroller = useCallback((element: HTMLElement | Window | null) => {
+    setTableScroller(element instanceof HTMLElement ? element : null)
+  }, [])
+  useEffect(() => {
+    const viewport = tableScroller ?? tableContainerRef.current
+    if (!viewport) return
+    const measure = () => setTableViewportWidth(viewport.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => window.removeEventListener('resize', measure)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [tableScroller, tableActive])
 
   // Bulk metrics for table columns — provided via props
   const metricsLookup = useMemo<MetricsLookup>(() => {
@@ -3980,9 +4138,9 @@ export function ResourcesView({
     const filteredExtras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
-  // Display order. Everything downstream reads this, so the picker, the header
-  // and the resize width snapshot (which maps <th> index to key) agree.
-  const allColumns = useMemo(() => applyColumnOrder(definedColumns, columnOrder), [definedColumns, columnOrder])
+  // The picker and table share one order, including pins that temporarily scroll.
+  const fixedLeadingCount = Math.max(0, definedColumns.findIndex(column => column.key === 'name'))
+  const allColumns = useMemo(() => orderResourceColumns(definedColumns, columnOrder, pinnedColumns, fixedLeadingCount), [definedColumns, columnOrder, pinnedColumns, fixedLeadingCount])
 
   // The offered key set, and a stable signature for it. allColumns is a new
   // identity on every printer-column refetch; depending on the array itself
@@ -4118,17 +4276,21 @@ export function ResourcesView({
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
         setColumnOrder(null)
+        setPinnedColumns([])
       } else {
-        setVisibleColumns(mergeSavedVisibleColumns(
-          saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown,
-        ))
+        const restoredVisible = mergeSavedVisibleColumns(saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown)
+        setVisibleColumns(restoredVisible)
         setColumnWidths(saved.widths || {})
-        setColumnOrder(sanitizeColumnOrder(saved.order))
+        const savedOrder = sanitizeColumnOrder(saved.order)
+        // Older settings reorder only columns after Name. Convert once to a full order.
+        setColumnOrder(Array.isArray(saved.pinned) ? savedOrder : applyColumnOrder(effective, savedOrder).map(column => column.key))
+        setPinnedColumns(sanitizePinnedColumns(saved.pinned).filter(key => restoredVisible.has(key)))
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setColumnWidths({})
       setColumnOrder(null)
+      setPinnedColumns([])
     }
     // printerColumnsKey, not builtPrinterColumns: the built array is a new
     // identity on every refetch, and re-running this effect would reset the
@@ -4151,23 +4313,52 @@ export function ResourcesView({
       custom: customColumns,
       known: Array.from(knownColumnKeys.current),
       order: columnOrder ?? undefined,
+      pinned: pinnedColumns,
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
     hadSavedColumnSettings.current = true
     // allColumnKeysSig, not allColumnKeys: see the memo above.
-  }, [visibleColumns, columnWidths, customColumns, columnOrder, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
+  }, [visibleColumns, columnWidths, customColumns, columnOrder, pinnedColumns, selectedKind.name, selectedKind.group, allColumnKeysSig, tableActive])
 
   // Close column picker on outside click or Escape
+  useLayoutEffect(() => {
+    if (!showColumnPicker) return
+    const position = (event?: Event) => {
+      if (event?.target instanceof Node && columnPickerPanelRef.current?.contains(event.target)) return
+      const anchor = columnPickerRef.current?.getBoundingClientRect()
+      if (!anchor) return
+      const width = Math.min(288, window.innerWidth - 24)
+      const top = anchor.bottom + 4
+      const next = {
+        top, left: Math.max(12, Math.min(anchor.right - width, window.innerWidth - width - 12)),
+        width, maxHeight: Math.max(100, Math.min(520, window.innerHeight - top - 12)),
+      }
+      setColumnPickerPosition(previous => previous.top === next.top && previous.left === next.left && previous.width === next.width && previous.maxHeight === next.maxHeight ? previous : next)
+    }
+    position()
+    columnPickerPanelRef.current?.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled])')?.focus({ preventScroll: true })
+    window.addEventListener('resize', position)
+    window.addEventListener('scroll', position, true)
+    return () => {
+      window.removeEventListener('resize', position)
+      window.removeEventListener('scroll', position, true)
+    }
+  }, [showColumnPicker])
+
   useEffect(() => {
     if (!showColumnPicker) return
     const handleClick = (e: MouseEvent) => {
-      if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
+      if (e.target instanceof Node && !columnPickerRef.current?.contains(e.target) && !columnPickerPanelRef.current?.contains(e.target)) {
         setShowColumnPicker(false)
       }
     }
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); setShowColumnPicker(false) }
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setShowColumnPicker(false)
+        columnPickerRef.current?.querySelector('button')?.focus()
+      }
     }
     document.addEventListener('mousedown', handleClick)
     document.addEventListener('keydown', handleKey, true)
@@ -4187,21 +4378,7 @@ export function ResourcesView({
 
     // On first resize, snapshot all column widths from the DOM to switch to fixed grid sizes
     const container = tableContainerRef.current
-    setColumnWidths(prev => {
-      const hasWidths = Object.keys(prev).length > 0
-      if (hasWidths) return prev
-      // Snapshot all visible <th> widths
-      const ths = container?.querySelectorAll('thead th')
-      if (!ths) return prev
-      const snapped: Record<string, number> = {}
-      const cols = allColumns.filter(c => visibleColumns.has(c.key))
-      ths.forEach((th, i) => {
-        if (cols[i]) {
-          snapped[cols[i].key] = th.getBoundingClientRect().width
-        }
-      })
-      return snapped
-    })
+    setColumnWidths(prev => Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container) ?? prev)
 
     // Show the resize line at the initial position
     const containerRect = container?.getBoundingClientRect()
@@ -4234,17 +4411,47 @@ export function ResourcesView({
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
       // Suppress the click event that fires after mouseup to prevent accidental sort toggle
-      document.addEventListener('click', (e) => e.stopPropagation(), { capture: true, once: true })
+      const suppressResizeClick = (event: MouseEvent) => event.stopPropagation()
+      document.addEventListener('click', suppressResizeClick, { capture: true, once: true })
+      // A resize can remount its original target, so no trailing click fires.
+      // Do not leave that listener around to swallow the next toolbar click.
+      window.setTimeout(() => document.removeEventListener('click', suppressResizeClick, true), 0)
     }
 
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
-  }, [allColumns, visibleColumns])
+  }, [])
+
+  // Fit one column to the widest of its header and its rendered cells.
+  const handleResizeDoubleClick = useCallback((e: React.MouseEvent, colKey: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const container = tableContainerRef.current
+    if (!container) return
+    let width = 0
+    container.querySelectorAll<HTMLElement>('[data-column-key]').forEach(cell => {
+      if (cell.dataset.columnKey !== colKey) return
+      // Cells and inner spans truncate, so measure an unconstrained copy instead of the cell itself.
+      const copy = cell.cloneNode(true) as HTMLElement
+      Object.assign(copy.style, { position: 'absolute', visibility: 'hidden', width: 'max-content', maxWidth: 'none' })
+      cell.parentElement?.appendChild(copy)
+      width = Math.max(width, copy.getBoundingClientRect().width)
+      copy.remove()
+    })
+    if (width === 0) return
+    const fitted = Math.max(48, Math.ceil(width))
+    setColumnWidths(prev => ({
+      ...(Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container)),
+      [colKey]: fitted,
+    }))
+  }, [])
 
   // Toggle column visibility
   const toggleColumnVisibility = useCallback((colKey: string) => {
+    // A hidden column has no pin to surprise the user when it is shown again.
+    setPinnedColumns(prev => prev.filter(key => key !== colKey))
     setVisibleColumns(prev => {
       const next = new Set(prev)
       if (next.has(colKey)) {
@@ -4265,6 +4472,7 @@ export function ResourcesView({
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setColumnWidths({})
     setColumnOrder(null)
+    setPinnedColumns([])
     setSortColumn(null)
     setSortDirection(null)
     saveSavedSort(selectedKind.name, selectedKind.group, null)
@@ -4291,6 +4499,7 @@ export function ResourcesView({
   // Remove a user-defined column entirely (not just hide it).
   const removeCustomColumn = useCallback((key: string) => {
     setCustomColumns(prev => prev.filter(c => customColumnKey(c) !== key))
+    setPinnedColumns(prev => prev.filter(column => column !== key))
     setVisibleColumns(prev => {
       if (!prev.has(key)) return prev
       const next = new Set(prev)
@@ -4326,7 +4535,7 @@ export function ResourcesView({
     category: 'Search',
     scope: 'resources',
     handler: () => searchInputRef.current?.focus(),
-    enabled: tableActive,
+    enabled: tableActive && !kindsDrawerOpen,
   })
 
   // Keyboard navigation: highlighted row state
@@ -4435,6 +4644,8 @@ export function ResourcesView({
     onResourceClick?.(isSelected ? null : stripped)
   }, [onRowSelect, onResourceClick, selectedKind.name, selectedKind.group])
 
+  // Shortcuts here (and the search shortcut above) pause while the phone
+  // kind drawer is open: it's modal, so the table behind it takes no keys.
   useRegisterShortcuts(([
     {
       id: 'resources-nav-down',
@@ -4548,12 +4759,12 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
+        } else if (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
       },
       enabled: highlightedIndex >= 0 && !compareMode && (
-        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
+        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
         isCoreBatchJob(selectedKind.name, selectedKind.group)
       ),
     },
@@ -4608,7 +4819,7 @@ export function ResourcesView({
         else searchInputRef.current?.blur()
       },
     },
-  ] as KeyboardShortcut[]).map((sc) => ({ ...sc, enabled: tableActive && (sc.enabled ?? true) })))
+  ] as KeyboardShortcut[]).map((sc) => ({ ...sc, enabled: tableActive && !kindsDrawerOpen && (sc.enabled ?? true) })))
 
   // Refs for accessing filteredResources inside shortcuts (computed later in component)
   const filteredResourceCountRef = useRef(0)
@@ -4618,7 +4829,7 @@ export function ResourcesView({
   const flatKindListRef = useRef<SelectedKindInfo[]>([])
 
   // Sidebar kind navigation: [ = previous kind, ] = next kind
-  useRegisterShortcuts([
+  useRegisterShortcuts(([
     {
       id: 'resources-prev-kind',
       keys: '[',
@@ -4651,7 +4862,7 @@ export function ResourcesView({
         onKindChange?.()
       },
     },
-  ])
+  ] as KeyboardShortcut[]).map((sc) => ({ ...sc, enabled: !kindsDrawerOpen && (sc.enabled ?? true) })))
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -5174,16 +5385,16 @@ export function ResourcesView({
       }
 
       const existing = next[selectedKindCountKey]
-      if (existing?.count === selectedLoadedResourceCount && existing.expiresAt === expiresAt) {
+      if (existing?.count === selectedLoadedResourceCount && existing.expiresAt === expiresAt && existing.coverage === selectedQuery?.coverage) {
         return changed ? next : prev
       }
 
       return {
         ...next,
-        [selectedKindCountKey]: { count: selectedLoadedResourceCount, expiresAt },
+        [selectedKindCountKey]: { count: selectedLoadedResourceCount, expiresAt, coverage: selectedQuery?.coverage },
       }
     })
-  }, [selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, selectedQuery?.dataUpdatedAt])
+  }, [selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, selectedQuery?.dataUpdatedAt, selectedQuery?.coverage])
 
   // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
@@ -5203,6 +5414,12 @@ export function ResourcesView({
     })
     return results
   }, [useNewCountsMode, resourcesToCount, resourceCountsProp, resourceUnavailableProp, loadedCountCache, selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, resourceQueries])
+
+  const sidebarResourceCoverage = useMemo(() => {
+    const result = deriveSidebarResourceCoverage(resourceCountsProp, resourceCoverageProp, loadedCountCache)
+    if (selectedQueryHasLoadedCount) result[selectedKindCountKey] = selectedQuery?.coverage ?? { status: 'unknown' }
+    return result
+  }, [resourceCountsProp, resourceCoverageProp, loadedCountCache, selectedQueryHasLoadedCount, selectedKindCountKey, selectedQuery?.coverage])
 
   const sidebarResourceUnavailable = useMemo(() => {
     if (!resourceUnavailableProp?.length) {
@@ -5327,14 +5544,31 @@ export function ResourcesView({
       if (issue) return issueTitle(issue)
       if (operationalIssuesIncomplete) return 'Unknown'
     }
+    if (column === 'status') {
+      const managedColumns = isLikelyCrossplaneMRGroup(selectedKind.name, selectedKind.group ?? '')
+      if ((managedColumns && isManagedResource(resource))
+        || ((!hasCuratedColumns(selectedKind.name, selectedKind.group) || managedColumns)
+          && getCrossplanePauseState(resource) === 'acknowledged')) {
+        return getCrossplaneStatus(resource).text
+      }
+    }
     return getCellFilterValue(resource, column, kind)
-  }, [operationalIssues, operationalIssuesIncomplete, selectedKind.group])
+  }, [operationalIssues, operationalIssuesIncomplete, selectedKind.name, selectedKind.group])
 
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {
     const meta = resource.metadata || {}
     const status = resource.status || {}
     const kindLower = kind?.toLowerCase() || ''
+    const connectorValue = getStrimziConnectorColumnValue(resource, column)
+    if (connectorValue !== undefined) {
+      if (column === 'connectorTasks') return Array.isArray(resource.status?.connectorStatus?.tasks) ? resource.status.connectorStatus.tasks.length : -1
+      return connectorValue
+    }
+    const otelValue = getOpenTelemetryColumnValue(resource, column)
+    if (otelValue !== undefined) return otelValue
+    const flaggerValue = getFlaggerColumnValue(resource, column)
+    if (flaggerValue !== undefined) return flaggerValue
 
     switch (column) {
       case 'name':
@@ -5471,13 +5705,18 @@ export function ResourcesView({
     }
   }, [regexMode, deferredSearchTerm])
 
+  const isTrivyKind = selectedKind.group === TRIVY_GROUP
+
   // Filter resources by search term, status, problems, and sort
-  const filteredResources = useMemo(() => {
-    if (!tableActive || !resources) return []
+  const { list: filteredResources, findings: findingsSearch } = useMemo((): { list: any[]; findings: TrivyFindingsSearch | null } => {
+    if (!tableActive || !resources) return { list: [], findings: null }
 
     let result = resources
+    let findings: TrivyFindingsSearch | null = null
 
-    // Apply search filter
+    // Apply search filter. On Trivy report kinds a plain search also matches
+    // findings and runs below, after the other filters. Regex mode stays on
+    // names: a pattern run over every finding could backtrack for seconds.
     if (deferredSearchTerm) {
       if (regexMode) {
         const re = searchRegex.re
@@ -5487,7 +5726,7 @@ export function ResourcesView({
             re.test(r.metadata?.namespace ?? '')
           )
         }
-      } else {
+      } else if (!isTrivyKind) {
         const term = deferredSearchTerm.toLowerCase()
         result = result.filter((r: any) =>
           r.metadata?.name?.toLowerCase().includes(term) ||
@@ -5561,6 +5800,19 @@ export function ResourcesView({
           ref.kind === ownerKind && ref.name === ownerName
         )
       })
+    }
+
+    // Trivy findings are searched after the other filters, so rows they hide
+    // don't spend the findings budget.
+    if (deferredSearchTerm && !regexMode && isTrivyKind) {
+      const term = deferredSearchTerm.toLowerCase()
+      const matched = searchTrivyFindings(result, term)
+      findings = matched
+      result = result.filter((r: any) =>
+        r.metadata?.name?.toLowerCase().includes(term) ||
+        r.metadata?.namespace?.toLowerCase().includes(term) ||
+        matched.matches.has(r)
+      )
     }
 
     // Apply custom sorting if set. Extra columns override
@@ -5658,8 +5910,8 @@ export function ResourcesView({
       }
     }
 
-    return result
-  }, [tableActive, resources, deferredSearchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, effectiveSortColumn, sortDirection, getSortValue, getDisplayFilterValue, extraColumnsByKey, podMatchesProblemFilter])
+    return { list: result, findings }
+  }, [tableActive, resources, deferredSearchTerm, regexMode, searchRegex, isTrivyKind, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, effectiveSortColumn, sortDirection, getSortValue, getDisplayFilterValue, extraColumnsByKey, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -5763,7 +6015,9 @@ export function ResourcesView({
   const selectedKindName = selectedKind.name.toLowerCase()
   const canBulkRestartSelectedKind = onBulkRestart != null && BULK_RESTART_WORKLOAD_KINDS.has(selectedKindName)
   const canBulkScaleSelectedKind = onBulkScale != null && BULK_SCALE_WORKLOAD_KINDS.has(selectedKindName)
-  const canBulkSelect = onBulkDelete != null || canBulkRestartSelectedKind || canBulkScaleSelectedKind
+  // Phones skip bulk selection and create (see the toolbar): phone triage
+  // is one resource at a time.
+  const canBulkSelect = !isPhone && (onBulkDelete != null || canBulkRestartSelectedKind || canBulkScaleSelectedKind)
   const isBulkMutating = isBulkDeleting || isBulkRestarting || isBulkScaling
 
   const openBulkScaleDialog = useCallback(() => {
@@ -5806,22 +6060,82 @@ export function ResourcesView({
   const handleRowMouseEnter = useCallback(() => setHighlightedIndex(-1), [])
 
   // Filter columns by visibility
-  const columns = useMemo(() => {
+  const visibleTableColumns = useMemo(() => {
     if (visibleColumns.size === 0) return allColumns.filter(c => c.defaultVisible !== false)
     return allColumns.filter(c => visibleColumns.has(c.key))
   }, [allColumns, visibleColumns])
+  const columns = visibleTableColumns
+
+  // Phones pin a leading Name column (see PHONE_PINNED_CELL). Cap it at
+  // PHONE_NAME_MAX_VW percent of the screen so a width saved on desktop can't
+  // make the pinned column cover it; the saved width itself is left alone.
+  // Tracked through resizes and rotation, which can stay within phone width.
+  const [phoneViewportWidth, setPhoneViewportWidth] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
+  useEffect(() => {
+    if (!isPhone) return
+    const onResize = () => setPhoneViewportWidth(window.innerWidth)
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [isPhone])
+  const phoneNameCap = isPhone && columns[0]?.key === 'name' ? Math.round(phoneViewportWidth * PHONE_NAME_MAX_VW / 100) : Infinity
+
+  // Loaded fonts can change header minima without changing the column definitions.
+  // User pins are offset by rendered widths, so a capped phone Name counts at its cap.
+  const pinWidths = useMemo(() => visibleTableColumns.map((column, i) => {
+    const width = columnWidths[column.key] || getColumnMinWidth(column, extraColumnsByKey)
+    return { key: column.key, width: i === 0 && column.key === 'name' ? Math.min(width, phoneNameCap) : width }
+  }), [visibleTableColumns, columnWidths, extraColumnsByKey, headerFontEpoch, phoneNameCap])
+  const leadingPinWidth = (compareMode ? COMPARE_COLUMN_WIDTH : 0) + (isCheckboxMode ? CHECKBOX_COLUMN_WIDTH : 0)
+  const effectivePinnedColumns = useMemo(() => {
+    if (!pinnedColumns.length) return []
+    const visible = new Set(visibleTableColumns.map(column => column.key))
+    const context = allColumns.slice(0, fixedLeadingCount).map(column => column.key)
+    return [...new Set([...context, ...pinnedColumns])].filter(key => visible.has(key))
+  }, [allColumns, fixedLeadingCount, pinnedColumns, visibleTableColumns])
+  const columnPins = useMemo(() => resolveColumnPins(pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth),
+    [pinWidths, effectivePinnedColumns, tableViewportWidth, leadingPinWidth])
+  const activePinnedColumns = useMemo(() => effectivePinnedColumns.slice(0, columnPins.offsets.size), [effectivePinnedColumns, columnPins.offsets.size])
+  // Keep requested pins at fixed widths even while their stickiness is paused.
+  const namePinned = pinnedColumns.includes('name')
+  const pinStyles = useMemo(() => {
+    const styles = new Map<string, React.CSSProperties>()
+    const widths = new Map(pinWidths.map(column => [column.key, column.width]))
+    let left = leadingPinWidth
+    const last = activePinnedColumns.at(-1)
+    for (const key of activePinnedColumns) {
+      const width = widths.get(key)
+      if (width === undefined) continue
+      styles.set(key, { position: 'sticky', left, zIndex: 1, boxShadow: key === last ? '2px 0 0 var(--border-default)' : undefined })
+      left += width
+    }
+    return styles
+  }, [activePinnedColumns, pinWidths, leadingPinWidth])
+  const toggleColumnPin = (key: string) => {
+    const next = toggleResourceColumnPin(allColumns, pinnedColumns, key, fixedLeadingCount)
+    setColumnOrder(next.order)
+    setPinnedColumns(next.pinned)
+  }
+  const reorderColumns = (order: string[]) => {
+    setColumnOrder(order)
+    setPinnedColumns(order.filter(key => pinnedColumns.includes(key)))
+  }
+  const hasTableSpacer = hasResizedColumns || namePinned
 
   // Fixed-width columns can consume the table's flexible space and collapse
   // the required name column. Keep a real table minimum and let the container
   // scroll horizontally when the viewport is too narrow.
   const tableMinWidth = useMemo(() => {
     const compareColumnWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
-    const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)), compareColumnWidth)
-    const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key])
+    const baseMinWidth = columns.reduce((sum, col, i) => {
+      const width = columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)
+      return sum + (i === 0 && col.key === 'name' ? Math.min(width, phoneNameCap) : width)
+    }, compareColumnWidth)
+    const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key] && !namePinned)
 
     if (!hasResizedColumns || !flexibleNameColumn) return baseMinWidth
     return baseMinWidth + getColumnMinWidth(flexibleNameColumn, extraColumnsByKey)
-  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch])
+  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch, phoneNameCap, namePinned])
 
   // Stable virtuoso components — memoized to avoid remounting the table on every render
   const virtuosoComponents = useMemo(() => ({
@@ -5843,24 +6157,26 @@ export function ResourcesView({
             */}
             {compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
             {isCheckboxMode && <col style={{ width: '40px' }} />}
-            {columns.map(col => (
+            {columns.map((col, i) => (
               <col
                 key={col.key}
                 style={{
-                  width: columnWidths[col.key]
-                    ? `${columnWidths[col.key]}px`
-                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
+                  width: i === 0 && col.key === 'name' && phoneNameCap !== Infinity
+                    ? `min(${columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)}px, ${PHONE_NAME_MAX_VW}vw)`
+                    : columnWidths[col.key]
+                      ? `${columnWidths[col.key]}px`
+                      : col.key === 'name' && !namePinned ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
                 }}
               />
             ))}
-            {hasResizedColumns && <col />}
+            {hasTableSpacer && <col />}
           </colgroup>
           {props.children}
         </table>
       )
     }),
     TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch])
+  }), [columns, columnWidths, hasTableSpacer, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch, phoneNameCap, namePinned])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -6058,46 +6374,86 @@ export function ResourcesView({
     onOpenWorkloadLogs,
   }), [onNavigate, certExpiry, certExpiryError, auditBadges, operationalIssues, operationalIssuesIncomplete, onOpenLogs, onOpenWorkloadLogs])
 
+  const renderSidebar = (className?: string, inDrawer = false) => (
+    <ResourcesSidebar
+      className={className}
+      displayState={inDrawer ? drawerSidebarState : undefined}
+      onDisplayStateChange={inDrawer ? setDrawerSidebarState : undefined}
+      containEscape={inDrawer}
+      selectedKind={selectedKind}
+      onSelectedKindChange={(kind) => {
+        shouldPushHistory.current = true
+        setSelectedKind(kind)
+        setKindsDrawerOpen(false)
+      }}
+      onKindChange={onKindChange}
+      apiResources={apiResourcesProp}
+      resourceCounts={counts}
+      resourceCoverage={sidebarResourceCoverage}
+      resourceForbidden={Array.from(forbiddenKinds)}
+      resourceUnavailable={sidebarResourceUnavailable}
+      pinned={pinned}
+      togglePin={togglePin}
+      isPinned={isPinned}
+      categoryWorkspaces={sidebarCategoryWorkspaces}
+      onKindNavigated={() => {
+        // After selecting a kind via keyboard, move focus to the table search
+        // so the user can immediately filter within the selected kind.
+        setTimeout(() => searchInputRef.current?.focus(), 50)
+      }}
+    />
+  )
+
+  const kindsButton = (
+    <button
+      type="button"
+      onClick={() => setKindsDrawerOpen(true)}
+      aria-expanded={kindsDrawerOpen}
+      aria-label={`Resource kinds (showing ${selectedKind.kind})`}
+      className="flex shrink-0 items-center gap-1.5 rounded-lg border border-theme-border bg-theme-elevated px-2.5 py-1.5 text-sm font-medium text-theme-text-primary hover:bg-theme-hover"
+    >
+      <PanelLeft className="h-4 w-4 text-theme-text-tertiary" />
+      <span className="max-w-[7rem] truncate">{selectedKind.kind}</span>
+    </button>
+  )
+
   return (
     <ResourcesViewDataContext.Provider value={resourcesViewDataContextValue}>
     <div className="flex h-full w-full">
-      {/* Sidebar - Resource Types */}
-      {!hideSidebar && (
-        <ResourcesSidebar
-          selectedKind={selectedKind}
-          onSelectedKindChange={(kind) => {
-            shouldPushHistory.current = true
-            setSelectedKind(kind)
-          }}
-          onKindChange={onKindChange}
-          apiResources={apiResourcesProp}
-          resourceCounts={counts}
-          resourceForbidden={Array.from(forbiddenKinds)}
-          resourceUnavailable={sidebarResourceUnavailable}
-          pinned={pinned}
-          togglePin={togglePin}
-          isPinned={isPinned}
-          categoryWorkspaces={sidebarCategoryWorkspaces}
-          onKindNavigated={() => {
-            // After selecting a kind via keyboard, move focus to the table search
-            // so the user can immediately filter within the selected kind.
-            setTimeout(() => searchInputRef.current?.focus(), 50)
-          }}
-        />
+      {/* Sidebar - Resource Types. On phones it is a modal drawer: the
+          dialog primitive traps focus, captures Escape before the table's
+          own shortcuts, and returns focus to the kinds button. */}
+      {!hideSidebar && !isPhone && renderSidebar()}
+      {!hideSidebar && isPhone && (
+        <DialogPortal
+          open={kindsDrawerOpen}
+          onClose={() => setKindsDrawerOpen(false)}
+          ariaLabel="Resource kinds"
+          className="!ml-0 !mr-auto h-full w-72 max-w-[85vw] self-stretch overflow-hidden rounded-none border-y-0 border-l-0"
+        >
+          {renderSidebar('!w-full h-full border-r-0', true)}
+        </DialogPortal>
       )}
 
       {kindView !== null ? (
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">{kindView}</div>
+        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
+          {!hideSidebar && isPhone && (
+            <div className="flex items-center px-3 py-2 border-b border-theme-border bg-theme-base shrink-0">{kindsButton}</div>
+          )}
+          {kindView}
+        </div>
       ) : (
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
         {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0">
-          <div className="flex-1 min-w-0">
+        {/* Phones: the toolbar wraps and search takes its own full row. */}
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0 phone:relative phone:flex-wrap phone:gap-2 phone:px-3">
+          {!hideSidebar && isPhone && kindsButton}
+          <div className="flex-1 min-w-0 phone:order-last phone:basis-full">
             <div className="relative max-w-md">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
               <Input
                 ref={searchInputRef}
-                placeholder={regexMode ? 'Search by regex... (press /)' : 'Search... (press /)'}
+                placeholder={regexMode ? 'Search by regex... (press /)' : isTrivyKind ? 'Search names and findings... (press /)' : 'Search... (press /)'}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 onKeyDown={(e) => {
@@ -6159,6 +6515,11 @@ export function ResourcesView({
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
+              {!searchRegex.error && findingsSearch?.truncated && (
+                <div className="absolute left-0 top-full mt-1 z-10 px-2 py-1 rounded bg-theme-elevated border border-theme-border text-xs text-theme-text-secondary shadow-theme-sm">
+                  Too many findings to search them all here; some weren't searched.
+                </div>
+              )}
               {searchRegex.error && (
                 <div
                   title={searchRegex.error}
@@ -6170,9 +6531,11 @@ export function ResourcesView({
             </div>
           </div>
 
-          {/* Problems dropdown (pods only) */}
+          {/* Problems dropdown (pods only). On phones the toolbar wraps, so this
+              menu and Labels' anchor to the toolbar (full width below it)
+              rather than to a trigger that may sit near either edge. */}
           {filterOptions?.problems && filterOptions.problems.length > 0 && (
-            <div className="relative" ref={problemsDropdownRef}>
+            <div className="relative phone:static" ref={problemsDropdownRef}>
               <button
                 onClick={() => { setShowProblemsDropdown(!showProblemsDropdown); setShowLabelsDropdown(false) }}
                 className={clsx(
@@ -6191,7 +6554,7 @@ export function ResourcesView({
                 )}
               </button>
               {showProblemsDropdown && (
-                <div className="absolute right-0 top-full mt-1 min-w-48 bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
+                <div className="absolute right-0 top-full mt-1 min-w-48 phone:left-3 phone:right-3 phone:min-w-0 bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
                   {problemFilters.length > 0 && (
                     <div className="flex items-center justify-between px-3 py-1.5 border-b border-theme-border">
                       <span className="text-xs font-medium text-theme-text-secondary">Problems</span>
@@ -6222,7 +6585,7 @@ export function ResourcesView({
 
           {/* Labels dropdown */}
           {filterOptions?.labels && filterOptions.labels.length > 0 && (
-            <div className="relative" ref={labelsDropdownRef}>
+            <div className="relative phone:static" ref={labelsDropdownRef}>
               <button
                 onClick={() => { setShowLabelsDropdown(!showLabelsDropdown); setShowProblemsDropdown(false); setLabelSearch('') }}
                 className={clsx(
@@ -6246,7 +6609,7 @@ export function ResourcesView({
                   ? labels.filter(l => l.value.toLowerCase().includes(labelSearch.toLowerCase()))
                   : labels
                 return (
-                  <div className="absolute right-0 top-full mt-1 min-w-64 max-w-80 bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
+                  <div className="absolute right-0 top-full mt-1 min-w-64 max-w-80 phone:left-3 phone:right-3 phone:min-w-0 phone:max-w-none bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
                     <div className="flex items-center gap-2 p-2 border-b border-theme-border">
                       <div className="relative flex-1">
                         <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary" />
@@ -6340,6 +6703,8 @@ export function ResourcesView({
           <div className="relative flex" ref={columnPickerRef}>
             <Tooltip content="Configure columns">
             <button
+              aria-label="Configure columns"
+              aria-expanded={showColumnPicker}
               onClick={() => setShowColumnPicker(prev => !prev)}
               className={clsx(
                 'p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg',
@@ -6349,8 +6714,8 @@ export function ResourcesView({
               <Columns3 className="w-4 h-4" />
             </button>
             </Tooltip>
-            {showColumnPicker && (
-              <div className="absolute right-0 top-full mt-1 z-50 bg-theme-surface border border-theme-border rounded-lg shadow-lg py-1 min-w-[200px] max-h-[400px] flex flex-col">
+            {showColumnPicker && createPortal(
+              <div ref={columnPickerPanelRef} role="region" aria-label="Columns" style={columnPickerPosition} className="fixed z-50 bg-theme-surface border border-theme-border rounded-lg shadow-theme-lg py-1 flex flex-col">
                 <div className="shrink-0 px-3 py-2 border-b border-theme-border flex items-center justify-between">
                   <span className="text-xs font-medium text-theme-text-secondary uppercase">Columns</span>
                   <button
@@ -6362,6 +6727,9 @@ export function ResourcesView({
                     Reset
                   </button>
                 </div>
+                <p className="shrink-0 px-3 pt-2 pb-1 text-xs text-theme-text-tertiary">
+                  {columnPins.paused.length ? 'Some pins scroll until there is more room.' : 'Pinned columns stay visible as you scroll.'}
+                </p>
                 {/* Column list scrolls; the add-column footer stays pinned so
                     its input isn't pushed below the fold on kinds with many columns. */}
                 <div className="overflow-y-auto flex-1 min-h-0">
@@ -6371,7 +6739,9 @@ export function ResourcesView({
                   customColumnKeys={customColumnKeySet}
                   onToggle={toggleColumnVisibility}
                   onRemoveCustom={removeCustomColumn}
-                  onReorder={setColumnOrder}
+                  onReorder={reorderColumns}
+                  fixedLeadingCount={fixedLeadingCount}
+                  pinning={{ pinned: effectivePinnedColumns, paused: columnPins.paused, onToggle: toggleColumnPin }}
                 />
                 </div>
                 {/* Add a label/annotation column */}
@@ -6423,10 +6793,10 @@ export function ResourcesView({
                     </button>
                   </form>
                 </div>
-              </div>
+              </div>, document.body
             )}
           </div>
-          {onCreateResource && (
+          {onCreateResource && !isPhone && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
                 aria-label={`Create ${selectedKind.kind || 'resource'}`}
@@ -6486,7 +6856,7 @@ export function ResourcesView({
 
         {/* Bulk actions bar */}
         {showBulkBar && (
-          <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0">
+          <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0 phone:flex-wrap phone:gap-2 phone:px-3">
             <span className="text-sm font-medium text-theme-text-primary">
               {checkedItems.length} selected
             </span>
@@ -6533,6 +6903,18 @@ export function ResourcesView({
           </div>
         )}
 
+        {!isLoading && !selectedQueryError && resourceCoverageNotice(selectedQuery?.coverage, isEnglishPlural(selectedKind.kind) ? selectedKind.kind : englishPlural(selectedKind.kind)) && (
+          <div role="status" className="px-4 py-2 text-xs text-warning-text border-b border-theme-border bg-theme-surface">
+            {resourceCoverageNotice(selectedQuery?.coverage, isEnglishPlural(selectedKind.kind) ? selectedKind.kind : englishPlural(selectedKind.kind))}
+          </div>
+        )}
+
+        {!isLoading && !selectedQueryError && resourceNarrowedNotice(selectedQuery?.coverage) && (
+          <div role="status" className="px-4 py-2 text-xs text-theme-text-tertiary border-b border-theme-border bg-theme-surface">
+            {resourceNarrowedNotice(selectedQuery?.coverage)}
+          </div>
+        )}
+
         {!isLoading && !isSelectedForbidden && !largeListGuard && filteredResources.length > 0 && (
           <ActiveFilterBar
             columnFilters={columnFilters}
@@ -6574,7 +6956,7 @@ export function ResourcesView({
                 />
               </div>
             </div>
-          ) : selectedQueryError && !Array.isArray(resources) ? (
+          ) : selectedQueryError && !Array.isArray(resources) && !largeListGuard ? (
             // A failed fetch with no rows to fall back on must not reach the
             // empty state below — it would tell the user the cluster has none.
             <FetchResult
@@ -6594,7 +6976,9 @@ export function ResourcesView({
               <p className="text-sm mt-1 max-w-xl">
                 {largeListGuard.reason === 'count-unavailable'
                   ? 'Radar could not verify this list is small enough to load. Choose a namespace or smaller namespace set to try again.'
-                  : `${largeListGuard.count?.toLocaleString()} ${largeListGuard.kind.toLowerCase()} are in the current scope. Choose a namespace or smaller namespace set to load this view.`}
+                  : largeListGuard.count == null
+                    ? 'This list exceeds the resource limit. Choose a namespace or smaller namespace set to load this view.'
+                    : `${largeListGuard.count.toLocaleString()} ${largeListGuard.kind.toLowerCase()} were read in the current scope. Choose a namespace or smaller namespace set to load this view.`}
               </p>
               <p className="text-xs mt-2 text-theme-text-disabled">
                 Radar limits full table loads to {largeListGuard.limit.toLocaleString()} resources to keep the UI responsive.
@@ -6605,8 +6989,8 @@ export function ResourcesView({
             </div>
           ) : filteredResources.length === 0 ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary">
-              <p>No {selectedKind.kind} found</p>
-              {emptyKindNote(selectedKind.kind, selectedKind.group, resources?.length ?? 0) && (
+              <p>{resourceEmptyMessage(selectedKind.kind, selectedQuery?.coverage, (resources?.length ?? 0) > 0)}</p>
+              {selectedQuery?.coverage?.status !== 'partial' && emptyKindNote(selectedKind.kind, selectedKind.group, resources?.length ?? 0) && (
                 <p className="text-xs mt-2 max-w-md text-center text-theme-text-disabled">
                   {emptyKindNote(selectedKind.kind, selectedKind.group, resources?.length ?? 0)}
                 </p>
@@ -6622,6 +7006,13 @@ export function ResourcesView({
                   No results for "{searchTerm}"
                   <X className="w-3.5 h-3.5" />
                 </button>
+              )}
+              {searchTerm && isTrivyKind && (
+                <p className="text-xs mt-1 text-theme-text-tertiary">
+                  {regexMode
+                    ? 'Regex search matches names and namespaces only.'
+                    : 'Searched names, namespaces and report findings (CVE, package, check ID, image).'}
+                </p>
               )}
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
               <ActiveFilterBar
@@ -6650,6 +7041,7 @@ export function ResourcesView({
             <MetricsContext.Provider value={metricsLookup}>
             <TableVirtuoso
               ref={virtuosoRef}
+              scrollerRef={captureTableScroller}
               data={filteredResources}
               increaseViewportBy={400}
               overscan={200}
@@ -6662,15 +7054,17 @@ export function ResourcesView({
                       // Inline px width — under `table-layout:fixed`,
                       // `w-9` is a hint the browser absorbs into leftover
                       // row width on an icon-only column.
-                      style={COMPARE_COLUMN_STYLE}
-                      className="px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
+                      style={{ ...COMPARE_COLUMN_STYLE, ...phonePinnedLeft(compareMode, isCheckboxMode, 'compare'), ...(pinStyles.size ? { position: 'sticky', left: 0, zIndex: 6 } : {}) }}
+                      className={clsx('px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400', PHONE_PINNED_HEAD)}
                       title="Compare mode"
                     >
                       <GitCompare className="w-3.5 h-3.5 inline-block opacity-70" />
                     </th>
                   )}
                   {isCheckboxMode && (
-                    <th className="bg-theme-surface border-b border-theme-border w-10 text-center px-0 py-3">
+                    <th
+                      style={{ ...phonePinnedLeft(compareMode, isCheckboxMode, 'checkbox'), ...(pinStyles.size ? { position: 'sticky', left: compareMode ? COMPARE_COLUMN_WIDTH : 0, zIndex: 6 } : {}) }}
+                      className={clsx('bg-theme-surface border-b border-theme-border w-10 text-center px-0 py-3', PHONE_PINNED_HEAD)}>
                       <input
                         type="checkbox"
                         checked={allVisibleChecked}
@@ -6693,9 +7087,17 @@ export function ResourcesView({
                     return (
                       <th
                         key={col.key}
+                        data-column-key={col.key}
+                        style={{
+                          ...(colIdx === 0 && col.key === 'name' ? phonePinnedLeft(compareMode, isCheckboxMode, 'name') : undefined),
+                          ...pinStyles.get(col.key),
+                          // Scrolling headers stay below pinned ones, including the phone-pinned Name.
+                          zIndex: isFilterOpen ? 50 : pinStyles.has(col.key) || (isPhone && colIdx === 0 && col.key === 'name') ? 6 : 1,
+                        }}
                         className={clsx(
                           'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide relative group/th',
                           'bg-theme-base border-b border-theme-border',
+                          colIdx === 0 && col.key === 'name' && PHONE_PINNED_HEAD,
                           !isLastCol && 'border-r-subtle',
                           isSortable ? 'text-theme-text-secondary hover:text-theme-text-primary cursor-pointer select-none' : 'text-theme-text-secondary'
                         )}
@@ -6883,19 +7285,20 @@ export function ResourcesView({
                         })()}
                         {/* Resize handle with visible divider */}
                         <div
-                          className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center"
-                          style={{ transform: 'translateX(50%)' , zIndex: 10 }}
+                          className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-end phone:hidden"
+                          style={{ zIndex: 10 }}
                           onMouseDown={(e) => {
                             const th = e.currentTarget.parentElement!
                             handleResizeStart(e, col.key, th.getBoundingClientRect().width)
                           }}
+                          onDoubleClick={(e) => handleResizeDoubleClick(e, col.key)}
                         >
                           <div className="w-px h-4 bg-theme-border group-hover/th:bg-theme-text-disabled transition-colors" />
                         </div>
                       </th>
                     )
                   })}
-                  {hasResizedColumns && <th className="bg-theme-base border-b border-theme-border p-0" />}
+                  {hasTableSpacer && <th className="bg-theme-base border-b border-theme-border p-0" />}
                 </tr>
               )}
               itemContent={(index, resource) => {
@@ -6918,7 +7321,8 @@ export function ResourcesView({
                     group={selectedKind.group}
                     columns={columns}
                     extraColumnsByKey={extraColumnsByKey}
-                    hasSpacerColumn={hasResizedColumns}
+                    hasSpacerColumn={hasTableSpacer}
+                    pinStyles={pinStyles}
                     isSelected={isSelected}
                     isHighlighted={isHighlighted}
                     isChecked={checkedResources.has(resourceKey)}
@@ -6931,6 +7335,7 @@ export function ResourcesView({
                     comparePickIndex={pickIdx}
                     rowHref={rowHrefFor?.(resource)}
                     onRowCheckToggle={toggleChecked}
+                    findingMatch={findingsSearch?.matches.get(resource)}
                   />
                 )
               }}
@@ -6964,13 +7369,12 @@ export function ResourcesView({
       open={tableActive && showBulkDeleteConfirm}
       onClose={() => { setShowBulkDeleteConfirm(false); setBulkForceDelete(false) }}
       onConfirm={() => {
+        const submittedKeys = new Set(checkedItems.map(getResourceKey))
+        setShowBulkDeleteConfirm(false)
+        setBulkForceDelete(false)
         onBulkDelete?.(checkedBulkItems, {
           force: bulkForceDelete,
-          onSuccess: () => {
-            clearBulkSelection()
-            setShowBulkDeleteConfirm(false)
-            setBulkForceDelete(false)
-          },
+          onSuccess: () => setCheckedResources(current => new Set([...current].filter(key => !submittedKeys.has(key)))),
         })
       }}
       title={`Delete ${checkedItems.length} ${selectedKind.kind}${checkedItems.length > 1 ? 's' : ''}?`}
@@ -6981,6 +7385,7 @@ export function ResourcesView({
       isLoading={isBulkDeleting}
       isClosable
     >
+      <CrossplaneDeleteNotice resources={checkedItems} force={bulkForceDelete} />
       <label className="flex items-center gap-2 text-sm text-theme-text-secondary">
         <input
           type="checkbox"
@@ -7079,6 +7484,7 @@ interface ResourceRowCellsProps {
   columns: Column[]
   extraColumnsByKey?: Map<string, ExtraColumn>
   hasSpacerColumn: boolean
+  pinStyles?: ReadonlyMap<string, React.CSSProperties>
   isSelected?: boolean
   isHighlighted?: boolean
   isChecked?: boolean
@@ -7098,6 +7504,9 @@ interface ResourceRowCellsProps {
    *  is unaffected (still toggles picks). */
   rowHref?: string
   onRowCheckToggle?: (resource: any) => void
+  /** What a Trivy report matched the table search through, when its name
+   *  and namespace didn't. */
+  findingMatch?: TrivyFindingMatch
 }
 
 function rowHighlightClass(
@@ -7119,7 +7528,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, pinStyles, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle, findingMatch }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
@@ -7128,14 +7537,25 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
   // columns: the anchor is the only navigation surface. The compare-mode
   // chip column keeps its onClick so pick toggling still works.
   const cellsAreClickable = !rowHref
+  const rowTint = compareMode && pickedSide
+    ? `color-mix(in srgb, var(--color-${pickedSide === 'a' ? 'blue' : 'emerald'}-500) 15%, transparent)`
+    : isSelected ? 'var(--selection-bg-strong)' : isHighlighted || isChecked ? 'var(--selection-bg)' : null
+  const pinnedBackground: React.CSSProperties = {
+    backgroundColor: 'var(--pinned-cell-bg, var(--bg-surface))',
+    backgroundImage: rowTint ? `linear-gradient(${rowTint}, ${rowTint})` : undefined,
+  }
+  const pinnedHover = rowTint ? undefined : 'group-hover/row:[--pinned-cell-bg:var(--bg-elevated)]'
+  const fixedLeading = (left: number): React.CSSProperties | undefined => pinStyles?.size
+    ? { position: 'sticky', left, zIndex: 1, ...pinnedBackground }
+    : undefined
   return (
     <>
       {compareMode && (
         <td
           onClick={onClick}
           onMouseEnter={onMouseEnter}
-          style={COMPARE_COLUMN_STYLE}
-          className={clsx('px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
+          style={{ ...COMPARE_COLUMN_STYLE, ...phonePinnedLeft(compareMode, showCheckbox, 'compare'), ...fixedLeading(0) }}
+          className={clsx('px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight, PHONE_PINNED_CELL, pinnedHover)}
         >
           {pickedSide ? (
             <span
@@ -7157,7 +7577,8 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
       )}
       {showCheckbox && (
         <td
-          className={clsx('border-b-subtle text-center px-0 py-3 w-10 cursor-pointer transition-colors', rowHighlight)}
+          style={{ ...phonePinnedLeft(compareMode, showCheckbox, 'checkbox'), ...fixedLeading(compareMode ? COMPARE_COLUMN_WIDTH : 0) }}
+          className={clsx('border-b-subtle text-center px-0 py-3 w-10 cursor-pointer transition-colors', rowHighlight, PHONE_PINNED_CELL, pinnedHover)}
           onClick={(e) => { e.stopPropagation(); onRowCheckToggle?.(resource) }}
         >
           <input
@@ -7168,16 +7589,23 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
           />
         </td>
       )}
-      {columns.map((col) => (
+      {columns.map((col, colIdx) => (
         <td
           key={col.key}
+          data-column-key={col.key}
           onClick={cellsAreClickable ? onClick : undefined}
           onMouseEnter={onMouseEnter}
+          style={{
+            ...(colIdx === 0 && col.key === 'name' ? phonePinnedLeft(compareMode, showCheckbox, 'name') : undefined),
+            ...(pinStyles?.has(col.key) ? { ...pinStyles.get(col.key), ...pinnedBackground } : undefined),
+          }}
           className={clsx(
             'px-4 py-3 border-b-subtle transition-colors',
             cellsAreClickable && 'cursor-pointer',
             col.key !== 'status' && 'overflow-hidden truncate',
             rowHighlight,
+            colIdx === 0 && col.key === 'name' && PHONE_PINNED_CELL,
+            pinnedHover,
           )}
         >
           <CellContent
@@ -7189,6 +7617,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
             storeProviders={storeProviders}
             extraColumn={extraColumnsByKey?.get(col.key)}
             nameHref={col.key === 'name' ? rowHref : undefined}
+            findingMatch={col.key === 'name' ? findingMatch : undefined}
           />
         </td>
       ))}
@@ -7238,9 +7667,10 @@ interface CellContentProps {
   /** When set on the name column, the resource name renders as `<a href>`
    *  so ⌘-click / copy-link / hover-URL all work. */
   nameHref?: string
+  findingMatch?: TrivyFindingMatch
 }
 
-function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref }: CellContentProps) {
+function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref, findingMatch }: CellContentProps) {
   const { auditBadges } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
@@ -7254,11 +7684,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (column === 'name') {
     const isTerminating = !!meta.deletionTimestamp
     const nameClass = clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
+    const pauseState = isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged' ? getCrossplanePauseState(resource) : null
     const audit = auditBadges?.[`${meta.namespace || ''}/${meta.name}`]
     const auditTotal = audit ? audit.danger + audit.warning : 0
     return (
       <div className="flex items-center gap-1.5 min-w-0">
-        <Tooltip content={meta.name}>
+        <Tooltip content={meta.name} wrapperClassName={findingMatch || pauseState ? 'min-w-0' : undefined}>
           {nameHref ? (
             <a
               href={nameHref}
@@ -7273,6 +7704,14 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
           )}
         </Tooltip>
         <CopyNameButton name={meta.name} />
+        <CrossplanePauseChip state={pauseState} compact />
+        {findingMatch && (
+          <Tooltip content={findingMatch.text}>
+            <span className="shrink-0 text-xs italic text-theme-text-tertiary cursor-help">
+              {findingMatch.site === 'image' ? 'in image' : 'in findings'}
+            </span>
+          </Tooltip>
+        )}
         {auditTotal > 0 && audit && (
           <Tooltip content={audit.messages && audit.messages.length > 0
             ? <AuditBadgeTooltip messages={audit.messages} />
@@ -7314,6 +7753,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
+  if (column === 'status' && isLikelyCrossplaneMRGroup(kind, group ?? '') && isManagedResource(resource)) {
+    return <ManagedResourceCell resource={resource} column={column} />
+  }
   if (group && !hasCuratedColumns(kind, group)) {
     return <GenericCell resource={resource} column={column} />
   }
@@ -7340,6 +7782,19 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     return <KyvernoCleanupPolicyCell resource={resource} column={column} />
   }
 
+  const connectorValue = getStrimziConnectorColumnValue(resource, column)
+  if (connectorValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{connectorValue || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
+  }
   switch (kindLower) {
     case 'pods':
       return <PodCell resource={resource} column={column} />
@@ -7456,6 +7911,8 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <IngressClassCell resource={resource} column={column} />
     case 'leases':
       return <LeaseCell resource={resource} column={column} />
+    case 'customresourcedefinitions':
+      return isApiGroup(resource.apiVersion, 'apiextensions.k8s.io') ? <CRDCell resource={resource} column={column} /> : <GenericCell resource={resource} column={column} />
     case 'priorityclasses':
       return <PriorityClassCell resource={resource} column={column} />
     case 'runtimeclasses':
@@ -7902,6 +8359,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 function GenericCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
+      if (isManagedResource(resource) || isComposite(resource) || getCrossplanePauseState(resource) === 'acknowledged') {
+        return <CrossplaneStatusCell resource={resource} />
+      }
       const derived = getGenericResourceStatus(resource)
       if (!derived) return <span className="text-sm text-theme-text-tertiary">-</span>
       return (
@@ -8624,7 +9084,7 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getJobStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge whitespace-nowrap', status.color)}>
           {status.text}
         </span>
       )
@@ -9003,7 +9463,10 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
     case 'pods': {
       const m = metrics.nodes.get(resource.metadata?.name)
       const allocatable = resource.status?.allocatable?.pods
-      const podCount = m?.podCount ?? 0
+      // No metrics entry means the count wasn't loaded (e.g. node metrics are
+      // off while a namespace is selected), not that the node runs no Pods.
+      if (!m) return <span className="text-sm text-theme-text-tertiary font-mono">-</span>
+      const podCount = m.podCount ?? 0
       if (!allocatable) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
       // Allocatable pods is a Quantity, so a 1000-pod node reports "1k" —
       // a raw-integer read would see 1 and peg the bar at 21600%.
@@ -9664,4 +10127,12 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
+}
+
+function CRDCell({ resource, column }: { resource: any; column: string }) {
+  if (column === 'status') return <GenericCell resource={resource} column={column} />
+  const spec = resource.spec || {}
+  if (column === 'versions') return <CRDVersionsCell versions={spec.versions || []} />
+  const value = getCRDColumnValue(resource, column)
+  return <span className="text-sm text-theme-text-secondary">{value || '-'}</span>
 }

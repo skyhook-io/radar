@@ -265,3 +265,29 @@ func TestRedactInlineSecrets_PlaintextUsersKey(t *testing.T) {
 		t.Errorf("plaintext users entry must be redacted by key, got %v", got)
 	}
 }
+
+func TestRedactInlineSecrets_AkeylessAccessKey(t *testing.T) {
+	// Akeyless's Secrets Store CSI provider takes its access key inline in a
+	// SecretProviderClass's parameters; the access ID and object list are
+	// references the operator needs and must survive.
+	spec := map[string]any{
+		"provider": "akeyless",
+		"parameters": map[string]any{
+			"akeylessAccessId":  "p-abc123",
+			"akeylessAccessKey": "s3cr3t-key-material-value",
+			"objects":           "- secretPath: /prod/db\n  fileName: db",
+		},
+	}
+	RedactInlineSecrets(spec)
+
+	params := spec["parameters"].(map[string]any)
+	if strings.Contains(params["akeylessAccessKey"].(string), "s3cr3t") {
+		t.Errorf("akeylessAccessKey not redacted: %v", params["akeylessAccessKey"])
+	}
+	if params["akeylessAccessId"] != "p-abc123" {
+		t.Errorf("access ID should survive, got %v", params["akeylessAccessId"])
+	}
+	if params["objects"] != "- secretPath: /prod/db\n  fileName: db" {
+		t.Errorf("objects should survive, got %v", params["objects"])
+	}
+}

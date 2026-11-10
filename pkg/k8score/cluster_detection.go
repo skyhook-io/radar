@@ -9,11 +9,27 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// NKPNamespace is where Nutanix Kubernetes Platform runs its own Flux, on
+// every cluster it manages. NKP also runs on AWS, Azure and other
+// infrastructure, so this is checked before the nodes' provider.
+const NKPNamespace = "kommander-flux"
+
+// IsNKP reports whether the cluster has the NKP namespace. A denied or failed
+// read counts as no.
+func IsNKP(ctx context.Context, client kubernetes.Interface) bool {
+	_, err := client.CoreV1().Namespaces().Get(ctx, NKPNamespace, metav1.GetOptions{})
+	return err == nil
+}
+
 // DetectClusterPlatform detects the Kubernetes platform/provider by inspecting nodes.
-// Returns one of: rke2, gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic, unknown.
+// Returns one of: nkp, rke2, gke, gke-autopilot, eks, aks, nutanix, minikube, kind, docker-desktop, openshift, rancher, generic, unknown.
 func DetectClusterPlatform(ctx context.Context, client kubernetes.Interface) (string, error) {
 	if client == nil {
 		return "unknown", nil
+	}
+
+	if IsNKP(ctx, client) {
+		return "nkp", nil
 	}
 
 	nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
@@ -72,6 +88,8 @@ func DetectByProviderID(node corev1.Node) string {
 		return "aks"
 	case strings.HasPrefix(providerID, "kind://"):
 		return "kind"
+	case strings.HasPrefix(providerID, "nutanix://"):
+		return "nutanix"
 	default:
 		return "unknown"
 	}

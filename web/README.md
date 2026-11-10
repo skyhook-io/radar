@@ -10,7 +10,7 @@ This package is source-only — it ships TypeScript + TSX files under `src/`. Co
 npm install @skyhook-io/radar-app
 ```
 
-Peer deps: `react >=19`, `react-dom >=19`, `react-router-dom >=7`, `@tanstack/react-query >=5`, `@skyhook-io/k8s-ui >=1.17.1`, plus `clsx`, `tailwind-merge`, `lucide-react`, `@xyflow/react`, `elkjs`.
+Peer deps: `react >=19`, `react-dom >=19`, `react-router-dom >=7`, `@tanstack/react-query >=5`, `@skyhook-io/k8s-ui >=1.18.2`, plus `clsx`, `tailwind-merge`, `lucide-react`, `@xyflow/react`, `elkjs`.
 
 ## Use
 
@@ -66,3 +66,9 @@ Host apps can override Radar's runtime behavior without passing props:
 - `setCredentialsMode(mode)` — fetch credentials mode (`same-origin` | `include` | `omit`).
 
 Call these before mounting `<RadarApp>`.
+
+## Resource list responses
+
+New Radar instances advertise `features.resourceReadCoverage` and return `{items, coverage, kind, group}` for resource lists, with `columns`/`cells` when table mode is requested. `coverage` describes the scope the answer covers, what Radar read of it, and coded gaps; namespace sets are `{count, names?}`, listing every member or none, and a gap's set may instead be `{"extent": "all"}` or `{"extent": "unknown"}`. A failed read answers `{error, error_code, coverage?}`. Lists fail when there is no usable inventory: nothing readable, an oversized result, or a changed connection. Partial lists with loading gaps refetch with 5s, 10s, 20s, then 30s delays; complete coverage or a changed query resets the backoff.
+
+Hosts making their own requests can call `normalizeResourceList(body)` from this package. It reads the body by its shape, so it needs no capabilities: a bare array or a table envelope without `coverage` (an older instance) produces `coverage.status: 'unknown'`, which cannot establish absence. The adapter returns `{items, coverage, printerTable}`. `fetchResourceList(kind, options)` uses Radar's configured API base/authentication and applies a server list budget, which older instances ignore.

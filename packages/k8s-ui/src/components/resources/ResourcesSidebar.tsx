@@ -1,3 +1,5 @@
+import type { ResourceCoverage } from '../../types/resource-coverage'
+import { boundedCountLabel, isEmptyCount, isLowerBound, resourceCountHint, resourceCountLabel } from '../../utils/resource-coverage'
 import { useState, useMemo, useEffect, useRef, useCallback, useId, forwardRef, type ComponentType } from 'react'
 import {
   Search,
@@ -10,7 +12,7 @@ import {
 import { clsx } from 'clsx'
 import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../ui/Collapse'
 import type { APIResource } from '../../types'
-import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, resourceSearchAliases } from '../../utils/api-resources'
 import { getResourceIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
 import { certaintyGlyph } from '../facts'
@@ -60,6 +62,7 @@ export interface ResourcesSidebarProps {
   onKindChange?: () => void
   apiResources?: APIResource[]
   resourceCounts?: Record<string, number | null>
+  resourceCoverage?: Record<string, ResourceCoverage>
   resourceUnavailable?: string[]
   resourceForbidden?: string[]
   pinned?: PinnedItem[]
@@ -76,6 +79,18 @@ export interface ResourcesSidebarProps {
   /** Task destinations keyed by category name (e.g. "CloudNativePG"). A category
    *  with a workspace stays visible even when it has no resources. */
   categoryWorkspaces?: Record<string, SidebarCategoryWorkspace>
+  /** Display settings held by the parent, for a sidebar that unmounts between
+   *  uses (the phone drawer) and should not reset them each time it opens. */
+  displayState?: SidebarDisplayState
+  onDisplayStateChange?: (state: SidebarDisplayState) => void
+  /** Escape in a non-empty kind filter clears it without letting the key
+   *  reach an enclosing dialog, which would close. */
+  containEscape?: boolean
+}
+
+export interface SidebarDisplayState {
+  showEmptyKinds: boolean
+  favoritesExpanded: boolean
 }
 
 // Persisted across remounts so collapsed categories survive tab switches
@@ -123,7 +138,8 @@ export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' 
   if (!normalized) return true
   return resource.kind.toLowerCase().includes(normalized) ||
     resource.name.toLowerCase().includes(normalized) ||
-    resource.group.toLowerCase().includes(normalized)
+    resource.group.toLowerCase().includes(normalized) ||
+    resourceSearchAliases(resource).some(alias => alias.includes(normalized))
 }
 
 export function rawCRDGroupTitle(resources: Pick<APIResource, 'group' | 'isCrd'>[]): string | undefined {
@@ -143,6 +159,7 @@ interface ResourceTypeButtonProps {
   /** `null` means "count not loaded yet" — rendered as a placeholder so
    *  the badge doesn't flicker to "0" while the API call is in flight. */
   count: number | null
+  coverage?: ResourceCoverage
   isSelected: boolean
   /** Keyboard-highlight state (arrow nav in the filter input). */
   isHighlighted?: boolean
@@ -154,7 +171,7 @@ interface ResourceTypeButtonProps {
 }
 
 const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps>(
-  function ResourceTypeButton({ resource, count, isSelected, isHighlighted, isForbidden: forbidden, isPinned, onTogglePin, onClick, indent }, ref) {
+  function ResourceTypeButton({ resource, count, coverage, isSelected, isHighlighted, isForbidden: forbidden, isPinned, onTogglePin, onClick, indent }, ref) {
     const Icon = getResourceIcon(resource.kind, resource.group)
     return (
       <button
@@ -214,13 +231,14 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
               </span>
             </Tooltip>
           ) : (
-            <span className={clsx(
-              'text-xs py-0.5 rounded text-center font-mono',
-              isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
-              count < 1000 ? 'w-8' : 'w-9',
-            )}>
-              {count}
-            </span>
+            <Tooltip disabled={!resourceCountHint(coverage)} content={resourceCountHint(coverage)} position="left">
+              <span className={clsx(
+                'text-xs py-0.5 px-1 min-w-8 rounded text-center font-mono',
+                isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
+              )}>
+                {resourceCountLabel(count, coverage)}
+              </span>
+            </Tooltip>
           )}
         </div>
       </button>
@@ -234,6 +252,7 @@ export function ResourcesSidebar({
   onKindChange,
   apiResources,
   resourceCounts,
+  resourceCoverage,
   resourceUnavailable,
   resourceForbidden,
   pinned = [],
@@ -244,6 +263,9 @@ export function ResourcesSidebar({
   basePath,
   onKindNavigated,
   categoryWorkspaces,
+  displayState,
+  onDisplayStateChange,
+  containEscape,
 }: ResourcesSidebarProps) {
   // Wraps kind selection to also navigate when basePath/onNavigate are provided
   const selectKind = (kind: SelectedKindInfo) => {
@@ -261,8 +283,13 @@ export function ResourcesSidebar({
     () => persistedExpandedCategories ?? new Set(['Workloads', 'Networking', 'Configuration'])
   )
   useEffect(() => { persistedExpandedCategories = expandedCategories }, [expandedCategories])
-  const [showEmptyKinds, setShowEmptyKinds] = useState(false)
-  const [favoritesExpanded, setFavoritesExpanded] = useState(() => pinned.length > 0)
+  const [ownDisplayState, setOwnDisplayState] = useState<SidebarDisplayState>(() => ({ showEmptyKinds: false, favoritesExpanded: pinned.length > 0 }))
+  const { showEmptyKinds, favoritesExpanded } = displayState ?? ownDisplayState
+  const setDisplayState = (patch: Partial<SidebarDisplayState>) => {
+    const next = { showEmptyKinds, favoritesExpanded, ...patch }
+    if (onDisplayStateChange) onDisplayStateChange(next)
+    else setOwnDisplayState(next)
+  }
   const favoritesDisclosure = useDisclosure(favoritesExpanded)
   // Category sections are mapped inline, so they can't each call useDisclosure;
   // one generated prefix plus the category name keeps aria-controls unique.
@@ -401,20 +428,25 @@ export function ResourcesSidebar({
         (sum, resource) => sum + (counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? 0),
         0
       )
+      const lowerBound = category.resources.some(resource =>
+        isLowerBound(resourceCoverage?.[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]))
+      const totalLabel = boundedCountLabel(total, lowerBound)
 
-      // Filter resources: hide only confirmed-empty kinds. Unknown counts stay
-      // visible as a dash so count coverage gaps do not masquerade as emptiness.
+      // Filter resources: hide only empty kinds. An unknown count stays visible
+      // as a dash, and a partial zero as one too, so count coverage gaps do not
+      // masquerade as emptiness.
       const visibleResources = category.resources.filter(resource => {
         const count = counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]
         const isSelectedResource =
           (effectiveSelectedKind.name === resource.name && effectiveSelectedKind.group === resource.group) ||
           (effectiveSelectedKind.kind.toLowerCase() === resource.kind.toLowerCase() && effectiveSelectedKind.group === resource.group)
-        const shouldShow = isSelectedResource || count === null || (count ?? 0) > 0 || showEmptyKinds
+        const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
+        const shouldShow = isSelectedResource || count === null || !isEmptyCount(count ?? 0, resourceCoverage?.[key]) || showEmptyKinds
         if (!shouldShow) totalHiddenKinds++
         return shouldShow
       })
 
-      return { ...category, total, visibleResources }
+      return { ...category, total, totalLabel, visibleResources }
     })
 
     // Sort: the category whose workspace is open first, then categories with
@@ -435,7 +467,7 @@ export function ResourcesSidebar({
     })
 
     return { sortedCategories: visibleCategories, hiddenKindsCount: totalHiddenKinds, hiddenGroupsCount: totalHiddenGroups }
-  }, [categories, counts, showEmptyKinds, effectiveSelectedKind.name, effectiveSelectedKind.kind, effectiveSelectedKind.group, categoryWorkspaces, activeDestinationCategory])
+  }, [categories, counts, resourceCoverage, showEmptyKinds, effectiveSelectedKind.name, effectiveSelectedKind.kind, effectiveSelectedKind.group, categoryWorkspaces, activeDestinationCategory])
 
   // Filter sidebar categories/kinds by the kind search term
   const filteredCategories = useMemo(() => {
@@ -518,6 +550,7 @@ export function ResourcesSidebar({
 
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
+      if (containEscape && kindFilter) e.stopPropagation()
       setKindFilter('')
       setHighlightedIndex(-1)
       ;(e.target as HTMLInputElement).blur()
@@ -535,7 +568,7 @@ export function ResourcesSidebar({
       setKindFilter('')
       onKindNavigated?.()
     }
-  }, [visibleResults.length, highlightedResult, selectKind, onKindNavigated]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visibleResults.length, highlightedResult, selectKind, onKindNavigated, containEscape, kindFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isKindHighlighted = useCallback((name: string, group: string) => {
     return highlightedKind?.name === name && highlightedKind?.group === group
@@ -592,7 +625,7 @@ export function ResourcesSidebar({
         <div className="mb-2">
           <button
             {...favoritesDisclosure.buttonProps}
-            onClick={() => setFavoritesExpanded((v) => !v)}
+            onClick={() => setDisplayState({ favoritesExpanded: !favoritesExpanded })}
             className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
           >
             <CollapseChevron open={favoritesExpanded} className="w-3 h-3" />
@@ -621,6 +654,7 @@ export function ResourcesSidebar({
                       ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
                       resource={{ name: p.name, kind: p.kind, group: p.group, version: '', namespaced: true, isCrd: false, verbs: [] }}
                       count={counts[p.group ? `${p.group}/${p.kind}` : p.kind] ?? null}
+                      coverage={resourceCoverage?.[p.group ? `${p.group}/${p.kind}` : p.kind]}
                       isSelected={isResourceSelected}
                       isHighlighted={highlighted}
                       isForbidden={forbiddenKinds.has(p.group ? `${p.group}/${p.kind}` : p.kind)}
@@ -653,8 +687,8 @@ export function ResourcesSidebar({
                   <CollapseChevron open={isExpanded} className="w-3 h-3" />
                   <span className="flex-1 text-left truncate" title={rawGroupTitle}>{category.name}</span>
                   {!isExpanded && (
-                    <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', category.total < 1000 ? 'w-8' : 'w-9')}>
-                      {category.total}
+                    <span className="text-xs py-0.5 px-1 min-w-8 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono">
+                      {category.totalLabel}
                     </span>
                   )}
                 </button>
@@ -692,6 +726,7 @@ export function ResourcesSidebar({
                         ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
                         resource={resource}
                         count={counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? null}
+                        coverage={resourceCoverage?.[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]}
                         isSelected={showSelected}
                         isHighlighted={highlighted}
                         isForbidden={forbiddenKinds.has(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)}
@@ -748,12 +783,14 @@ export function ResourcesSidebar({
                     </span>
                   </Tooltip>
                 ) : (
-                  <span className={clsx(
-                    'badge font-mono',
-                    isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
-                  )}>
-                    {count}
-                  </span>
+                  <Tooltip disabled={!resourceCountHint(resourceCoverage?.[kindKey])} content={resourceCountHint(resourceCoverage?.[kindKey])} position="left">
+                    <span className={clsx(
+                      'badge font-mono',
+                      isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
+                    )}>
+                      {resourceCountLabel(count, resourceCoverage?.[kindKey])}
+                    </span>
+                  </Tooltip>
                 )}
               </button>
             )
@@ -763,7 +800,7 @@ export function ResourcesSidebar({
         {/* Toggle for showing/hiding empty kinds and groups */}
         {hiddenKindsCount > 0 || hiddenGroupsCount > 0 || showEmptyKinds ? (
           <button
-            onClick={() => setShowEmptyKinds(!showEmptyKinds)}
+            onClick={() => setDisplayState({ showEmptyKinds: !showEmptyKinds })}
             className="w-full flex items-center gap-2 px-3 py-2 mt-2 text-xs text-theme-text-tertiary hover:text-theme-text-secondary border-t border-theme-border"
           >
             {showEmptyKinds ? (

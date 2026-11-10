@@ -420,7 +420,7 @@ radar_inventory_ready() {
   local kind="$1" group="$2" live cached projection
   projection='map({metadata: (.metadata | {namespace, name, uid, ownerReferences, labels}), status: (.status | {phase, terminalState, replicatedJobsStatus, conditions: [.conditions[]? | {type, status, reason}]})}) | sort_by(.metadata.name)'
   live="$(kc -n "${DEMO_NS}" get "${kind}${group:+.${group}}" --request-timeout=10s -o json | jq -cS ".items | ${projection}")" || return 1
-  cached="$(curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/${kind}?group=${group}&namespace=${DEMO_NS}" | jq -cS "${projection}")" || return 1
+  cached="$(curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/${kind}?group=${group}&namespace=${DEMO_NS}" | jq -cS 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end |'" ${projection}")" || return 1
   [ "${live}" = "${cached}" ]
 }
 
@@ -443,7 +443,7 @@ cmd_verify_radar() {
   wait_until "Radar Job identities, ownership and status" radar_inventory_ready jobs batch
   wait_until "Radar Pod identities, ownership and status" radar_inventory_ready pods ""
 
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobsets?group=jobset.x-k8s.io&namespace=${DEMO_NS}")" || fail "Radar jobsets list request failed"
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobsets?group=jobset.x-k8s.io&namespace=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || fail "Radar jobsets list request failed"
   jq -e '
     type == "array" and length == 3 and
     all(.[]; .apiVersion == "jobset.x-k8s.io/v1alpha2") and
@@ -453,7 +453,7 @@ cmd_verify_radar() {
       any(.status.conditions[]?; .type == "Failed" and .status == "True" and .reason == "FailJobSetFailurePolicyAction"))
   ' <<<"${response}" >/dev/null || fail "Radar did not return the three group-pure reconciled JobSets"
 
-  jobs="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobs?namespace=${DEMO_NS}")" || fail "Radar jobs list request failed"
+  jobs="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobs?namespace=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || fail "Radar jobs list request failed"
   jq -e '
     type == "array" and
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "roles-running")] | length) == 3 and
@@ -466,7 +466,7 @@ cmd_verify_radar() {
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "terminal-failure")] | length) == 1
   ' <<<"${jobs}" >/dev/null || fail "Radar did not expose the expected controller-created child Jobs"
 
-  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}")" || fail "Radar pods list request failed"
+  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" || fail "Radar pods list request failed"
   jq -e '
     type == "array" and
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "roles-running" and .status.phase == "Running")] | length) == 3 and

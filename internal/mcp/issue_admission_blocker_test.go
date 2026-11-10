@@ -184,6 +184,24 @@ func TestAdmissionBlocker_LimitRangeAddedAfterWorkload(t *testing.T) {
 	}
 }
 
+func TestAdmissionBlocker_LimitRangeIgnoresCustomGroup(t *testing.T) {
+	initAdmissionCache(t)
+	store := initCorrelationStore(t)
+	now := time.Now().Truncate(time.Second)
+	for _, version := range []string{"v1", "example.com/v1"} {
+		appendChange(t, store, timeline.TimelineEvent{
+			ID: version, Timestamp: now.Add(-time.Minute), Kind: "LimitRange", APIVersion: version,
+			Namespace: "shop", Name: "container-limits", EventType: timeline.EventTypeAdd,
+		})
+	}
+	iss := admissionIssue(issuesapi.CategoryQuotaExceeded, "Deployment", "api",
+		`pods "api-6d8b-xyz12" is forbidden: maximum memory usage per Container is 512Mi, but limit is 1Gi`, now)
+	ev := admissionBlockerForIssue(context.Background(), &iss, time.Hour)
+	if ev == nil || !ev.complete || ev.saturated || len(ev.changes) != 1 || ev.changes[0].APIVersion != "v1" {
+		t.Fatalf("admission evidence = %+v, want complete core-only LimitRange history", ev)
+	}
+}
+
 // A webhook denial quotes webhooks[].name; the configuration declaring it is
 // resolved from the cache and its change linked. A Job subject (untracked by
 // the change feed) still gets the policy side.

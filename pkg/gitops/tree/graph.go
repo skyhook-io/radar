@@ -145,21 +145,13 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	// helm.toolkit.fluxcd.io/v2 dropped lastReleaseRevision. The newest
 	// deployed history entry is the installed chart, comparable with
 	// lastAttemptedRevision; a newer failed attempt must still show as attempted.
-	if history, ok, _ := unstructured.NestedSlice(obj.Object, "status", "history"); ok {
-		for _, raw := range history {
-			if entry, ok := raw.(map[string]any); ok && gitops.StringValue(entry["status"]) == "deployed" {
-				if version := gitops.StringValue(entry["chartVersion"]); version != "" {
-					node.Data["revision"] = version
-				}
-				break
-			}
+	if release := gitops.FluxDeployedRelease(obj); release != nil && release.ChartVersion != "" {
+		node.Data["revision"] = release.ChartVersion
+	}
+	if ts, ok, _ := unstructured.NestedString(obj.Object, "status", "reconciledAt"); ok && ts != "" && gitops.ToolOf(obj) == gitops.ToolArgoCD && obj.GetKind() == "Application" {
+		if parsed, err := time.Parse(time.RFC3339Nano, ts); err == nil && !parsed.IsZero() {
+			node.Data["lastReconciledAt"] = parsed.UTC().Format(time.RFC3339Nano)
 		}
-	}
-	if ts, ok, _ := unstructured.NestedString(obj.Object, "status", "lastHandledReconcileAt"); ok && ts != "" {
-		node.Data["lastReconciledAt"] = ts
-	}
-	if ts, ok, _ := unstructured.NestedString(obj.Object, "status", "reconciledAt"); ok && ts != "" {
-		node.Data["lastReconciledAt"] = ts
 	}
 	if strings.HasSuffix(apiGroup(obj), ".toolkit.fluxcd.io") {
 		recordFluxReady(node, obj)
@@ -314,18 +306,19 @@ func rolePriority(role NodeRole) int {
 	}
 }
 
+var kindPriorities = map[string]int{
+	"Namespace": 0, "AppProject": 1, "ServiceAccount": 2,
+	"Secret": 3, "SealedSecret": 3, "ConfigMap": 4,
+	"CustomResourceDefinition": 5,
+	"ClusterRole":              6, "ClusterRoleBinding": 7, "Role": 8, "RoleBinding": 9,
+	"Service":    10,
+	"Deployment": 11, "Rollout": 11, "StatefulSet": 11, "DaemonSet": 11,
+	"ReplicaSet": 12, "Pod": 13,
+	"Ingress": 14, "Gateway": 14, "HTTPRoute": 15,
+}
+
 func kindPriority(kind string) int {
-	priorities := map[string]int{
-		"Namespace": 0, "AppProject": 1, "ServiceAccount": 2,
-		"Secret": 3, "SealedSecret": 3, "ConfigMap": 4,
-		"CustomResourceDefinition": 5,
-		"ClusterRole":              6, "ClusterRoleBinding": 7, "Role": 8, "RoleBinding": 9,
-		"Service":    10,
-		"Deployment": 11, "Rollout": 11, "StatefulSet": 11, "DaemonSet": 11,
-		"ReplicaSet": 12, "Pod": 13,
-		"Ingress": 14, "Gateway": 14, "HTTPRoute": 15,
-	}
-	if p, ok := priorities[kind]; ok {
+	if p, ok := kindPriorities[kind]; ok {
 		return p
 	}
 	return 20

@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -369,5 +370,85 @@ func TestDashboardCoverageProjectionSerializesWhenZero(t *testing.T) {
 	}
 	if !strings.Contains(string(encoded), `"coveredWorkloadsIfStaged":0`) {
 		t.Fatalf("coverage JSON = %s, want an explicit zero projection", encoded)
+	}
+}
+
+func TestDashboardReadinessGateEvidence(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, unknown := range []bool{false, true} {
+		t.Run(fmt.Sprint(unknown), func(t *testing.T) {
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "gate", Namespace: "test", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))}, Spec: corev1.PodSpec{ReadinessGates: []corev1.PodReadinessGate{{ConditionType: "example.com/ready"}}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Reason: "ReadinessGatesNotReady", Message: "gate not passed", LastTransitionTime: metav1.NewTime(now.Add(-time.Hour))},
+				{Type: corev1.ContainersReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(now.Add(-7 * time.Minute))},
+			}, ContainerStatuses: []corev1.ContainerStatus{{Name: "app", Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}}}
+			if unknown {
+				pod.Status.Conditions[1].LastTransitionTime = metav1.Time{}
+			}
+			got := podToProblem(pod, "medium", now)
+			if got.Reason != "ReadinessGatesNotReady" || got.Message != "gate not passed" || got.OnsetUnknown != unknown {
+				t.Fatalf("wrong gate evidence: %+v", got)
+			}
+			if unknown {
+				if got.Duration != "" || got.DurationSeconds != 0 {
+					t.Fatalf("invented onset: %+v", got)
+				}
+			} else if got.DurationSeconds != 420 {
+				t.Fatalf("used old Ready transition: %+v", got)
+			}
+			pod.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "owner"}}
+			groups := map[ownerKey]*ownerGroup{}
+			var orphans []DashboardProblem
+			collectPodForRollup(pod, "medium", now, groups, &orphans)
+			g := groups[ownerKey{"Job", "test", "owner"}]
+			if g == nil || g.onsetUnknown != unknown || g.reasons["ReadinessGatesNotReady"] != 1 || len(orphans) != 0 {
+				t.Fatalf("bad owner rollup: %+v", g)
+			}
+			if !unknown && g.newestDur != 7*time.Minute {
+				t.Fatalf("wrong owner duration: %v", g.newestDur)
+			}
+		})
+	}
+}
+
+func TestDashboardClusterFromInfo_NamesTheContext(t *testing.T) {
+	cases := []struct {
+		name     string
+		info     k8s.ClusterInfo
+		wantName string
+		// wantEntry "" means the kubeconfigCluster key must be absent.
+		wantEntry string
+	}{
+		// Several GitLab agent contexts share one cluster entry; each must keep its own name.
+		{"shared entry A", k8s.ClusterInfo{Context: "group/project:agent-a", Cluster: "gitlab_com"}, "group/project:agent-a", "gitlab_com"},
+		{"shared entry B", k8s.ClusterInfo{Context: "group/project:agent-b", Cluster: "gitlab_com"}, "group/project:agent-b", "gitlab_com"},
+		{"context equals entry", k8s.ClusterInfo{Context: "kind-dev", Cluster: "kind-dev"}, "kind-dev", "kind-dev"},
+		{"no context", k8s.ClusterInfo{Cluster: "gitlab_com"}, "gitlab_com", "gitlab_com"},
+		{"no cluster entry", k8s.ClusterInfo{Context: "plain-dev"}, "plain-dev", ""},
+		{"in-cluster", k8s.ClusterInfo{Context: "in-cluster", Cluster: "in-cluster", InCluster: true}, "in-cluster", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(dashboardClusterFromInfo(&tc.info))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(raw, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["name"] != tc.wantName {
+				t.Errorf("name = %v, want %q (%s)", payload["name"], tc.wantName, raw)
+			}
+			entry, has := payload["kubeconfigCluster"]
+			if tc.wantEntry == "" && has {
+				t.Errorf("kubeconfigCluster should be absent: %s", raw)
+			}
+			if tc.wantEntry != "" && entry != tc.wantEntry {
+				t.Errorf("kubeconfigCluster = %v, want %q (%s)", entry, tc.wantEntry, raw)
+			}
+			if _, has := payload["context"]; has {
+				t.Errorf("unexpected context key: %s", raw)
+			}
+		})
 	}
 }

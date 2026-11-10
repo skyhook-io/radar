@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
@@ -20,6 +21,10 @@ type ResourceDiscovery struct {
 	// backgroundRefresh is held while ServedGVR's refresh runs, so callers
 	// arriving during a slow refresh don't each park another goroutine.
 	backgroundRefresh atomic.Bool
+	// missRefresh serializes LookupRefreshingOnMiss's refreshes; missRefreshAt
+	// is when the last one started.
+	missRefresh   sync.Mutex
+	missRefreshAt time.Time
 }
 
 // Re-export types so existing callers compile without changes.
@@ -182,6 +187,35 @@ func ServedGVR(group, kind string) (schema.GroupVersionResource, bool) {
 		}()
 	}
 	return d.GetGVRWithGroup(kind, group)
+}
+
+// discoveryMissRefreshInterval bounds how often lookups that find nothing
+// refresh discovery, so a misspelled kind doesn't cost a discovery round trip
+// on every request.
+const discoveryMissRefreshInterval = 30 * time.Second
+
+// LookupRefreshingOnMiss returns lookup's answer. When lookup finds nothing,
+// discovery is refreshed and lookup asked again, so an API installed since
+// the last refresh resolves instead of reading as unknown. Concurrent misses
+// share one refresh, and misses refresh at most once per
+// discoveryMissRefreshInterval.
+func (d *ResourceDiscovery) LookupRefreshingOnMiss(lookup func(*ResourceDiscovery) (schema.GroupVersionResource, bool)) (schema.GroupVersionResource, bool) {
+	if d == nil || d.ResourceDiscovery == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	if gvr, ok := lookup(d); ok {
+		return gvr, true
+	}
+	d.missRefresh.Lock()
+	defer d.missRefresh.Unlock()
+	if gvr, ok := lookup(d); ok || time.Since(d.missRefreshAt) < discoveryMissRefreshInterval {
+		return gvr, ok
+	}
+	d.missRefreshAt = time.Now()
+	if err := d.Refresh(); err != nil {
+		log.Printf("[discovery] Refresh after a lookup miss failed: %v", err)
+	}
+	return lookup(d)
 }
 
 // SupportsWatchGVR checks if a GVR supports list and watch verbs.

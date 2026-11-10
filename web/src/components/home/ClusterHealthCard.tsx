@@ -1,16 +1,16 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { DashboardResponse, DashboardMetrics, DashboardCRDCount } from '../../api/client'
 import { HealthRing } from './HealthRing'
 import {
   AlertTriangle, CheckCircle, XCircle,
   Cpu, MemoryStick, Database, Container, Globe, Network as NetworkIcon, Briefcase, Clock,
-  ArrowRight, Server, Boxes, Shield, Radio, Info,
+  ArrowRight, Server, Boxes, Shield, Info,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatCPUMillicores, formatMemoryMiB } from '../../utils/format'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
-import { MCPSetupDialog } from './MCPSetupDialog'
-import { assetUrl, pluralize, parseContextName } from '@skyhook-io/k8s-ui'
+import { HomeAgentBlock } from './HomeAgentBlock'
+import { assetUrl, pluralize, parseContextName, CertaintyGlyph, MiddleEllipsis } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { mcpEndpointUrl } from '../../api/config'
 import { parseMajorMinor } from '../../utils/version'
@@ -112,6 +112,12 @@ function getPlatformInfo(platform: string): { name: string; icon: string | null 
   if (platformLower.includes('docker')) {
     return { name: 'Docker Desktop', icon: null }
   }
+  if (platformLower === 'nkp') {
+    return { name: 'Nutanix Kubernetes Platform', icon: null }
+  }
+  if (platformLower === 'nutanix') {
+    return { name: 'Nutanix', icon: null }
+  }
   // The Go backend returns "generic" for unrecognized platforms — that
   // literal string is no better than the empty case, so fall back to
   // the friendlier "Kubernetes" label for both. Only pass the platform
@@ -142,7 +148,6 @@ export function ClusterHealthCard({
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
-  const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const caps = useCapabilitiesContext()
   // Default to local mode when the backend doesn't ship a `deployment`
   // field (older Radar binaries pre-0.2.2). Local rendering is the safe
@@ -214,21 +219,20 @@ export function ClusterHealthCard({
   //     has no meaningful kubeconfig context — bootstrap sets it to
   //     the literal "in-cluster" sentinel. Fall back to the platform
   //     label ("Google Kubernetes Engine") which IS recognizable.
-  //  3. Last resort: the literal cluster.name, or "Cluster".
+  //  3. Last resort: the raw cluster.name, or "Cluster".
   // When the card is rendered embedded (cloud mode), the H2 itself is
   // suppressed below — the hub shell already shows the cluster name in
   // its top bar.
-  const parsedContext = parseContextName(cluster.name || '')
-  const rawHeadline = parsedContext.clusterName || cluster.name || 'Cluster'
+  const { raw: rawName, location, headline: rawHeadline } = clusterIdentity(cluster)
   const headlineName = isInCluster ? platformInfo.name : rawHeadline
 
   return (
     <div className="rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden">
-      {/* Main health section - three columns */}
-      <div className="px-6 py-5 border-b border-theme-border/50">
-        <div className="flex items-stretch gap-8">
+      {/* Main health section - three columns; stacked on phones */}
+      <div className="px-6 py-5 border-b border-theme-border/50 phone:px-4">
+        <div className="flex items-stretch gap-8 phone:flex-col phone:gap-5">
           {/* Left: Cluster info */}
-          <div className="flex flex-col justify-center w-[300px] shrink-0 pr-8 border-r border-theme-border/50">
+          <div className="flex flex-col justify-center w-[300px] shrink-0 pr-8 border-r border-theme-border/50 phone:w-auto phone:pr-0 phone:border-r-0">
             <div className="flex items-center gap-2 mb-1.5">
               {platformInfo.icon ? (
                 <img src={platformInfo.icon} alt={platformInfo.name} className="w-5 h-5 object-contain" />
@@ -246,17 +250,19 @@ export function ClusterHealthCard({
               // the visible text falls back to the platform label. Render no
               // tooltip in that case; local mode keeps it so users can hover
               // to see the full kubeconfig context path.
-              <Tooltip content={isInCluster ? '' : cluster.name} wrapperClassName="!block min-w-0">
-              <h2 className="text-xl font-semibold text-theme-text-primary truncate leading-tight mb-1.5">
-                {headlineName}
+              <Tooltip content={isInCluster ? '' : rawName} wrapperClassName="!block min-w-0">
+              <h2 aria-label={isInCluster ? headlineName : rawName} className="text-xl font-semibold text-theme-text-primary leading-tight mb-1.5">
+                {/* Generated contexts often share a long prefix and differ only at the end.
+                    MiddleEllipsis exposes only the cut text to screen readers; aria-label keeps the full name. */}
+                <MiddleEllipsis text={headlineName} />
               </h2>
               </Tooltip>
             )}
             <div className="flex flex-col gap-0.5 text-xs text-theme-text-tertiary">
-              {(parsedContext.account || parsedContext.region) && (
-                <Tooltip content={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')} wrapperClassName="min-w-0">
+              {location && (
+                <Tooltip content={location} wrapperClassName="min-w-0">
                 <span className="truncate font-mono">
-                  {[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}
+                  {location}
                 </span>
                 </Tooltip>
               )}
@@ -268,18 +274,7 @@ export function ClusterHealthCard({
                 />
               )}
               {radarVersion}
-              <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
-              {/* Show raw kubeconfig context as muted metadata only when
-                  it differs from the headline AND we're in local mode
-                  (in-cluster has no meaningful context name, cloud
-                  shell already renders the canonical name). */}
-              {cluster.name && cluster.name !== headlineName && deployment.mode === 'local' && (
-                <Tooltip content={cluster.name}>
-                <span className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5">
-                  {cluster.name}
-                </span>
-                </Tooltip>
-              )}
+              <NamespaceCountLine count={counts.namespaces} restricted={isRestricted('namespaces')} />
             </div>
             {freshness && <div className="mt-2">{freshness}</div>}
             {nodeVersionSkew && (
@@ -305,43 +300,28 @@ export function ClusterHealthCard({
                 </span>
               </Tooltip>
             )}
-            {/* MCP Server indicator. OSS-only: in Cloud, MCP discovery
-                lives at the hub level (org-wide endpoint, PAT-authed)
-                rather than per-cluster, so this localhost/no-auth card
-                would mislead a Cloud user. */}
+            {/* OSS-only: in Cloud, MCP discovery lives at the hub level
+                (org-wide endpoint, PAT-authed) rather than per-cluster, so this
+                localhost/no-auth entry would mislead a Cloud user. */}
             {showLocalMcpCard && (
-              <button
-                onClick={() => setMcpDialogOpen(true)}
-                className="flex items-center gap-2 mt-3 px-2.5 py-2 bg-purple-500/5 hover:bg-purple-500/10 border border-purple-500/20 rounded-md transition-colors w-full"
-              >
-                <Radio className="w-3.5 h-3.5 text-purple-400 animate-pulse shrink-0" />
-                <div className="flex flex-col gap-0.5 min-w-0 flex-1 text-left">
-                  <span className="text-xs font-medium text-purple-400">{caps.mcpReadOnly ? 'MCP Server Live (read-only)' : 'MCP Server Live'}</span>
-                  <Tooltip content={mcpUrl} wrapperClassName="min-w-0">
-                  <span className="text-[10px] text-theme-text-tertiary truncate font-mono">
-                    HTTP · {mcpUrl}
-                  </span>
-                  </Tooltip>
-                </div>
-                <Info className="w-3.5 h-3.5 text-purple-400/60 shrink-0" />
-              </button>
+              <HomeAgentBlock mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} execTools={caps.mcpExecTools} httpTools={caps.mcpHttpTools} helmTools={caps.mcpHelmTools} applicationEvidenceAvailable={caps.mcpApplicationEvidence} />
             )}
-            <MCPSetupDialog open={mcpDialogOpen} onClose={() => setMcpDialogOpen(false)} mcpUrl={mcpUrl} readOnly={caps.mcpReadOnly} />
           </div>
 
           {/* Center: Three health rings */}
-          <div className="flex-1 flex items-center justify-center gap-12">
+          {/* Phones: the three rings share one row; each ring's status lines stack. */}
+          <div className="flex-1 flex items-center justify-center gap-12 phone:grid phone:grid-cols-3 phone:items-start phone:gap-2">
             {/* Pods Ring */}
             {isRestricted('pods') ? (
               <RestrictedRing label="Pods" />
             ) : (
               <button
                 onClick={() => onNavigateToKind('pods')}
-                className="flex flex-col items-center gap-2 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
+                className="flex flex-col items-center gap-2 phone:min-w-0 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
               >
                 <HealthRing segments={podsRingSegments} size={88} strokeWidth={8} label={String(podsTotal)} />
-                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary">Pods</span>
-                <div className="flex items-center gap-2 text-xs font-mono">
+                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary phone:text-[11px] phone:tracking-wide">Pods</span>
+                <div className="flex items-center gap-2 text-xs font-mono phone:flex-col phone:gap-0.5">
                   {health.healthy > 0 && (
                     <span className="flex items-center gap-0.5 text-green-500">
                       <CheckCircle className="w-3 h-3" />
@@ -370,11 +350,11 @@ export function ClusterHealthCard({
             ) : (
               <button
                 onClick={() => onNavigateToKind('deployments')}
-                className="flex flex-col items-center gap-2 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
+                className="flex flex-col items-center gap-2 phone:min-w-0 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
               >
                 <HealthRing segments={deploymentsRingSegments} size={88} strokeWidth={8} label={String(counts.deployments.total)} />
-                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary">Deployments</span>
-                <div className="flex items-center gap-2 text-xs font-mono">
+                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary phone:text-[11px] phone:tracking-wide">Deployments</span>
+                <div className="flex items-center gap-2 text-xs font-mono phone:flex-col phone:gap-0.5">
                   <span className="text-green-500">{counts.deployments.available} available</span>
                   {counts.deployments.unavailable > 0 && (
                     <span className="text-red-500">{counts.deployments.unavailable} unavailable</span>
@@ -389,11 +369,11 @@ export function ClusterHealthCard({
             ) : (
               <button
                 onClick={() => onNavigateToKind('nodes')}
-                className="flex flex-col items-center gap-2 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
+                className="flex flex-col items-center gap-2 phone:min-w-0 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
               >
                 <HealthRing segments={nodesRingSegments} size={88} strokeWidth={8} label={String(counts.nodes.total)} />
-                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary">Nodes</span>
-                <div className="flex items-center gap-2 text-xs font-mono">
+                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary phone:text-[11px] phone:tracking-wide">Nodes</span>
+                <div className="flex items-center gap-2 text-xs font-mono phone:flex-col phone:gap-0.5">
                   <span className="text-green-500">{counts.nodes.ready} ready</span>
                   {cordonedCount > 0 && (
                     <span className="text-yellow-500">{cordonedCount} cordoned</span>
@@ -410,7 +390,7 @@ export function ClusterHealthCard({
           </div>
 
           {/* Right: Resource utilization */}
-          <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
+          <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50 phone:w-auto phone:pl-0 phone:border-l-0">
             <div className="flex items-center gap-2 mb-3">
               <Boxes className="w-4 h-4 text-theme-text-tertiary" />
               <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">Resource Utilization</span>
@@ -461,19 +441,25 @@ export function ClusterHealthCard({
                   />
                 </div>
               )}
-              {!metricsServerAvailable && (
+              {!metricsServerAvailable && (isRestricted('nodes') ? (
+                // Capacity comes from Nodes, so installing metrics-server wouldn't help.
+                <span className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
+                  <Shield className="w-3 h-3 shrink-0" />
+                  <span>CPU and memory need permission to list Nodes</span>
+                </span>
+              ) : (
                 <MetricsUnavailableHint platform={cluster.platform} metricsServerAvailable={metricsServerAvailable} />
-              )}
+              ))}
             </div>
 
           </div>
         </div>
       </div>
 
-      {/* Secondary resources row — matches top row's 3-column layout */}
-      <div className="flex items-stretch px-6 py-2.5 bg-theme-surface/30">
+      {/* Secondary resources row — matches top row's 3-column layout; stacked on phones */}
+      <div className="flex items-stretch px-6 py-2.5 bg-theme-surface/30 phone:flex-col phone:gap-3 phone:px-4 phone:py-3">
         {/* Left column: Warning indicators (aligned with cluster info) */}
-        <div className="flex flex-col justify-center gap-1 w-1/4 shrink-0 pr-4 border-r border-theme-border/50">
+        <div className="flex flex-col justify-center gap-1 w-1/4 shrink-0 pr-4 border-r border-theme-border/50 phone:w-auto phone:flex-row phone:flex-wrap phone:pr-0 phone:border-r-0">
           {health.warningEvents > 0 && (
             <Tooltip content="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)" wrapperClassName="w-fit">
             <button
@@ -499,7 +485,7 @@ export function ClusterHealthCard({
         </div>
 
         {/* Center column: Resources (aligned with health rings) */}
-        <div className="w-1/2 grid grid-cols-3 items-center justify-items-center px-4">
+        <div className="w-1/2 grid grid-cols-3 items-center justify-items-center px-4 phone:w-auto phone:flex phone:flex-wrap phone:gap-x-1 phone:px-0">
           {secondaryResources.map((res) => (
             <button
               key={res.kind}
@@ -523,7 +509,7 @@ export function ClusterHealthCard({
         </div>
 
         {/* Right column: Browse All (aligned with resource utilization) */}
-        <div className="flex items-center justify-center w-1/4 shrink-0 pl-4 border-l border-theme-border/50">
+        <div className="flex items-center justify-center w-1/4 shrink-0 pl-4 border-l border-theme-border/50 phone:w-auto phone:justify-start phone:pl-0 phone:border-l-0">
           <button
             onClick={onNavigateToView}
             className="flex items-center gap-2 text-base font-medium text-theme-text-secondary hover:text-theme-text-primary transition-colors"
@@ -535,6 +521,17 @@ export function ClusterHealthCard({
       </div>
     </div>
   )
+}
+
+// `name` is the kubeconfig context. A renamed cloud context
+// (`aws eks update-kubeconfig --alias`) no longer parses, but its kubeconfig
+// cluster entry still carries the account and region.
+export function clusterIdentity(cluster: Pick<DashboardResponse['cluster'], 'name' | 'kubeconfigCluster'>) {
+  const raw = cluster.name || ''
+  const parsed = parseContextName(raw)
+  const located = parsed.provider ? parsed : parseContextName(cluster.kubeconfigCluster || '')
+  const location = [located.account, located.region].filter(Boolean).join(' · ')
+  return { raw, headline: parsed.clusterName || raw || 'Cluster', location }
 }
 
 // How many minors the running version trails the newest one the upgrade-impact
@@ -571,17 +568,36 @@ function KubernetesVersionLine({
       }
       wrapperClassName="w-fit"
     >
+      {/* Inline text, not flex: flex items shrink and wrap separately, which
+          splits a long distribution version and the link into two columns. */}
       <button
         onClick={onNavigate}
-        className="group flex items-center gap-1 hover:text-theme-text-secondary transition-colors"
+        className="group text-left hover:text-theme-text-secondary transition-colors"
       >
-        <span>Kubernetes {version}</span>
+        Kubernetes {version}
         {behind > 0 && (
-          <span>· Upgrade impact</span>
+          <> · <span className="whitespace-nowrap">Upgrade impact</span></>
         )}
-        <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+        <ArrowRight className="inline-block w-3 h-3 ml-1 align-[-2px] opacity-0 group-hover:opacity-100 transition-opacity" />
       </button>
     </Tooltip>
+  )
+}
+
+// A restricted count covers only the namespaces Radar reads, so it is a lower
+// bound, and zero means unknown rather than none.
+export function NamespaceCountLine({ count, restricted }: { count: number; restricted: boolean }) {
+  if (!restricted) {
+    return <span><span className="font-mono">{count}</span> namespaces</span>
+  }
+  if (count === 0) {
+    return <span>Namespaces restricted</span>
+  }
+  return (
+    <span className="flex items-center gap-1">
+      <CertaintyGlyph certainty="lower_bound" title="Namespaces can't be listed here, so this counts only the ones in view. The cluster may have more." />
+      <span><span className="font-mono">{count}</span> {count === 1 ? 'namespace' : 'namespaces'}</span>
+    </span>
   )
 }
 

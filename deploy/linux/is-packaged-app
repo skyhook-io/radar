@@ -1,0 +1,2 @@
+Radar Desktop was installed from a .deb or .rpm package. Radar finds this file
+next to its binary and leaves updates to the package manager.

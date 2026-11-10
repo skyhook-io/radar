@@ -56,6 +56,128 @@ export function getVulnerabilityReportContainer(report: any): string {
 }
 
 // ============================================================================
+// TRIVY OPERATOR — TABLE SEARCH OVER FINDINGS
+// ============================================================================
+
+export const TRIVY_GROUP = 'aquasecurity.github.io'
+
+// Bounds one table search over findings. The filter runs on the main thread,
+// and a cluster can hold thousands of reports with hundreds of findings each.
+const MAX_TABLE_FINDINGS = 200_000
+
+// Server search caps one indexed finding at 256 bytes (internal/search/trivy.go).
+const MAX_FINDING_LABEL = 256
+
+export interface TrivyFindingMatch {
+  site: 'finding' | 'image'
+  text: string
+}
+
+export interface TrivyFindingsSearch {
+  // Rows that matched only through a finding or the scanned image.
+  matches: Map<object, TrivyFindingMatch>
+  truncated: boolean
+}
+
+function str(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}
+
+function asArray(v: unknown): any[] {
+  return Array.isArray(v) ? v : []
+}
+
+// findingLabel joins a finding's parts and caps it at MAX_FINDING_LABEL
+// UTF-8 bytes on a character boundary, as server search does, so a phrase
+// that falls past the cap matches in neither place.
+function findingLabel(...parts: string[]): string {
+  const label = parts.filter(Boolean).join(' ')
+  // A UTF-16 unit is at most 3 UTF-8 bytes, so short labels need no count.
+  if (label.length * 3 <= MAX_FINDING_LABEL) return label
+  let bytes = 0
+  let end = 0
+  for (const ch of label) {
+    const cp = ch.codePointAt(0) ?? 0
+    const size = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4
+    if (bytes + size > MAX_FINDING_LABEL) break
+    bytes += size
+    end += ch.length
+  }
+  return label.slice(0, end)
+}
+
+// trivyReportImageRef renders a report's scanned image the way search
+// indexes it: registry/repository:tag@digest.
+export function trivyReportImageRef(resource: any): string {
+  const report = resource?.report
+  const repo = str(report?.artifact?.repository)
+  if (!repo) return ''
+  const registry = str(report?.registry?.server)
+  let ref = registry ? `${registry}/${repo}` : repo
+  const tag = str(report?.artifact?.tag)
+  if (tag) ref += `:${tag}`
+  const digest = str(report?.artifact?.digest)
+  if (digest) ref += `@${digest}`
+  return ref
+}
+
+// searchTrivyFindings finds reports whose findings contain term, over the
+// entries server search indexes (internal/search/trivy.go): CVE IDs with
+// package and versions, SBOM components, failed check IDs, secret rule IDs
+// and targets, plus the scanned image. A secret finding's `match` is the
+// matched line itself and is never searched. A term with a space matches
+// within one finding, never across two. Rows whose name or namespace already
+// contain term are skipped, since they match without a finding.
+export function searchTrivyFindings(resources: readonly any[], term: string, limit = MAX_TABLE_FINDINGS): TrivyFindingsSearch {
+  const matches = new Map<object, TrivyFindingMatch>()
+  const re = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+  const spaced = term.includes(' ')
+  const hit = (...parts: string[]): boolean =>
+    spaced ? re.test(findingLabel(...parts)) : parts.some((p) => p !== '' && re.test(p))
+  let left = limit
+  for (const r of resources) {
+    const meta = r?.metadata
+    if (re.test(str(meta?.name)) || re.test(str(meta?.namespace))) continue
+    const report = r?.report
+    if (!report || typeof report !== 'object') continue
+    const image = trivyReportImageRef(r)
+    if (image && re.test(image)) {
+      matches.set(r, { site: 'image', text: image })
+      continue
+    }
+    let found = ''
+    let truncated = false
+    scan: {
+      for (const v of asArray(report.vulnerabilities)) {
+        if (--left < 0) { truncated = true; break scan }
+        const id = str(v?.vulnerabilityID)
+        if (!id) continue
+        const parts = [id, str(v.resource), str(v.installedVersion), '→', str(v.fixedVersion) || 'unfixed']
+        if (hit(...parts)) { found = findingLabel(...parts); break scan }
+      }
+      for (const c of asArray(report.components?.components)) {
+        if (--left < 0) { truncated = true; break scan }
+        const parts = [str(c?.name), str(c?.version)]
+        if (hit(...parts)) { found = findingLabel(...parts); break scan }
+      }
+      for (const c of asArray(report.checks)) {
+        if (--left < 0) { truncated = true; break scan }
+        if (c?.success !== false) continue
+        if (hit(str(c.checkID))) { found = findingLabel(str(c.checkID)); break scan }
+      }
+      for (const sec of asArray(report.secrets)) {
+        if (--left < 0) { truncated = true; break scan }
+        const parts = [str(sec?.ruleID), str(sec?.target)]
+        if (hit(...parts)) { found = findingLabel(...parts); break scan }
+      }
+    }
+    if (found) matches.set(r, { site: 'finding', text: found })
+    if (truncated) return { matches, truncated: true }
+  }
+  return { matches, truncated: false }
+}
+
+// ============================================================================
 // TRIVY OPERATOR — CONFIG AUDIT REPORT UTILITIES
 // ============================================================================
 

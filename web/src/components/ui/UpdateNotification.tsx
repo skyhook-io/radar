@@ -9,11 +9,15 @@ import {
   useDesktopUpdateStatus,
   useApplyDesktopUpdate,
 } from '../../api/client'
-import type { DesktopUpdateState } from '../../api/client'
+import type { DesktopUpdateState, VersionInfo } from '../../api/client'
+import { getApiBase } from '../../api/config'
+import { useToast } from './Toast'
 import { WithTooltip } from './Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { IN_CLUSTER_UPGRADE_URL } from '../../utils/version'
+import { LAUNCH_NOTICE_DISMISSED_EVENT, launchNoticeHoldsCorner, launchPhase, resolveLaunch } from '../product-hunt/launchWindow'
+import { USAGE_PROMPT_VISIBILITY_EVENT, usagePromptOnScreen } from '../usage-data/UsageDataPrompt'
 
 const DISMISSED_KEY = 'radar-update-dismissed'
 
@@ -35,6 +39,7 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
   const queryClient = useQueryClient()
+  const { showToast } = useToast()
   const { data: capabilities } = useCapabilities()
   const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
   const { data: versionInfo } = useVersionCheck()
@@ -47,7 +52,8 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   const startUpdate = useStartDesktopUpdate()
   const applyUpdate = useApplyDesktopUpdate()
   const isDesktop = versionInfo?.installMethod === 'desktop'
-  const { data: updateStatus } = useDesktopUpdateStatus(desktopUpdating || (inSettings && expanded && isDesktop))
+  const desktopSelfUpdate = isDesktop && !versionInfo?.manualUpdate
+  const { data: updateStatus } = useDesktopUpdateStatus(desktopUpdating || (inSettings && expanded && desktopSelfUpdate))
 
   useEffect(() => {
     if (!expanded) return
@@ -58,17 +64,55 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
     return () => document.removeEventListener('pointerdown', closeOutside)
   }, [expanded])
 
-  // Listen for "Check for Updates" menu item in desktop app.
   useEffect(() => {
+    if (inSettings) return
+    const id = 'radar-manual-update-check'
     const handler = () => {
+      showToast('Checking for updates…', { id, type: 'info', duration: 0 })
+    }
+    const resultHandler = (event: Event) => {
+      const info = (event as CustomEvent<VersionInfo>).detail
+      if (info.error) {
+        showToast('Could not check for updates', { id, type: 'error', detail: info.error })
+        return
+      }
+      void queryClient.cancelQueries({ queryKey: ['version-check', getApiBase()], exact: true })
       setDismissed(false)
       try { localStorage.removeItem(DISMISSED_KEY) } catch { /* ignore */ }
-      queryClient.invalidateQueries({ queryKey: ['version-check'] })
+      queryClient.setQueryData(['version-check', getApiBase()], info)
+      if (info.updateAvailable) {
+        showToast(`Radar ${info.latestVersion} is available`, { id, type: 'info' })
+      } else if (info.buildChannel === 'development') {
+        showToast(`Latest Radar release: ${info.latestVersion}`, { id, type: 'info', detail: 'You are running a development build.' })
+      } else {
+        showToast("You're up to date", { id, type: 'success', detail: `Radar ${info.currentVersion}` })
+      }
     }
 
     window.addEventListener('radar:check-for-updates', handler)
-    return () => window.removeEventListener('radar:check-for-updates', handler)
-  }, [queryClient])
+    window.addEventListener('radar:update-check-result', resultHandler)
+    return () => {
+      window.removeEventListener('radar:check-for-updates', handler)
+      window.removeEventListener('radar:update-check-result', resultHandler)
+    }
+  }, [queryClient, inSettings, showToast])
+
+  // Runs until the launch window is over, so a notice already on screen when
+  // the launch day starts steps aside too.
+  const launch = resolveLaunch(versionInfo?.productHuntLaunch)
+  const [launchNow, setLaunchNow] = useState(() => Date.now())
+  const launchWindowOpen = launchPhase(launch, launchNow) !== null
+  const launchHoldsCorner = launchNoticeHoldsCorner(launch, launchNow)
+  useEffect(() => {
+    if (inSettings || !launchWindowOpen) return
+    const recheck = () => setLaunchNow(Date.now())
+    window.addEventListener(LAUNCH_NOTICE_DISMISSED_EVENT, recheck)
+    const poll = window.setInterval(recheck, 60_000)
+    return () => {
+      window.removeEventListener(LAUNCH_NOTICE_DISMISSED_EVENT, recheck)
+      window.clearInterval(poll)
+    }
+  }, [inSettings, launchWindowOpen])
 
   // Log version check errors for debugging
   useEffect(() => {
@@ -77,12 +121,20 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
     }
   }, [versionInfo?.error])
 
-  // Check if this version was already dismissed
+  // Dismissal is per release: a newer one found while the page is open shows again.
   useEffect(() => {
-    if (versionInfo?.latestVersion && isUpdateDismissed(versionInfo.latestVersion)) {
-      setDismissed(true)
-    }
+    if (versionInfo?.latestVersion) setDismissed(isUpdateDismissed(versionInfo.latestVersion))
   }, [versionInfo?.latestVersion])
+
+  // The first-run usage card shares the corner; an update found while it is
+  // open waits for it.
+  const [usagePromptShowing, setUsagePromptShowing] = useState(usagePromptOnScreen)
+  useEffect(() => {
+    if (inSettings) return
+    const onUsagePrompt = () => setUsagePromptShowing(usagePromptOnScreen())
+    window.addEventListener(USAGE_PROMPT_VISIBILITY_EVENT, onUsagePrompt)
+    return () => window.removeEventListener(USAGE_PROMPT_VISIBILITY_EVENT, onUsagePrompt)
+  }, [inSettings])
 
   // Stop polling when update reaches a terminal state
   useEffect(() => {
@@ -125,7 +177,7 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   // Shared in-cluster viewers get a persistent Home notice instead of a
   // floating action prompt they may not be able to act on.
   const available = !!versionInfo?.updateAvailable && deploymentMode !== undefined && deploymentMode !== 'cloud'
-  const show = available && deploymentMode !== 'in-cluster' && (inSettings ? expanded : !dismissed)
+  const show = available && deploymentMode !== 'in-cluster' && (inSettings ? expanded : !dismissed && !launchHoldsCorner && !usagePromptShowing)
   // Presence outlives `show` by the menu exit so a dismiss fades the chip out
   // instead of snapping it away; the enter runs the same transition in reverse.
   const { shouldRender, isOpen } = useAnimatedUnmount(show, overlayExitMs('menu'))
@@ -162,8 +214,25 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
             {!inSettings && <>You're on {versionInfo.currentVersion}.</>}
           </p>
 
+          {/* Desktop that cannot replace itself: how to update, and the download */}
+          {isDesktop && versionInfo.manualUpdate && versionInfo.releaseUrl && (
+            <>
+              <p className="text-xs text-theme-text-secondary mt-1">
+                {MANUAL_UPDATE_TEXT[versionInfo.manualUpdate]}
+              </p>
+              <a
+                href={versionInfo.releaseUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-accent-text hover:underline"
+              >
+                Download from GitHub →
+              </a>
+            </>
+          )}
+
           {/* Desktop: in-app update flow */}
-          {isDesktop && (
+          {desktopSelfUpdate && (
             <DesktopUpdateControls
               state={effectiveState}
               progress={updateStatus?.progress}
@@ -255,6 +324,12 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
       {panel}
     </div>
   )
+}
+
+const MANUAL_UPDATE_TEXT: Record<NonNullable<VersionInfo['manualUpdate']>, string> = {
+  appimage: "This AppImage can't update itself. Download the new one and use it in place of this file.",
+  package: 'Download the new .deb or .rpm and install it with your package manager, such as apt or dnf.',
+  download: "Radar can't replace itself in this folder. Download the new version and copy it over this one, as an administrator if the folder needs it.",
 }
 
 function CopyIcon({ copied, failed }: { copied: boolean; failed: boolean }) {

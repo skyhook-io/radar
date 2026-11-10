@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	topo "github.com/skyhook-io/radar/pkg/topology"
@@ -91,20 +92,22 @@ func (a mcpPolicyReportLookupAdapter) FindingsFor(group, kind, namespace, name s
 // Pascal-singular kind required: the composer's Filters.Kinds matcher
 // case-folds both sides but doesn't plural-to-singular convert. Callers
 // pass canonicalKind from obj's TypeMeta.
-func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue) {
+func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue, *k8s.NodeCertificateReport) {
 	if cache == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	namespaces := issueNamespacesForResource(namespace)
 	// RelatedIssues is owner-aware and uncapped: get_resource on a workload
 	// surfaces the GROUPED issues its pods are evidence for (was empty — the
 	// old flat-by-exact-resource match looked for Kind=Deployment rows, but the
 	// evidence is Kind=Pod), and on a pod past the inline-Members cap too.
+	var unchecked []issuesapi.UncheckedSource
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked:            func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		Namespaces:             namespaces,
 		SkipPodTemplateContext: !includeFacts,
 		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
@@ -112,8 +115,15 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		CanReadSubject:         issueSubjectAccess(ctx),
 		CanReadEvidence:        issueEvidenceAccess(ctx),
 	}, group, kind, namespace, name)
+	var nodeReport *k8s.NodeCertificateReport
+	if group == "" && kind == "Node" && namespace == "" && issueClusterScopedAccess(ctx)("Node", "") {
+		nodeReport = provider.NodeCertificateReport(name)
+	}
 	if len(matched) == 0 {
-		return nil, nil
+		if len(unchecked) > 0 {
+			return &resourcecontext.IssueSummary{Unchecked: unchecked}, nil, nodeReport
+		}
+		return nil, nil, nodeReport
 	}
 	bySource := make(map[string]int, len(matched))
 	for _, row := range matched {
@@ -133,7 +143,8 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		TopReason:       matched[0].Reason,
 		TopSubject:      issues.SummarySubject(matched[0], group, kind, namespace, name),
 		BySource:        bySource,
-	}, matched
+		Unchecked:       unchecked,
+	}, matched, nodeReport
 }
 
 func issueNamespacesForResource(namespace string) []string {

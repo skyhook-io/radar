@@ -3,6 +3,7 @@ import type { APIResource } from '../../types'
 import {
   canonicalizeSelectedKind,
   deriveSidebarResourceCounts,
+  deriveSidebarResourceCoverage,
   LOADED_RESOURCE_COUNT_TTL_MS,
   resourceQueryMatchesSelectedKind,
 } from './ResourcesView'
@@ -139,5 +140,18 @@ describe('resourceQueryMatchesSelectedKind', () => {
         { name: 'endpointslices', kind: 'EndpointSlice', group: 'discovery.k8s.io' }
       )
     ).toBe(true)
+  })
+})
+
+
+describe('loaded count coverage', () => {
+  const partial = { status: 'partial' as const, scope: { type: 'all_namespaces' as const }, read: { type: 'namespaces' as const, namespaces: { names: ['alpha'], count: 1 } }, gaps: [{ code: 'radar_namespace_not_collected' }] }
+  it('retains a cached partial count qualification and expires both together', () => {
+    const cache = { Endpoints: { count: 0, expiresAt: 20, coverage: partial } }
+    expect(deriveSidebarResourceCoverage({}, {}, cache, 10)).toEqual({ Endpoints: partial })
+    expect(deriveSidebarResourceCoverage({}, {}, cache, 20)).toEqual({})
+  })
+  it('does not pair older unqualified count responses with cached newer metadata', () => {
+    expect(deriveSidebarResourceCoverage({ Endpoints: 0 }, undefined, { Endpoints: { count: 0, expiresAt: 20, coverage: partial } }, 10)).toEqual({ Endpoints: { status: 'unknown' } })
   })
 })

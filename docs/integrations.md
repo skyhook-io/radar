@@ -1,6 +1,144 @@
-# CRD Integrations
+# Ecosystem Integrations
 
-Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
+Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar adds dedicated capabilities described below, including detail views, topology edges, smart table columns, and AI-optimized summaries. Coverage varies by integration.
+
+Operational Issues in an open resource detail view refresh after observed root
+resource changes, coalesced to limit expensive checks. A once-per-minute visible-tab
+refresh covers Pod-only changes and findings that depend on elapsed time. Returning
+to a stale view refreshes it without requiring the detail view to be reopened.
+
+Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polling: their Issues request scans the whole cluster.
+
+## OpenTelemetry Operator
+
+Radar provides native resource details for `opentelemetry.io` **OpenTelemetryCollector**
+and **Instrumentation**. Native list columns add reconciliation/configuration status
+while retaining mode, version, image, management and instrumentation settings.
+
+Collector details show deployment mode, management state, the reported Pod-count
+snapshot, version/image and configured pipelines. Each pipeline lists receiver,
+processor and exporter component names; components declared as connectors are
+marked explicitly. Five pipelines are shown initially, with a control to show all.
+Collector `v1beta1` structured configuration and served `v1alpha1` YAML configuration
+are supported. An unreadable preview directs you to YAML rather than claiming the
+configuration has no pipelines.
+
+**Reconciliation is separate from runtime health.** The operator writes `Ready=True`
+when reconciliation succeeds, even if collector Pods are unready. Radar labels
+this **Reconciled**, with a neutral status. Earlier-generation observations are
+**Status stale**. Inspect the generated Deployment, DaemonSet or StatefulSet through
+existing ownership/Related Resources for current workload readiness. Reported Pod
+counts are a reconciliation-time snapshot: ready/observed total for Deployment
+and StatefulSet, or ready/desired scheduled Pods for DaemonSet.
+Neither readiness nor configuration proves telemetry delivery.
+
+Instrumentation details show the declared OTLP endpoint, propagators, sampler and
+runtime images. The configuration is **Configured**, not healthy; blocked automatic
+image upgrades are highlighted. This does not attribute injected Pods or infer
+collector relationships from endpoint strings.
+
+**REST and MCP:** existing resource list/get tools gain concise native summaries.
+Collector summaries include reconciliation state, mode, version and image.
+The optional `openTelemetryCollector.reportedPodReadiness` is the operator's Pod-count snapshot,
+not current readiness; read failures or a switch to sidecar mode can retain an
+earlier value. `openTelemetryCollector.declaredPipelines` gives the declared count and
+up to five sorted names, with truncation reported. That block is omitted when
+configuration cannot be previewed; omission does not mean zero pipelines. Alpha
+YAML previews are limited to 64 KiB. Instrumentation summaries name up to ten
+languages under `openTelemetryInstrumentation.recordedUpgradeBlocks`, using the
+same `{count,names,namesTruncated}` preview as declared pipelines,
+without copying arbitrary status messages. These are additive summary fields;
+no new MCP tool is introduced. Existing generic ownership remains;
+no endpoint-derived topology edges, telemetry queries, or new Issues source are added.
+Existing condition Issues surface managed reconciliation failures and status-read
+errors with the operator's message; unmanaged and stale observations are suppressed.
+A status-read warning does not establish a Collector Pod failure.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|---|---|---|---|---|
+| OpenTelemetryCollector | opentelemetry.io | No dedicated nodes or edges; owned-workload navigation is in Related Resources | Reconciliation, reported Pods and pipeline components | Reconciliation, mode, version and image |
+| Instrumentation | opentelemetry.io | No inferred injected-workload edges | Injection settings and blocked upgrades | Configuration and upgrade state |
+
+**Permissions:** the Helm chart already collects `opentelemetry.io` resources when
+`rbac.crdGroups.opentelemetry` is enabled. The Cloud integration-read baseline does
+not grant these full objects to default caller tiers: collector configuration and
+instrumentation environment values can contain credentials. Supply explicit
+customer-managed read permissions for caller-authorized tools when needed. This
+baseline exception is not a full-object UI/REST confidentiality guarantee; runtime
+response authorization remains separate. It does not revoke
+permissions already granted by other roles.
+
+### Instrumentation upgrade history
+
+The neutral “Upgrade block recorded” status describes `status.upgradeBlockedVersions`, written during an operator startup upgrade pass. A record can remain after a manual image change; it is not a current compatibility or runtime-health verdict. The drawer shows at most ten recorded languages, with shortened labels and a link to full YAML for remaining entries. Compact agent summaries retain their bounded language preview; detail reads retain native status without a duplicate context block.
+
+## Flagger
+
+Radar provides native details and concise REST/MCP summaries for `flagger.app`
+**Canary** and **MetricTemplate** resources, with native list columns for recorded state, strategy, canary target, reported
+weight and requested suspension. The unstable top-level transition timestamp is
+not used as a failure-onset column.
+
+Canary details distinguish recorded rollout phase from a requested suspension.
+The recorded phase stays visible while suspension is requested. Normal analysis,
+confirmation waits and promotion are neutral states; a failed last
+rollout remains visible even when suspension is requested. Flagger does not publish
+an observed generation, so its recorded phase is not proof that the latest spec
+has been reconciled. `Promoted=False` alone is not treated as a failure.
+
+The drawer links to the canary-side target, optional HPA/KEDA scaler and metric
+templates, including template namespace overrides. Links follow the controller's
+native clients: templates always resolve as `flagger.app` MetricTemplates; target
+kind determines the apps/core/Knative identity. Built-in metrics and inline queries
+are labeled without inventing template links. Blue/green, A/B and mirrored analysis
+are identified; reported canary weight is shown for weighted canaries, not as a
+live traffic measurement. MetricTemplate details show provider configuration and
+query text without rendering provider headers or fetching external metrics.
+
+A Deployment target is normally scaled to zero between analyses while its primary
+continues serving. Generated primary resources appear through existing ownership
+in Related Resources; Radar does not manufacture primary links from naming guesses.
+DaemonSet targets are parked using a node selector rather than zero replicas.
+
+**Issues:** collected Canaries in the caller-visible namespace scope with `status.phase=Failed` produce a warning
+for the last recorded rollout. The onset comes from the matching failed `Promoted` condition’s last-transition
+time when valid; the top-level timestamp is rewritten on scheduler ticks and is
+not used. Without that condition the onset remains unknown. Inspect the Canary's events for the
+cause. A failed new rollout does not imply the primary is down. Suspended failed
+rollouts remain visible; ordinary waiting/progress and `Promoted=False` remain quiet.
+No new workflow actions, topology edge types, traffic queries or MCP tools are added.
+
+Compact REST/MCP summaries also identify the configured strategy and carry the
+reported counters under `flaggerCanary`: weight percentage for weighted analysis, iteration
+for iteration-based analysis, and failed checks when reported. A reported zero
+is retained; an absent counter means unreported, not zero. These counters are
+controller snapshots, with the same freshness limits as the recorded phase.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|---|---|---|---|---|
+| Canary | flagger.app | No dedicated nodes or edges; primary navigation is in Related Resources | Recorded rollout, analysis and explicit refs | Recorded outcome, suspension and target |
+| MetricTemplate | flagger.app | No new edges | Provider and query configuration | Provider type and configuration state |
+
+**Access limitation:** existing namespace-authorized REST, YAML and MCP paths can
+return full Canary and MetricTemplate objects, including credential-bearing
+webhook metadata and provider headers, to callers with namespace visibility.
+Native summaries omit those fields; this integration does not add a per-kind
+response-authorization or redaction boundary.
+
+**In-cluster collection is opt-in:** set `rbac.crdGroups.flagger=true` in the Radar
+Helm chart to grant its collector `get/list/watch` on Canaries and MetricTemplates.
+Without collection access, in-cluster browsing and failed-rollout Issues for these
+kinds are unavailable. Locally, Radar uses the current Kubernetes identity's access.
+The Cloud integration-read baseline does not add these resources to generated
+caller-role grants. That baseline is not a deny rule for the response paths above.
+Default collector/caller access for existing integrations is unchanged.
+
+### Flagger dependency checks
+
+Issues reports missing declared Flagger targets, analysis MetricTemplates and provider Secrets used by those templates. These are warnings about release reconciliation/evaluation, not proof the stable primary is down. Suspended/deleting Canaries produce no reference warnings; skipped analysis suppresses only analysis-reference warnings; zero target replicas are valid.
+
+Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
+
 
 ## ConfigMap and Secret reflection (Reflector)
 
@@ -180,6 +318,8 @@ ClusterClass links use the namespace declared by the Cluster, defaulting to the 
 **Additional renderers:** MachineSet, MachinePool, MachineDrainRule, KubeadmConfig/Template
 
 **Resource Browser:** Smart columns for all CAPI kinds — phase badges, replica counts, cluster names, roles, versions.
+
+**Machine conditions:** A modern `status.v1beta2.conditions` True resolves the same-named deprecated failure in a v1beta1 Machine response. Expected progress stays selected so this cleanup cannot reveal a new warning behind it. Unknown, including aggregate Ready, does not establish recovery, so it does not suppress the deprecated failure; this preserves diagnostics for provisioned Machines whose nodes never join. Failed/stuck phase detections retain priority; their condition detail uses this selection rule, including the expected-progress exception. Legacy-only and direct v1beta2 responses keep their existing interpretation. Other CAPI kinds, renamed condition types, progress rules and timers are unchanged.
 
 **Topology-controlled badge:** Resources managed by ClusterClass (label `topology.cluster.x-k8s.io/owned`) show a warning banner.
 
@@ -384,7 +524,7 @@ Target links use the API group in `targetRef.apiVersion`. Built-in targets witho
 
 ### Cluster Audit checks
 
-Traefik ships no admission webhook or linter, so a typo'd reference is accepted silently and the route or middleware just doesn't do what you wrote. Radar's Cluster Audit catches the common dangling-reference cases as **Reliability** checks:
+Traefik ships no admission webhook or linter, so a typo'd reference is accepted, and Traefik then does not load any router that needs it: the route serves nothing (a 404 unless another router matches) and the error shows only in Traefik's log and dashboard. When a running Traefik loads the IngressRoute, `issues` reports it as a live failure on the IngressRoute (see [MCP](mcp.md)). Radar's Cluster Audit catches the common dangling-reference cases as **Reliability** checks:
 
 | Check | What it catches |
 |-------|-----------------|
@@ -453,7 +593,7 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 
 ### What Radar Shows
 
-**Topology:** Certificate → Issuer/ClusterIssuer edges connect each certificate to its observed built-in issuer, including ownerless issuers. Omitted `issuerRef.kind` and `issuerRef.group` use cert-manager defaults. Only referenced issuers are added; external issuer groups are not inferred. ClusterIssuer visibility uses its exact cluster-scoped read permission. Resource details and MCP context distinguish issuer dependencies from autoscaling. The full provisioning chain (Certificate → CertificateRequest → Order → Challenge) is connected via owner references.
+**Topology:** Certificates, CertificateRequests, Orders and Challenges in the graph link to the observed Issuer or ClusterIssuer named by `spec.issuerRef`. Only issuers in `cert-manager.io` are linked; omitted kind and group default to `Issuer` and `cert-manager.io`. A ClusterIssuer appears only to callers allowed to read ClusterIssuers. Owner references connect the provisioning chain. Issuer links show dependencies, not issuance success.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-topology.png" alt="cert-manager Topology" width="800">
@@ -465,6 +605,8 @@ TLS references resolve local Secret names and delegated `namespace/name` names c
 - Validity period with progress bar (green → yellow → red as expiry approaches)
 - Subject, DNS names, issuer reference
 - Renewal time and last failure
+
+**Renewal failures:** Issues and AI issue context warn when cert-manager reports a failed issuance after the scheduled renewal time while the existing certificate is still reported Ready. The finding includes the latest failure time and controller error, expiration and whether a retry is in progress; successful issuance clears it. It remains visible and becomes critical if the recorded validity expires before the Ready condition changes; it does not establish a live TLS outage. Detection uses current-generation Certificate status only, without reading Secret values. Disabled renewal, early reissuance failures, stale or incomplete status, and stalled attempts without a reported failure are not covered.
 
 **Dashboard:** Certificate health card showing healthy/warning/critical/expired certificate counts across all namespaces.
 
@@ -562,7 +704,9 @@ resource, including core Secrets and these excluded kinds. See the
 
 **Resource Browser:** Smart columns show severity counts and scan status at a glance.
 
-**Search (UI, REST `/api/search`, MCP `search`):** reports are searchable by CVE ID (with package and installed/fixed version in the snippet), SBOM component name and version, failed check ID and the scanned image, so `CVE-2026-109618` or `image:php kind:VulnerabilityReport` finds every report that lists it. Severity words and titles are not indexed, and a secret finding's matched text is never indexed, never exposed to the CEL `filter`, and redacted from what AI agents receive (MCP `get_resource`, `search` with `include=raw`). The `filter` binds `report` to the findings (vulnerabilities, components, checks, secrets without their match) for single-finding predicates such as `report.vulnerabilities.exists(v, v.vulnerabilityID == "CVE-2026-109618" && v.resource.contains("php"))`. Each hit names the workload behind the scanned object and, for a ReplicaSet, its replica count. With Trivy Operator's default `operator.vulnerabilityScannerScanOnlyCurrentRevisions: true`, an old ReplicaSet's reports are deleted after a rollout. With it set to `false` they stay, and a replica count of 0 usually marks one, though a Deployment scaled to zero also reads 0. A report is evidence about the scanned image at scan time: a CVE published after the last scan is absent until Trivy rescans with an updated database, and runtimes built from source (such as the official `php` images) are not detected by Trivy at all. With auth enabled, search returns a report only where the user may `list` that report kind, not wherever they may list Pods.
+**Search (UI, REST `/api/search`, MCP `search`):** reports are searchable by CVE ID, SBOM component name and version, failed check ID and the scanned image, so `CVE-2026-109618` or `image:php kind:VulnerabilityReport` finds every report that lists it. Severity words and titles are not indexed, and a secret finding's matched text is never indexed, never exposed to the CEL `filter`, and redacted from what AI agents receive (MCP `get_resource`, `search` with `include=raw`). The `filter` binds `report` to the findings (vulnerabilities, components, checks, secrets without their match) for single-finding predicates such as `report.vulnerabilities.exists(v, v.vulnerabilityID == "CVE-2026-109618" && v.resource.contains("php"))`. The global search UI identifies the matching report; it does not display package versions or workload attribution in the result row. REST and MCP search summaries include the matched finding, package and installed/fixed versions when available, and the workload behind the scanned object; ReplicaSet summaries also include replica count. With Trivy Operator's default `operator.vulnerabilityScannerScanOnlyCurrentRevisions: true`, an old ReplicaSet's reports are deleted after a rollout. With it set to `false` they stay, and a replica count of 0 usually marks one, though a Deployment scaled to zero also reads 0. A report is evidence about the scanned image at scan time: a CVE published after the last scan is absent until Trivy rescans with an updated database, and runtimes built from source (such as the official `php` images) are not detected by Trivy at all. With auth enabled, search returns a report only where the user may `list` that report kind, not wherever they may list Pods. When a search could not cover every report, the results say why: access to some namespaces' reports couldn't be confirmed in this search, because its limit on access checks was reached or a check failed (searching again checks more), or the search ran out of time before reading every report's findings (narrow with `ns:`).
+
+**Resources table:** on a report kind's table, the search box also matches findings: CVE ID with package and versions, SBOM component, failed check ID, secret rule ID and target, and the scanned image. A row that matched only through its findings is tagged *in findings*, with the finding on hover. Regex mode matches names and namespaces only, and a very large list stops after 200,000 findings and says some weren't searched.
 
 ### Supported CRDs
 
@@ -641,7 +785,7 @@ permits the reference or has produced an artifact.
 **Diagnosis**:
 - **Per-resource field diff** computed from each resource's `kubectl.kubernetes.io/last-applied-configuration` annotation vs live spec — works for any Argo client-side-applied resource without calling the Argo API
 - **Recent events** surfaced inline per managed resource (5 most recent, namespace-RBAC-filtered)
-- **Stuck-drift-loop detector** — flags `sync=OutOfSync ∧ opPhase=Succeeded ∧ auto-sync on ∧ reconciledAt<30min` with the likely cause (mutating webhook, sibling controller, schema migration)
+- **Stuck-drift-loop detector** — flags `sync=OutOfSync ∧ opPhase=Succeeded ∧ applied sources/revisions match the desired comparison ∧ auto-sync on ∧ reconciledAt<30min` with the likely cause (mutating webhook, sibling controller, schema migration)
 - **Manual-drift detector** — calls out OutOfSync apps with auto-sync disabled
 - **Argo Application conditions** extracted to issues (ComparisonError, OrphanedResourceWarning, etc.) with type-aware severity and per-condition action text
 - **Operation-failure parser** recognizes 11 patterns: annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.
@@ -877,15 +1021,64 @@ They roll up under three categories, split by what you'd go and look at: `backup
 
 ---
 
+## Secrets Store CSI Driver
+
+The [Secrets Store CSI Driver](https://secrets-store-csi-driver.sigs.k8s.io/) mounts secrets from an external store (Vault, AWS, Azure, GCP and others) into Pods as a CSI volume. A volume with `csi.driver: secrets-store.csi.k8s.io` names a SecretProviderClass in the Pod's namespace; after a successful mount the driver writes a SecretProviderClassPodStatus owned by that Pod.
+
+### What Radar Shows
+
+**Pod Detail View — Secrets Store CSI section** (only for Pods with such a volume):
+- Each volume, the containers and paths that mount it, and a link to its SecretProviderClass
+- The class's provider and synced Kubernetes Secrets (names, types and keys)
+- Mount state from the driver status matched by the Pod's UID and class, with object IDs and versions
+- The kubelet's latest `FailedMount` message for that volume while the Pod waits
+
+| State | Source |
+|---|---|
+| Mounted | SecretProviderClassPodStatus with `mounted: true`, owned by this Pod |
+| Mount failed | Warning `FailedMount` event naming the volume, while the Pod has not started |
+| Not mounted yet | Pod pending, no status and no failure event |
+| Mount not recorded | Pod started but the driver wrote no status for it |
+| Status shared | Another volume of this Pod uses the same class. The driver keeps one status per Pod and class, naming only the volume mounted last, so this volume has none of its own |
+| Class not found | A complete read of the namespace's classes has no class with that name |
+| No permission / could not read all / unavailable | The class or status read was denied, partial, or the API is not served |
+
+The driver never writes a status for a failed or pending mount, so a missing status is never shown as success. A status left by an earlier Pod with the same name is ignored.
+
+**SecretProviderClass Detail View:**
+- Provider and synced Secrets (names, types and keys)
+- Pods in the namespace whose volumes name the class, with each Pod's mount state
+
+Provider `parameters` are not summarized. This is presentation only, not a redaction boundary: the YAML view and REST/MCP reads return the full object to callers who can read it.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| SecretProviderClass | `secrets-store.csi.x-k8s.io/v1` | — | Yes | — |
+| SecretProviderClassPodStatus | `secrets-store.csi.x-k8s.io/v1` | — | Pod drawer | — |
+
+Collection is on by default in the Helm chart (`rbac.crdGroups.secretsStoreCsi`) and reads only these two kinds. For Radar Cloud callers, SecretProviderClass is withheld from the default integration-read grants (its `parameters` are free-form) and SecretProviderClassPodStatus is granted; see [the default read policy](cloud-rbac-baseline.md).
+
+Tested with driver 1.6.1 and the HashiCorp Vault provider (chart 0.34.1) on kind.
+
+---
+
 ## Strimzi Kafka connectors
+
+Connector details separate desired settings from the operator-reported connector and task states, show worker addresses and optional automatic-restart history, and link to KafkaConnect. Failed tasks override an otherwise Ready badge; stale, paused or incomplete observations never establish health. The view reads the existing custom resource without contacting Kafka Connect or requiring application credentials.
 
 Radar surfaces failure evidence from `KafkaConnector` resources in `kafka.strimzi.io` through Issues, including the API and MCP. A connector can remain `RUNNING` while an individual task is `FAILED`; Radar checks both. Explicit connector/task failures and `NotReady=True` produce one warning per connector, attributed to Strimzi's operator snapshot. Task IDs are bounded; configurations, exception messages and stack traces are not included in the issue.
 
-This requires existing Kubernetes read access to the connector CRs, with no Kafka credentials or additional settings. Connectors managed only through the Connect REST API are outside this coverage. Radar does not connect to Connect or Kafka directly. Radar Cloud's default integration-read role does not add `kafkaconnectors` access because full connector objects can contain credentials; callers need an existing separately authorized read grant.
+Radar's collector needs Kubernetes read access to the connector CRs, with no Kafka credentials or additional settings. Connectors managed only through the Connect REST API are outside this coverage. Radar does not connect to Connect or Kafka directly. Radar Cloud's default integration-read role does not add `kafkaconnectors` access because full connector objects can contain credentials. Radar's resource views and curated findings follow its [namespace-level read policy](authentication.md#read-granularity-namespace-level); withholding a full-object Kubernetes grant does not independently restrict those views.
 
 Missing or malformed observations do not establish health. Radar suppresses these warnings when the observed generation is absent or differs from the resource generation, reconciliation is paused, or the resource is terminating. Matching generations only establishes that Strimzi processed that specification; runtime state can change before the next reconciliation. Intentional `PAUSED`/`STOPPED` states and task-count differences are not treated as failures. Failure onset is unknown because operator condition timestamps do not reliably establish when a task failed.
 
 The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaConnectorStatus-reference) and [connector management documentation](https://strimzi.io/docs/operators/1.2.0/deploying.html#con-switching-api-to-kafka-connector-str). Discovery uses the served preferred version; partial-discovery recovery probes `v1` and `v1beta2`.
+
+`diagnose` supports `KafkaConnector` and `KafkaConnect` using cached operator status. KafkaConnect and related resource details can show up to five connector findings, linked by connector labels and a verified ownership chain. Findings keep the connector as their subject and do not change the viewed resource’s health. Missing findings do not establish recovery.
+
+Unreadable owner links omit this context. MCP requires exact owner-object read permissions; the UI follows namespace-level Related Resources access, so their coverage may differ. Modern worker attribution also requires StrimziPodSet collection. See [MCP semantics and access requirements](mcp.md#strimzi-connector-evidence).
 
 ## CloudNativePG
 
@@ -1011,7 +1204,7 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 
 **Managed Resource Detail View** (the generic MR renderer — works for every provider, including Upbound AWS/GCP/Azure, provider-kubernetes, provider-helm, and any community provider):
 - Kind, API group, external-name annotation, deletion + management policies
-- Paused banner (`crossplane.io/paused: "true"`) — reconciliation suppressed by operator intent
+- Neutral pause chip plus visible reconciliation context when `crossplane.io/paused` is exactly `"true"`; distinguishes a request from recorded `Synced=False/ReconcilePaused` acknowledgement. Acknowledged pause shows readiness as last reported, and the expected pause condition adds no failing-condition count. Independent failures stay visible.
 - Alert banner when `Synced=False` or `Ready=False` with the upstream cloud error verbatim
 - Linked `ProviderConfig` and (when this MR is composed) linked parent Composite via owner-ref walk
 - Collapsed `spec.forProvider` and `status.atProvider` JSON for deep diagnosis
@@ -1019,7 +1212,7 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 **Composite / Claim Detail View** — the killer feature:
 - Linked Composition and CompositionRevision (when pinned)
 - **Composed Resources list** — every entry in `spec.crossplane.resourceRefs` (v2) or `spec.resourceRefs` (v1) rendered as a clickable row with **its own live status badge**, fetched per-row via React Query. Clicking opens the composed resource's drawer.
-- Paused banner when `crossplane.io/paused: "true"`
+- The same neutral pause context as managed resources, scoped to this resource’s reconciler; it does not assert that composed resources or the bound XR are paused.
 - For v1 Claims: linked bound XR
 
 **Composition Detail View:**
@@ -1052,6 +1245,21 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 **Resource Browser:** MR list shows kind / external name / provider config / status; Provider list shows package, revision, status; Composition list shows mode, composite kind, function count; XRD list shows generated kind and claim kind.
 
 **Topology:** Radar connects a v1 Claim to its bound XR, and an XR to its composed Managed Resources. Edges follow Crossplane's v1 and v2 spec references; only resources Radar already watches and can read are shown.
+
+**Pause display:** Exact annotation intent plus recorded `Synced=False/ReconcilePaused` also qualifies pause context before an XR or Claim has resource references; this does not infer its resource type or enable composite-specific features. An annotation-only request without a recognized Crossplane shape remains unclassified. A neutral chip stays beside the row name, including XR/Claim tables using CRD printer columns. Condition-derived printer values retain their raw text; only exact condition-source metadata plus corroborated pause changes the expected Synced=False or recorded Ready=True tone. Older Radar servers omit that source metadata, so their printer cells keep generic tones alongside the neutral pause chip. Deletion requested while pause intent is set gets an inline warning that reconciliation may defer this resource’s controller cleanup. No pause age or freshness is inferred from condition transition times. Without exact annotation intent, `ReconcilePaused` remains an alert with its raw reason. A newer UI against a server predating the pause Issue rule can still show that server’s warning Issue.
+
+For shape-detected XRs and Claims without printer columns, the primary table status, filter and sort share the Crossplane status helper even when unpaused, matching the detail header.
+
+The topology graph retains its recorded readiness color and does not add this pause chip; opening the resource shows the reconciliation context.
+
+**Issues:** `Synced=False/ReconcilePaused` does not add a warning when `crossplane.io/paused` is exactly `"true"`. Other failure conditions remain eligible under the usual condition and generation filters; unlike Cluster Audit, the pause annotation does not exclude the whole resource from Issues. Pausing through empty `managementPolicies` is not covered by this rule.
+
+**Agent context:** AI resource summaries, per-row `summaryContext` (REST/MCP list and search), resource detail `resourceContext`, and the Diagnose kickoff health frame expose optional `crossplanePause`. `requested` means `crossplane.io/paused` is exactly `"true"`; `acknowledged` additionally has a recorded `Synced=False/ReconcilePaused` condition. This is annotation intent and stored controller evidence, independent of readiness and Issues. It does not establish freshness, matching generation, a pause start time, or the state of any child/provider controller. Omission makes no claim about management-policy pause or a prior resume. Summary rows retain the fact with `context=none`; generic CRD rows carrying `crossplanePause` retain an independent Synced failure in `issue` even when Ready is True. Compact retains the exact pause annotation and raw conditions; other Crossplane annotation keys are not broadly allowed through.
+
+**Operation context:** Delete confirmations identify annotated paused MR/XR/Claim resources holding a known Crossplane finalizer, whose controller cleanup is deferred; force delete can bypass that cleanup and leave external or related resources behind. YAML apply review and direct-save confirmations distinguish Kubernetes accepting edits from the resource controller acting on them. Review states whether the server preview keeps or clears a pause request; unavailable previews label unverified pause state. Direct editor saves also explain that omitting the annotation from server-side apply YAML does not guarantee removal. Removing `crossplane.io/paused` requests resumption; it does not prove the controller resumed or that related controllers paused. Generic Apply without a live preview labels existing pause state as unknown and explains that omitting the annotation from server-side apply YAML does not guarantee removal. A known pause uses the exact annotation value `"true"`; empty `managementPolicies` alone is outside this annotation-only context.
+
+Resources without a known Crossplane spec shape qualify for operation context only when the exact pause annotation is corroborated by `Synced=False/ReconcilePaused`. A single-target editor retains that raw evidence when review YAML omits status; generic Apply with no such evidence does not infer controller identity from the annotation alone.
+
 
 **Cluster Audit:** New `crossplaneStuck` check flags MRs/XRs/Claims reporting `Ready=False` or `Synced=False` for more than 5 minutes (Medium) or 30 minutes (High). Synced=False takes priority over Ready=False because it usually indicates the actionable problem (bad ProviderConfig, malformed spec, missing IAM). Same severity ramp as `stuckTerminating` for cross-surface consistency. Paused resources are deliberately suppressed.
 
@@ -1565,9 +1773,33 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ---
 
+## Multus (secondary networks)
+
+[Multus](https://github.com/k8snetworkplumbingwg/multus-cni) attaches extra network interfaces to a Pod. The Pod records what it asked for in the `k8s.v1.cni.cncf.io/networks` annotation and what Multus attached in `k8s.v1.cni.cncf.io/network-status`. OpenShift uses the same annotations for its secondary networks.
+
+### What Radar Shows
+
+**Detail View:** A Pod's **Secondary Networks** section lists each attachment with its interface, every IP address (so a dual-stack attachment shows both), MAC address and a default-network marker. Each row is labelled **Reported** when the `network-status` annotation lists it, **Requested only** when it does not, and a reported attachment that nothing requested says so. A definition name links to its `NetworkAttachmentDefinition` when Radar can read it; otherwise the row says the definition was not found, that you lack permission to read it, or that it could not be checked.
+
+The `networks` annotation may be a comma-separated list (`name`, `namespace/name`, `name@interface`) or a JSON list. A definition attached more than once appears once per attachment. A name without a namespace is read as the Pod's namespace. An annotation Radar cannot read is shown with the reason and its raw value, never as "no networks". The section does not appear for a Pod that only has its default network, which is every Pod on some clusters.
+
+Requested is not attached, and a reported interface does not show that the Pod can reach anything on that network.
+
+**Helm:** `rbac.crdGroups.multus` (default on) grants read on `network-attachment-definitions` in `k8s.cni.cncf.io`, and nothing else in that group.
+
+Topology, Issues, MCP summaries and `MultiNetworkPolicy` are not covered.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| NetworkAttachmentDefinition | `k8s.cni.cncf.io/v1` | No | Generic, linked from the Pod | — |
+
+---
+
 ## GPU & Batch Ecosystem (basic support)
 
-The baseline for the GPU scheduling, batch, and inference-serving ecosystem is **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Kueue Workloads, LocalQueues and ClusterQueues also have native detail views for admission evidence, quota accounting and policy. JobSet `v1alpha2` has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity. Other kinds use the standard spec/status renderer; selected resources also provide structured REST/MCP context as described below.
+The baseline for the GPU scheduling, batch, and inference-serving ecosystem is **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Kueue Workloads, LocalQueues and ClusterQueues also have native detail views for admission evidence, quota accounting and policy. JobSet `v1alpha2` has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity, and is drawn in Topology as the root of its member Jobs and Pods. Other kinds use the standard spec/status renderer; selected resources also provide structured REST/MCP context as described below.
 
 These integrations expose resource state and selected admission/execution relationships, not physical GPU accounting. They do not inventory physical devices, distinguish virtual or fractional GPUs such as HAMi, measure GPU utilization, or provide a complete scheduling simulation. JobSet's current CPU/memory observations and Kueue's request-based quota accounting have different meanings and are described separately below.
 
@@ -1584,17 +1816,39 @@ These integrations expose resource state and selected admission/execution relati
 
 Workload detail shows PodSet counts and controller-evaluated resource requests,
 quota reservations and assigned flavors, admission-check states and messages,
-and conditions. Links connect submission LocalQueues, reservation ClusterQueues,
-ResourceFlavors and AdmissionChecks. Reservation is distinguished from admission;
-resource totals are requests, not measured usage.
+and conditions. Reservation is distinguished from admission; resource totals are
+requests, not measured usage.
 
-LocalQueue and ClusterQueue detail distinguish reported state from configured stop
-policy, show pending/reserving/admitted counts, and link a LocalQueue to its
-ClusterQueue even before a Workload has a reservation. Per-flavor resource rows
-join quota reservations and admitted usage; ClusterQueues also show nominal quota,
-borrowing/lending limits, namespace eligibility and admission policies. These are
-controller-reported quota facts, not measured utilization or available physical
-capacity. Both v1beta1 and v1beta2 queue shapes are supported.
+Its **admission path** connects the owner, submission LocalQueue, its current
+ClusterQueue, reservation ClusterQueue and assigned ResourceFlavors. Missing,
+replaced and unreadable objects are distinguished. Per-flavor rejection reasons
+are one controller report, not attempt order or history; unrecognized text stays
+verbatim. Remote cluster names are reported without following them.
+
+LocalQueue and ClusterQueue detail separate Active state and freshness from
+configured stop policy. Pending/reserving/admitted counts are not additive;
+quota is requested capacity, not utilization or available hardware. Per-flavor
+rows compare reservations, admitted usage, nominal quota and borrowing/lending
+limits. Both v1beta1 and v1beta2 queue shapes are supported. Related flavors, AdmissionChecks and
+cohort peers are read as the viewer; Cohort objects are not read. A LocalQueue
+also shows namespace eligibility. Denied or incomplete reads never prove an
+object missing. An intentionally stopped parent softens a LocalQueue's alert
+only when fresh evidence establishes that the stop is its sole cause; table
+status retains the LocalQueue's own report.
+
+#### Workloads in a queue
+
+Queue detail lists and filters member Workloads by admission state. A
+ClusterQueue row distinguishes submission through a LocalQueue's **current**
+target from the Workload's recorded reservation; these can name different queues.
+Finished and deleting Workloads remain listed while retained, so Radar's member
+counts can differ from Kueue's live counts. List order is not admission order.
+
+Workloads and LocalQueues require exact per-kind list access in each namespace.
+Unread namespaces and unresolved submission membership are disclosed, with
+counts shown as lower bounds. A denied Workload read can still leave readable
+LocalQueues and their controller counts. Empty means confirmed empty only with
+complete, unnarrowed coverage and no unresolved submission membership.
 
 AdmissionCheck detail distinguishes controller readiness from a Workload's check
 result and links the built-in provisioning configuration. ProvisioningRequest
@@ -1608,38 +1862,66 @@ eviction; an empty list is not evidence that no request was made. The Workload's
 check message remains the primary explanation, and requests are not assigned to
 individual checks by parsing their names.
 
-For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
-and MCP `get_resource` also project a bounded admission summary into
-`resourceContext.scheduling.observations`. The first adapter emits one Kueue
-`admission` observation: a controller-neutral `satisfied`, `unsatisfied`,
-`held`, or `unknown` decision; the most useful native condition; LocalQueue and
-ClusterQueue facts with submission/entitlement roles; AdmissionCheck and
-preemption-gate evidence; and affirmative disruption conditions from the
-current snapshot. Resource names remain useful facts when RBAC withholds an
-optional navigation reference.
+#### Admission state classification
 
-`held` requires evidence of an explicit pause: `spec.active=false`, an `OnHold`
-condition, or `AdmissionGated` together with the current non-empty
-`kueue.x-k8s.io/admission-gated-by` annotation. The overloaded
-preemption-gated `AdmissionGated` reason remains `unsatisfied`, as does
-`Suspended` by itself: Kueue uses that reason for an inactive ClusterQueue,
-which may reflect broken dependencies rather than an intentional stop policy.
+Job, JobSet and RayJob admission cards distinguish lifecycle, waiting blockers,
+withdrawal and disruption using the Workload's own status. The Workload table
+and detail retain native condition headlines, which can differ from the card.
+REST AI detail and MCP `get_resource` include the same bounded admission context
+for v1beta2 and v1beta1 Workloads, with explicit truncation markers.
 
-Typed Kueue detail retains the controller's `pending` / `quota_reserved` /
-`admitted` / `finished` phase, PodsReady and replacement-Pod evidence,
-per-PodSet resource-to-ResourceFlavor assignments and usage, requeue state,
-and an exact concurrent-admission Parent reference for a Variant. Each
-observation carries the Workload's `subjectGeneration`, and projected
-conditions retain `observedGeneration`, so consumers can detect stale
-controller evidence. The compact projection keeps the first eight PodSets in
-name order and up to seven resource assignments per PodSet, prioritizing
-extended resources before core resources; explicit truncation flags point
-consumers back to the returned raw Workload for the complete status. Normal
-unsatisfied admission is scheduling context rather than an operational Issue.
-Radar does not infer feature-gate state, queue position, fairness math, Pod
-placement, or physical capacity. This is a bounded projection of the returned
-Workload's current status, not condition history, queue-wide observation
-coverage, or support for other Kueue API versions.
+This is a controller report, not a causal diagnosis: named queues and checks
+are not independently verified by the classification. Flavor fit describes only
+Kueue's last attempt. Stale evidence is marked; an absent stale marker does not
+confirm freshness, and transition times do not date scheduling attempts.
+Older Kueue wording is best-effort; unrecognized reasons remain visible.
+Radar does not infer fairness, Pod placement, physical capacity or runtime health.
+
+#### Kueue in Issues
+
+Issues surfaces actionable admission blockers, Kueue-stopped runs and broken
+queue configuration. Waiting for quota, preemption, checks or backoff, deliberate
+pauses, stale reports and uncertain flavor fit remain admission context.
+Pending or having no Pods alone is never an Issue. New configuration gets a
+short grace period; recovered queues suppress outdated blocked reports.
+
+Findings follow the run's controller chain; queue incidents group affected runs.
+Links follow the viewer's access. Broken-queue checks require
+ClusterQueue list permission; missing access or collection appears as unchecked
+coverage on affected resource pages and counts, rather than a healthy answer.
+ClusterQueue findings appear only in views not narrowed to namespaces.
+
+`diagnose` on Job, JobSet, RayJob or Kueue Workload returns cached context,
+related Issues and resource events. It collects no Pods, runtime logs, metrics
+or relationship graph. Follow Workload references for admission and Pods for
+runtime diagnosis. An empty Issues list does not establish runtime health;
+undecided Workloads, unrecognized reasons and MultiKueue handoff are not covered.
+
+**Admission history.** A queued root's Timeline includes controller-owned
+Workloads and their ProvisioningRequests by owner UID. It records observed
+admission, check, reservation, requeue and configuration changes, suppressing
+counter-only and quantity-only retry noise. It cannot reconstruct unwatched
+transitions or deleted provisioning attempts. Initial rows marked "from metadata"
+date only the last status transition, not its current reason or message.
+
+Coverage says when observation started late, retention removed rows, ownership
+records expired, or access/collection withheld related kinds. A gap never asserts
+that a hidden resource exists; an empty Timeline is not proof nothing happened.
+History belongs to the root workload; queue-scoped history is not provided.
+
+#### Pending position (Kueue's visibility API)
+
+When Kueue's visibility API is installed, pending Workload detail and admission
+cards show its reported LocalQueue and ClusterQueue positions with the read time.
+REST/MCP context carries the result on the Workload, not its parent Job.
+This is snapshot ordering, not promised admission order or a start time.
+
+The read runs as the viewer and requires `get localqueues/pendingworkloads` in
+`visibility.kueue.x-k8s.io` in that namespace; without authentication it uses
+Radar's identity. Access failures and unavailable APIs are shown explicitly.
+An unlisted Workload is not proven absent from the queue; a capped result leaves
+position unknown. Other namespaces contribute only to the ahead count, never
+names. Radar never derives position from timestamps or resource list order.
 
 ### KubeRay
 
@@ -1654,9 +1936,20 @@ RayCluster detail separates head readiness from ready, running and desired worke
 Pod counts. Worker-group sizing and autoscaling are declared configuration; they
 do not imply per-group health. The OSS host provides a bounded Pod list filtered
 by the current RayCluster controller UID, with head/group selection and ordinary
-Pod/log navigation. Controller-reported counts use Ray labels and may differ from
+Pod navigation. Controller-reported counts use Ray labels and may differ from
 that owned-Pod list. Missing access, cache warming and recreated roots are explicit;
 no RayCluster-wide log stream or lifecycle actions are added.
+
+The RayCluster **Logs** tab uses current owner-UID-matched Pods, with per-Pod
+Runtime Pods buttons. It opens the least healthy Pod, selecting an unfinished
+regular init container for a Pending or Failed Pod when identifiable, otherwise
+an application container. Native sidecars are not selected first.
+
+Each Pod list is capped at 200; narrow to the head or a worker group to reach
+others. Unreadable owned lists fall back to recorded Pods with an explanation;
+older Radars show an upgrade note. Logs are container output, not Ray session
+files under `/tmp/ray`, and deleted Pods have no retrievable logs. Already loaded
+lines may remain visible. RayClusters served before `ray.io/v1` use generic logs.
 
 RayJob detail separates the controller lifecycle from the last reported application
 state, with links to the runtime RayCluster and a UID-verified submitter Job for
@@ -1716,6 +2009,23 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 | TrainedModel | `serving.kserve.io/v1alpha1` | Ready condition |
 | LLMInferenceService | `serving.kserve.io` (v1alpha2, v1alpha1) | Ready / aggregate conditions |
 
+For `serving.kserve.io/v1beta1` InferenceServices, REST AI detail and MCP
+`get_resource` include a bounded serving summary: reported mode/runtime names,
+predictor model transitions and failure evidence, Knative revisions and configured
+traffic, and Standard-mode canaries. Absent facts remain unreported, not healthy
+or zero. A Ready root can still report a non-ready transformer.
+
+Per-field notes explain writer-specific limits beside the relevant raw fields.
+Their reference release is not a detected controller version. Model state and
+failure history can outlive a rollout; configured traffic and ready-copy counts
+do not prove what serves. Confirm with Pod, route and request evidence.
+
+This reads only the root: runtime names are unverified selections. ModelMesh
+gets only mode/runtime names; LLMInferenceService and list/search summaries are
+excluded. Raw spec/status remains available. Standard-mode status has live
+v0.20.0 proof; Knative traffic and serving-old/failing-new cases use writer-derived
+fixtures, not live proof.
+
 ### Gateway API Inference Extension
 
 | Resource | Group | Status source |
@@ -1725,19 +2035,21 @@ and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 
 ### Batch: LeaderWorkerSet, JobSet, Volcano, Kubeflow Training
 
-| Resource | Group | Status source |
-|----------|-------|---------------|
-| LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions |
-| JobSet | `jobset.x-k8s.io/v1alpha2` | Completed / Failed / Suspended conditions |
-| Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group |
-| Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) |
-| PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition |
-| JobFlow / JobTemplate | `flow.volcano.sh/v1alpha1` | state.phase / — |
-| Queue (KAI) | `scheduling.run.ai/v2` | Orphan / OverQuota conditions + allocation |
-| PodGroup (KAI) | `scheduling.run.ai/v2alpha2` | phase + scheduling conditions |
-| PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern |
-| MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern |
-| TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
+| Resource | Group | Status source | Topology |
+|----------|-------|---------------|----------|
+| LeaderWorkerSet | `leaderworkerset.x-k8s.io/v1` | Available / Progressing conditions | No |
+| JobSet | `jobset.x-k8s.io/v1alpha2` | Root terminal state, conditions and reported child counts | Yes: JobSet → member Job → Pod |
+| Job (Volcano) | `batch.volcano.sh/v1alpha1` | state.phase — disambiguated from batch/v1 Jobs by group | No |
+| Queue (Volcano) | `scheduling.volcano.sh/v1beta1` | state (Open/Closed) | No |
+| PodGroup (Volcano) | `scheduling.volcano.sh/v1beta1` | phase + Unschedulable condition | No |
+| JobFlow / JobTemplate | `flow.volcano.sh/v1alpha1` | state.phase / — | No |
+| Queue (KAI) | `scheduling.run.ai/v2` | Orphan / OverQuota conditions + allocation | No |
+| PodGroup (KAI) | `scheduling.run.ai/v2alpha2` | phase + scheduling conditions | No |
+| PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern | No |
+| MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern | No |
+| TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs | No |
+
+"No" means no dedicated nodes: a kind appears only when something already drawn owns it.
 
 For `jobset.x-k8s.io/v1alpha2` JobSets, REST AI detail and MCP `get_resource`
 include `resourceContext.execution`: root lifecycle and outcome, controller evidence,
@@ -1745,8 +2057,9 @@ requested suspension, and JobSet-specific role, child-Job, and recreation counts
 Missing observations remain distinct from zero. Activity does not guarantee running
 Pods, and a suspension request does not prove observed suspension or its cause.
 Root outcomes require root evidence; child failures alone are not terminal.
-Native spec/status remain available. This does not add JobSet `diagnose`, infer
-admission causes, or replace the JobSet→Job→Pod ownership chain.
+Native spec/status remain available. Generic JobSet `diagnose` returns this cached
+context, related Issues and resource events; it does not collect runtime logs or
+metrics, infer admission causes, or replace the JobSet→Job→Pod ownership chain.
 
 Job and JobSet drawer and fullscreen details connect the root to exact
 controller-owned Kueue Workloads, showing each admission decision, native reason, queues, checks, and
@@ -1768,6 +2081,16 @@ Extended-resource requests are declared demand, not GPU/TPU utilization. Logs ca
 scoped to one Job (live) or a role/all current members (bounded snapshots with source
 attribution and read failures). Historical goodput and archived logs are not collected.
 
+**Topology:** the resources view draws JobSets, including roots with no Jobs,
+and their exact controller-owned member Jobs and Pods. Status uses the same
+root lifecycle as detail; child failures alone do not make the root failed.
+Declared Job counts can exceed created members. Only v1alpha2 is interpreted;
+other served versions show unknown status and a warning without member links.
+
+With Jobs hidden, current member Pods attach to the JobSet. Pods from earlier
+same-named Jobs stay separate. The JobSet Topology tab shows at most 24 members,
+favoring failed and active Jobs, and clicking a member opens its Overview.
+Traffic, scheduling and dependency edges are not provided.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 
@@ -1781,6 +2104,22 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 | DeviceConfig (AMD GPU Operator) | `amd.com/v1alpha1` | Ready condition + component DaemonSet rollout counts |
 
 ---
+
+## Local runtime evidence: RabbitMQ, NATS and Vault
+
+When Radar runs locally, MCP clients can use `collect_application_evidence` to read one Pod endpoint after operator approval:
+
+| Integration | Endpoint | Evidence |
+|---|---|---|
+| RabbitMQ | Port 15692, `/metrics` | Node-reported disk/memory alarms, optional resource measurements and watermarks |
+| NATS | Port 8222, `/jsz` | JetStream pending, acknowledgement-pending and redelivery counts; delivery/acknowledgement positions, activity times and waiting pull requests when reported |
+| Vault | Port 8200, `/v1/sys/health` | HTTP status, initialization/seal/standby state, and HA connection/removal facts when reported |
+
+Requires Pod-read/port-forward permissions, a recognized application image and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must already be enabled. Credentials, TLS, custom ports, authenticated/remote/hosted/in-cluster deployments and built-in investigations are unsupported.
+
+In local resource details, use **Collect RabbitMQ evidence**, **Collect NATS evidence** or **Collect Vault evidence** to select a Pod and collect explicitly after a permission check. **Retry permission check** does not contact the application; neither does opening or refreshing a resource. Results show the target, observation time and selected-Pod scope. **Collection limits** expands the qualifications; **Copy observation** always includes them. If a Pod is missing from discovery, open it directly. Resource or cluster changes clear results; a replaced Pod requires a new selection and explicit collection.
+
+These are selected-endpoint observations, not automatic Issues or an application health verdict. See [MCP collection and result semantics](mcp.md#explicit-local-runtime-evidence).
 
 ## Any Other CRD
 

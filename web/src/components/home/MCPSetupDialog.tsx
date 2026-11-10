@@ -4,27 +4,42 @@ import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { MCP_TOOL_CATALOG } from './mcpToolCatalog'
 import { Tooltip } from '../ui/Tooltip'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
+
+const MCP_EXAMPLE_PROMPT ="Use Radar to find what's broken in my cluster and why."
 
 interface MCPSetupDialogProps {
   open: boolean
   onClose: () => void
   readOnly?: boolean
+  execTools?: boolean
+  httpTools?: boolean
+  /** Whether the native Helm MCP tool is registered; target Kubernetes permissions still required. */
+  helmTools?: boolean
+  applicationEvidenceAvailable?: boolean
   mcpUrl: string
+  /** Opens Radar's own investigation composer. Omit where investigations can't run. */
+  onInvestigate?: () => void
 }
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    // Plain-HTTP origins and denied permission reject the async Clipboard API;
+    // copyText falls back, and the tick must not claim a copy that didn't happen.
+    void copyText(text).then((ok) => {
+      if (!ok) return
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
   }
 
   return (
     <Tooltip content="Copy to clipboard" position="left" wrapperClassName="absolute top-2 right-2">
     <button
       onClick={handleCopy}
+      aria-label={copied ? 'Copied' : 'Copy to clipboard'}
       className="p-1.5 rounded-md bg-theme-elevated/50 hover:bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
     >
       {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
@@ -44,7 +59,7 @@ function CodeBlock({ children }: { children: string }) {
   )
 }
 
-export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false }: MCPSetupDialogProps) {
+export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false, execTools, httpTools, helmTools, onInvestigate, applicationEvidenceAvailable = false }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const [isDesktop, setIsDesktop] = useState(false)
   const [portPinned, setPortPinned] = useState(false)
@@ -118,7 +133,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false }: MCPS
   const currentPort = Number(window.location.port) || 80
 
   const tools = MCP_TOOL_CATALOG
-    .filter((tool) => !readOnly || !tool.write)
+    .filter((tool) => (!readOnly || !tool.write) && (tool.name !== 'exec_pod' || execTools) && (tool.name !== 'curl_service' || httpTools) && (tool.name !== 'manage_helm' || helmTools) && (!tool.localOnly || (!readOnly && applicationEvidenceAvailable)))
     .map((tool) => readOnly && tool.name === 'diagnose'
       ? { ...tool, params: tool.params.filter((param) => param.arg !== 'in_cluster') }
       : tool)
@@ -320,6 +335,20 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false }: MCPS
                 </div>
               </Disclosure>
             ))}
+
+            <p className="pt-1 text-xs text-theme-text-tertiary leading-relaxed">
+              <span className="font-medium text-theme-text-secondary">Tip:</span> name Radar in your prompt so your
+              agent uses Radar instead of kubectl, e.g. <code className="inline-code">{MCP_EXAMPLE_PROMPT}</code>
+            </p>
+            {onInvestigate && (
+              <button
+                type="button"
+                onClick={() => { onClose(); onInvestigate() }}
+                className="text-xs text-accent-text hover:underline underline-offset-2"
+              >
+                Or investigate from Radar itself →
+              </button>
+            )}
           </div>
 
           {/* Available tools */}
@@ -328,6 +357,17 @@ export function MCPSetupDialog({ open, onClose, mcpUrl, readOnly = false }: MCPS
               <h4 className="text-sm font-semibold text-theme-text-primary">Tools</h4>
               <span className="text-[11px] text-theme-text-tertiary">{tools.length} tools</span>
             </div>
+            {!readOnly && execTools === false && (
+              <p className="text-xs text-theme-text-tertiary">
+                <code className="inline-code">exec_pod</code> is disabled. The Radar operator can enable
+                container commands by restarting with <code className="inline-code">--mcp-exec-tools</code>{' '}
+                and without <code className="inline-code">--disable-exec</code>. See{' '}
+                <a href="https://github.com/skyhook-io/radar/blob/main/docs/mcp.md#exec_pod"
+                  target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                  configuration options
+                </a>{' '}for Desktop and Helm. Kubernetes permissions still apply.
+              </p>
+            )}
             <div className="grid grid-cols-1 gap-1.5">
               {tools.map((tool) => (
                 <div key={tool.name} className="card-inner space-y-1.5">

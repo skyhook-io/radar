@@ -36,6 +36,26 @@ describe('MultiSelectPicker', () => {
     expect(html).toContain('>Done</button>')
   })
 
+  it('adds an Only button to each row only when a select-only handler is given', () => {
+    expect(render()).not.toContain('>Only</button>')
+
+    const html = render({ onSelectOnly: () => {} })
+    expect(html.match(/>Only<\/button>/g)).toHaveLength(KINDS.length)
+    expect(html).toContain('aria-label="Show only Pod"')
+    // The name stays inside the checkbox label, so clicking it still toggles.
+    expect(html).toMatch(/<label[^>]*><span[^>]*><input type="checkbox"[^>]*\/><span class="truncate">Pod<\/span><\/span><\/label><button/)
+  })
+
+  it('hides Only until hover or keyboard focus, and keeps it visible on touch', () => {
+    const html = render({ onSelectOnly: () => {} })
+    const only = html.match(/<button[^>]*aria-label="Show only Pod"[^>]*>/)?.[0] ?? ''
+    expect(only).toContain('opacity-0')
+    expect(only).toContain('group-hover/row:opacity-100')
+    expect(only).toContain('group-has-[:focus-visible]/row:opacity-100')
+    expect(only).toContain('focus-visible:opacity-100')
+    expect(only).toContain('any-pointer-coarse:opacity-100')
+  })
+
   it('shows the filter input above the threshold and hides it below', () => {
     const shown = render()
     expect(shown).toContain('placeholder="Filter kinds"')

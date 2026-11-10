@@ -319,9 +319,17 @@ func (c *Client) resolvePreparedChart(ctx context.Context, req *InstallRequest, 
 	if err != nil {
 		return nil, "", err
 	}
-	body, err := fetchPreparedBytes(ctx, chartURL, maxPreparedChartBytes, "chart")
+	entry, err := c.repositoryEntryForRequest(req.Repository)
 	if err != nil {
 		return nil, "", err
+	}
+	buffer, err := (repositoryHTTPGetter{entry: *entry, timeout: httpClient.Timeout, maxBytes: maxPreparedChartBytes}).getContext(ctx, chartURL)
+	var body []byte
+	if buffer != nil {
+		body = buffer.Bytes()
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch chart: %w", err)
 	}
 	actual := sha256.Sum256(body)
 	if !bytes.Equal(actual[:], want) {

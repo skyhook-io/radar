@@ -250,12 +250,7 @@ func jobHasDetectedProblem(job *batchv1.Job, now time.Time) bool {
 	if _, ok := terminatingProblem("Job", "batch", job, now); ok {
 		return true
 	}
-	return failedJobCondition(job) != nil || stuckActiveJob(job, now)
-}
-
-func stuckActiveJob(job *batchv1.Job, now time.Time) bool {
-	return job != nil && job.Status.Active > 0 && job.Status.Succeeded == 0 && job.Status.Failed == 0 &&
-		now.Sub(job.CreationTimestamp.Time) > time.Hour
+	return failedJobCondition(job) != nil
 }
 
 func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker, now time.Time) (string, time.Time, bool) {
