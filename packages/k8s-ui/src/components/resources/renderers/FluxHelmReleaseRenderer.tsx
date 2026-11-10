@@ -5,6 +5,8 @@ import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, Reso
 import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
+import { getFluxDeployedRelease, getFluxHandledRequestToken, getFluxReleaseAttemptTime } from '../../../utils/flux-history'
+import { Tooltip } from '../../ui/Tooltip'
 
 export interface FluxValuesReference {
   kind?: 'ConfigMap' | 'Secret'
@@ -25,6 +27,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const spec = data.spec || {}
   const conditions = (status.conditions || []) as FluxCondition[]
   const history = status.history || []
+  const handledRequest = getFluxHandledRequestToken(status)
 
   // Convert to unified GitOps status
   const gitOpsStatus = fluxConditionsToGitOpsStatus(conditions, spec.suspend === true, {
@@ -80,8 +83,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const chartRef = spec.chart?.spec || {}
   const sourceRef = chartRef.sourceRef || {}
 
-  // Current release info
-  const lastRelease = history.length > 0 ? history[0] : null
+  const lastRelease = getFluxDeployedRelease(data)
 
   return (
     <>
@@ -94,7 +96,6 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
           {spec.interval && (
             <SyncCountdown
               interval={spec.interval}
-              lastSyncTime={status.lastHandledReconcileAt}
               suspended={gitOpsStatus.suspended}
             />
           )}
@@ -255,7 +256,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
       {lastRelease && (
         <Section title="Current Release" icon={CheckCircle2}>
           <PropertyList>
-            <Property label="Revision" value={lastRelease.revision} />
+            <Property label="Revision" value={lastRelease.version} />
             <Property label="Chart Version" value={lastRelease.chartVersion} />
             <Property label="App Version" value={lastRelease.appVersion} />
             <Property label="Status" value={lastRelease.status} />
@@ -275,49 +276,60 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
         </Section>
       )}
 
-      {/* Release History */}
-      {history.length > 1 && (
-        <Section title={`History (${history.length} revisions)`} icon={History} defaultExpanded={false}>
+      {/* History is low priority when the deployed release is shown above. */}
+      {(history.length > 1 || (history.length === 1 && !lastRelease)) && (
+        <Section title={`History (${history.length} ${history.length === 1 ? 'revision' : 'revisions'})`} icon={History} defaultExpanded={!lastRelease}>
           <div className="space-y-2 max-h-48 overflow-y-auto">
-            {history.map((release: any, idx: number) => (
-              <div
-                key={idx}
-                className={clsx(
-                  'p-2 rounded text-sm',
-                  idx === 0
-                    ? 'bg-green-500/10 border border-green-500/30'
-                    : 'bg-theme-elevated/30'
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-theme-text-primary">
-                    Rev {release.revision}
-                  </span>
-                  <span
-                    className={clsx(
-                      'badge-sm',
-                      release.status === 'deployed'
-                        ? 'status-healthy'
-                        : release.status === 'failed'
-                        ? 'status-unhealthy'
-                        : 'status-neutral'
-                    )}
-                  >
-                    {release.status}
-                  </span>
+            {history.map((release: any, idx: number) => {
+              const attemptedAt = getFluxReleaseAttemptTime(release)
+              return (
+                <div
+                  key={idx}
+                  className={clsx(
+                    'p-2 rounded text-sm',
+                    release.status === 'deployed' && release.version === lastRelease?.version
+                      ? 'bg-green-500/10 border border-green-500/30'
+                      : 'bg-theme-elevated/30'
+                  )}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-theme-text-primary">
+                      Rev {release.version}
+                    </span>
+                    <span
+                      className={clsx(
+                        'badge-sm',
+                        release.status === 'deployed'
+                          ? 'status-healthy'
+                          : release.status === 'failed'
+                          ? 'status-unhealthy'
+                          : 'status-neutral'
+                      )}
+                    >
+                      {release.status}
+                    </span>
+                  </div>
+                  <div className="text-xs text-theme-text-secondary mt-1">
+                    {release.chartVersion}
+                    {release.appVersion && ` (app: ${release.appVersion})`}
+                  </div>
+                  {attemptedAt && (
+                    <div className="text-xs text-theme-text-tertiary mt-1 flex items-baseline gap-1">
+                      <Tooltip content="Start time recorded by Helm for this install, upgrade or rollback attempt. It does not guarantee success.">
+                        <span>Attempt started</span>
+                      </Tooltip>
+                      <TimeValue timestamp={attemptedAt} />
+                    </div>
+                  )}
                 </div>
-                <div className="text-xs text-theme-text-secondary mt-1">
-                  {release.chartVersion}
-                  {release.appVersion && ` (app: ${release.appVersion})`}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </Section>
       )}
 
       {/* Revision info */}
-      {(status.helmChart || status.lastAppliedRevision || status.lastAttemptedRevision) && (
+      {(status.helmChart || status.lastAppliedRevision || status.lastAttemptedRevision || handledRequest) && (
         <Section title="Revision Info" defaultExpanded={false}>
           <PropertyList>
             {status.helmChart && (
@@ -329,12 +341,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
             {status.lastAttemptedRevision && (
               <Property label="Attempted Revision" value={status.lastAttemptedRevision} />
             )}
-            {status.lastHandledReconcileAt && (
-              <Property
-                label="Last Reconciled"
-                value={<TimeValue timestamp={status.lastHandledReconcileAt} />}
-              />
-            )}
+            <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>
         </Section>
       )}

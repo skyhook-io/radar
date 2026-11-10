@@ -102,7 +102,7 @@ func main() {
 	historyLimit := flag.Int("history-limit", fileCfg.HistoryLimitOr(10000), "Maximum number of events to retain in timeline")
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging (logs all event drops)")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)")
-	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
+	disableHelmWrite := flag.Bool("disable-helm-write", false, "Disable Helm release writes, per-release source updates, values previews and manage_helm; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue")
 	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP exec_pod")
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable the host local terminal")
 	disableAutoPortForward := flag.Bool("disable-auto-port-forward", fileCfg.DisableAutoPortForward, "Never open port-forwards on Radar's own initiative (metrics, traffic, cost and Argo CD discovery); port-forwards you start still work")
@@ -397,8 +397,8 @@ func main() {
 	if *namespaceScope && len(resolvedRBACNamespaces) > 0 {
 		log.Fatalf("--namespace-scope cannot be combined with --rbac-namespaces")
 	}
-	if len(resolvedNamespaces) > *maxScopeCandidates {
-		log.Fatalf("--namespaces lists %d namespaces but the RBAC probe fanout cap is %d; raise --max-scope-candidates (or RADAR_MAX_SCOPE_CANDIDATES) to cover all of them", len(resolvedNamespaces), *maxScopeCandidates)
+	if err := app.CheckNamespaceCount(resolvedNamespaces, *maxScopeCandidates); err != nil {
+		log.Fatalf("%v", err)
 	}
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
@@ -471,6 +471,7 @@ func main() {
 		MCPEnabled:                  mcpEnabled,
 		MCPReadOnly:                 mcpMode.ReadOnly,
 		MCPExecTools:                mcpFlags.ExecToolsEnabled(),
+		MCPHTTPTools:                mcpFlags.HTTPToolsEnabled(),
 		AIHistory:                   *aiHistory,
 		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
 		Version:                     version,
@@ -505,6 +506,10 @@ func main() {
 			OIDCBackchannelLogout:     *authOIDCBackchannelLogout,
 			OIDCEnablePKCE:            *authOIDCEnablePKCE,
 		},
+	}
+
+	if (*mcpCatalogOnly || *mcpCatalogStdio) && !cfg.FakeInCluster {
+		cfg.MCPHTTPTools = false
 	}
 
 	// Set global flags

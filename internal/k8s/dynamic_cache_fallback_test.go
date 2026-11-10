@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,6 +19,20 @@ import (
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
+
+func TestSupportedFallbacksIncludeNativeAdmissionPolicies(t *testing.T) {
+	for _, want := range []supportedCRDResource{
+		{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Namespaced: false},
+		{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Namespaced: false},
+	} {
+		if !slices.ContainsFunc(supportedCRDFallbacks, func(got supportedCRDResource) bool {
+			return got.Group == want.Group && slices.Equal(got.Versions, want.Versions) &&
+				got.Resource == want.Resource && got.Kind == want.Kind && got.Namespaced == want.Namespaced
+		}) {
+			t.Errorf("supportedCRDFallbacks is missing %+v", want)
+		}
+	}
+}
 
 func TestFallbackListProbeUsesNamespaceFallback(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}

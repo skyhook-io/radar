@@ -410,6 +410,32 @@ func PerformContextSwitch(newContext string) error {
 	return performContextSwitch(newContext, 0, false, nil)
 }
 
+var contextOperationsBlocked atomic.Pointer[error]
+
+// BlockClusterAccess keeps Radar off the cluster for the life of the process:
+// it drops the clients a successful kubeconfig load built, leaving the same
+// no-client state a failed load leaves, and makes every later context switch
+// and reconnect fail with err before any teardown, as a preflight rejection.
+// Radar Desktop calls it when its settings fail the startup check that the
+// CLI exits on. The kubeconfig's context metadata stays, so the window can
+// still name the context. Settings are read at startup, so nothing lifts it.
+func BlockClusterAccess(err error) {
+	contextOperationsBlocked.Store(&err)
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	k8sConfig = nil
+	k8sClient = nil
+	discoveryClient = nil
+	dynamicClient = nil
+}
+
+func contextOperationsBlockedErr() error {
+	if p := contextOperationsBlocked.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
 // ContextProbeError is a failed reachability check of the context Radar was
 // about to switch to. The switch was refused before any teardown, so the
 // current cluster is untouched.
@@ -500,6 +526,9 @@ func shouldCheckBeforeSwitch(newContext string) bool {
 // kubeconfig source to reload, so it verifies connectivity before rebuilding
 // caches around the existing client configuration.
 func RetryCurrentConnection() error {
+	if err := contextOperationsBlockedErr(); err != nil {
+		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, err)
+	}
 	contextName := GetContextName()
 	if contextName == "" {
 		return errors.New("no context configured")
@@ -608,6 +637,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 
 	if requireOperationCurrent && currentOperationGen() != observedOperationGen {
 		return ErrReconnectSuperseded
+	}
+	if err := contextOperationsBlockedErr(); err != nil {
+		return fmt.Errorf("%w: %w", ErrContextSwitchPreflight, err)
 	}
 	if IsInCluster() {
 		return fmt.Errorf("%w: context switching is unavailable in in-cluster mode", ErrContextSwitchPreflight)

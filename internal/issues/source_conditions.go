@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -378,9 +379,21 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 	groups := map[string]*routeGroup{}
 	var order []string
 
+	// A controller can leave a status.parents entry behind after its parent was
+	// removed from spec.parentRefs; that stale entry must not raise a warning
+	// while the route's current parent is healthy. Keep only status entries that
+	// still describe a parent the route attaches to (see gatewayStatusParentCounts).
+	routeNS := u.GetNamespace()
+	specParents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
+	attachedByDefault := routeUsesDefaultGateways(u)
+
 	for _, parent := range parents {
 		pm, ok := parent.(map[string]any)
 		if !ok {
+			continue
+		}
+		ref, _ := pm["parentRef"].(map[string]any)
+		if !gatewayStatusParentCounts(ref, specParents, routeNS, attachedByDefault) {
 			continue
 		}
 		gwLabel, gwKey, section := gatewayParentRef(pm)
@@ -450,6 +463,29 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 		out = append(out, issue)
 	}
 	return out
+}
+
+// gatewayStatusParentCounts reports whether a route's status.parents entry still
+// describes a parent the route attaches to. A parent matching a current
+// spec.parentRef always counts. A route that opts into default Gateways also
+// attaches to Gateways it does not name in spec, so an unmatched entry counts
+// only when it could be such a default attachment — i.e. it references a Gateway;
+// an unmatched non-Gateway entry (a mesh Service the spec dropped) is a leftover
+// and is ignored. Mirrors the route-status evidence rule in the shared UI
+// (resource-utils routeParentEvidence).
+func gatewayStatusParentCounts(ref map[string]any, specParents []any, routeNamespace string, attachedByDefault bool) bool {
+	if configrefs.GatewayParentRefInSpec(ref, specParents, routeNamespace) {
+		return true
+	}
+	return attachedByDefault && len(ref) > 0 && configrefs.GatewayParentIsGateway(ref)
+}
+
+// routeUsesDefaultGateways reports whether the route opts into attaching to
+// default Gateways (Gateway API spec.useDefaultGateways). Such routes record
+// Gateway parents in status that are not listed in spec.parentRefs.
+func routeUsesDefaultGateways(u *unstructured.Unstructured) bool {
+	v, found, _ := unstructured.NestedString(u.Object, "spec", "useDefaultGateways")
+	return found && v != "" && v != "None"
 }
 
 // gatewayRouteMessage renders a collapsed gateway group's message. When every

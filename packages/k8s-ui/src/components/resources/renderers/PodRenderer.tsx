@@ -3,7 +3,7 @@ import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, Circle
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
@@ -15,6 +15,8 @@ import { resolvedEnvFromKey } from '../../../utils/env-from'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import { NamespaceLimitRangeLink } from './LimitRangeRenderer'
+import { SecondaryNetworksSection } from './SecondaryNetworksSection'
+import type { NetworkAttachmentLookups } from '../../../utils/multus'
 import type {
   PodEnvironmentResponse,
   PodEnvironmentRevealResponse,
@@ -29,6 +31,7 @@ import { MetricsChart } from '../../ui/MetricsChart'
 import { Badge } from '../../ui/Badge'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
+import { SecretsStoreMountsSection, type SecretsStoreMountsSectionProps } from './SecretsStoreRenderers'
 import { formatRelativeAgeTime } from '../../../utils/format'
 
 function parseValidDate(dateStr: string): Date | null {
@@ -118,6 +121,14 @@ interface PodRendererProps {
   /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
    *  is pending or unreadable, which leaves the contextual link unrendered. */
   namespaceLimitRangeNames?: string[] | null
+  /** Lookup results for the NetworkAttachmentDefinitions this Pod names, by
+   *  `networkAttachmentKey`. Absent when the host didn't wire the lookup, which
+   *  leaves the names unlinked. */
+  networkAttachmentLookups?: NetworkAttachmentLookups
+  /** Host-read Secrets Store CSI facts for this Pod's namespace. Undefined
+   *  omits the section; the section also renders nothing for a Pod with no
+   *  Secrets Store CSI volumes. */
+  secretsStore?: Omit<SecretsStoreMountsSectionProps, 'pod' | 'onNavigate'>
 }
 
 // ── Env vars section — extracted to use hooks (useState for reveal) ──────────
@@ -306,6 +317,8 @@ export function PodRenderer({
   policyLoading,
   policyError,
   namespaceLimitRangeNames,
+  networkAttachmentLookups,
+  secretsStore,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
@@ -512,6 +525,8 @@ export function PodRenderer({
         </PropertyList>
       </Section>
 
+      <SecondaryNetworksSection pod={data} attachmentLookups={networkAttachmentLookups} onNavigate={onNavigate} />
+
       {/* Init Containers - shown only when present */}
       {initContainers.length > 0 && (
         <Section title={`Init Containers (${initContainers.length})`} icon={CirclePlay} defaultExpanded>
@@ -666,20 +681,7 @@ export function PodRenderer({
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>
         <div className="space-y-3">
-          {/* Pod-level budget (spec.resources) is shared by all containers, so it
-              stays its own row rather than being merged into the container rows. */}
-          {(podResources?.requests || podResources?.limits) && (
-            <div className="rounded-[10px] border border-dashed border-theme-border p-3">
-              <div className="flex items-baseline justify-between gap-2 mb-2">
-                <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
-                <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
-              </div>
-              <div className="text-xs text-theme-text-secondary space-y-1">
-                {podResources.requests && <div>Requests: {formatResources(podResources.requests)}</div>}
-                {podResources.limits && <div>Limits: {formatResources(podResources.limits)}</div>}
-              </div>
-            </div>
-          )}
+          <PodAggregateResources resources={podResources} />
           {containers.map((container: any) => {
             const status = containerStatuses.find((s: any) => s.name === container.name)
             const state = status?.state
@@ -875,6 +877,10 @@ export function PodRenderer({
           resolvedEnvFrom={resolvedEnvFrom}
           upgrade={environmentUpgrade}
         />
+      )}
+
+      {secretsStore && (
+        <SecretsStoreMountsSection pod={data} {...secretsStore} onNavigate={onNavigate} />
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}

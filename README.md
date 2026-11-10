@@ -190,8 +190,17 @@ sudo apt install ./radar-desktop_*.deb
 
 **Fedora/RHEL** — download the `.rpm` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
 ```bash
-sudo rpm -i radar-desktop_*.rpm
+sudo dnf install ./radar-desktop_*.rpm
 ```
+
+**Linux (AppImage, any distro)** — download the `.AppImage` from [GitHub Releases](https://github.com/skyhook-io/radar/releases), then:
+```bash
+chmod +x radar-desktop_*_linux_amd64.AppImage
+./radar-desktop_*_linux_amd64.AppImage
+```
+The AppImage doesn't update itself. When a new version is out, Radar links to the download.
+
+Kubeconfig login plugins (`exec`) run from inside the AppImage, not from the folder you started it in. If a plugin's `args` name a file by a relative path, such as `--token-file token.json`, the plugin can't find it and Radar shows "Authentication Failed". Give the full path instead, such as `--token-file /home/you/.kube/token.json`. A relative `command`, such as `./token.sh`, works: it's looked up next to the kubeconfig file.
 
 **Scoop (Windows):**
 ```powershell
@@ -477,6 +486,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets a
 | **[NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | JetStream consumer backlog, acknowledgment-pending and redelivery counters - **local collection** |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
+| **Secrets Store CSI Driver** | [SecretProviderClass and Pod mounts](docs/integrations.md#secrets-store-csi-driver): mount state, object versions and synced Secrets in the Pod drawer |
 | **[Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault)** | Initialization, seal and standby state - **local collection** |
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |

@@ -71,6 +71,7 @@ var staticBuiltinKinds = map[string]bool{
 	"Ingress": true, "NetworkPolicy": true, "IngressClass": true, "EndpointSlice": false,
 	"Lease": false, "PriorityClass": false, "RuntimeClass": false,
 	"MutatingWebhookConfiguration": false, "ValidatingWebhookConfiguration": false,
+	"ValidatingAdmissionPolicy": false, "ValidatingAdmissionPolicyBinding": false,
 	"VolumeAttachment": false, "PodDisruptionBudget": true, "StorageClass": true,
 	"Role": true, "ClusterRole": true, "RoleBinding": true, "ClusterRoleBinding": true,
 }

@@ -140,6 +140,13 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	// hosts merge the destination cluster's own tree on top (mergeGitOpsTrees).
 	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && (!gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root))) ||
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
+	// The local catalog doesn't describe a remote cluster; built-in scope
+	// holds everywhere.
+	if tool == ToolFluxCD && remote {
+		alignManagedScope(managed, nil)
+	} else if tool == ToolFluxCD {
+		alignManagedScope(managed, b.ownership.Catalog())
+	}
 	// Without recorded Helm inventory, recover roots from topology labels.
 	// A remote release's objects aren't in local topology, so a local match is
 	// someone else's.
@@ -229,6 +236,20 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	objects, unknownKinds, missing := b.prefetchObjects(ctx, enrichRefs)
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
+	}
+	if helmProjection {
+		// Topology carries labels, not annotations or owner references. The
+		// live object rules out a label match that is a Helm hook or that a
+		// controller generated: the latter shows under its controller, if the
+		// tree reaches it, rather than as a member beside it.
+		managed = slices.DeleteFunc(managed, func(res managedResource) bool {
+			obj := objects[refKey(res.Ref)]
+			if obj == nil {
+				return false
+			}
+			release, member := gitops.FluxHelmLabelledRelease(obj)
+			return !member || release != identity(rootRef)
+		})
 	}
 	// A referenced chart's source is local to that observed chart. Follow only
 	// the already-prefetched chart, never every chart in the cluster.

@@ -101,9 +101,9 @@ func readDynamicList(ctx context.Context, cache *k8s.ResourceCache, kind, group 
 					return dynamicCache.ListDirect(ctx, gvr, ns)
 				}
 				if !rows {
-					return dynamicCache.ListReadOnly(gvr, ns)
+					return dynamicCache.ListReadOnlyContext(ctx, gvr, ns)
 				}
-				return dynamicCache.List(gvr, ns)
+				return dynamicCache.ListContext(ctx, gvr, ns)
 			}
 			return cache.ListDynamicWithGroup(ctx, kind, ns, group)
 		}
@@ -127,7 +127,7 @@ func readDynamicList(ctx context.Context, cache *k8s.ResourceCache, kind, group 
 			return dynamicList{}, err
 		}
 	} else if unrestrictedAll && found && dynamicCache != nil {
-		ensureErr := dynamicCache.EnsureWatching(gvr)
+		ensureErr := dynamicCache.EnsureWatchingContext(ctx, gvr, "")
 		if !current() || dynamicCache.IsStopped() {
 			return dynamicList{}, errConnectionChanged()
 		}

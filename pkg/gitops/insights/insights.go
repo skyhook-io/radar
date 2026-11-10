@@ -53,6 +53,9 @@ type Summary struct {
 	// no rollback happened.
 	RollbackRevision string `json:"rollbackRevision,omitempty"`
 	LastReconcile    string `json:"lastReconcile,omitempty"`
+	LastApplied      string `json:"lastApplied,omitempty"`
+	LastApplyAttempt string `json:"lastApplyAttempt,omitempty"`
+	LastDeployed     string `json:"lastDeployed,omitempty"`
 	PartialReason    string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
 	// "Manual", "Auto", "Auto · prune", "Auto · self-heal",
@@ -488,7 +491,12 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 		s.OperationMessage, s.RawOperationMessage = diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 		s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "sync", "revision")
 		s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "operationState", "syncResult", "revision")
-		s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "reconciledAt")
+		if root.GetKind() == "Application" {
+			value, _, _ := unstructured.NestedString(root.Object, "status", "reconciledAt")
+			if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil && !parsed.IsZero() {
+				s.LastReconcile = parsed.UTC().Format(time.RFC3339Nano)
+			}
+		}
 		source, _, _ := unstructured.NestedMap(root.Object, "spec", "source")
 		if len(source) == 0 {
 			sources, _, _ := unstructured.NestedSlice(root.Object, "spec", "sources")
@@ -509,9 +517,14 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	s.Health = status.health
 	s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAttemptedRevision")
 	s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAppliedRevision")
-	s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "lastHandledReconcileAt")
-	if s.LastReconcile == "" {
-		s.LastReconcile = newestConditionTime(root)
+	if at, succeeded := gitops.FluxLastApply(root); succeeded {
+		s.LastApplied = at
+	} else {
+		s.LastApplyAttempt = at
+	}
+	if release := gitops.FluxDeployedRelease(root); release != nil && release.ChartVersion != "" {
+		s.LastRevision = release.ChartVersion
+		s.LastDeployed = release.LastDeployed
 	}
 	if sources := gitops.FluxSourceReferences(root); len(sources) > 0 {
 		s.Source = sources[0].Kind + "/" + sources[0].Name
@@ -587,10 +600,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			operationFailed = true
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 			parsed := diagnose.ParseArgoOperationError(msg)
+			createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(root)
+			parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 			action := fallback(parsed.Action, "Open Activity for operation details.")
 			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
-				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed); remoteAction != "" {
+				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet); remoteAction != "" {
 					action = remoteAction
 				}
 			}
@@ -1826,16 +1841,6 @@ func parseWave(value string) (int, bool) {
 	return i, err == nil
 }
 
-func newestConditionTime(root *unstructured.Unstructured) string {
-	newest := ""
-	for _, c := range conditions(root) {
-		if c.lastTransitionTime > newest {
-			newest = c.lastTransitionTime
-		}
-	}
-	return newest
-}
-
 func stringData(data map[string]any, key string) string {
 	if data == nil {
 		return ""
@@ -2398,6 +2403,8 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 		action := guidance.Action
 		if typ == argoSyncErrorConditionType {
 			parsed := diagnose.ParseArgoOperationError(msg)
+			createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(root)
+			parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 			if parsed.Reason != "" {
 				if parsed.Reason == diagnose.ReasonAutoSyncBlockedEmpty && !gitops.ArgoEmptyRenderGuardHolds(root) {
 					continue
@@ -2410,7 +2417,7 @@ func argoApplicationConditions(root *unstructured.Unstructured, syncHazard strin
 			}
 			if !gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root) {
 				var remoteAction string
-				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
+				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet)
 				if remoteAction != "" {
 					action = remoteAction
 				}

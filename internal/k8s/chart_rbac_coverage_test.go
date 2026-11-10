@@ -1,14 +1,113 @@
 package k8s
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/topology"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v3/pkg/engine"
+	"helm.sh/helm/v3/pkg/strvals"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"sigs.k8s.io/yaml"
 )
+
+func renderCollectorClusterRole(t *testing.T, overrides string) rbacv1.ClusterRole {
+	t.Helper()
+	chartPath := filepath.Join("..", "..", "deploy", "helm", "radar")
+	chart, err := loader.Load(chartPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := map[string]interface{}{}
+	if overrides != "" {
+		if err := strvals.ParseInto(overrides, values); err != nil {
+			t.Fatal(err)
+		}
+	}
+	renderValues, err := chartutil.ToRenderValues(
+		chart,
+		values,
+		chartutil.ReleaseOptions{Name: "radar", Namespace: "radar", IsUpgrade: true},
+		chartutil.DefaultCapabilities,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered, err := engine.Render(chart, renderValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var role rbacv1.ClusterRole
+	if err := yaml.Unmarshal([]byte(rendered["radar/templates/clusterrole.yaml"]), &role); err != nil {
+		t.Fatal(err)
+	}
+	return role
+}
+
+func admissionPolicyRule(role rbacv1.ClusterRole) *rbacv1.PolicyRule {
+	for i := range role.Rules {
+		rule := &role.Rules[i]
+		if slices.Contains(rule.Resources, "validatingadmissionpolicies") ||
+			slices.Contains(rule.Resources, "validatingadmissionpolicybindings") {
+			return rule
+		}
+	}
+	return nil
+}
+
+func TestAdmissionPolicyRBACGate(t *testing.T) {
+	if rule := admissionPolicyRule(renderCollectorClusterRole(t, "")); rule != nil {
+		t.Fatalf("default no-auth chart unexpectedly grants admission policy reads: %+v", *rule)
+	}
+	if rule := admissionPolicyRule(renderCollectorClusterRole(t, "rbac.viewWebhooks=true")); rule != nil {
+		t.Fatalf("viewWebhooks must not grant admission policy reads: %+v", *rule)
+	}
+	for _, overrides := range []string{"rbac.viewAdmissionPolicies=true", "auth.mode=proxy", "cloud.enabled=true,cloud.token=test-token,cloud.url=wss://radar.example,cloud.clusterName=test-cluster"} {
+		role := renderCollectorClusterRole(t, overrides)
+		rule := admissionPolicyRule(role)
+		if rule == nil {
+			t.Fatalf("%s: admission policy rule is missing", overrides)
+		}
+		if !slices.Equal(rule.APIGroups, []string{"admissionregistration.k8s.io"}) ||
+			!slices.Equal(rule.Resources, []string{"validatingadmissionpolicies", "validatingadmissionpolicybindings"}) ||
+			!slices.Equal(rule.Verbs, []string{"get", "list", "watch"}) {
+			t.Errorf("%s: admission policy rule = %+v", overrides, *rule)
+		}
+	}
+}
+
+func TestAdmissionPolicyRBACValueAndSchema(t *testing.T) {
+	chartPath := filepath.Join("..", "..", "deploy", "helm", "radar")
+	chart, err := loader.Load(chartPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rbac := chart.Values["rbac"].(map[string]interface{})
+	if value, exists := rbac["viewAdmissionPolicies"]; !exists || value != false {
+		t.Fatalf("rbac.viewAdmissionPolicies default = %v, exists = %v; want false", value, exists)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(chartPath, "values.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema["properties"].(map[string]any)["rbac"].(map[string]any)["properties"].(map[string]any)
+	entry, exists := properties["viewAdmissionPolicies"].(map[string]any)
+	if !exists || entry["type"] != "boolean" {
+		t.Fatalf("rbac.viewAdmissionPolicies schema = %#v", properties["viewAdmissionPolicies"])
+	}
+}
 
 // TestChartGrantsEveryWatchedCRDGroup guards against the drift where Radar
 // watches an API group the Helm chart never grants. That failure is silent: the

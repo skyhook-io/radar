@@ -1,9 +1,14 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RadarApp } from './RadarApp'
+import { setAutomaticRequestMarking } from './api/config'
 import { openExternal } from './utils/navigation'
 import { installWailsClipboardShim } from './utils/wails-clipboard'
 import './index.css'
+
+// Automatic requests can beat the usage status to the server, and a recording
+// Radar must still tell them from clicks. Embedding hosts don't run this entry.
+setAutomaticRequestMarking(true)
 
 // Intercept external link clicks in the Wails desktop app.
 // <a target="_blank"> is swallowed by WKWebView/WebView2 — route through openExternal()

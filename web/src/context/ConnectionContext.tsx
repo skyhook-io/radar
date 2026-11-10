@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { getApiBase } from '../api/config'
+import { automaticRequestHeaders, getApiBase } from '../api/config'
 import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot, type NodeDrainActivity } from '../api/client'
 import { ClusterConnectedContext } from './clusterConnected'
@@ -79,8 +79,8 @@ export function shouldAutoRetryConnection(errorType?: string): boolean {
   // Auth-shaped failures are excluded: the server runs its own backoff
   // reconnect loop for those, and each browser retry would invoke the exec
   // credential plugin again. Manual "Retry Connection" stays available for
-  // an immediate check.
-  return errorType !== 'config' && errorType !== 'rbac' && !errorType?.startsWith('auth')
+  // an immediate check. A settings error can't clear until Radar restarts.
+  return errorType !== 'config' && errorType !== 'settings' && errorType !== 'rbac' && !errorType?.startsWith('auth')
 }
 
 export function shouldApplyPolledConnection(
@@ -110,9 +110,10 @@ async function fetchConnectionStatus(sseGenerationAtStart: number): Promise<Poll
   return { ...status, sseGenerationAtStart }
 }
 
-async function retryConnection(): Promise<ConnectionState> {
+async function retryConnection(automatic = false): Promise<ConnectionState> {
   const response = await apiFetch(`${getApiBase()}/connection/retry`, {
     method: 'POST',
+    headers: automatic ? automaticRequestHeaders() : undefined,
   })
   if (!response.ok) {
     const error = await readErrorBody(response) as { error?: string; errorType?: string }
@@ -290,7 +291,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   // Retry mutation
   const retryMutation = useMutation({
-    mutationFn: retryConnection,
+    mutationFn: () => retryConnection(),
     onMutate: () => {
       manualRetryPendingRef.current = true
       // Until SSE re-delivers state, a failed retry may report its own error
@@ -387,7 +388,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       lastAutoRetryAtRef.current = Date.now()
       setIsAutoRetrying(true)
       let recovered = false
-      retryConnection()
+      retryConnection(true)
         .then((result) => {
           if (stopped) return
           recovered = true

@@ -51,6 +51,7 @@ type Config struct {
 	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
 	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
 	MCPExecTools             *bool             `json:"mcpExecTools,omitempty"`
+	MCPHTTPTools             *bool             `json:"mcpHttpTools,omitempty"`
 	MCPReadOnly              *bool             `json:"mcpReadOnly,omitempty"`
 	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 	// DebugImage is the image used for ephemeral debug containers and node debug
@@ -89,6 +90,10 @@ type Config struct {
 	// to this machine's disk), so one acknowledgment covers the web panel and
 	// the `radar diagnose` CLI alike.
 	AIConsent map[string]string `json:"aiConsent,omitempty"`
+	// MaxScopeCandidates is Radar Desktop's --max-scope-candidates: how many
+	// namespaces, the kubeconfig context namespace included, Radar checks its
+	// access in. 0 keeps the default. The CLI reads only the flag and its env var.
+	MaxScopeCandidates int `json:"maxScopeCandidates,omitempty"`
 }
 
 // AI-investigation consent disclosure versions, per surface. THE single source of

@@ -547,6 +547,29 @@ it('shows reported running-but-unready nginx readiness as degraded', () => {
   expect(html).toMatch(/>running</)
 })
 
+describe('PodRenderer secondary networks', () => {
+  const render = (annotations?: Record<string, string>) => renderToString(
+    <PodRenderer
+      data={{ ...pod, metadata: { ...pod.metadata, annotations } }}
+      onCopy={() => undefined}
+      copied={null}
+    />,
+  )
+
+  it('leaves a Pod without Multus annotations exactly as it was', () => {
+    const withoutAnnotations = render(undefined)
+    expect(withoutAnnotations).not.toContain('Secondary Networks')
+    expect(render({ 'example.com/other': 'value' })).toBe(withoutAnnotations)
+  })
+
+  it('shows the section for a requested attachment and not for the default network alone', () => {
+    expect(render({ 'k8s.v1.cni.cncf.io/networks': 'macvlan-conf' })).toContain('Secondary Networks')
+    expect(render({
+      'k8s.v1.cni.cncf.io/network-status': JSON.stringify([{ name: 'ovn-kubernetes', interface: 'eth0', default: true }]),
+    })).not.toContain('Secondary Networks')
+  })
+})
+
 describe('finished Pod resource usage',()=>{
  it.each(['Succeeded','Failed'])('explains ended live usage for %s without cluster repair advice',phase=>{
   const html=renderToString(<PodRenderer data={{...pod,status:{phase}}} onCopy={()=>{}} copied={null} metricsUnavailable metricsHistory={{containers:[],metricsUnavailableReason:'not found'}} />)

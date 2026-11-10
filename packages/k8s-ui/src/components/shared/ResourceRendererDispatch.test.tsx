@@ -38,6 +38,40 @@ describe('ResourceRendererDispatch', () => {
     expect(html).not.toContain('VerticalPodAutoscaler')
   })
 
+  describe('ValidatingAdmissionPolicy dispatch', () => {
+    it('uses dedicated renderers only for the exact native API group', () => {
+      const nativePolicy = renderKind('validatingadmissionpolicies', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicy',
+        metadata: { name: 'native', generation: 1 },
+        spec: { validations: [{ expression: 'true', message: 'native validation' }] },
+      })
+      expect(nativePolicy).toContain('Failure Policy')
+      expect(nativePolicy).toContain('native validation')
+
+      const nativeBinding = renderKind('validatingadmissionpolicybindings', {
+        apiVersion: 'admissionregistration.k8s.io/v1',
+        kind: 'ValidatingAdmissionPolicyBinding',
+        metadata: { name: 'native-binding' },
+        spec: { policyName: 'native', validationActions: ['Warn'] },
+      })
+      expect(nativeBinding).toContain('Validation Actions')
+      expect(nativeBinding).toContain('effective scope')
+
+      for (const kind of ['validatingadmissionpolicies', 'validatingadmissionpolicybindings']) {
+        const foreign = renderKind(kind, {
+          apiVersion: 'policies.example.io/v1',
+          kind: 'ForeignPolicy',
+          metadata: { name: 'foreign' },
+          spec: { collisionProbe: COLLISION_PROBE },
+        })
+        expect(foreign).toContain(COLLISION_PROBE)
+        expect(foreign).not.toContain('Failure Policy')
+        expect(foreign).not.toContain('Validation Actions')
+      }
+    })
+  })
+
   it('does not block manual replica scaling for VPA-only relationships', () => {
     const html = renderWithScalers([
       { kind: 'VerticalPodAutoscaler', namespace: 'prod', name: 'api-vpa' },
@@ -1169,4 +1203,61 @@ it('gives Diagnose the CRD health the header badge shows', () => {
   expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'NamesAccepted', status: 'False', reason: 'ListKindConflict' }]))).toBe('problem')
   expect(diagnoseHealthHint('customresourcedefinitions', crd([{ type: 'Established', status: 'True' }], { deletionTimestamp: '2026-01-01T00:00:00Z' }))).toBe('problem')
   expect(diagnoseHealthHint('customresourcedefinitions', crd([]))).toBe('unknown')
+})
+
+describe('Gateway API route plural collision', () => {
+  const routeData = (apiVersion: string, kind: string) => ({
+    apiVersion,
+    kind,
+    metadata: { name: 'shop', namespace: 'default' },
+    spec: { parentRefs: [{ name: 'main-gw' }], hostnames: ['shop.example.com'], collisionProbe: COLLISION_PROBE },
+    status: {},
+  })
+  const render = (kind: string, data: any) => {
+    const reads: string[] = []
+    const overrides: RendererOverrides = {
+      HTTPRouteRenderer: ({ data }) => {
+        reads.push(data.metadata.name)
+        return <span>gateway-lookup-override</span>
+      },
+    }
+    const html = renderToString(
+      <ResourceRendererDispatch
+        resource={{ kind, namespace: 'default', name: 'shop' }}
+        data={data}
+        onCopy={() => {}}
+        copied={null}
+        rendererOverrides={overrides}
+        showCommonSections={false}
+      />,
+    )
+    return { html, reads }
+  }
+
+  it('gives a foreign httproutes resource the generic renderer, with no Gateway lookups or host buttons', () => {
+    const { html, reads } = render('httproutes', routeData('routes.example.io/v1', 'HTTPRoute'))
+    expect(reads).toEqual([])
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('gives a foreign grpcroutes resource the generic renderer, with no Copy button', () => {
+    const { html } = render('grpcroutes', routeData('routes.example.io/v1', 'GRPCRoute'))
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('aria-label="Copy')
+  })
+
+  it('keeps the Gateway API renderers for gateway.networking.k8s.io routes', () => {
+    const http = render('httproutes', routeData('gateway.networking.k8s.io/v1', 'HTTPRoute'))
+    expect(http.reads).toEqual(['shop'])
+    const grpc = render('grpcroutes', routeData('gateway.networking.k8s.io/v1', 'GRPCRoute'))
+    expect(grpc.html).toContain('aria-label="Copy hostname shop.example.com"')
+  })
+
+  it('reads no route status for a foreign httproutes or grpcroutes resource', () => {
+    for (const kind of ['httproutes', 'grpcroutes']) {
+      expect(getResourceStatus(kind, { apiVersion: 'routes.example.io/v1', status: {} })).toBeNull()
+      expect(getResourceStatus(kind, { apiVersion: 'gateway.networking.k8s.io/v1', status: {} })).not.toBeNull()
+    }
+  })
 })

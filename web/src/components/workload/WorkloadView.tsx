@@ -39,6 +39,7 @@ import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resou
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
+import { NodeCertificateContext, NodeCertificateDetails, nodeCertificateContextVisible } from './NodeCertificateEvidence'
 import { useHistoryPaging } from './historyPaging'
 import { findInheritedGitOpsLookupRef, useResolvedGitOpsOwner } from '../../hooks/useResolvedGitOpsOwner'
 import { useGitOpsWriteGuard } from '../../hooks/useGitOpsWriteGuard'
@@ -138,8 +139,20 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
+import { recordUsageEvent } from '../../api/usage-data'
+import { issueResourceOpener } from './issueResourceOpener'
 
 type TabType = WorkloadTabType
+
+// The usage-report view a tab counts under. Timeline holds the resource's
+// events (it replaced the Events tab), so it counts as panel:events.
+const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+  logs: 'panel:logs',
+  yaml: 'panel:yaml',
+  metrics: 'panel:metrics',
+  timeline: 'panel:events',
+}
+
 const BATCH_EXECUTION_KINDS = new Set([
   'Job',
   'CronJob',
@@ -553,8 +566,14 @@ export function WorkloadView({
           ? 'reachability' // the network tab was renamed Reachability
           : (rawTab as TabType) || 'overview'
 
+
+  // A panel counts when someone switches to it. Counting renders instead would
+  // recount the same open tab: the drawer mounts hidden WorkloadView layers
+  // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {
+      const panel = PANEL_USAGE_VIEWS[tab]
+      if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
         params.delete('tab')
@@ -563,7 +582,7 @@ export function WorkloadView({
       }
       setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory, state: location.state })
     },
-    [pushTabHistory, searchParams, setSearchParams, location.state],
+    [migratedTab, pushTabHistory, searchParams, setSearchParams, location.state],
   )
 
   const selectedRunKey = searchParams.get('run') ?? ''
@@ -852,22 +871,30 @@ export function WorkloadView({
   // the renderer banners. The backend canonicalizes a plural kind via discovery,
   // so using the normalized API kind resolves direct links and app navigation alike.
   const isCronJob = apiKind === 'cronjobs' && (!effectiveGroup || effectiveGroup === 'batch')
+  const isCoreNode = apiKind === 'nodes' && !effectiveGroup
   const { support: coverageSupport } = useRadarFeature('resourceIssueCoverage')
-  const useCronJobCoverage = isCronJob && coverageSupport === 'supported'
+  const useReportCoverage = (isCronJob || isCoreNode) && coverageSupport === 'supported'
   const issueObservation = resource ? JSON.stringify([resource.metadata?.uid, resource.metadata?.resourceVersion]) : undefined
   const ordinaryIssues = useResourceIssues(apiKind, rest.group, namespace, name,
-    rest.active !== false && !useCronJobCoverage && !isNotFoundError(resourceError), issueObservation)
-  const cronJobIssues = useSubjectIssues(useCronJobCoverage ? { kind: 'CronJob', group: 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useCronJobCoverage && Boolean(resource))
-  const liveIssues = useCronJobCoverage ? cronJobIssues.data?.issues : ordinaryIssues.data
-  const issuesPending = useCronJobCoverage ? cronJobIssues.isPending : ordinaryIssues.isPending
-  const schedulingEvidence = cronJobIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? cronJobIssues.data?.scheduling_report : undefined
-  const [schedulingTimelineFocus, setSchedulingTimelineFocus] = useState<{ uid: string; id: string }>()
+    rest.active !== false && !useReportCoverage && !isNotFoundError(resourceError), issueObservation)
+  const subjectIssues = useSubjectIssues(useReportCoverage ? { kind: isCoreNode ? 'Node' : 'CronJob', group: isCoreNode ? '' : 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useReportCoverage && Boolean(resource))
+  const liveIssues = useReportCoverage ? subjectIssues.data?.issues : ordinaryIssues.data
+  const issuesPending = useReportCoverage ? subjectIssues.isPending : ordinaryIssues.isPending
+  const schedulingEvidence = isCronJob && subjectIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.scheduling_report : undefined
+  const certificateEvidence = isCoreNode && subjectIssues.data?.node_certificate_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.node_certificate_report : undefined
+  const hasCertificateIssue = Boolean(liveIssues?.some(issue => issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry'))
+  const [reportTimelineFocus, setReportTimelineFocus] = useState<{ uid: string; id: string }>()
   const viewSchedulingReport = useCallback(() => {
-    setSchedulingTimelineFocus(schedulingEvidence?.event_id ? { uid: schedulingEvidence.uid, id: schedulingEvidence.event_id } : undefined)
+    setReportTimelineFocus(schedulingEvidence?.event_id ? { uid: schedulingEvidence.uid, id: schedulingEvidence.event_id } : undefined)
     handleTabChange('timeline')
   }, [schedulingEvidence, handleTabChange])
+  const viewCertificateReport = useCallback(() => {
+    setReportTimelineFocus(certificateEvidence?.event_id ? { uid: certificateEvidence.uid, id: certificateEvidence.event_id } : undefined)
+    handleTabChange('timeline')
+  }, [certificateEvidence, handleTabChange])
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
+  const openIssueResource = issueResourceOpener(rest.onNavigateToResource)
   const {
     onCompareTo,
     onCompareAcrossClusters,
@@ -1213,7 +1240,7 @@ export function WorkloadView({
         refetch={refetchResourceAndRuns}
         // Timeline
         allEvents={allEvents}
-        timelineFocusEvent={schedulingTimelineFocus?.uid === resource?.metadata?.uid ? schedulingTimelineFocus : undefined}
+        timelineFocusEvent={reportTimelineFocus?.uid === resource?.metadata?.uid ? reportTimelineFocus : undefined}
         historyTruncated={!historyFallback && historyTruncated}
         onLoadOlderHistory={historyFallback ? undefined : loadOlderHistory}
         loadingOlderHistory={!historyFallback && loadingOlderHistory}
@@ -1349,10 +1376,7 @@ export function WorkloadView({
             {diagnoseHint}
             <RelatedFindingsSection
               data={resourceResponse?.relatedFindings}
-              onResourceClick={rest.onNavigateToResource ? (ref) => rest.onNavigateToResource?.({
-                kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '',
-              }) : undefined}
+              onResourceClick={openIssueResource}
             />
             <AuditOverviewSection
               findings={auditFindings ?? []}
@@ -1364,26 +1388,21 @@ export function WorkloadView({
         renderOverviewLead={() => (
           <div className="flex flex-col gap-4">
           <CronJobSchedulingContext evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
+          <NodeCertificateContext evidence={certificateEvidence} hasIssue={hasCertificateIssue} onViewTimeline={viewCertificateReport} />
           <ResourceIssuesSection
             issues={liveIssues}
-            renderDetailSection={schedulingEvidence?.state === 'reported' ? ({ issue }) => issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason ? <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} /> : null : undefined}
+            renderDetailSection={({ issue }) => {
+              if (schedulingEvidence?.state === 'reported' && issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason) return <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
+              if (certificateEvidence && issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry') return <NodeCertificateDetails evidence={certificateEvidence} onViewTimeline={viewCertificateReport} includeOriginalReport={false} />
+              return null
+            }}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
-            onResourceClick={
-              rest.onNavigateToResource
-                ? (ref) =>
-                    rest.onNavigateToResource?.({
-                      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                      namespace: ref.namespace ?? '',
-                      name: ref.name,
-                      group: ref.group ?? '',
-                    })
-                : undefined
-            }
+            onResourceClick={openIssueResource}
           />
           </div>
         )}
-        hasOverviewLead={hasOperationalIssues || Boolean(schedulingEvidence && schedulingEvidence.state !== 'reported')}
+        hasOverviewLead={hasOperationalIssues || Boolean(schedulingEvidence && schedulingEvidence.state !== 'reported') || nodeCertificateContextVisible(certificateEvidence, hasCertificateIssue)}
         hasOperationalIssues={hasOperationalIssues}
         operationalIssuesPending={issuesPending}
         // A manager answer's chip links only managers the server found; a

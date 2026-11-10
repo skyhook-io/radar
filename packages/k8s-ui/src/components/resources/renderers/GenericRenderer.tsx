@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
+import { isApiGroup } from '../resource-utils-cnpg'
+import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
 import { CrossplanePauseNotice } from './CrossplanePauseContext'
 import type { HealthLevel } from '../resource-utils'
@@ -158,6 +160,11 @@ const BANNER_TYPE: Record<HealthLevel, HealthType> = {
 }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
+  if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && isInferenceServiceStopRequested(resource)) {
+    const status = getInferenceServiceStatus(resource)
+    if (status.level === 'neutral') return { type: 'unknown', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
+    return { type: BANNER_TYPE[status.level], label: status.text }
+  }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
   if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
@@ -328,49 +335,71 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
 // CONDITIONS SECTION
 // ============================================================================
 
+// KServe's Stopped reports an intentional state rather than health: True for a
+// model its owner stopped, False otherwise. While it is True, readiness that is
+// False only because of the stop follows it.
+function isKServeStopState(resource: any, cond: any): boolean {
+  if (!isApiGroup(resource?.apiVersion, 'serving.kserve.io')) return false
+  if (cond.type === 'Stopped') return true
+  return cond.status === 'False' && cond.reason === 'Stopped' && isInferenceServiceStopRequested(resource)
+}
+const WARNING_CONDITION_TYPES = new Set(['Degraded', 'Warning', 'ScalingLimited'])
+const POSITIVE_CONDITION_TYPES = new Set(['Ready', 'Available', 'Healthy', 'Initialized', 'Complete'])
+
+export type GenericConditionTone = 'neutral' | 'ok' | 'warning' | 'fail' | 'unclear' | 'unknown'
+
+// One tone per condition, so the icon, the status chip, the sort order and
+// whether the section opens all agree. Unknown-polarity False is 'unclear'
+// (slate icon, red chip): many such conditions are positive, like
+// PredictorReady, and their False is a real failure. An Unknown status is not
+// a failure, so its chip isn't red.
+export function genericConditionTone(resource: any, cond: any): GenericConditionTone {
+  if (getCrossplaneConditionTone(resource, cond) === 'neutral') return 'neutral'
+  if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
+  if (isKServeStopState(resource, cond)) return 'neutral'
+  const isTrue = cond.status === 'True'
+  if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
+  if (isInvertedPolarityCondition(cond.type)) return isTrue ? 'fail' : 'ok'
+  if (isTrue) return 'ok'
+  return POSITIVE_CONDITION_TYPES.has(cond.type) ? 'fail' : 'unclear'
+}
+
+const isProblemTone = (tone: GenericConditionTone) => tone === 'fail' || tone === 'warning' || tone === 'unclear'
+
 function GenericConditionsSection({ conditions, resource }: { conditions: any[]; resource: any }) {
   // Sort conditions: problematic first, then alphabetically
   const sortedConditions = [...conditions].sort((a, b) => {
-    const aProblematic = getCrossplaneConditionTone(resource, a) !== 'neutral' && (a.status === 'False' || (a.status === 'True' && ['Degraded', 'Warning'].includes(a.type)))
-    const bProblematic = getCrossplaneConditionTone(resource, b) !== 'neutral' && (b.status === 'False' || (b.status === 'True' && ['Degraded', 'Warning'].includes(b.type)))
+    const aProblematic = isProblemTone(genericConditionTone(resource, a))
+    const bProblematic = isProblemTone(genericConditionTone(resource, b))
     if (aProblematic && !bProblematic) return -1
     if (!aProblematic && bProblematic) return 1
     return (a.type || '').localeCompare(b.type || '')
   })
 
-  // Check for any problems
-  const hasProblems = sortedConditions.some(c =>
-    getCrossplaneConditionTone(resource, c) !== 'neutral' && (c.status === 'False' || (c.status === 'True' && ['Degraded', 'Warning'].includes(c.type)))
-  )
+  const hasProblems = sortedConditions.some(c => isProblemTone(genericConditionTone(resource, c)))
 
   return (
     <Section title={`Conditions (${conditions.length})`} defaultExpanded={hasProblems || conditions.length <= 5}>
       <div className="space-y-2">
         {sortedConditions.map((cond: any, index: number) => {
-          const isNeutral = getCrossplaneConditionTone(resource, cond) === 'neutral'
-          const isTrue = cond.status === 'True'
-          const isFalse = cond.status === 'False'
-          const isWarningType = ['Degraded', 'Warning', 'ScalingLimited'].includes(cond.type)
-          const isPositiveType = ['Ready', 'Available', 'Healthy', 'Initialized', 'Complete'].includes(cond.type)
-
-          // Determine icon color based on condition semantics
-          let iconColor = 'text-yellow-400'
-          if (isNeutral) iconColor = 'text-theme-text-tertiary'
-          else if (isTrue && isPositiveType) iconColor = 'text-green-400'
-          else if (isTrue && isWarningType) iconColor = 'text-yellow-400'
-          else if (isTrue) iconColor = 'text-green-400'
-          else if (isFalse && isPositiveType) iconColor = 'text-red-400'
-          else if (isFalse) iconColor = 'text-slate-400'
+          const tone = genericConditionTone(resource, cond)
+          const iconColor = {
+            neutral: 'text-theme-text-tertiary',
+            ok: 'text-green-400',
+            warning: 'text-yellow-400',
+            fail: 'text-red-400',
+            unclear: 'text-slate-400',
+            unknown: 'text-yellow-400',
+          }[tone]
+          const chipRed = tone === 'fail' || tone === 'unclear'
 
           return (
             <div key={`${cond.type}-${index}`} className="flex items-start gap-2 text-sm">
               <span className={clsx('w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5', iconColor)}>
-                {isNeutral ? <Minus className="w-4 h-4" /> :
-                 isTrue && isPositiveType ? <CheckCircle className="w-4 h-4" /> :
-                 isTrue && isWarningType ? <AlertTriangle className="w-4 h-4" /> :
-                 isTrue ? <CheckCircle className="w-4 h-4" /> :
-                 isFalse && isPositiveType ? <XCircle className="w-4 h-4" /> :
-                 isFalse ? <AlertCircle className="w-4 h-4" /> :
+                {tone === 'neutral' ? <Minus className="w-4 h-4" /> :
+                 tone === 'ok' ? <CheckCircle className="w-4 h-4" /> :
+                 tone === 'warning' ? <AlertTriangle className="w-4 h-4" /> :
+                 tone === 'fail' ? <XCircle className="w-4 h-4" /> :
                  <AlertCircle className="w-4 h-4" />}
               </span>
               <div className="flex-1 min-w-0">
@@ -378,7 +407,7 @@ function GenericConditionsSection({ conditions, resource }: { conditions: any[];
                   <span className="text-theme-text-primary font-medium">{cond.type}</span>
                   <span className={clsx(
                     'badge-sm',
-                    isTrue || isNeutral ? 'bg-theme-elevated text-theme-text-secondary' : 'status-red'
+                    chipRed ? 'status-red' : 'bg-theme-elevated text-theme-text-secondary'
                   )}>
                     {cond.status}
                   </span>

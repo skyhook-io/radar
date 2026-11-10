@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/topology"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -871,7 +873,7 @@ func TestRemoteFluxInventoryOverlapDoesNotEnrichFromLocalSource(t *testing.T) {
 
 func TestHelmReleaseRootKeepsInstalledChartOverTopologyRevision(t *testing.T) {
 	hr := helmRelease("team", "app")
-	hr.Object["status"] = map[string]any{"lastAttemptedRevision": "6.15.0", "history": []any{map[string]any{"chartVersion": "6.15.0", "status": "deployed"}}}
+	hr.Object["status"] = map[string]any{"lastAttemptedRevision": "6.16.0", "history": []any{map[string]any{"version": int64(2), "chartVersion": "6.16.0", "status": "failed"}, map[string]any{"version": int64(1), "chartVersion": "6.15.0", "status": "deployed"}}}
 	topo := &topology.Topology{Nodes: []topology.Node{{ID: "helmrelease/team/app", Kind: "HelmRelease", Name: "app", Data: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "namespace": "team", "revision": 0}}}}
 	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}): hr}}
 	tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
@@ -946,4 +948,126 @@ func TestBuildNotGitOpsErrorNamesTheResource(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Fatalf("error = %v, want %q", err, want)
 	}
+}
+
+func TestFluxTreeDropsNamespaceRecordedForClusterScopedKinds(t *testing.T) {
+	hr := helmRelease("flux", "release")
+	hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{
+		map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"},
+		map[string]any{"id": "prod_global_cert-manager.io_ClusterIssuer"},
+		map[string]any{"id": "prod_local_cert-manager.io_Issuer"},
+		map[string]any{"id": "prod_unknown_example.io_Widget"},
+	}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux", Name: "release"}): hr,
+	}}
+	session := ownershipSession(t,
+		ownedObject("cert-manager.io", "ClusterIssuer", "", "global", nil, false),
+		ownedObject("cert-manager.io", "Issuer", "prod", "local", nil, false),
+	)
+	tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "HelmRelease", "flux", "release", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"ClusterRole": "", "ClusterIssuer": "", "Issuer": "prod", "Widget": "prod"}
+	for _, node := range tree.Nodes {
+		if ns, ok := want[node.Ref.Kind]; ok {
+			if node.Ref.Namespace != ns {
+				t.Errorf("%s namespace = %q, want %q", node.Ref.Kind, node.Ref.Namespace, ns)
+			}
+			delete(want, node.Ref.Kind)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing from tree: %v", want)
+	}
+}
+
+func TestRemoteFluxTreeAlignsOnlyBuiltinScope(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "fleet-prod", "namespace": "flux-system"},
+		"spec":     map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}}},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"},
+			map[string]any{"id": "prod_global_cert-manager.io_ClusterIssuer"},
+		}}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "fleet-prod"}): ks,
+	}}
+	// The local catalog's scope for a custom kind says nothing about the remote cluster.
+	session := ownershipSession(t, ownedObject("cert-manager.io", "ClusterIssuer", "", "local-only", nil, false))
+	tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "Kustomization", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"ClusterRole": "", "ClusterIssuer": "prod"}
+	for _, node := range tree.Nodes {
+		if ns, ok := want[node.Ref.Kind]; ok {
+			if node.Ref.Namespace != ns {
+				t.Errorf("%s namespace = %q, want %q", node.Ref.Kind, node.Ref.Namespace, ns)
+			}
+			delete(want, node.Ref.Kind)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing from tree: %v", want)
+	}
+}
+
+func TestFluxTreeKeepsRecordedNamespaceWhenScopeIsDisputed(t *testing.T) {
+	served := func(version, resource string, namespaced bool) ownership.ServedResource {
+		return ownership.ServedResource{Group: "rbac.authorization.k8s.io", Version: version, Kind: "ClusterRole", Resource: resource, Namespaced: namespaced, Verbs: []string{"get", "list", "watch"}}
+	}
+	for name, resources := range map[string][]ownership.ServedResource{
+		"ambiguous":         {served("v1", "clusterroles", false), served("v2", "tenantroles", true)},
+		"served namespaced": {served("v1", "clusterroles", true)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hr := helmRelease("flux", "release")
+			hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"}}}}
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+				refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux", Name: "release"}): hr,
+			}}
+			session, err := ownershiptest.Scan(ownershiptest.World{Resources: resources}).Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "HelmRelease", "flux", "release", "helm.toolkit.fluxcd.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range tree.Nodes {
+				if node.Ref.Kind == "ClusterRole" {
+					if node.Ref.Namespace != "prod" {
+						t.Fatalf("disputed scope: namespace = %q, want the recorded prod", node.Ref.Namespace)
+					}
+					return
+				}
+			}
+			t.Fatal("ClusterRole missing from tree")
+		})
+	}
+}
+
+// Argo Changes rebuild each row from status.resources as recorded, so the
+// tree keeps Argo entries as recorded too; the two must name one object.
+func TestArgoTreeKeepsRecordedNamespace(t *testing.T) {
+	app := operatorApplication()
+	app.Object["status"] = map[string]any{"resources": []any{map[string]any{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "namespace": "prod", "name": "reader", "status": "Synced"}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range tree.Nodes {
+		if node.Ref.Kind == "ClusterRole" {
+			if node.Ref.Namespace != "prod" {
+				t.Fatalf("Argo entry namespace = %q, want it as recorded", node.Ref.Namespace)
+			}
+			return
+		}
+	}
+	t.Fatal("ClusterRole missing from tree")
 }

@@ -80,6 +80,7 @@ import {
   getIngressHosts,
   getServiceExternalIP,
   getWorkloadDisplayStatus,
+  isKueueQueuedJob,
 } from '../resources/resource-utils'
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
 import { isRolloutActivityVisible, rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
@@ -3101,13 +3102,13 @@ function getPodTemplateSpec(resource: any, apiKind: string) {
     : spec.template?.spec
 }
 
-function jobPhase(job: any): 'Complete' | 'Failed' | 'Suspended' | 'Running' | 'Pending' {
+export function jobPhase(job: any): 'Complete' | 'Failed' | 'Held by Kueue' | 'Suspended' | 'Running' | 'Pending' {
   const status = job?.status || {}
   const spec = job?.spec || {}
   const conditions = Array.isArray(status.conditions) ? status.conditions : []
   if (conditions.some((condition: any) => condition.type === 'Failed' && condition.status === 'True')) return 'Failed'
   if (conditions.some((condition: any) => condition.type === 'Complete' && condition.status === 'True')) return 'Complete'
-  if (spec.suspend) return 'Suspended'
+  if (spec.suspend) return isKueueQueuedJob(job) ? 'Held by Kueue' : 'Suspended'
   if ((status.active ?? 0) > 0) return 'Running'
   return 'Pending'
 }

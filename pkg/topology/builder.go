@@ -4001,10 +4001,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !opts.MatchesNamespaceFilter(namespace) {
 					continue
 				}
-				targetName, _, _ := unstructured.NestedString(sealedSecret.Object, "spec", "template", "metadata", "name")
-				if targetName == "" {
-					targetName = sealedSecret.GetName()
-				}
+				// The controller forces the produced Secret's name to the
+				// SealedSecret's own name; spec.template.metadata.name is
+				// overwritten and does not name the output Secret.
+				targetName := sealedSecret.GetName()
 				key := workloadRefKey{namespace: namespace, name: targetName}
 				consumers := secretConsumers[key]
 				if len(consumers) == 0 {
@@ -4522,212 +4522,61 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	nodes, edges, fluxSourceWarnings := addFluxSourceEdges(nodes, edges, fluxRoots, dynamicCache, opts)
 	warnings = append(warnings, fluxSourceWarnings...)
 
-	// 14. Create FluxCD HelmRelease edges to managed resources
-	// Older HelmReleases keep no inventory - match by labels:
-	// - helm.toolkit.fluxcd.io/name (FluxCD-specific, preferred)
-	// - app.kubernetes.io/instance (standard Helm label)
-	for hrKey, hrID := range helmReleaseIDs {
-		parts := strings.Split(hrKey, "/")
-		// A release applied to another cluster installed nothing here; a local
-		// workload with matching labels belongs to some other release.
-		if len(parts) != 2 || remoteHelmReleases[hrKey] {
+	// 14. FluxCD HelmRelease edges by origin labels, for releases whose status
+	// records no inventory (older helm-controllers). A release that records
+	// one gets its edges from it, beside Kustomizations, in
+	// addGitOpsManagedResourceEdges. A release applied to another cluster
+	// installed nothing here; a local workload with its labels belongs to
+	// some other release.
+	labelledReleases := make(map[resourceid.Ref]string)
+	for _, hr := range helmReleaseResources {
+		key := hr.GetNamespace() + "/" + hr.GetName()
+		if remoteHelmReleases[key] || gitops.FluxMembersReadable(hr) {
 			continue
 		}
-		hrNS := parts[0]
-		hrName := parts[1]
-
-		// Find Deployments with matching label
-		for depKey, depID := range deploymentIDs {
-			depParts := strings.Split(depKey, "/")
-			if len(depParts) != 2 {
-				continue
+		labelledReleases[resourceid.NewRef("helm.toolkit.fluxcd.io", "HelmRelease", hr.GetNamespace(), hr.GetName())] = helmReleaseIDs[key]
+	}
+	if len(labelledReleases) > 0 {
+		addLabelledRelease := func(obj metav1.Object, targetID string) {
+			if targetID == "" {
+				return
 			}
-			depNS := depParts[0]
-			depName := depParts[1]
-
-			// Must be in same namespace
-			if depNS != hrNS {
-				continue
+			release, ok := gitops.FluxHelmLabelledRelease(obj)
+			if !ok {
+				return
 			}
-
-			// Check if deployment has matching label
-			var dep *appsv1.Deployment
-			for _, d := range deployments {
-				if d.Namespace == depNS && d.Name == depName {
-					dep = d
-					break
-				}
-			}
-			if dep == nil {
-				continue
-			}
-
-			if matchesHelmRelease(dep.Labels, hrName, hrNS) {
+			if hrID := labelledReleases[release]; hrID != "" {
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, depID),
+					ID:     fmt.Sprintf("%s-to-%s", hrID, targetID),
 					Source: hrID,
-					Target: depID,
+					Target: targetID,
 					Type:   EdgeManages,
 				})
 			}
 		}
-
-		// Find Services with matching label
-		for svcKey, svcID := range serviceIDs {
-			svcParts := strings.Split(svcKey, "/")
-			if len(svcParts) != 2 {
-				continue
-			}
-			svcNS := svcParts[0]
-			svcName := svcParts[1]
-
-			// Must be in same namespace
-			if svcNS != hrNS {
-				continue
-			}
-
-			// Check if service has matching label
-			var svc *corev1.Service
-			for _, s := range services {
-				if s.Namespace == svcNS && s.Name == svcName {
-					svc = s
-					break
-				}
-			}
-			if svc == nil {
-				continue
-			}
-
-			if matchesHelmRelease(svc.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, svcID),
-					Source: hrID,
-					Target: svcID,
-					Type:   EdgeManages,
-				})
+		for _, d := range deployments {
+			addLabelledRelease(d, deploymentIDs[d.Namespace+"/"+d.Name])
+		}
+		for _, s := range services {
+			addLabelledRelease(s, serviceIDs[s.Namespace+"/"+s.Name])
+		}
+		for _, s := range statefulsets {
+			addLabelledRelease(s, statefulSetIDs[s.Namespace+"/"+s.Name])
+		}
+		for _, d := range daemonsets {
+			if opts.MatchesNamespaceFilter(d.Namespace) {
+				addLabelledRelease(d, fmt.Sprintf("daemonset/%s/%s", d.Namespace, d.Name))
 			}
 		}
-
-		// Find StatefulSets with matching label
-		for stsKey, stsID := range statefulSetIDs {
-			stsParts := strings.Split(stsKey, "/")
-			if len(stsParts) != 2 {
-				continue
-			}
-			stsNS := stsParts[0]
-			stsName := stsParts[1]
-
-			// Must be in same namespace
-			if stsNS != hrNS {
-				continue
-			}
-
-			// Check if statefulset has matching label
-			var sts *appsv1.StatefulSet
-			for _, s := range statefulsets {
-				if s.Namespace == stsNS && s.Name == stsName {
-					sts = s
-					break
-				}
-			}
-			if sts == nil {
-				continue
-			}
-
-			if matchesHelmRelease(sts.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, stsID),
-					Source: hrID,
-					Target: stsID,
-					Type:   EdgeManages,
-				})
-			}
+		for _, j := range jobs {
+			addLabelledRelease(j, jobIDs[j.Namespace+"/"+j.Name])
 		}
-
-		// Find DaemonSets with matching label
-		for _, ds := range daemonsetsByNS[hrNS] {
-			if matchesHelmRelease(ds.Labels, hrName, hrNS) {
-				dsID := fmt.Sprintf("daemonset/%s/%s", ds.Namespace, ds.Name)
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, dsID),
-					Source: hrID,
-					Target: dsID,
-					Type:   EdgeManages,
-				})
-			}
+		for _, c := range cronjobs {
+			addLabelledRelease(c, cronJobIDs[c.Namespace+"/"+c.Name])
 		}
-
-		// Find Jobs with matching label
-		for jobKey, jobID := range jobIDs {
-			jobParts := strings.Split(jobKey, "/")
-			if len(jobParts) != 2 || jobParts[0] != hrNS {
-				continue
-			}
-			var job *batchv1.Job
-			for _, j := range jobs {
-				if j.Namespace == jobParts[0] && j.Name == jobParts[1] {
-					job = j
-					break
-				}
-			}
-			if job == nil {
-				continue
-			}
-			if matchesHelmRelease(job.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, jobID),
-					Source: hrID,
-					Target: jobID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find CronJobs with matching label
-		for cjKey, cjID := range cronJobIDs {
-			cjParts := strings.Split(cjKey, "/")
-			if len(cjParts) != 2 || cjParts[0] != hrNS {
-				continue
-			}
-			var cj *batchv1.CronJob
-			for _, c := range cronjobs {
-				if c.Namespace == cjParts[0] && c.Name == cjParts[1] {
-					cj = c
-					break
-				}
-			}
-			if cj == nil {
-				continue
-			}
-			if matchesHelmRelease(cj.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, cjID),
-					Source: hrID,
-					Target: cjID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find Rollouts with matching label
-		if hasRollouts && dynamicCache != nil {
-			for rolloutKey, rolloutID := range rolloutIDs {
-				rolloutParts := strings.Split(rolloutKey, "/")
-				if len(rolloutParts) != 2 || rolloutParts[0] != hrNS {
-					continue
-				}
-				rolloutRes, rolloutGetErr := dynamicCache.Get(rolloutGVR, rolloutParts[0], rolloutParts[1])
-				if rolloutGetErr != nil || rolloutRes == nil {
-					continue
-				}
-				if matchesHelmRelease(rolloutRes.GetLabels(), hrName, hrNS) {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", hrID, rolloutID),
-						Source: hrID,
-						Target: rolloutID,
-						Type:   EdgeManages,
-					})
-				}
+		for _, ns := range slices.Sorted(maps.Keys(rolloutsByNamespace)) {
+			for _, r := range rolloutsByNamespace[ns] {
+				addLabelledRelease(r, rolloutIDs[ns+"/"+r.GetName()])
 			}
 		}
 	}
@@ -5787,6 +5636,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		applicationDestNamespaces,
 		kustomizationResources,
 		kustomizationIDs,
+		helmReleaseResources,
+		helmReleaseIDs,
 	)
 
 	// 17. Annotate workload nodes with NetworkPolicy coverage (optional)
@@ -5815,6 +5666,8 @@ func addGitOpsManagedResourceEdges(
 	applicationDestNamespaces map[string]string,
 	kustomizations []*unstructured.Unstructured,
 	kustomizationIDs map[string]string,
+	helmReleases []*unstructured.Unstructured,
+	helmReleaseIDs map[string]string,
 ) []Edge {
 	resourceIDs := make(map[string]string, len(nodes))
 	for i := range nodes {
@@ -5882,24 +5735,28 @@ func addGitOpsManagedResourceEdges(
 		"Ingress": true, "Gateway": true, "HTTPRoute": true,
 		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true, "UDPRoute": true,
 	}
-	for _, kustomization := range kustomizations {
-		if !gitops.FluxTargetsLocalCluster(kustomization) {
-			continue
-		}
-		ksID := kustomizationIDs[kustomization.GetNamespace()+"/"+kustomization.GetName()]
-		entries, _, _ := unstructured.NestedSlice(kustomization.Object, "status", "inventory", "entries")
-		for _, entry := range entries {
-			m, ok := entry.(map[string]any)
-			if !ok {
+	addFluxInventory := func(managers []*unstructured.Unstructured, ids map[string]string) {
+		for _, manager := range managers {
+			if !gitops.FluxTargetsLocalCluster(manager) {
 				continue
 			}
-			group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(gitops.StringValue(m["id"]))
-			if !ok || !fluxKinds[kind] {
-				continue
+			managerID := ids[manager.GetNamespace()+"/"+manager.GetName()]
+			entries, _, _ := unstructured.NestedSlice(manager.Object, "status", "inventory", "entries")
+			for _, entry := range entries {
+				m, ok := entry.(map[string]any)
+				if !ok {
+					continue
+				}
+				group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(gitops.StringValue(m["id"]))
+				if !ok || !fluxKinds[kind] {
+					continue
+				}
+				appendManaged(managerID, group, kind, namespace, name)
 			}
-			appendManaged(ksID, group, kind, namespace, name)
 		}
 	}
+	addFluxInventory(kustomizations, kustomizationIDs)
+	addFluxInventory(helmReleases, helmReleaseIDs)
 
 	return edges
 }
@@ -8106,28 +7963,6 @@ func monitorNodeData(monitor *unstructured.Unstructured, endpointField string) m
 		"apiVersion":    monitor.GetAPIVersion(),
 		"endpointCount": len(endpoints),
 	}
-}
-
-// matchesHelmRelease checks if a resource's labels indicate it's managed by a FluxCD HelmRelease
-// Checks both FluxCD-specific labels and standard Helm labels
-func matchesHelmRelease(labels map[string]string, hrName, hrNamespace string) bool {
-	// FluxCD adds these labels to resources deployed by HelmRelease
-	// helm.toolkit.fluxcd.io/name: <helmrelease-name>
-	// helm.toolkit.fluxcd.io/namespace: <helmrelease-namespace>
-	fluxName := labels["helm.toolkit.fluxcd.io/name"]
-	fluxNS := labels["helm.toolkit.fluxcd.io/namespace"]
-	if fluxName == hrName && (fluxNS == "" || fluxNS == hrNamespace) {
-		return true
-	}
-
-	// Fallback to standard Helm label (app.kubernetes.io/instance)
-	// This is set by charts that follow Helm best practices
-	instanceLabel := labels["app.kubernetes.io/instance"]
-	if instanceLabel == hrName {
-		return true
-	}
-
-	return false
 }
 
 type workloadRefs struct {

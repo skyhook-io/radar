@@ -78,7 +78,7 @@ func rolloutServiceLookupResult(cache *ResourceCache, namespace, rolloutName, se
 	if err != nil && !apierrors.IsNotFound(err) {
 		log.Printf("[missing-refs] failed to verify Rollout %s/%s service ref %s: %s", logsafe.Sanitize(namespace), logsafe.Sanitize(rolloutName), logsafe.Sanitize(serviceName), logsafe.Sanitize(err.Error()))
 	}
-	return refLookupResult(cache, "services", namespace, err)
+	return refLookupResult(cache, "services", namespace, serviceName, err)
 }
 
 type namedRef struct {
@@ -206,7 +206,7 @@ func scaleTargetLookupResult(cache *ResourceCache, resource, kind, namespace, na
 	if err != nil && !apierrors.IsNotFound(err) {
 		log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
 	}
-	return refLookupResult(cache, resource, namespace, err)
+	return refLookupResult(cache, resource, namespace, name, err)
 }
 
 func dynamicScaleTargetExists(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, name string) (checked bool, exists bool) {

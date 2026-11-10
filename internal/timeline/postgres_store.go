@@ -1206,6 +1206,13 @@ func (s *PostgresStore) buildQuery(opts QueryOptions, excludeManaged bool) (stri
 		}
 		addInFilter("event_type", vals)
 	}
+	if len(opts.Reasons) > 0 {
+		vals := make([]any, len(opts.Reasons))
+		for i, reason := range opts.Reasons {
+			vals[i] = reason
+		}
+		addInFilter("COALESCE(reason, '')", vals)
+	}
 	if opts.ExcludeDeleted {
 		addFilter(" AND event_type != $%d", string(EventTypeDelete))
 	}

@@ -62,7 +62,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -821,7 +821,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     navigate({ pathname: `/resources/${pluralKind}`, search: newParams.toString() })
   }, [searchParams, navigate])
 
-  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null) => {
+  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null, observed?: boolean) => {
     const newParams = new URLSearchParams()
     const globalNamespaces = searchParams.get('namespaces')
     if (globalNamespaces) {
@@ -832,7 +832,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       newParams.set('releaseStorage', storageNamespace)
     }
     if (investigationRunID) newParams.set('ai-run', investigationRunID)
-    setSelectedHelmRelease({ namespace, name, storageNamespace })
+    setSelectedHelmRelease({ namespace, name, storageNamespace, observed })
     if (mainView === 'helm') {
       setSearchParams(newParams, { replace: true })
       return
@@ -1036,9 +1036,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Fetch available namespaces
   const { data: availableNamespaces } = useNamespaces()
 
-  // Per-user view filter served by the backend. Loaded eagerly so the
-  // picker can render its current state without showing the multi-select
-  // fallback during the initial scope fetch.
+  // This tab's namespace pick plus the picker's source list (see
+  // utils/namespacePick). Loaded eagerly so the picker can render its current
+  // state without showing the multi-select fallback during the initial fetch.
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
@@ -1381,8 +1381,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     showClusterWarmupLabel ? clusterLoadState.message :
     crdDiscoveryStatus === 'discovering' ? 'Discovering Custom Resources…' :
     ''
+  // A settings error (ConnectionErrorView) clears only on restart.
   const showHeaderReconnect =
-    clusterConnectionState === 'disconnected' ||
+    (clusterConnectionState === 'disconnected' && connection.errorType !== 'settings') ||
     liveUpdatesDisconnected
   const headerReconnect = clusterConnectionState === 'disconnected' ? retryConnection : reconnectEventStream
   const headerReconnectPending = clusterConnectionState === 'disconnected' ? isRetrying : false
@@ -1451,7 +1452,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Serialize namespaces for stable dependency tracking
   const namespacesKey = namespaces.join(',')
 
-  // The server is canonical for the per-user namespace pick. Mirror its
+  // The scope query holds this tab's namespace pick. Mirror its
   // `actives` into App.tsx state so consumer hooks (SSE, dashboard, resource
   // lists) stay in lockstep with the picker. The dedicated URL-write effect
   // below propagates the mirrored state to `?namespaces=`.
@@ -1475,7 +1476,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (namespaces.length === 0) return
     setActiveNamespace.mutate(
       { namespaces: [] },
-      { onSuccess: () => setNamespaces([]) },
+      // A clear answered after a newer switch landed must not override it.
+      { onSuccess: (_scope, _vars, start) => { if (isAppliedNamespaceSwitch(start)) setNamespaces([]) } },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
   // Same write as the header picker, which then mirrors it into `namespaces`.
@@ -1642,7 +1644,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (slashIdx > 0) {
         const ns = releaseParam.slice(0, slashIdx)
         const name = releaseParam.slice(slashIdx + 1)
-        setSelectedHelmRelease({ namespace: ns, name, storageNamespace: searchParams.get('releaseStorage') || undefined })
+        const storageNamespace = searchParams.get('releaseStorage') || undefined
+        // Keep what a row click knows about the release; the URL doesn't carry it.
+        setSelectedHelmRelease(prev => (prev?.namespace === ns && prev.name === name && prev.storageNamespace === storageNamespace ? prev : { namespace: ns, name, storageNamespace }))
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- run only when searchParams change; namespacesKey/namespaceScope are read for that transition
@@ -2349,7 +2353,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <HelmView
             namespaces={namespaces}
             selectedRelease={selectedHelmRelease}
-            onReleaseClick={navigateToHelmRelease}
+            onReleaseClick={(namespace, name, storageNamespace, observed) => navigateToHelmRelease(namespace, name, storageNamespace, undefined, observed)}
           />
         )}
 

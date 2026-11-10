@@ -107,14 +107,14 @@ var categoryDescription = map[Category]string{
 	CategoryWorkloadDegraded:  "A workload has fewer ready replicas than desired — some pods are unavailable.",
 	CategoryHighRestart:       "A container has restarted many times — unstable even if it's currently running.",
 	CategoryPodEvicted:        "The kubelet evicted a pod because its node ran low on memory, disk, or PIDs, or because the pod exceeded its own ephemeral-storage limit.",
-	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline — or has been running too long with no completions.",
+	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline (activeDeadlineSeconds).",
 	CategoryCronJobFailed:     "A CronJob's recent runs are failing, or its schedule isn't producing successful jobs.",
 	CategoryBatchRunStopped:   "Kueue stopped trying a batch run: it was requeued too many times, or it exceeded its maximum execution time.",
 	// Configuration
 	CategoryMissingConfigRef:     "A pod references a ConfigMap, Secret, or volume that doesn't exist, so it can't start.",
 	CategoryInvalidConfiguration: "A workload contains contradictory or redundant configuration that can make the application behave differently from its manifest's apparent intent.",
 	CategoryPDBBlocksEvictions:   "A PodDisruptionBudget is blocking evictions — node drains and upgrades can't make progress.",
-	CategorySecretSyncFailed:     "An external secret sync (e.g. External Secrets Operator) failed to materialize a Secret.",
+	CategorySecretSyncFailed:     "A secret-producing controller (e.g. External Secrets Operator, or a SealedSecret) failed to materialize a Secret.",
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
 	CategoryServiceMixedBackends:  "A Service's selector matches pods of workloads that don't all serve it (different applications, or a port some don't declare), so part of its traffic reaches pods that may not serve it.",
@@ -140,7 +140,7 @@ var categoryDescription = map[Category]string{
 	CategoryHPALimitedOrFailed: "A HorizontalPodAutoscaler can't scale — missing metrics, pinned at max replicas, or scaling errors.",
 	// Security
 	CategoryRBACForbidden:            "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
-	CategoryCertificateNotReady:      "A certificate isn't usable or soon won't be — cert-manager issuance is failing or pending, or a certificate (including CloudNativePG's operator-managed ones) is expiring or has expired, or a live Ingress or Gateway uses a TLS Secret whose certificate is expired, not yet valid or about to expire.",
+	CategoryCertificateNotReady:      "A certificate needs attention: cert-manager issuance is failing or pending, a CloudNativePG certificate is expiring or expired, a live Ingress or Gateway uses an invalid or nearly expired TLS Secret, or an RKE2/K3s node monitor reported a certificate warning. Retained node warnings with stale or incomplete evidence have unverified current status.",
 	CategoryCertificateRenewalFailed: "Failed issuance after cert-manager's reported renewal time, with the latest failure, retry status and recorded certificate expiry.",
 	CategoryPodSecurityViolation:     "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
 	// Control plane

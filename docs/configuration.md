@@ -27,7 +27,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
 | `--disable-exec` | `false` | Disable pod terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP `exec_pod` |
-| `--disable-helm-write` | `false` | Disable Helm write operations |
+| `--disable-helm-write` | `false` | Disable release writes, per-release source updates, values previews and `manage_helm`; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
 | `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
@@ -95,6 +95,15 @@ existing deployments are unaffected.
 ignored with `--disable-exec`, `--mcp-read-only`, or disabled MCP. The CLI
 flag overrides the config key, including `--mcp-exec-tools=false`. Helm
 operators use `mcp.execTools: true`. See [exec_pod](mcp.md#exec_pod).
+
+`--mcp-http-tools`, `"mcpHttpTools": true`, or Helm `mcp.httpTools: true` opts in
+to [curl_service](mcp.md#curl_service), independently of `exec_pod`. It defaults
+to false, needs in-cluster Radar with writable MCP, and is not affected by
+`--disable-exec`. Each call needs `get services/proxy` on the target Service, as the caller or, without auth, as Radar's ServiceAccount. The
+CLI flag overrides the config key, including `--mcp-http-tools=false`.
+Catalog-only modes omit the tool unless `--fake-in-cluster` is set.
+`/api/capabilities.mcpHttpTools` and `/api/config.effective.mcpHttpTools` report
+the effective state (older Radar versions omit them: treat absent as off), and startup logs explain a suppressed opt-in.
 
 MCP is enabled with read and write tools by default. `--no-mcp` disables all
 MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
@@ -343,6 +352,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `restoreLastDesktopContext` | Desktop app only: reopen on the cluster last used (default: enabled). `false` always opens on the kubeconfig's `current-context` — see [Startup Context](#startup-context) |
 | `namespace` | Initial namespace filter |
 | `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
+| `maxScopeCandidates` | Desktop app only: the Desktop equivalent of `--max-scope-candidates` (default 20). How many namespaces Radar checks its access in, the kubeconfig context namespace included; raise it when `namespaces` lists more. Takes effect on the next start. The CLI reads `--max-scope-candidates` and `RADAR_MAX_SCOPE_CANDIDATES` only |
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `noVersionCheck` | Disable automatic version checks; Desktop's manual Check for Updates remains available |
@@ -364,6 +374,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `argoCdInsecureTls` | Skip TLS verification for argocd-server (self-signed default installs). Scoped to the Argo CD client only. |
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. Same rule as `prometheusHeaders`: requires `prometheusUrl`. |
 | `mcpExecTools` | Opt in to `exec_pod` (`--mcp-exec-tools`, default false) |
+| `mcpHttpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`, default false) |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
 
@@ -877,13 +888,13 @@ external terminal. Radar will not substitute a shell for the previous context.
 
 The header has a namespace picker on the right. Pick a single namespace to focus the view, or **All namespaces** to see everything you have access to. Cluster-scoped resources (Nodes, Namespaces, PVs, StorageClasses) appear regardless of the pick if your RBAC permits them — they have no namespace to filter on. Namespace-restricted users without their own cluster-scoped RBAC won't see cluster-scoped sections at all.
 
-The pick is a per-user view filter — it doesn't change anything for other users sharing the same Radar instance. Locally, your pick is remembered per kubeconfig context across restarts. In shared (auth-enabled) deployments the pick lives for the session.
+The pick belongs to the browser tab. Picking in one tab doesn't change your other tabs, or what anyone else sees, and a tab keeps its pick when you reload it, including **All namespaces**. A new tab starts from the last pick made on this Radar for the kubeconfig context, in any tab. Locally that last pick is remembered across restarts. In shared (auth-enabled) deployments it lives until Radar restarts or reconnects to the cluster, and it is shared by everyone Radar maps to the same Kubernetes user, so with a shared identity a new tab can start on someone else's last pick.
 
 The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
 
-Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice sticks for the context and the kubeconfig value is no longer consulted.
+Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice is what new tabs start from for the context and the kubeconfig value is no longer consulted.
 
-When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
+When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter, so it is one setting for every tab and every user. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
 
 **Single namespace only.** `--namespace-scope` pins the cache to exactly one namespace; scoping to several namespaces at once is not supported yet. Passing more than one (e.g. `--namespace=a,b`) fails at startup with a clear error rather than silently caching nothing. When scoped, the namespace picker becomes single-select, and a switch re-points the whole cache to the new namespace rather than adding to it.
 
@@ -901,9 +912,9 @@ Radar Desktop doesn't take command-line flags, so set the same list in `~/.radar
 { "namespaces": ["ns1", "ns2", "ns3"] }
 ```
 
-Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default the UI picks up when it loads. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
+Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as the default a user's first tab starts from. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** is then what new tabs start from. The picker can switch between those namespaces or keep several selected at once.
 
-This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
+This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. A custom resource kind refused everywhere Radar checked stays refused for a minute before Radar checks again, so access granted to it while Radar runs can take that long to appear. The list is capped by `--max-scope-candidates` (default 20), counting the kubeconfig context namespace when it isn't in the list. Rather than silently probing a subset, the CLI exits with an error, and Radar Desktop opens with the error in its window and doesn't connect; raise the cap with `maxScopeCandidates` in `~/.radar/config.json` and reopen Desktop.
 
 ## Audit evidence under partial access
 

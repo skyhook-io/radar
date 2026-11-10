@@ -1501,18 +1501,6 @@
         "type": "manages"
       },
       {
-        "id": "helmrelease/shop/redis-to-deployment/shop/redis-legacy",
-        "source": "helmrelease/shop/redis",
-        "target": "deployment/shop/redis-legacy",
-        "type": "manages"
-      },
-      {
-        "id": "helmrelease/shop/redis-to-job/shop/redis-migrate",
-        "source": "helmrelease/shop/redis",
-        "target": "job/shop/redis-migrate",
-        "type": "manages"
-      },
-      {
         "id": "helmrelease/shop/redis-to-rollout/shop/redis-proxy",
         "source": "helmrelease/shop/redis",
         "target": "rollout/shop/redis-proxy",
@@ -1850,15 +1838,8 @@
     },
     {
       "root": "apps|Deployment|shop|redis-legacy",
-      "relationships": {
-        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
-        "managedBy": [
-          {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-        ]
-      },
-      "managedBy": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ],
+      "relationships": null,
+      "managedBy": null,
       "deletePreview": {
         "root": {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
         "rootResolved": true,
@@ -2184,7 +2165,6 @@
     {
       "root": "batch|Job|shop|redis-migrate",
       "relationships": {
-        "owner": {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"},
         "managedBy": [
           {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
         ]
@@ -2537,11 +2517,9 @@
           {"kind": "Service", "namespace": "shop", "name": "redis"},
           {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
           {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
-          {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
           {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
           {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
-          {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
-          {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+          {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"}
         ],
         "managedBy": [
           {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
@@ -2557,11 +2535,9 @@
           {"kind": "Service", "namespace": "shop", "name": "redis"},
           {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
           {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
-          {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
           {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
           {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
-          {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
-          {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+          {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"}
         ]
       }
     },
@@ -4265,6 +4241,21 @@
             }
           },
           {
+            "id": "gitrepository/flux-system/repo",
+            "kind": "GitRepository",
+            "name": "repo",
+            "status": "unknown",
+            "data": {
+              "apiVersion": "source.toolkit.fluxcd.io/v1",
+              "auditKey": "source.toolkit.fluxcd.io|GitRepository|flux-system|repo",
+              "branch": "",
+              "labels": null,
+              "namespace": "flux-system",
+              "ready": "Unknown",
+              "url": "https://example.com/repo.git"
+            }
+          },
+          {
             "id": "kustomization/flux-system/shop",
             "kind": "Kustomization",
             "name": "shop",
@@ -4281,6 +4272,13 @@
           }
         ],
         "edges": [
+          {
+            "id": "gitrepository/flux-system/repo-to-kustomization/flux-system/shop-configures",
+            "source": "gitrepository/flux-system/repo",
+            "target": "kustomization/flux-system/shop",
+            "type": "configures",
+            "label": "source"
+          },
           {
             "id": "kustomization/flux-system/shop-to-deployment/shop/cart",
             "source": "kustomization/flux-system/shop",

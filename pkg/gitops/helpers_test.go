@@ -82,6 +82,37 @@ func TestFluxTargetsLocalCluster(t *testing.T) {
 // Shapes recorded from Argo CD 3.5.2: a live empty-render guard marks every
 // resource requiresPruning; the same leftover condition after the render
 // recovered and the Deployment drifted carries no requiresPruning at all.
+func TestArgoCreateNamespaceEnabled(t *testing.T) {
+	appWithOptions := func(opts ...any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"spec": map[string]any{"syncPolicy": map[string]any{"syncOptions": opts}},
+		}}
+	}
+	tests := []struct {
+		name string
+		app  *unstructured.Unstructured
+		want bool
+	}{
+		{name: "set", app: appWithOptions("CreateNamespace=true"), want: true},
+		{name: "set among others", app: appWithOptions("ServerSideApply=true", "CreateNamespace=true"), want: true},
+		{name: "explicitly disabled", app: appWithOptions("CreateNamespace=false"), want: false},
+		{name: "other options only", app: appWithOptions("PruneLast=true"), want: false},
+		// Argo matches the exact literal; a mistyped value is not the option, so
+		// Radar must not treat it as set and hide the misconfiguration.
+		{name: "wrong case is not the option", app: appWithOptions("CreateNamespace=TRUE"), want: false},
+		{name: "empty options", app: appWithOptions(), want: false},
+		{name: "no syncPolicy", app: &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}, want: false},
+		{name: "nil app", app: nil, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ArgoCreateNamespaceEnabled(tc.app); got != tc.want {
+				t.Errorf("ArgoCreateNamespaceEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestArgoEmptyRenderPredicates(t *testing.T) {
 	app := func(sync string, resources ...any) *unstructured.Unstructured {
 		status := map[string]any{"sync": map[string]any{"status": sync}}

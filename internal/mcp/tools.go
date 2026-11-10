@@ -138,7 +138,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"get_dashboard or issues first. " +
 			"crossplanePause: requested=exact annotation true; acknowledged=that plus stored Synced=False/ReconcilePaused. Neither state establishes readiness, and absence does not rule out other pause mechanisms.",
 		Annotations: readOnly,
-	}, logToolCall("list_resources", handleListResources))
+	}, logToolCall("list_resources", stopsWhenCallerLeaves(handleListResources)))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_resource",
@@ -379,7 +379,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"operation, and a capped operations trail for failed upgrades, rollbacks, and stuck operations. " +
 			"Use this first for Helm deployment debugging; if storageNamespace is present, pass that " +
 			"value as namespace to get_helm_release. Follow with get_helm_release include=history,operations " +
-			"for the full revision trail.",
+			"for the full revision trail. When you can't read Helm's release Secrets, the result is an object: " +
+			"its summary says what's unknown, and observed rows come from labels and annotations on " +
+			"objects, with no status, and may miss releases.",
 		Annotations: readOnly,
 	}, logToolCall("list_helm_releases", handleListHelmReleases))
 
@@ -389,10 +391,23 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"resources, health, current or recovered operation failures, and hook diagnostics. " +
 			"The namespace argument is the Helm storage namespace: use `storageNamespace` " +
 			"from list_helm_releases when present, otherwise use the release namespace. " +
-			"Request values, history, operations, or " +
-			"revision comparisons with `include`; returned values are key-aware redacted.",
-		Annotations: readOnly,
+			"Use include=chart with chart_path for stored defaults/schema (no fetch), include=versions for exact upgrade versions, include=notes for bounded untrusted notes. Request values, history, operations, or " +
+			"revision comparisons with `include`; returned values are key-aware redacted and describe the latest revision. " +
+			"manage_helm merges deployed values, which may differ after failure; check history/values_diff. " +
+			"Without Helm's Secrets it returns {summary, observed}, built from the release's objects.",
+		// include=versions contacts the release's chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "get_helm_chart",
+		Description: "List a Helm chart's versions in a configured source, newest first, before installing it; " +
+			"`latest` is the newest non-prerelease. Pass the repository and chart manage_helm install will use. " +
+			"Read live from the source; versions are what it advertises, not a check that one installs. " +
+			"For an installed release use get_helm_release include=versions.",
+		// Contacts the configured chart source, outside the cluster API.
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(true)},
+	}, logToolCall("get_helm_chart", handleGetHelmChart))
 
 	// --- Packages tool (read-only) ---
 	//
@@ -609,6 +624,14 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
 	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))
 
+	if !k8s.ForceDisableHelmWrite {
+		addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+			Name:        "manage_helm",
+			Description: "Install/upgrade/rollback/uninstall native Helm as the caller. Install needs an exact version (get_helm_chart lists them) and configured source; refuses existing history. Upgrade can reuse a complete stored chart without a source; version omission requires latest/deployed agreement. Other upgrades need a confirmed configured source. dry_run previews upgrades (identical merge rules) and rollbacks (live takeover/retention checks; rollback claims existing objects unchecked); expected_revision checks for stale edits, not an atomic lock. Upgrade merges last deployed overrides (latest failed/superseded if none deployed). Latest get_helm_release values may differ: inspect history/values_diff after failure. Maps merge, lists replace; hidden-credential container replacement is refused unless replace_values=true replaces ALL overrides. Change GitOps dependencies in git. Uninstall without confirm previews resources; return the reviewed token to delete. Coordinate writers: Helm has no atomic revision-conditioned uninstall. Hooks may run; operations take minutes and can outlive client timeouts. Inspect get_helm_release before retrying; use wait_for for readiness. Never pass literal credentials.",
+			Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)},
+		}, logToolCall("manage_helm", handleManageHelm))
+	}
+
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
@@ -617,6 +640,7 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 			"(requires 'revision'; enumerate valid numbers with get_resource include=revisions), " +
 			"'pause' holds a Deployment's rollouts until 'resume' (Deployments only; rollback is refused while paused). " +
 			"Use list_resources or get_dashboard first to identify the target. " +
+			"Roll back a native Helm release's workload as the release (manage_helm rollback where available); a workload rollback leaves Helm's record stale. " +
 			"On a Rollout, 'rollback' rewrites the pod template and so starts a new rollout that re-runs every " +
 			"canary step, pause, and analysis — to revert traffic now use manage_rollout abort, or follow the " +
 			"rollback with manage_rollout promote-full.",
@@ -716,6 +740,9 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 
+	if includeExec && httpToolsEnabled.Load() && k8s.IsInCluster() {
+		registerHTTPTools(server, paramRegistry, &mcp.ToolAnnotations{DestructiveHint: boolPtr(true), OpenWorldHint: boolPtr(true)})
+	}
 	// Tools that run commands in the cluster: opt-in (--mcp-exec-tools).
 	if includeExec && execToolsEnabled.Load() {
 		registerExecTools(server, paramRegistry, &mcp.ToolAnnotations{
@@ -1210,9 +1237,16 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 
 	var issueSummary *resourcecontext.IssueSummary
 	var issueRows []issues.Issue
+	var nodeCertificateReport *k8s.NodeCertificateReport
 	if !skipContext || includes["issues"] {
 		gvk := rawObj.GetObjectKind().GroupVersionKind()
-		issueSummary, issueRows = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+		issueSummary, issueRows, nodeCertificateReport = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+	}
+	if nodeCertificateReport != nil {
+		node, ok := rawObj.(*corev1.Node)
+		if !ok || nodeCertificateReport.UID != string(node.UID) {
+			nodeCertificateReport = nil
+		}
 	}
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
@@ -1278,13 +1312,16 @@ func readMCPResource(ctx context.Context, input getResourceInput, tier resourcec
 	//     or template-divergence warning upgrades this to {resource, warnings})
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
-	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges {
+	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && staleEnv == nil && !defaultConfigMapChanges && nodeCertificateReport == nil {
 		return toJSONResult(resourceData)
 	}
 
 	result := map[string]any{"resource": resourceData}
 	if tier == resourcecontext.TierDiagnostic {
 		result["coverage"] = "Cached resource and Issues evidence, with a bounded sample of this resource's events. Pods, runtime logs and metrics were not collected. Graph-derived networking/scaling relationships were not collected; an empty Issues list does not establish runtime health. Follow Workload references with get_resource or diagnose for admission context, and Pod references with diagnose for runtime evidence."
+	}
+	if nodeCertificateReport != nil {
+		result["nodeCertificateReport"] = nodeCertificateReport
 	}
 	if includes["issues"] {
 		attachRelatedIssueDetails(result, issueRows)
@@ -2587,9 +2624,10 @@ type mcpMetrics struct {
 }
 
 type mcpClusterInfo struct {
-	Name     string `json:"name"`
-	Platform string `json:"platform"`
-	Version  string `json:"version"`
+	Name              string `json:"name"`                        // kubeconfig context, or "in-cluster"
+	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"` // cluster entry the context points at; several contexts can share one
+	Platform          string `json:"platform"`
+	Version           string `json:"version"`
 }
 
 type mcpNodeSummary = health.NodeFleetCounts
@@ -2731,6 +2769,12 @@ type mcpHelmSummary struct {
 	// reporting Total=0.
 	Unavailable       bool   `json:"unavailable,omitempty"`
 	UnavailableReason string `json:"unavailableReason,omitempty"`
+	// UnreadNamespaces are namespaces whose Helm release Secrets weren't read:
+	// the caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases;
+	// list_helm_releases may still find them from objects the caller can read.
+	// Absent when every namespace in scope was read, and when Unavailable.
+	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
 type mcpHelmRelease struct {
@@ -2753,6 +2797,15 @@ func mcpHelmDashboardPriority(r helm.HelmRelease) int {
 	return helm.ReleasePriority(r)
 }
 
+func mcpClusterInfoFromInfo(info *k8s.ClusterInfo) mcpClusterInfo {
+	return mcpClusterInfo{
+		Name:              info.DisplayName(),
+		KubeconfigCluster: info.KubeconfigCluster(),
+		Platform:          info.Platform,
+		Version:           info.KubernetesVersion,
+	}
+}
+
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
 	d := mcpDashboard{
 		ResourceCounts: make(map[string]int),
@@ -2763,11 +2816,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 	// Cluster info
 	if info, err := k8s.GetClusterInfo(ctx); err == nil {
-		d.Cluster = mcpClusterInfo{
-			Name:     info.Cluster,
-			Platform: info.Platform,
-			Version:  info.KubernetesVersion,
-		}
+		d.Cluster = mcpClusterInfoFromInfo(info)
 	}
 
 	now := time.Now()
@@ -3040,12 +3089,21 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		d.HelmReleases.UnavailableReason = "Helm client not initialized."
 	} else {
 		user := userFromContext(ctx)
-		namespaces := resolveHelmListNamespaces(ctx, namespace)
+		namespaces, checked, unread := resolveHelmStorageScope(ctx, namespace)
 		if namespaces != nil && len(namespaces) == 0 {
 			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, namespaces, user)
-			if err != nil {
+			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user)
+			if !checked && ((err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err)) {
+				// A permission check went unanswered, so the refusal may be of a
+				// cluster-wide fallback the caller can't make even though some
+				// namespace would allow it.
+				d.HelmReleases.Unavailable = true
+				d.HelmReleases.UnavailableReason = "Couldn't check the caller's access to Helm release secrets (a permission check went unanswered); retry shortly."
+			} else if err == nil && len(read) == 0 && len(denied) > 0 {
+				d.HelmReleases.Unavailable = true
+				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope. list_helm_releases may find releases from objects the caller can read."
+			} else if err != nil {
 				// Not fatal for the dashboard — a viewer with no helm access
 				// still sees everything else. Surface to LLM consumers via
 				// Unavailable so they don't confidently report "Total=0
@@ -3061,6 +3119,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				}
 			} else {
 				d.HelmReleases.Total = len(releases)
+				if missing := helm.UnreadStorageNamespaces(unread, denied); len(missing) > 0 {
+					d.HelmReleases.UnreadNamespaces = resourceapi.Names(missing, resourceapi.MCPSetLimit)
+				}
 
 				// Sort: failed/pending first, then operation-signaled Helm rollbacks,
 				// then unhealthy/degraded owned resources.
@@ -3428,8 +3489,10 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 	}
 	user := userFromContext(ctx)
 	helmNamespaces := namespaces
+	checked := true
+	var unread []string
 	if helmNamespaces == nil {
-		helmNamespaces = resolveHelmListNamespaces(ctx, "")
+		helmNamespaces, checked, unread = resolveHelmStorageScope(ctx, "")
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
 	username, groups := "", []string(nil)
@@ -3437,6 +3500,11 @@ func nativeHelmIssuesForContext(ctx context.Context, namespaces []string, filter
 		username, groups = user.Username, user.Groups
 	}
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	// Namespaces left out because the caller can't read Helm's storage there
+	// were never read, and list_helm_releases still lists their releases.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
+	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 

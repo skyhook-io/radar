@@ -176,6 +176,17 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryOperatorConditionFail
 		case g == "external-secrets.io":
 			return issuesapi.CategorySecretSyncFailed
+		case g == "bitnami.com":
+			// Only a SealedSecret whose Synced condition is False failed to
+			// PRODUCE its Secret (e.g. "no key could decrypt") — that is the
+			// secret-production failure the producer root-cause link keys on, the
+			// same bucket as External Secrets. Any other condition type (Ready,
+			// Available, …) or other bitnami.com kind is generic: don't mislabel
+			// it "secret sync failed" or make it a secret-producer root.
+			if in.Kind == "SealedSecret" && conditionTypeFromReason(in.Reason) == "Synced" {
+				return issuesapi.CategorySecretSyncFailed
+			}
+			return issuesapi.CategoryOperatorConditionFail
 		case g == "keda.sh":
 			return issuesapi.CategoryHPALimitedOrFailed
 		case strings.Contains(g, "karpenter"):
@@ -200,6 +211,15 @@ func Classify(in classifyInput) issuesapi.Category {
 		return classifyProblem(in)
 	}
 	return issuesapi.CategoryUnknown
+}
+
+// conditionTypeFromReason extracts the condition type from a condTypeReason-encoded
+// string: "Synced: UnsealError" or "Ready=False" → "Synced" / "Ready".
+func conditionTypeFromReason(reason string) string {
+	if i := strings.IndexAny(reason, ":="); i >= 0 {
+		return strings.TrimSpace(reason[:i])
+	}
+	return strings.TrimSpace(reason)
 }
 
 // classifyProblem handles the broad source=problem channel (radar's per-kind
@@ -306,6 +326,8 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 
 	case "Node":
 		switch in.Reason {
+		case k8s.NodeCertificateIssueReason:
+			return issuesapi.CategoryCertificateNotReady
 		case "NotReady", "MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable":
 			return issuesapi.CategoryNodeNotReady
 		}
@@ -339,11 +361,11 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		return issuesapi.CategoryUnknown
 
 	case "Job":
-		// DetectProblems only emits Job problems for genuine failures: a
-		// JobFailed condition (reason e.g. BackoffLimitExceeded /
-		// DeadlineExceeded, or the "Failed" fallback) or a stuck-active job
-		// ("Running for … with no completions"). All map to the batch
-		// workload-failure category rather than being discarded.
+		// DetectProblems only emits Job problems for a genuine terminal
+		// failure: a JobFailed condition (reason e.g. BackoffLimitExceeded /
+		// DeadlineExceeded, or the "Failed" fallback). It maps to the batch
+		// workload-failure category. (A deleting Job is classified as
+		// terminating earlier, before this switch.)
 		return issuesapi.CategoryJobFailed
 
 	case "CronJob":

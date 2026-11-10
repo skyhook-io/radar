@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
@@ -586,7 +588,6 @@ func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
 	foreign.rootKind = "Application"
 	foreign.rootGroup = "apps.example.io"
 	foreign.rootIdentity = resourceid.ResourceKey(foreign.rootGroup, foreign.rootKind, "operators", "platform")
-	foreign.source = sourceRefForInput(nil, foreign.rootKind, foreign.rootGroup, foreign.rootKey)
 
 	rows := groupApplications([]appWorkloadInput{foreign})
 	if len(rows) != 1 {
@@ -601,17 +602,16 @@ func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
 func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 	helmApp := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	helmApp.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	helmApp.source = sourceRefForInput(helmApp.overlay, helmApp.rootKind, helmApp.rootGroup, helmApp.rootKey)
+	helmApp.source = &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
 
 	labelApp := overlayInput("Deployment", "prod", "payments-worker", "1.0", "healthy", subject.TierPartOf, "prod/app/payments", subject.ConfidenceMedium)
 	labelApp.overlay.Winner.Ref = subject.Ref{Kind: "app", Namespace: "prod", Name: "payments"}
-	labelApp.source = sourceRefForInput(labelApp.overlay, labelApp.rootKind, labelApp.rootGroup, labelApp.rootKey)
 
 	structuralApp := rawInput("Deployment", "prod", "admin", "1.0", "healthy")
 	structuralApp.rootKey, structuralApp.rootKind = "argocd/Application/admin", "Application"
 	structuralApp.rootGroup = "argoproj.io"
 	structuralApp.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "argocd", "admin")
-	structuralApp.source = sourceRefForInput(structuralApp.overlay, structuralApp.rootKind, structuralApp.rootGroup, structuralApp.rootKey)
+	structuralApp.source = &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "admin"}
 
 	rows := groupApplications([]appWorkloadInput{helmApp, labelApp, structuralApp})
 
@@ -632,7 +632,7 @@ func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 func TestGroupApplications_SourceRefRequiresEveryWorkload(t *testing.T) {
 	api := overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	api.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	api.source = sourceRefForInput(api.overlay, api.rootKind, api.rootGroup, api.rootKey)
+	api.source = &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
 
 	worker := overlayInput("Deployment", "prod", "checkout-worker", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 
@@ -1601,5 +1601,53 @@ func TestManagedSourceRefs_IgnoreRemoteArgoDestinations(t *testing.T) {
 	ref := commonManagedSourceRef([]appWorkload{{Group: "apps", Kind: "Deployment", Namespace: "sealed-secrets", Name: "controller"}}, sources)
 	if ref == nil || ref.Name != "sealed-secrets-hub" {
 		t.Fatalf("source ref = %+v, want the in-cluster Application only", ref)
+	}
+}
+
+func TestApplicationsViewRestricted(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		requested  []string
+		effective  []string
+		unreadable string
+		want       bool
+	}{
+		{name: "all namespaces, all visible", unreadable: "none", want: false},
+		{name: "all namespaces, user narrowed", effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "all namespaces, no access", effective: []string{}, unreadable: "none", want: true},
+		{name: "all namespaces, Radar can't read them all", unreadable: "", want: true},
+		{name: "explicit filter fully granted", requested: []string{"a", "b"}, effective: []string{"a", "b"}, unreadable: "none", want: false},
+		{name: "explicit filter partly granted", requested: []string{"a", "b"}, effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "explicit filter inside what Radar reads", requested: []string{"a"}, effective: []string{"a"}, unreadable: "b", want: false},
+		{name: "explicit filter outside what Radar reads", requested: []string{"b"}, effective: []string{"b"}, unreadable: "b", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readable := func(namespaces []string) bool { return !slices.Contains(namespaces, tc.unreadable) }
+			if got := applicationsViewRestricted(tc.requested, tc.effective, readable); got != tc.want {
+				t.Fatalf("applicationsViewRestricted() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewestRevisionByOwner(t *testing.T) {
+	older := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	newer := metav1.NewTime(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
+	revision := func(owner types.UID, at metav1.Time) metav1.Object {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: at,
+			OwnerReferences:   []metav1.OwnerReference{{UID: owner}},
+		}}
+	}
+
+	// A rollback bumps the revision number on an old object, so creation time
+	// has to win over listing order.
+	got := newestRevisionByOwner([]metav1.Object{
+		revision("api", newer),
+		revision("api", older),
+		revision("worker", older),
+	})
+	if !got["api"].Equal(newer.Time) || !got["worker"].Equal(older.Time) || len(got) != 2 {
+		t.Fatalf("newestRevisionByOwner() = %v", got)
 	}
 }

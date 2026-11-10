@@ -192,6 +192,17 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
 
+  {{- if or .Values.rbac.viewAdmissionPolicies (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # Native validating admission policies (read). Kept separate from
+  # rbac.viewWebhooks so no-auth installs can grant either admission surface
+  # independently. Auth/cloud reads are re-checked per requesting user.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+
   {{- if .Values.rbac.viewNodeRuntime }}
   # Kubelet runtime evidence (opt-in): upgrade-impact checks inspect kubelet
   # metrics and effective configuration through the Node proxy. In no-auth
@@ -425,6 +436,13 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.multus }}
+  # Pod details link each secondary network to its NetworkAttachmentDefinition;
+  # nothing else in the group is read.
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.networkPolicyApi }}
   # SIG-network out-of-tree Network Policy API; ClusterNetworkPolicy is
   # cluster-scoped and surfaced in topology.
@@ -552,6 +570,11 @@ rules:
   {{- if .Values.rbac.crdGroups.sealedSecrets }}
   - apiGroups: ["bitnami.com"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.secretsStoreCsi }}
+  - apiGroups: ["secrets-store.csi.x-k8s.io"]
+    resources: ["secretproviderclasses", "secretproviderclasspodstatuses"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.strimzi }}

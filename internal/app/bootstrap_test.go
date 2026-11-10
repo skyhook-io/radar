@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -524,10 +525,35 @@ func TestValidateNamespaceFanout(t *testing.T) {
 	if err := validateNamespaceFanout(full, "ns-3", 20); err != nil {
 		t.Fatalf("context namespace inside the list must not consume a slot: %v", err)
 	}
-	if err := validateNamespaceFanout(full, "other", 20); err == nil {
-		t.Fatal("distinct context namespace pushing past the cap must error")
-	}
 	if err := validateNamespaceFanout(full[:19], "other", 20); err != nil {
 		t.Fatalf("cap-1 list with distinct context namespace should fit: %v", err)
+	}
+
+	var fanout *NamespaceFanoutError
+	err := validateNamespaceFanout(full, "other", 20)
+	if !errors.As(err, &fanout) || fanout.Listed != 20 || fanout.ContextNamespace != "other" || fanout.Cap != 20 || fanout.Candidates() != 21 {
+		t.Fatalf("distinct context namespace pushing past the cap: err = %#v", err)
+	}
+	// The CLI prints this text as-is; it must not change.
+	const cliText = `--namespaces lists 20 namespaces and the kubeconfig context namespace "other" adds one more probe candidate, exceeding the fanout cap of 20; raise --max-scope-candidates or include the context namespace in the list`
+	if err.Error() != cliText {
+		t.Fatalf("CLI error text changed:\n got %q\nwant %q", err.Error(), cliText)
+	}
+
+	if err := CheckNamespaceCount(full, 20); err != nil {
+		t.Fatalf("a list at the cap passes the CLI check: %v", err)
+	}
+	if err := CheckNamespaceCount(append(slices.Clone(full), "ns-20"), 20); !errors.As(err, &fanout) || fanout.Listed != 21 || fanout.ContextNamespace != "" {
+		t.Fatalf("a list past the cap fails the CLI check: err = %#v", err)
+	}
+	const cliCountText = "--namespaces lists 21 namespaces but the RBAC probe fanout cap is 20; raise --max-scope-candidates (or RADAR_MAX_SCOPE_CANDIDATES) to cover all of them"
+	if got := CheckNamespaceCount(append(slices.Clone(full), "ns-20"), 20).Error(); got != cliCountText {
+		t.Fatalf("CLI error text changed:\n got %q\nwant %q", got, cliCountText)
+	}
+
+	long := append(slices.Clone(full), "ns-20", "ns-21")
+	err = validateNamespaceFanout(long, "ns-3", 20)
+	if !errors.As(err, &fanout) || fanout.Listed != 22 || fanout.ContextNamespace != "" || fanout.Candidates() != 22 {
+		t.Fatalf("list longer than the cap: err = %#v", err)
 	}
 }

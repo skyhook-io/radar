@@ -438,8 +438,15 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       const branch = nodeData.branch as string;
       return branch ? `${ready} • ${branch}` : ready;
     }
-    case "Pod":
-      return (nodeData.phase as string) || "Unknown";
+    case "Pod": {
+      const phase = (nodeData.phase as string) || "Unknown";
+      if (Number(nodeData.terminating) > 0) {
+        // Phase stays Running while a deleted Pod drains; kubectl shows Terminating.
+        // A Pod that already finished keeps its outcome visible.
+        return phase === "Failed" || phase === "Succeeded" ? `${phase} • terminating` : "Terminating";
+      }
+      return phase;
+    }
     case "Service": {
       const svcType = (nodeData.type as string) || "ClusterIP";
       const ports = (nodeData.ports as ServicePortEntry[] | undefined) || [];
@@ -515,6 +522,14 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       const count = (nodeData.podCount as number) || 0;
       const healthy = (nodeData.healthy as number) || 0;
       const unhealthy = (nodeData.unhealthy as number) || 0;
+      // Termination and health are separate: a draining Pod can be healthy.
+      // The card is narrow, so the unhealthy count comes first and survives truncation.
+      const pods = (nodeData.pods as Array<{ terminating?: boolean }> | undefined) || [];
+      const terminating = pods.filter(p => p.terminating === true).length;
+      if (terminating > 0) {
+        const draining = `${terminating === count ? 'all' : terminating} terminating`;
+        return unhealthy > 0 ? `${count} pods • ${unhealthy} unhealthy • ${draining}` : `${count} pods • ${draining}`;
+      }
       if (unhealthy > 0) {
         return `${count} pods (${unhealthy} unhealthy)`;
       }

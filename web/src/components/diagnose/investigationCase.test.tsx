@@ -841,6 +841,47 @@ describe("agent case placement (D-1, D-1b)", () => {
     expect(resolved.items[0].placement).toBe("card");
   });
 
+  it("places a citation of an observed Helm release stored in another namespace", () => {
+    const helmRef = evidenceRef("h", "o");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "helm",
+        "get_helm_release",
+        {
+          summary: "Observed: Helm's release Secrets can't be read here.",
+          observed: {
+            name: "shop",
+            namespace: "shop",
+            storageNamespace: "flux-system",
+            chart: "shop",
+            chartVersion: "1.4.2",
+            resourceCount: 3,
+          },
+        },
+        {
+          evidenceRef: helmRef,
+          summary: JSON.stringify({ namespace: "flux-system", name: "shop" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(helmRef, "context", "The release's chart is shop 1.4.2.", {
+            kind: "HelmRelease",
+            namespace: "shop",
+            name: "shop",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("card");
+  });
+
   it("keeps an ordinary listing's held entry to the listing's namespace", () => {
     const listRef = evidenceRef("c", "e");
     const projection = project(

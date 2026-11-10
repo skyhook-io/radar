@@ -102,6 +102,7 @@ type AppConfig struct {
 	MCPReadOnly                 bool
 	MCPEnabled                  bool
 	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -118,6 +119,7 @@ func SetGlobals(cfg AppConfig) {
 	// Init-only write, before any goroutine reads it; later reads happen under
 	// clientMu and assume no concurrent mutation.
 	k8s.ForceInCluster = cfg.FakeInCluster
+	mcppkg.SetHTTPToolsEnabled(cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster())
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
 	portforward.SetAutoDisabled(cfg.DisableAutoPortForward)
@@ -131,6 +133,42 @@ func SetGlobals(cfg AppConfig) {
 	versionpkg.SetCurrent(cfg.Version)
 }
 
+// NamespaceFanoutError reports a --namespaces list that, with the kubeconfig
+// context namespace, names more namespaces than the probe candidate cap. Each
+// entrypoint words the fix for its own settings: the CLI prints Error(),
+// Desktop points at config.json.
+type NamespaceFanoutError struct {
+	Listed int
+	// ContextNamespace is the kubeconfig context namespace when it is not in
+	// the list and so takes a cap slot of its own; empty otherwise.
+	ContextNamespace string
+	Cap              int
+}
+
+// Candidates is how many namespaces Radar would check: the cap value that fits.
+func (e *NamespaceFanoutError) Candidates() int {
+	if e.ContextNamespace != "" {
+		return e.Listed + 1
+	}
+	return e.Listed
+}
+
+func (e *NamespaceFanoutError) Error() string {
+	if e.ContextNamespace == "" {
+		return fmt.Sprintf("--namespaces lists %d namespaces but the RBAC probe fanout cap is %d; raise --max-scope-candidates (or RADAR_MAX_SCOPE_CANDIDATES) to cover all of them", e.Listed, e.Cap)
+	}
+	return fmt.Sprintf("--namespaces lists %d namespaces and the kubeconfig context namespace %q adds one more probe candidate, exceeding the fanout cap of %d; raise --max-scope-candidates or include the context namespace in the list", e.Listed, e.ContextNamespace, e.Cap)
+}
+
+// CheckNamespaceCount is the CLI's startup check of a --namespaces list
+// against the probe cap, before the kubeconfig is read.
+func CheckNamespaceCount(namespaces []string, maxCandidates int) error {
+	if len(namespaces) > maxCandidates {
+		return &NamespaceFanoutError{Listed: len(namespaces), Cap: maxCandidates}
+	}
+	return nil
+}
+
 // validateNamespaceFanout rejects a --namespaces list that cannot fully fit
 // in the probe candidate cap. The kubeconfig context namespace is prepended
 // to the candidates, so a distinct one occupies a cap slot the flag-time
@@ -138,11 +176,13 @@ func SetGlobals(cfg AppConfig) {
 // here beats silently dropping the last configured namespace from probing.
 func validateNamespaceFanout(namespaces []string, ctxNs string, maxCandidates int) error {
 	slots := len(namespaces)
+	distinctCtx := ""
 	if ctxNs != "" && !slices.Contains(namespaces, ctxNs) {
 		slots++
+		distinctCtx = ctxNs
 	}
 	if slots > maxCandidates {
-		return fmt.Errorf("--namespaces lists %d namespaces and the kubeconfig context namespace %q adds one more probe candidate, exceeding the fanout cap of %d; raise --max-scope-candidates or include the context namespace in the list", len(namespaces), ctxNs, maxCandidates)
+		return &NamespaceFanoutError{Listed: len(namespaces), ContextNamespace: distinctCtx, Cap: maxCandidates}
 	}
 	return nil
 }
@@ -526,6 +566,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		MCP:                       &cfg.MCPEnabled,
 		MCPReadOnly:               &cfg.MCPReadOnly,
 		MCPExecTools:              &cfg.MCPExecTools,
+		MCPHTTPTools:              &cfg.MCPHTTPTools,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -590,6 +631,13 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 	mcppkg.SetExecToolsEnabled(mcpExecTools)
 	serverCfg.MCPExecTools = mcpExecTools
+	mcpHTTPTools := cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster()
+	if cfg.MCPHTTPTools && !mcpHTTPTools {
+		log.Printf("[mcp] curl_service opt-in suppressed (MCP enabled=%t, read-only=%t, in-cluster=%t)", cfg.MCPEnabled, cfg.MCPReadOnly, k8s.IsInCluster())
+	}
+	effectiveCfg.MCPHTTPTools = &mcpHTTPTools
+	mcppkg.SetHTTPToolsEnabled(mcpHTTPTools)
+	serverCfg.MCPHTTPTools = mcpHTTPTools
 	if cfg.MCPEnabled {
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP

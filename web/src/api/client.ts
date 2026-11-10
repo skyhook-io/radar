@@ -2,7 +2,7 @@ import { createListRefetchInterval, normalizeResourceList, type ResourceListBody
 import type { CascadeDetail } from '@skyhook-io/k8s-ui/components/ui/ForceDeleteConfirmDialog'
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { pluralize } from '@skyhook-io/k8s-ui/utils/pluralize'
-import type { ReadGap } from '@skyhook-io/k8s-ui/types/read-coverage'
+import type { ReadGap, ReadGapSet } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { WorkloadHistoryCoverage } from '@skyhook-io/k8s-ui/utils/workload-history-notes'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef, useCallback, useMemo } from 'react'
@@ -35,6 +35,7 @@ import type {
 import { focusManager, useInfiniteQuery, useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess, showApiNotice } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
+import { applyTabPick, cleanPick, ownsTabPick, pruneTabPick, withActives, writeTabPick } from '../utils/namespacePick'
 import type {
   Topology,
   ClusterInfo,
@@ -44,8 +45,10 @@ import type {
   TimelineEvent,
   TimeRange,
   ResourceWithRelationships,
+  HelmInventory,
   HelmRelease,
   HelmReleaseDetail,
+  ObservedHelmReleaseDetail,
   HelmValues,
   ManifestDiff,
   NotesDiff,
@@ -73,7 +76,7 @@ import type {
   PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
@@ -425,7 +428,12 @@ export async function fetchJSON<T>(
 // ============================================================================
 
 export interface DashboardCluster {
+  // Kubeconfig context, or "in-cluster". The kubeconfig cluster entry is in
+  // kubeconfigCluster.
   name: string;
+  // Kubeconfig cluster entry the context points at; several contexts can
+  // share one. Absent in in-cluster mode and from older Radar.
+  kubeconfigCluster?: string;
   platform: string;
   version: string;
   connected: boolean;
@@ -529,13 +537,20 @@ export interface DashboardHelmRelease {
 export interface DashboardHelmSummary {
   total: number;
   releases: DashboardHelmRelease[];
-  restricted?: boolean; // True when user lacks permissions to list Helm releases (RBAC-denied)
+  // True when no Helm records could be read and the caller was refused. A
+  // refusal in only some namespaces leaves it false and fills unreadNamespaces.
+  restricted?: boolean;
   // error + errorCode populated when the Helm read failed for a non-RBAC
   // reason (client not initialized, unconfigured, network). Surfaced
   // via the dashboard widget so empty results aren't mistaken for
   // "this cluster has zero releases."
   error?: string;
   errorCode?: string;
+  // Namespaces whose Helm records weren't read: refused, or the permission
+  // check behind that went unanswered. Their releases are missing from total
+  // and releases. Absent when everything in scope was read, on a restricted or
+  // failed answer, and from an older Radar.
+  unreadNamespaces?: ReadGapSet<string>;
 }
 
 export interface DashboardCRDCount {
@@ -801,8 +816,10 @@ export interface UncheckedSource {
   // The kinds within the source that went unchecked; absent means the whole
   // source, or that Radar couldn't tell which kinds.
   kinds?: { group?: string; kind: string }[];
-  // The namespaces whose read failed while the others were read; absent
-  // means the gap isn't limited to particular namespaces.
+  // The namespaces this entry's gap is limited to: the source was checked in
+  // the others, and these weren't (the read failed or was refused there, or
+  // Radar didn't read there because the caller can't). Absent means the gap
+  // isn't limited to particular namespaces.
   namespaces?: string[];
 }
 
@@ -926,6 +943,7 @@ export interface CronJobSchedulingEvidence {
 }
 
 export interface SubjectIssuesResponse {
+	node_certificate_report?: NodeCertificateReport;
   scheduling_report?: CronJobSchedulingEvidence;
   issues: Issue[];
   coverage: "ok" | "syncing" | "notWatched" | "unknownKind";
@@ -933,6 +951,19 @@ export interface SubjectIssuesResponse {
   visibility?: { state?: string; impact?: string };
   /** Checks about this resource Radar couldn't make for the caller. */
   unchecked_sources?: UncheckedSource[];
+}
+
+export interface NodeCertificateReport {
+  uid: string;
+  event_id?: string;
+  state: 'reported' | 'unverified' | 'ok';
+  reason: string;
+  message: string;
+  last_reported_at: string;
+  expires_at?: string;
+  not_before?: string;
+  history_incomplete?: boolean;
+  validity_unknown?: boolean;
 }
 
 export function useSubjectIssues(
@@ -1845,7 +1876,8 @@ export function useWhatsNewState(enabled: boolean) {
 export async function markWhatsNewSeen(version: string): Promise<void> {
   const response = await apiFetch(`${getApiBase()}/whats-new/seen`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // Bookkeeping that follows the dialog, not a separate action.
+    headers: { "Content-Type": "application/json", ...automaticRequestHeaders() },
     body: JSON.stringify({ version }),
   });
   if (!response.ok) throw new ApiError(`HTTP ${response.status}`, response.status);
@@ -1860,6 +1892,12 @@ export interface VersionInfo {
   releaseNotes?: string;
   installMethod: InstallMethod;
   updateCommand?: string;
+  /**
+   * Desktop install that cannot update itself, and how the user updates instead:
+   * a new AppImage, a new .deb/.rpm through the package manager, or a download
+   * because Radar can't write to its folder. Absent: Update Now works.
+   */
+  manualUpdate?: 'appimage' | 'package' | 'download';
   error?: string;
   productHuntLaunch?: { enabled: boolean; url: string; start: string; end: string };
 }
@@ -4156,6 +4194,7 @@ export function useAutoPromConnect(): void {
       // meta-driven toast handler stays silent — the user didn't click anything.
       apiFetch(`${getApiBase()}/prometheus/connect?optional=true`, {
         method: "POST",
+        headers: automaticRequestHeaders(),
       })
         .then(async (resp) => {
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -6200,13 +6239,59 @@ function helmNamespaceParams(namespaces: string[] = []) {
   return namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
 }
 
-// List all Helm releases
-export function useHelmReleases(namespaces: string[] = []) {
+// Objects still loading clear on their own, so the list shouldn't wait for a
+// manual refresh to fill in. Some gaps outlast any quick retry, such as
+// permission checks spread over many namespaces, so polling slows rather than
+// repeating a full object read every few seconds.
+const HELM_INVENTORY_FAST_POLLS = 24;
+
+export function helmInventoryRefetchInterval(inventory: Pick<HelmInventory, "objectCoverage"> | undefined, updates: number): number | false {
+  const settling = inventory?.objectCoverage?.gaps.some((gap) => gap.action === "retry" || gap.action === "wait");
+  if (!settling) return false;
+  return updates < HELM_INVENTORY_FAST_POLLS ? 5000 : 60000;
+}
+
+// The Helm list as far as the caller's access reaches. An older Radar has no
+// inventory route: its list is the whole answer, and a denial stays a 403.
+export function useHelmInventory(namespaces: string[] = []) {
   const params = helmNamespaceParams(namespaces);
-  return useQuery<HelmRelease[]>({
-    queryKey: ["helm-releases", namespaces],
-    queryFn: () => fetchJSON(`/helm/releases${params}`),
+  const { isPending: capabilitiesPending } = useCapabilities();
+  const { support } = useRadarFeature("helmInventory");
+  const hasInventory = support === "supported";
+  return useQuery<HelmInventory>({
+    queryKey: ["helm-releases", namespaces, hasInventory],
+    queryFn: async () =>
+      hasInventory
+        ? fetchJSON<HelmInventory>(`/helm/inventory${params}`)
+        : { releases: await fetchJSON<HelmRelease[]>(`/helm/releases${params}`), observed: [] },
+    enabled: !capabilitiesPending,
     staleTime: 30000, // 30 seconds
+    refetchInterval: (query) => helmInventoryRefetchInterval(query.state.data, query.state.dataUpdateCount),
+  });
+}
+
+// Kubernetes refused the caller's own read of Helm's storage. Other 403s on the
+// same route mean something else, and a Radar without inventory sends no code.
+export function isHelmReleaseReadDenied(error: unknown): boolean {
+  return isForbiddenError(error) && (error as ApiError).data?.error_code === "release_read_denied";
+}
+
+// Each observed read walks every object the caller can see, so an open drawer
+// follows the list's schedule while objects settle and otherwise refreshes
+// once a minute. A retryable error retries sooner.
+export function observedHelmReleaseRefetchInterval(detail: ObservedHelmReleaseDetail | undefined, updates: number, error: unknown): number | false {
+  if (error) return isStableClientError(error) ? false : 15000
+  return helmInventoryRefetchInterval(detail, updates) || 60000
+}
+
+// One release built from the stamps on its objects, for a caller who can't read
+// Helm's storage.
+export function useObservedHelmRelease(namespace: string, name: string) {
+  return useQuery<ObservedHelmReleaseDetail>({
+    queryKey: ["helm-observed-release", namespace, name],
+    queryFn: () => fetchJSON(`/helm/inventory/${namespace}/${name}`),
+    staleTime: 5000,
+    refetchInterval: (query) => observedHelmReleaseRefetchInterval(query.state.data, query.state.dataUpdateCount, query.state.error),
   });
 }
 
@@ -6221,7 +6306,9 @@ export function useHelmRelease(
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}`),
     enabled: Boolean(namespace && name) && (options?.enabled ?? true),
     staleTime: 5000,
-    refetchInterval: 10000, // Poll for live resource status updates (post-upgrade/rollback)
+    // Poll for live resource status updates (post-upgrade/rollback); a refusal
+    // would only repeat.
+    refetchInterval: (query) => (isForbiddenError(query.state.error) ? false : 10000),
   });
 }
 
@@ -7551,8 +7638,20 @@ export function useSwitchContext() {
 // ============================================================================
 
 export interface NamespaceScope {
+  /**
+   * This tab's pick. Outside --namespace-scope it is the tab's own (see
+   * utils/namespacePick); the server's remembered pick only seeds it.
+   */
   actives: string[];
   kubeconfigNamespace: string;
+  /** Context the scope was read under. Absent from servers older than per-tab picks. */
+  context?: string;
+  /**
+   * True when the server drops its own pick to `accessibleNamespaces` on this
+   * read; a tab drops its pick under the same rule. Absent from servers older
+   * than per-tab picks.
+   */
+  accessChecked?: boolean;
   /**
    * 'cluster-wide' — no per-user pick; user can list across namespaces.
    * 'namespace'    — per-user view filter pinned to one or more namespaces.
@@ -7576,7 +7675,11 @@ export interface NamespaceScope {
 export function useNamespaceScope() {
   return useQuery<NamespaceScope>({
     queryKey: ["namespace-scope"],
-    queryFn: () => fetchJSON("/cluster/namespace-scope"),
+    queryFn: async ({ signal }) => {
+      const apiBase = getApiBase();
+      const scope = await fetchJSON<NamespaceScope>("/cluster/namespace-scope", signal);
+      return applyTabPick(scope, apiBase);
+    },
     staleTime: 30000,
   });
 }
@@ -7639,9 +7742,34 @@ export async function refreshAfterNamespaceSwitch(
   await queryClient.invalidateQueries({ predicate: notScope }, { cancelRefetch: false });
 }
 
+// Per apiBase, the last namespace switch this tab started, and the newest one
+// whose answer it applied. Answers can arrive out of order: an older switch
+// must not overwrite a newer one that already landed, but it still applies
+// while the newer one is in flight, in case that one is refused.
+const startedNamespaceSwitch = new Map<string, number>();
+const appliedNamespaceSwitch = new Map<string, number>();
+
+export interface NamespaceSwitchStart {
+  seq: number;
+  apiBase: string;
+  context: string | undefined;
+}
+
+/** True while `start` is the newest namespace switch this tab has applied. */
+export function isAppliedNamespaceSwitch(start: NamespaceSwitchStart | undefined): boolean {
+  return !start || appliedNamespaceSwitch.get(start.apiBase) === start.seq;
+}
+
+/** Records `start` as applied unless a newer switch already landed. */
+function claimNamespaceSwitch(start: NamespaceSwitchStart): boolean {
+  if (start.seq < (appliedNamespaceSwitch.get(start.apiBase) ?? 0)) return false;
+  appliedNamespaceSwitch.set(start.apiBase, start.seq);
+  return true;
+}
+
 export function useSetActiveNamespace() {
   const queryClient = useQueryClient();
-  return useMutation<NamespaceScope, Error, { namespaces: string[] }>({
+  return useMutation<NamespaceScope, Error, { namespaces: string[] }, NamespaceSwitchStart>({
     meta: {
       // Surface 403s (RBAC drift, denied bookmark) and network errors via the
       // global toast. Without this, App.tsx call sites that mutate without
@@ -7685,7 +7813,9 @@ export function useSetActiveNamespace() {
           const error = await readErrorBody(response);
           throw new Error(error.error || `HTTP ${response.status}`);
         }
-        return response.json();
+        // Awaited so a body lost in transfer reaches the catch below.
+        const scope: NamespaceScope = await response.json();
+        return scope;
       } catch (error) {
         clearTimeout(timeoutId);
         debugNamespaceLog("mutation:error", {
@@ -7708,10 +7838,45 @@ export function useSetActiveNamespace() {
             { cause: error },
           );
         }
+        // A network failure can hide a write the server already made; its
+        // scope says whether the pick landed. A refused pick (HTTP error) did
+        // not land.
+        if (!isRescope && error instanceof TypeError) {
+          const applied = await reconcileNamespaceSwitch(namespaces);
+          if (applied) {
+            debugNamespaceLog("mutation:network-error-but-applied", { namespaces });
+            return applied;
+          }
+        }
         throw error;
       }
     },
-    onSuccess: (scope) => {
+    onMutate: () => {
+      const apiBase = getApiBase();
+      const seq = (startedNamespaceSwitch.get(apiBase) ?? 0) + 1;
+      startedNamespaceSwitch.set(apiBase, seq);
+      const context = queryClient.getQueryData<NamespaceScope>(["namespace-scope"])?.context;
+      return { seq, apiBase, context };
+    },
+    onSuccess: (response, { namespaces }, start) => {
+      let scope = response;
+      if (ownsTabPick(response)) {
+        // The response renders the server's stored pick after the write, which
+        // another tab can change in between, and its context is read after the
+        // write too. Record what this tab asked for, under the context it
+        // asked in.
+        const context = start.context ?? response.context;
+        const cached = queryClient.getQueryData<NamespaceScope>(["namespace-scope"]);
+        // A context switch landed meanwhile: the tab starts again from the
+        // server's pick for the new context.
+        if (getApiBase() !== start.apiBase || (cached && cached.context !== context) || response.context !== context) return;
+        if (!claimNamespaceSwitch(start)) return;
+        const picked = pruneTabPick(response, cleanPick(namespaces));
+        writeTabPick(start.apiBase, context, picked);
+        scope = withActives(response, picked);
+      } else {
+        claimNamespaceSwitch(start);
+      }
       debugNamespaceLog("mutation:success-before-scope-cache-write", {
         actives: scope.actives,
         mode: scope.mode,

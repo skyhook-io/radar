@@ -27,6 +27,8 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
@@ -63,10 +65,14 @@ type DashboardCRDsResponse struct {
 }
 
 type DashboardCluster struct {
-	Name      string `json:"name"`
-	Platform  string `json:"platform"`
-	Version   string `json:"version"`
-	Connected bool   `json:"connected"`
+	// Name is the kubeconfig context, or "in-cluster" in in-cluster mode.
+	Name string `json:"name"`
+	// KubeconfigCluster is the kubeconfig cluster entry the context points at.
+	// Several contexts can share one. Omitted in in-cluster mode.
+	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"`
+	Platform          string `json:"platform"`
+	Version           string `json:"version"`
+	Connected         bool   `json:"connected"`
 	// UpgradeReviewedThrough is the newest Kubernetes minor the upgrade-impact
 	// catalog covers. A static catalog fact, so Home can hint that the cluster
 	// is behind without triggering the (expensive) upgrade-readiness scan.
@@ -251,9 +257,12 @@ type DashboardTrafficSummary struct {
 }
 
 type DashboardHelmSummary struct {
-	Total      int                    `json:"total"`
-	Releases   []DashboardHelmRelease `json:"releases"`
-	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases (RBAC-denied)
+	Total    int                    `json:"total"`
+	Releases []DashboardHelmRelease `json:"releases"`
+	// Restricted is true when no Helm records could be read and the caller was
+	// refused. A refusal in only some namespaces leaves it false and fills
+	// UnreadNamespaces instead.
+	Restricted bool `json:"restricted,omitempty"`
 	// Error + ErrorCode are populated when the Helm read failed for a
 	// reason other than RBAC (Helm client not initialized, no resolved
 	// rest.Config, network error). Lets the dashboard widget render
@@ -263,6 +272,12 @@ type DashboardHelmSummary struct {
 	// unreachable, timed_out, unconfigured, auth_required).
 	Error     string `json:"error,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
+	// UnreadNamespaces are namespaces whose Helm records weren't read: the
+	// caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases; the Helm
+	// view may still list them from objects the caller can read. Absent when
+	// every namespace in scope was read, and on a restricted or failed answer.
+	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
 type DashboardHelmRelease struct {
@@ -410,20 +425,42 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	resp.Audit = s.getDashboardAudit(r, cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
+	// A zero would read as an empty cluster, so a kind that neither the caller
+	// nor Radar's own identity can list is marked restricted. Without auth
+	// canRead is always true, yet Radar may have no informer for the kind.
+	nodesCounted := false
 	if canReadNodes {
 		if nodeLister := cache.Nodes(); nodeLister != nil {
 			nodeList, _ := nodeLister.List(labels.Everything())
 			resp.ResourceCounts.Nodes = health.CountNodeFleet(nodeList, time.Now())
+			nodesCounted = true
 		}
 	}
+	if !nodesCounted {
+		resp.ResourceCounts.Restricted = append(resp.ResourceCounts.Restricted, "nodes")
+	}
+	namespacesCounted := false
 	if canReadNamespaces {
 		if nsLister := cache.Namespaces(); nsLister != nil {
 			nss, _ := nsLister.List(labels.Everything())
 			resp.ResourceCounts.Namespaces = len(nss)
+			namespacesCounted = true
 		}
-	} else if len(namespaces) > 0 {
-		// Restricted user — surface their accessible count instead of "0".
-		resp.ResourceCounts.Namespaces = len(namespaces)
+	}
+	if !namespacesCounted {
+		// Count the namespaces the caller can see that Radar collects Pods in,
+		// whatever the picker narrowed this request to, as the listed count
+		// would be. It is a lower bound: the cluster may hold more.
+		// KindNamespaces is nil both for cluster-wide Pods and for no Pods at
+		// all; only the first may stand in for every namespace.
+		collected := cache.KindNamespaces(k8score.Pods)
+		if cache.KindReadinessFor(k8score.Pods) == k8s.KindUnavailable {
+			collected = []string{}
+		}
+		if visible := s.getUserNamespaces(r, nil); !readscope.NoNamespaceAccess(visible) {
+			resp.ResourceCounts.Namespaces = len(readscope.SelectNamespaces(collected, visible))
+		}
+		resp.ResourceCounts.Restricted = append(resp.ResourceCounts.Restricted, "namespaces")
 	}
 
 	if canReadNodes && cache.Nodes() != nil {
@@ -451,13 +488,13 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces, ok := s.resolveHelmNamespaces(r)
+	namespaces, ok, checked, unread := s.resolveHelmStorageScope(r)
 	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
 		return
 	}
 
-	summary := s.getDashboardHelmSummary(r, namespaces)
+	summary := s.getDashboardHelmSummary(r, namespaces, checked, unread...)
 	s.writeJSON(w, summary)
 }
 
@@ -488,8 +525,13 @@ func (s *Server) getDashboardCluster(ctx context.Context) DashboardCluster {
 	if err != nil {
 		return DashboardCluster{Connected: false}
 	}
+	return dashboardClusterFromInfo(info)
+}
+
+func dashboardClusterFromInfo(info *k8s.ClusterInfo) DashboardCluster {
 	return DashboardCluster{
-		Name:                   info.Cluster,
+		Name:                   info.DisplayName(),
+		KubeconfigCluster:      info.KubeconfigCluster(),
 		Platform:               info.Platform,
 		Version:                info.KubernetesVersion,
 		Connected:              true,
@@ -1200,7 +1242,10 @@ func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 	return &DashboardTrafficSummary{Source: sourceName}
 }
 
-func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {
+// unread are namespaces the storage scope already left out because the caller
+// can't list Secrets there; checked is false when a permission check behind
+// that went unanswered.
+func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, checked bool, unread ...string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
 		return DashboardHelmSummary{
@@ -1210,11 +1255,21 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 		}
 	}
 
-	releases, err := helmClient.ListReleasesAcrossNamespaces(r.Context(), namespaces, auth.UserFromContext(r.Context()))
-	if err != nil {
-		if helm.ReleaseReadDeniedForCaller(err) {
-			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
+	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()))
+	if (err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err) {
+		// With a permission check unanswered, the read may have fallen back
+		// to a cluster-wide list the caller can't make even though some
+		// namespace would allow it, so the refusal doesn't establish that.
+		if !checked {
+			return DashboardHelmSummary{
+				Releases:  []DashboardHelmRelease{},
+				Error:     "Couldn't check your access to Helm's records. Try again shortly.",
+				ErrorCode: ErrCodeUnreachable,
+			}
 		}
+		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
+	}
+	if err != nil {
 		if !errors.Is(r.Context().Err(), context.Canceled) {
 			log.Printf("[dashboard] Failed to list Helm releases: %v", err)
 		}
@@ -1225,7 +1280,11 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 		}
 	}
 
-	return dashboardHelmSummaryFromReleases(releases)
+	summary := dashboardHelmSummaryFromReleases(releases)
+	if missing := helm.UnreadStorageNamespaces(unread, denied); len(missing) > 0 {
+		summary.UnreadNamespaces = resourceapi.Names(missing, resourceapi.RESTSetLimit)
+	}
+	return summary
 }
 
 func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelmSummary {

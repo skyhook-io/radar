@@ -97,6 +97,8 @@ export function getJobSetStatus(resource: any): StatusBadge {
 
   const suspendedCond = conditions.find((c: any) => c.type === 'Suspended')
   if (suspendedCond?.status === 'True') {
+    // Kueue suspends a JobSet submitted to a LocalQueue until admission.
+    if (resource.metadata?.labels?.['kueue.x-k8s.io/queue-name']) return { text: 'Held by Kueue', color: healthColors.neutral, level: 'neutral' }
     return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 

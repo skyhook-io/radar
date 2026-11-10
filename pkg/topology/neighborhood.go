@@ -215,6 +215,7 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	}
 
 	allowedEdges := edgeTypesForProfile(opts.Profile, rootNode.Kind)
+	rootOnly := rootOnlyEdgeTypes(opts.Profile, rootNode.Kind)
 
 	// neighbors yields every edge touching id that passes the profile filter,
 	// preferring the precomputed index when supplied. The undirected walk
@@ -225,6 +226,9 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	// instead of O(degree), but the index-free path is reserved for tests
 	// and library callers without a Memoizer — hot REST/MCP traffic always
 	// supplies idx.
+	follows := func(e Edge, from string) bool {
+		return allowedEdges[e.Type] && (!rootOnly[e.Type] || from == rootID)
+	}
 	neighbors := func(id string) []Edge {
 		if idx != nil {
 			incoming, outgoing := idx.EdgesFor(id)
@@ -233,12 +237,12 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 			// index's internal storage.
 			out := make([]Edge, 0, len(incoming)+len(outgoing))
 			for _, e := range outgoing {
-				if allowedEdges[e.Type] {
+				if follows(e, id) {
 					out = append(out, e)
 				}
 			}
 			for _, e := range incoming {
-				if allowedEdges[e.Type] {
+				if follows(e, id) {
 					out = append(out, e)
 				}
 			}
@@ -246,7 +250,7 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 		}
 		var out []Edge
 		for _, e := range t.Edges {
-			if !allowedEdges[e.Type] {
+			if !follows(e, id) {
 				continue
 			}
 			if e.Source == id || e.Target == id {
@@ -393,6 +397,21 @@ func allEdgeTypes() map[EdgeType]bool {
 	}
 }
 
+// rootOnlyEdgeTypes are the profile's edge types followed only from the root.
+// A GitOps object's sources are context: walking on through a shared source
+// would fill the answer with the other objects reading from it, and from a
+// managed workload would pull in its ConfigMaps and Secrets.
+func rootOnlyEdgeTypes(profile Profile, rootKind NodeKind) map[EdgeType]bool {
+	if profile == ProfileAll {
+		return nil
+	}
+	switch rootKind {
+	case KindApplication, KindKustomization, KindHelmRelease, KindGitRepository:
+		return map[EdgeType]bool{EdgeConfigures: true}
+	}
+	return nil
+}
+
 // edgeTypesForAuto picks profile edge-types based on the root's kind. The
 // goal is "the agent asked about a workload — show the management chain
 // plus the network and policy attachments, not the whole graph."
@@ -411,9 +430,10 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 		}
 	case KindWorkflowTemplate, KindClusterWorkflowTemplate:
 		return map[EdgeType]bool{EdgeConfigures: true, EdgeManages: true}
-	// GitOps controllers: just the management chain (what they own).
+	// GitOps controllers: what they manage, and the sources they read from
+	// (see rootOnlyEdgeTypes).
 	case KindApplication, KindKustomization, KindHelmRelease, KindGitRepository:
-		return managementEdgeTypes()
+		return map[EdgeType]bool{EdgeManages: true, EdgeConfigures: true}
 	// Network-shaped resources: routing topology.
 	case KindService, KindIngress, KindGateway, KindGatewayClass,
 		KindHTTPRoute, KindGRPCRoute, KindTCPRoute, KindTLSRoute, KindUDPRoute,

@@ -1,6 +1,6 @@
 import type { Issue, IssueResourceRef } from '../components/issues/types'
 import type { CapacityIntegrationState } from './capacity'
-import type { ReadGap, ReadKindRef } from './read-coverage'
+import type { ReadGap, ReadGapSet, ReadKindRef, SearchCoverage } from './read-coverage'
 
 // Topology types matching the Go backend
 
@@ -131,6 +131,8 @@ export interface Capabilities {
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
   mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
+  mcpHelmTools?: boolean // Native Helm MCP tool registered; target Kubernetes permissions still required
+  mcpHttpTools?: boolean // Effective in-cluster HTTP registration; services/proxy permission is still required
   mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
   mcpApplicationEvidence?: boolean
@@ -168,9 +170,11 @@ export interface CloudConnectCapability {
 
 export interface FeatureCapabilities {
  helmSourceIdentity?: boolean
+  helmInventory?: boolean
   resourceReadCoverage?: boolean
   searchCoverage?: boolean
  applicationEvidence?: boolean
+  searchEventContent?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
@@ -1222,11 +1226,74 @@ export interface ResourceDiff {
   parseErrorCount?: number
 }
 
+// A release as its deployed objects describe it, built without Helm's release
+// Secrets. It has no status, revision or update time because only those Secrets
+// record them. An absent chart, chartVersion or appVersion is unknown.
+export interface ObservedHelmRelease {
+  name: string
+  namespace: string
+  // Set when a readable Flux HelmRelease records another storage namespace.
+  // Absent doesn't say where it's stored.
+  storageNamespace?: string
+  chart?: string
+  chartVersion?: string
+  appVersion?: string
+  // Other helm.sh/chart labels on its objects. With no chart, these are the
+  // candidates Radar wouldn't choose between.
+  otherCharts?: string[]
+  // The distinct versions, sorted, found when the chart's objects disagree, as
+  // after an interrupted upgrade; chartVersion or appVersion is then absent.
+  // From object labels only: when a readable Flux HelmRelease names the chart
+  // in its history, its versions replace them. Absent doesn't prove the
+  // objects agree.
+  chartVersions?: string[]
+  appVersions?: string[]
+  // Objects the caller can read, which can be fewer than the release has.
+  resourceCount: number
+  // 'unknown' when the object read had gaps, even beside a summary of what was read.
+  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
+  healthIssue?: string
+  healthSummary?: string
+  // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
+  managedByFluxHelmRelease?: string
+}
+
+// One entry of a Flux HelmRelease's status.history.
+export interface FluxHelmRevision {
+  revision: number
+  status?: string
+  chartName?: string
+  chartVersion?: string
+  appVersion?: string
+  // Flux's checksum of the stored Helm release, not an image digest.
+  digest?: string
+  lastDeployed?: string
+}
+
+export interface ObservedHelmReleaseDetail extends ObservedHelmRelease {
+  resources?: HelmOwnedResource[]
+  // Newest first. Absent means no Flux record was read, not that there are no revisions.
+  fluxHistory?: FluxHelmRevision[]
+  objectCoverage: SearchCoverage
+}
+
+// The Helm list as far as the caller's access reaches. storageDenied is absent
+// when nothing was denied; objectCoverage is present when objects were read.
+export interface HelmInventory {
+  releases: HelmRelease[]
+  observed: ObservedHelmRelease[]
+  storageDenied?: ReadGapSet<string>
+  objectCoverage?: SearchCoverage
+}
+
 // Selected Helm release (for drawer state)
 export interface SelectedHelmRelease {
   namespace: string
   name: string
   storageNamespace?: string
+  // Opened from a row built without Helm's release Secrets, so the full release
+  // read would only be refused. A shared link has no such hint.
+  observed?: boolean
 }
 
 // Upgrade availability info
@@ -1781,6 +1848,12 @@ export interface WorkloadPodContainerInfo {
   sidecar?: boolean
   ready: boolean
   restartCount: number
+  /** Current run's state. Absent from older Radars. */
+  state?: 'waiting' | 'running' | 'terminated'
+  /** Waiting or terminated reason, e.g. PodInitializing, CrashLoopBackOff, Completed. */
+  reason?: string
+  /** Past its startup probe; a started native sidecar no longer holds up initialization. */
+  started?: boolean
 }
 
 export interface WorkloadPodInfo {
@@ -1809,6 +1882,7 @@ export type WorkloadLogEventType =
   | 'log'
   | 'pod_added'
   | 'pod_removed'
+  | 'pod_updated'
   | 'end'
   | 'error'
 

@@ -744,6 +744,10 @@ func checkDynamicResourceRead(ctx context.Context, kind, group, namespace, verb 
 }
 
 func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, verb string, readErr error, dynamicCache *k8s.DynamicResourceCache, gvr schema.GroupVersionResource, ok bool) (bool, error) {
+	// A read that ended with the caller's context says nothing about the kind.
+	if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(readErr, ctxErr) {
+		return false, ctxErr
+	}
 	var classified *readError
 	if errors.As(readErr, &classified) {
 		return false, readErr
@@ -793,7 +797,12 @@ func checkDynamicResourceReadFrom(ctx context.Context, kind, group, namespace, v
 	}
 	if readErr == nil || isObjectNotFound(readErr) {
 		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
-			_, waitErr := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
+			// The caller's deadline bounds this wait: an MCP tool call that
+			// ends must not keep a goroutine blocked on a sync it can't use.
+			_, waitErr := dynamicCache.ListBlockingContext(ctx, gvr, namespace, dynamicSyncWait)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return false, ctxErr
+			}
 			if waitErr != nil {
 				return checkDynamicResourceReadFrom(ctx, kind, group, namespace, verb, waitErr, dynamicCache, gvr, ok)
 			}

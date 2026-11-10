@@ -515,6 +515,8 @@ func argoSyncHazardAction(app *unstructured.Unstructured) string {
 
 func applyArgoOperationDiagnosis(d *Detection, app *unstructured.Unstructured, msg string) {
 	parsed := diagnose.ParseArgoOperationError(msg)
+	createNamespaceSet := gitops.ArgoCreateNamespaceEnabled(app)
+	parsed = diagnose.WithCreateNamespaceState(parsed, createNamespaceSet)
 	if parsed.Reason != "" {
 		d.Reason = parsed.Reason
 	}
@@ -530,7 +532,7 @@ func applyArgoOperationDiagnosis(d *Detection, app *unstructured.Unstructured, m
 	d.ActionSecondary = parsed.ActionSecondary
 	if !gitops.IsInClusterDestination(app) {
 		var remoteAction string
-		parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
+		parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed, createNamespaceSet)
 		if remoteAction != "" {
 			d.Action = remoteAction
 		}

@@ -79,7 +79,7 @@ func handleOperatorDiagnose(ctx context.Context, input diagnoseInput, kind, reso
 	if err != nil {
 		return nil, nil, err
 	}
-	issueSummary, related := computeMCPIssueContext(ctx, cache, input.Group, kind, input.Namespace, input.Name, true)
+	issueSummary, related, _ := computeMCPIssueContext(ctx, cache, input.Group, kind, input.Namespace, input.Name, true)
 	children := k8s.OperatorChildrenForObject(u, func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) })
 	rc := buildMCPResourceContextWithOperatorChildren(ctx, u, kind, input.Namespace, input.Name, resourcecontext.TierDiagnostic, k8s.FindStaleSecretEnvChecksForObject(ctx, cache, u), issueSummary, children, true)
 	resp := operatorDiagnoseResponse{Resource: minified, ResourceContext: rc, RelatedIssues: related, Warnings: objectWarnings(u, rc)}

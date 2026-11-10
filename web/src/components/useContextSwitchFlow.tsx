@@ -4,6 +4,7 @@ import { pluralize } from '@skyhook-io/k8s-ui'
 import { useSwitchContext, fetchSessionCounts, SwitchContextError, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from './ui/Toast'
+import { Tooltip } from './ui/Tooltip'
 import { useDock } from './dock'
 import type { ContextInfo, SelectedResource } from '../types'
 import { parseContextForSwitcher } from '../utils/context-name'
@@ -130,7 +131,10 @@ export function useContextSwitchFlow() {
             )}
           </ul>
           <p className="text-xs text-theme-text-tertiary">
-            Switch to: <span className="text-theme-text-secondary">{parseContextForSwitcher(pending.context).clusterName}</span>
+            Switch to:{' '}
+            <Tooltip content={shortNameHides(pending.context) ? pending.context.name : ''}>
+              <span className="text-theme-text-secondary">{parseContextForSwitcher(pending.context).clusterName}</span>
+            </Tooltip>
           </p>
         </div>
         <div className="px-4 py-3 border-t border-theme-border flex justify-end gap-2">
@@ -161,4 +165,8 @@ export function useContextSwitchFlow() {
       : null,
     confirmDialog,
   }
+}
+
+function shortNameHides(context: ContextInfo) {
+  return parseContextForSwitcher(context).clusterName !== context.name
 }

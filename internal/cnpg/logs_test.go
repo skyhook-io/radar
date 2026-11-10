@@ -223,6 +223,13 @@ func TestCNPGLogsContainerSelection(t *testing.T) {
 	if len(cnpgLogContainers(p, "no-such-container")) != 0 {
 		t.Fatal("selected unknown container")
 	}
+	p.Status = corev1.PodStatus{
+		Conditions:            []corev1.PodCondition{{Type: corev1.PodInitialized, Status: corev1.ConditionFalse}},
+		InitContainerStatuses: []corev1.ContainerStatus{{Name: "sidecar", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}},
+	}
+	if got := strings.Join(cnpgLogContainers(p, "all"), ","); got != "postgres,sidecar" {
+		t.Fatalf("initializing Pod: %s", got)
+	}
 }
 
 func TestCNPGLogsWaitingSources(t *testing.T) {

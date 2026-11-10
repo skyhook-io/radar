@@ -144,14 +144,6 @@ func TestIssuesDoNotSayHelmUncheckedWhenItWasNot(t *testing.T) {
 			query:  "namespace=shop",
 		},
 		{
-			// A caller who may not list release Secrets sees no Helm issues,
-			// as with any other kind it can't list.
-			name:   "caller may not list release Secrets",
-			status: http.StatusForbidden,
-			body:   `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"secrets is forbidden: User \"dev\" cannot list resource \"secrets\" in API group \"\" in the namespace \"shop\"","reason":"Forbidden","code":403}`,
-			query:  "namespace=shop",
-		},
-		{
 			name:   "Helm releases not asked for",
 			status: http.StatusInternalServerError,
 			body:   `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"etcdserver: request timed out","code":500}`,
@@ -167,6 +159,18 @@ func TestIssuesDoNotSayHelmUncheckedWhenItWasNot(t *testing.T) {
 				t.Errorf("unchecked_sources = %s, want it absent", got)
 			}
 		})
+	}
+}
+
+// A caller with no release Secrets gets no Helm issues, and is told, because the
+// Helm view still lists releases for them.
+func TestIssuesSayHelmUncheckedForACallerDeniedReleaseSecrets(t *testing.T) {
+	useHelmStorageAnswering(t, http.StatusForbidden, `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"secrets is forbidden: User \"dev\" cannot list resource \"secrets\" in API group \"\" in the namespace \"shop\"","reason":"Forbidden","code":403}`)
+	recorder := httptest.NewRecorder()
+	testServerSrv.handleIssues(recorder, httptest.NewRequest(http.MethodGet, "/api/issues?namespace=shop", nil))
+	want := `[{"reason":"caller_access_denied","source":"helm"}]`
+	if got := uncheckedSourcesWire(t, issuesWire(t, recorder)); got != want {
+		t.Errorf("unchecked_sources = %s, want %s", got, want)
 	}
 }
 
@@ -300,7 +304,7 @@ func TestDashboardHelmSummarySeparatesDeniedFromFailed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			useHelmStorageAnswering(t, tc.status, tc.body)
-			got := testServerSrv.getDashboardHelmSummary(httptest.NewRequest(http.MethodGet, "/api/dashboard/helm", nil), []string{"shop"})
+			got := testServerSrv.getDashboardHelmSummary(httptest.NewRequest(http.MethodGet, "/api/dashboard/helm", nil), []string{"shop"}, true)
 			if got.Restricted != tc.wantRestricted {
 				t.Fatalf("restricted = %v, want %v (summary: %+v)", got.Restricted, tc.wantRestricted, got)
 			}

@@ -484,9 +484,6 @@
   {
     "root": "apps|Deployment|shop|redis-legacy",
     "relationships": {
-      "managers": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ],
       "ownership": {
         "children": {
           "complete": false,
@@ -531,10 +528,7 @@
             "object": {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"}
           }
         }
-      },
-      "managedBy": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ]
+      }
     }
   },
   {
@@ -1674,9 +1668,6 @@
   {
     "root": "batch|Job|shop|redis-migrate",
     "relationships": {
-      "managers": [
-        {"kind": "HelmRelease", "namespace": "shop", "name": "redis", "group": "helm.toolkit.fluxcd.io"}
-      ],
       "ownership": {
         "children": {
           "complete": false,
@@ -2444,6 +2435,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -2674,6 +2675,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -2876,11 +2887,9 @@
         {"kind": "Service", "namespace": "shop", "name": "redis"},
         {"kind": "DaemonSet", "namespace": "shop", "name": "redis-exporter", "group": "apps"},
         {"kind": "Deployment", "namespace": "shop", "name": "redis", "group": "apps"},
-        {"kind": "Deployment", "namespace": "shop", "name": "redis-legacy", "group": "apps"},
         {"kind": "StatefulSet", "namespace": "shop", "name": "redis-replica", "group": "apps"},
         {"kind": "Rollout", "namespace": "shop", "name": "redis-proxy", "group": "argoproj.io"},
-        {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"},
-        {"kind": "Job", "namespace": "shop", "name": "redis-migrate", "group": "batch"}
+        {"kind": "CronJob", "namespace": "shop", "name": "redis-backup", "group": "batch"}
       ],
       "ownership": {
         "children": {
@@ -2967,6 +2976,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3068,6 +3087,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -3220,6 +3249,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4086,6 +4125,16 @@
             },
             {
               "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
               "kind": "ValidatingWebhookConfiguration",
               "reason": "radar_kind_not_collected"
             },
@@ -4198,6 +4247,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -4363,6 +4422,16 @@
             {
               "group": "admissionregistration.k8s.io",
               "kind": "MutatingWebhookConfiguration",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicy",
+              "reason": "radar_kind_not_collected"
+            },
+            {
+              "group": "admissionregistration.k8s.io",
+              "kind": "ValidatingAdmissionPolicyBinding",
               "reason": "radar_kind_not_collected"
             },
             {
@@ -5069,15 +5138,29 @@
           "unreadable": 1
         },
         "manager": {
-          "state": "claimed",
-          "lead": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
+          "state": "agree",
+          "lead": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
           "direct": {
             "object": {"kind": "Pod", "namespace": "shop", "name": "cart-5c6-a"},
             "claims": [
               {
                 "manager": {"kind": "Kustomization", "namespace": "flux-system", "name": "platform", "group": "kustomize.toolkit.fluxcd.io"},
                 "source": "flux-kustomize-labels",
-                "check": "omitted"
+                "check": "omitted",
+                "weak": true
+              }
+            ]
+          },
+          "via": {
+            "object": {"kind": "Deployment", "namespace": "shop", "name": "cart", "group": "apps"},
+            "recorders": [
+              {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"}
+            ],
+            "claims": [
+              {
+                "manager": {"kind": "Kustomization", "namespace": "flux-system", "name": "shop", "group": "kustomize.toolkit.fluxcd.io"},
+                "source": "flux-kustomize-labels",
+                "check": "recorded"
               }
             ]
           }

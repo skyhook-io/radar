@@ -26,6 +26,7 @@ import {
   overlayTransitionStyle,
 } from "../../utils/animation";
 import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
+import { recordUsageEvent } from "../../api/usage-data";
 
 // The per-resource AI entry point. It no longer owns a panel — it just dispatches
 // to the single app-level AI surface (DiagnoseContext), opening a new investigation
@@ -416,6 +417,7 @@ export function IssueDiagnoseButton({
   if (!shown) return null;
   const ready = d.available;
   const investigate = () => {
+    recordUsageEvent({ type: "ui", name: "issue_action:investigate" });
     if (ready)
       d.openInvestigation({ kind, group: group ?? "", namespace, name });
     else d.openHome();

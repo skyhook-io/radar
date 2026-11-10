@@ -200,6 +200,10 @@ func CreatePodNode(pod *corev1.Pod, provider ResourceProvider, includeNodeName b
 	if includeNodeName {
 		data["nodeName"] = pod.Spec.NodeName
 	}
+	// A Pod being deleted keeps phase Running while it drains; the card says so.
+	if pod.DeletionTimestamp != nil {
+		data["terminating"] = 1
+	}
 
 	return Node{
 		ID:     podID,
@@ -263,6 +267,9 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 			// crash-looping pod stays Phase=Running, and pkg/health already
 			// tracks that across the kubelet's Waiting->Running oscillation.
 			"status": string(getPodStatus(pod)),
+		}
+		if pod.DeletionTimestamp != nil {
+			detail["terminating"] = true
 		}
 		// ownerKey identifies which of the group's (possibly several — see
 		// the large-group path in builder.go) distinct owners this specific

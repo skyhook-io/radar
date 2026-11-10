@@ -33,6 +33,7 @@ export const RADAR_FEATURES = {
   resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
   searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
   applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },
+  searchEventContent: { label: 'Event reason and message searches', flag: 'searchEventContent', flagShippedWithEndpoint: true },
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
   resourceIssueCoverage: { label: 'Resource-specific issue views', flag: 'resourceIssueCoverage', flagShippedWithEndpoint: true },
   podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
@@ -67,6 +68,8 @@ export const RADAR_FEATURES = {
   // turns it on.
   argoEnableSelfHealOff: { label: 'Auto-sync that starts without self-heal', flag: 'argoEnableSelfHealOff', flagShippedWithEndpoint: true },
   helmSourceIdentity: { label: 'Helm source selection', flag: 'helmSourceIdentity', flagShippedWithEndpoint: true },
+  // Never blocks a control: on an older Radar the Helm view reads /helm/releases.
+  helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 

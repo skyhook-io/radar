@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/launchday"
 	"golang.org/x/term"
 )
@@ -89,10 +90,10 @@ func checkAndUpdateStarred(statePath string, state *starState) bool {
 	if ghPath == "" {
 		return state.StarredAt != ""
 	}
-	if err := exec.Command(ghPath, "auth", "status").Run(); err != nil {
+	if err := ghCommand(ghPath, "auth", "status").Run(); err != nil {
 		return state.StarredAt != ""
 	}
-	if err := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "--silent").Run(); err == nil {
+	if err := ghCommand(ghPath, "api", "user/starred/"+githubRepo, "--silent").Run(); err == nil {
 		// 204 No Content — user has starred
 		if state.StarredAt == "" {
 			state.StarredAt = time.Now().Format(time.RFC3339)
@@ -103,7 +104,7 @@ func checkAndUpdateStarred(statePath string, state *starState) bool {
 	// The error could be 404 (not starred) or a transient failure (network, rate limit).
 	// Only clear cached StarredAt if we can confirm it's a 404 by re-checking with
 	// a command that surfaces the HTTP status code.
-	out, err := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "-i", "--silent").CombinedOutput()
+	out, err := ghCommand(ghPath, "api", "user/starred/"+githubRepo, "-i", "--silent").CombinedOutput()
 	if err != nil && strings.Contains(string(out), "HTTP 404") {
 		if state.StarredAt != "" {
 			state.StarredAt = ""
@@ -151,7 +152,7 @@ func trackAndMaybePrompt() error {
 	ghPath, _ := exec.LookPath("gh")
 	ghReady := ghPath != ""
 	if ghReady {
-		if err := exec.Command(ghPath, "auth", "status").Run(); err != nil {
+		if err := ghCommand(ghPath, "auth", "status").Run(); err != nil {
 			ghReady = false
 		}
 	}
@@ -170,7 +171,7 @@ func trackAndMaybePrompt() error {
 		response = strings.TrimSpace(strings.ToLower(response))
 
 		if response == "" || response == "y" || response == "yes" {
-			cmd := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "-X", "PUT", "--silent")
+			cmd := ghCommand(ghPath, "api", "user/starred/"+githubRepo, "-X", "PUT", "--silent")
 			if err := cmd.Run(); err != nil {
 				fmt.Printf("  Hmm, that didn't work — you can star manually at https://github.com/%s\n\n", githubRepo)
 				state.Dismissals++
@@ -238,4 +239,12 @@ func saveStarState(path string, state *starState) {
 	if err := os.Rename(tmp, path); err != nil {
 		log.Printf("[star] Failed to rename state file: %v", err)
 	}
+}
+
+// ghCommand runs gh from the folder Radar was launched from when that differs
+// from its own working directory (inside the AppImage).
+func ghCommand(ghPath string, args ...string) *exec.Cmd {
+	cmd := exec.Command(ghPath, args...)
+	cmd.Dir = desktopenv.ChildDir()
+	return cmd
 }

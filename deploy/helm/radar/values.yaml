@@ -130,6 +130,14 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
+  # Allow reading native ValidatingAdmissionPolicy and
+  # ValidatingAdmissionPolicyBinding resources so the resource browser can show
+  # their declared rules and binding relationships. Auto-enabled when auth is on
+  # (auth.mode != none) or in cloud mode, where every read is re-checked against
+  # the requesting user's own permissions. For no-auth installs this stays
+  # opt-in because policies expose admission-control coverage and gaps.
+  viewAdmissionPolicies: false
+
   # Allow the no-auth in-cluster Radar identity to read kubelet metrics and
   # effective configuration through nodes/proxy for upgrade-impact checks.
   # This exposes node-level runtime and configuration details to anyone who
@@ -218,6 +226,7 @@ rbac:
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
     lws: true               # leaderworkerset.x-k8s.io
     mariadb: true           # mariadb.mmontes.io
+    multus: true            # k8s.cni.cncf.io (Multus NetworkAttachmentDefinitions, read to link a Pod's secondary networks)
     networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
     nimOperator: true       # apps.nvidia.com (NVIDIA NIM: NIMServices, NIMCaches, NIMPipelines)
@@ -229,6 +238,7 @@ rbac:
     reflector: true         # reflector.v1.k8s.emberstack.com
     reloader: true          # reloader.stakater.com
     sealedSecrets: true     # bitnami.com
+    secretsStoreCsi: true   # secrets-store.csi.x-k8s.io (Secrets Store CSI Driver: SecretProviderClasses, SecretProviderClassPodStatuses)
     strimzi: true           # strimzi.io, kafka.strimzi.io, core.strimzi.io (StrimziPodSet only)
     tekton: true            # tekton.dev
     traefik: true           # traefik.io, traefik.containo.us
@@ -632,8 +642,11 @@ usageReporting:
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:
-  # Opt in to exec_pod; also requires rbac.podExec for local ServiceAccount access.
+  # Opt in to exec_pod; requires pods/exec permission (rbac.podExec for Radar
+  # ServiceAccount access).
   execTools: false
+  # Independent Service HTTP opt-in. Requires services/proxy; does not enable exec.
+  httpTools: false
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 
