@@ -132,8 +132,9 @@ terminal. `--disable-exec` turns uploads off along with the terminal.
 - **How it writes.** The body streams to a temp file in the same directory, and
   is renamed into place only after every byte arrived. A cancelled, cut-off or
   failed upload leaves the destination untouched and removes the temp file. A
-  replaced file keeps its permissions and owner; when the container's user
-  cannot keep the owner, the upload is refused instead.
+  replaced file keeps its owner and permissions, without setuid, setgid or
+  sticky; when the container's user cannot keep the owner, the upload is
+  refused instead.
 - **What it needs.** The container needs `/bin/sh` and `/proc` plus `mktemp`,
   `readlink`, `cat`, `wc`, `ln`, `mv`, `chmod`, `ls` and `rm`. Replacing a
   file owned by another user also needs `chown`. Distroless and scratch images

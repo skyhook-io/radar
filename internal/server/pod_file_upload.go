@@ -134,9 +134,11 @@ const (
 // also refuses anything but a regular file. The temp file takes that owner
 // before the body is written, so a user who could not keep it is refused
 // before the transfer. The comparison is with the temp file's own ids, not
-// the writer's: a setgid directory gives new files its group. The mode is
-// applied last, after the write (a read-only mode would stop a non-root
-// writer) and after chown (which clears setuid and setgid).
+// the writer's: a setgid directory gives new files its group. Only the read,
+// write and execute bits carry over: setuid, setgid and sticky are dropped,
+// as a non-root write or an SFTP upload would, so new content never inherits
+// another binary's privileges. The mode is applied last, after the write (a
+// read-only mode would stop a non-root writer).
 //
 // The commit never treats the destination as a directory (-T), so a directory
 // that appears under that name mid-upload refuses it instead of swallowing the
@@ -161,7 +163,6 @@ mode_of() {
   for b in 256 128 64 32 16 8 4 2 1; do
     c=${s%"${s#?}"} s=${s#?}
     case $c in -|S|T) ;; *) v=$((v + b)) ;; esac
-    case $b$c in 64[sS]) v=$((v + 2048)) ;; 8[sS]) v=$((v + 1024)) ;; 1[tT]) v=$((v + 512)) ;; esac
   done
   printf %o "$v"
 }

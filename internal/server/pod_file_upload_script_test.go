@@ -314,7 +314,7 @@ func TestUploadScriptReplacesReadOnlyFile(t *testing.T) {
 }
 
 // chown clears setuid and setgid, so the mode must be applied after it.
-func TestUploadScriptKeepsSpecialBitsAcrossOwnerChange(t *testing.T) {
+func TestUploadScriptDropsSpecialBitsOnReplace(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("only root can replace a file owned by someone else")
 	}
@@ -324,7 +324,7 @@ func TestUploadScriptKeepsSpecialBitsAcrossOwnerChange(t *testing.T) {
 	if err := os.Chown(dest, 1234, 1234); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(dest, 0o755|os.ModeSetuid|os.ModeSetgid); err != nil {
+	if err := os.Chmod(dest, 0o755|os.ModeSetuid|os.ModeSetgid|os.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
 	code, _, stderr := runUploadScript(t, dir, "tool", true, 3, []byte("new"))
@@ -332,8 +332,8 @@ func TestUploadScriptKeepsSpecialBitsAcrossOwnerChange(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
 	st, _ := os.Stat(dest)
-	if st.Mode()&(os.ModeSetuid|os.ModeSetgid) != os.ModeSetuid|os.ModeSetgid || st.Mode().Perm() != 0o755 {
-		t.Errorf("mode %v, want setuid+setgid 0755", st.Mode())
+	if st.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || st.Mode().Perm() != 0o755 {
+		t.Errorf("mode %v, want plain 0755 with no setuid, setgid or sticky", st.Mode())
 	}
 	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || sys.Uid != 1234 || sys.Gid != 1234 {
 		t.Errorf("owner changed: %+v", st.Sys())
