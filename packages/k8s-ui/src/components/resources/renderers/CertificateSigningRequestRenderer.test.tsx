@@ -136,6 +136,13 @@ describe('CertificateSigningRequestRenderer', () => {
     expect(html).toContain('x509: ECDSA verification failure')
   })
 
+  it('does not call SANs of an unreadable type absent', () => {
+    const unreadable = render(csr({}), { request: { ...decodedRequest, unreadableSANs: true }, certificate: { status: 'absent' } })
+    const none = render(csr({}), { request: decodedRequest, certificate: { status: 'absent' } })
+    expect(none).toContain('None requested')
+    expect(unreadable).not.toContain('None requested')
+  })
+
   it('says when the payloads were not decoded rather than calling them missing', () => {
     const html = render(csr({ certificate: 'Y2VydA==', conditions: [approved] }))
     expect(html).toContain('this Radar version does not decode certificate requests')

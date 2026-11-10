@@ -149,7 +149,12 @@ function RequestedIdentity({ request, present }: { request?: CSRRequestDetails; 
           <Property label="Organizations" value={chips(request.organizations)} />
           <Property label="Subject" value={request.subject ? <span className="font-mono text-xs">{request.subject}</span> : <Unread>Empty</Unread>} />
           {sans.map(([label, values]) => <Property key={label} label={label} value={chips(values)} />)}
-          {!hasSANs && <Property label="SANs" value="None requested" />}
+          {!hasSANs && (
+            <Property
+              label="SANs"
+              value={request.unreadableSANs ? <Unread>Present, but of a type Radar can't read</Unread> : 'None requested'}
+            />
+          )}
           <Property label="Public key" value={request.publicKey} />
           <Property label="Signature algorithm" value={request.signatureAlgorithm} />
         </PropertyList>

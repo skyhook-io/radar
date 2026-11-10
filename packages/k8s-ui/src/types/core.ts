@@ -848,6 +848,8 @@ export interface CSRRequestDetails {
   ipAddresses?: string[]
   emailAddresses?: string[]
   uris?: string[]
+  /** Set when the request has a SAN extension but none of its names is a type Radar reads. */
+  unreadableSANs?: boolean
   publicKey?: string
   signatureAlgorithm?: string
   /** Set when the request parses but is not signed by its own key. */

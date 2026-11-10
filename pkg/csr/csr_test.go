@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -114,6 +115,70 @@ func TestDescribeDecodesTheRequestedIdentity(t *testing.T) {
 	if details.Certificate.Status != DecodeAbsent {
 		t.Fatalf("certificate status = %s, want absent", details.Certificate.Status)
 	}
+}
+
+func TestDescribeFlagsSANsOfAnUnreadableType(t *testing.T) {
+	key := newKey(t)
+	upnOnly := &x509.CertificateRequest{
+		Subject:         pkix.Name{CommonName: "alice"},
+		ExtraExtensions: []pkix.Extension{upnSANExtension(t, "alice@corp.example")},
+	}
+	got := Describe(object(b64(requestPEM(t, key, upnOnly)), nil), time.Now()).Request
+	if got.Status != DecodeDecoded || !got.UnreadableSANs {
+		t.Fatalf("UPN-only request: status %s, unreadableSANs %v; want decoded, true", got.Status, got.UnreadableSANs)
+	}
+
+	// A readable name alongside the UPN lists the readable one and says nothing more.
+	withDNS := &x509.CertificateRequest{
+		Subject:         pkix.Name{CommonName: "alice"},
+		ExtraExtensions: []pkix.Extension{upnAndDNSSANExtension(t, "alice@corp.example", "alice.example.internal")},
+	}
+	got = Describe(object(b64(requestPEM(t, key, withDNS)), nil), time.Now()).Request
+	if got.UnreadableSANs || !reflect.DeepEqual(got.DNSNames, []string{"alice.example.internal"}) {
+		t.Fatalf("UPN+DNS request: unreadableSANs %v, dnsNames %v; want false, [alice.example.internal]", got.UnreadableSANs, got.DNSNames)
+	}
+
+	noSANs := &x509.CertificateRequest{Subject: pkix.Name{CommonName: "alice"}}
+	got = Describe(object(b64(requestPEM(t, key, noSANs)), nil), time.Now()).Request
+	if got.UnreadableSANs {
+		t.Fatal("request without a SAN extension was flagged as having unreadable SANs")
+	}
+}
+
+// upnSANExtension is a subjectAltName holding one Microsoft UPN otherName,
+// a type Go's parser skips.
+func upnSANExtension(t *testing.T, upn string) pkix.Extension {
+	return sanExtension(t, upnOtherName(t, upn))
+}
+
+func upnAndDNSSANExtension(t *testing.T, upn, dns string) pkix.Extension {
+	return sanExtension(t, upnOtherName(t, upn), asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 2, Bytes: []byte(dns)})
+}
+
+func upnOtherName(t *testing.T, upn string) asn1.RawValue {
+	t.Helper()
+	value, err := asn1.MarshalWithParams(upn, "utf8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	typeID, err := asn1.Marshal(asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: append(typeID, explicit...)}
+}
+
+func sanExtension(t *testing.T, names ...asn1.RawValue) pkix.Extension {
+	t.Helper()
+	der, err := asn1.Marshal(names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pkix.Extension{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: der}
 }
 
 func TestDescribeReportsARequestThatIsNotSignedByItsKey(t *testing.T) {

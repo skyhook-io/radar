@@ -9,6 +9,8 @@ package csr
 import (
 	"bytes"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
@@ -175,16 +177,21 @@ type Details struct {
 type Request struct {
 	Status DecodeStatus `json:"status"`
 	// Error says why the request could not be read.
-	Error              string   `json:"error,omitempty"`
-	Subject            string   `json:"subject,omitempty"`
-	CommonName         string   `json:"commonName,omitempty"`
-	Organizations      []string `json:"organizations,omitempty"`
-	DNSNames           []string `json:"dnsNames,omitempty"`
-	IPAddresses        []string `json:"ipAddresses,omitempty"`
-	EmailAddresses     []string `json:"emailAddresses,omitempty"`
-	URIs               []string `json:"uris,omitempty"`
-	PublicKey          string   `json:"publicKey,omitempty"`
-	SignatureAlgorithm string   `json:"signatureAlgorithm,omitempty"`
+	Error          string   `json:"error,omitempty"`
+	Subject        string   `json:"subject,omitempty"`
+	CommonName     string   `json:"commonName,omitempty"`
+	Organizations  []string `json:"organizations,omitempty"`
+	DNSNames       []string `json:"dnsNames,omitempty"`
+	IPAddresses    []string `json:"ipAddresses,omitempty"`
+	EmailAddresses []string `json:"emailAddresses,omitempty"`
+	URIs           []string `json:"uris,omitempty"`
+	// UnreadableSANs is set when the request has a subject alternative name
+	// extension but none of its names is a DNS name, IP address, email
+	// address or URI, such as a Microsoft UPN. Without it the request would
+	// read as asking for no SANs.
+	UnreadableSANs     bool   `json:"unreadableSANs,omitempty"`
+	PublicKey          string `json:"publicKey,omitempty"`
+	SignatureAlgorithm string `json:"signatureAlgorithm,omitempty"`
 	// SignatureError is set when the request parses but is not signed by its
 	// own key.
 	SignatureError string `json:"signatureError,omitempty"`
@@ -256,10 +263,23 @@ func decodeRequest(value any) Request {
 		PublicKey:          publicKey,
 		SignatureAlgorithm: req.SignatureAlgorithm.String(),
 	}
+	out.UnreadableSANs = hasExtension(req.Extensions, oidSubjectAltName) &&
+		len(out.DNSNames)+len(out.IPAddresses)+len(out.EmailAddresses)+len(out.URIs) == 0
 	if err := req.CheckSignature(); err != nil {
 		out.SignatureError = err.Error()
 	}
 	return out
+}
+
+var oidSubjectAltName = asn1.ObjectIdentifier{2, 5, 29, 17}
+
+func hasExtension(extensions []pkix.Extension, oid asn1.ObjectIdentifier) bool {
+	for _, ext := range extensions {
+		if ext.Id.Equal(oid) {
+			return true
+		}
+	}
+	return false
 }
 
 // pemBlockPattern finds each armored block, readable or not, so a block that
