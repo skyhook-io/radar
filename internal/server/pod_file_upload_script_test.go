@@ -384,7 +384,7 @@ func runUploadScriptWithout(t *testing.T, missing []string, dir, name string, ov
 	for _, m := range missing {
 		skip[m] = true
 	}
-	for _, tool := range []string{"mktemp", "readlink", "cat", "wc", "ln", "mv", "chmod", "ls", "rm", "chown"} {
+	for _, tool := range []string{"mktemp", "cat", "wc", "ln", "mv", "chmod", "ls", "rm", "chown"} {
 		if skip[tool] {
 			continue
 		}
@@ -522,4 +522,65 @@ func TestUploadScriptTempSwappedForSymlinkTouchesNothingElse(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(dir, "stolen")); string(got) != string(body) {
 		t.Errorf("upload did not land in Radar's own temp file: %q", got)
 	}
+}
+
+// Another process plants a hard link to one of its own files at the temp name
+// before Radar opens it. The upload must not write into that file.
+func TestUploadScriptRefusesPlantedHardLinkAtTempName(t *testing.T) {
+	dir := realTempDir(t)
+	outside := filepath.Join(realTempDir(t), "theirs")
+	if err := os.WriteFile(outside, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if filepath.VolumeName(outside) != filepath.VolumeName(dir) {
+		t.Skip("needs one filesystem for the hard link")
+	}
+	bin := t.TempDir()
+	for _, tool := range []string{"cat", "wc", "ln", "mv", "chmod", "ls", "rm", "chown"} {
+		p, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not on this host", tool)
+		}
+		if err := os.Symlink(p, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A mktemp that hands out a name it has already filled with a hard link.
+	fake := "#!/bin/sh\nln " + outside + " ./.radar-upload.planted || exit 1\necho ./.radar-upload.planted\n"
+	if err := os.WriteFile(filepath.Join(bin, "mktemp"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := podFileUploadCommand(dir, "new.txt", false, 6)
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Env = []string{"PATH=" + bin}
+	c.Stdin = bytes.NewReader([]byte("secret"))
+	if err := c.Run(); err == nil {
+		t.Error("upload succeeded through a planted hard link")
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "original" {
+		t.Errorf("planted file was written: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new.txt")); err == nil {
+		t.Error("destination created from a planted temp file")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".radar-upload.planted")); err != nil {
+		t.Errorf("the planted file must be left alone, not removed: %v", err)
+	}
+}
+
+// Without rm a temp file could never be removed, so the upload stops before
+// creating one and names rm.
+func TestUploadScriptWithoutRmStopsBeforeTheTempFile(t *testing.T) {
+	dir := realTempDir(t)
+	code, stderr := runUploadScriptWithout(t, []string{"rm"}, dir, "a.txt", false, []byte("new"))
+	if code != 127 {
+		t.Fatalf("exit %d, want 127 (%s)", code, stderr)
+	}
+	if got := missingCommandName(stderr); got != "rm" {
+		t.Errorf("missing command = %q from %q, want rm", got, stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.txt")); err == nil {
+		t.Error("destination created without rm")
+	}
+	assertNoTempFiles(t, dir)
 }

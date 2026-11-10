@@ -406,7 +406,6 @@ func TestPodFileUploadClassifiesFailures(t *testing.T) {
 		{"exists", k8sexec.CodeExitError{Code: uploadExitExists, Err: errors.New("exit")}, "", http.StatusConflict, uploadCodeExists},
 		{"symlink or special", k8sexec.CodeExitError{Code: uploadExitNotRegular, Err: errors.New("exit")}, "", http.StatusConflict, uploadCodeNotARegularFile},
 		{"mount point", k8sexec.CodeExitError{Code: uploadExitMountPoint, Err: errors.New("exit")}, "", http.StatusConflict, uploadCodeMountPoint},
-		{"mode", k8sexec.CodeExitError{Code: uploadExitModeUnknown, Err: errors.New("exit")}, "", http.StatusConflict, uploadCodeModeUnknown},
 		{"owner", k8sexec.CodeExitError{Code: uploadExitOwnerChange, Err: errors.New("exit")}, "", http.StatusConflict, uploadCodeOwnerChange},
 		{"short", k8sexec.CodeExitError{Code: uploadExitIncomplete, Err: errors.New("exit")}, "", http.StatusBadRequest, uploadCodeIncomplete},
 		{"erofs", k8sexec.CodeExitError{Code: 1, Err: errors.New("exit")}, "mktemp: failed to create file via template './.radar-upload.XXXXXX': Read-only file system", http.StatusConflict, uploadCodeReadOnly},

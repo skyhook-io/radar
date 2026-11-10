@@ -78,7 +78,6 @@ const (
 	uploadCodeExists           = "file_exists"
 	uploadCodeNotARegularFile  = "not_a_regular_file"
 	uploadCodeMountPoint       = "mount_point"
-	uploadCodeModeUnknown      = "mode_not_preserved"
 	uploadCodeOwnerChange      = "ownership_change"
 	uploadCodeIncomplete       = "incomplete_upload"
 	uploadCodeSymlinkedDir     = "symlinked_directory"
@@ -101,7 +100,6 @@ const (
 	uploadExitExists        = 22
 	uploadExitNotRegular    = 23
 	uploadExitMountPoint    = 24
-	uploadExitModeUnknown   = 25
 	uploadExitOwnerChange   = 26
 	uploadExitIncomplete    = 27
 	uploadExitSymlinkedDir  = 28
@@ -122,10 +120,12 @@ const (
 // browser shows paths, and writing somewhere else than the path the user
 // chose is the surprise to avoid. Refusing names the real location.
 //
-// Another process in the container that can write the directory could swap
-// the temp file for a symlink at any point. So the script opens the temp file
-// once, checks through /proc that the open file is the one mktemp made, and
-// from then on writes, counts, chowns and chmods only through that open file.
+// Another process in the container that can write the directory could put
+// something at the temp name, or swap it later. So the script creates the temp
+// file itself with an exclusive open (set -C), which refuses any name that
+// already exists, symlinks included, and keeps that handle. It then requires a
+// plain file with one link, and from then on writes, counts, chowns and chmods
+// only through the handle (/proc/self/fd/3).
 // The commit is by name, so it re-checks that the destination is that same
 // file afterwards; a swap is reported, and nothing outside the directory is
 // ever written or changed.
@@ -191,14 +191,21 @@ if [ -e "$dest" ]; then
     done < /proc/self/mountinfo
   fi
 fi
-tmp=$(mktemp ./.radar-upload.XXXXXX) || exit $?
+command -v rm >/dev/null 2>&1 || { echo "radar: rm: not found" >&2; exit 127; }
+name=$(mktemp -u ./.radar-upload.XXXXXX) || exit $?
+mask=$(umask)
+umask 077
+set -C
+exec 3>"$name"
+set +C
+umask "$mask"
+tmp=$name
 echo "tmp=${tmp#./}"
-case $here in /) want=/${tmp#./} ;; *) want=$here/${tmp#./} ;; esac
-exec 4<"$tmp" || exit 1
-got=$(readlink /proc/self/fd/4) || exit $?
-[ "$got" = "$want" ] || { echo "radar: temp file changed" >&2; exit 29; }
-exec 3<>/proc/self/fd/4 4<&- || exit 1
 f=/proc/self/fd/3
+set -- $(ls -nLd -- "$f")
+[ $# -ge 4 ] || exit 127
+case $1 in -*) ;; *) echo "radar: temp file changed" >&2; exit 29 ;; esac
+[ "$2" = 1 ] || { echo "radar: temp file changed" >&2; exit 29; }
 if [ -e "$dest" ]; then
   replace=1
   set -- $(ls -nd -- "$dest")
@@ -658,9 +665,6 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 		case uploadExitMountPoint:
 			return http.StatusConflict, uploadCodeMountPoint,
 				fmt.Sprintf("%s is mounted into the container on its own (a single-file volume mount); change it at its source", destPath)
-		case uploadExitModeUnknown:
-			return http.StatusConflict, uploadCodeModeUnknown,
-				fmt.Sprintf("Could not read the permissions of %s to keep them, so it was left unchanged", destPath)
 		case uploadExitOwnerChange:
 			return http.StatusConflict, uploadCodeOwnerChange,
 				fmt.Sprintf("%s is owned by another user; replacing it as the container's user would change its owner, so it was left unchanged", destPath)
@@ -688,7 +692,7 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 				fmt.Sprintf("This container has no %s command, which uploading needs, so nothing was written.", cmd) + fallback
 		}
 		return http.StatusNotImplemented, uploadCodeMissingTools,
-			"This container lacks a command uploading needs (it uses sh, mktemp, readlink, cat, wc, ln, mv, chmod, ls and rm), so nothing was written." + fallback
+			"This container lacks a command uploading needs (it uses sh, mktemp, cat, wc, ln, mv, chmod, ls and rm), so nothing was written." + fallback
 	case strings.Contains(combined, "read-only file system"):
 		return http.StatusConflict, uploadCodeReadOnly,
 			fmt.Sprintf("%s is on a read-only filesystem", dir)
