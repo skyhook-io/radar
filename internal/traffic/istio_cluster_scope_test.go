@@ -115,7 +115,7 @@ func TestIstioFamiliesScopedSeparately(t *testing.T) {
 	if names := flowNames(resp.Flows); !names["http-server-a"] || names["http-server-b"] || names["tcp-server-"] {
 		t.Errorf("flows = %v, want cluster a's HTTP flows and no unattributed TCP", names)
 	}
-	if !strings.Contains(resp.Warning, "TCP connections aren't shown") || !strings.Contains(resp.Warning, "isn't labeled by cluster") {
+	if !strings.Contains(resp.Warning, "TCP connections aren't shown") || !strings.Contains(resp.Warning, "none of it has a cluster label") {
 		t.Errorf("warning %q does not explain the missing TCP connections", resp.Warning)
 	}
 	// Whole edges are missing, so the warning must outlast a viewer's filters.
@@ -151,9 +151,9 @@ func TestIstioEmptyMapClusterWarnings(t *testing.T) {
 		http, tcp map[string]bool
 		want      string
 	}{
-		{"labeled, not this cluster", map[string]bool{"b": true}, nil, "none of it carries cluster=a"},
-		{"no cluster label", map[string]bool{"": true}, nil, "isn't labeled by cluster"},
-		{"only TCP, not this cluster", nil, map[string]bool{"b": true}, "none of it carries cluster=a"},
+		{"labeled, not this cluster", map[string]bool{"b": true}, nil, "none of it is labeled cluster=a"},
+		{"no cluster label", map[string]bool{"": true}, nil, "none of it has a cluster label"},
+		{"only TCP, not this cluster", nil, map[string]bool{"b": true}, "none of it is labeled cluster=a"},
 		{"store has no traffic", nil, nil, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -188,7 +188,7 @@ func TestIstioMixedClustersNote(t *testing.T) {
 	if names := flowNames(resp.Flows); !names["http-server-a"] || !names["http-server-b"] {
 		t.Errorf("flows = %v, want every cluster's", names)
 	}
-	if resp.WarningKind != WarningCluster || !strings.Contains(resp.Warning, "may include other clusters' traffic") {
+	if resp.WarningKind != WarningCluster || !strings.Contains(resp.Warning, mixedClustersNote) {
 		t.Errorf("warning = %q (%s), want the mixed-clusters note", resp.Warning, resp.WarningKind)
 	}
 
@@ -196,7 +196,7 @@ func TestIstioMixedClustersNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if failed.WarningKind != WarningTransient || !strings.Contains(failed.Warning, "may include other clusters' traffic") {
+	if failed.WarningKind != WarningTransient || !failed.WarningClusterScope || !strings.Contains(failed.Warning, mixedClustersNote) {
 		t.Errorf("warning = %q (%s), want the note on a retried response", failed.Warning, failed.WarningKind)
 	}
 }
@@ -275,10 +275,27 @@ func TestIstioMissingFamilyNoteSurvivesMixedNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(resp.Warning, "may include other clusters' traffic") || !strings.Contains(resp.Warning, "TCP connections aren't shown") {
+	if !strings.Contains(resp.Warning, mixedClustersNote) || !strings.Contains(resp.Warning, "TCP connections aren't shown") {
 		t.Fatalf("warning %q, want both notes", resp.Warning)
 	}
 	if resp.WarningKind != WarningIncomplete {
 		t.Errorf("warning kind = %s, want %s", resp.WarningKind, WarningIncomplete)
+	}
+}
+
+// A failed TCP query must not hide why the HTTP traffic is missing: the map is
+// empty for both reasons, and the retry stays.
+func TestIstioMismatchSurvivesFailedTCPQuery(t *testing.T) {
+	useConfiguredStore(t)
+	stubScope(t, clusterA)
+	resp, err := scopedIstio(&istioStore{http: map[string]bool{"b": true}, failTCP: true}).GetFlows(t.Context(), FlowOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Flows) != 0 || resp.WarningKind != WarningTransient || !resp.WarningClusterScope {
+		t.Fatalf("flows = %d, kind = %s, cluster scope = %v", len(resp.Flows), resp.WarningKind, resp.WarningClusterScope)
+	}
+	if !strings.Contains(resp.Warning, "TCP connections") || !strings.Contains(resp.Warning, "cluster=a") {
+		t.Errorf("warning %q should name both the failed TCP query and the cluster mismatch", resp.Warning)
 	}
 }

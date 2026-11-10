@@ -284,7 +284,7 @@ func TestBeylaFamiliesScopedSeparately(t *testing.T) {
 	if names := flowNames(resp.Flows); !names["backend-a"] || names["backend-b"] || names["http-"] {
 		t.Errorf("flows = %v, want cluster a's network flows and no unattributed HTTP", names)
 	}
-	if !strings.Contains(resp.Warning, "HTTP request rates, errors and latency are missing") || !strings.Contains(resp.Warning, "isn't labeled by cluster") {
+	if !strings.Contains(resp.Warning, "HTTP request rates, errors and latency are missing") || !strings.Contains(resp.Warning, "none of it has a cluster label") {
 		t.Errorf("warning %q does not explain the missing HTTP figures", resp.Warning)
 	}
 }
@@ -320,8 +320,8 @@ func TestEmptyMapClusterWarnings(t *testing.T) {
 		clusters map[string]bool
 		want     string
 	}{
-		{"labeled, not this cluster", map[string]bool{"b": true}, "none of it carries cluster=a"},
-		{"no cluster label", map[string]bool{"": true}, "isn't labeled by cluster"},
+		{"labeled, not this cluster", map[string]bool{"b": true}, "none of it is labeled cluster=a"},
+		{"no cluster label", map[string]bool{"": true}, "none of it has a cluster label"},
 		{"store has no traffic", map[string]bool{}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -357,7 +357,7 @@ func TestCarettaEmptyMapClusterWarning(t *testing.T) {
 	if err != nil || len(resp.Flows) != 0 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
-	if resp.WarningKind != WarningCluster || !strings.Contains(resp.Warning, "none of it carries cluster=a") {
+	if resp.WarningKind != WarningCluster || !strings.Contains(resp.Warning, "none of it is labeled cluster=a") {
 		t.Errorf("warning = %q (%s)", resp.Warning, resp.WarningKind)
 	}
 }
@@ -404,7 +404,7 @@ func TestMixedClustersNote(t *testing.T) {
 			if err != nil || len(resp.Flows) != len(tc.clusters) {
 				t.Fatalf("GetFlows: %v, %d flows", err, len(resp.Flows))
 			}
-			got := resp.WarningKind == WarningCluster && strings.Contains(resp.Warning, "may include other clusters' traffic")
+			got := resp.WarningKind == WarningCluster && strings.Contains(resp.Warning, mixedClustersNote)
 			if got != tc.note {
 				t.Errorf("note = %v, want %v (warning %q)", got, tc.note, resp.Warning)
 			}
@@ -425,7 +425,7 @@ func TestCarettaMixedClustersNote(t *testing.T) {
 	if err != nil || len(resp.Flows) == 0 {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
-	if resp.WarningKind != WarningCluster || !strings.HasPrefix(resp.Warning, mixedClustersNote) {
+	if resp.WarningKind != WarningCluster || !resp.WarningClusterScope || !strings.HasPrefix(resp.Warning, mixedClustersNote) {
 		t.Errorf("warning = %q (%s), want the mixed-clusters note", resp.Warning, resp.WarningKind)
 	}
 }
@@ -458,7 +458,7 @@ func TestScopeCheckFailureShowsNoTraffic(t *testing.T) {
 	})
 	store := &beylaStore{l4: map[string]bool{"a": true, "b": true}}
 	resp, err := newScopedBeyla(store).GetFlows(t.Context(), FlowOptions{})
-	if err != nil || len(resp.Flows) != 0 || resp.WarningKind != WarningTransient {
+	if err != nil || len(resp.Flows) != 0 || resp.WarningKind != WarningTransient || !resp.WarningClusterScope {
 		t.Fatalf("GetFlows: %v %+v", err, resp)
 	}
 	if len(store.sent()) != 0 {

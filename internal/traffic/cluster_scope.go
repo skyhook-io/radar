@@ -183,38 +183,53 @@ func (sc clusterScope) selectsAny(rows []map[string]string) bool {
 // rows of the same query run without the cluster matchers. None means the
 // store really has no traffic here; a row carrying this cluster's labels
 // means this cluster is quiet or its traffic could not be placed. Either
-// way the plain empty state is the truth. collector names who exports the
-// metric, for the fix.
+// way the plain empty state is the truth. collector names the metric family
+// (e.g. "Beyla HTTP"), for the reason and the fix.
 func (sc clusterScope) clusterMismatchWarning(rows []map[string]string, collector string) string {
 	if sc.matchers == "" || len(rows) == 0 || sc.selectsAny(rows) {
 		return ""
 	}
 	if sc.carriesIdentity(rows) {
-		return fmt.Sprintf("The metrics store has traffic, but none of it carries %s, the label Radar uses for this cluster. "+
-			"If this cluster's traffic is labeled differently there, start Radar with that label in "+
-			"--prometheus-cluster-label (Helm: traffic.prometheusClusterLabels).", sc.labelText())
+		return fmt.Sprintf("The metrics store has %s traffic, but none of it is labeled %s, the label Radar uses for this cluster. "+
+			"If this cluster's traffic carries a different label or value, set that one: %s", collector, sc.labelText(), setClusterLabel)
 	}
-	return fmt.Sprintf("The metrics store has traffic, but it isn't labeled by cluster, so Radar can't tell this cluster's traffic from others'. "+
-		"Add a cluster label where %s is scraped.", collector)
+	return fmt.Sprintf("The metrics store has %s traffic, but none of it has a cluster label, so Radar can't tell this cluster's traffic from other clusters'. "+
+		"To show it, add %s to the %s metrics where they're scraped or sent to the store.", collector, sc.labelText(), collector)
 }
 
-const mixedClustersNote = "Radar couldn't work out which cluster this traffic comes from, so the map may include other clusters' traffic. " +
-	"To limit it to this cluster, start Radar with --prometheus-cluster-label (Helm: traffic.prometheusClusterLabels)."
+// setClusterLabel tells the reader how to give Radar this cluster's label, for
+// both who may be reading: someone running Radar locally, or an operator of an
+// in-cluster install.
+const setClusterLabel = "start Radar with --prometheus-cluster-label <label>=<value>, or for an in-cluster install set traffic.prometheusClusterLabels in the Helm values."
+
+// uncheckedFamilyNote follows the warning that names a metric family left out
+// because the query checking which cluster it belongs to failed. It names the
+// fix without spelling out the flag: the mixed-clusters note often sits beside
+// it and already does, and the docs link carries the rest.
+const uncheckedFamilyNote = "The check of which cluster they belong to failed. Setting this cluster's label skips that check."
+
+const mixedClustersNote = "Radar couldn't tell which of this traffic is this cluster's, and the metrics store may hold other clusters' traffic too. " +
+	"To show only this cluster's, " + setClusterLabel
 
 // applyClusterScopeWarning sets the cluster warning on a response: the reason
 // for an empty map, or the note that the flows shown may mix clusters. The
 // note joins a warning the source already set, since which cluster the flows
 // belong to matters more than their details. A transient kind stays so the
 // client still retries the read that failed, and an incomplete one so the
-// warning about missing edges outlasts a viewer's filters. An empty-map reason never
-// replaces one: the source's warning is about what it could read at all.
+// warning about missing edges outlasts a viewer's filters. An empty-map reason
+// follows a warning the source already set and keeps its kind: that warning is
+// about what it could read at all, and the reason is still why the rest is hidden.
 func applyClusterScopeWarning(response *FlowsResponse, mismatch string, mixed bool) {
 	switch {
-	case len(response.Flows) == 0 && mismatch != "" && response.Warning == "":
-		response.Warning = mismatch
-		response.WarningKind = WarningCluster
+	case len(response.Flows) == 0 && mismatch != "":
+		if response.Warning == "" {
+			response.WarningKind = WarningCluster
+		}
+		response.Warning = strings.TrimSpace(response.Warning + " " + mismatch)
+		response.WarningClusterScope = true
 	case len(response.Flows) > 0 && mixed:
 		response.Warning = strings.TrimSpace(mixedClustersNote + " " + response.Warning)
+		response.WarningClusterScope = true
 		if response.WarningKind != WarningTransient && response.WarningKind != WarningIncomplete {
 			response.WarningKind = WarningCluster
 		}
@@ -226,6 +241,7 @@ func applyClusterScopeWarning(response *FlowsResponse, mismatch string, mixed bo
 // The cause is logged by scopeForMetric.
 func scopeCheckFailed(source string) *FlowsResponse {
 	return &FlowsResponse{Source: source, Timestamp: time.Now(), Flows: []Flow{},
-		Warning:     "Radar couldn't check which cluster this traffic belongs to, so it isn't shown.",
-		WarningKind: WarningTransient}
+		Warning: "Radar couldn't query the metrics store to check which cluster this traffic belongs to, so it isn't shown. " +
+			"Check that the store is up and answering. If it is, give Radar this cluster's label so it can skip the check: " + setClusterLabel,
+		WarningKind: WarningTransient, WarningClusterScope: true}
 }

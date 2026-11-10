@@ -19,6 +19,18 @@ import { Tooltip } from '../ui/Tooltip'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus, warningRetries, warningBannerTitle, emptyWarningHeadline } from './trafficFilters'
 
+// Where a warning about which cluster the traffic belongs to points: how the map
+// keeps to this cluster in a shared metrics store, and how to set its label.
+const CLUSTER_SCOPE_DOCS_URL = 'https://github.com/skyhook-io/radar/blob/main/docs/configuration.md#traffic-map-in-a-shared-metrics-store'
+
+function ClusterScopeDocsLink() {
+  return (
+    <a className="text-xs text-accent hover:underline" href={CLUSTER_SCOPE_DOCS_URL} target="_blank" rel="noopener noreferrer">
+      How to fix this
+    </a>
+  )
+}
+
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
 
@@ -507,6 +519,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       variant="warning"
       title={warningBannerTitle(flowsData.warningKind)}
       message={flowsData.warning}
+      action={flowsData.warningClusterScope ? <ClusterScopeDocsLink /> : undefined}
     />
   ) : null
 
@@ -1600,6 +1613,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                 onShowSystem={() => setHideSystem(false)}
                 onSwitchNamespace={onSetNamespaces && !namespaceLocked && focus.namespace ? () => onSetNamespaces([focus.namespace!]) : undefined}
                 warning={flowsData.warning}
+                warningClusterScope={flowsData.warningClusterScope}
                 onLeave={() => setFocus(null)}
               />
             </div>
@@ -1650,6 +1664,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   icon={AlertTriangle}
                   headline={emptyWarningHeadline(flowsData.warningKind)}
                   body={flowsData.warning}
+                  action={flowsData.warningClusterScope ? <ClusterScopeDocsLink /> : undefined}
                   className="max-w-md"
                 />
               ) : (
@@ -1679,12 +1694,14 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
  * one of them means the workload is quiet: Radar may have hidden its traffic,
  * or never fetched it.
  */
-function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, onLeave }: {
+function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, warningClusterScope, onLeave }: {
   focus: TrafficFocus
   /** Hide System is on: traffic with system namespaces was never fetched. */
   hideSystem: boolean
   /** The fetch's own warning: with it, absence is not proof of quiet. */
   warning?: string
+  /** The warning is about which cluster the traffic belongs to. */
+  warningClusterScope?: boolean
   hiddenByFilters: boolean
   systemHidden: boolean
   outsideNamespaces: boolean
@@ -1737,6 +1754,7 @@ function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsi
           >
             Leave focus
           </button>
+          {warningClusterScope && <ClusterScopeDocsLink />}
         </div>
       }
       className="max-w-md"

@@ -209,7 +209,11 @@ func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc c
 	if err != nil {
 		return ""
 	}
-	return sc.clusterMismatchWarning(rows, "Istio")
+	family := "Istio HTTP"
+	if metric == istioTCPMetric {
+		family = "Istio TCP"
+	}
+	return sc.clusterMismatchWarning(rows, family)
 }
 
 // errIstioTCPUnchecked stands in for the TCP query when its cluster scope
@@ -269,6 +273,10 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		// Without this the edges read as measured: a failed 5xx query shows as no
 		// errors, and failed TCP or byte queries as no traffic of that kind.
 		response.Warning = fmt.Sprintf("Istio metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(missing, ", "))
+		if scopes.tcpUnchecked {
+			response.Warning += " " + uncheckedFamilyNote
+			response.WarningClusterScope = true
+		}
 		// Missing figures qualify the edges shown. Missing TCP connections are
 		// edges that may not be shown at all, which holds whatever is filtered.
 		response.WarningKind = WarningPartial
@@ -302,6 +310,7 @@ func (s *IstioSource) noteFamilyMismatch(ctx context.Context, opts FlowOptions, 
 		return
 	}
 	response.Warning = strings.TrimSpace(lead + " " + reason + " " + response.Warning)
+	response.WarningClusterScope = true
 	if response.WarningKind != WarningTransient {
 		response.WarningKind = WarningIncomplete
 	}

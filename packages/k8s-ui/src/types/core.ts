@@ -1752,10 +1752,12 @@ export interface TrafficFlowsResponse {
    *  may include other clusters'. It holds until the configuration changes, so
    *  do not retry. */
   warningKind?: TrafficWarningKind
+  /** Set when the warning includes a reason tied to keeping the map to this
+   *  cluster in a shared metrics store, so the view links to how that works. */
+  warningClusterScope?: boolean
 }
 
 export type TrafficWarningKind = 'transient' | 'partial' | 'incomplete' | 'cluster'
-
 
 // Response from GET /api/traffic/flows/records — the newest records behind
 // one graph selection.

@@ -245,6 +245,10 @@ type FlowsResponse struct {
 	// something the user needs to read rather than wait out. WarningIncomplete
 	// and WarningCluster are not retried either.
 	WarningKind string `json:"warningKind,omitempty"`
+	// WarningClusterScope is set when Warning includes a reason tied to keeping
+	// the map to this cluster in a metrics store shared by several, so a client
+	// can link to how that works and how to set this cluster's label.
+	WarningClusterScope bool `json:"warningClusterScope,omitempty"`
 	// CoveredSince is when Flows start being complete, set when a source read
 	// only its newest records and some of the window did not fit: Hubble
 	// returns at most NodeFlowLimit flows per node. Before it, traffic may be

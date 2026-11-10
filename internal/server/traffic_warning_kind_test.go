@@ -135,12 +135,18 @@ func TestTrafficFlowsPayloadDropsClusterNoteWhenFilteringRemovedEverything(t *te
 		t.Error("the mixed-clusters note should go with the flows it describes")
 	}
 	empty := &traffic.FlowsResponse{
-		Source:      "caretta",
-		Flows:       []traffic.Flow{},
-		Warning:     "The metrics store has traffic, but none of it carries cluster=a.",
-		WarningKind: traffic.WarningCluster,
+		Source:              "caretta",
+		Flows:               []traffic.Flow{},
+		Warning:             "The metrics store has traffic, but none of it is labeled cluster=a.",
+		WarningKind:         traffic.WarningCluster,
+		WarningClusterScope: true,
 	}
-	if got := trafficFlowsPayload(empty, []traffic.Flow{}, false)["warningKind"]; got != traffic.WarningCluster {
+	payload := trafficFlowsPayload(empty, []traffic.Flow{}, false)
+	if got := payload["warningKind"]; got != traffic.WarningCluster {
 		t.Errorf("an empty map's cluster explanation must survive, got kind %v", got)
+	}
+	// The client links to the cluster-label docs only when this travels.
+	if got := payload["warningClusterScope"]; got != true {
+		t.Errorf("warningClusterScope = %v, want true", got)
 	}
 }

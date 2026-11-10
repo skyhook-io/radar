@@ -805,19 +805,9 @@ Leave both unset for automatic matching. Configured labels must exist on each
 affected metric source, including kubelet volume stats. See
 [scope and remedies](workload-metrics.md#pvc-usage-scope).
 
-The Caretta, Beyla and Istio traffic map keeps to this cluster the same way when
-it reads a metrics store you configured (`--prometheus-url`, Helm
-`traffic.prometheusUrl`, or a URL saved in Settings): it uses the
-`--prometheus-cluster-label` labels when set, otherwise the labels automatic
-matching proves for this cluster, checked separately for Caretta, Beyla network
-flows, Beyla HTTP, Istio HTTP and Istio TCP metrics. Caretta's own store and
-stores Radar discovers in the cluster are read unfiltered. When the store has
-traffic but none of it carries this cluster's labels, the map says so rather
-than showing "no traffic yet". When Radar can't work out which cluster the
-traffic comes from, the map shows it, with a note that it may include other
-clusters' traffic when the traffic carries more than one cluster name in
-`cluster`, `cluster_name`, `k8s_cluster_name`, `kubernetes_cluster` or
-`cluster_id`.
+The same `--prometheus-cluster-label` labels also keep the Caretta, Beyla and
+Istio traffic map to this cluster. See
+[Traffic map in a shared metrics store](#traffic-map-in-a-shared-metrics-store).
 
 | Run mode | How to configure an explicit override |
 |---|---|
@@ -830,6 +820,40 @@ Changing the Kubernetes connection, logical metrics backend or headers clears
 an active override and resumes automatic matching. A new local port-forward to
 the same discovered Service is not a different backend. Only reapply an override
 after verifying the new connection's scope. See [operator override details](workload-metrics.md#optional-operator-override).
+
+### Traffic map in a shared metrics store
+
+When the traffic map reads Caretta, Beyla or Istio traffic from a metrics store
+you configured (`--prometheus-url`, Helm `traffic.prometheusUrl`, or a URL saved
+in Settings), it keeps to this cluster's traffic when it can tell which that
+is. It matches this cluster by the `--prometheus-cluster-label` labels when
+they're set, otherwise by the cluster label kube-state-metrics carries for this
+cluster's Pods. Caretta's own store, and stores Radar finds in the cluster, are
+read unfiltered.
+
+When Radar can't tell which traffic is this cluster's, the map says so:
+
+| The map says | What happened | What to do |
+|---|---|---|
+| The store has traffic, but none of it has a cluster label | Radar matches this cluster by a label (the one you set, or the one kube-state-metrics carries), but the traffic metrics carry no cluster label, so they could belong to any cluster. | Add the same label and value to the traffic metrics where they're scraped or sent to the store, for example with a relabel rule or an external label. |
+| The store has traffic, but none of it is labeled `<label>=<value>` | The traffic carries a cluster label, but not the one Radar uses for this cluster. | Set the label and value this cluster's traffic actually carries (below). |
+| This map may include other clusters' traffic | The traffic may come from more than one cluster, going by `cluster`, `cluster_name`, `k8s_cluster_name`, `kubernetes_cluster` or `cluster_id`, and Radar can't separate this cluster's from the rest, for example because the store has no kube-state-metrics or it carries no cluster label. The map shows the traffic with this note. | Set this cluster's label (below). |
+| Radar couldn't query the metrics store to check which cluster this traffic belongs to (or, for one family: the check of which cluster they belong to failed) | The query that checks the cluster labels failed: the store was down, timed out or refused it. That traffic isn't shown until it works. | Check that the store is up and answering. If it is, set this cluster's label (below): Radar then uses it without running the check. |
+
+Beyla and Istio check their network and HTTP metrics separately, so the map can
+show one and say the other is missing for the same reasons.
+
+To set this cluster's label:
+
+- Local CLI or `kubectl radar`: add `--prometheus-cluster-label cluster=production`
+  (your label and value) on each launch. Repeat the flag for more than one label.
+- In-cluster (Helm): set `traffic.prometheusClusterLabels`, for example
+  `{cluster: production}`. Radar Cloud agents use the same Helm value.
+- Desktop: the flag isn't available. Use the CLI when you need it.
+
+The traffic metrics must carry every label you set. Traffic without them is
+hidden. The map says so when that leaves it, or one of Beyla's or Istio's
+metric families, empty; when only some series lack the labels, it can't tell.
 
 ## Startup Context
 

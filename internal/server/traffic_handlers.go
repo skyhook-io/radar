@@ -333,6 +333,9 @@ func addFlowsWarning(result map[string]any, response *traffic.FlowsResponse, flo
 		if response.WarningKind != "" {
 			result["warningKind"] = response.WarningKind
 		}
+		if response.WarningClusterScope {
+			result["warningClusterScope"] = true
+		}
 	}
 }
 

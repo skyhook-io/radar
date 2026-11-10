@@ -97,16 +97,16 @@ func (s *BeylaSource) clusterMismatch(ctx context.Context, opts FlowOptions, sc 
 }
 
 func (s *BeylaSource) l4Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
-	return s.familyMismatch(ctx, sc, beylaActiveSeries(s.flowMetricName(), beylaJobSelector(), opts.Namespace,
+	return s.familyMismatch(ctx, sc, "Beyla network", beylaActiveSeries(s.flowMetricName(), beylaJobSelector(), opts.Namespace,
 		[]string{"k8s_src_namespace", "k8s_dst_namespace"}, beylaWindow(opts.Since)))
 }
 
 func (s *BeylaSource) l7Mismatch(ctx context.Context, opts FlowOptions, sc clusterScope) string {
-	return s.familyMismatch(ctx, sc, beylaActiveSeries(beylaL7Metric, beylaJobSelector(), opts.Namespace,
+	return s.familyMismatch(ctx, sc, "Beyla HTTP", beylaActiveSeries(beylaL7Metric, beylaJobSelector(), opts.Namespace,
 		[]string{"k8s_namespace_name"}, beylaWindow(opts.Since)))
 }
 
-func (s *BeylaSource) familyMismatch(ctx context.Context, sc clusterScope, active string) string {
+func (s *BeylaSource) familyMismatch(ctx context.Context, sc clusterScope, family, active string) string {
 	if sc.matchers == "" {
 		return ""
 	}
@@ -114,7 +114,7 @@ func (s *BeylaSource) familyMismatch(ctx context.Context, sc clusterScope, activ
 	if err != nil {
 		return ""
 	}
-	return sc.clusterMismatchWarning(rows, "Beyla")
+	return sc.clusterMismatchWarning(rows, family)
 }
 
 // beylaActiveSeries selects the series present in the window, filtered to
@@ -449,6 +449,10 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	}
 	if len(presence.failed) > 0 && len(flows) > 0 {
 		failed := fmt.Sprintf("Beyla metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(presence.failed, ", "))
+		if scopes.l7Unchecked {
+			failed += " " + uncheckedFamilyNote
+			response.WarningClusterScope = true
+		}
 		response.Warning = strings.TrimSpace(failed + " " + response.Warning)
 		// About figures on the edges shown, like the attribute warning it may
 		// join: shown beside them, and gone when they are filtered away.
@@ -462,6 +466,7 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		// HTTP series. Say so, or the edges read as carrying no requests.
 		if l7 := s.l7Mismatch(ctx, opts, scopes.l7); l7 != "" {
 			response.Warning = strings.TrimSpace("HTTP request rates, errors and latency are missing from these edges. " + l7 + " " + response.Warning)
+			response.WarningClusterScope = true
 			if response.WarningKind == "" {
 				response.WarningKind = WarningPartial
 			}
