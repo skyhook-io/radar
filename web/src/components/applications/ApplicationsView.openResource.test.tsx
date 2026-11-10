@@ -105,13 +105,14 @@ it('opens a ConfigMap clicked in a single-workload app on its resource page', as
   expect(url.searchParams.get('resource')).toBe('shop/web-config')
 })
 
-it('keeps the API group and namespace filter when opening an Ingress from a single-workload app', async () => {
+it('keeps the API group, namespace filter and open investigation when opening an Ingress from a single-workload app', async () => {
   apps = [app('shop/Deployment/web', ['web'])]
-  await renderAt('/applications?app=shop%2FDeployment%2Fweb&namespaces=shop')
+  await renderAt('/applications?app=shop%2FDeployment%2Fweb&namespaces=shop&ai-run=run-1')
   await click('open-ing')
   const url = new URL(location, 'http://radar.invalid')
   expect(url.pathname).toBe('/resources/ingresses')
   expect(url.searchParams.get('resource')).toBe('shop/web')
   expect(url.searchParams.get('apiGroup')).toBe('networking.k8s.io')
   expect(url.searchParams.get('namespaces')).toBe('shop')
+  expect(url.searchParams.get('ai-run')).toBe('run-1')
 })

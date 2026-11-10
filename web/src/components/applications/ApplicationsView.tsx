@@ -52,7 +52,7 @@ import {
 } from "../../api/client";
 import { useConnection } from "../../context/ConnectionContext";
 import { useTimelineSource } from "../../context/TimelineSource";
-import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath } from "../../utils/navigation";
+import { apiVersionToGroup, kindToPluralWithGroup, relatedResourcePath, withCrossViewParams } from "../../utils/navigation";
 import { WorkloadView } from "../workload/WorkloadView";
 import { ApplicationCostTab } from "../cost/ApplicationCostTab";
 import { useTimelineRetentionNote } from "../../context/TimelineCustomization";
@@ -493,11 +493,7 @@ function AppDetailRoute({
         return;
       }
 
-      const [pathname, rawSearch = ""] = relatedResourcePath(resource).split("?");
-      const params = new URLSearchParams(rawSearch);
-      const activeNamespaces = searchParams.get("namespaces");
-      if (activeNamespaces) params.set("namespaces", activeNamespaces);
-      navigate({ pathname, search: params.toString() });
+      navigate(withCrossViewParams(relatedResourcePath(resource), searchParams.toString()));
     },
     [navigate, onOpenResource, searchParams, singleWorkloadKey],
   );
