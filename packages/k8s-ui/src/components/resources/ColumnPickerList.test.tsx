@@ -23,6 +23,7 @@ describe('ColumnPickerList keyboard focus', () => {
       onToggle={() => {}}
       onRemoveCustom={() => {}}
       onReorder={onReorder}
+      pinning={{ pinned: ['name'], paused: [], onToggle: () => {} }}
     />))
     try {
       render()
