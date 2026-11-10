@@ -136,16 +136,17 @@ terminal. `--disable-exec` turns uploads off along with the terminal.
   sticky; when the container's user cannot keep the owner, the upload is
   refused instead.
 - **What it needs.** The container needs `/bin/sh` and `/proc` plus `mktemp`,
-  `readlink`, `cat`, `wc`, `ln`, `mv`, `chmod`, `ls` and `rm`. Replacing a
-  file owned by another user also needs `chown`. Distroless and scratch images
-  are refused with an explanation, and a missing command is named. For an image
-  that can't take uploads, `kubectl cp` still works if the image has `tar`.
+  `cat`, `wc`, `ln`, `mv`, `chmod`, `ls` and `rm`. Replacing a file owned by
+  another user also needs `chown`. Distroless and scratch images are refused
+  with an explanation, and a missing command is named. For an image that can't
+  take uploads, `kubectl cp` still works if the image has `tar`.
 - **What it refuses.** Symlinks, directories and special files as destinations;
   a directory reached through a symlink (the error names its real location);
   replacing an existing file without the user confirming it; files mounted on
   their own (a `subPath` ConfigMap or Secret); and files over 100 MiB (413). At
   most four uploads run at once per Radar process, and an upload whose data
-  stops arriving for two minutes is ended (408).
+  stops arriving for two minutes is ended (408). A proxy in front of Radar may
+  have a smaller request size limit of its own; raise it to allow uploads.
 
 Changes apply to the running container only and are lost when it is recreated,
 unless they land on a volume that outlives it.

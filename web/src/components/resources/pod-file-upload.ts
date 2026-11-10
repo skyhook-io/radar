@@ -194,6 +194,19 @@ export class PodFileUploadError extends Error {
   }
 }
 
+// A 413 without Radar's own error body was refused before it reached Radar,
+// usually by a proxy with a smaller request size limit than Radar's.
+export function uploadResponseError(status: number, body: { error?: string; error_code?: string } | null): PodFileUploadError {
+  if (status === 413 && !body?.error) {
+    return new PodFileUploadError(
+      'The upload was rejected as too large, possibly by a proxy in front of Radar. If so, that proxy\'s request size limit needs raising for uploads.',
+      'file_too_large',
+      status,
+    )
+  }
+  return new PodFileUploadError(body?.error || `Upload failed (HTTP ${status})`, body?.error_code || 'upload_failed', status)
+}
+
 export const UPLOAD_CANCELLED = 'upload_cancelled'
 
 export interface UploadRequest {
@@ -237,7 +250,7 @@ export function uploadPodFile(req: UploadRequest): Promise<UploadResult> {
         resolve(body as UploadResult)
         return
       }
-      reject(new PodFileUploadError(body?.error || `Upload failed (HTTP ${xhr.status})`, body?.error_code || 'upload_failed', xhr.status))
+      reject(uploadResponseError(xhr.status, body))
     }
     xhr.onerror = () => reject(new PodFileUploadError('The upload could not reach Radar', 'network_error', 0))
     xhr.onabort = () => reject(new PodFileUploadError('Upload cancelled', UPLOAD_CANCELLED, 0))

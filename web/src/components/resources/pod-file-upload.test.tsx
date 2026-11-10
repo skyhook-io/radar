@@ -9,6 +9,7 @@ import {
   oversizeMessage,
   POD_FILE_PERSISTENCE_NOTE,
   uploadBlockedHint,
+  uploadResponseError,
   uploadTarget,
 } from './pod-file-upload'
 import { PodFileUploadButton, PodFileUploadNotices, PodFileUploadStatus } from './PodFileUploadPanel'
@@ -201,5 +202,22 @@ describe('upload controls', () => {
       <PodFileUploadStatus state={{ phase: 'saved', path: '/a', replaced: false }} onConfirmReplace={() => {}} onCancel={() => {}} onDismiss={() => {}} />,
     )
     expect(saved).toContain('Saved /a')
+  })
+})
+
+describe('uploadResponseError', () => {
+  it('blames a proxy only when a 413 carries no Radar error body', () => {
+    const fromProxy = uploadResponseError(413, null)
+    expect(fromProxy.message).toMatch(/proxy/)
+    expect(fromProxy.code).toBe('file_too_large')
+
+    const fromRadar = uploadResponseError(413, { error: 'Uploads are limited to 104857600 bytes', error_code: 'file_too_large' })
+    expect(fromRadar.message).toBe('Uploads are limited to 104857600 bytes')
+    expect(fromRadar.message).not.toMatch(/proxy/)
+  })
+
+  it('keeps other failures as before', () => {
+    expect(uploadResponseError(500, null).message).toBe('Upload failed (HTTP 500)')
+    expect(uploadResponseError(409, { error: 'x exists', error_code: 'file_exists' }).code).toBe('file_exists')
   })
 })
