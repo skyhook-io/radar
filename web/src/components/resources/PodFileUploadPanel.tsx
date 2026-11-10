@@ -96,7 +96,7 @@ export function PodFileUploadStatus({ state, onConfirmReplace, onCancel, onDismi
         <AlertBanner
           variant="warning"
           title={`Replace ${state.name}?`}
-          message={`${state.dir === '/' ? '' : state.dir}/${state.name} already exists. Uploading ${formatBytes(state.size)} replaces it in the running container; its permissions and owner are kept.`}
+          message={`${state.dir === '/' ? '' : state.dir}/${state.name} already exists. Uploading ${formatBytes(state.size)} replaces it in the running container; its owner and permissions are kept, but not ACLs or extended attributes.`}
           className="mb-3"
         >
           <div className="flex gap-2 mt-2">
