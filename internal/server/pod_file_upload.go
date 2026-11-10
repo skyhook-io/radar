@@ -82,6 +82,7 @@ const (
 	uploadCodeOwnerChange      = "ownership_change"
 	uploadCodeIncomplete       = "incomplete_upload"
 	uploadCodeSymlinkedDir     = "symlinked_directory"
+	uploadCodeTempChanged      = "temp_file_changed"
 	uploadCodeStalled          = "upload_stalled"
 	uploadCodeReadOnly         = "read_only_filesystem"
 	uploadCodePermissionDenied = "permission_denied"
@@ -104,6 +105,7 @@ const (
 	uploadExitOwnerChange   = 26
 	uploadExitIncomplete    = 27
 	uploadExitSymlinkedDir  = 28
+	uploadExitTempChanged   = 29
 )
 
 // podFileUploadScript writes stdin to a file without ever exposing a partial
@@ -120,12 +122,21 @@ const (
 // browser shows paths, and writing somewhere else than the path the user
 // chose is the surprise to avoid. Refusing names the real location.
 //
-// When replacing, the temp file takes the old one's owner before the body is
-// written, so a user who could not keep that owner is refused before the
-// transfer. The comparison is with the temp file's own ids, not the writer's:
-// a setgid directory gives new files its group. The mode is applied last,
-// after the write (a read-only mode would stop a non-root writer) and after
-// chown (which clears setuid and setgid).
+// Another process in the container that can write the directory could swap
+// the temp file for a symlink at any point. So the script opens the temp file
+// once, checks through /proc that the open file is the one mktemp made, and
+// from then on writes, counts, chowns and chmods only through that open file.
+// The commit is by name, so it re-checks that the destination is that same
+// file afterwards; a swap is reported, and nothing outside the directory is
+// ever written or changed.
+//
+// When replacing, the old file's owner and mode come from one ls of it, which
+// also refuses anything but a regular file. The temp file takes that owner
+// before the body is written, so a user who could not keep it is refused
+// before the transfer. The comparison is with the temp file's own ids, not
+// the writer's: a setgid directory gives new files its group. The mode is
+// applied last, after the write (a read-only mode would stop a non-root
+// writer) and after chown (which clears setuid and setgid).
 //
 // The commit never treats the destination as a directory (-T), so a directory
 // that appears under that name mid-upload refuses it instead of swallowing the
@@ -145,6 +156,19 @@ const (
 const podFileUploadScript = `dir=$1 name=$2 overwrite=$3 size=$4 tmp= replace=
 set -f
 drain() { cat >/dev/null 2>&1 || while read -r _; do :; done; }
+mode_of() {
+  s=${1#?} v=0
+  for b in 256 128 64 32 16 8 4 2 1; do
+    c=${s%"${s#?}"} s=${s#?}
+    case $c in -|S|T) ;; *) v=$((v + b)) ;; esac
+    case $b$c in 64[sS]) v=$((v + 2048)) ;; 8[sS]) v=$((v + 1024)) ;; 1[tT]) v=$((v + 512)) ;; esac
+  done
+  printf %o "$v"
+}
+committed() {
+  [ "$dest" -ef "$f" ] || { echo "radar: temp file changed" >&2; exit 29; }
+  exit 0
+}
 trap 'rc=$?; [ -n "$tmp" ] && rm -f -- "$tmp"; [ $rc -ne 0 ] && drain; exit $rc' EXIT
 trap 'exit 129' HUP INT TERM PIPE
 if [ ! -e "$dir" ]; then echo "radar: directory not found" >&2; exit 20; fi
@@ -168,36 +192,43 @@ if [ -e "$dest" ]; then
 fi
 tmp=$(mktemp ./.radar-upload.XXXXXX) || exit $?
 echo "tmp=${tmp#./}"
+case $here in /) want=/${tmp#./} ;; *) want=$here/${tmp#./} ;; esac
+exec 4<"$tmp" || exit 1
+got=$(readlink /proc/self/fd/4) || exit $?
+[ "$got" = "$want" ] || { echo "radar: temp file changed" >&2; exit 29; }
+exec 3<>/proc/self/fd/4 4<&- || exit 1
+f=/proc/self/fd/3
 if [ -e "$dest" ]; then
   replace=1
-  set -- $(ls -nd -- "$tmp")
-  uid=$3 gid=$4
   set -- $(ls -nd -- "$dest")
-  if [ "$3" != "$uid" ] || [ "$4" != "$gid" ]; then
-    chown "$3:$4" "$tmp" 2>/dev/null || { echo "radar: owner $3:$4 differs" >&2; exit 26; }
+  [ $# -ge 4 ] || exit 127
+  case $1 in -*) ;; *) echo "radar: not a regular file" >&2; exit 23 ;; esac
+  mode=$(mode_of "$1") owner=$3 group=$4
+  set -- $(ls -nLd -- "$f")
+  [ $# -ge 4 ] || exit 127
+  if [ "$3" != "$owner" ] || [ "$4" != "$group" ]; then
+    chown "$owner:$group" "$f" 2>/dev/null || { echo "radar: owner $owner:$group differs" >&2; exit 26; }
   fi
 fi
-cat > "$tmp" || exit $?
-n=$(wc -c < "$tmp") || exit $?
+cat >&3 || exit $?
+n=$(wc -c < "$f") || exit $?
 [ $n -eq "$size" ] || { echo "radar: received $n of $size bytes" >&2; exit 27; }
 if [ -n "$replace" ]; then
-  if ! chmod --reference="$dest" "$tmp" 2>/dev/null; then
-    mode=$(stat -c %a -- "$dest" 2>/dev/null) && chmod "$mode" "$tmp" || { echo "radar: cannot read the file mode" >&2; exit 25; }
-  fi
+  chmod "$mode" "$f" || exit $?
   echo replaced
 else
-  chmod "$(printf %o $((0666 & ~0$(umask))))" "$tmp" || exit 1
+  chmod "$(printf %o $((0666 & ~0$(umask))))" "$f" || exit $?
 fi
 if [ "$overwrite" != 1 ]; then
-  if ln -T -- "$tmp" "$dest" 2>/dev/null; then exit 0; fi
+  if ln -T -- "$tmp" "$dest" 2>/dev/null; then committed; fi
   check_dest
-  if ln -- "$tmp" "$dest" 2>/dev/null; then exit 0; fi
+  if ln -- "$tmp" "$dest" 2>/dev/null; then committed; fi
   check_dest
 fi
 check_dest
-mv -f -T -- "$tmp" "$dest" 2>/dev/null && exit 0
+mv -f -T -- "$tmp" "$dest" 2>/dev/null && committed
 check_dest
-mv -f -- "$tmp" "$dest"
+mv -f -- "$tmp" "$dest" && committed
 `
 
 func podFileUploadCommand(dir, name string, overwrite bool, size int64) []string {
@@ -502,6 +533,18 @@ func (s *Server) podFileWriteSlotsChan() chan struct{} {
 	return s.podFileWriteSlots
 }
 
+// missingCommandName reads the command name out of a shell's "not found"
+// line: "sh: mktemp: not found" (BusyBox), "sh: 1: mktemp: not found" (dash),
+// "/bin/sh: line 3: mktemp: command not found" (bash).
+var missingCommandPattern = regexp.MustCompile(`([A-Za-z0-9_.+-]+): (?:command )?not found`)
+
+func missingCommandName(stderr string) string {
+	if m := missingCommandPattern.FindStringSubmatch(stderr); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 func uploadTempName(stdout string) string {
 	for _, line := range strings.Split(stdout, "\n") {
 		if name, ok := strings.CutPrefix(line, "tmp="); ok && podFileUploadTempName.MatchString(name) {
@@ -624,6 +667,9 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 			real := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(stderr), "radar: resolves to "))
 			return http.StatusConflict, uploadCodeSymlinkedDir,
 				fmt.Sprintf("%s goes through a symlink and resolves to %s; browse to %s to upload there", dir, real, real)
+		case uploadExitTempChanged:
+			return http.StatusConflict, uploadCodeTempChanged,
+				fmt.Sprintf("Something else in the container changed the upload's temp file while it was being written, so the upload stopped. Check %s: it may not hold your file.", destPath)
 		case uploadExitIncomplete:
 			return http.StatusBadRequest, uploadCodeIncomplete, "The upload stopped before the whole file arrived; nothing was written"
 		}
@@ -635,8 +681,13 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 		return http.StatusNotImplemented, uploadCodeNoShell,
 			"Container has no shell (/bin/sh), which uploading needs. Distroless and scratch images cannot take uploads."
 	case isCommandMissing(streamErr, stderr):
+		const fallback = " If the image has tar, kubectl cp can still copy the file in."
+		if cmd := missingCommandName(stderr); cmd != "" {
+			return http.StatusNotImplemented, uploadCodeMissingTools,
+				fmt.Sprintf("This container has no %s command, which uploading needs, so nothing was written.", cmd) + fallback
+		}
 		return http.StatusNotImplemented, uploadCodeMissingTools,
-			"Container lacks a standard command uploading needs (it uses sh, mktemp, cat, wc, ln, mv, chmod, stat, ls and rm). Minimal images may not support uploads."
+			"This container lacks a command uploading needs (it uses sh, mktemp, readlink, cat, wc, ln, mv, chmod, ls and rm), so nothing was written." + fallback
 	case strings.Contains(combined, "read-only file system"):
 		return http.StatusConflict, uploadCodeReadOnly,
 			fmt.Sprintf("%s is on a read-only filesystem", dir)

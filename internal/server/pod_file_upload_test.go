@@ -414,6 +414,7 @@ func TestPodFileUploadClassifiesFailures(t *testing.T) {
 		{"enospc", k8sexec.CodeExitError{Code: 1, Err: errors.New("exit")}, "cat: write error: No space left on device", http.StatusInsufficientStorage, uploadCodeNoSpace},
 		{"ebusy", k8sexec.CodeExitError{Code: 1, Err: errors.New("exit")}, "mv: cannot move './.radar-upload.x' to './app.conf': Device or resource busy", http.StatusConflict, uploadCodeMountPoint},
 		{"no mktemp", k8sexec.CodeExitError{Code: 127, Err: errors.New("exit")}, "sh: mktemp: not found", http.StatusNotImplemented, uploadCodeMissingTools},
+		{"no chmod under bash", k8sexec.CodeExitError{Code: 127, Err: errors.New("exit")}, "/bin/sh: line 44: chmod: command not found", http.StatusNotImplemented, uploadCodeMissingTools},
 		{"no shell", errors.New(`OCI runtime exec failed: exec failed: unable to start container process: exec: "/bin/sh": stat /bin/sh: no such file or directory`), "", http.StatusNotImplemented, uploadCodeNoShell},
 		{"transport", errors.New("stream error: connection reset"), "", http.StatusBadGateway, uploadCodeUncertain},
 		{"no such pod", errors.New(`unable to upgrade connection: pods "x" not found`), "", http.StatusNotFound, uploadCodePodNotFound},
@@ -446,6 +447,20 @@ func TestPodFileUploadClassifiesFailures(t *testing.T) {
 // answered. Whether a browser receives it rather than a reset depends on the
 // drain, which Go's own client cannot tell apart; that part is checked in a
 // browser.
+func TestPodFileUploadNamesTheMissingCommand(t *testing.T) {
+	for stderr, want := range map[string]string{
+		"sh: mktemp: not found":                      "This container has no mktemp command",
+		"sh: 1: wc: not found":                       "This container has no wc command",
+		"/bin/sh: line 44: chmod: command not found": "This container has no chmod command",
+		"": "This container lacks a command uploading needs",
+	} {
+		_, code, message := classifyPodFileUploadError("/data/a.txt", k8sexec.CodeExitError{Code: 127, Err: errors.New("exit")}, stderr)
+		if code != uploadCodeMissingTools || !strings.HasPrefix(message, want) || !strings.Contains(message, "kubectl cp") {
+			t.Errorf("stderr %q: code %s, message %q", stderr, code, message)
+		}
+	}
+}
+
 func TestPodFileUploadEarlyRefusalReachesClientWithLargeBody(t *testing.T) {
 	h := uploadServer(t, true, func(_ context.Context, req uploadExec, opts remotecommand.StreamOptions) error {
 		fmt.Fprint(opts.Stderr, "radar: mount point")

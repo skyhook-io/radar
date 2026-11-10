@@ -134,10 +134,11 @@ terminal. `--disable-exec` turns uploads off along with the terminal.
   failed upload leaves the destination untouched and removes the temp file. A
   replaced file keeps its permissions and owner; when the container's user
   cannot keep the owner, the upload is refused instead.
-- **What it needs.** The container needs `/bin/sh` plus `mktemp`, `cat`, `wc`,
-  `ln`, `mv`, `chmod`, `ls` and `rm`, and `stat` where `chmod --reference`
-  is missing (BusyBox). Distroless and scratch images are refused with an
-  explanation.
+- **What it needs.** The container needs `/bin/sh` and `/proc` plus `mktemp`,
+  `readlink`, `cat`, `wc`, `ln`, `mv`, `chmod`, `ls` and `rm`. Replacing a
+  file owned by another user also needs `chown`. Distroless and scratch images
+  are refused with an explanation, and a missing command is named. For an image
+  that can't take uploads, `kubectl cp` still works if the image has `tar`.
 - **What it refuses.** Symlinks, directories and special files as destinations;
   a directory reached through a symlink (the error names its real location);
   replacing an existing file without the user confirming it; files mounted on

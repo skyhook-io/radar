@@ -374,3 +374,152 @@ func TestUploadScriptKeepsGroupInSetgidDirectory(t *testing.T) {
 		t.Errorf("owner %d:%d, want 0:0", sys.Uid, sys.Gid)
 	}
 }
+
+// runUploadScriptWithout runs the script with a PATH holding every command it
+// uses except the named ones, to stand in for a minimal image.
+func runUploadScriptWithout(t *testing.T, missing []string, dir, name string, overwrite bool, body []byte) (int, string) {
+	t.Helper()
+	bin := t.TempDir()
+	skip := map[string]bool{}
+	for _, m := range missing {
+		skip[m] = true
+	}
+	for _, tool := range []string{"mktemp", "readlink", "cat", "wc", "ln", "mv", "chmod", "ls", "rm", "chown"} {
+		if skip[tool] {
+			continue
+		}
+		p, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not on this host", tool)
+		}
+		if err := os.Symlink(p, filepath.Join(bin, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := podFileUploadCommand(dir, name, overwrite, int64(len(body)))
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Env = []string{"PATH=" + bin}
+	c.Stdin = bytes.NewReader(body)
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	err := c.Run()
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode(), stderr.String()
+	}
+	if err != nil {
+		t.Fatalf("run script: %v", err)
+	}
+	return 0, stderr.String()
+}
+
+// Without ls the owner check reads nothing, so a replace must be refused
+// rather than leave the file owned by the container's user.
+func TestUploadScriptWithoutLsRefusesReplace(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("only root can replace a file owned by someone else")
+	}
+	dir := realTempDir(t)
+	dest := filepath.Join(dir, "app.conf")
+	_ = os.WriteFile(dest, []byte("old"), 0o640)
+	if err := os.Chown(dest, 1000, 1000); err != nil {
+		t.Fatal(err)
+	}
+	code, stderr := runUploadScriptWithout(t, []string{"ls"}, dir, "app.conf", true, []byte("new"))
+	if code != 127 {
+		t.Fatalf("exit %d, want 127 (%s)", code, stderr)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "old" {
+		t.Errorf("destination changed to %q", got)
+	}
+	st, _ := os.Stat(dest)
+	if sys, ok := st.Sys().(*syscall.Stat_t); !ok || sys.Uid != 1000 || sys.Gid != 1000 {
+		t.Errorf("owner changed: %+v", st.Sys())
+	}
+	assertNoTempFiles(t, dir)
+	if got := missingCommandName(stderr); got != "ls" {
+		t.Errorf("missing command = %q from %q, want ls", got, stderr)
+	}
+}
+
+// A missing chmod is reported as a missing command, on a new file and on a
+// replace, not as a raw failure or as unreadable permissions.
+func TestUploadScriptWithoutChmodNamesIt(t *testing.T) {
+	for _, overwrite := range []bool{false, true} {
+		dir := realTempDir(t)
+		if overwrite {
+			_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("old"), 0o640)
+		}
+		code, stderr := runUploadScriptWithout(t, []string{"chmod"}, dir, "a.txt", overwrite, []byte("new"))
+		if code != 127 {
+			t.Fatalf("overwrite=%v: exit %d, want 127 (%s)", overwrite, code, stderr)
+		}
+		if got := missingCommandName(stderr); got != "chmod" {
+			t.Errorf("overwrite=%v: missing command = %q from %q, want chmod", overwrite, got, stderr)
+		}
+		assertNoTempFiles(t, dir)
+	}
+}
+
+// Something else in the container swaps the temp file for a symlink while
+// the body is arriving. The write, owner and mode must still land on the
+// temp file Radar created, never on the symlink's target, and the upload
+// must report the swap instead of claiming success.
+func TestUploadScriptTempSwappedForSymlinkTouchesNothingElse(t *testing.T) {
+	dir := realTempDir(t)
+	outside := filepath.Join(realTempDir(t), "target")
+	if err := os.WriteFile(outside, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "app.conf")
+	_ = os.WriteFile(dest, []byte("old"), 0o644)
+
+	body := []byte("first-half|second-half")
+	cmd := podFileUploadCommand(dir, "app.conf", true, int64(len(body)))
+	c := exec.Command(cmd[0], cmd[1:]...)
+	stdin, err := c.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = stdin.Write(body[:11])
+	var tmp string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		matches, _ := filepath.Glob(filepath.Join(dir, ".radar-upload.*"))
+		if len(matches) == 1 {
+			if st, err := os.Stat(matches[0]); err == nil && st.Size() == 11 {
+				tmp = matches[0]
+				break
+			}
+		}
+	}
+	if tmp == "" {
+		t.Fatal("temp file never received the first half")
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, "stolen")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, tmp); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = stdin.Write(body[11:])
+	_ = stdin.Close()
+	err = c.Wait()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 29 {
+		t.Fatalf("err %v, want exit 29 (%s)", err, stderr.String())
+	}
+	if got, _ := os.ReadFile(outside); string(got) != "original" {
+		t.Errorf("symlink target written: %q", got)
+	}
+	if st, _ := os.Stat(outside); st.Mode().Perm() != 0o600 {
+		t.Errorf("symlink target mode changed to %v", st.Mode())
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "stolen")); string(got) != string(body) {
+		t.Errorf("upload did not land in Radar's own temp file: %q", got)
+	}
+}
