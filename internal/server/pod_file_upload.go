@@ -411,7 +411,9 @@ func (s *Server) handlePodFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.AuditLog(r, namespace, podName)
+	audit := auth.AuditActionDetails{Action: "upload_file", Kind: "Pod", Namespace: namespace, Name: podName,
+		Container: container, Source: "ui", Outcome: "failed", Directory: dir, File: name, Bytes: r.ContentLength}
+	defer func() { auth.AuditLogAction(r, audit) }()
 
 	execCtx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -433,10 +435,15 @@ func (s *Server) handlePodFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if streamErr == nil && bodyErr == nil {
+		replaced := strings.Contains(stdout.String(), "\nreplaced\n")
+		audit.Outcome = "saved"
+		if replaced {
+			audit.Outcome = "replaced"
+		}
 		s.writeJSON(w, podFileUploadResult{
 			Path:     destPath,
 			Size:     r.ContentLength,
-			Replaced: strings.Contains(stdout.String(), "\nreplaced\n"),
+			Replaced: replaced,
 		})
 		return
 	}
@@ -454,11 +461,13 @@ func (s *Server) handlePodFileUpload(w http.ResponseWriter, r *http.Request) {
 
 	var maxErr *http.MaxBytesError
 	if errors.As(bodyErr, &maxErr) {
+		audit.Outcome = uploadCodeTooLarge
 		s.writePodFileError(w, http.StatusRequestEntityTooLarge, uploadCodeTooLarge,
 			fmt.Sprintf("Uploads are limited to %d bytes", limit))
 		return
 	}
 	if errors.Is(bodyErr, os.ErrDeadlineExceeded) {
+		audit.Outcome = uploadCodeStalled
 		s.writePodFileError(w, http.StatusRequestTimeout, uploadCodeStalled,
 			fmt.Sprintf("No data arrived for %s, so the upload was stopped; nothing was written", podFileUploadStallTimeout))
 		return
@@ -466,6 +475,7 @@ func (s *Server) handlePodFileUpload(w http.ResponseWriter, r *http.Request) {
 	if bodyErr != nil {
 		log.Printf("[copy] upload to %s/%s path=%s stopped: request body: %v", namespace, podName, destPath, bodyErr)
 		errorlog.Record("copy", "warning", "upload to %s/%s path=%s stopped before the file arrived: %v", namespace, podName, destPath, bodyErr)
+		audit.Outcome = uploadCodeIncomplete
 		s.writePodFileError(w, http.StatusBadRequest, uploadCodeIncomplete,
 			"The upload stopped before the whole file arrived; nothing was written")
 		return
@@ -477,6 +487,7 @@ func (s *Server) handlePodFileUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status, code, message := classifyPodFileUploadError(destPath, streamErr, stderr.String())
+	audit.Outcome = code
 	if status >= 500 {
 		log.Printf("[copy] Failed to upload %s/%s path=%s: %v, stderr: %s", namespace, podName, destPath, streamErr, stderr.String())
 		errorlog.Record("copy", "error", "upload to %s/%s path=%s failed: %v", namespace, podName, destPath, streamErr)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -244,6 +245,42 @@ func TestPodFileUploadOverwriteFlagAndReplacedResult(t *testing.T) {
 	_ = json.Unmarshal(raw, &res)
 	if !res.Replaced {
 		t.Error("replaced = false, want true")
+	}
+}
+
+// The audit line names where the file went and its size, never its contents.
+func TestPodFileUploadAuditNamesFileWithoutContents(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(previous)
+
+	var got []byte
+	h := uploadServer(t, true, acceptAll(&got, "replaced\n"))
+	payload := []byte("secret-payload")
+	if status, _, raw := postUpload(t, uploadURL(h.ts, "/data", "a.txt", true), payload); status != http.StatusOK {
+		t.Fatalf("status %d (%s)", status, raw)
+	}
+	line := output.String()
+	for _, want := range []string{`action="upload_file"`, `kind="Pod"`, `container="app"`, `outcome="replaced"`, `dir="/data" file="a.txt" bytes=14`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("audit line %q lacks %s", line, want)
+		}
+	}
+	if strings.Contains(line, "secret-payload") {
+		t.Errorf("audit line carries the file contents: %q", line)
+	}
+
+	output.Reset()
+	refuse := uploadServer(t, true, func(_ context.Context, _ uploadExec, opts remotecommand.StreamOptions) error {
+		_, _ = io.Copy(io.Discard, opts.Stdin)
+		return k8sexec.CodeExitError{Code: uploadExitExists, Err: errors.New("exit")}
+	})
+	if status, _, raw := postUpload(t, uploadURL(refuse.ts, "/data", "a.txt", false), payload); status != http.StatusConflict {
+		t.Fatalf("status %d (%s)", status, raw)
+	}
+	if line := output.String(); !strings.Contains(line, `outcome="file_exists"`) || !strings.Contains(line, `file="a.txt"`) {
+		t.Errorf("refused upload audit line = %q", line)
 	}
 }
 
