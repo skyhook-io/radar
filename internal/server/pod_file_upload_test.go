@@ -644,3 +644,32 @@ func TestPodFileUploadCrossOriginRefusedOnRealRouter(t *testing.T) {
 		t.Errorf("got %d %s, want the cross-origin refusal", resp.StatusCode, body)
 	}
 }
+
+// client-go's StreamWithContext returns as soon as its context is cancelled,
+// while its output goroutine may still be writing; the handler then reads the
+// same buffers. Run with -race.
+func TestPodFileUploadOutputWrittenAfterStreamReturns(t *testing.T) {
+	var late sync.WaitGroup
+	h := uploadServer(t, true, func(_ context.Context, req uploadExec, opts remotecommand.StreamOptions) error {
+		if req.isCleanup() {
+			return nil
+		}
+		fmt.Fprint(opts.Stdout, "tmp=.radar-upload.Rr5Tt4\n")
+		_, _ = io.Copy(io.Discard, opts.Stdin)
+		late.Add(1)
+		go func() {
+			defer late.Done()
+			for i := 0; i < 200; i++ {
+				_, _ = opts.Stdout.Write([]byte("late\n"))
+				_, _ = opts.Stderr.Write([]byte("late\n"))
+				time.Sleep(100 * time.Microsecond)
+			}
+		}()
+		return errors.New("stream error: connection reset")
+	})
+	status, _, _ := postUpload(t, uploadURL(h.ts, "/data", "a", false), []byte("x"))
+	late.Wait()
+	if status != http.StatusBadGateway {
+		t.Errorf("status %d", status)
+	}
+}

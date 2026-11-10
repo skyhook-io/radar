@@ -309,12 +309,18 @@ func (u *uploadBody) drain(max int64) {
 // cappedBuffer keeps the first max bytes written to it and drops the rest
 // without failing the writer, so a chatty command cannot grow memory or abort
 // the stream that carries its exit status.
+//
+// It is locked because client-go can still be writing to it after
+// StreamWithContext returns on a cancelled context.
 type cappedBuffer struct {
+	mu  sync.Mutex
 	buf bytes.Buffer
 	max int
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if room := c.max - c.buf.Len(); room > 0 {
 		if len(p) > room {
 			c.buf.Write(p[:room])
@@ -325,7 +331,11 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (c *cappedBuffer) String() string { return c.buf.String() }
+func (c *cappedBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
 
 // handlePodFileUpload writes the request body into a file in a pod container.
 // Anyone who may exec can already write files through the terminal, so
