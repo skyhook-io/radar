@@ -223,8 +223,9 @@ func applyClusterScopeWarning(response *FlowsResponse, mismatch string, mixed bo
 
 // scopeCheckFailed is the response when Radar could not check which cluster
 // the traffic belongs to. Drawing it anyway could show another cluster's.
-func scopeCheckFailed(source string, err error) *FlowsResponse {
+// The cause is logged by scopeForMetric.
+func scopeCheckFailed(source string) *FlowsResponse {
 	return &FlowsResponse{Source: source, Timestamp: time.Now(), Flows: []Flow{},
-		Warning:     fmt.Sprintf("Radar couldn't check which cluster this traffic belongs to, so it isn't shown: %v", err),
+		Warning:     "Radar couldn't check which cluster this traffic belongs to, so it isn't shown.",
 		WarningKind: WarningTransient}
 }

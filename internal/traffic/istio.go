@@ -222,7 +222,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 
 	scopes, err := s.resolveScopes(ctx)
 	if err != nil {
-		return scopeCheckFailed("istio", err), nil
+		return scopeCheckFailed("istio"), nil
 	}
 
 	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, &missing)

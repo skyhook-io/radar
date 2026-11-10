@@ -420,7 +420,7 @@ type l4LabelPresence struct {
 func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
 	scopes, err := s.resolveScopes(ctx)
 	if err != nil {
-		return scopeCheckFailed("beyla", err), nil
+		return scopeCheckFailed("beyla"), nil
 	}
 	flows, presence, err := s.getFlowsInternal(ctx, opts, scopes)
 	if err != nil {

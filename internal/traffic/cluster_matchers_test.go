@@ -412,6 +412,34 @@ func TestMixedClustersNote(t *testing.T) {
 	}
 }
 
+// Caretta on a configured store whose traffic carries two cluster names draws
+// it with the note.
+func TestCarettaMixedClustersNote(t *testing.T) {
+	stubScope(t, func(string) (string, promclient.SeriesIsolation, error) {
+		return "", promclient.SeriesIsolation{}, promclient.ErrScopeAmbiguous
+	})
+	srv, _ := carettaProm(t, func(string) []map[string]string {
+		return []map[string]string{{"client_name": "x", "server_name": "y", "cluster": "a"}}
+	})
+	resp, err := connectedCaretta(srv.URL, srv.URL).GetFlows(t.Context(), FlowOptions{})
+	if err != nil || len(resp.Flows) == 0 {
+		t.Fatalf("GetFlows: %v %+v", err, resp)
+	}
+	if resp.WarningKind != WarningCluster || !strings.HasPrefix(resp.Warning, mixedClustersNote) {
+		t.Errorf("warning = %q (%s), want the mixed-clusters note", resp.Warning, resp.WarningKind)
+	}
+}
+
+// An empty map has nothing that could be another cluster's, so it never gets
+// the note.
+func TestNoMixedClustersNoteOnEmptyMap(t *testing.T) {
+	resp := &FlowsResponse{Flows: []Flow{}}
+	applyClusterScopeWarning(resp, "", true)
+	if resp.Warning != "" || resp.WarningKind != "" {
+		t.Errorf("got %q (%s), want no warning", resp.Warning, resp.WarningKind)
+	}
+}
+
 // The note outranks a warning about the flows' details, and keeps it.
 func TestMixedClustersNoteJoinsPartialWarning(t *testing.T) {
 	resp := &FlowsResponse{Flows: []Flow{{}}, Warning: "Beyla is not exporting dst.port.", WarningKind: WarningPartial}

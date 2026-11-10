@@ -330,7 +330,7 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 
 	scope, err := c.resolveClusterScope(ctx)
 	if err != nil {
-		return scopeCheckFailed("caretta", err), nil
+		return scopeCheckFailed("caretta"), nil
 	}
 	flows, err := c.queryPrometheusForFlows(ctx, promAddr, basePath, opts, scope)
 	if err != nil {
