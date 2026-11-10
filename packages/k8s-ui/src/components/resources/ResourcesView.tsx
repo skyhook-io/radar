@@ -480,6 +480,17 @@ function headerLabelWidth(label: string): number {
   return width
 }
 
+function snapshotHeaderWidths(container: HTMLElement | null): Record<string, number> | undefined {
+  const ths = container?.querySelectorAll<HTMLElement>('thead th[data-column-key]')
+  if (!ths) return undefined
+  const snapped: Record<string, number> = {}
+  ths.forEach(th => {
+    const key = th.dataset.columnKey
+    if (key) snapped[key] = th.getBoundingClientRect().width
+  })
+  return snapped
+}
+
 /**
  * Header label that carries its own full text in a tooltip when it truncates.
  *
@@ -4358,19 +4369,7 @@ export function ResourcesView({
 
     // On first resize, snapshot all column widths from the DOM to switch to fixed grid sizes
     const container = tableContainerRef.current
-    setColumnWidths(prev => {
-      const hasWidths = Object.keys(prev).length > 0
-      if (hasWidths) return prev
-      // Snapshot all visible <th> widths
-      const ths = container?.querySelectorAll<HTMLElement>('thead th[data-column-key]')
-      if (!ths) return prev
-      const snapped: Record<string, number> = {}
-      ths.forEach(th => {
-        const key = th.dataset.columnKey
-        if (key) snapped[key] = th.getBoundingClientRect().width
-      })
-      return snapped
-    })
+    setColumnWidths(prev => Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container) ?? prev)
 
     // Show the resize line at the initial position
     const containerRect = container?.getBoundingClientRect()
@@ -4414,6 +4413,30 @@ export function ResourcesView({
     document.body.style.userSelect = 'none'
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
+  }, [])
+
+  // Fit one column to the widest of its header and its rendered cells.
+  const handleResizeDoubleClick = useCallback((e: React.MouseEvent, colKey: string) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const container = tableContainerRef.current
+    if (!container) return
+    let width = 0
+    container.querySelectorAll<HTMLElement>('[data-column-key]').forEach(cell => {
+      if (cell.dataset.columnKey !== colKey) return
+      // Cells and inner spans truncate, so measure an unconstrained copy instead of the cell itself.
+      const copy = cell.cloneNode(true) as HTMLElement
+      Object.assign(copy.style, { position: 'absolute', visibility: 'hidden', width: 'max-content', maxWidth: 'none' })
+      cell.parentElement?.appendChild(copy)
+      width = Math.max(width, copy.getBoundingClientRect().width)
+      copy.remove()
+    })
+    if (width === 0) return
+    const fitted = Math.max(48, Math.ceil(width))
+    setColumnWidths(prev => ({
+      ...(Object.keys(prev).length > 0 ? prev : snapshotHeaderWidths(container)),
+      [colKey]: fitted,
+    }))
   }, [])
 
   // Toggle column visibility
@@ -7259,6 +7282,7 @@ export function ResourcesView({
                             const th = e.currentTarget.parentElement!
                             handleResizeStart(e, col.key, th.getBoundingClientRect().width)
                           }}
+                          onDoubleClick={(e) => handleResizeDoubleClick(e, col.key)}
                         >
                           <div className="w-px h-4 bg-theme-border group-hover/th:bg-theme-text-disabled transition-colors" />
                         </div>
