@@ -42,7 +42,7 @@ interface AuthHints {
   hideAuthButton?: boolean
 }
 
-function getAuthHints(context: string, awsProfile?: string, kubectlInstalled = false): AuthHints {
+function getAuthHints(context: string, awsProfile?: string, runInTerminal = true): AuthHints {
   const parsed = parseContextName(context)
 
   switch (parsed.provider) {
@@ -102,7 +102,7 @@ function getAuthHints(context: string, awsProfile?: string, kubectlInstalled = f
         result.authCommand = {
           label: 'Run this to see the sign-in error and finish signing in:',
           command: `kubectl --context ${context} version`,
-          runnable: kubectlInstalled,
+          runnable: runInTerminal,
         }
       }
       return result
@@ -355,11 +355,11 @@ export function CopyableCommand({ command, onRunInTerminal }: { command: string;
   )
 }
 
-export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string, awsProfile?: string, backgroundRecovery = true, kubectlInstalled = false): AuthHints | null {
+export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string, awsProfile?: string, backgroundRecovery = true, runInTerminal = true): AuthHints | null {
   const parsedContext = originalContext || context
   switch (errorType) {
     case 'auth':
-      return getAuthHints(parsedContext, awsProfile, kubectlInstalled)
+      return getAuthHints(parsedContext, awsProfile, runInTerminal)
     case 'auth-rejected':
       return getAuthRejectedHints(parsedContext, awsProfile)
     case 'auth-plugin-stuck':
@@ -382,10 +382,10 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying, back, var
   const originalContext = matchedContext?.originalName
   const awsProfile = contextsLoading ? undefined : matchedContext?.awsProfile
   const since = outageSinceLabel(connection.disconnectedAt)
-  const { localTerminal, kubectl } = useCapabilitiesContext()
+  const { localTerminal } = useCapabilitiesContext()
   // After a refused switch the terminal opens on the current cluster's
   // kubeconfig, which may not hold the target context, so that screen is copy-only.
-  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile, variant === 'connection' && !connection.autoRetryStopped, kubectl === true && variant === 'connection')
+  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile, variant === 'connection' && !connection.autoRetryStopped, variant === 'connection')
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()

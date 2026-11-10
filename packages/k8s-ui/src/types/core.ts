@@ -123,8 +123,6 @@ export interface Capabilities {
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
   /** Shell family where a hand-off command runs; absent from older Radars. */
   localShell?: 'powershell' | 'posix'
-  /** kubectl is on PATH for the local terminal; absent from older Radars. */
-  kubectl?: boolean
   logs: boolean           // Log viewer (pods/log)
   portForward: boolean    // Port forwarding (pods/portforward)
   secrets: boolean        // List secrets

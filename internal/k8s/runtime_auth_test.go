@@ -1666,6 +1666,8 @@ func waitForRecoveryWorkerExit(t *testing.T) {
 func TestRuntimeAuthRecoveryStopsAfterRetryLimitUntilUserRetries(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
+	prevExec := SetTestContextUsesExec(true)
+	t.Cleanup(func() { SetTestContextUsesExec(prevExec) })
 	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
 	SetAutomaticRetryLimit(3)
 	var probes atomic.Int32
@@ -1738,6 +1740,8 @@ func TestRuntimeAuthRecoveryKeepsRetryingWithoutLimit(t *testing.T) {
 func TestRuntimeAuthRecoveryProbeFromBeforeRetryDoesNotCount(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
+	prevExec := SetTestContextUsesExec(true)
+	t.Cleanup(func() { SetTestContextUsesExec(prevExec) })
 	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
 	SetAutomaticRetryLimit(1)
 	started, release := make(chan struct{}), make(chan struct{})
@@ -1761,5 +1765,34 @@ func TestRuntimeAuthRecoveryProbeFromBeforeRetryDoesNotCount(t *testing.T) {
 			t.Fatal("a probe from before Retry used up the retry budget")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRuntimeAuthRecoveryRetryLimitSkipsContextsWithoutExecPlugin(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	prevExec := SetTestContextUsesExec(false)
+	t.Cleanup(func() { SetTestContextUsesExec(prevExec) })
+	setRuntimeAuthRecoveryIntervalsForTest(time.Millisecond, 2*time.Millisecond)
+	SetAutomaticRetryLimit(3)
+	var probes atomic.Int32
+	setRuntimeAuthProbe(func(context.Context) error {
+		probes.Add(1)
+		return nil // the probe succeeds; reconnecting re-reads the kubeconfig and fails
+	})
+	setRuntimeAuthReconnect(func(string, uint64) error {
+		return errors.New("Unauthorized")
+	})
+
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "token-context", ErrorType: "auth-rejected"})
+	deadline := time.Now().Add(2 * time.Second)
+	for probes.Load() < 10 {
+		if time.Now().After(deadline) {
+			t.Fatalf("automatic retries = %d, want a static-token context to keep retrying past the limit", probes.Load())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if GetConnectionStatus().AutoRetryStopped {
+		t.Fatal("a context without an exec plugin was told retries stopped")
 	}
 }

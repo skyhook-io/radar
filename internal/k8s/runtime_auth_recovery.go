@@ -52,7 +52,10 @@ var (
 )
 
 // SetAutomaticRetryLimit stops automatic reconnects after limit consecutive
-// failures, until the user retries or switches context. Desktop only.
+// failures, until the user retries or switches context. Desktop only. It
+// applies only to contexts that use an exec credential plugin: retrying a
+// static token or certificate runs nothing, and keeps picking up a re-login
+// that rewrites the kubeconfig (oc login).
 func SetAutomaticRetryLimit(limit int) {
 	runtimeAuthRecoveryRetryLimit.Store(int32(limit))
 }
@@ -182,7 +185,7 @@ func runRuntimeAuthRecovery() {
 // recordAutomaticRetryFailure counts a failed automatic retry and reports
 // whether automatic retries have now stopped.
 func recordAutomaticRetryFailure(observedResets uint64) bool {
-	if runtimeAuthRecoveryResets.Load() != observedResets {
+	if runtimeAuthRecoveryResets.Load() != observedResets || !UsesExecAuth() {
 		return false
 	}
 	runtimeAuthRecoveryFailures.Add(1)

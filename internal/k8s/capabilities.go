@@ -116,7 +116,6 @@ type Capabilities struct {
 	Exec                   bool                     `json:"exec"`           // Can create pods/exec (terminal feature)
 	LocalTerminal          bool                     `json:"localTerminal"`  // Local terminal available (not in-cluster, not disabled)
 	LocalShell             string                   `json:"localShell"`     // Shell family where a hand-off command runs: "powershell" on Windows, else "posix"
-	Kubectl                bool                     `json:"kubectl"`        // kubectl is on PATH for the local terminal
 	Logs                   bool                     `json:"logs"`           // Can get pods/log (log viewer)
 	PortForward            bool                     `json:"portForward"`    // Can create pods/portforward
 	Secrets                bool                     `json:"secrets"`        // Can list secrets
