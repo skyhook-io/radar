@@ -201,6 +201,7 @@ export interface FeatureCapabilities {
   // Workload Pod info marks native sidecars (containerStatuses[].sidecar).
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
+  podFileUpload?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

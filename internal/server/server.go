@@ -128,6 +128,9 @@ type Server struct {
 	cloudConnectCfg     CloudConnectConfig
 	cloudInstall        *cloudInstallManager
 	applicationEvidence *applicationEvidenceAPI
+	// podFileWriteSlots bounds pod file uploads in flight across all users.
+	podFileWriteSlots     chan struct{}
+	podFileWriteSlotsOnce sync.Once
 	// nsPreferences holds each user's last active-namespace pick from the
 	// in-app switcher. Key shape: "<username>\x00<contextName>" when auth is
 	// enabled, "\x00<contextName>" when auth is disabled. Cleared on context
@@ -562,6 +565,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// 60s timeout group for the same reason the download does — a large file
 		// over a slow cluster link legitimately takes longer than that.
 		r.Post("/pods/{namespace}/{name}/files/save", s.handlePodFileSave)
+		// Outside the 60s timeout group because a large upload over a slow
+		// cluster link takes longer.
+		r.Post("/pods/{namespace}/{name}/files/upload", s.handlePodFileUpload)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 		r.Get("/cnpg/clusters/{namespace}/{name}/logs/stream", s.handleCNPGClusterLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
@@ -1511,6 +1517,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		RayClusterPods:           true,
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
+		PodFileUpload:            true,
 	}
 }
 
@@ -1540,6 +1547,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = advertisedFeatures()
+	// handlePodFileUpload refuses in Radar Cloud; hide the control to match.
+	caps.Features.PodFileUpload = !cloudMode()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
