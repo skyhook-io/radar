@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestFluxLastApplyAttempt(t *testing.T) {
+func TestFluxLastApply(t *testing.T) {
 	root := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
 		"status": map[string]any{
@@ -20,15 +20,22 @@ func TestFluxLastApplyAttempt(t *testing.T) {
 			},
 		},
 	}}
-	if got := FluxLastApplyAttempt(root); got != "2026-10-30T12:00:00.123456789Z" {
-		t.Fatalf("last apply = %q", got)
+	if got, succeeded := FluxLastApply(root); got != "2026-10-30T12:00:00.123456789Z" || succeeded {
+		t.Fatalf("last apply = %q, succeeded = %v; want the failed health check", got, succeeded)
+	}
+	// A later success wins, and an older failure does not mark it failed.
+	history, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
+	history = append(history, map[string]any{"lastReconciled": "2026-10-30T12:05:00Z", "lastReconciledStatus": "ReconciliationSucceeded"})
+	_ = unstructured.SetNestedSlice(root.Object, history, "status", "history")
+	if got, succeeded := FluxLastApply(root); got != "2026-10-30T12:05:00Z" || !succeeded {
+		t.Fatalf("last apply = %q, succeeded = %v; want the later success", got, succeeded)
 	}
 	unstructured.RemoveNestedField(root.Object, "status", "history")
-	if got := FluxLastApplyAttempt(root); got != "" {
+	if got, _ := FluxLastApply(root); got != "" {
 		t.Fatalf("missing history invented apply time %q", got)
 	}
 	root.SetAPIVersion("example.io/v1")
-	if got := FluxLastApplyAttempt(root); got != "" {
+	if got, _ := FluxLastApply(root); got != "" {
 		t.Fatalf("unrelated kind got apply time %q", got)
 	}
 }

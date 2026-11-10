@@ -6,7 +6,7 @@ describe('GitOps landing timing', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-30T21:00:00Z')) })
   afterEach(() => vi.useRealTimers())
   it('uses recorded apply and deployed history instead of condition changes or requested constraints', () => {
-    const kustom = normalizeFluxKustomization({ apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', metadata: { name: 'checkout', namespace: 'flux-system' }, status: { conditions: [{ type: 'Ready', status: 'True', lastTransitionTime: '2026-10-30T20:59:00Z' }], history: [{ lastReconciled: '2026-10-30T20:55:00Z' }] } })
+    const kustom = normalizeFluxKustomization({ apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', metadata: { name: 'checkout', namespace: 'flux-system' }, status: { conditions: [{ type: 'Ready', status: 'True', lastTransitionTime: '2026-10-30T20:59:00Z' }], history: [{ lastReconciled: '2026-10-30T20:55:00Z', lastReconciledStatus: 'ReconciliationFailed' }] } })
     const helm = normalizeFluxHelmRelease({ apiVersion: 'helm.toolkit.fluxcd.io/v2', kind: 'HelmRelease', metadata: { name: 'payments', namespace: 'flux-system' }, spec: { chart: { spec: { version: '>=1.2.0 <2.0.0' } } }, status: { history: [
       { version: 5, chartVersion: '1.3.0', status: 'failed', lastDeployed: '2026-10-30T20:59:00Z' },
       { version: 4, chartVersion: '1.2.0', status: 'deployed', lastDeployed: '2026-10-27T21:00:00Z' },
@@ -22,6 +22,15 @@ describe('GitOps landing timing', () => {
     expect(html).toContain('3d ago')
     expect(html).toContain('5m ago')
     expect(html).not.toContain('Last Sync')
+  })
+
+  it('labels a successful apply apart from a failed attempt', () => {
+    const row = normalizeFluxKustomization({ apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', metadata: { name: 'checkout', namespace: 'flux-system' }, status: { history: [
+      { lastReconciled: '2026-10-30T20:50:00Z', lastReconciledStatus: 'ReconciliationFailed' },
+      { lastReconciled: '2026-10-30T20:55:00Z', lastReconciledStatus: 'ReconciliationSucceeded' },
+    ] } })
+    expect(row.lastSync).toBe('2026-10-30T20:55:00Z')
+    expect(row.lastSyncLabel).toBe('Applied')
   })
 
   it('does not turn conditions into an apply date on an older controller', () => {

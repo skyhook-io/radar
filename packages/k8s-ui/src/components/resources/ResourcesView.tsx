@@ -1814,7 +1814,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Applied git revision' },
     { key: 'inventory', label: 'Resources', width: 'w-24', tooltip: 'Number of managed resources' },
-    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since the last recorded apply attempt; falls back to the last Ready transition. Neither guarantees success.' },
+    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since Flux last applied, or last tried to apply if that did not succeed; falls back to the last Ready transition.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmreleases: [

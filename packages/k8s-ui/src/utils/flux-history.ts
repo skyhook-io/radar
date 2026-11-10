@@ -31,26 +31,32 @@ function timestamp(value: unknown): FluxTimestamp | undefined {
   return { value, milliseconds, submillisecond: Number((match[1] ?? '').padEnd(9, '0').slice(3)) }
 }
 
-function latestTimestamp(entries: unknown[], field: 'lastReconciled' | 'lastTransitionTime'): string | undefined {
-  let latest: FluxTimestamp | undefined
+function latestEntry(entries: unknown[], field: 'lastReconciled' | 'lastTransitionTime'): { entry: Record<string, unknown>, time: FluxTimestamp } | undefined {
+  let latest: { entry: Record<string, unknown>, time: FluxTimestamp } | undefined
   for (const entry of entries) {
     const candidate = object(entry) ? timestamp(entry[field]) : undefined
-    if (candidate && (!latest || candidate.milliseconds > latest.milliseconds
-      || (candidate.milliseconds === latest.milliseconds && candidate.submillisecond > latest.submillisecond))) latest = candidate
+    if (object(entry) && candidate && (!latest || candidate.milliseconds > latest.time.milliseconds
+      || (candidate.milliseconds === latest.time.milliseconds && candidate.submillisecond > latest.time.submillisecond))) latest = { entry, time: candidate }
   }
-  return latest?.value
+  return latest
+}
+
+export interface FluxLastApply {
+  time: string
+  succeeded: boolean
 }
 
 // Flux history may omit failures before apply, and firstReconciled can span
 // several source revisions that produced the same manifests.
-export function getFluxLastApplyAttempt(resource: unknown): string | undefined {
-  return latestTimestamp(history(resource, 'kustomize.toolkit.fluxcd.io', 'Kustomization'), 'lastReconciled')
+export function getFluxLastApply(resource: unknown): FluxLastApply | undefined {
+  const latest = latestEntry(history(resource, 'kustomize.toolkit.fluxcd.io', 'Kustomization'), 'lastReconciled')
+  return latest && { time: latest.time.value, succeeded: latest.entry.lastReconciledStatus === 'ReconciliationSucceeded' }
 }
 
 export function getFluxLastStatusChange(resource: unknown): string | undefined {
   const status = fluxStatus(resource, 'kustomize.toolkit.fluxcd.io', 'Kustomization')
     ?? fluxStatus(resource, 'helm.toolkit.fluxcd.io', 'HelmRelease')
-  return latestTimestamp(Array.isArray(status?.conditions) ? status.conditions : [], 'lastTransitionTime')
+  return latestEntry(Array.isArray(status?.conditions) ? status.conditions : [], 'lastTransitionTime')?.time.value
 }
 
 export function getFluxHandledRequestToken(status: unknown): string | undefined {

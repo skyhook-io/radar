@@ -3,7 +3,7 @@ import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, Reso
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
-import { getFluxHandledRequestToken, getFluxLastApplyAttempt } from '../../../utils/flux-history'
+import { getFluxHandledRequestToken, getFluxLastApply } from '../../../utils/flux-history'
 
 interface KustomizationRendererProps {
   data: any
@@ -15,7 +15,7 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
   const spec = data.spec || {}
   const conditions = (status.conditions || []) as FluxCondition[]
   const inventoryEntries = status.inventory?.entries || []
-  const lastApplyAttempt = getFluxLastApplyAttempt(data)
+  const lastApply = getFluxLastApply(data)
   const handledRequest = getFluxHandledRequestToken(status)
 
   // Convert to unified GitOps status
@@ -165,7 +165,7 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
       )}
 
       {/* Revision info */}
-      {(status.lastAppliedRevision || status.lastAttemptedRevision || lastApplyAttempt || handledRequest) && (
+      {(status.lastAppliedRevision || status.lastAttemptedRevision || lastApply || handledRequest) && (
         <Section title="Revision" defaultExpanded={false}>
           <PropertyList>
             {status.lastAppliedRevision && (
@@ -174,10 +174,10 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
             {status.lastAttemptedRevision && status.lastAttemptedRevision !== status.lastAppliedRevision && (
               <Property label="Attempted" value={status.lastAttemptedRevision} />
             )}
-            {lastApplyAttempt && (
+            {lastApply && (
               <Property
-                label="Last apply attempt"
-                value={<TimeValue timestamp={lastApplyAttempt} />}
+                label={lastApply.succeeded ? 'Last applied' : 'Last apply attempt'}
+                value={<TimeValue timestamp={lastApply.time} />}
               />
             )}
             <Property label="Last handled manual request" value={handledRequest} />

@@ -301,10 +301,14 @@ function SummaryTiming({ summary }: { summary: NonNullable<GitOpsInsight['summar
   let label: string
   let timestamp: string | undefined
   let description: string
-  if (summary.tool === 'fluxcd' && summary.kind === 'Kustomization') {
+  if (summary.tool === 'fluxcd' && summary.kind === 'Kustomization' && summary.lastApplied) {
+    label = 'Last applied'
+    timestamp = summary.lastApplied
+    description = 'Latest successful apply recorded by Flux, including routine re-applies with no changes.'
+  } else if (summary.tool === 'fluxcd' && summary.kind === 'Kustomization') {
     label = 'Last apply attempt'
     timestamp = summary.lastApplyAttempt
-    description = 'Latest apply completion recorded by Flux, successful or not. Failures before apply may not add a history entry.'
+    description = 'Latest apply attempt recorded by Flux. It did not succeed. Failures before apply may not add a history entry.'
   } else if (summary.tool === 'fluxcd' && summary.kind === 'HelmRelease') {
     label = 'Last deployed'
     timestamp = summary.lastRevision ? summary.lastDeployed : undefined

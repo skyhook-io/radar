@@ -42,7 +42,7 @@ import { isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoOperationInProg
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import { parseContextName } from '../../utils/context-name'
-import { getFluxDeployedRelease, getFluxHelmChartVersion, getFluxLastApplyAttempt, getFluxLastStatusChange } from '../../utils/flux-history'
+import { getFluxDeployedRelease, getFluxHelmChartVersion, getFluxLastApply, getFluxLastStatusChange } from '../../utils/flux-history'
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format'
 import { FilterRailPanel } from '../shared/FilterRailPanel'
 
@@ -172,7 +172,7 @@ export interface GitOpsRow {
   destinationNamespace: string
   createdAt: string
   lastSync: string
-  lastSyncLabel?: 'Apply attempt' | 'Deployed' | 'Sync attempt' | 'Status changed'
+  lastSyncLabel?: 'Applied' | 'Apply attempt' | 'Deployed' | 'Sync attempt' | 'Status changed'
   autoSync: boolean
   terminating: boolean
   terminationStartedAt?: string
@@ -2135,7 +2135,7 @@ export function normalizeArgoApplicationSet(resource: any): GitOpsRow {
 
 export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsResourceStatus('kustomizations', resource)
-  const lastApplyAttempt = getFluxLastApplyAttempt(resource)
+  const lastApply = getFluxLastApply(resource)
   const sourceName = resource.spec?.sourceRef?.name ?? ''
   const sourceKind = resource.spec?.sourceRef?.kind ?? ''
   const repository = fluxSourceUrls?.get(`${sourceKind}/${resource.metadata?.namespace ?? ''}/${sourceName}`) ?? sourceName
@@ -2162,8 +2162,8 @@ export function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<s
     destination: 'in-cluster',
     destinationNamespace: resource.spec?.targetNamespace ?? resource.metadata?.namespace ?? '',
     createdAt: resource.metadata?.creationTimestamp ?? '',
-    lastSync: lastApplyAttempt ?? getFluxLastStatusChange(resource) ?? '',
-    lastSyncLabel: lastApplyAttempt ? 'Apply attempt' : 'Status changed',
+    lastSync: lastApply?.time ?? getFluxLastStatusChange(resource) ?? '',
+    lastSyncLabel: !lastApply ? 'Status changed' : lastApply.succeeded ? 'Applied' : 'Apply attempt',
     autoSync: !resource.spec?.suspend,
     terminating: isTerminating(resource),
     terminationStartedAt: terminationStartedAt(resource),

@@ -20,6 +20,16 @@ describe('GitOps status timing', () => {
     expect(html).not.toContain('Latest revision')
   })
 
+  it('labels the apply time by its recorded outcome', () => {
+    const applied = render({ lastApplied: '2026-10-30T20:55:00Z' })
+    expect(applied).toContain('Last applied:')
+    expect(applied).toContain('5m ago')
+    expect(applied).not.toContain('attempt')
+    const failed = render({ lastApplyAttempt: '2026-10-30T20:50:00Z' })
+    expect(failed).toContain('Last apply attempt:')
+    expect(failed).toContain('10m ago')
+  })
+
   it.each(['Kustomization', 'HelmRelease'])('ignores the old backend Flux timestamp for %s', kind => {
     const html = render({ kind, lastRevision: undefined, targetRevision: '1.2.0' })
     expect(html).toContain('Revision:')

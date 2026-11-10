@@ -53,6 +53,7 @@ type Summary struct {
 	// no rollback happened.
 	RollbackRevision string `json:"rollbackRevision,omitempty"`
 	LastReconcile    string `json:"lastReconcile,omitempty"`
+	LastApplied      string `json:"lastApplied,omitempty"`
 	LastApplyAttempt string `json:"lastApplyAttempt,omitempty"`
 	LastDeployed     string `json:"lastDeployed,omitempty"`
 	PartialReason    string `json:"partialReason,omitempty"`
@@ -516,7 +517,11 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	s.Health = status.health
 	s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAttemptedRevision")
 	s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "lastAppliedRevision")
-	s.LastApplyAttempt = gitops.FluxLastApplyAttempt(root)
+	if at, succeeded := gitops.FluxLastApply(root); succeeded {
+		s.LastApplied = at
+	} else {
+		s.LastApplyAttempt = at
+	}
 	if release := gitops.FluxDeployedRelease(root); release != nil && release.ChartVersion != "" {
 		s.LastRevision = release.ChartVersion
 		s.LastDeployed = release.LastDeployed

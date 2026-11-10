@@ -60,6 +60,7 @@ export interface GitOpsInsightSummary {
   // effective auto-sync is off. Absence does not mean no rollback happened.
   rollbackRevision?: string
   lastReconcile?: string
+  lastApplied?: string
   lastApplyAttempt?: string
   lastDeployed?: string
   partialReason?: string

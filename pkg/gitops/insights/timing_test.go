@@ -16,11 +16,15 @@ func TestBuildFluxDatesDescribeRecordedEvents(t *testing.T) {
 		},
 	}}
 	summary := Build(kustomization, nil, nil).Summary
-	if summary.LastRevision != "main@sha1:current" || summary.LastApplyAttempt != "2026-10-30T12:00:00Z" || summary.LastReconcile != "" {
+	if summary.LastRevision != "main@sha1:current" || summary.LastApplyAttempt != "2026-10-30T12:00:00Z" || summary.LastApplied != "" || summary.LastReconcile != "" {
 		t.Fatalf("Kustomization summary = %+v", summary)
 	}
+	_ = unstructured.SetNestedSlice(kustomization.Object, []any{map[string]any{"lastReconciled": "2026-10-30T12:05:00Z", "lastReconciledStatus": "ReconciliationSucceeded"}}, "status", "history")
+	if summary := Build(kustomization, nil, nil).Summary; summary.LastApplied != "2026-10-30T12:05:00Z" || summary.LastApplyAttempt != "" {
+		t.Fatalf("successful apply summary = %+v", summary)
+	}
 	unstructured.RemoveNestedField(kustomization.Object, "status", "history")
-	if summary := Build(kustomization, nil, nil).Summary; summary.LastApplyAttempt != "" || summary.LastReconcile != "" {
+	if summary := Build(kustomization, nil, nil).Summary; summary.LastApplyAttempt != "" || summary.LastApplied != "" || summary.LastReconcile != "" {
 		t.Fatalf("missing history invented time: %+v", summary)
 	}
 	helm := &unstructured.Unstructured{Object: map[string]any{

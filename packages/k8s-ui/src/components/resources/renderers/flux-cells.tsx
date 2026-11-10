@@ -2,7 +2,7 @@
 
 import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
-import { getFluxDeployedRelease, getFluxLastApplyAttempt } from '../../../utils/flux-history'
+import { getFluxDeployedRelease, getFluxLastApply } from '../../../utils/flux-history'
 import {
   getGitRepositoryUrl,
   getGitRepositoryRef,
@@ -168,11 +168,11 @@ export function KustomizationCell({ resource, column }: { resource: any; column:
       )
     }
     case 'lastUpdated': {
-      const lastApply = getFluxLastApplyAttempt(resource)
-      const lastUpdated = lastApply ||
+      const lastApply = getFluxLastApply(resource)
+      const lastUpdated = lastApply?.time ||
         resource.status?.conditions?.find((c: any) => c.type === 'Ready')?.lastTransitionTime
       return (
-        <Tooltip content={lastApply ? 'Last apply attempt recorded by Flux, successful or not' : 'Last Ready status change, not an apply time'}>
+        <Tooltip content={!lastApply ? 'Last Ready status change, not an apply time' : lastApply.succeeded ? 'Last successful apply recorded by Flux' : 'Last apply attempt recorded by Flux, which did not succeed'}>
           <span className="text-sm text-theme-text-secondary">
             {lastUpdated ? formatAge(lastUpdated) : '-'}
           </span>

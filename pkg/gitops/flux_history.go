@@ -7,11 +7,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// FluxLastApplyAttempt returns the latest completion recorded in Kustomization
-// history. Failures before apply may not produce a history entry.
-func FluxLastApplyAttempt(root *unstructured.Unstructured) string {
+// FluxLastApply returns the latest completion recorded in Kustomization
+// history and whether Flux recorded it as successful. Failures before apply
+// may not produce a history entry.
+func FluxLastApply(root *unstructured.Unstructured) (at string, succeeded bool) {
 	if root == nil || root.GetKind() != "Kustomization" || ToolOf(root) != ToolFluxCD {
-		return ""
+		return "", false
 	}
 	history, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
 	var latest time.Time
@@ -23,12 +24,14 @@ func FluxLastApplyAttempt(root *unstructured.Unstructured) string {
 		value, _, _ := unstructured.NestedString(entry, "lastReconciled")
 		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil && parsed.After(latest) {
 			latest = parsed
+			status, _, _ := unstructured.NestedString(entry, "lastReconciledStatus")
+			succeeded = status == "ReconciliationSucceeded"
 		}
 	}
 	if latest.IsZero() {
-		return ""
+		return "", false
 	}
-	return latest.UTC().Format(time.RFC3339Nano)
+	return latest.UTC().Format(time.RFC3339Nano), succeeded
 }
 
 type FluxDeployedSnapshot struct {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getFluxDeployedRelease, getFluxHandledRequestToken, getFluxHelmChartVersion, getFluxLastApplyAttempt, getFluxLastStatusChange, getFluxReleaseAttemptTime } from './flux-history'
+import { getFluxDeployedRelease, getFluxHandledRequestToken, getFluxHelmChartVersion, getFluxLastApply, getFluxLastStatusChange, getFluxReleaseAttemptTime } from './flux-history'
 
 const kustomization = (history?: unknown[]) => ({
   apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization',
@@ -9,18 +9,27 @@ const helm = (history: unknown[]) => ({ apiVersion: 'helm.toolkit.fluxcd.io/v2',
 
 describe('Flux history', () => {
   it('selects the latest recorded apply across offsets and outcomes, preserving nanoseconds', () => {
-    expect(getFluxLastApplyAttempt(kustomization([
-      { firstReconciled: '2026-09-01T00:00:00Z', lastReconciled: '2026-10-30T12:00:00.123456788Z' },
+    expect(getFluxLastApply(kustomization([
+      { firstReconciled: '2026-09-01T00:00:00Z', lastReconciled: '2026-10-30T12:00:00.123456788Z', lastReconciledStatus: 'ReconciliationSucceeded' },
       { lastReconciled: '2026-10-30T14:00:00.123456789+02:00', lastReconciledStatus: 'HealthCheckFailed' },
       { lastReconciled: '2026-10-30T13:00:00+02:00' },
       { lastReconciled: 'invalid' },
-    ]))).toBe('2026-10-30T14:00:00.123456789+02:00')
+    ]))).toEqual({ time: '2026-10-30T14:00:00.123456789+02:00', succeeded: false })
+  })
+
+  it('reports success only when the newest recorded apply succeeded', () => {
+    const failedThenFixed = [
+      { lastReconciled: '2026-10-30T12:00:00Z', lastReconciledStatus: 'ReconciliationFailed' },
+      { lastReconciled: '2026-10-30T12:05:00Z', lastReconciledStatus: 'ReconciliationSucceeded' },
+    ]
+    expect(getFluxLastApply(kustomization(failedThenFixed))).toEqual({ time: '2026-10-30T12:05:00Z', succeeded: true })
+    expect(getFluxLastApply(kustomization([{ lastReconciled: '2026-10-30T12:00:00Z' }]))?.succeeded).toBe(false)
   })
 
   it('never infers apply time from a request marker or a condition', () => {
-    expect(getFluxLastApplyAttempt(kustomization())).toBeUndefined()
-    expect(getFluxLastApplyAttempt(kustomization([{ lastReconciled: '2026-02-30T00:00:00Z' }, { lastReconciled: '0001-01-01T00:00:00Z' }]))).toBeUndefined()
-    expect(getFluxLastApplyAttempt({ ...kustomization([{ lastReconciled: '2026-10-30T12:00:00Z' }]), apiVersion: 'example.io/v1' })).toBeUndefined()
+    expect(getFluxLastApply(kustomization())).toBeUndefined()
+    expect(getFluxLastApply(kustomization([{ lastReconciled: '2026-02-30T00:00:00Z' }, { lastReconciled: '0001-01-01T00:00:00Z' }]))).toBeUndefined()
+    expect(getFluxLastApply({ ...kustomization([{ lastReconciled: '2026-10-30T12:00:00Z' }]), apiVersion: 'example.io/v1' })).toBeUndefined()
   })
 
   it('keeps the deployed release identity and date together after a failed upgrade and rollback', () => {
@@ -47,7 +56,7 @@ describe('Flux history', () => {
       { type: 'Stalled', lastTransitionTime: 'invalid' },
     ] } }
     expect(getFluxLastStatusChange(resource)).toBe('2026-10-30T14:00:00.123456789+02:00')
-    expect(getFluxLastApplyAttempt(resource)).toBeUndefined()
+    expect(getFluxLastApply(resource)).toBeUndefined()
     expect(getFluxLastStatusChange({ ...resource, apiVersion: 'example.io/v1' })).toBeUndefined()
     expect(getFluxLastStatusChange({ ...helm([]), status: { conditions: [{ lastTransitionTime: '0001-01-01T00:00:00Z' }] } })).toBeUndefined()
   })
