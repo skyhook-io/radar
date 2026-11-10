@@ -7,6 +7,7 @@ import { useContexts, useClusterInfo, useCapabilities } from '../api/client'
 import type { ContextInfo } from '../types'
 import { useContextSwitchFlow } from './useContextSwitchFlow'
 import { useContextSwitch } from '../context/ContextSwitchContext'
+import { useConnection } from '../context/ConnectionContext'
 import { parseContextForSwitcher, visibleContextQualifier, type ParsedContextName } from '../utils/context-name'
 
 interface ContextSwitcherProps {
@@ -31,6 +32,10 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
   const { data: capabilities } = useCapabilities()
   const switchFlow = useContextSwitchFlow()
   const { failedSwitch } = useContextSwitch()
+  // A settings error (Desktop's namespace list over the limit) blocks every
+  // switch until restart, so offering the list would only lead to a refusal.
+  const { connection } = useConnection()
+  const settingsBlocked = connection.errorType === 'settings'
 
   // Parse contexts and decide whether to render group headers (multi-account only).
   // hasMultipleSources gates the kubeconfig-source chip — only useful when 2+
@@ -134,7 +139,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         items={items}
         onSelect={handleSelect}
         loading={switchFlow.isPending}
-        disabled={contextsLoading || !capabilities || capabilities.configManagement === 'operator'}
+        disabled={settingsBlocked || contextsLoading || !capabilities || capabilities.configManagement === 'operator'}
         searchable={items.length > 1}
         currentSelectable={!!failedSwitch}
         showGroupHeaders={hasMultipleAccounts}

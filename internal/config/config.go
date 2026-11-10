@@ -90,6 +90,10 @@ type Config struct {
 	// to this machine's disk), so one acknowledgment covers the web panel and
 	// the `radar diagnose` CLI alike.
 	AIConsent map[string]string `json:"aiConsent,omitempty"`
+	// MaxScopeCandidates is Radar Desktop's --max-scope-candidates: how many
+	// namespaces, the kubeconfig context namespace included, Radar checks its
+	// access in. 0 keeps the default. The CLI reads only the flag and its env var.
+	MaxScopeCandidates int `json:"maxScopeCandidates,omitempty"`
 }
 
 // AI-investigation consent disclosure versions, per surface. THE single source of

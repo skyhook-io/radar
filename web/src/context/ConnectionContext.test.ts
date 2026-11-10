@@ -43,6 +43,7 @@ describe('shouldAutoRetryConnection', () => {
   it('leaves configuration and RBAC errors for the user to resolve', () => {
     expect(shouldAutoRetryConnection('config')).toBe(false)
     expect(shouldAutoRetryConnection('rbac')).toBe(false)
+    expect(shouldAutoRetryConnection('settings')).toBe(false)
   })
 })
 

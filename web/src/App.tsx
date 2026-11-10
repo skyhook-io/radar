@@ -1381,8 +1381,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     showClusterWarmupLabel ? clusterLoadState.message :
     crdDiscoveryStatus === 'discovering' ? 'Discovering Custom Resources…' :
     ''
+  // A settings error (ConnectionErrorView) clears only on restart.
   const showHeaderReconnect =
-    clusterConnectionState === 'disconnected' ||
+    (clusterConnectionState === 'disconnected' && connection.errorType !== 'settings') ||
     liveUpdatesDisconnected
   const headerReconnect = clusterConnectionState === 'disconnected' ? retryConnection : reconnectEventStream
   const headerReconnectPending = clusterConnectionState === 'disconnected' ? isRetrying : false

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -168,10 +169,6 @@ func main() {
 		log.Printf("ERROR: %v", err)
 		os.Exit(1)
 	}
-	if len(resolvedNamespaces) > k8s.MaxScopeCandidates {
-		log.Printf("ERROR: --namespaces lists %d namespaces but the RBAC probe fanout cap is %d", len(resolvedNamespaces), k8s.MaxScopeCandidates)
-		os.Exit(1)
-	}
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
@@ -261,17 +258,21 @@ func main() {
 		updater.CleanupOldUpdate()
 	}
 
-	// Initialize K8s client — if this fails (e.g., no kubeconfig found),
-	// still start the UI so the user sees the error instead of a silent exit.
+	// The CLI's --max-scope-candidates, applied the same way the CLI applies it.
+	k8s.ConfigureDeadlines(k8s.DeadlineOptions{MaxScopeCandidates: fileCfg.MaxScopeCandidates})
+
+	// Initialize K8s client — if this fails (e.g., no kubeconfig found, or more
+	// namespaces than Radar checks), still start the UI so the user sees the
+	// error instead of a silent exit.
 	k8sInitErr := app.InitializeK8s(cfg)
+	k8sInitErr = withNamespaceCountCheck(k8sInitErr, cfg.Namespaces)
 	if k8sInitErr != nil {
 		log.Printf("K8s init failed (will show in UI): %v", k8sInitErr)
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Context:   k8s.GetContextName(),
-			Error:     k8sInitErr.Error(),
-			ErrorType: "config",
-		})
+		status, blockConnect := initFailureStatus(k8sInitErr, k8s.GetContextName(), namespacesFlagSet, config.Path())
+		if blockConnect {
+			k8s.BlockClusterAccess(errors.New(status.Error))
+		}
+		k8s.SetConnectionStatus(status)
 	}
 
 	timelineStoreCfg, err := app.BuildTimelineStoreConfig(cfg)

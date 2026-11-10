@@ -79,8 +79,8 @@ export function shouldAutoRetryConnection(errorType?: string): boolean {
   // Auth-shaped failures are excluded: the server runs its own backoff
   // reconnect loop for those, and each browser retry would invoke the exec
   // credential plugin again. Manual "Retry Connection" stays available for
-  // an immediate check.
-  return errorType !== 'config' && errorType !== 'rbac' && !errorType?.startsWith('auth')
+  // an immediate check. A settings error can't clear until Radar restarts.
+  return errorType !== 'config' && errorType !== 'settings' && errorType !== 'rbac' && !errorType?.startsWith('auth')
 }
 
 export function shouldApplyPolledConnection(
