@@ -396,6 +396,20 @@ func (i *Inspector) GetMetadata(ctx context.Context, req InspectRequest) (*Image
 	}, nil
 }
 
+// registryFetchError is a failure to read the image's manifest from its
+// registry, as opposed to a later failure caching or reading its layers.
+type registryFetchError struct {
+	err error
+	// anonymous is the anonymous attempt's error when a credentialed retry
+	// produced err. The registry's answer to it can differ: stale credentials
+	// turn a public image's "no such manifest" into an auth failure.
+	anonymous error
+}
+
+func (e *registryFetchError) Error() string { return "failed to fetch image: " + e.err.Error() }
+
+func (e *registryFetchError) Unwrap() error { return e.err }
+
 // fetchImageBruteForce tries to fetch an image using anonymous auth first,
 // then falls back to authenticated access if anonymous fails. release closes
 // the connections the returned image reads its layers through.
@@ -409,17 +423,17 @@ func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest
 	}
 
 	// Try anonymous first
-	img, err := remote.Image(ref,
+	img, anonErr := remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithAuth(authn.Anonymous),
 	)
-	if err == nil {
+	if anonErr == nil {
 		log.Printf("Image %s accessible with anonymous auth", req.Image)
 		return img, "anonymous", func() {}, nil
 	}
 
 	// Anonymous failed, try with credentials
-	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
+	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(anonErr.Error()))
 
 	keychain := req.keychain
 	if keychain == nil {
@@ -430,7 +444,7 @@ func (i *Inspector) fetchImageBruteForce(ctx context.Context, req InspectRequest
 		remote.WithAuthFromKeychain(keychain),
 	)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err, anonymous: anonErr}
 	}
 
 	registryType := DetectRegistryType(req.Image)
@@ -466,17 +480,18 @@ func (i *Inspector) fetchGuarded(ctx context.Context, ref name.Reference, req In
 	}
 	release()
 	if isRefused(err) || req.keychain == nil {
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err}
 	}
 	auth, kerr := req.keychain.Resolve(ref.Context())
 	if kerr != nil {
-		return nil, "", nil, fmt.Errorf("failed to resolve registry credentials: %w", kerr)
+		return nil, "", nil, &registryFetchError{err: fmt.Errorf("failed to resolve registry credentials: %w", kerr), anonymous: err}
 	}
 	if auth == authn.Anonymous {
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err}
 	}
 	log.Printf("Anonymous auth failed for %s, trying with credentials: %v", k8s.SanitizeForLog(req.Image), k8s.SanitizeForLog(err.Error()))
 	credentialed, release := i.guardFor()
+	anonErr := err
 	img, err = remote.Image(ref,
 		remote.WithContext(ctx),
 		remote.WithTransport(credentialed),
@@ -484,7 +499,7 @@ func (i *Inspector) fetchGuarded(ctx context.Context, ref name.Reference, req In
 	)
 	if err != nil {
 		release()
-		return nil, "", nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, "", nil, &registryFetchError{err: err, anonymous: anonErr}
 	}
 	return img, string(DetectRegistryType(req.Image)), release, nil
 }
