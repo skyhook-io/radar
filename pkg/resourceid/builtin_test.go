@@ -36,12 +36,14 @@ func TestBuiltinTableIsConsistent(t *testing.T) {
 
 func TestBuiltinForName(t *testing.T) {
 	for name, want := range map[string]GroupKind{
-		"deploy":      {Group: "apps", Kind: "Deployment"},
-		"Deployments": {Group: "apps", Kind: "Deployment"},
-		"deployment":  {Group: "apps", Kind: "Deployment"},
-		"hpa":         {Group: "autoscaling", Kind: "HorizontalPodAutoscaler"},
-		"ep":          {Group: "", Kind: "Endpoints"},
-		"jobs":        {Group: "batch", Kind: "Job"},
+		"deploy":                            {Group: "apps", Kind: "Deployment"},
+		"Deployments":                       {Group: "apps", Kind: "Deployment"},
+		"deployment":                        {Group: "apps", Kind: "Deployment"},
+		"hpa":                               {Group: "autoscaling", Kind: "HorizontalPodAutoscaler"},
+		"ep":                                {Group: "", Kind: "Endpoints"},
+		"jobs":                              {Group: "batch", Kind: "Job"},
+		"validatingadmissionpolicies":       {Group: "admissionregistration.k8s.io", Kind: "ValidatingAdmissionPolicy"},
+		"validatingadmissionpolicybindings": {Group: "admissionregistration.k8s.io", Kind: "ValidatingAdmissionPolicyBinding"},
 	} {
 		b, ok := BuiltinForName(name)
 		if !ok || b.GroupKind() != want {
@@ -57,6 +59,7 @@ func TestBuiltinScope(t *testing.T) {
 	for kind, namespaced := range map[string]bool{
 		"Pod": true, "Node": false, "Namespace": false, "Role": true, "ClusterRole": false,
 		"ResourceClaim": true, "DeviceClass": false,
+		"ValidatingAdmissionPolicy": false, "ValidatingAdmissionPolicyBinding": false,
 	} {
 		b, ok := BuiltinForKind(kind)
 		if !ok || b.Namespaced != namespaced {
@@ -71,5 +74,22 @@ func TestBuiltinAPIVersionOmitsVaryingVersions(t *testing.T) {
 	}
 	if group, ok := BuiltinGroup("ResourceClaim"); !ok || group != "resource.k8s.io" {
 		t.Fatalf("BuiltinGroup(ResourceClaim) = %q, %v", group, ok)
+	}
+}
+
+func TestDynamicallyReadNativeIdentities(t *testing.T) {
+	for _, want := range []Builtin{
+		{Group: "apiregistration.k8s.io", Version: "v1", Kind: "APIService", Resource: "apiservices"},
+		{Group: "apiextensions.k8s.io", Version: "v1", Kind: "CustomResourceDefinition", Resource: "customresourcedefinitions"},
+	} {
+		got, ok := BuiltinForKind(want.Kind)
+		if !ok || got.GroupKind() != want.GroupKind() || got.APIVersion() != want.APIVersion() || got.Resource != want.Resource || got.Namespaced {
+			t.Fatalf("native identity: got %+v, %v; want %+v", got, ok, want)
+		}
+		for _, name := range want.Names() {
+			if byName, ok := BuiltinForName(name); !ok || byName.GroupKind() != want.GroupKind() {
+				t.Fatalf("native name %q: got %+v, %v", name, byName, ok)
+			}
+		}
 	}
 }

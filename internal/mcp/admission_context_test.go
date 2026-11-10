@@ -73,7 +73,7 @@ func TestGetResourcePodTemplateDivergenceInContextAndAsBareNote(t *testing.T) {
 	spec := template.Spec.DeepCopy()
 	spec.Containers[0].Resources.Limits[corev1.ResourceMemory] = resource.MustParse("16Mi")
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "web-1-abc", Namespace: "shop", OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", APIVersion: "apps/v1", Name: "web-1", UID: "rs", Controller: &controller}}}, Spec: *spec}
-	if err := k8s.InitTestResourceCache(fake.NewClientset(rs, pod)); err != nil {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(fixtureNamespaces(rs, pod)...)); err != nil {
 		t.Fatal(err)
 	}
 	call := func(mode string) map[string]any {

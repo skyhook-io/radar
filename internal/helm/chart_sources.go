@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/repo"
 	orasregistry "oras.land/oras-go/v2/registry"
@@ -347,7 +346,7 @@ func (c *Client) ensureClassicRepository(rawURL, preferredName string) (string, 
 		return "", fmt.Errorf("stage repository index: %w", err)
 	}
 	defer os.RemoveAll(stageDir)
-	chartRepo, err := repo.NewChartRepository(entry, getter.All(c.settings))
+	chartRepo, err := repo.NewChartRepository(entry, c.repositoryGetters(entry))
 	if err != nil {
 		return "", fmt.Errorf("failed to create chart repository: %w", err)
 	}
@@ -600,6 +599,9 @@ func (c *Client) setSourceWith(actionConfig *action.Configuration, name string, 
 	} else {
 		loaded, _, err := c.loadSourceChart(actionConfig, selected, rel.Chart.Metadata.Name, rel.Chart.Metadata.Version)
 		if err != nil {
+			if errors.Is(err, errChartDigest) {
+				return fmt.Errorf("%w: could not verify the selected installed chart version: %w", errInvalidChartSource, err)
+			}
 			return fmt.Errorf("%w: could not verify the selected installed chart version: %v", errInvalidChartSource, err)
 		}
 		if chartSourceBinding(loaded) != chartSourceBinding(rel.Chart) {

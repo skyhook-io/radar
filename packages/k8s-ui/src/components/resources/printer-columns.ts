@@ -1,4 +1,5 @@
 import type { HealthLevel } from './resource-utils'
+import { getCrossplanePauseState } from './resource-utils-crossplane'
 import { KNOWN_NEGATIVE_CONDITIONS, KNOWN_POSITIVE_CONDITIONS } from './generic-status'
 
 // Vendor-declared table columns from a CRD's additionalPrinterColumns,
@@ -9,6 +10,8 @@ import { KNOWN_NEGATIVE_CONDITIONS, KNOWN_POSITIVE_CONDITIONS } from './generic-
 /** One column definition, as the CRD declared it. */
 export interface PrinterColumnDef {
   name: string
+  /** Source provenance; absent when a supported older Radar omits it. Never evaluated by the UI. */
+  jsonPath?: string
   type?: string
   format?: string
   /** The vendor's own text. Absent for most CRDs, which declare none. */
@@ -70,6 +73,7 @@ export function sanitizePrinterTable(raw: any): PrinterTable | null {
     columns.push({
       name,
       type: typeof c.type === 'string' ? c.type : undefined,
+      ...(typeof c.jsonPath === 'string' ? { jsonPath: c.jsonPath } : {}),
       format: typeof c.format === 'string' ? c.format : undefined,
       description: typeof c.description === 'string' ? c.description : undefined,
       priority: typeof c.priority === 'number' ? c.priority : 0,
@@ -230,7 +234,7 @@ function truthiness(value: unknown): 'true' | 'false' | 'unknown' | null {
  * fine; rendering that as grey text throws away the only scannable signal on
  * the kinds that have no curated Status column.
  */
-export function printerCellTone(def: PrinterColumnDef, value: unknown): HealthLevel | null {
+export function printerCellTone(def: PrinterColumnDef, value: unknown, resource?: any): HealthLevel | null {
   const state = truthiness(value)
   if (!state) return null
   // The NAME decides whether we say anything at all — including for Unknown.
@@ -241,6 +245,13 @@ export function printerCellTone(def: PrinterColumnDef, value: unknown): HealthLe
   const degraded = DEGRADED_COLUMN_NAMES.has(name)
   const terminal = TERMINAL_COLUMN_NAMES.has(name)
   if (!positive && !degraded && !terminal) return null
+  // A vendor column name alone does not establish which condition it reads.
+  const conditionSource = /^\.status\.conditions\[\?\(@\.type==(['"])(Synced|Ready)\1\)\]\.status$/.exec(def.jsonPath ?? '')?.[2]
+  if (positive && conditionSource
+    && getCrossplanePauseState(resource) === 'acknowledged'
+    && ((conditionSource === 'Synced' && state === 'false') || (conditionSource === 'Ready' && state === 'true'))) {
+    return 'neutral'
+  }
   // Unknown is not a failure — the controller could not evaluate it.
   if (state === 'unknown') return 'unknown'
   if (positive) return state === 'true' ? 'healthy' : 'unhealthy'

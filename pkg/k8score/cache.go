@@ -528,6 +528,11 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		if err != nil {
 			return fmt.Errorf("failed to register %s event handler: %w", s.kind, err)
 		}
+		if !s.isEvent {
+			if err := inf.AddIndexers(ownerUIDIndexers); err != nil {
+				return fmt.Errorf("failed to index %s by owner: %w", s.kind, err)
+			}
+		}
 
 		// Wire a WatchErrorHandler so reflector-level failures (most
 		// notably 403/Unauthorized that the probe didn't predict — e.g.
@@ -1983,9 +1988,10 @@ type KindSyncState struct {
 	Key      string `json:"key"`
 	Synced   bool   `json:"synced"`
 	Deferred bool   `json:"deferred"`
-	// Failed marks a kind whose sync deadline fired without completing —
-	// terminal for this connection. The shell renders these as errors
-	// instead of promising they will finish loading.
+	// Failed marks a kind whose sync deadline fired before it finished
+	// loading. Its informer keeps retrying and the kind clears once it
+	// syncs; the shell renders these as errors instead of promising they
+	// will finish soon.
 	Failed bool `json:"failed,omitempty"`
 }
 

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/desktopenv"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -161,6 +162,7 @@ func runLoginShell(shell, script string) string {
 		"USER=" + os.Getenv("USER"),
 		"SHELL=" + shell,
 	}
+	cmd.Dir = desktopenv.ChildDir()
 	cmd.Stdin = nil
 	out, err := cmd.Output()
 	if err != nil {

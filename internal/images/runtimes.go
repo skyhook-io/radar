@@ -105,12 +105,19 @@ const (
 var (
 	leadingVersion = regexp.MustCompile(`(?i)^(?:v|jdk-)?(\d+(?:\.\d+)*)(.*)$`)
 	// prerelease marks a version that comes before its numeric release
-	// (8.3.36RC1, 8.3.36-dev, 8.3.36~rc1, 21.0.5-ea+7), so it lacks that
-	// release's fix.
-	prerelease = regexp.MustCompile(`(?i)^[-~._]?(rc|alpha|beta|dev|pre|ea|nightly|snapshot|canary|internal|a|b)\d*(\+[0-9A-Za-z.-]+)?$`)
+	// (8.3.36RC1, 8.3.36-dev, 8.3.36~rc1, 21.0.5-ea+7, 22.23.4-rc.1), so it
+	// lacks that release's fix.
+	prerelease = regexp.MustCompile(`(?i)^[-~._]?(rc|alpha|beta|dev|pre|ea|nightly|snapshot|canary|internal|a|b)(\.?\d+)?(\+[0-9A-Za-z.-]+)?$`)
 	// Distro revisions require package-specific comparison and backport data.
 	finalSuffix = regexp.MustCompile(`^(\+[0-9A-Za-z.-]+)?$`)
 )
+
+// releaseLineLength sets how many leading components of a fixed version name
+// its branch, for runtimes whose release lines aren't "all but the last
+// component". A Node.js line is a major with semver minors, so 22.23.4 fixes
+// 22.x; Rust ships one stable train with no maintained older lines, so 1.82.0
+// fixes every earlier version.
+var releaseLineLength = map[string]int{"node": 1, "rust": 0}
 
 func ValidateRuntimeQuery(runtime string, fixedIn []string) error {
 	if runtime == "image" && len(fixedIn) > 0 {
@@ -139,14 +146,15 @@ func ValidateRuntimeQuery(runtime string, fixedIn []string) error {
 	return nil
 }
 
-// ClassifyFix compares a declared version against fixed releases. A fixed
-// version's branch is everything but its last component (8.3.36 → 8.3,
-// 17.6 → 17; a one-part fix is its own branch); a declared version is
-// compared with the earliest fix on the longest branch it falls in. Only
-// upstream versions with up to three numeric components, known prereleases
-// and build metadata are supported; distro revisions stay unparsed.
+// ClassifyFix compares a declared version of runtime against fixed releases.
+// A fixed version's branch is everything but its last component (8.3.36 →
+// 8.3, 17.6 → 17; a one-part fix is its own branch) unless releaseLineLength
+// says otherwise for the runtime; a declared version is compared with the
+// earliest fix on the longest branch it falls in. Only upstream versions with
+// up to three numeric components, known prereleases and build metadata are
+// supported; distro revisions stay unparsed.
 // It returns the classification and the fixed version used.
-func ClassifyFix(version string, fixedIn []string) (string, string) {
+func ClassifyFix(runtime, version string, fixedIn []string) (string, string) {
 	got, rest := parseVersionRest(version)
 	if got == nil || len(got) > 3 || (!finalSuffix.MatchString(rest) && !prerelease.MatchString(rest)) {
 		return FixUnparsed, ""
@@ -160,7 +168,11 @@ func ClassifyFix(version string, fixedIn []string) (string, string) {
 			return FixUnparsed, ""
 		}
 		// A one-part fix ("17") covers its own major.
-		branch := fixed[:max(len(fixed)-1, 1)]
+		line := max(len(fixed)-1, 1)
+		if n, ok := releaseLineLength[runtime]; ok {
+			line = n
+		}
+		branch := fixed[:line]
 		if len(got) < len(branch) || !hasPrefix(got, branch) {
 			continue
 		}
@@ -181,6 +193,10 @@ func ClassifyFix(version string, fixedIn []string) (string, string) {
 	case c == 0 && !finalSuffix.MatchString(rest):
 		// The fixed version with a suffix this can't read: it may be a
 		// pre-release build without the fix.
+		return FixUnparsed, bestRaw
+	case prerelease.MatchString(rest) && !hasPrefix(got, best[:max(len(best)-1, 1)]):
+		// Past the fix's own patch line (a later Node minor, a later Rust
+		// release), a prerelease may have been cut before the fix landed.
 		return FixUnparsed, bestRaw
 	}
 	return FixAtOrAbove, bestRaw

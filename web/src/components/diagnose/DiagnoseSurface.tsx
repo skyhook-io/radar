@@ -16,14 +16,14 @@ import {
   Maximize2,
   Minimize2,
   Settings2,
-  MoreVertical,
-  TerminalSquare,
-  Copy,
-  Check,
   RotateCcw,
   PanelLeftOpen,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
+import {
+  ContinueInAgentButton,
+  useContinueInAgentCommand,
+} from "./ContinueInAgentButton";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import {
   TRANSITION_BACKDROP,
@@ -36,9 +36,11 @@ import {
   agentLabelFor,
   openDiagnoseSettings,
   type DiagnoseView,
+  type Target,
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
+import { InvestigationCapacityRecovery } from "./InvestigationCapacityNotice";
 import { useNavCustomization } from "../../context/NavCustomization";
 import { InvestigationView } from "./InvestigationView";
 import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
@@ -49,13 +51,28 @@ import {
   statusWord,
 } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
+import {
+  EXAMPLE_INVESTIGATION_ID,
+  EXAMPLE_INVESTIGATION_RUN,
+  exampleInvestigationOffered,
+  isExampleInvestigation,
+} from "./exampleInvestigation";
+import { AgentSigninNotice } from "./AgentSigninNotice";
+import {
+  useAgentSignin,
+  useApproveAfterSignin,
+} from "../../hooks/useAgentSignin";
 import { ConsentCard } from "./parts";
-import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
+import type { ConsentSubject } from "./AgentControls";
 import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
-import { mcpEndpointUrl } from "../../api/config";
-import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useContexts } from "../../api/client";
-import { formatInvestigationTarget } from "./target";
+import {
+  formatInvestigationTarget,
+  formatInvestigationTitle,
+  formatQuestionScope,
+  isQuestionOnly,
+  rerunOpening,
+} from "./target";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 
 function capWord(s: string): string {
@@ -85,107 +102,6 @@ function buildConfigLine(cfg: {
   return "via " + parts.join(" · ");
 }
 
-// InvestigationMenu hands an investigation off to the user's own full agent. The
-// PRIMARY action copies a resume command they can paste wherever they actually
-// work (terminal, tmux, IDE) — destination-agnostic. Running it in Radar's built-in
-// terminal is the secondary "run it here" convenience.
-function InvestigationMenu({ run }: { run: RunSummary }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const { localTerminal, mcpReadOnly } = useCapabilitiesContext();
-  const label = launchAgentLabel(run);
-  const command = buildLaunchCommand(
-    run,
-    mcpEndpointUrl(mcpReadOnly),
-  );
-
-  // The diagnose root is a CSS container, so a position:fixed click-away layer
-  // inside it is panel-bound rather than viewport-bound. Dismiss from the
-  // document instead; the anchored menu itself can stay next to its trigger.
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
-
-  // No resumable session yet (or stale run) → nothing to hand off.
-  if (!command) return null;
-  const toggle = () => {
-    setCopied(false);
-    setOpen((v) => !v);
-  };
-  const copy = () => {
-    void navigator.clipboard?.writeText(command);
-    setCopied(true);
-    setTimeout(() => {
-      setCopied(false);
-      setOpen(false);
-    }, 1100);
-  };
-
-  return (
-    <div ref={menuRef} className="relative flex items-center">
-      <Tooltip content="More" position="bottom">
-        <button
-          onClick={toggle}
-          className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-          aria-label="More actions"
-          aria-haspopup="menu"
-          aria-expanded={open}
-        >
-          <MoreVertical className="h-4 w-4" />
-        </button>
-      </Tooltip>
-      {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
-          <button
-            onClick={copy}
-            className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-          >
-            {copied ? (
-              <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-            ) : (
-              <Copy className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
-            )}
-            <span>
-              {copied ? "Copied ✓" : `Copy command to continue in ${label}`}
-              {!copied && (
-                <span className="block text-[11px] text-theme-text-tertiary">
-                  Paste it wherever you run {label} — resumes this exact
-                  session.
-                </span>
-              )}
-            </span>
-          </button>
-          {localTerminal && (
-            <button
-              onClick={() => {
-                openInTerminal(command, "Radar Investigation");
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-            >
-              <TerminalSquare className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              Run in a Radar terminal
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // The panel is an ABSOLUTE slot inside the app's body frame (the column under the
 // header, right of the nav rail) — App renders it there and passes topInset (the
 // header height; 0 in chromeless embeds). It shares that frame with the resource/
@@ -194,7 +110,7 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
 // Every clause is a failure this button actually had:
 //
 //   view          Home is the fresh-entry surface, never a re-run action.
-//   run           nothing to take a resource from.
+//   run           nothing to take a resource or question from.
 //   running/stopping human starts reuse the live run. Automatic investigations
 //                 are immutable, so they retain a separate fresh human start.
 //   stale         the original session is closed after a cluster switch;
@@ -209,8 +125,7 @@ export function canRerunInvestigation(
   return (
     view === "investigation" &&
     !!run &&
-    !!run.kind &&
-    !!run.name &&
+    ((!!run.kind && !!run.name) || isQuestionOnly(run)) &&
     ((run.status !== "running" && run.status !== "stopping") ||
       run.trigger === "background") &&
     run.status !== "stale" &&
@@ -231,6 +146,25 @@ export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
 // docked and maximized modes; their intended scroll roots are inside the frame.
 export const DIAGNOSE_SURFACE_FRAME_CLASS =
   "@container/diagnose-surface absolute z-40 flex min-h-0 flex-col overflow-hidden border-l border-theme-border bg-theme-surface shadow-drawer";
+
+// The consent card names what it is about to investigate, so approving it is
+// approving that run.
+export function consentSubject(
+  target: Target | null,
+): ConsentSubject | undefined {
+  if (!target) return undefined;
+  if (isQuestionOnly(target)) {
+    return {
+      title: `“${formatInvestigationTitle(target)}”`,
+      detail: formatQuestionScope(target),
+      question: true,
+    };
+  }
+  return {
+    title: formatInvestigationTarget(target),
+    detail: target.question ? `Asked: ${target.question}` : undefined,
+  };
+}
 
 export function unavailableInvestigationMessage(embedded: boolean): string {
   return embedded
@@ -381,6 +315,28 @@ export function DiagnoseSurface({
   onBrowseIssues?: () => void;
 }) {
   const d = useDiagnose();
+  // A hosted agent runs on the host's backend, where a local CLI's sign-in
+  // says nothing.
+  const signin = useAgentSignin(
+    d.selectedAgent,
+    d.profile,
+    d.needsConsent && !d.hosted,
+  );
+  const consentActions = useApproveAfterSignin({
+    approve: d.approveConsent,
+    cancel: d.cancelConsent,
+    signin,
+    attemptKey: `${d.selectedAgent}\u0000${d.profile}\u0000${d.needsConsent}`,
+  });
+  const signinNotice =
+    signin.status?.state === "signed-out" && signin.status.signinCmd ? (
+      <AgentSigninNotice
+        agentName={d.agentLabel}
+        signinCmd={signin.status.signinCmd}
+        rechecking={signin.rechecking}
+        onRecheck={signin.recheck}
+      />
+    ) : null;
   const { data: contexts } = useContexts();
   const currentContext = contexts?.find((context) => context.isCurrent)?.name;
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -466,6 +422,10 @@ export function DiagnoseSurface({
       setMaximized,
     ],
   );
+  const revealDestination = useCallback(
+    () => revealInvestigationDestination(setMaximized, d.dismissForNavigation, narrow),
+    [d.dismissForNavigation, narrow, setMaximized],
+  );
   const openEvidenceTimeline = useCallback(
     (scope: InvestigationTimelineScope) => {
       if (!onOpenTimeline) return;
@@ -507,10 +467,26 @@ export function DiagnoseSurface({
   const setupPending =
     d.setupState === "needs-install" || d.setupState === "needs-restart";
 
-  const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
+  const exampleOpen = isExampleInvestigation(d.activeRunId);
+  const activeRun = exampleOpen
+    ? EXAMPLE_INVESTIGATION_RUN
+    : (d.runs.find((r) => r.id === d.activeRunId) ?? null);
+  const openExample = exampleInvestigationOffered({
+    runs: d.runs,
+    runsLoaded: d.runsLoaded,
+    setupPending,
+    needsConsent: d.needsConsent,
+  })
+    ? () => d.openRun(EXAMPLE_INVESTIGATION_ID)
+    : undefined;
   // Consent replaces the detail pane even if goHome retained an older run id.
   // Header identity and actions must describe what is actually visible.
-  const visibleRunDetail = d.needsConsent ? null : activeRun;
+  const visibleRunDetail =
+    d.needsConsent || d.startCapacity ? null : activeRun;
+  // The investigation view knows when its agent session is quiet; the header
+  // offers the hand-off only then.
+  const [handoffAllowed, setHandoffAllowed] = useState(false);
+  const handoffCommand = useContinueInAgentCommand(visibleRunDetail);
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
   const activeAgentLabel = visibleRunDetail?.agent
     ? agentLabelFor(visibleRunDetail.agent)
@@ -526,7 +502,7 @@ export function DiagnoseSurface({
     visibleRunDetail ?? defaultHeaderConfig,
   );
   const focusedTitle = visibleRunDetail
-    ? formatInvestigationTarget(visibleRunDetail)
+    ? formatInvestigationTitle(visibleRunDetail)
     : "AI investigations";
   const headerPresentation = investigationHeaderPresentation({
     view: d.view,
@@ -563,21 +539,37 @@ export function DiagnoseSurface({
           agent={d.selectedAgent}
           profile={d.profile}
           copy={consentCopy}
+          subject={consentSubject(d.pendingTarget)}
           onOpenSettings={openSettings ?? undefined}
           error={d.consentError}
-          onApprove={d.approveConsent}
-          onCancel={d.cancelConsent}
+          notice={signinNotice}
+          approveBusy={consentActions.waiting}
+          onApprove={consentActions.approve}
+          onCancel={consentActions.cancel}
         />
       </div>
     </div>
+  ) : d.startCapacity ? (
+    // Before the focused run: the start the user just asked for is what this
+    // pane is about, and a focused run's view would bury the way out.
+    <InvestigationCapacityRecovery capacity={d.startCapacity} />
   ) : activeRun ? (
     <InvestigationView
       key={activeRun.id}
       run={activeRun}
       agentLabel={activeAgentLabel}
       maximized={maximized}
-      onOpenResource={onOpenResource ? openEvidenceResource : undefined}
-      onOpenTimeline={onOpenTimeline ? openEvidenceTimeline : undefined}
+      // The example's resources are on a test cluster, not this one.
+      onOpenResource={
+        onOpenResource && !exampleOpen ? openEvidenceResource : undefined
+      }
+      onOpenTimeline={
+        onOpenTimeline && !exampleOpen ? openEvidenceTimeline : undefined
+      }
+      onRevealDestination={revealDestination}
+      example={exampleOpen}
+      onCloseExample={exampleOpen ? d.goHome : undefined}
+      onHandoffAllowedChange={setHandoffAllowed}
     />
   ) : d.activeRunId && !d.runsLoaded ? (
     // Deep-linked to a run before the list has ever loaded: show the load
@@ -608,6 +600,14 @@ export function DiagnoseSurface({
       <p className="text-sm text-theme-text-secondary">{d.startError}</p>
       <div className="flex flex-wrap items-center justify-center gap-2">
         <InvestigationRefusalAction refusal={d.startRefusal} />
+        {d.questionDraft?.text && (
+          <button
+            onClick={d.openHome}
+            className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+          >
+            Back to your question
+          </button>
+        )}
         <button
           onClick={d.dismissError}
           className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
@@ -624,6 +624,7 @@ export function DiagnoseSurface({
         checkingAgents={d.checkingAgents}
         agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
+        onOpenExample={openExample}
       />
     </div>
   ) : (
@@ -638,10 +639,13 @@ export function DiagnoseSurface({
         agent={d.selectedAgent}
         profile={d.profile}
         copy={consentCopy}
+        subject={consentSubject(d.pendingTarget)}
         onOpenSettings={openSettings ?? undefined}
         error={d.consentError}
-        onApprove={d.approveConsent}
-        onCancel={d.cancelConsent}
+        notice={signinNotice}
+        approveBusy={consentActions.waiting}
+        onApprove={consentActions.approve}
+        onCancel={consentActions.cancel}
       />
     </div>
   ) : setupPending ? (
@@ -652,13 +656,18 @@ export function DiagnoseSurface({
         checkingAgents={d.checkingAgents}
         agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
+        onOpenExample={openExample}
       />
     </div>
   ) : (
     <InvestigationHome
       agentLabel={d.agentLabel}
+      questions={d.questions}
+      onOpenExample={openExample}
       onBrowseIssues={
-        d.runsLoaded && d.runs.length === 0 ? onBrowseIssues : undefined
+        d.questions || (d.runsLoaded && d.runs.length === 0)
+          ? onBrowseIssues
+          : undefined
       }
     />
   );
@@ -765,22 +774,15 @@ export function DiagnoseSurface({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {activeRun &&
+            visibleRunDetail &&
+            !exampleOpen &&
             canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
                 content="Re-run this investigation from scratch"
                 position="bottom"
               >
                 <button
-                  onClick={() =>
-                    d.openInvestigation({
-                      kind: activeRun.kind,
-                      group: activeRun.group,
-                      namespace: activeRun.namespace,
-                      name: activeRun.name,
-                      issueId: activeRun.issueId,
-                      fresh: true,
-                    })
-                  }
+                  onClick={() => d.openInvestigation(rerunOpening(activeRun))}
                   className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
                   aria-label="Re-run this investigation from scratch"
                 >
@@ -788,7 +790,9 @@ export function DiagnoseSurface({
                 </button>
               </Tooltip>
             )}
-          {visibleRunDetail && headerPresentation.runActionsClass !== null && (
+          {visibleRunDetail &&
+            !exampleOpen &&
+            headerPresentation.runActionsClass !== null && (
             <div
               className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
             >
@@ -796,7 +800,12 @@ export function DiagnoseSurface({
                 run: visibleRunDetail,
                 onRunUpdated: d.updateRunSummary,
               })}
-              <InvestigationMenu run={visibleRunDetail} />
+              {handoffAllowed && handoffCommand && (
+                <ContinueInAgentButton
+                  run={visibleRunDetail}
+                  command={handoffCommand}
+                />
+              )}
             </div>
           )}
           {!fullWidthForced && (!maximized || d.canRestoreWorkspace) && (
@@ -869,6 +878,19 @@ export function DiagnoseSurface({
                 if (historyOverlay) dismissHistory();
               }}
               historyDegraded={d.historyDegraded}
+              loaded={d.runsLoaded}
+              loadFailed={d.runsLoadFailed}
+              onRetry={d.refreshRuns}
+              questions={d.questions}
+              // Beside Home on the full page, Home already offers it.
+              onOpenExample={
+                persistentHistory || exampleOpen || !openExample
+                  ? undefined
+                  : () => {
+                      openExample();
+                      dismissHistory();
+                    }
+              }
             />
           </aside>
         )}

@@ -18,7 +18,7 @@ import (
 type runtimeVersionsInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"limit to one namespace; omit for every namespace you can list Pods in"`
 	Runtime   string `json:"runtime,omitempty" jsonschema:"keep images declaring this runtime (php, node, python, go, ruby, java, nginx, postgres, …) plus unreadable ones"`
-	FixedIn   string `json:"fixed_in,omitempty" jsonschema:"first fixed release per branch, comma-separated, e.g. 8.2.35,8.3.36"`
+	FixedIn   string `json:"fixed_in,omitempty" jsonschema:"first fix per branch (node: per major), comma-separated, e.g. 8.2.35,8.3.36"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max images (default 50, max 200); below-fix first"`
 }
 
@@ -54,8 +54,8 @@ func handleGetRuntimeVersions(ctx context.Context, _ *mcp.CallToolRequest, input
 	if err := images.ValidateRuntimeQuery(input.Runtime, fixedIn); err != nil {
 		return nil, nil, err
 	}
-	if input.Namespace != "" && !namespaceWithinPin(input.Namespace) {
-		return nil, nil, fmt.Errorf("%s: namespace %q is outside Radar's configured scope", deniedScopeReason([]string{input.Namespace}), input.Namespace)
+	if input.Namespace != "" && pinExcludesVisible(ctx, []string{input.Namespace}) {
+		return nil, nil, fmt.Errorf("%s: namespace %q is outside Radar's configured scope", ReasonOutsideNamespacePin, input.Namespace)
 	}
 	pods, denied := runtimePods(ctx, cache, input.Namespace)
 	user, _ := resolveUserPerms(ctx)

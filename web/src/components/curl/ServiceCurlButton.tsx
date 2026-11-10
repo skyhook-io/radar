@@ -36,8 +36,8 @@ export function defaultPathForPort(port: number, name?: string, appProtocol?: st
 }
 
 export function isHttpishPort(port: number, name?: string, appProtocol?: string, protocol?: string): boolean {
-  // HTTP rides TCP — a UDP port is never a GET target (e.g. statsd "metrics-udp").
-  if ((protocol || '').toUpperCase() === 'UDP') return false
+  // HTTP rides TCP — UDP and SCTP ports are never GET targets (e.g. statsd "metrics-udp").
+  if (protocol && protocol.toUpperCase() !== 'TCP') return false
   const proto = (appProtocol || '').toLowerCase()
   if (proto === 'http' || proto === 'https' || proto === 'http2') return true
   if (proto && proto !== 'tcp') {

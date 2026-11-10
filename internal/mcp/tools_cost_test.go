@@ -454,7 +454,7 @@ func TestChangePercentIsAbsentFromZero(t *testing.T) {
 func TestCostRemediationNamesThePinRatherThanPermissions(t *testing.T) {
 	// The pin and an RBAC denial produce the same namespace list; telling a
 	// cluster-admin their access is restricted is the wrong answer.
-	got := costRemediation(ReasonOutsideNamespaceScope)
+	got := costRemediation(ReasonOutsideNamespacePin)
 	if !strings.Contains(got, "--namespace") {
 		t.Errorf("remediation should name the flag, got %q", got)
 	}

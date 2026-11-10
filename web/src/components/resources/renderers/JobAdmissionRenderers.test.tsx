@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { JobRenderer, JobSetRenderer } from './JobAdmissionRenderers'
-vi.mock('../../execution/JobSetAdmission', () => ({ KueueAdmission: ({ presentation }: { presentation?: string }) => <div data-presentation={presentation}>admission evidence</div> }))
+vi.mock('../../execution/JobSetAdmission', () => ({ KueueAdmission: ({ presentation, children }: { presentation?: string; children?: (content: React.ReactNode, managed: boolean) => React.ReactNode }) => {
+ const content = <div data-presentation={presentation}>admission evidence</div>
+ return children ? children(content, false) : content
+} }))
 const job = { apiVersion: 'batch/v1', kind: 'Job', metadata: { name: 'training', namespace: 'ml' }, status: { conditions: [{ type: 'Failed', status: 'True', reason: 'BackoffLimitExceeded' }] } }
 describe('admission renderer composition', () => {
  it('keeps Job failure above admission evidence', () => {

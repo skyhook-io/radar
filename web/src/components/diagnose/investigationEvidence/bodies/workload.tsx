@@ -14,6 +14,8 @@ import type {
   DiagnosisResourceRef,
   DiagnosisScalerRef,
 } from "../../diagnoseEvidenceTypes";
+import { getCrossplanePauseState, isManagedResource, isComposite } from "@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane";
+import { CrossplanePauseChip, CrossplanePauseNotice } from "@skyhook-io/k8s-ui/components/resources/renderers/CrossplanePauseContext";
 import { InvestigationResourceEvidence } from "../../InvestigationResourceEvidence";
 import { EvidenceNavigationContext } from "../navigation";
 import {
@@ -131,6 +133,7 @@ export function CrashBody({ data }: { data: EvidenceDataOf<"crash"> }) {
 
 export function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
   const replicas = data.resourceContext?.workloadSummary?.replicas;
+  const crossplane = isManagedResource(data.resource) || isComposite(data.resource) || getCrossplanePauseState(data.resource) === "acknowledged";
   // SealedSecret's dedicated body renders the resource's conditions beside
   // its controller state, so repeating the derived summary here adds noise.
   const conditions =
@@ -145,6 +148,7 @@ export function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
   return (
     <div className="space-y-3">
       <InvestigationResourceEvidence resource={data.resource} />
+      {crossplane && getCrossplanePauseState(data.resource) ? <div className="space-y-1.5"><CrossplanePauseChip state={getCrossplanePauseState(data.resource)} compact /><CrossplanePauseNotice data={data.resource} /></div> : null}
       {data.gitOpsDiagnosis ? (
         <GitOpsStatusBody status={data.gitOpsDiagnosis} />
       ) : null}
@@ -182,7 +186,7 @@ export function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
                 className="flex min-w-0 items-start gap-2 text-xs"
               >
                 <StatusDot
-                  tone={conditionStatusTone(condition)}
+                  tone={conditionStatusTone(condition, data.resource)}
                   className="mt-1 shrink-0"
                 />
                 <p className="min-w-0 text-theme-text-secondary">

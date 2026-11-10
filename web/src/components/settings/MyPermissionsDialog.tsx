@@ -193,29 +193,32 @@ function displayKind(countKey: string): string {
 
 // RestrictedResources surfaces the kinds Radar isn't showing the user (the
 // resource-counts `forbidden` set) — the "what's hidden from me" half of access,
-// alongside the SelfSubjectRulesReview rules above. That set mixes RBAC denials
-// with not-installed/not-watched kinds, so the copy says "usually RBAC" rather
-// than asserting a cause, and links to the docs that carry the unblock RBAC.
+// alongside the SelfSubjectRulesReview rules above. Each forbidden kind carries
+// a reason, so only the caller's own RBAC denials are listed. A Radar that
+// predates reasons mixes those with not-installed/not-watched kinds, so its
+// copy says "usually RBAC" rather than asserting a cause. Both link to the docs
+// that carry the unblock RBAC.
 function RestrictedResources({ enabled }: { enabled: boolean }) {
-  const { data } = useQuery<{ forbidden?: string[] }>({
+  const { data } = useQuery<{ forbidden?: string[]; reasons?: Record<string, string> }>({
     queryKey: ['resource-counts', 'your-access'],
     queryFn: () => fetchJSON('/resource-counts'),
     enabled,
     staleTime: 10000,
   })
-  const forbidden = data?.forbidden ?? []
+  const reasons = data?.reasons
+  const forbidden = (data?.forbidden ?? []).filter(key => !reasons || reasons[key] === 'rbac_denied')
   if (forbidden.length === 0) return null
 
   return (
     <div>
       <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-2 flex items-center gap-1.5">
         <Lock className="w-3.5 h-3.5 text-amber-400" />
-        Restricted or unavailable ({forbidden.length})
+        {reasons ? 'Restricted resources' : 'Restricted or unavailable'} ({forbidden.length})
       </div>
       <p className="text-xs text-theme-text-tertiary mb-2">
-        Resource types Radar isn't showing you — usually because your RBAC doesn't allow listing
-        them, sometimes because the type isn't installed or watched on this cluster. Either way,
-        not an empty cluster.
+        {reasons
+          ? 'These kinds are hidden by your permissions.'
+          : "Resource types Radar isn't showing you — usually because your RBAC doesn't allow listing them, sometimes because the type isn't installed or watched on this cluster. Either way, not an empty cluster."}
       </p>
       <div className="flex flex-wrap gap-1.5">
         {forbidden.map((k) => (

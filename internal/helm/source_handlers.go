@@ -24,6 +24,9 @@ func validSourceUpgradeRoute(w http.ResponseWriter, r *http.Request, req ApplyVa
 }
 
 func sourceErrorCode(err error) string {
+	if errors.Is(err, errChartDigest) {
+		return "chart_digest_failed"
+	}
 	if errors.Is(err, errSourceRequired) {
 		return "chart_source_required"
 	}

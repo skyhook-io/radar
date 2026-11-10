@@ -340,6 +340,18 @@ func TestDropManagedFields_EventKeepsEventsAPITimes(t *testing.T) {
 	}
 }
 
+func TestDropManagedFields_EventKeepsRelatedSubject(t *testing.T) {
+	related := &corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Namespace: "apps", Name: "worker", UID: "related-uid"}
+	out, err := DropManagedFields(&corev1.Event{Related: related})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.(*corev1.Event).Related
+	if got == nil || *got != *related {
+		t.Fatalf("related Event subject stripped: %+v", got)
+	}
+}
+
 func helmReleaseSecretForTest(payload []byte) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{

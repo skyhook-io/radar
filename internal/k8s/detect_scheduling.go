@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/gkedisk"
@@ -417,8 +418,9 @@ func diagnoseUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) 
 // set, names the PersistentVolume pinning the pod ahead of the scheduler
 // summary, and a rollout deadlock replaces the per-class action.
 func diagnoseParsedUnschedulable(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts, vol *volumePlacement) (message, action string) {
-	message = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes)
-	action = unschedulableAction(reasons)
+	sc := schedulingContext{defaultOrder: usesDefaultScheduler(pod)}
+	message, sc.selectorUnsatisfiable = renderUnschedulableMessage(pod, schedMsg, total, reasons, nodes, sc)
+	action = unschedulableAction(reasons, sc)
 	if action == "" {
 		action = genericUnschedulableAction
 	}
@@ -439,11 +441,47 @@ func describeUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) 
 	return msg
 }
 
-func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts) string {
+// schedulingContext is what the advice may assume about a verdict.
+type schedulingContext struct {
+	// defaultOrder: the pod uses kube-scheduler, whose default filters check
+	// NodeAffinity before resource fit, ports, volumes and inter-pod rules.
+	// Other schedulers, such as Volcano, check resources first.
+	defaultOrder bool
+	// selectorUnsatisfiable: no node carries a label the pod requires.
+	selectorUnsatisfiable bool
+}
+
+func hasLaterFilterReason(reasons []SchedulingReason) bool {
+	for _, r := range reasons {
+		if r.NodeCount > 0 && schedAfterNodeAffinity[r.Class] {
+			return true
+		}
+	}
+	return false
+}
+
+// kube-scheduler profiles that keep the default filter order: GKE's
+// optimize-utilization profile renames the scheduler but only changes scoring.
+var defaultOrderSchedulers = map[string]bool{
+	"":                                      true,
+	corev1.DefaultSchedulerName:             true,
+	"gke.io/optimize-utilization-scheduler": true,
+}
+
+func usesDefaultScheduler(pod *corev1.Pod) bool {
+	return pod == nil || defaultOrderSchedulers[pod.Spec.SchedulerName]
+}
+
+// renderUnschedulableMessage also reports whether it resolved the selector as
+// unsatisfiable, so the advice agrees with the message.
+func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, reasons []SchedulingReason, nodes []NodeFacts, sc schedulingContext) (string, bool) {
 	var parts []string
 	resolvedAffinity := false
 	for _, r := range reasons {
-		if r.Class == SchedNodeAffinitySelector {
+		// Without node facts every label looks missing; and under kube-scheduler's
+		// order a count from a later filter proves some node matched the selector,
+		// which outweighs Radar's own view of the nodes.
+		if r.Class == SchedNodeAffinitySelector && len(nodes) > 0 && !(sc.defaultOrder && hasLaterFilterReason(reasons)) {
 			if resolved := resolveUnsatisfiableNodeSelector(extractPodPlacement(pod), nodes); len(resolved) > 0 {
 				parts = append(parts, resolved...)
 				resolvedAffinity = true
@@ -451,26 +489,26 @@ func renderUnschedulableMessage(pod *corev1.Pod, schedMsg string, total int, rea
 			break
 		}
 	}
-	if summary := summarizeReasons(reasons, resolvedAffinity); summary != "" {
+	if summary := summarizeReasons(reasons, resolvedAffinity, sc.defaultOrder); summary != "" {
 		parts = append(parts, summary)
 	}
 	if len(parts) == 0 {
 		if total > 0 {
-			return fmt.Sprintf("Pod is unschedulable (0/%d nodes available)", total)
+			return fmt.Sprintf("Pod is unschedulable (0/%d nodes available)", total), resolvedAffinity
 		}
 		if schedulerMessageOnlyIgnoredNoise(schedMsg) {
-			return "Pod is unschedulable"
+			return "Pod is unschedulable", resolvedAffinity
 		}
 		if msg := strings.TrimSpace(schedMsg); msg != "" {
-			return msg
+			return msg, resolvedAffinity
 		}
-		return "Pod is unschedulable"
+		return "Pod is unschedulable", resolvedAffinity
 	}
 	msg := strings.Join(parts, "; ")
 	if total > 0 {
 		msg = fmt.Sprintf("%s (0/%d nodes available)", msg, total)
 	}
-	return msg
+	return msg, resolvedAffinity
 }
 
 func schedulerMessageOnlyIgnoredNoise(msg string) bool {
@@ -514,25 +552,127 @@ func isIgnoredSchedulerClause(clause string) bool {
 // "start here"), but when more than one class blocks placement it says so rather
 // than implying the single fix is sufficient. Returns "" when nothing is
 // confidently actionable so the caller can fall back to the generic action.
-func unschedulableAction(reasons []SchedulingReason) string {
-	// Lead with the dominant reason that is ALSO actionable — picking the
-	// highest-NodeCount overall would fall back to generic when an unparsed
-	// (SchedOther) clause happens to reject the most nodes, even though a
-	// smaller, actionable clause (e.g. VolumeBinding) is present.
-	base := ""
-	bestCount := -1
-	distinct := map[SchedReasonClass]bool{}
+func unschedulableAction(reasons []SchedulingReason, sc schedulingContext) string {
+	// One constraint per class and resource: "Insufficient cpu" and
+	// "Insufficient memory" are two things to fix.
+	type constraint struct {
+		class    SchedReasonClass
+		resource string
+	}
+	distinct := map[constraint]bool{}
+	matchingNodes := map[constraint]bool{}
+	selector, unclassified := false, false
 	for _, r := range reasons {
-		distinct[r.Class] = true
-		if a := actionForSchedClass(r); a != "" && r.NodeCount > bestCount {
-			base, bestCount = a, r.NodeCount
+		distinct[constraint{r.Class, r.Resource}] = true
+		selector = selector || r.Class == SchedNodeAffinitySelector
+		unclassified = unclassified || (r.Class == SchedOther && r.NodeCount > 0)
+		if schedAfterNodeAffinity[r.Class] {
+			matchingNodes[constraint{r.Class, r.Resource}] = true
 		}
 	}
+	moreThan := func(n int, base string) string {
+		if len(distinct) > n {
+			base += " More than one constraint blocks scheduling — the message lists them all."
+		}
+		return base
+	}
+	if selector && sc.selectorUnsatisfiable {
+		return moreThan(1, actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector}))
+	}
+	if selector && sc.defaultOrder {
+		// The selector excluded some nodes and the rest failed a later filter:
+		// that filter is the blocker on the nodes the pod actually targets.
+		if base := dominantAction(reasons, func(r SchedulingReason) bool { return schedAfterNodeAffinity[r.Class] }); base != "" {
+			const matching = "The nodes that match the pod's nodeSelector/affinity"
+			if rest, ok := strings.CutPrefix(base, "Candidate nodes "); ok {
+				base = matching + " " + rest
+			} else {
+				base = matching + " can't take it. " + base
+			}
+			// Only constraints on the matching nodes count here: a taint was checked
+			// before the selector and may sit on nodes the pod doesn't target.
+			if len(matchingNodes) > 1 {
+				base += " More than one constraint blocks scheduling — the message lists them all."
+			}
+			return base
+		}
+		// Nodes rejected before the selector check (a taint, a cordon) were
+		// never matched against it, so they may be the pod's targets. A clause
+		// Radar can't classify (such as a DRA claim failure) could be the real
+		// blocker on the matching nodes, so it gets the general advice instead.
+		if unclassified {
+			return ""
+		}
+		if early := dominantReason(reasons, func(r SchedulingReason) bool {
+			return !schedAfterNodeAffinity[r.Class] && r.Class != SchedNodeAffinitySelector
+		}); early != nil {
+			return moreThan(2, "Some nodes were rejected before the nodeSelector/affinity check. If they're the pod's target nodes, "+targetNodesAction(*early)+" Otherwise, "+lowerFirst(actionForSchedClass(SchedulingReason{Class: SchedNodeAffinitySelector})))
+		}
+	}
+	base := dominantAction(reasons, func(SchedulingReason) bool { return true })
 	if base == "" {
 		return ""
 	}
-	if len(distinct) > 1 {
-		base += " More than one constraint blocks scheduling — the message lists them all."
+	return moreThan(1, base)
+}
+
+func lowerFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToLower(s[:1]) + s[1:]
+}
+
+// schedAfterNodeAffinity holds the classes whose kube-scheduler filters run
+// after NodeAffinity in the default plugin order. A node is counted under the
+// first filter it fails, so a node counted under one of these passed the pod's
+// nodeSelector/affinity. Taint and unschedulable checks run before NodeAffinity,
+// so their nodes may not match the selector at all.
+var schedAfterNodeAffinity = map[SchedReasonClass]bool{
+	SchedNoPorts:              true,
+	SchedInsufficientResource: true,
+	SchedVolumeCount:          true,
+	SchedVolumeBinding:        true,
+	SchedVolumeNodeAffinity:   true,
+	SchedTopologySpread:       true,
+	SchedPodAffinity:          true,
+	SchedPodAntiAffinity:      true,
+}
+
+// dominantReason is dominantAction's reason, for callers that word it themselves.
+func dominantReason(reasons []SchedulingReason, eligible func(SchedulingReason) bool) *SchedulingReason {
+	var best *SchedulingReason
+	for i, r := range reasons {
+		if eligible(r) && actionForSchedClass(r) != "" && (best == nil || r.NodeCount > best.NodeCount) {
+			best = &reasons[i]
+		}
+	}
+	return best
+}
+
+// targetNodesAction words an earlier-filter blocker for nodes that may be the
+// pod's targets.
+func targetNodesAction(r SchedulingReason) string {
+	if r.Class == SchedNodeUnschedulable {
+		return "they're cordoned, not ready, or reserved by a taint — uncordon or recover one, or tolerate the reservation taint."
+	}
+	return lowerFirst(actionForSchedClass(r))
+}
+
+// dominantAction returns the action of the eligible reason that rejected the
+// most nodes and is actionable. Picking the highest NodeCount overall would fall
+// back to generic when an unparsed (SchedOther) clause rejects the most nodes,
+// even though a smaller, actionable clause (e.g. VolumeBinding) is present.
+func dominantAction(reasons []SchedulingReason, eligible func(SchedulingReason) bool) string {
+	base := ""
+	bestCount := -1
+	for _, r := range reasons {
+		if !eligible(r) {
+			continue
+		}
+		if a := actionForSchedClass(r); a != "" && r.NodeCount > bestCount {
+			base, bestCount = a, r.NodeCount
+		}
 	}
 	return base
 }
@@ -586,14 +726,31 @@ func actionForSchedClass(r SchedulingReason) string {
 // Clauses are ordered by how many nodes each rejected, descending — the
 // scheduler emits them in an arbitrary predicate order, so leading with the
 // widest-blast-radius constraint surfaces the dominant reason first ("2 node(s)
-// node affinity/selector mismatch" before "1 node(s) pod anti-affinity
-// conflict") instead of whichever predicate the scheduler happened to list
-// first. Stable, so equal counts keep the scheduler's order; count-0
-// whole-message clauses (e.g. unbound PVC) sink to the end.
-func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
+// untolerated taint" before "1 node(s) insufficient cpu") instead of whichever
+// predicate the scheduler happened to list first. Stable, so equal counts keep
+// the scheduler's order; count-0 whole-message clauses (e.g. unbound PVC) sink
+// to the end.
+//
+// One exception, for kube-scheduler's default filter order: when the selector
+// excluded some nodes, the clauses from filters after the selector check (see
+// schedAfterNodeAffinity) lead, because they describe the nodes the pod
+// targets. The selector mismatch is usually the pod's intent, not the problem.
+func summarizeReasons(reasons []SchedulingReason, skipAffinity, defaultOrder bool) string {
 	ordered := make([]SchedulingReason, len(reasons))
 	copy(ordered, reasons)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].NodeCount > ordered[j].NodeCount })
+	selector := false
+	for _, r := range reasons {
+		selector = selector || r.Class == SchedNodeAffinitySelector
+	}
+	targets := func(r SchedulingReason) bool {
+		return defaultOrder && selector && !skipAffinity && r.NodeCount > 0 && schedAfterNodeAffinity[r.Class]
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ti, tj := targets(ordered[i]), targets(ordered[j]); ti != tj {
+			return ti
+		}
+		return ordered[i].NodeCount > ordered[j].NodeCount
+	})
 
 	var parts []string
 	for _, r := range ordered {
@@ -1239,6 +1396,10 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 		return "WebhookUnavailable", true
 	}
 	switch {
+	case admissionCreateTimeoutPattern.MatchString(msg):
+		// The API server gave up on the create before answering. Admission
+		// webhooks are the usual cause, but the message names none.
+		return "CreateTimeout", true
 	case admissionWebhookDenialPattern.MatchString(msg):
 		return "WebhookDenied", true
 	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
@@ -1279,6 +1440,10 @@ var (
 	admissionNoEndpointsNamePattern    = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
 	admissionServiceNotFoundPattern    = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
 )
+
+// apierrors.NewTimeoutError from the create handler: "Timeout: request did
+// not complete within requested timeout - context deadline exceeded".
+var admissionCreateTimeoutPattern = regexp.MustCompile(`(?i)^(?:(?:error creating(?: job)?:|create pod \S+ in statefulset \S+ failed error:)\s*)?timeout: request did not complete within`)
 
 func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBackendFailure, bool) {
 	lower := strings.ToLower(message)
@@ -1442,6 +1607,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 	// an older one. Backoff is tracked per disk, so an echo for one volume says
 	// nothing about another's error.
 	informativeAttach := map[string]*corev1.Event{}
+	// The newest Multi-Attach event per pod, also kept across the window: the
+	// attach-detach controller reports it once per volume, after which the
+	// kubelet's FailedMount timeouts become the latest event while the
+	// conflict persists.
+	multiAttach := map[string]*corev1.Event{}
 	var order []string
 	for _, e := range events {
 		if e.InvolvedObject.Kind != "Pod" {
@@ -1467,6 +1637,11 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				if cur := informativeAttach[volKey]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
 					informativeAttach[volKey] = e
 				}
+			}
+		}
+		if reason == "VolumeMultiAttach" {
+			if cur := multiAttach[key]; cur == nil || eventLastTime(e).After(eventLastTime(cur)) {
+				multiAttach[key] = e
 			}
 		}
 		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
@@ -1502,6 +1677,10 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Tim
 				}
 			}
 			cause, action = attachFailureDiagnosis(cache, pod, eventMessage)
+		} else if ma := multiAttach[key]; ma != nil && (c.reason == "VolumeMultiAttach" || c.reason == "VolumeMount") && ownerKind == "Deployment" {
+			// The diagnosis rechecks the holder in the cache, so an old event
+			// only explains the mount timeout while that replica still exists.
+			cause, action = multiAttachSharedVolumeDiagnosis(cache, pod, ownerName, ma.Message)
 		}
 		detection := Detection{
 			Kind:              "Pod",
@@ -1644,6 +1823,149 @@ func attachEventVolume(message string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// The attach-detach controller's Multi-Attach event ("Waiting for detach" since
+// Kubernetes 1.37): the volume (PV name) and the pods in the pod's namespace
+// already using it, minus any count of pods in other namespaces.
+var multiAttachEventRE = regexp.MustCompile(`(?:Multi-Attach error|Waiting for detach) for volume "([^"]+)" Volume is already used by pod\(s\) (.+?)(?: and \d+ pod\(s\) in different namespaces)?$`)
+
+// multiAttachSharedVolumeDiagnosis names the root cause of a Multi-Attach
+// failure on a Deployment pod whose volume is a ReadWriteOnce claim the
+// Deployment mounts, when the pod holding it is another pod of the same
+// Deployment on a different node. With one replica, a holder from an older
+// revision means a RollingUpdate surge started the new pod before the old one
+// let go (see rolloutMultiAttachCause); with more, the replicas share the claim
+// across nodes. Returns "" otherwise: a holder from another workload is not
+// this cause.
+func multiAttachSharedVolumeDiagnosis(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (cause, action string) {
+	d, claim, holders := multiAttachDeploymentHolders(cache, pod, deployment, eventMessage)
+	if len(holders) == 0 {
+		return "", ""
+	}
+	replicas := schedDesiredReplicas(d.Spec.Replicas)
+	if replicas == 1 {
+		for _, holder := range holders {
+			if cause := rollingUpdateMultiAttachCause(cache, d, claim, pod, holder); cause != "" {
+				return cause, rollingUpdateRWOFix
+			}
+		}
+		return "", ""
+	}
+	if replicas < 2 {
+		return "", ""
+	}
+	// Pod and node names stay in the message: the cause must read the same
+	// for every blocked replica so grouping keeps it.
+	return fmt.Sprintf("Deployment %s runs %d replicas that share ReadWriteOnce PVC %s, which only one node can mount. A replica on another node holds it, so replicas on other nodes can't attach it.",
+			d.Name, replicas, claim.Name),
+		sharedRWOVolumeFix
+}
+
+// multiAttachDeploymentHolders resolves a Multi-Attach event on a pod of the
+// named Deployment: the Deployment, the ReadWriteOnce claim it mounts that the
+// event names, and the event's holder pods that belong to the same Deployment
+// and are still running on another node. Holders are nil when any of that doesn't hold.
+func multiAttachDeploymentHolders(cache *ResourceCache, pod *corev1.Pod, deployment, eventMessage string) (*appsv1.Deployment, *corev1.PersistentVolumeClaim, []*corev1.Pod) {
+	m := multiAttachEventRE.FindStringSubmatch(eventMessage)
+	if m == nil || cache == nil || cache.Deployments() == nil || cache.Pods() == nil {
+		return nil, nil, nil
+	}
+	d, err := cache.Deployments().Deployments(pod.Namespace).Get(deployment)
+	if err != nil || d == nil {
+		return nil, nil, nil
+	}
+	var claim *corev1.PersistentVolumeClaim
+	for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
+		// ReadWriteOncePod is one pod, not one node; its Deployment row covers it.
+		if pvc.Spec.VolumeName == m[1] && singleNodeAccessMode(pvc) == corev1.ReadWriteOnce {
+			claim = pvc
+			break
+		}
+	}
+	if claim == nil {
+		return nil, nil, nil
+	}
+	var holders []*corev1.Pod
+	for _, name := range strings.Split(m[2], ",") {
+		holder, err := cache.Pods().Pods(pod.Namespace).Get(strings.TrimSpace(name))
+		// A finished pod no longer holds the volume, though an old event names it.
+		if err != nil || holder == nil || holder.Spec.NodeName == "" || holder.Spec.NodeName == pod.Spec.NodeName ||
+			holder.Status.Phase == corev1.PodSucceeded || holder.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		if _, kind, owner := podOwnerKindName(cache, holder); kind != "Deployment" || owner != d.Name {
+			continue
+		}
+		holders = append(holders, holder)
+	}
+	return d, claim, holders
+}
+
+// rolloutMultiAttachCause returns the RollingUpdate cause for a stuck
+// Deployment rollout: one of its pending pods has a Multi-Attach event that the
+// pod's own row explains with rollingUpdateMultiAttachCause. Both rows run the
+// same check, so they can't disagree.
+func rolloutMultiAttachCause(cache *ResourceCache, d *appsv1.Deployment) string {
+	if schedDesiredReplicas(d.Spec.Replicas) != 1 || cache == nil || cache.Events() == nil || cache.Pods() == nil {
+		return ""
+	}
+	events, _ := cache.Events().Events(d.Namespace).List(labels.Everything())
+	for _, e := range events {
+		if e.InvolvedObject.Kind != "Pod" {
+			continue
+		}
+		if reason, ok := classifyPostBindFailure(e.Reason, e.Message); !ok || reason != "VolumeMultiAttach" {
+			continue
+		}
+		pod, err := cache.Pods().Pods(d.Namespace).Get(e.InvolvedObject.Name)
+		if err != nil || pod == nil || pod.Status.Phase != corev1.PodPending || (e.InvolvedObject.UID != "" && e.InvolvedObject.UID != pod.UID) {
+			continue
+		}
+		if _, kind, owner := podOwnerKindName(cache, pod); kind != "Deployment" || owner != d.Name {
+			continue
+		}
+		dep, claim, holders := multiAttachDeploymentHolders(cache, pod, d.Name, e.Message)
+		for _, holder := range holders {
+			if cause := rollingUpdateMultiAttachCause(cache, dep, claim, pod, holder); cause != "" {
+				return cause
+			}
+		}
+	}
+	return ""
+}
+
+const rollingUpdateRWOFix = "Set strategy: Recreate, or maxSurge: 0 with maxUnavailable: 1, so the rollout removes the old pod first."
+
+// rollingUpdateMultiAttachCause explains a one-replica Deployment's new pod
+// blocked by its old pod: the blocked pod is from the current revision, the
+// holder from an older one, and the RollingUpdate surges, so both run at once
+// on different nodes. With maxUnavailable at 0 a live old pod waits for the
+// new one to be ready, so the rollout can't finish on its own.
+func rollingUpdateMultiAttachCause(cache *ResourceCache, d *appsv1.Deployment, claim *corev1.PersistentVolumeClaim, pod, holder *corev1.Pod) string {
+	strategy := d.Spec.Strategy
+	if strategy.Type != appsv1.RollingUpdateDeploymentStrategyType || strategy.RollingUpdate == nil || strategy.RollingUpdate.MaxSurge == nil {
+		return ""
+	}
+	if cache.ReplicaSets() == nil {
+		return ""
+	}
+	replicaSets, _ := cache.ReplicaSets().ReplicaSets(d.Namespace).List(labels.Everything())
+	current := k8score.CurrentDeploymentRevisionPodHashes(replicaSets)[d.UID]
+	if current == "" || pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey] != current || holder.Labels[appsv1.DefaultDeploymentUniqueLabelKey] == current {
+		return ""
+	}
+	replicas := int(schedDesiredReplicas(d.Spec.Replicas))
+	surge, err := intstr.GetScaledValueFromIntOrPercent(strategy.RollingUpdate.MaxSurge, replicas, true)
+	if err != nil || surge == 0 {
+		return ""
+	}
+	cause := fmt.Sprintf("Deployment %s uses RollingUpdate with maxSurge %s, so it starts the new pod before the old one stops. The old pod holds ReadWriteOnce PVC %s on another node, and only one node can mount it.",
+		d.Name, strategy.RollingUpdate.MaxSurge.String(), claim.Name)
+	if unavailable, err := intstr.GetScaledValueFromIntOrPercent(strategy.RollingUpdate.MaxUnavailable, replicas, false); err == nil && unavailable == 0 && holder.DeletionTimestamp == nil {
+		cause += " The old pod stays until the new one is ready, so the rollout is stuck."
+	}
+	return cause
 }
 
 // attachFailureDiagnosis explains an attach failure the cloud rejected
@@ -1852,7 +2174,9 @@ func classifyPostBindFailure(reason, msg string) (string, bool) {
 		}
 		return "SandboxCreationFailed", true
 	case reason == "FailedAttachVolume":
-		if strings.Contains(lower, "multi-attach") {
+		// Kubernetes 1.37 renamed the attach-detach controller's "Multi-Attach
+		// error" prefix to "Waiting for detach".
+		if strings.Contains(lower, "multi-attach") || strings.HasPrefix(lower, "waiting for detach") {
 			return "VolumeMultiAttach", true
 		}
 		return "VolumeAttach", true

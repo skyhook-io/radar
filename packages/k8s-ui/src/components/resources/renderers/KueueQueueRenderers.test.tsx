@@ -49,8 +49,8 @@ describe('queue quota accounting', () => {
 describe('queue status and policy', () => {
   it('does not turn absent status into zero workloads or healthy state', () => {
     const html = render(base)
-    expect(html).toContain('Controller status has not been reported')
-    expect(html).not.toContain('No Active condition reported')
+    expect(html).toContain('No Active condition reported')
+    expect(html).toContain('Not reported')
     expect(html).toContain('Unknown')
     const counted = render({ ...base, status: { pendingWorkloads: 0, reservingWorkloads: 1, admittedWorkloads: 1 } })
     expect(counted).not.toContain('counts have not been reported')
@@ -79,8 +79,8 @@ describe('queue status and policy', () => {
     const data = { ...base, spec: { stopPolicy }, status: { conditions: [{ type: 'Active', status: 'False', reason: 'FlavorNotFound', message: 'flavor missing' }] } }
     expect(getClusterQueueStatus(data).text).toBe('FlavorNotFound')
     const html = render(data)
-    expect(html).toContain('cancel reservations')
-    expect(html).toContain(stopPolicy === 'Hold' ? 'may continue' : 'are to be evicted')
+    expect(html).toContain('reservations are cancelled')
+    expect(html).toContain(stopPolicy === 'Hold' ? 'admitted Workloads run to completion' : 'admitted Workloads are evicted')
     expect(html).toContain('flavor missing')
   })
 
@@ -111,7 +111,7 @@ it('omits zero borrowing and irrelevant cohort policies on a real-shaped standal
   } }
   const html = render(data)
   expect(html).not.toContain('Nominal quota is not a hard ceiling')
-  for (const text of ['Borrowed reservation:', 'Reclaim within Cohort', 'Borrow with Preemption', 'Flavor when Borrowing']) expect(html).not.toContain(text)
+  for (const text of ['Borrowed reservation:', 'Reclaim within cohort', 'Borrow with preemption', 'Flavor when borrowing']) expect(html).not.toContain(text)
   const cohort = render({ ...data, spec: { ...data.spec, cohortName: 'shared' } })
   expect(cohort).toContain('Nominal quota is not a hard ceiling')
   expect(cohort).toContain('borrowing has no configured cap')

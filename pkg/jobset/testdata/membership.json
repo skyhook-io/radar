@@ -1,0 +1,235 @@
+{
+  "description": "Which Jobs a JobSet controls. Every surface that lists a JobSet's members (the member API, the topology graph) must return exactly `members`.",
+  "jobSet": {
+    "apiVersion": "jobset.x-k8s.io/v1alpha2",
+    "kind": "JobSet",
+    "metadata": {
+      "name": "train",
+      "namespace": "ml",
+      "uid": "jobset-uid"
+    },
+    "spec": {
+      "replicatedJobs": [
+        {
+          "name": "driver",
+          "replicas": 1
+        },
+        {
+          "name": "workers",
+          "replicas": 2
+        }
+      ]
+    }
+  },
+  "jobs": [
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "train-driver-0",
+        "namespace": "ml",
+        "uid": "uid-train-driver-0",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid",
+            "controller": true
+          }
+        ],
+        "labels": {
+          "jobset.sigs.k8s.io/jobset-name": "train",
+          "jobset.sigs.k8s.io/replicatedjob-name": "driver"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "train-workers-0",
+        "namespace": "ml",
+        "uid": "uid-train-workers-0",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid",
+            "controller": true
+          }
+        ],
+        "labels": {
+          "jobset.sigs.k8s.io/jobset-name": "train",
+          "jobset.sigs.k8s.io/replicatedjob-name": "workers"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "train-workers-1",
+        "namespace": "ml",
+        "uid": "uid-train-workers-1",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid",
+            "controller": true
+          }
+        ],
+        "labels": {
+          "jobset.sigs.k8s.io/jobset-name": "train",
+          "jobset.sigs.k8s.io/replicatedjob-name": "workers"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "forged-label",
+        "namespace": "ml",
+        "uid": "uid-forged-label",
+        "labels": {
+          "jobset.sigs.k8s.io/jobset-name": "train",
+          "jobset.sigs.k8s.io/replicatedjob-name": "workers"
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "foreign-group",
+        "namespace": "ml",
+        "uid": "uid-foreign-group",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.example.com/v1",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid",
+            "controller": true
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "other-version",
+        "namespace": "ml",
+        "uid": "uid-other-version",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha1",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid",
+            "controller": true
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "stale-uid",
+        "namespace": "ml",
+        "uid": "uid-stale-uid",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "earlier-jobset-uid",
+            "controller": true
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "not-controller",
+        "namespace": "ml",
+        "uid": "uid-not-controller",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid",
+            "controller": false
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "no-controller-flag",
+        "namespace": "ml",
+        "uid": "uid-no-controller-flag",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "other-jobset",
+        "namespace": "ml",
+        "uid": "uid-other-jobset",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "eval",
+            "uid": "eval-uid",
+            "controller": true
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "other-namespace",
+        "namespace": "ml-eval",
+        "uid": "uid-other-namespace",
+        "ownerReferences": [
+          {
+            "apiVersion": "jobset.x-k8s.io/v1alpha2",
+            "kind": "JobSet",
+            "name": "train",
+            "uid": "jobset-uid",
+            "controller": true
+          }
+        ]
+      }
+    }
+  ],
+  "members": [
+    "train-driver-0",
+    "train-workers-0",
+    "train-workers-1"
+  ]
+}

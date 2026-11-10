@@ -40,7 +40,8 @@ function isRiskyMultilinePaste(xterm: XTerm, text: string): boolean {
  * Wires terminal clipboard behavior onto an xterm instance.
  *
  * Copy is explicit — the host's toolbar Copy button (via copyTerminalSelection)
- * and ⌘C on macOS (Ctrl+C stays SIGINT). We deliberately do NOT copy on
+ * and ⌘C on macOS (Ctrl+C stays SIGINT; the key lives in attachTerminalKeys,
+ * which owns xterm's single custom key handler). We deliberately do NOT copy on
  * selection: a browser terminal has a single system clipboard with no separate
  * PRIMARY buffer, so copy-on-select would clobber the clipboard on every
  * incidental drag. `onSelectionChange` just reports selection presence so the
@@ -68,23 +69,6 @@ export function setupTerminalClipboard(
   const selectionListener = xterm.onSelectionChange(() => {
     onSelectionChange?.(xterm.hasSelection())
   })
-
-  // macOS: ⌘C copies the selection. Ctrl+C is left untouched so it still sends
-  // SIGINT. Other platforms have no conflict-free copy keystroke in a browser
-  // (Ctrl+C = SIGINT, Ctrl+Shift+C = devtools), so they rely on the Copy button.
-  if (mac) {
-    xterm.attachCustomKeyEventHandler((e) => {
-      if (
-        e.type === 'keydown' && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey &&
-        (e.key === 'c' || e.key === 'C') && xterm.hasSelection()
-      ) {
-        e.preventDefault()
-        copyTerminalSelection(xterm)
-        return false
-      }
-      return true
-    })
-  }
 
   const handlePaste = (e: ClipboardEvent) => {
     const text = e.clipboardData?.getData('text') ?? ''

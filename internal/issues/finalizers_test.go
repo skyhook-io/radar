@@ -686,6 +686,8 @@ func TestStuckDeletionCleanupNeedsNoRecognizedController(t *testing.T) {
 			if err := dc.EnsureWatching(s.gvr); err != nil {
 				t.Fatal(err)
 			}
+		}
+		for _, s := range subjects {
 			if !dc.WaitForSync(s.gvr, 2*time.Second) {
 				t.Fatalf("%s did not sync", s.gvr)
 			}

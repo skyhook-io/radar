@@ -7,23 +7,40 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // EnrichRuntimeObjectWarnings converts a typed K8s runtime.Object to
 // *unstructured.Unstructured (if needed) and runs EnrichObjectWarnings.
 // Returns nil on conversion error — best-effort, never blocks the caller.
 func EnrichRuntimeObjectWarnings(obj runtime.Object) []string {
+	return enrichRuntime(obj, true)
+}
+
+// EnrichRuntimeObjectAnsweredWarnings is EnrichRuntimeObjectWarnings for a
+// caller that reports a GitOps manager answer beside the warnings: the answer
+// weighs the Argo CD, Flux and Helm claims the metadata makes, so a warning
+// naming one of those is left out. Metadata it doesn't weigh keeps its
+// warning: another controller's app.kubernetes.io/managed-by label, or Helm
+// named by labels without its release annotation.
+func EnrichRuntimeObjectAnsweredWarnings(obj runtime.Object) []string {
+	return enrichRuntime(obj, false)
+}
+
+func enrichRuntime(obj runtime.Object, withManager bool) []string {
 	if obj == nil {
 		return nil
 	}
 	if u, ok := obj.(*unstructured.Unstructured); ok {
-		return EnrichObjectWarnings(u)
+		return enrich(u, withManager)
 	}
 	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
 		return nil
 	}
-	return EnrichObjectWarnings(&unstructured.Unstructured{Object: raw})
+	return enrich(&unstructured.Unstructured{Object: raw}, withManager)
 }
 
 // EnrichObjectWarnings derives advisory warnings purely from an object's own
@@ -34,13 +51,24 @@ func EnrichRuntimeObjectWarnings(obj runtime.Object) []string {
 // All entries are self-contained factual sentences. Empty result means
 // "nothing notable about this object's state."
 func EnrichObjectWarnings(obj *unstructured.Unstructured) []string {
+	return enrich(obj, true)
+}
+
+// enrich derives the warnings; without withManager, the caller reports a
+// manager answer that covers the GitOps and Helm metadata.
+func enrich(obj *unstructured.Unstructured, withManager bool) []string {
 	if obj == nil {
 		return nil
 	}
 	var out []string
 
-	if mgr, instance := detectExternalManager(obj); mgr != "" {
-		out = append(out, formatExternalManagerWarning(mgr, instance))
+	// Beside a manager answer, the first manager its claims don't already
+	// cover: an independent controller label, or Helm named by labels alone.
+	for _, m := range externalManagers(obj) {
+		if withManager || !m.claim {
+			out = append(out, formatExternalManagerWarning(m.name, m.instance))
+			break
+		}
 	}
 
 	if w := deletionTimestampWarning(obj); w != "" {
@@ -196,3 +224,21 @@ func durationShort(d time.Duration) string {
 	days := int(d.Hours()) / 24
 	return fmt.Sprintf("%dd", days)
 }
+
+// copiedTrackingID reports whether instance is an Argo CD tracking ID naming
+// another object, as on a Secret copied with its source's annotations: Argo CD
+// doesn't count such an object as its own.
+func copiedTrackingID(obj *unstructured.Unstructured, instance string) bool {
+	if instance == "" || instance != obj.GetAnnotations()[argoTrackingIDAnnotationKey] {
+		return false
+	}
+	ref := resourceid.Ref{Group: resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName()}
+	for _, c := range gitops.Claims(ref, nil, obj.GetAnnotations()) {
+		if c.Source == gitops.ClaimArgoTrackingID {
+			return c.Copied
+		}
+	}
+	return false
+}
+
+const argoTrackingIDAnnotationKey = "argocd.argoproj.io/tracking-id"

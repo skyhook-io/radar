@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -197,8 +198,7 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 			return true
 		}
 		if ref.Namespace != "" || strings.EqualFold(ref.Kind, "Namespace") {
-			_, _, ok := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group)
-			if !ok {
+			if s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group) != nil {
 				return false
 			}
 			switch {
@@ -234,15 +234,22 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 		username, groups = user.Username, user.Groups
 	}
 	helmNamespaces := namespaces
+	checked := true
+	var unread []string
 	if helmNamespaces == nil {
 		var ok bool
-		helmNamespaces, ok = s.resolveHelmNamespaces(r)
+		helmNamespaces, ok, checked, unread = s.resolveHelmStorageScope(r)
 		if !ok {
 			return nil, unchecked, false
 		}
 	}
 	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, user)
 	unchecked, incomplete = helm.ReportIssueRead(ctx, err, username, groups, helmNamespaces)
+	// Namespaces left out because the caller can't read Helm's storage there
+	// were never read, and the Helm view still lists their releases.
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		unchecked, incomplete = helm.AddUnreadNamespaces(unchecked, incomplete, unread, checked)
+	}
 	return issues.NativeHelmReleaseIssues(releases, time.Now()), unchecked, incomplete
 }
 
@@ -280,8 +287,8 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	// cluster-scoped get-SAR (fails closed), namespace access, and the
 	// per-namespace Secret get-SAR — so this can't surface issues for a resource
 	// the caller couldn't open in the drawer.
-	if status, msg, ok := s.preflightResourceGet(r, normalizeKind(rawKind), namespace, name, group); !ok {
-		s.writeError(w, status, msg)
+	if failure := s.preflightResourceGet(r, normalizeKind(rawKind), namespace, name, group); failure != nil {
+		s.writeReadFailure(w, rawKind, failure, nil)
 		return
 	}
 
@@ -313,8 +320,11 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		namespaces = []string{namespace}
 	}
 
+	subjectCache, _, _ := provider.CacheIdentity()
 	evidenceWithheld := map[string]bool{}
+	var unchecked []issuesapi.UncheckedSource
 	related := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		OnUnchecked:          func(gaps []issuesapi.UncheckedSource) { unchecked = gaps },
 		Namespaces:           namespaces,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
@@ -326,6 +336,10 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		},
 	}, group, kind, namespace, name)
+	if k8s.GetResourceCache() != subjectCache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	if related == nil {
 		related = []issues.Issue{}
 	}
@@ -336,11 +350,15 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	withheld := ResourceIssuesWithheld{Issues: len(evidenceWithheld)}
 	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
 	resp := ResourceIssuesResponse{
-		Issues:   related,
-		Coverage: resourceIssuesCoverage(kind, group, namespace),
+		Issues:    related,
+		Coverage:  resourceIssuesCoverage(kind, group, namespace),
+		Unchecked: unchecked,
 	}
 	if kind == "CronJob" && (group == "batch" || group == "") && namespace != "" && s.canRead(r, "", "events", namespace, "list") {
 		resp.SchedulingReport = k8s.GetCronJobSchedulingEvidence(namespace, name)
+	}
+	if kind == "Node" && group == "" && namespace == "" && s.canRead(r, "", "nodes", "", "list") {
+		resp.NodeCertificateReport = provider.NodeCertificateReport(name)
 	}
 	if withheld.Issues > 0 {
 		resp.Withheld = &withheld
@@ -348,13 +366,18 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		resp.Visibility = k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces))
 	}
+	if k8s.GetResourceCache() != subjectCache {
+		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
+		return
+	}
 	s.writeJSON(w, resp)
 }
 
 // ResourceIssuesResponse is /api/issues/resource with ?coverage=1.
 type ResourceIssuesResponse struct {
-	SchedulingReport *k8s.CronJobSchedulingEvidence `json:"scheduling_report,omitempty"`
-	Issues           []issues.Issue                 `json:"issues"`
+	NodeCertificateReport *k8s.NodeCertificateReport     `json:"node_certificate_report,omitempty"`
+	SchedulingReport      *k8s.CronJobSchedulingEvidence `json:"scheduling_report,omitempty"`
+	Issues                []issues.Issue                 `json:"issues"`
 	// Whether the issues engine reads the subject's kind: ok, syncing,
 	// notWatched, or unknownKind (discovery doesn't serve the kind, as when a
 	// link made on one cluster opens on another). Anything but ok makes an
@@ -362,6 +385,11 @@ type ResourceIssuesResponse struct {
 	Coverage   string                  `json:"coverage"`
 	Withheld   *ResourceIssuesWithheld `json:"withheld,omitempty"`
 	Visibility *k8s.VisibilitySummary  `json:"visibility,omitempty"`
+	// Unchecked lists checks Radar couldn't make that it attributes to this
+	// resource, such as a Kueue queue check that needs ClusterQueues the caller
+	// can't read; with it, an empty list is not "none". Its absence is not a
+	// completeness guarantee: read it with coverage, withheld and visibility.
+	Unchecked []issuesapi.UncheckedSource `json:"unchecked_sources,omitempty"`
 }
 
 // ResourceIssuesWithheld counts what the caller's access kept out of the
@@ -500,7 +528,7 @@ func splitCSV(v string) []string {
 }
 
 // issueSubjectAccess is the drawer's gate for an issue's own namespaced
-// resource: namespace access, plus a get for Secrets and LimitRanges. It runs
+// resource: namespace access, plus a get for exact-gated namespaced kinds. It runs
 // once per composed row, so the caller's namespaces are resolved once.
 func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
 	if auth.UserFromContext(r.Context()) == nil {

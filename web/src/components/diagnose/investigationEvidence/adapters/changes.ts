@@ -70,6 +70,32 @@ export function adaptChanges(
 
 const CLUSTER_SCOPED_LABEL = "Cluster-scoped admission changes";
 
+// The sentences internal/meaningfulchanges/cluster_scoped.go writes when the
+// window only starts before Radar's recorded history: Radar started, began
+// watching a kind, or evicted older events. The producer joins them into
+// `incomplete` with failures (a denied kind, an uncached scope, a failed
+// recording), which stay open questions; only these exact bounds are history.
+const ADMISSION_HISTORY_SENTENCES = [
+  /^Radar has recorded changes only since \S+; earlier changes in the window are unknown\.$/,
+  /^Radar has watched \w+ only since \S+; earlier changes in the window are unknown\.$/,
+  /^Radar has evicted older change history; earlier changes in the window are unknown\.$/,
+];
+
+/** Splits the producer's `incomplete` text into history bounds and everything else. */
+function splitAdmissionIncomplete(text: string): {
+  history: string;
+  other: string;
+} {
+  const history: string[] = [];
+  const other: string[] = [];
+  for (const sentence of text.trim().split(/(?<=\.)\s+/)) {
+    if (ADMISSION_HISTORY_SENTENCES.some((pattern) => pattern.test(sentence)))
+      history.push(sentence);
+    else other.push(sentence);
+  }
+  return { history: history.join(" "), other: other.join(" ") };
+}
+
 // Admission configuration changes that apply, or may apply, to the queried
 // namespace. Each row's summary carries why it is listed, because the
 // applicability is the point: the row itself is a cluster-scoped object.
@@ -106,7 +132,16 @@ export function addClusterScopedChanges(
     builder.limit(source, CLUSTER_SCOPED_LABEL, value.error, "error");
   }
   if (nonEmptyString(value.incomplete)) {
-    builder.limit(source, CLUSTER_SCOPED_LABEL, value.incomplete, "unknown");
+    const { history, other } = splitAdmissionIncomplete(value.incomplete);
+    if (other) builder.limit(source, CLUSTER_SCOPED_LABEL, other, "unknown");
+    if (history)
+      builder.limit(
+        source,
+        CLUSTER_SCOPED_LABEL,
+        history,
+        "unknown",
+        "history",
+      );
   }
   const notListed = stringArray(value.not_listed) ?? [];
   if (notListed.length > 0 || value.truncated === true) {

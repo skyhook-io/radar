@@ -560,6 +560,48 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 			"match", "other-ns", "other-kind", "other-name", "other-source")
 	})
 
+	t.Run("reason filter runs before pagination", func(t *testing.T) {
+		store := newStore(t)
+		appendReason := func(id string, offset time.Duration, reason string) {
+			e := informer(id, offset)
+			e.Reason = reason
+			mustAppend(t, store, e)
+		}
+		appendReason("warning", 0, "CertificateExpirationWarning")
+		for i := 1; i <= 5; i++ {
+			appendReason(fmt.Sprintf("noise-%d", i), time.Duration(i)*time.Minute, "NodeReady")
+		}
+		appendReason("ok", 6*time.Minute, "CertificateExpirationOK")
+		appendReason("empty", 7*time.Minute, "")
+		appendReason("quoted", 8*time.Minute, "x' OR 1=1 --")
+		for _, tc := range []struct {
+			name    string
+			reasons []string
+			offset  int
+			want    string
+		}{
+			{"latest", []string{"CertificateExpirationWarning", "CertificateExpirationOK"}, 0, "ok"},
+			{"offset", []string{"CertificateExpirationWarning", "CertificateExpirationOK"}, 1, "warning"},
+			{"empty", []string{""}, 0, "empty"},
+			{"quoted", []string{"x' OR 1=1 --"}, 0, "quoted"},
+			{"missing", []string{"UnknownReason"}, 0, ""},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rows, err := store.Query(ctx, timeline.QueryOptions{Reasons: tc.reasons, Limit: 1, Offset: tc.offset, IncludeManaged: true, IncludeK8sEvents: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.want == "" {
+					if len(rows) != 0 {
+						t.Fatalf("unexpected reason matches: %v", idsOfEvents(rows))
+					}
+				} else if len(rows) != 1 || rows[0].ID != tc.want {
+					t.Fatalf("reason pagination returned %v, want %s", idsOfEvents(rows), tc.want)
+				}
+			})
+		}
+	})
+
 	// APIGroups narrows on the group parsed from APIVersion before the limit
 	// applies, so same-kind rows from another group cannot crowd out the
 	// requested resource's history. Rows with no recorded APIVersion are

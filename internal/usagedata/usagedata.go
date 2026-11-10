@@ -49,7 +49,7 @@ const (
 	// Bounds the report sent as a shared install shuts down, so a slow or
 	// unreachable endpoint can't hold up the pod's termination.
 	shutdownSendTimeout = 5 * time.Second
-	schemaVersion       = 3
+	schemaVersion       = 4
 )
 
 // State is the effective usage-data decision.

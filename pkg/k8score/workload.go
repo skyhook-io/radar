@@ -14,12 +14,16 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/yaml"
 
 	"github.com/skyhook-io/radar/pkg/rollouts"
@@ -37,6 +41,16 @@ type WorkloadRevision struct {
 	// traffic, what an abort reverts to) are different revisions.
 	IsStable bool   `json:"isStable,omitempty"`
 	PodHash  string `json:"podHash,omitempty"`
+	// ReadyReplicas is this revision's own ready pods. Nil when the kind has no
+	// per-revision count and the workload's pods may span revisions.
+	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
+	// Serving says whether this revision's pods are running and ready. Nil means
+	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
+	// per revision. Rollouts leave it nil; IsStable is their signal.
+	Serving *bool `json:"serving,omitempty"`
+	// ChangeCause is the kubernetes.io/change-cause note on this revision, the
+	// one record of why it exists when no Helm or GitOps source does.
+	ChangeCause string `json:"changeCause,omitempty"`
 }
 
 // UpdateResourceOptions contains options for updating a resource.
@@ -95,7 +109,7 @@ type ApplyResourceResult struct {
 	Submitted  *unstructured.Unstructured `json:"-"`
 
 	// Warnings are advisory notes derived from the actual state of the cluster
-	// (e.g., "this resource is reconciled by Helm" or "field X you omitted is
+	// (e.g., "its metadata says Helm installed it" or "field X you omitted is
 	// still present after apply because manager Y owns it"). They never block
 	// the apply — the apply succeeded if no error was returned. Treat each
 	// entry as a self-contained sentence.
@@ -587,38 +601,61 @@ func isOnlyRadarFieldManagerConflict(err error) bool {
 
 // DeleteResource deletes a Kubernetes resource.
 func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
+	_, err := m.DeleteResourceWithResult(ctx, opts)
+	return err
+}
+
+// DeleteResourceWithResult deletes a resource and observes asynchronous cleanup.
+func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts DeleteResourceOptions) (*DeleteResourceResult, error) {
 	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+		return nil, fmt.Errorf("resource discovery not initialized")
 	}
 	if m.dynClient == nil {
-		return fmt.Errorf("dynamic client not initialized")
+		return nil, fmt.Errorf("dynamic client not initialized")
 	}
 
 	gvr, ok := m.discovery.GetGVRWithGroup(opts.Kind, opts.Group)
 	if !ok {
-		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("unknown resource kind: %s", opts.Kind))
+	}
+
+	var client dynamic.ResourceInterface = m.dynClient.Resource(gvr)
+	if opts.Namespace != "" {
+		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	}
+	// A caller may have delete permission without get permission. Only observe
+	// cleanup when a pre-delete read identifies the object by UID.
+	var uid types.UID
+	obj, readErr := client.Get(ctx, opts.Name, metav1.GetOptions{})
+	if readErr == nil {
+		uid = obj.GetUID()
 	}
 
 	// Background propagation avoids legacy defaults that orphan a Job's Pods.
 	background := metav1.DeletePropagationBackground
 	deleteOpts := metav1.DeleteOptions{PropagationPolicy: &background}
-	var client dynamic.ResourceInterface = m.dynClient.Resource(gvr)
-	if opts.Namespace != "" {
-		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	if uid != "" {
+		deleteOpts.Preconditions = &metav1.Preconditions{UID: &uid}
 	}
-	if obj, err := client.Get(ctx, opts.Name, metav1.GetOptions{}); err == nil {
+	if readErr == nil {
 		// Only GC finalizers record a policy to preserve; Background has no finalizer.
 		// Omitting the policy otherwise can orphan a terminating Job's Pods.
-		for _, finalizer := range obj.GetFinalizers() {
-			if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
-				deleteOpts.PropagationPolicy = nil
-				break
-			}
+		if _, ok := PendingDeletionPolicy(obj.GetFinalizers()); ok {
+			deleteOpts.PropagationPolicy = nil
 		}
 	}
 
-	if opts.Force {
-		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
+	if opts.Force && (readErr != nil || len(obj.GetFinalizers()) > 0) {
+		metadata := map[string]any{"finalizers": nil}
+		if readErr == nil {
+			if obj.GetUID() != "" {
+				metadata["uid"] = obj.GetUID()
+			}
+			if obj.GetResourceVersion() != "" {
+				metadata["resourceVersion"] = obj.GetResourceVersion()
+			}
+		}
+		finalizerPatch, _ := json.Marshal(map[string]any{"metadata": metadata})
 		var patchErr error
 		if opts.Namespace != "" {
 			_, patchErr = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
@@ -627,13 +664,14 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		}
 		if patchErr != nil && !apierrors.IsNotFound(patchErr) {
 			if apierrors.IsForbidden(patchErr) {
-				return fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
+				return nil, fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
 			}
-			log.Printf("[delete] Failed to strip finalizers from %s %s/%s: %v", opts.Kind, opts.Namespace, opts.Name, patchErr)
+			return nil, fmt.Errorf("force delete could not strip finalizers: %w", patchErr)
 		}
 	}
 
 	if opts.Force {
+		deleteOpts.PropagationPolicy = &background
 		gracePeriod := int64(0)
 		deleteOpts.GracePeriodSeconds = &gracePeriod
 	}
@@ -646,24 +684,20 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 	}
 	if err != nil {
 		if opts.Force && apierrors.IsNotFound(err) {
-			return nil
+			return &DeleteResourceResult{}, nil
 		}
-		return fmt.Errorf("failed to delete resource: %w", err)
+		return nil, fmt.Errorf("failed to delete resource: %w", err)
 	}
 
-	if !opts.Force {
-		var obj *unstructured.Unstructured
-		if opts.Namespace != "" {
-			obj, _ = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Get(ctx, opts.Name, metav1.GetOptions{})
-		} else {
-			obj, _ = m.dynClient.Resource(gvr).Get(ctx, opts.Name, metav1.GetOptions{})
+	if uid == "" {
+		result := &DeleteResourceResult{ObservationError: "Deletion target UID is unavailable; cleanup was not observed."}
+		if readErr != nil && !apierrors.IsNotFound(readErr) {
+			result.ObservationError = readErr.Error()
 		}
-		if obj != nil && obj.GetDeletionTimestamp() != nil && len(obj.GetFinalizers()) > 0 {
-			return fmt.Errorf("resource is stuck in Terminating state due to finalizers — use force delete to remove it")
-		}
+		return result, nil
 	}
 
-	return nil
+	return ObserveResourceDeletion(ctx, client, opts.Name, uid), nil
 }
 
 // TriggerCronJob creates a Job from a CronJob.
@@ -899,7 +933,12 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 	case "deployments":
 		return m.listDeploymentRevisions(ctx, namespace, name, workloadUID)
 	case "statefulsets", "daemonsets":
-		return m.listControllerRevisions(ctx, namespace, name, workloadUID)
+		revisions, err := m.listControllerRevisions(ctx, namespace, name, workloadUID)
+		if err != nil {
+			return nil, err
+		}
+		applyControllerRevisionServing(revisions, workload, normalizedKind)
+		return revisions, nil
 	default:
 		return nil, fmt.Errorf("revision history not supported for %s", kind)
 	}
@@ -912,15 +951,17 @@ func (m *WorkloadManager) listRolloutRevisions(ctx context.Context, namespace, n
 	}
 	out := make([]WorkloadRevision, 0, len(revisions))
 	for _, r := range revisions {
+		readyReplicas := r.ReadyReplicas
 		out = append(out, WorkloadRevision{
-			Number:    r.Number,
-			CreatedAt: r.CreatedAt,
-			Image:     r.Image,
-			IsCurrent: r.IsCurrent,
-			IsStable:  r.IsStable,
-			PodHash:   r.PodHash,
-			Replicas:  r.Replicas,
-			Template:  r.Template,
+			Number:        r.Number,
+			CreatedAt:     r.CreatedAt,
+			Image:         r.Image,
+			IsCurrent:     r.IsCurrent,
+			IsStable:      r.IsStable,
+			PodHash:       r.PodHash,
+			Replicas:      r.Replicas,
+			Template:      r.Template,
+			ReadyReplicas: &readyReplicas,
 		})
 	}
 	return out, nil
@@ -971,6 +1012,8 @@ func BuildDeploymentRevisions(rsList []unstructured.Unstructured, workloadUID st
 
 		image := extractContainerImage(rs.Object)
 		replicas, _, _ := unstructured.NestedInt64(rs.Object, "spec", "replicas")
+		readyReplicas, _, _ := unstructured.NestedInt64(rs.Object, "status", "readyReplicas")
+		serving := readyReplicas > 0
 
 		var templateStr string
 		if template, found, _ := unstructured.NestedMap(rs.Object, "spec", "template"); found && template != nil {
@@ -984,12 +1027,15 @@ func BuildDeploymentRevisions(rsList []unstructured.Unstructured, workloadUID st
 		}
 
 		revisions = append(revisions, WorkloadRevision{
-			Number:    revNum,
-			CreatedAt: rs.GetCreationTimestamp().Time,
-			Image:     image,
-			Replicas:  replicas,
-			Template:  templateStr,
-			PodHash:   rs.GetLabels()["pod-template-hash"],
+			Number:        revNum,
+			CreatedAt:     rs.GetCreationTimestamp().Time,
+			Image:         image,
+			Replicas:      replicas,
+			Template:      templateStr,
+			PodHash:       rs.GetLabels()["pod-template-hash"],
+			ReadyReplicas: &readyReplicas,
+			Serving:       &serving,
+			ChangeCause:   rs.GetAnnotations()["kubernetes.io/change-cause"],
 		})
 	}
 
@@ -1149,6 +1195,69 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 	return revisions
 }
 
+// applyControllerRevisionServing fills the serving signal when the workload's
+// status proves every pod is on one revision. Mid-update there is no per-revision
+// pod count to read, so the fields stay nil rather than guessing.
+func applyControllerRevisionServing(revisions []WorkloadRevision, workload *unstructured.Unstructured, normalizedKind string) {
+	generation := workload.GetGeneration()
+	observed, _, _ := unstructured.NestedInt64(workload.Object, "status", "observedGeneration")
+	if observed < generation {
+		return
+	}
+
+	settled := -1
+	var ready int64
+	switch normalizedKind {
+	case "statefulsets":
+		updateRevision, _, _ := unstructured.NestedString(workload.Object, "status", "updateRevision")
+		currentRevision, _, _ := unstructured.NestedString(workload.Object, "status", "currentRevision")
+		if updateRevision == "" || updateRevision != currentRevision {
+			return
+		}
+		// OnDelete can leave pods on a reverted revision while both names agree,
+		// and those pods are the only ones this count leaves out.
+		replicas, _, _ := unstructured.NestedInt64(workload.Object, "status", "replicas")
+		onRevision, _, _ := unstructured.NestedInt64(workload.Object, "status", "currentReplicas")
+		if onRevision != replicas {
+			return
+		}
+		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "readyReplicas")
+		for i := range revisions {
+			if revisions[i].PodHash == updateRevision {
+				settled = i
+			}
+		}
+	case "daemonsets":
+		desired, _, _ := unstructured.NestedInt64(workload.Object, "status", "desiredNumberScheduled")
+		updated, _, _ := unstructured.NestedInt64(workload.Object, "status", "updatedNumberScheduled")
+		// Pods on nodes the DaemonSet no longer targets count in neither figure,
+		// and they can be on an older revision.
+		misscheduled, _, _ := unstructured.NestedInt64(workload.Object, "status", "numberMisscheduled")
+		if updated != desired || misscheduled != 0 {
+			return
+		}
+		ready, _, _ = unstructured.NestedInt64(workload.Object, "status", "numberReady")
+		for i := range revisions {
+			if revisions[i].IsCurrent {
+				settled = i
+			}
+		}
+	}
+	if settled < 0 {
+		return
+	}
+
+	for i := range revisions {
+		serving := i == settled && ready > 0
+		revisions[i].Serving = &serving
+		var count int64
+		if i == settled {
+			count = ready
+		}
+		revisions[i].ReadyReplicas = &count
+	}
+}
+
 // RollbackWorkload rolls back a Deployment, StatefulSet, DaemonSet, or Rollout to a specific revision.
 func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace, name string, revision int64) error {
 	if m.dynClient == nil {
@@ -1171,28 +1280,62 @@ func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace,
 		return fmt.Errorf("unknown resource kind: %s", kind)
 	}
 
-	workload, err := m.dynClient.Resource(workloadGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get workload: %w", err)
-	}
-	workloadUID := string(workload.GetUID())
-
 	switch normalizedKind {
-	case "deployments":
-		return m.rollbackDeployment(ctx, namespace, name, workloadUID, revision)
-	case "statefulsets", "daemonsets":
-		return m.rollbackControllerRevision(ctx, normalizedKind, namespace, name, workloadUID, revision)
+	case "deployments", "statefulsets", "daemonsets":
 	default:
 		return fmt.Errorf("rollback not supported for %s", kind)
 	}
+
+	// The patch pins the resourceVersion that was read, and controller status
+	// writes bump it, so a rollback during an active rollout can conflict without
+	// any change to the template. Each retry re-reads and re-compares.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		workload, err := m.dynClient.Resource(workloadGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get workload: %w", err)
+		}
+		if normalizedKind == "deployments" {
+			return m.rollbackDeployment(ctx, workload, revision)
+		}
+		return m.rollbackControllerRevision(ctx, normalizedKind, workload, revision)
+	})
 }
 
-func (m *WorkloadManager) rollbackDeployment(ctx context.Context, namespace, name, workloadUID string, revision int64) error {
+// ErrWorkloadPaused: a paused Deployment would hold a restored template without
+// rolling it out, so a rollback that reports success would change nothing.
+// kubectl rollout undo refuses for the same reason.
+var ErrWorkloadPaused = errors.New("workload is paused; resume it first (kubectl rollout resume, or set spec.paused to false) and retry, because a paused Deployment holds a new template without rolling it out")
+
+// deploymentRollbackKeptAnnotations are the Deployment annotations a rollback keeps
+// from the live object; every other annotation is restored from the target
+// ReplicaSet. Same set as kubectl rollout undo's annotationsToSkip
+// (k8s.io/kubectl/pkg/polymorphichelpers/rollback.go).
+var deploymentRollbackKeptAnnotations = map[string]bool{
+	corev1.LastAppliedConfigAnnotation:          true,
+	"deployment.kubernetes.io/revision":         true,
+	"deployment.kubernetes.io/revision-history": true,
+	"deployment.kubernetes.io/desired-replicas": true,
+	"deployment.kubernetes.io/max-replicas":     true,
+	appsv1.DeprecatedRollbackTo:                 true,
+}
+
+// rollbackDeployment restores a ReplicaSet's pod template the way kubectl rollout
+// undo does: the whole spec.template is replaced (a merge patch would keep fields
+// the target revision lacks), pod-template-hash is dropped (the controller adds
+// it to the ReplicaSet, never to the Deployment), and annotations come from the
+// ReplicaSet except the controller's bookkeeping. The patch carries the
+// resourceVersion that was compared, so a concurrent write fails with a conflict
+// instead of being overwritten.
+func (m *WorkloadManager) rollbackDeployment(ctx context.Context, deployment *unstructured.Unstructured, revision int64) error {
+	namespace, name := deployment.GetNamespace(), deployment.GetName()
+	if paused, _, _ := unstructured.NestedBool(deployment.Object, "spec", "paused"); paused {
+		return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrWorkloadPaused)
+	}
+
 	rsGVR, ok := m.discovery.GetGVR("replicasets")
 	if !ok {
 		return fmt.Errorf("replicasets resource not found")
 	}
-
 	rsList, err := m.dynClient.Resource(rsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list replicasets: %w", err)
@@ -1201,42 +1344,56 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, namespace, nam
 	var targetRS *unstructured.Unstructured
 	for i := range rsList.Items {
 		rs := &rsList.Items[i]
-		owned := false
-		for _, ref := range rs.GetOwnerReferences() {
-			if string(ref.UID) == workloadUID {
-				owned = true
-				break
-			}
-		}
-		if !owned {
+		if !ownedBy(rs, deployment.GetUID()) {
 			continue
 		}
-
-		revStr, ok := rs.GetAnnotations()["deployment.kubernetes.io/revision"]
-		if !ok {
-			continue
-		}
-		revNum, err := strconv.ParseInt(revStr, 10, 64)
-		if err != nil {
-			continue
-		}
-		if revNum == revision {
+		revNum, err := strconv.ParseInt(rs.GetAnnotations()["deployment.kubernetes.io/revision"], 10, 64)
+		if err == nil && revNum == revision {
 			targetRS = rs
 			break
 		}
 	}
-
 	if targetRS == nil {
 		return fmt.Errorf("revision %d not found", revision)
 	}
 
-	podTemplate, found, err := unstructured.NestedMap(targetRS.Object, "spec", "template")
+	template, found, err := unstructured.NestedMap(targetRS.Object, "spec", "template")
 	if err != nil || !found {
 		return fmt.Errorf("failed to extract pod template from revision %d", revision)
 	}
+	if labels, found, _ := unstructured.NestedStringMap(template, "metadata", "labels"); found {
+		delete(labels, appsv1.DefaultDeploymentUniqueLabelKey)
+		if len(labels) == 0 {
+			unstructured.RemoveNestedField(template, "metadata", "labels")
+		} else if err := unstructured.SetNestedStringMap(template, labels, "metadata", "labels"); err != nil {
+			return fmt.Errorf("failed to strip pod-template-hash from revision %d: %w", revision, err)
+		}
+	}
 
-	patchData := map[string]any{"spec": map[string]any{"template": podTemplate}}
-	patchBytes, err := json.Marshal(patchData)
+	live, _, _ := unstructured.NestedMap(deployment.Object, "spec", "template")
+	if same, err := podTemplatesEqual(live, template, true); err != nil {
+		return fmt.Errorf("failed to compare revision %d with the current template: %w", revision, err)
+	} else if same {
+		return fmt.Errorf("revision %d of Deployment %s/%s: %w", revision, namespace, name, rollouts.ErrTemplateUnchanged)
+	}
+
+	annotations := map[string]string{}
+	for k, v := range deployment.GetAnnotations() {
+		if deploymentRollbackKeptAnnotations[k] {
+			annotations[k] = v
+		}
+	}
+	for k, v := range targetRS.GetAnnotations() {
+		if !deploymentRollbackKeptAnnotations[k] {
+			annotations[k] = v
+		}
+	}
+
+	patch, err := json.Marshal([]map[string]any{
+		{"op": "replace", "path": "/metadata/resourceVersion", "value": deployment.GetResourceVersion()},
+		{"op": "replace", "path": "/spec/template", "value": template},
+		{"op": "add", "path": "/metadata/annotations", "value": annotations},
+	})
 	if err != nil {
 		return fmt.Errorf("failed to build rollback patch: %w", err)
 	}
@@ -1245,23 +1402,22 @@ func (m *WorkloadManager) rollbackDeployment(ctx context.Context, namespace, nam
 	if !ok {
 		return fmt.Errorf("deployments resource not found")
 	}
-
-	_, err = m.dynClient.Resource(deployGVR).Namespace(namespace).Patch(
-		ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to rollback deployment: %w", err)
+	if _, err := m.dynClient.Resource(deployGVR).Namespace(namespace).Patch(ctx, name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
+		return rollbackPatchError("Deployment", namespace, name, err)
 	}
-
 	return nil
 }
 
-func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normalizedKind, namespace, name, workloadUID string, revision int64) error {
+// rollbackControllerRevision applies a StatefulSet or DaemonSet ControllerRevision
+// as a strategic merge patch, as kubectl rollout undo does. The controllers store
+// data as {"spec":{"template":{..., "$patch":"replace"}}}, so the template is
+// replaced rather than merged.
+func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normalizedKind string, workload *unstructured.Unstructured, revision int64) error {
+	namespace, name := workload.GetNamespace(), workload.GetName()
 	crGVR, ok := m.discovery.GetGVR("controllerrevisions")
 	if !ok {
 		return fmt.Errorf("controllerrevisions resource not found")
 	}
-
 	crList, err := m.dynClient.Resource(crGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to list controllerrevisions: %w", err)
@@ -1270,27 +1426,15 @@ func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normal
 	var targetCR *unstructured.Unstructured
 	for i := range crList.Items {
 		cr := &crList.Items[i]
-		owned := false
-		for _, ref := range cr.GetOwnerReferences() {
-			if string(ref.UID) == workloadUID {
-				owned = true
-				break
-			}
-		}
-		if !owned {
+		if !ownedBy(cr, workload.GetUID()) {
 			continue
 		}
-
 		revNum, found, err := unstructured.NestedInt64(cr.Object, "revision")
-		if err != nil || !found {
-			continue
-		}
-		if revNum == revision {
+		if err == nil && found && revNum == revision {
 			targetCR = cr
 			break
 		}
 	}
-
 	if targetCR == nil {
 		return fmt.Errorf("revision %d not found", revision)
 	}
@@ -1300,6 +1444,19 @@ func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normal
 		return fmt.Errorf("failed to extract data from revision %d", revision)
 	}
 
+	if template, found, _ := unstructured.NestedMap(data, "spec", "template"); found {
+		delete(template, "$patch")
+		live, _, _ := unstructured.NestedMap(workload.Object, "spec", "template")
+		if same, err := podTemplatesEqual(live, template, false); err != nil {
+			return fmt.Errorf("failed to compare revision %d with the current template: %w", revision, err)
+		} else if same {
+			return fmt.Errorf("revision %d of %s %s/%s: %w", revision, workload.GetKind(), namespace, name, rollouts.ErrTemplateUnchanged)
+		}
+	}
+
+	// A resourceVersion in the patch makes the API server reject it with a
+	// conflict if the workload changed after it was read.
+	data["metadata"] = map[string]any{"resourceVersion": workload.GetResourceVersion()}
 	patchBytes, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("failed to build rollback patch: %w", err)
@@ -1309,15 +1466,45 @@ func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normal
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", normalizedKind)
 	}
-
-	_, err = m.dynClient.Resource(gvr).Namespace(namespace).Patch(
-		ctx, name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to rollback workload: %w", err)
+	if _, err := m.dynClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{}); err != nil {
+		return rollbackPatchError(workload.GetKind(), namespace, name, err)
 	}
-
 	return nil
+}
+
+func rollbackPatchError(kind, namespace, name string, err error) error {
+	if apierrors.IsConflict(err) {
+		return fmt.Errorf("%s %s/%s changed while rolling back; check its current template and retry: %w", kind, namespace, name, err)
+	}
+	return fmt.Errorf("failed to roll back %s %s/%s: %w", kind, namespace, name, err)
+}
+
+func ownedBy(obj *unstructured.Unstructured, uid types.UID) bool {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.UID == uid {
+			return true
+		}
+	}
+	return false
+}
+
+// podTemplatesEqual compares templates as typed objects, the way the controllers
+// and kubectl do, so equivalent quantities and absent-vs-empty fields are not
+// mistaken for a difference. ignoreDeploymentHash drops pod-template-hash, which
+// is Deployment controller bookkeeping and means nothing to other workloads.
+func podTemplatesEqual(a, b map[string]any, ignoreDeploymentHash bool) (bool, error) {
+	var ta, tb corev1.PodTemplateSpec
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(a, &ta); err != nil {
+		return false, err
+	}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(b, &tb); err != nil {
+		return false, err
+	}
+	if ignoreDeploymentHash {
+		delete(ta.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
+		delete(tb.Labels, appsv1.DefaultDeploymentUniqueLabelKey)
+	}
+	return apiequality.Semantic.DeepEqual(ta, tb), nil
 }
 
 // NormalizeWorkloadKind converts various kind formats to the plural lowercase form.

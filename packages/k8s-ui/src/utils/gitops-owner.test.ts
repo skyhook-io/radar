@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 
-import type { Relationships } from '../types/core'
+import type { ManagerAnswer, Relationships } from '../types/core'
 
-import { gitOpsOwnerFromRelationships } from './gitops-owner'
+import { argoAutoSyncController, gitOpsOwnerFromRelationships, managerListing } from './gitops-owner'
 
 describe('gitOpsOwnerFromRelationships', () => {
   it('returns null when relationships is undefined', () => {
@@ -91,5 +91,72 @@ describe('gitOpsOwnerFromRelationships', () => {
       namespace: 'argocd',
       name: 'primary',
     })
+  })
+})
+
+describe('managerListing', () => {
+  const owner = { tool: 'argocd' as const, kind: 'applications' as const, namespace: 'argocd', name: 'billing' }
+  const app = (name: string) => ({ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name })
+
+  it('confirms an owner that is the only manager listing the resource', () => {
+    expect(managerListing(owner, [app('billing')], true, true)).toEqual({ state: 'confirmed' })
+  })
+
+  it('confirms an instance-label owner whose namespace is not known yet', () => {
+    expect(managerListing({ ...owner, namespace: '' }, [app('billing')], true, true)).toEqual({ state: 'confirmed' })
+  })
+
+  it('reports a conflict when other managers list the resource and the owner does not', () => {
+    expect(managerListing(owner, [app('hub')], true, true)).toEqual({
+      state: 'conflict',
+      listedBy: [{ tool: 'argocd', kind: 'applications', namespace: 'argocd', name: 'hub' }],
+    })
+  })
+
+  it('says nothing when the owner is one of several managers', () => {
+    expect(managerListing(owner, [app('billing'), app('hub')], true, true)).toBeUndefined()
+  })
+
+  it('says nothing without managers to compare', () => {
+    expect(managerListing(owner, undefined, true, true)).toBeUndefined()
+    expect(managerListing(owner, [], true, true)).toBeUndefined()
+    expect(managerListing(null, [app('billing')], true, true)).toBeUndefined()
+    expect(managerListing(owner, [{ kind: 'Deployment', group: 'apps', namespace: 'x', name: 'y' }], true, true)).toBeUndefined()
+  })
+
+  it('claims nothing for an owner not verified in this cluster', () => {
+    expect(managerListing(owner, [app('billing')], false, true)).toBeUndefined()
+    expect(managerListing(owner, [app('hub')], false, true)).toBeUndefined()
+  })
+
+  it('claims nothing when the search left managers unsettled, since a listed one may be a topology link', () => {
+    expect(managerListing(owner, [app('billing')], true, false)).toBeUndefined()
+    expect(managerListing(owner, [app('hub')], true, false)).toBeUndefined()
+  })
+})
+
+describe('argoAutoSyncController', () => {
+  const self = { namespace: 'argocd', name: 'guestbook' }
+  const parent = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'apps' }
+  const managed = (state: ManagerAnswer['state'], lead = parent): Relationships => ({ ownership: { manager: { state, lead } } } as unknown as Relationships)
+
+  it('names the owning ApplicationSet first', () => {
+    const rel: Relationships = { ...managed('listed'), owner: { kind: 'ApplicationSet', group: 'argoproj.io', namespace: 'argocd', name: 'clusters' } }
+    expect(argoAutoSyncController(rel, self)).toEqual({ kind: 'ApplicationSet', name: 'clusters' })
+  })
+
+  it.each(['agree', 'listed'] as const)('names a parent Application whose resources list it (%s)', (state) => {
+    expect(argoAutoSyncController(managed(state), self)).toEqual({ kind: 'Application', name: 'apps' })
+  })
+
+  it.each(['claimed', 'shared', 'disagree', 'unknown', 'none'] as const)('names no parent on a %s answer', (state) => {
+    expect(argoAutoSyncController(managed(state), self)).toBeNull()
+  })
+
+  it('names nothing without an answer, for a non-Argo owner, or for itself', () => {
+    expect(argoAutoSyncController(undefined, self)).toBeNull()
+    expect(argoAutoSyncController({ managedBy: [parent] }, self)).toBeNull()
+    expect(argoAutoSyncController({ owner: { kind: 'ApplicationSet', group: 'example.com', namespace: 'argocd', name: 'x' } }, self)).toBeNull()
+    expect(argoAutoSyncController(managed('listed', { ...parent, name: 'guestbook' }), self)).toBeNull()
   })
 })

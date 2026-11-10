@@ -1,0 +1,191 @@
+[
+ {
+  "type": "turn"
+ },
+ {
+  "type": "phase",
+  "phase": "investigating"
+ },
+ {
+  "type": "phase",
+  "phase": "connected"
+ },
+ {
+  "type": "phase",
+  "phase": "ready",
+  "model": "claude-opus-5-5",
+  "toolCount": 25,
+  "mcpServers": [
+   {
+    "name": "radar",
+    "status": "connected"
+   }
+  ]
+ },
+ {
+  "type": "thinking",
+  "token": "I'll start with Radar's diagnose bundle for the Deployment."
+ },
+ {
+  "type": "step",
+  "step": {
+   "id": "toolu_sample_diagnose_deployment",
+   "tool": "diagnose",
+   "status": "running",
+   "summary": "{\"kind\":\"deployment\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui\",\"group\":\"apps\"}"
+  }
+ },
+ {
+  "type": "step",
+  "step": {
+   "id": "toolu_sample_diagnose_deployment",
+   "tool": "",
+   "status": "done",
+   "ms": 3062,
+   "result": "{\"resource\":{\"apiVersion\":\"apps/v1\",\"kind\":\"Deployment\",\"metadata\":{\"annotations\":{\"argocd.argoproj.io/tracking-id\":\"guestbook:apps/Deployment:guestbook/guestbook-ui\",\"deployment.kubernetes.io/revision\":\"4\"},\"creationTimestamp\":\"2026-10-08T10:06:19Z\",\"generation\":4,\"name\":\"guestbook-ui\",\"namespace\":\"guestbook\"},\"spec\":{\"progressDeadlineSeconds\":600,\"replicas\":1,\"revisionHistoryLimit\":3,\"selector\":{\"matchLabels\":{\"app\":\"guestbook-ui\"}},\"strategy\":{\"rollingUpdate\":{\"maxSurge\":\"25%\",\"maxUnavailable\":\"25%\"},\"type\":\"RollingUpdate\"},\"template\":{\"metadata\":{\"labels\":{\"app\":\"guestbook-ui\"}},\"spec\":{\"containers\":[{\"image\":\"gcr.io/google-samples/gb-frontend:v99-missing\",\"name\":\"guestbook-ui\",\"ports\":[{\"containerPort\":80,\"protocol\":\"TCP\"}],\"resources\":{}}],\"restartPolicy\":\"Always\",\"securityContext\":{},\"terminationGracePeriodSeconds\":30}}},\"status\":{\"availableReplicas\":1,\"conditions\":[{\"lastTransitionTime\":\"2026-10-08T10:06:34Z\",\"lastUpdateTime\":\"2026-10-08T10:06:34Z\",\"message\":\"Deployment has minimum availability.\",\"reason\":\"MinimumReplicasAvailable\",\"status\":\"True\",\"type\":\"Available\"},{\"lastTransitionTime\":\"2026-10-08T10:06:20Z\",\"lastUpdateTime\":\"2026-10-08T10:44:55Z\",\"message\":\"ReplicaSet \\\"guestbook-ui-5c4d9dcb47\\\" is progressing.\",\"reason\":\"ReplicaSetUpdated\",\"status\":\"True\",\"type\":\"Progressing\"}],\"readyReplicas\":1,\"replicas\":2,\"unavailableReplicas\":1,\"updatedReplicas\":1}},\"resourceContext\":{\"tier\":\"diagnostic\",\"managedBy\":[{\"kind\":\"Application\",\"group\":\"argoproj.io\",\"name\":\"guestbook\"}],\"exposes\":[{\"kind\":\"Service\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui\"}],\"statusSummary\":{\"conditions\":[{\"type\":\"Available\",\"status\":\"True\",\"reason\":\"MinimumReplicasAvailable\",\"message\":\"Deployment has minimum availability.\",\"lastTransitionTime\":\"2026-10-08T10:06:34Z\"},{\"type\":\"Progressing\",\"status\":\"True\",\"reason\":\"ReplicaSetUpdated\",\"message\":\"ReplicaSet \\\"guestbook-ui-5c4d9dcb47\\\" is progressing.\",\"lastTransitionTime\":\"2026-10-08T10:06:20Z\"}]},\"workloadSummary\":{\"replicas\":{\"desired\":1,\"ready\":1,\"available\":1,\"updated\":1,\"unavailable\":1}},\"issueSummary\":{\"count\":1,\"highestSeverity\":\"critical\",\"topReason\":\"ImagePullBackOff\",\"bySource\":{\"problem\":1}},\"auditSummary\":{\"count\":11,\"highestSeverity\":\"high\",\"topFinding\":\"privilegeEscalation\"}},\"logsCurrent\":[{\"pod\":\"guestbook-ui-5c4d9dcb47-nqnfz\",\"container\":\"guestbook-ui\",\"logs\":{\"lines\":null,\"totalLines\":0,\"matchedLines\":0,\"fallback\":false},\"error\":\"failed to get logs: container \\\"guestbook-ui\\\" in pod \\\"guestbook-ui-5c4d9dcb47-nqnfz\\\" is waiting to start: trying and failing to pull image\"},{\"pod\":\"guestbook-ui-84774bdc6f-kkx5q\",\"container\":\"guestbook-ui\",\"logs\":{\"lines\":[\"2026-10-08T10:06:34.086788508Z AH00558: apache2: Could not reliably determine the server's fully qualified domain name, using 10.0.0.12. Set the 'ServerName' directive globally to suppress this message (repeated ×2, 10:06:34→10:06:34)\",\"2026-10-08T10:06:34.115729612Z [Thu Oct 08 10:06:34.115588 2026] [mpm_prefork:notice] [pid 1] AH00163: Apache/2.4.38 (Debian) PHP/7.4.33 configured -- resuming normal operations\",\"2026-10-08T10:06:34.115746184Z [Thu Oct 08 10:06:34.115696 2026] [core:notice] [pid 1] AH00094: Command line: 'apache2 -D FOREGROUND'\"],\"totalLines\":4,\"matchedLines\":0,\"fallback\":true}}],\"logsPrevious\":[{\"pod\":\"guestbook-ui-5c4d9dcb47-nqnfz\",\"container\":\"guestbook-ui\",\"logs\":{\"lines\":null,\"totalLines\":0,\"matchedLines\":0,\"fallback\":false},\"error\":\"failed to get logs: previous terminated container \\\"guestbook-ui\\\" in pod \\\"guestbook-ui-5c4d9dcb47-nqnfz\\\" not found\"},{\"pod\":\"guestbook-ui-84774bdc6f-kkx5q\",\"container\":\"guestbook-ui\",\"logs\":{\"lines\":null,\"totalLines\":0,\"matchedLines\":0,\"fallback\":false},\"error\":\"failed to get logs: previous terminated container \\\"guestbook-ui\\\" in pod \\\"guestbook-ui-84774bdc6f-kkx5q\\\" not found\"}],\"events\":[{\"reason\":\"Failed\",\"message\":\"Error: ErrImagePull\",\"type\":\"Warning\",\"count\":3,\"lastTimestamp\":\"2026-10-08T10:45:36Z\"},{\"reason\":\"Failed\",\"message\":\"Failed to pull image \\\"gcr.io/google-samples/gb-frontend:v99-missing\\\": rpc error: code = NotFound desc = failed to pull and unpack image \\\"gcr.io/google-samples/gb-frontend:v99-missing\\\": failed to resolve reference \\\"gcr.io/google-samples/gb-frontend:v99-missing\\\": gcr.io/google-samples/gb-frontend:v99-missing: not found\",\"type\":\"Warning\",\"count\":3,\"lastTimestamp\":\"2026-10-08T10:45:36Z\"},{\"reason\":\"Failed\",\"message\":\"Error: ImagePullBackOff\",\"type\":\"Warning\",\"count\":2,\"lastTimestamp\":\"2026-10-08T10:45:24Z\"}],\"eventsTotalGroups\":3,\"logCoverage\":{\"resolvedPods\":2,\"selectedPods\":2,\"shownLines\":3,\"totalLines\":3,\"shownPods\":1,\"totalPods\":1},\"expectedPreviousLogAbsences\":[{\"pod\":\"guestbook-ui-5c4d9dcb47-nqnfz\",\"container\":\"guestbook-ui\"},{\"pod\":\"guestbook-ui-84774bdc6f-kkx5q\",\"container\":\"guestbook-ui\"}],\"relatedIssues\":[{\"severity\":\"critical\",\"source\":\"problem\",\"category\":\"image_pull_failed\",\"category_group\":\"startup\",\"id\":\"sampleissue0001\",\"grouping_scope\":\"workload\",\"kind\":\"Deployment\",\"group\":\"apps\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui\",\"reason\":\"ImagePullBackOff\",\"message\":\"Back-off pulling image \\\"gcr.io/google-samples/gb-frontend:v99-missing\\\": ErrImagePull: rpc error: code = NotFound desc = failed to pull and unpack image \\\"gcr.io/google-samples/gb-frontend:v99-missing\\\": failed to resolve reference \\\"gcr.io/google-samples/gb-frontend:v99-missing\\\": gcr.io/google-samples/gb-frontend:v99-missing: not found\",\"cause\":\"Image not found: gcr.io/google-samples/gb-frontend:v99-missing\",\"action\":\"Verify the repository and tag, then update the image reference or publish the missing image.\",\"onset_unknown\":true,\"resource_created_at\":\"2026-10-08T10:44:55Z\",\"last_seen\":\"2026-10-08T10:45:42.822028Z\",\"count\":1,\"affected\":{\"pods\":1},\"members\":[{\"kind\":\"Pod\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui-5c4d9dcb47-nqnfz\"}],\"diagnostic_context\":{\"role\":\"rollup\",\"facts\":[{\"type\":\"owner_rollup\",\"message\":\"Grouped from 1 affected resource(s) under this Deployment.\",\"refs\":[{\"kind\":\"Pod\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui-5c4d9dcb47-nqnfz\"}]}]},\"change_context\":{\"changed\":true,\"what\":\"pod_template\",\"when\":\"47s\",\"evidence\":\"generation=4, observedGeneration=4, 3 owned ReplicaSets, newest ReplicaSet guestbook-ui-5c4d9dcb47 created 47s ago\"},\"issue_timing\":\"started_after_resource_was_healthy\",\"issue_timing_basis\":\"pod_creation\"}],\"changeContext\":{\"changed\":true,\"what\":\"pod_template\",\"when\":\"48s\",\"evidence\":\"generation=4, observedGeneration=4, 3 owned ReplicaSets, newest ReplicaSet guestbook-ui-5c4d9dcb47 created 48s ago\"},\"recentChanges\":[{\"kind\":\"Deployment\",\"apiVersion\":\"apps/v1\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui\",\"changeType\":\"update\",\"summary\":\"image(guestbook-ui): gcr.io/google-samples/gb-frontend:v5→...:v99-missing\",\"timestamp\":\"2026-10-08T10:44:55Z\",\"change_category\":\"spec_config\",\"rank_reason\":\"application configuration field changed\",\"application_configuration_change\":true,\"fields\":[{\"path\":\"spec.template.spec.containers[guestbook-ui].image\",\"oldValue\":\"gcr.io/google-samples/gb-frontend:v5\",\"newValue\":\"gcr.io/google-samples/gb-frontend:v99-missing\"}]},{\"kind\":\"Deployment\",\"apiVersion\":\"apps/v1\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui\",\"changeType\":\"update\",\"summary\":\"image(guestbook-ui): gcr.io/google-samples/gb-frontend:v4→gcr.io/google-samples/gb-frontend:v5\",\"timestamp\":\"2026-10-08T10:37:33Z\",\"change_category\":\"spec_config\",\"rank_reason\":\"application configuration field changed\",\"application_configuration_change\":true,\"fields\":[{\"path\":\"spec.template.spec.containers[guestbook-ui].image\",\"oldValue\":\"gcr.io/google-samples/gb-frontend:v4\",\"newValue\":\"gcr.io/google-samples/gb-frontend:v5\"}]},{\"kind\":\"Deployment\",\"apiVersion\":\"apps/v1\",\"namespace\":\"guestbook\",\"name\":\"guestbook-ui\",\"changeType\":\"update\",\"summary\":\"image(guestbook-ui): gcr.io/google-samples/gb-frontend:v5→gcr.io/google-samples/gb-frontend:v4\",\"timestamp\":\"2026-10-08T10:31:46Z\",\"change_category\":\"spec_config\",\"rank_reason\":\"application configuration field changed\",\"application_configuration_change\":true,\"fields\":[{\"path\":\"spec.template.spec.containers[guestbook-ui].image\",\"oldValue\":\"gcr.io/google-samples/gb-frontend:v5\",\"newValue\":\"gcr.io/google-samples/gb-frontend:v4\"}]}],\"recentChangesSaturated\":true,\"pods\":2,\"podNames\":[\"guestbook-ui-5c4d9dcb47-nqnfz\",\"guestbook-ui-84774bdc6f-kkx5q\"],\"warnings\":[\"Resource is reconciled by Argo CD (instance: guestbook:apps/Deployment:guestbook/guestbook-ui). Direct edits may be reverted by the next reconciliation; prefer changing the source of truth (chart values / Application spec / operator CR).\"],\"metrics\":{\"window\":{\"start\":\"2026-10-08T09:45:42Z\",\"end\":\"2026-10-08T10:45:42Z\",\"step\":\"0s\"},\"pods\":2,\"series\":[],\"error\":\"prometheus probe did not answer within 3s\"}}",
+   "evidenceRef": "ev_sampleinvestigationaaaaaaa_deploymentdiagnosebundleaa",
+   "radarEvidence": true,
+   "isError": false
+  }
+ },
+ {
+  "type": "thinking",
+  "token": "I've identified the likely cause, but need to confirm whether the bad tag originated from Git or a direct live edit Argo isn't correcting. I'll check the Argo CD Application's sync status next.\n\n"
+ },
+ {
+  "type": "step",
+  "step": {
+   "id": "toolu_sample_diagnose_application",
+   "tool": "diagnose",
+   "status": "running",
+   "summary": "{\"kind\":\"application\",\"namespace\":\"argocd\",\"name\":\"guestbook\",\"group\":\"argoproj.io\"}"
+  }
+ },
+ {
+  "type": "step",
+  "step": {
+   "id": "toolu_sample_diagnose_application",
+   "tool": "",
+   "status": "done",
+   "ms": 13,
+   "result": "{\"resource\":{\"apiVersion\":\"argoproj.io/v1alpha1\",\"kind\":\"Application\",\"metadata\":{\"creationTimestamp\":\"2026-10-08T10:06:16Z\",\"generation\":33,\"name\":\"guestbook\",\"namespace\":\"argocd\"},\"spec\":{\"destination\":{\"namespace\":\"guestbook\",\"server\":\"https://kubernetes.default.svc\"},\"project\":\"default\",\"source\":{\"path\":\"guestbook\",\"repoURL\":\"https://github.com/argoproj/argocd-example-apps\",\"targetRevision\":\"HEAD\"},\"syncPolicy\":{\"automated\":{\"prune\":true,\"selfHeal\":false}}},\"status\":{\"controllerNamespace\":\"argocd\",\"health\":{\"lastTransitionTime\":\"2026-10-08T10:44:55Z\",\"status\":\"Progressing\"},\"history\":[{\"deployStartedAt\":\"2026-10-08T10:06:18Z\",\"deployedAt\":\"2026-10-08T10:06:20Z\",\"id\":0,\"initiatedBy\":{\"automated\":true},\"revision\":\"8088f4c0d970abb09e250248cc97e35623447cb5\",\"source\":{\"path\":\"guestbook\",\"repoURL\":\"https://github.com/argoproj/argocd-example-apps\",\"targetRevision\":\"HEAD\"}},{\"deployStartedAt\":\"2026-10-08T10:37:24Z\",\"deployedAt\":\"2026-10-08T10:37:33Z\",\"id\":1,\"initiatedBy\":{\"username\":\"radar\"},\"revision\":\"8088f4c0d970abb09e250248cc97e35623447cb5\",\"source\":{\"path\":\"guestbook\",\"repoURL\":\"https://github.com/argoproj/argocd-example-apps\",\"targetRevision\":\"HEAD\"}}],\"operationState\":{\"finishedAt\":\"2026-10-08T10:37:33Z\",\"message\":\"successfully synced (all tasks run)\",\"operation\":{\"initiatedBy\":{\"automated\":true,\"username\":\"radar\"},\"retry\":{\"limit\":5},\"sync\":{\"prune\":true,\"revision\":\"8088f4c0d970abb09e250248cc97e35623447cb5\",\"source\":{\"path\":\"guestbook\",\"repoURL\":\"https://github.com/argoproj/argocd-example-apps\",\"targetRevision\":\"HEAD\"}}},\"phase\":\"Succeeded\",\"startedAt\":\"2026-10-08T10:37:24Z\",\"syncResult\":{\"resources\":[{\"group\":\"\",\"hookPhase\":\"Running\",\"kind\":\"Service\",\"message\":\"service/guestbook-ui unchanged\",\"name\":\"guestbook-ui\",\"namespace\":\"guestbook\",\"status\":\"Synced\",\"syncPhase\":\"Sync\",\"version\":\"v1\"},{\"group\":\"apps\",\"hookPhase\":\"Running\",\"images\":[\"gcr.io/google-samples/gb-frontend:v5\"],\"kind\":\"Deployment\",\"message\":\"deployment.apps/guestbook-ui configured\",\"name\":\"guestbook-ui\",\"namespace\":\"guestbook\",\"status\":\"Synced\",\"syncPhase\":\"Sync\",\"version\":\"v1\"}],\"revision\":\"8088f4c0d970abb09e250248cc97e35623447cb5\",\"source\":{\"path\":\"guestbook\",\"repoURL\":\"https://github.com/argoproj/argocd-example-apps\",\"targetRevision\":\"HEAD\"}}},\"reconciledAt\":\"2026-10-08T10:44:55Z\",\"resourceHealthSource\":\"appTree\",\"resources\":[{\"kind\":\"Service\",\"name\":\"guestbook-ui\",\"namespace\":\"guestbook\",\"status\":\"Synced\",\"version\":\"v1\"},{\"group\":\"apps\",\"kind\":\"Deployment\",\"name\":\"guestbook-ui\",\"namespace\":\"guestbook\",\"status\":\"OutOfSync\",\"version\":\"v1\"}],\"sourceHydrator\":{},\"sourceType\":\"Directory\",\"summary\":{\"images\":[\"gcr.io/google-samples/gb-frontend:v5\",\"gcr.io/google-samples/gb-frontend:v99-missing\"]},\"sync\":{\"comparedTo\":{\"destination\":{\"namespace\":\"guestbook\",\"server\":\"https://kubernetes.default.svc\"},\"source\":{\"path\":\"guestbook\",\"repoURL\":\"https://github.com/argoproj/argocd-example-apps\",\"targetRevision\":\"HEAD\"}},\"revision\":\"8088f4c0d970abb09e250248cc97e35623447cb5\",\"status\":\"OutOfSync\"}}},\"pods\":0,\"gitopsDiagnosis\":{\"tool\":\"argocd\",\"sync\":\"OutOfSync\",\"health\":\"Progressing\",\"operationPhase\":\"Succeeded\"}}",
+   "evidenceRef": "ev_sampleinvestigationaaaaaaa_applicationdiagnosebundlea",
+   "radarEvidence": true,
+   "isError": false
+  }
+ },
+ {
+  "type": "done",
+  "diagnosis": {
+   "rootCause": "At 10:44:55Z the live Deployment's image was changed from `gcr.io/google-samples/gb-frontend:v5` to `:v99-missing`, a tag that does not exist in the registry, so the new pod fails with ErrImagePull / NotFound. The change did not come from Git: Argo CD reports the Deployment OutOfSync against revision `8088f4c`, which deploys `v5`. Because self-heal is off, Argo will not undo the edit.",
+   "summary": "A direct edit set guestbook-ui to a nonexistent image tag; the new pod can't start and the rollout is stuck on the old pod.",
+   "certainty": "established",
+   "steps": [
+    {
+     "text": "Re-sync the Deployment from Git to restore the `v5` image: `argocd app sync guestbook --resource apps:Deployment:guestbook-ui` (or use **Sync** on the Deployment in the Argo CD UI).",
+     "kind": "mitigate"
+    },
+    {
+     "text": "Confirm the rollout finishes and Argo reports Synced: `kubectl -n guestbook rollout status deploy/guestbook-ui` then `argocd app get guestbook`.",
+     "kind": "verify"
+    },
+    {
+     "text": "If a new version was meant to ship, publish the image, check that it exists with `crane ls gcr.io/google-samples/gb-frontend`, and change the tag in Git (`guestbook/` in argocd-example-apps), not on the live object.",
+     "kind": "investigate",
+     "precondition": "Someone intended to deploy a version other than v5"
+    },
+    {
+     "text": "Find who made the edit at 10:44:55Z in the API server audit log (filter by verb `update`/`patch` on `deployments/guestbook-ui` in `guestbook`).",
+     "kind": "investigate"
+    }
+   ],
+   "report": "A change to the live Deployment caused this, not a change in Git. At 10:44:55Z the container image was changed from `gb-frontend:v5` to `gb-frontend:v99-missing`. The Deployment started a new pod with that tag, and the registry says the tag doesn't exist.\n\n[[radar:evidence=0]]\n\n[[radar:evidence=1|compact]]\n\nArgo CD manages this Deployment, and its view settles where the edit came from. Its last sync used Git revision `8088f4c` with image `v5`. It now marks the Deployment **OutOfSync**, which means the live object no longer matches Git. Self-heal is turned off for this Application, so Argo won't overwrite the edit by itself. The rollout will stay stuck until someone acts.\n\n[[radar:evidence=2]]\n\nThe service is not down right now. A rolling update only removes the old pod once the new one is ready, so the previous pod is still serving and the Deployment reports 1 of 1 available. I didn't check which tag that old pod runs, and with Prometheus unreachable there are no traffic metrics. With one serving pod there is no redundancy, so if that pod is lost the service has no replacement.\n\nThe fix is to re-sync the Deployment from Git, which brings back `v5`. If whoever made the edit was trying to release a new version, the right path is to publish the image and change the tag in Git. Editing the live object again would just drift from Git again. Nothing I found leaves the cause in doubt. The open item is who made the edit, and only the API server audit log can show that.",
+   "notes": "**Evidence ledger**\n- `ev_…deployment…` (diagnose, Deployment): the live pod template uses `gcr.io/google-samples/gb-frontend:v99-missing`. The new pod `guestbook-ui-5c4d9dcb47-nqnfz` is stuck because the registry answered `NotFound` for that tag (3 ErrImagePull events). The change feed shows the image went from `v5` to `v99-missing` at 10:44:55Z. The old pod `guestbook-ui-84774bdc6f-kkx5q` is still Ready, so the Deployment has 1 of 1 available. Not covered: which image the old pod runs, and who made the edit. Metrics were unavailable because Prometheus timed out.\n- `ev_…application…` (diagnose, Application guestbook): Git revision `8088f4c` was last synced at 10:37:33Z with image `v5`. The live Deployment is now **OutOfSync**, and `selfHeal: false`. Not covered: the identity of whoever changed the live object.\n- Alternative: Git changed to the bad tag. Contradicted by `ev_…application…`. The synced revision still deploys `v5`, and the live Deployment differs from Git.\n- Alternative: a registry auth or network problem. Contradicted by `ev_…deployment…`. The registry resolved the request and answered `NotFound` for the tag, which is not an auth or connection error.\n- Alternative: the app crashes after starting. Contradicted by `ev_…deployment…`. The new container never started; it is still waiting for its image to pull.",
+   "rootCauseEvidence": {
+    "status": "linked",
+    "refs": [
+     "ev_sampleinvestigationaaaaaaa_deploymentdiagnosebundleaa",
+     "ev_sampleinvestigationaaaaaaa_applicationdiagnosebundlea"
+    ]
+   },
+   "evidence": [
+    {
+     "status": "linked",
+     "ref": "ev_sampleinvestigationaaaaaaa_deploymentdiagnosebundleaa",
+     "role": "cause",
+     "claim": "The pod template image was changed from v5 to v99-missing at 10:44:55Z.",
+     "gap": "change feed shows what changed, not who changed it",
+     "subject": {
+      "group": "apps",
+      "kind": "Deployment",
+      "namespace": "guestbook",
+      "name": "guestbook-ui",
+      "observation": "changes"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_sampleinvestigationaaaaaaa_deploymentdiagnosebundleaa",
+     "role": "symptom",
+     "claim": "The registry returns NotFound for gb-frontend:v99-missing, so the new pod's image pull fails.",
+     "gap": "events for the new pod only, sampled at this check",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "guestbook",
+      "name": "guestbook-ui-5c4d9dcb47-nqnfz",
+      "observation": "events"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_sampleinvestigationaaaaaaa_applicationdiagnosebundlea",
+     "role": "cause",
+     "claim": "Argo CD's synced Git revision deploys v5, the live Deployment is OutOfSync, and selfHeal is false, so the edit was made outside Git and nothing reverts it.",
+     "gap": "does not identify who edited the live object",
+     "subject": {
+      "group": "argoproj.io",
+      "kind": "Application",
+      "namespace": "argocd",
+      "name": "guestbook",
+      "observation": "resource"
+     }
+    },
+    {
+     "status": "linked",
+     "ref": "ev_sampleinvestigationaaaaaaa_deploymentdiagnosebundleaa",
+     "role": "context",
+     "claim": "The previous pod is still Ready and the Deployment reports 1/1 available, so the service is up on one older pod.",
+     "gap": "does not show which image tag the old pod runs, and has no traffic metrics",
+     "subject": {
+      "group": "",
+      "kind": "Pod",
+      "namespace": "guestbook",
+      "name": "guestbook-ui-84774bdc6f-kkx5q",
+      "observation": "logs"
+     }
+    }
+   ],
+   "ruledOut": [
+    {
+     "hypothesis": "The bad tag came from a Git commit synced by Argo CD",
+     "evidenceIndex": 2
+    },
+    {
+     "hypothesis": "Registry authentication or network failure",
+     "evidenceIndex": 1
+    }
+   ],
+   "remediation": [
+    "Re-sync the Deployment from Git to restore the `v5` image: `argocd app sync guestbook --resource apps:Deployment:guestbook-ui` (or use **Sync** on the Deployment in the Argo CD UI).",
+    "Confirm the rollout finishes and Argo reports Synced: `kubectl -n guestbook rollout status deploy/guestbook-ui` then `argocd app get guestbook`.",
+    "If a new version was meant to ship, publish the image, check that it exists with `crane ls gcr.io/google-samples/gb-frontend`, and change the tag in Git (`guestbook/` in argocd-example-apps), not on the live object.",
+    "Find who made the edit at 10:44:55Z in the API server audit log (filter by verb `update`/`patch` on `deployments/guestbook-ui` in `guestbook`)."
+   ],
+   "confidence": 0.95,
+   "recommendedIndex": 1,
+   "recommendedReason": "Targeted to one resource and reversible; it restores the Git-declared v5, which may not be the version whoever made the edit was trying to ship.",
+   "turns": 3
+  }
+ }
+]

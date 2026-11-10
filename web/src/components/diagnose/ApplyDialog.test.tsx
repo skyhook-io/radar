@@ -123,3 +123,13 @@ it("distinguishes local execution from sending resource data to the model provid
   expect(html).toContain("model provider under your account, not to Radar");
   expect(html).not.toContain("never leaves your machine");
 });
+
+
+it("explains pause conditionally even when the proposed fix removes it, without changing the existing gate", () => {
+  const resourceData = { metadata: { name: "archive", annotations: { "crossplane.io/paused": "true" } }, spec: { providerConfigRef: { name: "default" } } };
+  const result = renderToStaticMarkup(<ApplyDialog open onClose={() => {}} onConfirm={() => {}} agentLabel="Local agent" resourceLabel="Bucket archive" context="fixture" fix="Remove the pause annotation." gitOpsGuard={unmanaged} resourceData={resourceData} />);
+  expect(result).toContain("Pause affects reconciliation");
+  expect(result).toContain("requests resumption");
+  expect(result).not.toContain("will resume");
+  expect(applyButton(result)).not.toContain('disabled=""');
+});

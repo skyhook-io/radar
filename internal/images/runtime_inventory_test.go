@@ -169,6 +169,32 @@ func TestInventory_GroupsByRunningDigestAndClassifies(t *testing.T) {
 	}
 }
 
+func TestInventory_ClassifiesNodeByMajorLine(t *testing.T) {
+	const (
+		node22 = "docker.io/library/node@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+		node25 = "docker.io/library/node@sha256:2525252525252525252525252525252525252525252525252525252525252525"
+	)
+	f := &fakeLookup{configs: map[string]*v1.ConfigFile{
+		refKey(t, node22): {Config: v1.Config{Env: []string{"NODE_VERSION=22.12.0"}}},
+		refKey(t, node25): {Config: v1.Config{Env: []string{"NODE_VERSION=25.1.0"}}},
+	}}
+	src := podSource(
+		runningPod("shop", "eol-1", "x86-node", "eol", map[string][2]string{"node": {"node:25", node25}}),
+		runningPod("shop", "api-1", "x86-node", "api", map[string][2]string{"node": {"node:22", node22}}),
+	)
+	got := fakeInventory(f).Inventory(context.Background(), src, InventoryOptions{Runtime: "node", FixedIn: []string{"22.23.4", "24.22.1", "26.12.1"}})
+
+	if got.Totals.BelowFix != 1 || len(got.Images) != 2 {
+		t.Fatalf("totals = %+v, images = %+v", got.Totals, got.Images)
+	}
+	if d := got.Images[0].Declared; len(d) != 1 || d[0].Version != "22.12.0" || d[0].Fix != FixBelow || d[0].FixedIn != "22.23.4" {
+		t.Fatalf("first image must be the one below its major's fix: %+v", d)
+	}
+	if d := got.Images[1].Declared; len(d) != 1 || d[0].Version != "25.1.0" || d[0].Fix != FixBranchUnknown {
+		t.Fatalf("an unfixed end-of-life major stays unlisted: %+v", d)
+	}
+}
+
 func TestInventory_SpecDigestIsNotProofOfWhatRuns(t *testing.T) {
 	f := &fakeLookup{configs: map[string]*v1.ConfigFile{refKey(t, phpDigest): phpConfig("8.3.36")}}
 	got := fakeInventory(f).Inventory(context.Background(), podSource(

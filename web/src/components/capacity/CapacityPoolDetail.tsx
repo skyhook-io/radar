@@ -173,7 +173,8 @@ export function CapacityPoolDetail({
 
       {query.error && <RefreshError message={errorMessage(query.error)} />}
 
-      <div className="flex gap-1 border-b border-theme-border">
+      {/* Phones: the tabs stay on one line and scroll sideways. */}
+      <div className="flex gap-1 border-b border-theme-border phone:overflow-x-auto">
         {POOL_SECTIONS.map((tab) => (
           <button
             key={tab.id}
@@ -184,7 +185,7 @@ export function CapacityPoolDetail({
                 tab.id === "summary" ? poolPath : `${poolPath}/${tab.id}`,
               )
             }
-            className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+            className={`border-b-2 px-3 py-2 text-sm font-medium transition-colors phone:shrink-0 phone:whitespace-nowrap ${
               section === tab.id
                 ? "border-skyhook-500 text-theme-text-primary"
                 : "border-transparent text-theme-text-secondary hover:text-theme-text-primary"
@@ -780,15 +781,16 @@ function WorkloadAttribution({
           <button
             key={identityKey({ ref: workload.owner })}
             type="button"
-            className="flex w-full items-baseline justify-between gap-2 border-b border-theme-border-subtle py-1.5 text-left last:border-b-0 hover:text-accent-text"
+            // Phones: the workload gets its own full line and the counts wrap under it.
+            className="flex w-full items-baseline justify-between gap-2 border-b border-theme-border-subtle py-1.5 text-left last:border-b-0 hover:text-accent-text phone:flex-wrap phone:justify-start phone:gap-x-3 phone:gap-y-0.5"
             onClick={() =>
               onOpenResource(refToSelectedResource(workload.owner))
             }
           >
-            <span className="min-w-0 flex-1 truncate font-mono text-xs text-theme-text-primary">
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-theme-text-primary phone:basis-full phone:whitespace-normal phone:[overflow-wrap:anywhere]">
               {workload.owner.kind}/{workload.owner.name}
             </span>
-            <span className="shrink-0 text-xs text-theme-text-tertiary">
+            <span className="shrink-0 text-xs text-theme-text-tertiary phone:shrink phone:min-w-0 phone:[overflow-wrap:anywhere]">
               {workload.owner.namespace}
             </span>
             <span className="shrink-0 font-mono text-xs">

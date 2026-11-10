@@ -96,6 +96,11 @@ export function partitionInvestigationEvidence(
    * target is folded into a second tier. Broader results stay cited-only.
    */
   inventory = false,
+  /**
+   * The run stopped without an assessment, so nothing will ever be cited:
+   * broader results are all it has to show, and are not withheld.
+   */
+  showUncited = false,
 ) {
   // Selection: legacy root-cause links plus every placed agent item, of any
   // role (placement promotes a group into main the way a citation does; the
@@ -126,7 +131,7 @@ export function partitionInvestigationEvidence(
   // reader knows the agent ran queries it did not build its case on.
   let hiddenMetrics = 0;
   for (const group of groups) {
-    const broader = group.latest.relevance === "broader";
+    const broader = group.latest.relevance === "broader" && !showUncited;
     // Citations select tool results, not individual rows in a broad search.
     // Only a focused, unambiguous fact can be promoted by a source citation.
     // An agent item names this observation when its subject does, or when the

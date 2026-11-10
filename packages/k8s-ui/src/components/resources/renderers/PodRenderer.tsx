@@ -3,7 +3,7 @@ import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, Circle
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
@@ -31,6 +31,7 @@ import { MetricsChart } from '../../ui/MetricsChart'
 import { Badge } from '../../ui/Badge'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
+import { SecretsStoreMountsSection, type SecretsStoreMountsSectionProps } from './SecretsStoreRenderers'
 import { formatRelativeAgeTime } from '../../../utils/format'
 
 function parseValidDate(dateStr: string): Date | null {
@@ -89,6 +90,8 @@ interface PodRendererProps {
   // Metrics data injection
   metrics?: { containers?: any[]; timestamp?: string }
   metricsHistory?: { metricsAPIReachable?: boolean; containers?: any[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
+  metricsHistoryLoading?: boolean
+  metricsHistoryError?: Error | null
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
   // Filesystem browser render props
@@ -122,6 +125,10 @@ interface PodRendererProps {
    *  `networkAttachmentKey`. Absent when the host didn't wire the lookup, which
    *  leaves the names unlinked. */
   networkAttachmentLookups?: NetworkAttachmentLookups
+  /** Host-read Secrets Store CSI facts for this Pod's namespace. Undefined
+   *  omits the section; the section also renders nothing for a Pod with no
+   *  Secrets Store CSI volumes. */
+  secretsStore?: Omit<SecretsStoreMountsSectionProps, 'pod' | 'onNavigate'>
 }
 
 // ── Env vars section — extracted to use hooks (useState for reveal) ──────────
@@ -292,6 +299,8 @@ export function PodRenderer({
   renderPortAction,
   metrics,
   metricsHistory,
+  metricsHistoryLoading,
+  metricsHistoryError,
   metricsUnavailable,
   hideMetricsServer,
   renderImageBrowser,
@@ -309,6 +318,7 @@ export function PodRenderer({
   policyError,
   namespaceLimitRangeNames,
   networkAttachmentLookups,
+  secretsStore,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
@@ -327,6 +337,7 @@ export function PodRenderer({
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
   const isRunning = data.status?.phase === 'Running'
+  const isTerminal = data.status?.phase === 'Succeeded' || data.status?.phase === 'Failed'
 
   // Check for problems. Suppressed when the detail already shows the dedicated
   // Operational Issues section (the Issues pipeline covers the same pod failures,
@@ -336,9 +347,10 @@ export function PodRenderer({
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
   const notRunning = data.status?.phase === 'Pending' && ![...containerStatuses, ...initContainerStatuses].some((s: any) => s.state?.running)
   const noUsageYet = notRunning && metricsHistory?.metricsAPIReachable === true && !metricsHistory.collectionError && !metricsHistory.containers?.length && !metrics?.containers?.length
-  const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
+  const showMetricsUnavailable = !isTerminal && !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
   const hasMetricsHistory = !!metricsHistory?.containers?.length
-  const currentMetrics = metricsUnavailable ? undefined : metrics
+  const showTerminalUsage = isTerminal && (metricsHistory !== undefined || metricsHistoryLoading || !!metricsHistoryError || !!metrics || metricsUnavailable)
+  const currentMetrics = isTerminal || metricsUnavailable ? undefined : metrics
 
   // Image filesystem modal state
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
@@ -669,20 +681,7 @@ export function PodRenderer({
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>
         <div className="space-y-3">
-          {/* Pod-level budget (spec.resources) is shared by all containers, so it
-              stays its own row rather than being merged into the container rows. */}
-          {(podResources?.requests || podResources?.limits) && (
-            <div className="rounded-[10px] border border-dashed border-theme-border p-3">
-              <div className="flex items-baseline justify-between gap-2 mb-2">
-                <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
-                <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
-              </div>
-              <div className="text-xs text-theme-text-secondary space-y-1">
-                {podResources.requests && <div>Requests: {formatResources(podResources.requests)}</div>}
-                {podResources.limits && <div>Limits: {formatResources(podResources.limits)}</div>}
-              </div>
-            </div>
-          )}
+          <PodAggregateResources resources={podResources} />
           {containers.map((container: any) => {
             const status = containerStatuses.find((s: any) => s.name === container.name)
             const state = status?.state
@@ -880,16 +879,35 @@ export function PodRenderer({
         />
       )}
 
+      {secretsStore && (
+        <SecretsStoreMountsSection pod={data} {...secretsStore} onNavigate={onNavigate} />
+      )}
+
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
+      {!hideMetricsServer && !!(showTerminalUsage || currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
+          {isTerminal && (
+            <div className="mb-3 text-sm text-theme-text-tertiary">
+              Live resource usage has ended for this Pod.{metricsHistory && !hasMetricsHistory && !metricsHistoryLoading && !metricsHistoryError && ' No recorded usage is available.'}
+            </div>
+          )}
+          {isTerminal && metricsHistoryLoading && (
+            <p className="mb-3 text-sm text-theme-text-tertiary">Loading recorded usage...</p>
+          )}
+          {isTerminal && metricsHistoryError && (
+            <AlertBanner
+              variant="warning"
+              title={metricsHistory ? 'Recorded usage could not be refreshed' : 'Recorded usage could not be loaded'}
+              message={metricsHistoryError.message}
+            />
+          )}
           {noUsageYet && <MetricsUnavailableNotice noUsageYet />}
           {showMetricsUnavailable && (
             <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} diagnosis={metricsHistory?.metricsUnavailableDiagnosis} />
           )}
           {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
-              <span className="font-medium">Metrics collection error:</span>{' '}
+              <span className="font-medium">{isTerminal ? 'Current cluster metrics collection error:' : 'Metrics collection error:'}</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>
             </div>
           )}
@@ -979,14 +997,16 @@ export function PodRenderer({
         </Section>
       )}
 
-      {/* Conditions. A completed pod's Ready/ContainersReady flip to False with
-          reason "PodCompleted" — that's expected for a finished pod, not a failure,
-          so tone it neutral (gray) instead of red. Gated on the PodCompleted reason
-          so a genuinely not-ready pod (any other reason) still reads red. */}
+      {/* Sandbox teardown and lost serving readiness are expected after success;
+          custom conditions retain their own meaning. */}
       <ConditionsSection
         conditions={data.status?.conditions}
         getConditionTone={(cond) =>
-          cond?.status === 'False' && cond?.reason === 'PodCompleted' ? 'unknown' : undefined
+          data.status?.phase === 'Succeeded'
+            && cond?.status === 'False'
+            && ['Ready', 'ContainersReady', 'PodReadyToStartContainers'].includes(cond?.type)
+            ? 'unknown'
+            : undefined
         }
       />
 

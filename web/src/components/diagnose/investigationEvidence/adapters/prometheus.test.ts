@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   investigationEvidenceSubjectRef,
   metricsScope,
+  metricsSelectedPod,
   projectInvestigationEvidence,
   type InvestigationEvidenceTarget,
 } from "../index";
@@ -974,7 +975,8 @@ describe("query_prometheus evidence", () => {
     ]);
     expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
     expect(projection.limitations).toHaveLength(1);
-    expect(projection.limitations[0].kind).toBe("truncated");
+    expect(projection.limitations[0].kind).toBe("unknown");
+    expect(projection.limitations[0].presentation).toBeUndefined();
     expect(projection.limitations[0].message).toContain("812 series");
     expect(projection.limitations[0].message).toContain(
       "812 distinct pod values",
@@ -1637,5 +1639,44 @@ describe("query_prometheus evidence", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].observations).toHaveLength(2);
     expect(groups[0].observations[1].changedFromPrevious).toBe(true);
+  });
+});
+
+describe("metricsSelectedPod", () => {
+  const selector = (...matchers: [string, string, string][]) => ({
+    metric: "kube_pod_container_status_restarts_total",
+    matchers: matchers.map(([label, op, value]) => ({ label, op, value })),
+  });
+  it("names the one Pod every selector selects exactly", () => {
+    expect(
+      metricsSelectedPod([
+        selector(["namespace", "=", "shop"], ["pod", "=~", "^(api-0)$"]),
+        selector(["namespace", "=", "shop"], ["pod", "=", "api-0"]),
+      ]),
+    ).toBe("api-0");
+  });
+  it("names no Pod for a set, a pattern, disagreeing selectors or a selector without one", () => {
+    expect(
+      metricsSelectedPod([selector(["pod", "=~", "^(api-0|api-1)$"])]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([selector(["pod", "=~", "api-.*"])]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([selector(["pod", "!=", "api-0"])]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([
+        selector(["pod", "=", "api-0"]),
+        selector(["pod", "=", "api-1"]),
+      ]),
+    ).toBeUndefined();
+    expect(
+      metricsSelectedPod([
+        selector(["pod", "=", "api-0"]),
+        selector(["namespace", "=", "shop"]),
+      ]),
+    ).toBeUndefined();
+    expect(metricsSelectedPod([])).toBeUndefined();
   });
 });

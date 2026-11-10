@@ -24,7 +24,30 @@ function keep(
   label: string,
 ): void {
   const kept = findings.filter((_, index) => relevances[index] !== "broader");
+  const elsewhere = findings.filter(
+    (_, index) => relevances[index] === "broader",
+  );
   const scope = scopeFromArgs(source);
+  // A run with no resource keeps every finding as one broader card, which the
+  // pane withholds unless the agent cites it; without it such a run would
+  // have nothing to cite. A run about a resource keeps the receipt alone, so
+  // a citation of "nothing here concerns this resource" lands on it.
+  const keepElsewhere = () => {
+    if (elsewhere.length === 0 || builder.target.name) return;
+    builder.observe(
+      `posture:${origin}:broader:${source.args ?? scope}`,
+      "posture",
+      source,
+      {
+        tier: evidenceTierForRelevance("context", "broader"),
+        relevance: "broader",
+        tone: "neutral",
+        title: label,
+        summary: `${elsewhere.length} finding${elsewhere.length === 1 ? "" : "s"} · ${scope}`,
+        data: { type: "posture", source: origin, findings: elsewhere, scope },
+      },
+    );
+  };
   if (missing.length > 0) {
     builder.limit(
       source,
@@ -34,7 +57,9 @@ function keep(
     );
   }
   if (kept.length === 0) {
+    keepElsewhere();
     if (!source.confirmedSuccess) return;
+    if (!builder.target.name && elsewhere.length > 0) return;
     builder.observe(
       `posture:${origin}:receipt:${source.args ?? scope}`,
       "receipt",
@@ -43,7 +68,9 @@ function keep(
         tier: evidenceTierForRelevance("checked", "producer-related"),
         relevance: "producer-related",
         tone: "neutral",
-        title: `No ${label.toLowerCase()} on this resource`,
+        title: builder.target.name
+          ? `No ${label.toLowerCase()} on this resource`
+          : `No ${label.toLowerCase()}`,
         summary: scope,
         data: {
           type: "receipt",
@@ -82,6 +109,7 @@ function keep(
       data: { type: "posture", source: origin, findings: kept, scope },
     },
   );
+  keepElsewhere();
 }
 
 function relevanceOf(

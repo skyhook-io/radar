@@ -71,6 +71,17 @@ rbac:
   create: true
   # Additional rules to add to the ClusterRole
   additionalRules: []
+  # Limit Radar to these namespaces. Radar's ServiceAccount and, with
+  # cloud.enabled, the Radar Cloud people, alerts and AI bindings get their usual
+  # roles only in the listed namespaces, so Radar never reads anything outside
+  # them. Cluster-scoped views (Nodes, PersistentVolumes, CRDs) show no access.
+  # Leave it unset for cluster-wide access; an empty list is refused. Set this
+  # at install: narrowing an install that already reported to Radar Cloud does
+  # not remove what Radar Cloud holds. With auth or cloud on, Radar's own
+  # namespace must not be listed.
+  # namespaces:
+  #   - app
+  #   - billing
 
   # Privileged permissions (disabled by default for security)
   # Enable these based on features you need:
@@ -119,6 +130,14 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
+  # Allow reading native ValidatingAdmissionPolicy and
+  # ValidatingAdmissionPolicyBinding resources so the resource browser can show
+  # their declared rules and binding relationships. Auto-enabled when auth is on
+  # (auth.mode != none) or in cloud mode, where every read is re-checked against
+  # the requesting user's own permissions. For no-auth installs this stays
+  # opt-in because policies expose admission-control coverage and gaps.
+  viewAdmissionPolicies: false
+
   # Allow the no-auth in-cluster Radar identity to read kubelet metrics and
   # effective configuration through nodes/proxy for upgrade-impact checks.
   # This exposes node-level runtime and configuration details to anyone who
@@ -126,7 +145,7 @@ rbac:
   # Authenticated users need this permission on their own Kubernetes identity.
   viewNodeRuntime: false
 
-  # Allow pod exec (enables terminal feature)
+  # Allow pod exec (enables terminal feature). disableExec overrides this.
   podExec: false
 
   # Allow pod logs (enables log viewer)
@@ -202,7 +221,7 @@ rbac:
     kuberay: true           # ray.io (RayClusters, RayJobs, RayServices)
     kubeshark: true         # kubeshark.io
     kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
-    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests)
+    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests) + get localqueues/pendingworkloads in visibility.kueue.x-k8s.io (pending position)
     kured: true             # kured.io
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
     lws: true               # leaderworkerset.x-k8s.io
@@ -213,12 +232,14 @@ rbac:
     nimOperator: true       # apps.nvidia.com (NVIDIA NIM: NIMServices, NIMCaches, NIMPipelines)
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
+    flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
     reflector: true         # reflector.v1.k8s.emberstack.com
     reloader: true          # reloader.stakater.com
     sealedSecrets: true     # bitnami.com
-    strimzi: true           # strimzi.io, kafka.strimzi.io
+    secretsStoreCsi: true   # secrets-store.csi.x-k8s.io (Secrets Store CSI Driver: SecretProviderClasses, SecretProviderClassPodStatuses)
+    strimzi: true           # strimzi.io, kafka.strimzi.io, core.strimzi.io (StrimziPodSet only)
     tekton: true            # tekton.dev
     traefik: true           # traefik.io, traefik.containo.us
     trivy: true             # aquasecurity.github.io
@@ -261,6 +282,15 @@ service:
 # Leave empty for root serving or for ingresses that rewrite /radar -> /.
 # Cannot be combined with cloud.enabled — Radar Cloud owns the URL path.
 basePath: ""
+
+# Hostnames that Radar answers when auth.mode is none, besides localhost, IP
+# addresses and Kubernetes Service names (radar, radar.<ns>.svc,
+# radar.<ns>.svc.cluster.local). Requests for other hostnames are refused so a
+# web page cannot reach Radar by rebinding its own hostname to Radar's address.
+# The chart adds <service>.<namespace>, ingress.hosts and httpRoute.hostnames,
+# and the server adds the hosts of trustedOrigins. List others, e.g. a custom cluster domain; *.example.com
+# covers names under a domain. "*" turns the check off.
+allowedHosts: []
 
 # Origins, besides the address Radar is opened at, that may use Radar's API,
 # including changes and pod terminals, e.g. http://radar.internal. Leave empty unless changes fail
@@ -468,6 +498,32 @@ cloud:
   # encrypted but is NOT authenticated (a network attacker could impersonate
   # the hub), so leave false for any hub with a publicly trusted certificate.
   insecureSkipVerify: false
+  # Join a Radar Hub with a shared enrollment key instead of a per-cluster
+  # token. Set hubURL and enrollment.key (or enrollment.existingSecret), and
+  # leave url, token and existingSecret empty: a configured token always wins.
+  # Every Radar installed with the same key shows up in the Hub as its own
+  # cluster, and joins again with the key every time it starts. Requires
+  # replicaCount: 1.
+  # Hub address, e.g. https://hub.example.com. http:// works only for
+  # localhost.
+  hubURL: ""
+  enrollment:
+    # Enrollment key (rhe_...). An owner creates one in Radar Hub under
+    # Settings > Enrollment keys; a self-hosted Hub's install key works too.
+    # Inline for trials; prefer existingSecret so the key stays out of the
+    # Helm release.
+    key: ""
+    existingSecret: ""
+    existingSecretKey: key
+  # Wrap the cluster name Radar picks when clusterName is empty: the API
+  # server host from kube-public/cluster-info, else cluster-<first 8
+  # characters of the kube-system namespace UID>. With clusterName set, that
+  # exact name is used and these are ignored.
+  clusterNamePrefix: ""
+  clusterNameSuffix: ""
+  # With an enrollment key: extra CA certificates (PEM) to trust for a Hub
+  # with a self-signed or private certificate. Radar reads them at startup.
+  caBundle: ""
   # Default ClusterRoleBindings for Radar Cloud identity groups.
   #
   # How it works: Cloud injects X-Forwarded-Groups: radar:<role>,
@@ -586,6 +642,11 @@ usageReporting:
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:
+  # Opt in to exec_pod; requires pods/exec permission (rbac.podExec for Radar
+  # ServiceAccount access).
+  execTools: false
+  # Independent Service HTTP opt-in. Requires services/proxy; does not enable exec.
+  httpTools: false
   # Set to false to disable the MCP server (useful when deployed behind authentication)
   enabled: true
 
@@ -698,6 +759,13 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Turn off pod exec through Radar on this cluster for everyone, Owners included:
+# terminals, debug shells, pod file browsing, CloudNativePG sessions and the MCP
+# exec_pod tool. Wins over rbac.podExec and mcp.execTools, and removes the exec
+# rule from Radar's ServiceAccount. kubectl access is unchanged: Kubernetes RBAC
+# still decides that.
+disableExec: false
 
 # Additional command-line flags appended to the container args, after the ones
 # the chart derives from the values above. Use it for flags the chart does not

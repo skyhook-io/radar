@@ -2,7 +2,6 @@ package cloudinstall
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strconv"
@@ -17,6 +16,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
 
@@ -89,7 +89,13 @@ type DeploymentRuntime struct {
 	CloudTokenConfigured  bool
 	CloudTokenSecretName  string
 	CloudTokenSecretKey   string
-	AlreadyCloud          bool
+	// Enrollment mode: Radar joins with a shared key instead of a configured
+	// token.
+	EnrollmentConfigured bool
+	HubURL               string
+	HubURLConfigured     bool
+	HubURLUnresolved     bool
+	AlreadyCloud         bool
 }
 
 type DiscoveryOptions struct {
@@ -241,6 +247,10 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 	runtime.CloudURL, runtime.CloudURLConfigured = argumentValue(container.Args, "--cloud-url")
 	runtime.ClusterName, runtime.ClusterNameConfigured = argumentValue(container.Args, "--cluster-name")
 	cloudTokenValue, cloudTokenArg := argumentValue(container.Args, "--cloud-token")
+	runtime.HubURL, runtime.HubURLConfigured = argumentValue(container.Args, "--cloud-hub-url")
+	if keyFile, ok := argumentValue(container.Args, "--cloud-enrollment-key-file"); ok && keyFile != "" {
+		runtime.EnrollmentConfigured = true
+	}
 
 	for _, env := range container.Env {
 		switch env.Name {
@@ -263,6 +273,16 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 				runtime.ClusterNameConfigured = env.Value != "" || env.ValueFrom != nil
 				runtime.ClusterNameUnresolved = env.ValueFrom != nil
 			}
+		case "RADAR_CLOUD_HUB_URL":
+			if !runtime.HubURLConfigured {
+				runtime.HubURL = env.Value
+				runtime.HubURLConfigured = env.Value != "" || env.ValueFrom != nil
+				runtime.HubURLUnresolved = env.ValueFrom != nil
+			}
+		case "RADAR_CLOUD_ENROLLMENT_KEY_FILE":
+			if env.Value != "" || env.ValueFrom != nil {
+				runtime.EnrollmentConfigured = true
+			}
 		case "RADAR_CLOUD_TOKEN":
 			runtime.CloudTokenConfigured = env.Value != "" || env.ValueFrom != nil
 			if env.ValueFrom != nil && env.ValueFrom.SecretKeyRef != nil {
@@ -272,7 +292,7 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 		}
 	}
 	runtime.CloudTokenConfigured = runtime.CloudTokenConfigured || (cloudTokenArg && cloudTokenValue != "")
-	runtime.AlreadyCloud = runtime.CloudMode || runtime.CloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured
+	runtime.AlreadyCloud = runtime.CloudMode || runtime.CloudModeUnresolved || runtime.CloudURLConfigured || runtime.ClusterNameConfigured || runtime.CloudTokenConfigured || runtime.EnrollmentConfigured
 	return runtime
 }
 
@@ -422,7 +442,7 @@ func verifyController(ctx context.Context, dc dynamic.Interface, ref subject.Ref
 		obj, err := dc.Resource(gvr).Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 		if err == nil {
 			if ref.Group == "helm.toolkit.fluxcd.io" && ref.Kind == "HelmRelease" {
-				candidate.ReleaseName, candidate.TargetNamespace, candidate.StorageNamespace = fluxHelmTarget(obj)
+				candidate.ReleaseName, candidate.TargetNamespace, candidate.StorageNamespace = gitops.FluxHelmTarget(obj)
 				if releaseName == "" || candidate.ReleaseName != releaseName || candidate.TargetNamespace != targetNamespace {
 					candidate.Verification = ControllerStale
 					candidate.Error = fmt.Sprintf(
@@ -449,40 +469,6 @@ func verifyController(ctx context.Context, dc dynamic.Interface, ref subject.Ref
 
 	candidate.Verification = ControllerStale
 	return candidate
-}
-
-func fluxHelmTarget(obj metav1.Object) (releaseName, targetNamespace, storageNamespace string) {
-	unstructuredObj, ok := obj.(interface{ UnstructuredContent() map[string]any })
-	if !ok {
-		return "", "", ""
-	}
-	spec, _ := unstructuredObj.UnstructuredContent()["spec"].(map[string]any)
-	targetNamespace, _ = spec["targetNamespace"].(string)
-	if targetNamespace == "" {
-		targetNamespace = obj.GetNamespace()
-	}
-	releaseName, _ = spec["releaseName"].(string)
-	if releaseName == "" {
-		if configuredTarget, _ := spec["targetNamespace"].(string); configuredTarget != "" {
-			releaseName = configuredTarget + "-" + obj.GetName()
-		} else {
-			releaseName = obj.GetName()
-		}
-		releaseName = shortenFluxReleaseName(releaseName)
-	}
-	storageNamespace, _ = spec["storageNamespace"].(string)
-	if storageNamespace == "" {
-		storageNamespace = obj.GetNamespace()
-	}
-	return releaseName, targetNamespace, storageNamespace
-}
-
-func shortenFluxReleaseName(name string) string {
-	if len(name) <= 53 {
-		return name
-	}
-	sum := fmt.Sprintf("%x", sha256.Sum256([]byte(name)))
-	return name[:40] + "-" + sum[:12]
 }
 
 func verifyClusterVisibleArgoApplication(ctx context.Context, dc dynamic.Interface, ref subject.Ref, gvrs []schema.GroupVersionResource) ControllerCandidate {
@@ -549,4 +535,10 @@ func controllerGVRs(ref subject.Ref) []schema.GroupVersionResource {
 	default:
 		return nil
 	}
+}
+
+// UsesEnrollment reports a Radar that joins its Hub with an enrollment key
+// rather than a configured token. A configured token wins, as in the binary.
+func (r DeploymentRuntime) UsesEnrollment() bool {
+	return r.EnrollmentConfigured && !r.CloudTokenConfigured
 }

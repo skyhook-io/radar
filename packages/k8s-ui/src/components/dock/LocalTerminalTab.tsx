@@ -8,6 +8,9 @@ import { clsx } from 'clsx'
 import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
 import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
 import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
+import { attachTerminalKeys } from './terminalKeys'
+import { useTerminalSearch } from './useTerminalSearch'
+import { TerminalSearchBar, TerminalSearchButton } from './TerminalSearchBar'
 import { toneTextClass } from '../ui/status-tone'
 
 export interface LocalTerminalSessionInfo {
@@ -57,6 +60,8 @@ export function LocalTerminalTab({
   const [hasSelection, setHasSelection] = useState(false)
   const connectAllowed = canConnect?.() !== false
   const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
+  const search = useTerminalSearch(isActive)
+  const { attach: attachSearch, open: openSearch, restoreFocus } = search
 
   const handleCopy = useCallback(() => {
     if (xtermRef.current) copyTerminalSelection(xtermRef.current)
@@ -85,6 +90,8 @@ export function LocalTerminalTab({
       fontFamily: 'JetBrains Mono, Menlo, Monaco, monospace',
       fontSize: 13,
       lineHeight: 1.2,
+      // Search highlights use xterm's decoration API, which is still marked proposed.
+      allowProposedApi: true,
       theme: {
         background: '#0f172a',
         foreground: '#e2e8f0',
@@ -124,6 +131,8 @@ export function LocalTerminalTab({
       confirmPaste,
       onSelectionChange: setHasSelection,
     })
+    const detachSearch = attachSearch(xterm)
+    attachTerminalKeys(xterm, { onFind: openSearch })
 
     const doFit = (ws?: WebSocket) => {
       const dims = fitAddon.proposeDimensions()
@@ -169,6 +178,7 @@ export function LocalTerminalTab({
     cleanupRef.current = () => {
       resizeObserver.disconnect()
       disposeClipboard()
+      detachSearch()
     }
 
     createSessionRef.current()
@@ -182,7 +192,7 @@ export function LocalTerminalTab({
           setIsConnected(true)
           setIsConnecting(false)
           doFit(ws)
-          xterm.focus()
+          restoreFocus()
           if (initialCommand && !initialCommandSentRef.current) {
             // Small delay to let the shell prompt initialize
             setTimeout(() => {
@@ -241,7 +251,7 @@ export function LocalTerminalTab({
         setError(err instanceof Error ? err.message : 'Failed to connect')
         setIsConnecting(false)
       })
-  }, [])
+  }, [attachSearch, openSearch, restoreFocus])
 
   useEffect(() => {
     connect()
@@ -258,9 +268,9 @@ export function LocalTerminalTab({
     if (isActive && fitAddonRef.current && xtermRef.current) {
       const dims = fitAddonRef.current.proposeDimensions()
       if (dims) xtermRef.current.resize(dims.cols, dims.rows)
-      xtermRef.current.focus()
+      restoreFocus()
     }
-  }, [isActive])
+  }, [isActive, restoreFocus])
 
   return (
     <div className="relative h-full w-full bg-theme-base overflow-hidden">
@@ -287,7 +297,13 @@ export function LocalTerminalTab({
           </button>
         )}
 
-        {!error && <TerminalClipboardToolbar hasSelection={hasSelection} onCopy={handleCopy} />}
+        {!error && (
+          <TerminalClipboardToolbar
+            hasSelection={hasSelection}
+            onCopy={handleCopy}
+            leading={<TerminalSearchButton onClick={openSearch} />}
+          />
+        )}
       </div>
 
       {/* Terminal or error */}
@@ -306,6 +322,7 @@ export function LocalTerminalTab({
           </button>
         </div>
       )}
+      {!error && <TerminalSearchBar search={search} />}
       {pasteDialog}
     </div>
   )

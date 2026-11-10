@@ -110,6 +110,9 @@ func pruneAnnotationsCompact(meta map[string]any) {
 }
 
 func shouldKeepAnnotation(key string) bool {
+	if key == "crossplane.io/paused" {
+		return true
+	}
 	for _, prefix := range keepAnnotationPrefixes {
 		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {
 			return true

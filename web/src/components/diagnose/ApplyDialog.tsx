@@ -8,12 +8,13 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
-import { GitOpsWriteWarning } from "@skyhook-io/k8s-ui";
+import { GitOpsWriteWarning, type GitOpsOwnerRef } from "@skyhook-io/k8s-ui";
 import {
   canConfirmGitOpsWrite,
   gitOpsWriteGuardKey,
   type GitOpsWriteGuard,
 } from "@skyhook-io/k8s-ui/utils/gitops-write-guard";
+import { CrossplaneApplyNotice } from "@skyhook-io/k8s-ui/components/ui/CrossplaneOperationNotice";
 import { parseContextName } from "../../utils/context-name";
 import type { Diagnosis, ApplyMutationOutcome } from "../../api/diagnose";
 import { AIMarkdown, CopyButton } from "./AIMarkdown";
@@ -32,7 +33,9 @@ export function ApplyDialog({
   precondition,
   gitOpsGuard,
   onOpenGitOpsOwner,
+  onOpenGitOpsManager,
   confidence,
+  resourceData,
 }: {
   open: boolean;
   onClose: () => void;
@@ -48,7 +51,9 @@ export function ApplyDialog({
   /** GitOps/Helm write guard for the target; undefined blocks Apply. */
   gitOpsGuard?: GitOpsWriteGuard;
   onOpenGitOpsOwner?: () => void;
+  onOpenGitOpsManager?: (owner: GitOpsOwnerRef) => void;
   confidence?: number;
+  resourceData?: unknown;
 }) {
   const titleId = useId();
   const fixText = fix?.trim();
@@ -144,12 +149,14 @@ export function ApplyDialog({
         )}
       </div>
       <div className="shrink-0 space-y-2 p-4">
+        <CrossplaneApplyNotice resources={[resourceData]} />
         {gitOpsGuard && (
           <GitOpsWriteWarning
             guard={gitOpsGuard}
             acknowledged={acked}
             onAcknowledgedChange={(value) => setAckedKey(value ? guardKey : "")}
             onOpenOwner={onOpenGitOpsOwner}
+            onOpenManager={onOpenGitOpsManager}
           />
         )}
         {lowConfidence && (

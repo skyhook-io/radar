@@ -112,6 +112,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         onSelectedKindChange={selectKind}
         apiResources={apiResources}
         resourceCounts={counts?.counts}
+        resourceCoverage={counts?.coverage}
         resourceForbidden={counts?.forbidden}
         resourceUnavailable={counts?.unavailable}
         pinned={pinned}

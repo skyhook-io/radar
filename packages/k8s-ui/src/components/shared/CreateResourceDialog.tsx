@@ -9,6 +9,8 @@ import {
   YamlReview,
   type YamlPreviewResult,
 } from '../ui/YamlReview'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { CrossplaneYamlApplyNotice } from '../ui/CrossplaneOperationNotice'
 import { Tooltip } from '../ui/Tooltip'
 import { formatApplyError } from '../../utils/k8s-errors'
 import {
@@ -84,6 +86,7 @@ export function CreateResourceDialog({
 }: CreateResourceDialogProps) {
   const titleId = useId()
   const [yaml, setYaml] = useState(initialYaml)
+  const pauseContextYaml = useDebouncedValue(onPreview ? '' : yaml, 200)
   const [mode, setMode] = useState<'apply' | 'create'>(initialMode)
   const [dryRun, setDryRun] = useState(false)
   const [force, setForce] = useState(false)
@@ -401,6 +404,7 @@ export function CreateResourceDialog({
         <YamlReview
           titleId={titleId}
           submittedYaml={preview.yaml}
+          mode={preview.mode}
           documents={preview.documents}
           nonAtomic={preview.nonAtomic}
           force={preview.force}
@@ -493,6 +497,7 @@ export function CreateResourceDialog({
             </div>
           </div>
 
+          {!onPreview && <div className="px-4"><CrossplaneYamlApplyNotice yaml={pauseContextYaml} baselineUnavailable={mode === 'apply'} /></div>}
           {(error || previewError || partialCreates.length > 0) && (
             <ApplyErrorBanner error={error || previewError || 'Resources were created before the previous attempt stopped.'} partialCreates={partialCreates} strictCreate={lockMode && mode === 'create'} hasPreview={Boolean(onPreview)} />
           )}

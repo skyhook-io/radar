@@ -1,0 +1,77 @@
+# Synthetic, writer-derived: KServe v0.20.0 Knative (Serverless) mode, predictor with
+# canaryTrafficPercent: 10 whose new revision failed to load while the previously
+# rolled-out revision keeps the configured traffic. Shapes follow
+# pkg/apis/serving/v1beta1/inference_service_status.go PropagateStatus (component
+# revisions + Knative serviceStatus.Traffic) and ksvc_reconciler.go (latest/prev tags).
+# Not captured from a cluster: no Knative-mode KServe controller was available.
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: fraud-model
+  namespace: ml-serving
+  generation: 3
+spec:
+  predictor:
+    canaryTrafficPercent: 10
+    model:
+      modelFormat:
+        name: sklearn
+      storageUri: gs://example-bucket/models/fraud/2.0
+status:
+  observedGeneration: 2
+  url: http://fraud-model.ml-serving.example.com
+  address:
+    url: http://fraud-model.ml-serving.svc.cluster.local
+  deploymentMode: Serverless
+  clusterServingRuntimeName: kserve-sklearnserver
+  conditions:
+  - type: IngressReady
+    status: "True"
+  - type: LatestDeploymentReady
+    status: "False"
+    reason: RevisionFailed
+    message: 'Revision "fraud-model-predictor-00002" failed with message: Container failed with: storage initializer error.'
+  - type: PredictorConfigurationReady
+    status: "False"
+    reason: RevisionFailed
+  - type: PredictorReady
+    status: "False"
+    reason: RevisionFailed
+  - type: PredictorRouteReady
+    status: "True"
+  - type: Ready
+    status: "False"
+    reason: RevisionFailed
+  - type: RoutesReady
+    status: "True"
+  components:
+    predictor:
+      latestCreatedRevision: fraud-model-predictor-00002
+      latestReadyRevision: fraud-model-predictor-00001
+      latestRolledoutRevision: fraud-model-predictor-00001
+      url: http://fraud-model-predictor.ml-serving.example.com
+      restUrl: http://fraud-model-predictor.ml-serving.example.com
+      address:
+        url: http://fraud-model-predictor.ml-serving.svc.cluster.local
+      traffic:
+      - latestRevision: true
+        percent: 10
+        revisionName: fraud-model-predictor-00001
+        tag: latest
+        url: http://latest-fraud-model-predictor.ml-serving.example.com
+      - latestRevision: false
+        percent: 90
+        revisionName: fraud-model-predictor-00001
+        tag: prev
+        url: http://prev-fraud-model-predictor.ml-serving.example.com
+  modelStatus:
+    transitionStatus: BlockedByFailedLoad
+    states:
+      activeModelState: Loaded
+      targetModelState: FailedToLoad
+    lastFailureInfo:
+      reason: ModelLoadFailed
+      exitCode: 1
+      message: 'storage initializer: object gs://example-bucket/models/fraud/2.0 not found'
+    copies:
+      failedCopies: 0

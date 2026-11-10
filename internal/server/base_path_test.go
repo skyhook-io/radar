@@ -260,7 +260,7 @@ func TestBasePathRedirectsStaySameOrigin(t *testing.T) {
 // r.URL.Path prefixed and the auth middleware treats paths outside /api, /mcp
 // and /debug as public static content, so any prefix left in place by the time
 // the middleware runs makes every endpoint read as public — including the
-// /debug/pprof heap dump of the whole informer cache.
+// /debug/pprof process diagnostics.
 func TestBasePathDoesNotBypassAuth(t *testing.T) {
 	protected := []string{"/api/config", "/api/resources/pods", "/debug/pprof/heap", "/api/auth/whoami"}
 

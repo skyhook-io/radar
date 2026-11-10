@@ -69,7 +69,7 @@ func TestImageInspectorCredentialIsolation(t *testing.T) {
 			}
 			transport := &imageRegistryTransport{manifest: manifest, wantAuth: expectedAuth}
 			remote.DefaultTransport = transport
-			_, _, err := (&Inspector{}).fetchImageBruteForce(context.Background(), InspectRequest{Image: "gcr.io/project/app:v1", Namespace: "team", PullSecretNames: []string{"other-secret"}, keychain: tc.keychain})
+			_, _, _, err := (&Inspector{}).fetchImageBruteForce(context.Background(), InspectRequest{Image: "gcr.io/project/app:v1", Namespace: "team", PullSecretNames: []string{"other-secret"}, keychain: tc.keychain})
 			if (err == nil) != tc.succeeds {
 				t.Fatalf("fetch success=%v, want %v: %v", err == nil, tc.succeeds, err)
 			}
@@ -94,7 +94,7 @@ func TestImageInspectorCredentialIsolation(t *testing.T) {
 		google.Keychain = imageAnonymousKeychain{resolve: func() { googleCalls++ }}
 		transport := &imageRegistryTransport{manifest: manifest, wantAuth: "Basic " + base64.StdEncoding.EncodeToString([]byte("ambient:secret"))}
 		remote.DefaultTransport = transport
-		_, _, err := (&Inspector{}).fetchImageBruteForce(context.Background(), InspectRequest{Image: "gcr.io/project/app:v1"})
+		_, _, _, err := (&Inspector{}).fetchImageBruteForce(context.Background(), InspectRequest{Image: "gcr.io/project/app:v1"})
 		if err != nil || googleCalls != 1 {
 			t.Fatalf("local fetch err=%v, Google keychain calls=%d", err, googleCalls)
 		}

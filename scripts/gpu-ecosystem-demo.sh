@@ -340,7 +340,7 @@ cmd_verify_radar() {
   while IFS=$'\t' read -r logical group plural kind scope version scenario url; do
     ready=false
     for _ in $(seq 1 30); do
-      if response="$(curl -fsS "http://127.0.0.1:${RADAR_PORT}/api/resources/${plural}?group=${group}" 2>/dev/null)" && \
+      if response="$(curl -fsS "http://127.0.0.1:${RADAR_PORT}/api/resources/${plural}?group=${group}" 2>/dev/null | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')" && \
         jq -e --arg g "${group}" 'type == "array" and length > 0 and all(.[]; (.apiVersion | split("/")[0]) == $g)' <<<"${response}" >/dev/null; then
         ready=true
         break
@@ -351,7 +351,7 @@ cmd_verify_radar() {
     [ "${ready}" = "true" ] || fail "Radar did not return group-pure ${plural}.${group} objects within 30s"
   done < <(registry_rows)
 
-  response="$(curl -fsS "http://127.0.0.1:${RADAR_PORT}/api/resources/jobs?group=batch")"
+  response="$(curl -fsS "http://127.0.0.1:${RADAR_PORT}/api/resources/jobs?group=batch" | jq -ce 'if .coverage.status == "complete" then .items else error("Radar resource read is incomplete") end')"
   jq -e 'length > 0 and all(.[]; (.apiVersion // "batch/v1") == "batch/v1") and any(.[]; .metadata.name == "collision-demo")' \
     <<<"${response}" >/dev/null || fail "Radar did not keep the core batch/v1 Job collision fixture separate"
   kill "${pid}" >/dev/null 2>&1 || true

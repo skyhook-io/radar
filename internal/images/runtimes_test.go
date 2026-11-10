@@ -105,9 +105,55 @@ func TestClassifyFix(t *testing.T) {
 		{"8.3.38", []string{"8.3.36", "8.3.40"}, FixAtOrAbove, "8.3.36"},
 	}
 	for _, tc := range cases {
-		got, against := ClassifyFix(tc.version, tc.fixedIn)
+		got, against := ClassifyFix("php", tc.version, tc.fixedIn)
 		if got != tc.want || against != tc.against {
 			t.Errorf("ClassifyFix(%q, %v) = %s against %q, want %s against %q", tc.version, tc.fixedIn, got, against, tc.want, tc.against)
+		}
+	}
+}
+
+func TestClassifyFix_ReleaseLines(t *testing.T) {
+	node := []string{"22.23.4", "24.22.1", "26.12.1"}
+	cases := []struct {
+		runtime string
+		version string
+		fixedIn []string
+		want    string
+		against string
+	}{
+		{"node", "22.12.0", node, FixBelow, "22.23.4"},
+		{"node", "24.11.0", node, FixBelow, "24.22.1"},
+		{"node", "26.3.0", node, FixBelow, "26.12.1"},
+		{"node", "22.23.3", node, FixBelow, "22.23.4"},
+		{"node", "22.23.4-rc.1", node, FixBelow, "22.23.4"},
+		{"node", "v22.12.0", node, FixBelow, "22.23.4"},
+		{"node", "22.23.4", node, FixAtOrAbove, "22.23.4"},
+		{"node", "22.24.0", node, FixAtOrAbove, "22.23.4"},
+		{"node", "22.23.5-rc.1", node, FixAtOrAbove, "22.23.4"},
+		{"node", "22.24.0-rc.1", node, FixUnparsed, "22.23.4"},
+		{"node", "26.12.1", node, FixAtOrAbove, "26.12.1"},
+		{"node", "20.18.0", node, FixBranchUnknown, ""},
+		{"node", "25.1.0", node, FixBranchUnknown, ""},
+		{"node", "22", node, FixUnparsed, "22.23.4"},
+		{"rust", "1.80.0", []string{"1.82.0"}, FixBelow, "1.82.0"},
+		{"rust", "1.82.0-beta.3", []string{"1.82.0"}, FixBelow, "1.82.0"},
+		{"rust", "1.82.0", []string{"1.82.0"}, FixAtOrAbove, "1.82.0"},
+		{"rust", "1.83.1", []string{"1.82.0"}, FixAtOrAbove, "1.82.0"},
+		{"rust", "1.83.0-beta.1", []string{"1.82.0"}, FixUnparsed, "1.82.0"},
+		{"rust", "1.83.0-nightly", []string{"1.82.0"}, FixUnparsed, "1.82.0"},
+		{"rust", "1.77.1", []string{"1.78.0", "1.77.2"}, FixBelow, "1.77.2"},
+		{"rust", "1.77.2", []string{"1.78.0", "1.77.2"}, FixAtOrAbove, "1.77.2"},
+		// Every other runtime keeps all-but-last-component branches.
+		{"python", "3.12.4", []string{"3.12.7", "3.13.1"}, FixBelow, "3.12.7"},
+		{"python", "3.11.9", []string{"3.12.7", "3.13.1"}, FixBranchUnknown, ""},
+		{"go", "1.22.5", []string{"1.23.4"}, FixBranchUnknown, ""},
+		{"php", "8.3.36-rc.1", []string{"8.3.36"}, FixBelow, "8.3.36"},
+		{"postgres", "16.4", []string{"17.6"}, FixBranchUnknown, ""},
+	}
+	for _, tc := range cases {
+		got, against := ClassifyFix(tc.runtime, tc.version, tc.fixedIn)
+		if got != tc.want || against != tc.against {
+			t.Errorf("ClassifyFix(%q, %q, %v) = %s against %q, want %s against %q", tc.runtime, tc.version, tc.fixedIn, got, against, tc.want, tc.against)
 		}
 	}
 }
