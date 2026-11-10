@@ -322,6 +322,29 @@ func TestRollbackPausedDeploymentIsRefused(t *testing.T) {
 	}
 }
 
+func TestRestartPausedDeploymentIsRefused(t *testing.T) {
+	client := newAppsClient(
+		deploymentObject(podTemplateV2(), nil, func(o map[string]any) { o["spec"].(map[string]any)["paused"] = true }),
+	)
+	err := NewWorkloadManager(client, appsDiscovery()).RestartWorkload(context.Background(), "Deployment", "prod", "web")
+	if !errors.Is(err, ErrRestartPaused) {
+		t.Fatalf("want ErrRestartPaused, got %v", err)
+	}
+	if n := len(patchActions(client)); n != 0 {
+		t.Fatalf("issued %d patches for a paused Deployment", n)
+	}
+}
+
+func TestRestartRunningDeploymentPatchesTemplate(t *testing.T) {
+	client := newAppsClient(deploymentObject(podTemplateV2(), nil, nil))
+	if err := NewWorkloadManager(client, appsDiscovery()).RestartWorkload(context.Background(), "Deployment", "prod", "web"); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if n := len(patchActions(client)); n != 1 {
+		t.Fatalf("issued %d patches, want 1", n)
+	}
+}
+
 func controllerRevisionObject(owner, ownerKind, name string, revision int64, template map[string]any) *unstructured.Unstructured {
 	data := runtime.DeepCopyJSON(template)
 	data["$patch"] = "replace"

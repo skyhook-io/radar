@@ -260,3 +260,13 @@ func TestRollbackResult(t *testing.T) {
 		t.Fatalf("success result = %v, %v", resp, err)
 	}
 }
+
+func TestRestartFailureNamesResumeForAPausedDeployment(t *testing.T) {
+	paused := fmt.Errorf("Deployment ns/web: %w", k8score.ErrRestartPaused)
+	if err := restartFailure(paused); !errors.Is(err, k8score.ErrRestartPaused) || !strings.Contains(err.Error(), "action=resume") {
+		t.Fatalf("paused restart error = %v, want a failure that names action=resume", err)
+	}
+	if err := restartFailure(errors.New("forbidden")); strings.Contains(err.Error(), "action=resume") {
+		t.Fatalf("other restart error = %v, should not point at resume", err)
+	}
+}
