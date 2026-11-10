@@ -911,6 +911,31 @@ func TestHandleCallback_Matrix(t *testing.T) {
 		{name: "groups prefix keeps reserved-looking group out of system:", alg: oidc.RS256, cfg: Config{OIDCGroupsPrefix: "oidc:"}, setup: func(f *fakeIDP) {
 			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","exp":%d,"groups":["system:masters"]}`, f.issuer, future)
 		}, wantStatus: http.StatusFound, wantUser: "a@b.com", wantGroups: []string{"oidc:system:masters"}},
+		{name: "configured username claim", alg: oidc.RS256, cfg: Config{OIDCUsernameClaim: "upn"}, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","sub":"s1","upn":"alice@corp","exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusFound, wantUser: "alice@corp"},
+		{name: "configured username claim with prefix", alg: oidc.RS256, cfg: Config{OIDCUsernameClaim: "sub", OIDCUsernamePrefix: "oidc:"},
+			wantStatus: http.StatusFound, wantUser: "oidc:alice"},
+		{name: "configured username claim missing does not fall back", alg: oidc.RS256, cfg: Config{OIDCUsernameClaim: "upn"},
+			wantStatus: http.StatusBadRequest},
+		{name: "configured username claim not a string", alg: oidc.RS256, cfg: Config{OIDCUsernameClaim: "upn"}, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","upn":["x"],"exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusBadRequest},
+		{name: "unverified email refused", alg: oidc.RS256, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","email_verified":false,"sub":"s1","exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusForbidden},
+		{name: "unverified email refused when email claim is configured", alg: oidc.RS256, cfg: Config{OIDCUsernameClaim: "email"}, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","email_verified":false,"exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusForbidden},
+		{name: "verified email accepted", alg: oidc.RS256, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","email_verified":true,"exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusFound, wantUser: "a@b.com"},
+		{name: "email_verified not a boolean", alg: oidc.RS256, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","email_verified":"true","exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusBadRequest},
+		{name: "unverified email ignored when username comes from sub", alg: oidc.RS256, cfg: Config{OIDCUsernameClaim: "sub"}, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","email_verified":false,"sub":"s1","exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusFound, wantUser: "s1"},
 	}
 
 	for _, tc := range tests {

@@ -12,12 +12,14 @@ import { PortForwardInlineButton } from '../portforward/PortForwardButton'
 import { useAvailablePorts } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
-import { pluralize } from '@skyhook-io/k8s-ui'
+import { pluralize, getExecContainerNames } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 
 interface OwnedResourcesProps {
   resources: HelmOwnedResource[]
   onNavigate?: NavigateToResource
+  /** Follows the count, saying what the list claims about these resources. */
+  summaryLabel?: string
 }
 
 function getIconForKind(kind: string) {
@@ -69,7 +71,7 @@ function computeHealthSummary(resources: HelmOwnedResource[]) {
   return { healthy, warning, error, unknown, total: resources.length }
 }
 
-export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
+export function OwnedResources({ resources, onNavigate, summaryLabel = 'created by this release' }: OwnedResourcesProps) {
   const [healthFilter, setHealthFilter] = useState<HealthFilter>('all')
 
   if (!resources || resources.length === 0) {
@@ -100,7 +102,7 @@ export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
       <div className="flex items-center justify-between">
         <div className="text-sm text-theme-text-secondary">
           {healthFilter === 'all' ? (
-            <>{pluralize(resources.length, 'resource')} created by this release</>
+            <>{pluralize(resources.length, 'resource')} {summaryLabel}</>
           ) : (
             <span className="flex items-center gap-2">
               Showing {filteredResources.length} of {resources.length} resources
@@ -358,7 +360,7 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
           namespace,
           podName,
           containerName: containers[0].name,
-          containers: containers.map((c: { name: string }) => c.name),
+          containers: getExecContainerNames(data.resource),
         })
       }
     } catch (error) {

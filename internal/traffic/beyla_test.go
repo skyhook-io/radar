@@ -1625,7 +1625,7 @@ func TestQueryL7DetailCombinesReplicasOnOnePort(t *testing.T) {
 		return emptyResult(), nil
 	}
 
-	latency, errors := src.queryL7Detail(context.Background(), FlowOptions{})
+	latency, errors, _ := src.queryL7Detail(context.Background(), FlowOptions{})
 	key := dstPortKey{"demo", "web", 80}
 
 	got, ok := errors.perPort[key]
@@ -1801,5 +1801,53 @@ func TestGetFlowsRatesAndScalesOverTheRequestedWindow(t *testing.T) {
 	// 10 B/s across an hour, not across the old fixed 300 seconds.
 	if got := resp.Flows[0].BytesSent; got != 36000 {
 		t.Errorf("bytes must be scaled by the requested window: got %d, want 36000", got)
+	}
+}
+
+func TestBeylaSource_GetFlows_FailedEnrichmentIsReportedNotZeroed(t *testing.T) {
+	isL7Rate := func(q string) bool {
+		return strings.Contains(q, beylaL7Metric) && !strings.Contains(q, "_sum") && !strings.Contains(q, `=~"5.."`)
+	}
+	for _, tc := range []struct {
+		name  string
+		fails func(query string) bool
+		want  string
+	}{
+		{"request rates", isL7Rate, "HTTP request rates"},
+		{"latency", func(q string) bool { return strings.Contains(q, "http_server_request_duration_seconds_sum") }, "HTTP latency"},
+		{"5xx", func(q string) bool { return strings.Contains(q, `http_response_status_code=~"5.."`) }, "HTTP 5xx error rates"},
+		{"received bytes", func(q string) bool { return strings.Contains(q, `direction="response"`) }, "received bytes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+			src.queryFn = func(_ context.Context, query string) (*prom.QueryResult, error) {
+				if tc.fails(query) {
+					return nil, fmt.Errorf("query timed out")
+				}
+				if strings.Contains(query, `direction="unknown"`) {
+					return emptyResult(), nil
+				}
+				if strings.Contains(query, "beyla_network_flow_bytes_total") && !strings.Contains(query, `direction="response"`) {
+					return promResult("vector", promSeries(map[string]string{
+						"k8s_src_owner_name": "frontend", "k8s_src_namespace": "web",
+						"k8s_dst_owner_name": "backend", "k8s_dst_namespace": "api",
+						"dst_port": "8080", "transport": "TCP",
+					}, 10.0)), nil
+				}
+				return emptyResult(), nil
+			}
+
+			resp, err := src.GetFlows(context.Background(), FlowOptions{})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(resp.Flows) != 1 {
+				t.Fatalf("the L4 edge must still be returned, got %d flows", len(resp.Flows))
+			}
+			if !strings.Contains(resp.Warning, tc.want) {
+				t.Errorf("warning = %q, want it to name %q", resp.Warning, tc.want)
+			}
+			assertEq(t, "warningKind", resp.WarningKind, WarningPartial)
+		})
 	}
 }

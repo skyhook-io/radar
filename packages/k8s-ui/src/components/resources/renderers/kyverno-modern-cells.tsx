@@ -71,7 +71,7 @@ export function KyvernoModernPolicyCell({ resource, column }: { resource: any; c
           </span>
         )
       }
-      return <span className="text-sm text-theme-text-secondary">{formatAge(last)} ago</span>
+      return <span className="text-sm text-theme-text-secondary">{formatAge(last)}</span>
     }
     case 'schedule': {
       const schedule = getKyvernoSchedule(resource)

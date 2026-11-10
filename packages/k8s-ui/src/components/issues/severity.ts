@@ -57,6 +57,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   unschedulable: "Can't be scheduled",
   quota_exceeded: 'Quota exceeded',
   admission_webhook_blocking: 'Admission blocked',
+  queue_admission_blocked: 'Queue admission blocked',
   image_pull_failed: 'Image pull failed',
   container_waiting: 'Container waiting',
   init_container_failed: 'Init container failed',
@@ -66,17 +67,19 @@ const CATEGORY_LABEL: Record<string, string> = {
   readiness_failed: 'Not ready for traffic',
   workload_degraded: 'Workload degraded',
   high_restart: 'High restart count',
+  pod_evicted: 'Pod evicted',
   missing_config_ref: 'Missing reference',
   pdb_blocks_evictions: 'Evictions blocked',
   secret_sync_failed: 'Secret sync failed',
   service_no_endpoints: 'No endpoints',
+  service_mixed_backends: 'Mixed Service backends',
   ingress_backend_missing: 'Ingress backend missing',
   ingress_class_missing: 'Ingress class missing',
   load_balancer_pending: 'Load balancer pending',
   gateway_not_ready: 'Gateway not ready',
   gateway_route_invalid: 'Gateway route invalid',
   dns_failure: 'DNS failure',
-  network_policy_block: 'Network policy block',
+  network_policy_denied: 'Traffic denied by NetworkPolicy',
   pvc_pending: 'PVC pending',
   pvc_lost: 'PVC lost',
   pv_failed: 'PV failed',
@@ -87,11 +90,13 @@ const CATEGORY_LABEL: Record<string, string> = {
   backup_target_unavailable: 'Backup target unavailable',
   backup_stalled: 'Backup not progressing',
   job_failed: 'Job failed',
-  cronjob_failed: 'CronJob failed',
+  cronjob_failed: 'CronJob needs attention',
+  batch_run_stopped: 'Run stopped by Kueue',
   rollout_stalled: 'Rollout stalled',
   hpa_limited_or_failed: 'Autoscaling limited',
   rbac_forbidden: 'Permission denied',
   certificate_not_ready: 'Certificate not ready',
+  certificate_renewal_failed: 'Certificate renewal failed',
   pod_security_violation: 'Pod Security blocked',
   node_not_ready: 'Node not ready',
   node_provisioning_failed: 'Node provisioning failed',
@@ -99,6 +104,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   crossplane_reconcile_failed: 'Crossplane reconcile failed',
   termination_stuck: 'Stuck terminating',
   operator_condition_failed: 'Controller reports a problem',
+  gitops_resource_warning: 'GitOps resource warning',
   gitops_sync_failed: 'GitOps sync failed',
   gitops_render_failed: 'GitOps render failed',
   gitops_spec_invalid: 'GitOps spec invalid',
@@ -134,6 +140,45 @@ function humanize(raw: string): string {
 
 export function categoryLabel(category: string): string {
   return CATEGORY_LABEL[category] ?? humanize(category);
+}
+
+// Reasons filed under a category whose label names a different operation:
+// CNPG archiving and an unanswered scheduled run sit under backup_failed.
+const REASON_TITLE: Record<string, string> = {
+  NodeCertificateExpiry: 'Node certificates need attention',
+  FlaggerCanaryFailed: "Canary rollout failed",
+  InvalidSchedule: 'Scheduling error reported',
+  UnparseableSchedule: 'Scheduling error reported',
+  UnParseableCronJobSchedule: 'Scheduling error reported',
+  UnknownTimeZone: 'Time zone error reported',
+  MissSchedule: 'Missed schedule reported',
+  TooManyMissedTimes: 'Missed schedules reported',
+  CNPGWALArchivingFailing: "WAL archiving failing",
+  CNPGLastBackupFailed: "Latest backup failed",
+  CNPGScheduleDestinationMissing: "Backup schedule has no destination",
+  CNPGInstanceReadinessMismatch: "Instance Pods contradict Cluster readiness",
+  CNPGPrimaryLabelMismatch: "Primary Pod label contradicts Cluster status",
+  CNPGScheduledRunNoBackup: "No successful backup since a scheduled run",
+  KueueAdmissionCheckRejected: 'Admission check rejected the run',
+  KueueClusterQueueInactive: 'ClusterQueue admits nothing',
+  KueueClusterQueueMissing: 'ClusterQueue missing',
+  KueueLocalQueueMissing: 'LocalQueue missing',
+  KueueRequeuingLimitExceeded: 'Kueue stopped retrying the run',
+  KueueMaximumExecutionTimeExceeded: 'Run hit its maximum execution time',
+  KueueDeactivatedByKueue: 'Kueue withdrew the run',
+  KueueResourceUnavailable: 'Queue offers no quota for a requested resource',
+  KueueNamespaceNotEligible: "Queue doesn't admit this namespace",
+  KueueInvalidWorkload: "Kueue can't admit the run's spec",
+};
+
+/** The title a reason has wherever it is shown, when its category's label would name the wrong operation. */
+export function issueReasonTitle(reason: string | undefined): string | undefined {
+  return reason ? REASON_TITLE[reason] : undefined;
+}
+
+/** An issue row's title: its category, unless the reason names it better. */
+export function issueTitle(issue: { category: string; reason?: string }): string {
+  return issueReasonTitle(issue.reason) || categoryLabel(issue.category);
 }
 
 export function groupLabel(group: string): string {

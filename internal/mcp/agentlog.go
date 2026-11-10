@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -117,22 +118,48 @@ func extractKindNamespace(input any) (kind string, ns string) {
 // The dev log preserves the colored, terminal-friendly behavior radar already
 // had; the structured line is the machine-readable companion that downstream
 // tooling parses for response-size and latency data.
+//
+// An error carrying a read reason is returned as a tool result with
+// structuredContent (see readErrorResult) after it is logged; every other
+// error keeps the SDK's text-only tool error.
 func logToolCall[In any](
 	name string,
 	handler func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error),
 ) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
-		args, _ := json.Marshal(input)
-		log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m %s", name, string(args))
+		sensitive := name == "exec_pod" || name == "manage_helm" || name == "get_helm_chart" || name == "curl_service"
+		if sensitive {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m", name)
+		} else {
+			loggedInput := any(input)
+			if deletion, ok := loggedInput.(deleteResourceInput); ok {
+				deletion.Confirm = ""
+				loggedInput = deletion
+			}
+			args, _ := json.Marshal(loggedInput)
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m %s", name, string(args))
+		}
 
 		start := time.Now()
 		result, extra, err := handler(ctx, req, input)
 		dur := time.Since(start)
+		toolErr := err
+		if toolErr == nil && result != nil && result.IsError {
+			toolErr = errors.New("tool returned an error result")
+		}
 
-		if err != nil {
-			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), err)
+		if toolErr != nil && sensitive {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s)", name, dur.Round(time.Millisecond))
+		} else if toolErr != nil {
+			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), toolErr)
+			if cause := collectorCause(err); cause != nil {
+				log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m collector response: %v", name, cause)
+			}
 		} else {
 			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[32mOK\033[0m (%s)", name, dur.Round(time.Millisecond))
+		}
+		if structured, ok := readErrorResult(err); ok {
+			result, extra, err = structured, nil, nil
 		}
 
 		bytes := resultBytes(result)
@@ -145,7 +172,7 @@ func logToolCall[In any](
 			ContextTier: "none",
 			Kind:        kind,
 			Namespace:   ns,
-			Err:         err,
+			Err:         toolErr,
 		})
 
 		return result, extra, err

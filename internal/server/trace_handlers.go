@@ -7,15 +7,14 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/trace"
 )
 
 // traceNamespaceCeiling returns the caller's RBAC-allowed namespaces (nil =
-// unrestricted). A trace subject is directly addressed, so gating it on the
-// in-app namespace VIEW pick (parseNamespacesForUser's fallback) was wrong
-// twice over: page navigation races the pick save, so a freshly-opened detail
-// page read the previous page's pick and claimed "RBAC denies access" on a
-// fully readable resource; and the pick redacted cross-namespace fan-out (a
+// unrestricted). A trace subject is directly addressed, so a namespace view
+// filter must never gate it: it would claim "RBAC denies access" on a fully
+// readable resource outside the view, and redact cross-namespace fan-out (a
 // parent Gateway living in its own namespace) the caller is allowed to see.
 // Mirror preflightResourceGet: RBAC only. ForceNamespaceScope still wins -
 // in that mode nothing outside the target namespace may be served.
@@ -50,7 +49,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	// Mirror handleAuditResource: when the user has no namespace access
 	// (RBAC trims the set to empty), return an unknown-verdict trace
 	// instead of leaking that the resource even exists.
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, &trace.Trace{
 			Subject:    trace.ResourceRef{Kind: kind, Namespace: namespace, Name: name},
 			Downstream: []trace.Hop{},
@@ -78,6 +77,13 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		Dynamic:   k8s.GetDynamicResourceCache(),
 		Discovery: k8s.GetResourceDiscovery(),
 		Issues:    issues.NewCacheProvider(),
+		IssueAccess: trace.IssueAccess{
+			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadRelated:       s.issueRelatedResourceAccess(r),
+			CanReadSubject:       s.issueSubjectAccess(r),
+			CanReadEvidence:      s.issueEvidenceAccess(r),
+		},
+		CanReadWorkload: s.workloadReadAccess(r),
 		// Probes call services/proxy + pods/proxy on this client. Use the
 		// per-request impersonated identity (or the SA when auth is disabled)
 		// so the apiserver enforces the caller's RBAC on the proxy verbs -
@@ -92,7 +98,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		// leak Service config + pod IPs + findings the handler did not
 		// authorize. A nil list means single-user / auth-disabled, where
 		// every namespace is in scope; the non-nil empty (no access) case
-		// is handled above by noNamespaceAccess before we reach here.
+		// is handled above by readscope.NoNamespaceAccess before we reach here.
 		AllowedNamespaces: namespaces,
 	}
 	opts := trace.Options{

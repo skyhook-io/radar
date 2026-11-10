@@ -4,10 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/skyhook-io/radar/internal/k8s"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"net/http"
 	"testing"
 	"time"
@@ -15,11 +11,15 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -120,6 +120,11 @@ func TestKueueAdmissionPermissionFilteredRefsAndUnsupportedEvidence(t *testing.T
 		t.Fatalf("list-only should retain identity but withhold get detail: %+v", entry)
 	}
 	w.SetAPIVersion("kueue.x-k8s.io/v1beta1")
+	got = kueueAdmissionForRoot(context.Background(), root, []*unstructured.Unstructured{w}, nil)
+	if got.Total != 1 || got.Workloads[0].Projection != "available" || got.Workloads[0].Scheduling.Observations[0].Kueue.Admission == nil {
+		t.Fatalf("v1beta1 Workload lost its projection: %+v", got)
+	}
+	w.SetAPIVersion("kueue.x-k8s.io/v1alpha1")
 	got = kueueAdmissionForRoot(context.Background(), root, []*unstructured.Unstructured{w}, nil)
 	if got.Total != 1 || got.Workloads[0].Projection != "unsupported" {
 		t.Fatalf("unsupported version is not absence: %+v", got)

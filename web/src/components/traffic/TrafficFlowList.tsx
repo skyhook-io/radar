@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Virtuoso } from 'react-virtuoso'
 import type { TrafficFlow, TrafficEndpoint } from '../../types'
 import { clsx } from 'clsx'
+import { dedupeHTTPPairs } from './trafficFilters'
 import { ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { pluralize, StatusDot } from '@skyhook-io/k8s-ui'
@@ -53,9 +54,11 @@ type SortDir = 'asc' | 'desc'
 
 interface TrafficFlowListProps {
   flows: TrafficFlow[]
+  /** The server said its L7 responses run caller → callee; see dedupeHTTPPairs. */
+  responsesCallerOriented: boolean
 }
 
-export function TrafficFlowList({ flows }: TrafficFlowListProps) {
+export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowListProps) {
   const [search] = useFlowSearch()
   const [sortField, setSortField] = useState<SortField>('time')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -70,26 +73,7 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
     }
   }
 
-  // Deduplicate HTTP REQUEST/RESPONSE pairs: prefer RESPONSE (has status + latency).
-  // Keep orphan REQUESTs (no matching RESPONSE) as they indicate missing responses.
-  // Deduplicate HTTP REQUEST/RESPONSE pairs: prefer RESPONSE (has status + latency).
-  // REQUEST goes client→server, RESPONSE goes server→client (src/dst swapped).
-  const deduped = useMemo(() => {
-    // RESPONSE goes server→client, REQUEST goes client→server (src/dst swapped).
-    // Normalize key: always client|server|method|path
-    const responseKeys = new Set<string>()
-    for (const f of flows) {
-      if (f.l7Protocol === 'HTTP' && f.l7Type === 'RESPONSE') {
-        responseKeys.add(`${f.destination.name}|${f.source.name}|${f.httpMethod}|${f.httpPath}`)
-      }
-    }
-    return flows.filter(f => {
-      if (f.l7Protocol === 'HTTP' && f.l7Type === 'REQUEST') {
-        return !responseKeys.has(`${f.source.name}|${f.destination.name}|${f.httpMethod}|${f.httpPath}`)
-      }
-      return true
-    })
-  }, [flows])
+  const deduped = useMemo(() => dedupeHTTPPairs(flows, responsesCallerOriented), [flows, responsesCallerOriented])
 
   const filtered = useMemo(() => {
     if (!search) return deduped

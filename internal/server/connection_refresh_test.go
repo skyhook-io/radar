@@ -329,6 +329,41 @@ func TestRejectedArgoCandidateLeavesSavedConnectionUnchanged(t *testing.T) {
 	}
 }
 
+// Saving Argo CD settings connects right away, so the first page read finds
+// the connection ready instead of answering "connecting".
+func TestSavedArgoConnectionConnectsBeforeAnyRead(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/version":
+			w.Write([]byte(`{"Version":"v3.0.0"}`))
+		case "/api/v1/session/userinfo":
+			w.Write([]byte(`{"loggedIn":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer backend.Close()
+	target, _ := k8s.CurrentProfileTarget()
+	s.localRuntime.Apply(target, false)
+	view := s.localConnections.Resolve(target, config.IntegrationArgoCD, true).View
+	data, _ := json.Marshal(connections.Update{Target: target, Revision: view.Revision, Kind: config.IntegrationArgoCD, Action: "save", URL: &backend.URL, Secret: &connections.SecretEdit{Action: "set", Value: "saved-token"}})
+	response := httptest.NewRecorder()
+	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(data))))
+	if response.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", response.Code, response.Body.String())
+	}
+	// Address reads state only; it starts nothing.
+	deadline := time.Now().Add(5 * time.Second)
+	for argocd.Address() != backend.URL {
+		if time.Now().After(deadline) {
+			t.Fatal("the saved settings weren't connected before any read asked")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestSavedConnectionRejectsOversizedRequest(t *testing.T) {
 	s := setupLocalProfileTest(t)
 	body := `{"kind":"metrics","action":"save","url":"http://` + strings.Repeat("a", 257*1024) + `"}`

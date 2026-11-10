@@ -45,6 +45,7 @@ func TestOmittedReasonMarshalsSnakeCase(t *testing.T) {
 		OmittedBudgetExceeded: "budget_exceeded",
 		OmittedCacheCold:      "cache_cold",
 		OmittedNotInstalled:   "not_installed",
+		OmittedUnavailable:    "unavailable",
 	}
 	for c, want := range cases {
 		got, err := json.Marshal(c)
@@ -63,6 +64,7 @@ func TestOmittedReasonUnmarshalsSnakeCase(t *testing.T) {
 		"budget_exceeded": OmittedBudgetExceeded,
 		"cache_cold":      OmittedCacheCold,
 		"not_installed":   OmittedNotInstalled,
+		"unavailable":     OmittedUnavailable,
 	}
 	for in, want := range cases {
 		var got OmittedReason

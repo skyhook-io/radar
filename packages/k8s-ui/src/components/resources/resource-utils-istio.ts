@@ -8,13 +8,17 @@ import { pluralize } from '../../utils/pluralize'
 // SHARED HELPERS
 // ============================================================================
 
-function parseIstioHost(host: string): { name: string; namespace: string } {
-  // Istio hosts can be: "reviews", "reviews.default", "reviews.default.svc.cluster.local"
+// FQDNs require the registry domain supplied by the producer. Undotted
+// names use Istio's documented namespace-relative expansion.
+export function resolveIstioServiceHost(host: string, defaultNamespace: string, serviceDomain = ''): { name: string; namespace: string } | undefined {
+  const label = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/
   const parts = host.split('.')
-  return {
-    name: parts[0] || host,
-    namespace: parts.length >= 2 ? parts[1] : '',
+  if (parts.length === 1 && host.length <= 63 && label.test(host)) return { name: host, namespace: defaultNamespace }
+  if (serviceDomain && host.endsWith(`.svc.${serviceDomain}`)) {
+    const service = host.slice(0, -(`.svc.${serviceDomain}`.length)).split('.')
+    if (service.length === 2 && service.every(part => part.length <= 63 && label.test(part))) return { name: service[0], namespace: service[1] }
   }
+  return undefined
 }
 
 // ============================================================================
@@ -103,16 +107,16 @@ export function getVirtualServiceTlsRoutes(resource: any): any[] {
   return resource.spec?.tls || []
 }
 
-export function getVirtualServiceDestinations(resource: any): Array<{ host: string; namespace: string; port?: number; subset?: string; weight?: number }> {
+export function getVirtualServiceDestinations(resource: any, serviceDomain = ''): Array<{ host: string; namespace: string; port?: number; subset?: string; weight?: number }> {
   const destinations: Array<{ host: string; namespace: string; port?: number; subset?: string; weight?: number }> = []
   const httpRoutes = resource.spec?.http || []
   for (const route of httpRoutes) {
     for (const dest of (route.route || [])) {
       if (dest.destination?.host) {
-        const parsed = parseIstioHost(dest.destination.host)
+        const parsed = resolveIstioServiceHost(dest.destination.host, resource.metadata?.namespace || '', serviceDomain)
         destinations.push({
           host: dest.destination.host,
-          namespace: parsed.namespace || resource.metadata?.namespace || '',
+          namespace: parsed?.namespace || '',
           port: dest.destination.port?.number,
           subset: dest.destination.subset,
           weight: dest.weight,

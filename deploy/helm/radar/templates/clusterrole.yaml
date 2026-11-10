@@ -1,3 +1,19 @@
+{{- if and (include "radar.userTokenMode" . | eq "true") (not .Values.cloud.enabled) }}
+{{- fail "auth.kubernetesCredentials=user-token requires cloud.enabled=true: the user's token reaches Radar only through the Radar Cloud tunnel" }}
+{{- end }}
+{{- if and (include "radar.userTokenMode" . | eq "true") (or .Values.cloud.insecureSkipVerify (hasPrefix "ws://" (toString .Values.cloud.url)) (and (include "radar.cloudEnrollmentMode" . | eq "true") (hasPrefix "http://" (toString .Values.cloud.hubURL)))) }}
+{{- fail "auth.kubernetesCredentials=user-token needs a verified tunnel: people's tokens travel over it, so cloud.insecureSkipVerify must be false, cloud.url must be wss:// and cloud.hubURL https://. Give the control plane a certificate the cluster trusts." }}
+{{- end }}
+{{- if and (include "radar.userTokenMode" . | eq "true") .Values.cloud.defaultRbac.create }}
+{{- fail "auth.kubernetesCredentials=user-token requires cloud.defaultRbac.create=false: the Hub-role bindings (radar:owner/member/viewer) would grant cluster access to any token whose IdP groups include one of those names. People's access comes from your own RBAC in this mode." }}
+{{- end }}
+{{- /* A pinned image older than the mode would ignore it and keep impersonating,
+       while this chart drops the impersonate grant: every call would 403.
+       Only release-style tags are checked; others can't be compared. */}}
+{{- $tag := toString .Values.image.tag }}
+{{- if and (include "radar.userTokenMode" . | eq "true") (regexMatch "^v?[0-9]+\\.[0-9]+\\.[0-9]+" $tag) (semverCompare "<1.18.0-0" $tag) }}
+{{- fail (printf "auth.kubernetesCredentials=user-token requires Radar 1.18.0 or later, but image.tag pins %s. Unset image.tag to use the chart's version, or pin 1.18.0 or later." $tag) }}
+{{- end }}
 {{- if .Values.rbac.create -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -59,10 +75,13 @@ rules:
       - podsecuritypolicies
     verbs: ["list"]
 
-  {{- if .Values.rbac.helm }}
+  {{- if and .Values.rbac.helm (eq .Values.auth.mode "none") (not .Values.cloud.enabled) }}
   # Helm write operations require broad permissions because charts can create
   # any Kubernetes resource type. Read access for common resources is granted
   # by other rules in this ClusterRole. Secrets read access is auto-enabled below.
+  # No-auth installs only: under auth or cloud mode every Helm action runs as the
+  # impersonated user, so the ServiceAccount never needs it there. The per-tier
+  # add-ons (clusterrole-helm*.yaml) are what users get instead.
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["create", "update", "patch", "delete"]
@@ -77,6 +96,10 @@ rules:
     resources:
       - secrets
     verbs: ["get", "list", "watch"]
+  # These objects can carry inline credentials, so they share the Secrets grant.
+  - apiGroups: ["operator.victoriametrics.com"]
+    resources: ["vmagents", "vmclusters", "vmsingles"]
+    verbs: ["get", "list", "watch"]
   {{- end }}
 
   # Workload resources (read-only)
@@ -86,6 +109,7 @@ rules:
       - daemonsets
       - statefulsets
       - replicasets
+      - controllerrevisions
     verbs: ["get", "list", "watch"]
 
   # Networking resources (read-only)
@@ -168,6 +192,17 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
 
+  {{- if or .Values.rbac.viewAdmissionPolicies (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # Native validating admission policies (read). Kept separate from
+  # rbac.viewWebhooks so no-auth installs can grant either admission surface
+  # independently. Auth/cloud reads are re-checked per requesting user.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+
   {{- if .Values.rbac.viewNodeRuntime }}
   # Kubelet runtime evidence (opt-in): upgrade-impact checks inspect kubelet
   # metrics and effective configuration through the Node proxy. In no-auth
@@ -186,7 +221,7 @@ rules:
     verbs: ["get"]
   {{- end }}
 
-  {{- if .Values.rbac.podExec }}
+  {{- if and .Values.rbac.podExec (not .Values.disableExec) (include "radar.userTokenMode" . | eq "false") }}
   # Pod exec (opt-in - enables terminal feature)
   - apiGroups: [""]
     resources:
@@ -194,7 +229,7 @@ rules:
     verbs: ["create"]
   {{- end }}
 
-  {{- if .Values.rbac.portForward }}
+  {{- if and .Values.rbac.portForward (include "radar.userTokenMode" . | eq "false") }}
   # Port forwarding (opt-in - enables port forward feature)
   - apiGroups: [""]
     resources:
@@ -230,12 +265,20 @@ rules:
 
   # CRD access
   {{- if .Values.rbac.crdGroups.all }}
-  # Wildcard access to all CRDs (rbac.crdGroups.all=true)
+  # Wildcard reads include core Secrets and credential-bearing CRDs.
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- else }}
   # Per-group CRD access
+  {{- if .Values.rbac.crdGroups.antrea }}
+  # Antrea policies can allow traffic a core NetworkPolicy denies; the
+  # NetworkPolicy deny-all check treats an unreadable kind as "may allow" and
+  # stays silent, so it needs these reads.
+  - apiGroups: ["crd.antrea.io"]
+    resources: ["networkpolicies", "clusternetworkpolicies"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.apiRegistration }}
   - apiGroups: ["apiregistration.k8s.io"]
     resources: ["*"]
@@ -244,6 +287,14 @@ rules:
   {{- if .Values.rbac.crdGroups.argo }}
   - apiGroups: ["argoproj.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.awsNetworkPolicy }}
+  # EKS VPC CNI policies, served on EKS clusters by default. Same reason as
+  # antrea: unreadable, they silence the NetworkPolicy deny-all check
+  # cluster-wide.
+  - apiGroups: ["networking.k8s.aws"]
+    resources: ["applicationnetworkpolicies", "clusternetworkpolicies"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.awx }}
@@ -385,6 +436,13 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.multus }}
+  # Pod details link each secondary network to its NetworkAttachmentDefinition;
+  # nothing else in the group is read.
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["network-attachment-definitions"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.networkPolicyApi }}
   # SIG-network out-of-tree Network Policy API; ClusterNetworkPolicy is
   # cluster-scoped and surfaced in topology.
@@ -420,6 +478,12 @@ rules:
   - apiGroups: ["kueue.x-k8s.io", "autoscaling.x-k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  # Kueue's visibility API: where a pending Workload sits in its LocalQueue.
+  # Without authentication Radar asks as itself; signed-in users are asked as
+  # themselves and need this through their own roles (Kueue aggregates it to view).
+  - apiGroups: ["visibility.kueue.x-k8s.io"]
+    resources: ["localqueues/pendingworkloads"]
+    verbs: ["get"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kserve }}
   - apiGroups: ["serving.kserve.io"]
@@ -478,6 +542,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.flagger }}
+  - apiGroups: ["flagger.app"]
+    resources: ["canaries", "metrictemplates"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.opentelemetry }}
   - apiGroups: ["opentelemetry.io"]
     resources: ["*"]
@@ -503,9 +572,17 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.secretsStoreCsi }}
+  - apiGroups: ["secrets-store.csi.x-k8s.io"]
+    resources: ["secretproviderclasses", "secretproviderclasspodstatuses"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.strimzi }}
   - apiGroups: ["strimzi.io", "kafka.strimzi.io"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["core.strimzi.io"]
+    resources: ["strimzipodsets"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.tekton }}
@@ -544,12 +621,14 @@ rules:
   {{- end }}
 
   {{- if or (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  {{- if include "radar.userTokenMode" . | eq "false" }}
   # Auth: Impersonation permissions for user-scoped operations.
   # Required under cloud-mode too — the binary forces --auth-mode=proxy there
   # and impersonates Cloud-injected identities to the K8s API.
   - apiGroups: [""]
     resources: ["users", "groups"]
     verbs: ["impersonate"]
+  {{- end }}
   # Auth: SubjectAccessReview for per-user permission checks
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]

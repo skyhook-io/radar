@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -410,10 +411,9 @@ func TestEfficiencyChecks_LimitRangePodTypeDoesNotSuppress(t *testing.T) {
 	}
 }
 
-func TestEfficiencyChecks_LimitRangeMaxDoesNotSuppress(t *testing.T) {
-	// LimitRange items with Max/Min but no Default/DefaultRequest enforce
-	// constraints — they do not inject values, so missing-request/limit
-	// findings must still fire.
+func TestEfficiencyChecks_LimitRangeRawConstraintsDoNotSuppress(t *testing.T) {
+	// API-admitted LimitRanges already contain defaults derived from Max/Min.
+	// Raw constraints in an audit input must not invent additional defaults.
 	input := &CheckInput{
 		Deployments: []*appsv1.Deployment{{
 			ObjectMeta: metav1.ObjectMeta{Name: "max-only", Namespace: "team"},
@@ -488,6 +488,236 @@ func TestEfficiencyChecks_LimitRangePartialDefaults(t *testing.T) {
 		if !flagged[id] {
 			t.Errorf("%s should still fire — LimitRange covered only cpu request", id)
 		}
+	}
+}
+
+func TestEfficiencyChecks_PodLevelResourceTemplates(t *testing.T) {
+	deploy := func(name string, res *corev1.ResourceRequirements) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "team"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Resources:  res,
+						Containers: []corev1.Container{{Name: "app", Image: "nginx:1.25"}},
+					},
+				},
+			},
+		}
+	}
+	tests := []struct {
+		name                   string
+		res                    *corev1.ResourceRequirements
+		containers             []corev1.Container
+		initContainers         []corev1.Container
+		limitRanges            []*corev1.LimitRange
+		limitRangesUnavailable bool
+		want                   []string
+	}{
+		{
+			name: "requests and limits",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+		},
+		{
+			name: "limits only",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+		},
+		{
+			name: "cpu requests only",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+			},
+			want: []string{"memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"},
+		},
+		{
+			name: "zero requests",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0"), corev1.ResourceMemory: resource.MustParse("0")},
+			},
+			want: []string{"cpuRequestMissing", "memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"},
+		},
+		{
+			name: "zero limits",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0"), corev1.ResourceMemory: resource.MustParse("0")},
+			},
+			want: []string{"cpuRequestMissing", "memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"},
+		},
+		{
+			name: "zero requests with limits",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0"), corev1.ResourceMemory: resource.MustParse("0")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			want: []string{"cpuRequestMissing", "memoryRequestMissing"},
+		},
+		{
+			name: "limits with zero container requests",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0"), corev1.ResourceMemory: resource.MustParse("0")},
+			}}},
+			want: []string{"cpuRequestMissing", "memoryRequestMissing"},
+		},
+		{
+			name: "limits with zero container limits",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0"), corev1.ResourceMemory: resource.MustParse("0")},
+			}}},
+			want: []string{"cpuRequestMissing", "memoryRequestMissing"},
+		},
+		{
+			name: "container limit defaults shared request",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			containers: []corev1.Container{
+				{Name: "app", Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")}}},
+				{Name: "sidecar"},
+			},
+		},
+		{
+			name: "limits with zero init requests",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			initContainers: []corev1.Container{{Name: "init", Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0"), corev1.ResourceMemory: resource.MustParse("0")},
+			}}},
+			want: []string{"cpuRequestMissing", "memoryRequestMissing"},
+		},
+		{
+			name: "init limit defaults shared request",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			initContainers: []corev1.Container{{Name: "init", Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+			}}},
+		},
+		{
+			name: "mixed pod and container resources",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+			},
+			containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")},
+				Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
+			}}},
+			want: []string{"cpuLimitMissing"},
+		},
+		{
+			name: "stored pod requests preserve zero after defaulting",
+			res: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("0")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("0")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+			}}},
+			want: []string{"memoryRequestMissing"},
+		},
+		{
+			name: "pod limit enables aggregate requests for another resource",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
+			},
+			containers: []corev1.Container{
+				{Name: "app", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")}}},
+				{Name: "sidecar"},
+			},
+			want: []string{"memoryLimitMissing"},
+		},
+		{
+			name: "zero restartable init request with positive container request",
+			res: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			containers: []corev1.Container{{Name: "app", Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+			}}},
+			initContainers: []corev1.Container{{Name: "sidecar", RestartPolicy: ptr(corev1.ContainerRestartPolicyAlways), Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0")},
+			}}},
+		},
+		{
+			name:                   "pod resources with unavailable LimitRanges",
+			res:                    &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")}},
+			limitRangesUnavailable: true,
+		},
+		{
+			name: "pod memory limit with CPU namespace default",
+			res:  &corev1.ResourceRequirements{Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")}},
+			limitRanges: []*corev1.LimitRange{{
+				ObjectMeta: metav1.ObjectMeta{Name: "cpu", Namespace: "team"},
+				Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
+					Type:           corev1.LimitTypeContainer,
+					DefaultRequest: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
+				}}},
+			}},
+			want: []string{"cpuLimitMissing"},
+		},
+		{
+			name: "no pod resources",
+			want: []string{"cpuRequestMissing", "memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"},
+		},
+		{
+			name: "empty pod resources",
+			res:  &corev1.ResourceRequirements{},
+			want: []string{"cpuRequestMissing", "memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := deploy("podlevel", tt.res)
+			if tt.containers != nil {
+				d.Spec.Template.Spec.Containers = tt.containers
+			}
+			d.Spec.Template.Spec.InitContainers = tt.initContainers
+			before := d.DeepCopy()
+			limitRanges := tt.limitRanges
+			if limitRanges == nil && !tt.limitRangesUnavailable {
+				limitRanges = []*corev1.LimitRange{}
+			}
+			inputs := map[string]*CheckInput{
+				"deployment":  {Deployments: []*appsv1.Deployment{d}, LimitRanges: limitRanges, ClusterVersion: "1.35"},
+				"statefulset": {StatefulSets: []*appsv1.StatefulSet{{ObjectMeta: d.ObjectMeta, Spec: appsv1.StatefulSetSpec{Template: d.Spec.Template}}}, LimitRanges: limitRanges, ClusterVersion: "1.35"},
+				"daemonset":   {DaemonSets: []*appsv1.DaemonSet{{ObjectMeta: d.ObjectMeta, Spec: appsv1.DaemonSetSpec{Template: d.Spec.Template}}}, LimitRanges: limitRanges, ClusterVersion: "1.35"},
+			}
+			for kind, input := range inputs {
+				t.Run(kind, func(t *testing.T) {
+					flagged := map[string]bool{}
+					for _, f := range RunChecks(input).Findings {
+						flagged[f.CheckID] = true
+					}
+					want := map[string]bool{}
+					for _, id := range tt.want {
+						want[id] = true
+					}
+					for _, id := range []string{"cpuRequestMissing", "memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"} {
+						if flagged[id] != want[id] {
+							t.Errorf("%s: flagged=%v, want %v", id, flagged[id], want[id])
+						}
+					}
+				})
+			}
+			if !reflect.DeepEqual(d, before) {
+				t.Error("audit mutated workload resources")
+			}
+		})
 	}
 }
 
@@ -751,6 +981,27 @@ func TestIngressNoMatchingService(t *testing.T) {
 	}
 }
 
+func TestIngressNoMatchingServiceChecksTheDefaultBackend(t *testing.T) {
+	input := &CheckInput{
+		Ingresses: []*networkingv1.Ingress{{
+			ObjectMeta: metav1.ObjectMeta{Name: "catch-all", Namespace: "default"},
+			Spec: networkingv1.IngressSpec{DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{Name: "missing-service"},
+			}},
+		}},
+		Services: []*corev1.Service{},
+	}
+	var messages []string
+	for _, f := range RunChecks(input).Findings {
+		if f.CheckID == "ingressNoMatchingService" {
+			messages = append(messages, f.Message)
+		}
+	}
+	if len(messages) != 1 || !strings.Contains(messages[0], "missing-service") {
+		t.Errorf("findings = %v, want the missing default backend reported once", messages)
+	}
+}
+
 func TestBarePodChecked(t *testing.T) {
 	input := &CheckInput{
 		Pods: []*corev1.Pod{{
@@ -807,6 +1058,9 @@ func TestImageTag(t *testing.T) {
 		{"nginx", ""},
 		{"gcr.io/project/image:v2", "v2"},
 		{"image@sha256:abc123", "sha256:abc123"},
+		{"localhost:5000/nginx:1.25", "1.25"},
+		{"localhost:5000/nginx", ""},
+		{"registry.example.com:5000/team/app:v1.2.3", "v1.2.3"},
 	}
 	for _, tt := range tests {
 		got := imageTag(tt.image)
@@ -2287,6 +2541,43 @@ func TestCheckStuckTerminating(t *testing.T) {
 // coverage for that kind without any other test catching it. One
 // terminating fixture per kind, all set 45min old → all should report
 // danger-tier with their correct Kind field.
+// The storage protection finalizers hold deletion while the object is in use;
+// the finding must say so instead of reading like a stalled controller.
+func TestCheckStuckTerminating_StorageProtectionFinalizers(t *testing.T) {
+	dt := metav1.NewTime(time.Now().Add(-45 * time.Minute))
+	input := &CheckInput{
+		PersistentVolumeClaims: []*corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app", DeletionTimestamp: &dt, Finalizers: []string{"kubernetes.io/pvc-protection"}}}},
+		PersistentVolumes:      []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "pv-data", DeletionTimestamp: &dt, Finalizers: []string{"kubernetes.io/pv-protection", "external-provisioner.volume.kubernetes.io/finalizer"}}}},
+	}
+	want := map[string]string{
+		"PersistentVolumeClaim/data": "holds deletion while a Pod uses the claim",
+		"PersistentVolume/pv-data":   "holds deletion while the volume is bound to a claim",
+	}
+	tr := newEvalTracker()
+	findings := checkStuckTerminating(tr, input)
+	if len(findings) != len(want) {
+		t.Fatalf("findings = %+v", findings)
+	}
+	for _, f := range findings {
+		if !strings.Contains(f.Message, want[f.Kind+"/"+f.Name]) {
+			t.Errorf("%s/%s message = %q", f.Kind, f.Name, f.Message)
+		}
+	}
+	for _, f := range findings {
+		for _, unsafe := range []string{"stop those Pods", "delete or release that claim"} {
+			if strings.Contains(f.Message, unsafe) {
+				t.Errorf("%s/%s must not tell the user to complete the deletion: %q", f.Kind, f.Name, f.Message)
+			}
+		}
+	}
+	if remediation := CheckRegistry["stuckTerminating"].Remediation; !strings.Contains(remediation, "Never clear storage finalizers by hand") {
+		t.Errorf("the shared remediation shown with these findings must exempt storage finalizers: %q", remediation)
+	}
+	if !strings.Contains(findings[1].Message, "external-provisioner.volume.kubernetes.io/finalizer") {
+		t.Errorf("other finalizers must still be named: %q", findings[1].Message)
+	}
+}
+
 func TestCheckStuckTerminating_AllKinds(t *testing.T) {
 	now := time.Now()
 	dt := metav1.NewTime(now.Add(-45 * time.Minute))
@@ -2311,6 +2602,8 @@ func TestCheckStuckTerminating_AllKinds(t *testing.T) {
 		ConfigMaps:               []*corev1.ConfigMap{{ObjectMeta: meta("cm-x")}},
 		Secrets:                  []*corev1.Secret{{ObjectMeta: meta("secret-x")}},
 		ServiceAccounts:          []*corev1.ServiceAccount{{ObjectMeta: meta("sa-x")}},
+		PersistentVolumeClaims:   []*corev1.PersistentVolumeClaim{{ObjectMeta: meta("pvc-x")}},
+		PersistentVolumes:        []*corev1.PersistentVolume{{ObjectMeta: metav1.ObjectMeta{Name: "pv-x", DeletionTimestamp: &dt, Finalizers: []string{"example.io/cleanup"}}}},
 	}
 
 	// Call the check directly. RunChecks would run the full chain
@@ -2339,6 +2632,8 @@ func TestCheckStuckTerminating_AllKinds(t *testing.T) {
 		"ConfigMap/cm-x":                SeverityDanger,
 		"Secret/secret-x":               SeverityDanger,
 		"ServiceAccount/sa-x":           SeverityDanger,
+		"PersistentVolumeClaim/pvc-x":   SeverityDanger,
+		"PersistentVolume/pv-x":         SeverityDanger,
 	}
 	for k, want := range wantPairs {
 		got, ok := byKindAndName[k]

@@ -33,6 +33,7 @@ const RESOURCE_KINDS: {
   { kind: 'GRPCRoute', label: 'GRPCRoute', icon: getTopologyIcon('GRPCRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'TCPRoute', label: 'TCPRoute', icon: getTopologyIcon('TCPRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'TLSRoute', label: 'TLSRoute', icon: getTopologyIcon('TLSRoute'), color: 'text-purple-300', category: 'networking' },
+  { kind: 'UDPRoute', label: 'UDPRoute', icon: getTopologyIcon('UDPRoute'), color: 'text-purple-300', category: 'networking' },
   { kind: 'Service', label: 'Service', icon: getTopologyIcon('Service'), color: 'text-blue-400', category: 'networking' },
   { kind: 'CalicoNetworkPolicy', label: 'Calico NetworkPolicy', icon: getTopologyIcon('CalicoNetworkPolicy'), color: 'text-teal-400', category: 'custom' },
   { kind: 'CalicoGlobalNetworkPolicy', label: 'Calico GlobalNetworkPolicy', icon: getTopologyIcon('CalicoGlobalNetworkPolicy'), color: 'text-teal-400', category: 'custom' },
@@ -50,6 +51,7 @@ const RESOURCE_KINDS: {
   { kind: 'PodGroup', label: 'Pod Group', icon: getTopologyIcon('PodGroup'), color: 'text-lime-400', category: 'workloads' },
   { kind: 'Job', label: 'Job', icon: getTopologyIcon('Job'), color: 'text-orange-400', category: 'workloads' },
   { kind: 'CronJob', label: 'CronJob', icon: getTopologyIcon('CronJob'), color: 'text-orange-300', category: 'workloads' },
+  { kind: 'JobSet', label: 'JobSet', icon: getTopologyIcon('JobSet'), color: 'text-orange-400', category: 'workloads' },
   { kind: 'Workflow', label: 'Workflow', icon: getTopologyIcon('Workflow'), color: 'text-purple-400', category: 'workloads' },
   { kind: 'CronWorkflow', label: 'CronWorkflow', icon: getTopologyIcon('CronWorkflow'), color: 'text-purple-300', category: 'workloads' },
 

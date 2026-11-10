@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -133,15 +134,15 @@ var configRefDependencies = map[schema.GroupResource]configRefDependency{
 	{Group: "traefik.containo.us", Resource: "ingressroutetcps"}:              {traefikRouteConfigRefs, false, false},
 	{Group: "traefik.io", Resource: "middlewares"}:                            {traefikMiddlewareConfigRefs, false, false},
 	{Group: "traefik.containo.us", Resource: "middlewares"}:                   {traefikMiddlewareConfigRefs, false, false},
-	{Group: "traefik.io", Resource: "serverstransports"}:                      {traefikTransportConfigRefs, false, false},
-	{Group: "traefik.io", Resource: "serverstransporttcps"}:                   {traefikTransportConfigRefs, false, false},
+	{Group: "traefik.io", Resource: "serverstransports"}:                      {traefikTransportConfigRefs, true, false},
+	{Group: "traefik.io", Resource: "serverstransporttcps"}:                   {traefikTCPTransportConfigRefs, true, false},
 	{Group: "traefik.containo.us", Resource: "serverstransports"}:             {traefikTransportConfigRefs, false, false},
-	{Group: "traefik.containo.us", Resource: "serverstransporttcps"}:          {traefikTransportConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "serverstransporttcps"}:          {traefikTCPTransportConfigRefs, false, false},
 	{Group: "traefik.io", Resource: "tlsoptions"}:                             {traefikTLSOptionConfigRefs, false, false},
 	{Group: "traefik.containo.us", Resource: "tlsoptions"}:                    {traefikTLSOptionConfigRefs, false, false},
 	{Group: "traefik.io", Resource: "tlsstores"}:                              {traefikTLSStoreConfigRefs, false, false},
 	{Group: "traefik.containo.us", Resource: "tlsstores"}:                     {traefikTLSStoreConfigRefs, false, false},
-	{Group: "projectcontour.io", Resource: "httpproxies"}:                     {contourHTTPProxyConfigRefs, false, false},
+	{Group: "projectcontour.io", Resource: "httpproxies"}:                     {contourHTTPProxyConfigRefs, false, true},
 	{Group: "networking.istio.io", Resource: "gateways"}:                      {istioGatewayConfigRefs, false, false},
 	{Group: "cert-manager.io", Resource: "certificates"}:                      {certManagerCertificateConfigRefs, false, false},
 	{Group: "cert-manager.io", Resource: "issuers"}:                           {certManagerIssuerConfigRefs, false, false},
@@ -216,13 +217,22 @@ func traefikMiddlewareConfigRefs(u *unstructured.Unstructured) []bp.ConfigObject
 }
 
 func traefikTransportConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
+	return traefikTransportRefs(u, false)
+}
+
+func traefikTCPTransportConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
+	return traefikTransportRefs(u, true)
+}
+
+func traefikTransportRefs(u *unstructured.Unstructured, tcp bool) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
 	ns := u.GetNamespace()
-	for _, name := range stringsAt(u.Object, "spec", "rootCAsSecrets") {
+	secrets, configMaps := configrefs.TraefikTransportRefs(u.Object, tcp)
+	for _, name := range secrets {
 		addSecret(&refs, ns, name)
 	}
-	for _, name := range stringsAt(u.Object, "spec", "certificatesSecrets") {
-		addSecret(&refs, ns, name)
+	for _, name := range configMaps {
+		addConfigMap(&refs, ns, name)
 	}
 	return refs
 }
@@ -237,13 +247,17 @@ func traefikTLSOptionConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectR
 
 func traefikTLSStoreConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
-	addSecret(&refs, u.GetNamespace(), stringAt(u.Object, "spec", "defaultCertificate", "secretName"))
+	for _, name := range configrefs.TraefikTLSStoreSecrets(u.Object) {
+		addSecret(&refs, u.GetNamespace(), name)
+	}
 	return refs
 }
 
 func contourHTTPProxyConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
-	addSecret(&refs, u.GetNamespace(), stringAt(u.Object, "spec", "virtualhost", "tls", "secretName"))
+	for _, ref := range configrefs.ContourSecretReferences(u) {
+		addSecret(&refs, ref.Namespace, ref.Name)
+	}
 	return refs
 }
 
@@ -387,7 +401,7 @@ func kedaTriggerAuthConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRe
 	for _, ref := range mapsAt(u.Object, "spec", "configMapTargetRef") {
 		addConfigMap(&refs, ns, stringValue(ref["name"]))
 	}
-	addSecret(&refs, ns, stringAt(u.Object, "spec", "gcpSecretManager", "credentials", "clientSecret", "name"))
+	addSecret(&refs, ns, stringAt(u.Object, "spec", "gcpSecretManager", "credentials", "clientSecret", "valueFrom", "secretKeyRef", "name"))
 	return refs
 }
 

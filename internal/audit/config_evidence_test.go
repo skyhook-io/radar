@@ -295,3 +295,60 @@ func TestReflectionCoverageHonorsCompleteNamespaceSecretGrants(t *testing.T) {
 		}
 	}
 }
+
+func TestDelegatedContourCertificateIsNotOrphan(t *testing.T) {
+	wildcard := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "wildcard", Namespace: "certs"}}
+	unused := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "unused", Namespace: "certs"}}
+	client := fake.NewClientset(wildcard, unused)
+	scopes := map[string]k8score.ResourceScope{}
+	for _, kind := range append(append([]string{}, typedConfigConsumers...), "secrets", "configmaps") {
+		scopes[kind] = k8score.ResourceScope{Enabled: true}
+	}
+	if err := k8s.InitScopedTestResourceCache(client, scopes); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	proxyGVR := schema.GroupVersionResource{Group: "projectcontour.io", Version: "v1", Resource: "httpproxies"}
+	proxy := testUnstructured("projectcontour.io/v1", "HTTPProxy", "shop", "storefront", map[string]any{
+		"spec": map[string]any{"virtualhost": map[string]any{
+			"fqdn": "shop.example.com",
+			"tls":  map[string]any{"secretName": "certs/wildcard"},
+		}},
+	})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{proxyGVR: "HTTPProxyList"})
+	if _, err := dyn.Resource(proxyGVR).Namespace("shop").Create(context.Background(), proxy, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: proxyGVR.Group, Version: proxyGVR.Version, Name: proxyGVR.Resource, Kind: "HTTPProxy", Namespaced: true, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	dynamic := k8s.GetDynamicResourceCache()
+	if err := dynamic.EnsureWatching(proxyGVR); err != nil {
+		t.Fatal(err)
+	}
+	if !dynamic.WaitForSync(proxyGVR, 2*time.Second) {
+		t.Fatal("sync timeout")
+	}
+	cache := k8s.GetResourceCache()
+	orphans := func(results *bp.ScanResults) map[string]bool {
+		seen := map[string]bool{}
+		for _, f := range results.Findings {
+			if f.CheckID == "orphanConfigMapSecret" && f.Kind == "Secret" {
+				seen[f.Name] = true
+			}
+		}
+		return seen
+	}
+
+	// Auditing only the certificate's namespace still sees the proxy in "shop".
+	if seen := orphans(RunFromCache(cache, []string{"certs"}, nil)); !seen["unused"] || seen["wildcard"] {
+		t.Fatalf("unrestricted audit of certs: orphans %v, want only unused", seen)
+	}
+	// Without read access to other namespaces' proxies, absence can't be proven.
+	limited := &ReadScope{Namespaces: []string{"certs"}, SecretNamespaces: []string{"certs"}}
+	if seen := orphans(RunFromCache(cache, []string{"certs"}, &RunOptions{Scope: limited})); len(seen) != 0 {
+		t.Fatalf("restricted audit claimed orphans it cannot prove: %v", seen)
+	}
+}

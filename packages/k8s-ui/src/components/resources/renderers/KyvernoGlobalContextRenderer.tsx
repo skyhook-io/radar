@@ -2,8 +2,9 @@ import { Globe, RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { HEALTH_BADGE_COLORS } from '../../../utils/badge-colors'
-import { formatAge, healthColors } from '../resource-utils'
+import { healthColors } from '../resource-utils'
 import type { StatusBadge } from '../resource-utils'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 type Nav = (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 
@@ -66,7 +67,7 @@ export function KyvernoGlobalContextRenderer({ data, onNavigate }: { data: any; 
               </span>
             }
           />
-          {refresh.at && <Property label="Last Refreshed" value={`${formatAge(refresh.at)} ago`} />}
+          {refresh.at && <Property label="Last Refreshed" value={<TimeValue timestamp={refresh.at} />} />}
           {api?.refreshInterval && <Property label="Interval" value={api.refreshInterval} />}
           {api?.retryLimit != null && <Property label="Retry Limit" value={String(api.retryLimit)} />}
         </PropertyList>

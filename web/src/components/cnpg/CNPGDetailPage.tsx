@@ -1,0 +1,289 @@
+import { useCallback, useEffect, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { refetchCNPGDetail } from './refresh'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import { Activity, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
+import { CNPG_GROUP, refToSelectedResource, Tooltip, Badge, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import type { SelectedResource } from '../../types'
+import { useConnection } from '../../context/ConnectionContext'
+import { useContexts, useRadarFeature } from '../../api/client'
+import { useContextSwitchFlow } from '../useContextSwitchFlow'
+import { WorkloadView } from '../workload/WorkloadView'
+import { CNPGClusterActivity } from './CNPGClusterActivity'
+import { CNPGPerformance } from './CNPGPerformance'
+import { CNPGReplicationTab } from './CNPGReplicationTab'
+import { CNPGBackupsTab, CNPGClusterServing, CNPGStorageTab, CNPGTabMark } from './CNPGClusterTabs'
+import { CNPGConfiguration } from './CNPGConfiguration'
+import type { CNPGChartGroup } from './CNPGTrends'
+import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, cnpgViewNamedForKind, type CNPGDetailTarget } from './routes'
+import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
+import { currentPageLabel } from '../../utils/page-links'
+import { CNPGOperatorBanner } from './CNPGOperatorBanner'
+import { ScreenEmptyState } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
+
+// Set by drill-downs; Esc then goes back to that page instead of the home view.
+interface ReturnState {
+  returnLabel?: string
+  returnCtx?: string
+}
+
+/**
+ * The full detail of a CloudNativePG object, framed by the workspace: the
+ * Resources sidebar keeps the workspace destination highlighted and the crumb
+ * names the object's place. The object's own sections come from Radar's
+ * detail view.
+ *
+ * `ctx` in the URL pins the Kubernetes context; when the active context is a
+ * different one, the page says so instead of loading a same-named object.
+ */
+export function CNPGDetailPage({
+  target,
+  namespaces,
+  onOpenResource,
+}: {
+  target: CNPGDetailTarget
+  namespaces: string[]
+  onOpenResource: (resource: SelectedResource) => void
+}) {
+  const location = useLocation()
+  const navigate = useCNPGNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const { connection } = useConnection()
+  const queryClient = useQueryClient()
+  const { plural, group, namespace, name } = target
+  const refresh = useCallback(() => refetchCNPGDetail(queryClient, { plural, group, namespace, name }), [queryClient, plural, group, namespace, name])
+  const activeContext = connection.context
+  const pinnedContext = searchParams.get('ctx')
+
+  // A link opened without a context belongs to the one active now; pin it so a
+  // later context switch shows "not in this context" instead of a same-named
+  // object from the other cluster.
+  useEffect(() => {
+    if (pinnedContext || !activeContext) return
+    const params = new URLSearchParams(searchParams)
+    params.set('ctx', activeContext)
+    setSearchParams(params, { replace: true, state: location.state })
+  }, [pinnedContext, activeContext]) // eslint-disable-line react-hooks/exhaustive-deps
+  const returnState = (location.state ?? {}) as ReturnState
+  const spec = CNPG_DETAIL_KINDS[target.plural]
+  const home = CNPG_SCREENS.find((s) => s.id === spec.home)!
+  const returnLabel = returnState.returnLabel && (!returnState.returnCtx || returnState.returnCtx === activeContext) ? returnState.returnLabel : null
+
+  const openRelated = useCallback(
+    (res: SelectedResource) => {
+      const plural = cnpgDetailKindFor(res.kind, res.group)
+      if (plural) {
+        navigate(cnpgDetailPath({ plural, namespace: res.namespace, name: res.name }, activeContext), {
+          state: { returnLabel: currentPageLabel(), returnCtx: activeContext } satisfies ReturnState,
+        })
+      } else {
+        onOpenResource(res)
+      }
+    },
+    [navigate, activeContext, onOpenResource],
+  )
+
+  // The extra tabs require the advertised runtime contracts.
+  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support === 'supported'
+  const isCluster = target.plural === 'clusters' && target.group === CNPG_GROUP && cnpgWorkspace
+  // A tab change on this page, applied like a tab click: the previous tab's
+  // own params (section, chart group, instance) are dropped unless named.
+  const goTab = useCallback(
+    (tab: string, extra: Record<string, string> = {}) => {
+      const params = new URLSearchParams(searchParams)
+      for (const k of ['section', 'charts', 'instance', 'pod', 'container', 'since', 'until']) params.delete(k)
+      params.set('tab', tab)
+      for (const [k, v] of Object.entries(extra)) params.set(k, v)
+      setSearchParams(params, { replace: true, state: location.state })
+    },
+    [searchParams, setSearchParams, location.state],
+  )
+  const openHistory = useCallback((charts: CNPGChartGroup) => goTab('performance', { section: 'history', charts }), [goTab])
+  const extraTabs = useMemo<WorkloadExtraTab[] | undefined>(() => {
+    if (target.plural !== 'clusters' || target.group !== CNPG_GROUP) return undefined
+    const ns = target.namespace
+    const name = target.name
+    const activity: WorkloadExtraTab = {
+      id: 'activity',
+      label: 'Activity',
+      icon: <Activity className="h-4 w-4" />,
+      replaces: 'timeline',
+      render: () => <CNPGClusterActivity namespace={ns} name={name} onNavigate={openRelated} />,
+    }
+    if (!cnpgWorkspace) return [activity]
+    return [
+      {
+        id: 'replication',
+        label: 'Replication',
+        badge: <CNPGTabMark namespace={ns} name={name} id="replication" />,
+        icon: <Network className="h-4 w-4" />,
+        render: () => (
+          <CNPGReplicationTab
+            namespace={ns}
+            name={name}
+            onOpenLogs={(pod) => goTab('logs', { pod })}
+            onOpenHistory={() => openHistory('replication')}
+            onNavigate={(ref) => openRelated(refToSelectedResource(ref))}
+          />
+        ),
+      },
+      {
+        id: 'storage',
+        label: 'Storage',
+        badge: <CNPGTabMark namespace={ns} name={name} id="storage" />,
+        icon: <HardDrive className="h-4 w-4" />,
+        render: () => <CNPGStorageTab namespace={ns} name={name} onOpenHistory={() => openHistory('storage')} onOpenReplication={() => goTab('replication')} />,
+      },
+      {
+        id: 'performance',
+        label: 'Performance',
+        icon: <Gauge className="h-4 w-4" />,
+        render: () => (
+          <CNPGPerformance
+            namespace={ns}
+            name={name}
+            onOpenInterval={(tab, since, until) => {
+              const params = new URLSearchParams(searchParams)
+              params.delete('pod')
+              params.set('tab', tab)
+              params.set('since', since)
+              params.set('until', until)
+              setSearchParams(params, { state: location.state })
+            }}
+          />
+        ),
+      },
+      {
+        id: 'backups',
+        label: 'Backups',
+        badge: <CNPGTabMark namespace={ns} name={name} id="protection" />,
+        icon: <ShieldCheck className="h-4 w-4" />,
+        render: () => (
+          <CNPGBackupsTab
+            namespace={ns}
+            name={name}
+            onInspect={onOpenResource}
+            onOpenYaml={() => goTab('yaml')}
+            onOpenLogs={(pod, container) => goTab('logs', { pod, container })}
+            onOpenOperator={() => navigate(cnpgScreenPath('operator'), { state: { returnLabel: currentPageLabel(), returnCtx: activeContext } satisfies ReturnState })}
+          />
+        ),
+      },
+      activity,
+    ]
+  }, [cnpgWorkspace, target.plural, target.group, target.namespace, target.name, goTab, openHistory, onOpenResource, openRelated, navigate, activeContext, searchParams, setSearchParams, location.state])
+
+  if (pinnedContext && activeContext && pinnedContext !== activeContext) {
+    return <NotInContext target={target} pinnedContext={pinnedContext} activeContext={activeContext} homeLabel={home.label} homePath={home.path} />
+  }
+
+  const outsideFilter = namespaces.length > 0 && !!target.namespace && !namespaces.includes(target.namespace)
+
+  // Where the object lives, on its title line: workspace / view /. The way
+  // back to the previous page is the browser's Back, or Esc.
+  const titlePrefix = (
+    <div className="flex min-w-0 items-center gap-x-2 text-sm">
+      <nav aria-label="Location" className="flex shrink-0 items-center gap-1.5 text-theme-text-tertiary">
+        <Database className="h-3.5 w-3.5" />
+        <span>CloudNativePG</span>
+        <span>/</span>
+        <button type="button" onClick={() => navigate(home.path)} className="hover:text-theme-text-primary hover:underline">
+          {home.label}
+        </button>
+        <span>/</span>
+      </nav>
+    </div>
+  )
+  const namespaceNote = outsideFilter ? (
+    <Tooltip content="Your namespace filter leaves this namespace out; an object you open stays open." position="bottom">
+      <span className="whitespace-nowrap text-xs text-theme-text-tertiary">· outside your namespace filter</span>
+    </Tooltip>
+  ) : undefined
+
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+      {/* Above the title line, before any status the page shows. */}
+      {target.plural === 'clusters' && <CNPGOperatorBanner namespaces={[target.namespace]} className="mx-6 mt-3 shrink-0" />}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <WorkloadView
+          key={`${target.plural}/${target.namespace}/${target.name}`}
+          kind={target.plural}
+          namespace={target.namespace}
+          name={target.name}
+          group={target.group}
+          expanded
+          onBack={() => (returnLabel ? navigate(-1) : navigate(home.path))}
+          hideBackButton
+          titlePrefix={titlePrefix}
+          inlineBadges
+          namespaceNote={namespaceNote}
+          hideKindBadge={cnpgViewNamedForKind(target.plural)}
+          onNavigateToResource={openRelated}
+          onRefresh={cnpgWorkspace ? refresh : undefined}
+          extraTabs={extraTabs}
+          tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}
+          renderStatusBadge={isCluster ? (resource) => (
+            <Tooltip content={resource?.status?.phase ? `status.phase, reported by CloudNativePG: ${resource.status.phase}` : 'CloudNativePG has not reported status.phase'}>
+              <Badge severity="neutral">
+                <span className="mr-1 font-normal text-theme-text-tertiary">Phase</span>
+                {resource?.status?.phase ? resource.status.phase : 'Not reported'}
+              </Badge>
+            </Tooltip>
+          ) : undefined}
+          statusNote={isCluster ? <CNPGClusterServing namespace={target.namespace} name={target.name} onSelect={() => goTab(cnpgDimensionTab('serving'))} /> : undefined}
+          specTab={
+            isCluster
+              ? { label: 'Configuration', icon: <Settings2 className="h-4 w-4" />, render: () => <CNPGConfiguration namespace={target.namespace} name={target.name} onNavigate={openRelated} onSelectTab={goTab} /> }
+              : undefined
+          }
+        />
+      </div>
+    </div>
+  )
+}
+
+function NotInContext({
+  target,
+  pinnedContext,
+  activeContext,
+  homeLabel,
+  homePath,
+}: {
+  target: CNPGDetailTarget
+  pinnedContext: string
+  activeContext: string
+  homeLabel: string
+  homePath: string
+}) {
+  const navigate = useCNPGNavigate()
+  const { data: contexts } = useContexts()
+  const { requestSwitch, confirmDialog } = useContextSwitchFlow()
+  const pinned = contexts?.find((c) => c.name === pinnedContext)
+  return (
+    <>
+      <ScreenEmptyState
+        icon={Unplug}
+        title={`${target.name} is not in ${activeContext}`}
+        detail={`This link points at ${CNPG_DETAIL_KINDS[target.plural].kind} ${target.name} in context ${pinnedContext}. Radar does not open a same-named object from another cluster.`}
+        action={
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {pinned && (
+              <button type="button" onClick={() => requestSwitch(pinned)} className="btn-brand px-3 py-1.5 text-sm font-medium">
+                Switch back to {pinnedContext}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => navigate(homePath)}
+              className="btn-secondary px-3 py-1.5 text-sm"
+            >
+              Go to CloudNativePG {homeLabel}
+            </button>
+          </div>
+        }
+      />
+      {confirmDialog}
+    </>
+  )
+}

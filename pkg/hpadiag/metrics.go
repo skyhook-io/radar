@@ -4,6 +4,9 @@ import (
 	"fmt"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 func summarizeMetrics(hpa *autoscalingv2.HorizontalPodAutoscaler) []MetricSummary {
@@ -11,15 +14,15 @@ func summarizeMetrics(hpa *autoscalingv2.HorizontalPodAutoscaler) []MetricSummar
 		return nil
 	}
 
-	currentByKey := make(map[string]autoscalingv2.MetricStatus, len(hpa.Status.CurrentMetrics))
+	currentByKey := make(map[metricKey]autoscalingv2.MetricStatus, len(hpa.Status.CurrentMetrics))
 	for _, current := range hpa.Status.CurrentMetrics {
-		currentByKey[metricStatusKey(current)] = current
+		currentByKey[metricStatusKey(current, hpa.Namespace)] = current
 	}
 
-	seen := make(map[string]struct{}, len(hpa.Spec.Metrics))
+	seen := make(map[metricKey]struct{}, len(hpa.Spec.Metrics))
 	out := make([]MetricSummary, 0, len(hpa.Spec.Metrics))
 	for _, spec := range hpa.Spec.Metrics {
-		key := metricSpecKey(spec)
+		key := metricSpecKey(spec, hpa.Namespace)
 		seen[key] = struct{}{}
 		current, ok := currentByKey[key]
 		status := "ok"
@@ -32,7 +35,7 @@ func summarizeMetrics(hpa *autoscalingv2.HorizontalPodAutoscaler) []MetricSummar
 		}
 		out = append(out, MetricSummary{
 			Type:    string(spec.Type),
-			Name:    metricSpecName(spec),
+			Name:    metricSpecName(spec, hpa.Namespace),
 			Current: currentValue,
 			Target:  formatMetricTarget(spec),
 			Status:  status,
@@ -40,11 +43,11 @@ func summarizeMetrics(hpa *autoscalingv2.HorizontalPodAutoscaler) []MetricSummar
 	}
 
 	for _, current := range hpa.Status.CurrentMetrics {
-		key := metricStatusKey(current)
+		key := metricStatusKey(current, hpa.Namespace)
 		if _, ok := seen[key]; ok {
 			continue
 		}
-		name := metricStatusName(current)
+		name := metricStatusName(current, hpa.Namespace)
 		currentValue := formatMetricCurrent(current)
 		if name == "unknown" && currentValue == "" {
 			continue
@@ -60,15 +63,72 @@ func summarizeMetrics(hpa *autoscalingv2.HorizontalPodAutoscaler) []MetricSummar
 	return out
 }
 
-func metricSpecKey(metric autoscalingv2.MetricSpec) string {
-	return string(metric.Type) + "/" + metricSpecName(metric)
+type metricKey struct {
+	typeName  autoscalingv2.MetricSourceType
+	resource  string
+	container string
+	object    resourceid.Ref
+	metric    string
+	selector  string
 }
 
-func metricStatusKey(metric autoscalingv2.MetricStatus) string {
-	return string(metric.Type) + "/" + metricStatusName(metric)
+func metricSpecKey(metric autoscalingv2.MetricSpec, namespace string) metricKey {
+	key := metricKey{typeName: metric.Type}
+	switch metric.Type {
+	case autoscalingv2.ResourceMetricSourceType:
+		if metric.Resource != nil {
+			key.resource = metric.Resource.Name.String()
+		}
+	case autoscalingv2.ContainerResourceMetricSourceType:
+		if metric.ContainerResource != nil {
+			key.resource, key.container = metric.ContainerResource.Name.String(), metric.ContainerResource.Container
+		}
+	case autoscalingv2.PodsMetricSourceType:
+		if metric.Pods != nil {
+			key.metric, key.selector = metric.Pods.Metric.Name, metav1.FormatLabelSelector(metric.Pods.Metric.Selector)
+		}
+	case autoscalingv2.ObjectMetricSourceType:
+		if metric.Object != nil {
+			key.object = objectMetricRef(metric.Object.DescribedObject, namespace)
+			key.metric, key.selector = metric.Object.Metric.Name, metav1.FormatLabelSelector(metric.Object.Metric.Selector)
+		}
+	case autoscalingv2.ExternalMetricSourceType:
+		if metric.External != nil {
+			key.metric, key.selector = metric.External.Metric.Name, metav1.FormatLabelSelector(metric.External.Metric.Selector)
+		}
+	}
+	return key
 }
 
-func metricSpecName(metric autoscalingv2.MetricSpec) string {
+func metricStatusKey(metric autoscalingv2.MetricStatus, namespace string) metricKey {
+	key := metricKey{typeName: metric.Type}
+	switch metric.Type {
+	case autoscalingv2.ResourceMetricSourceType:
+		if metric.Resource != nil {
+			key.resource = metric.Resource.Name.String()
+		}
+	case autoscalingv2.ContainerResourceMetricSourceType:
+		if metric.ContainerResource != nil {
+			key.resource, key.container = metric.ContainerResource.Name.String(), metric.ContainerResource.Container
+		}
+	case autoscalingv2.PodsMetricSourceType:
+		if metric.Pods != nil {
+			key.metric, key.selector = metric.Pods.Metric.Name, metav1.FormatLabelSelector(metric.Pods.Metric.Selector)
+		}
+	case autoscalingv2.ObjectMetricSourceType:
+		if metric.Object != nil {
+			key.object = objectMetricRef(metric.Object.DescribedObject, namespace)
+			key.metric, key.selector = metric.Object.Metric.Name, metav1.FormatLabelSelector(metric.Object.Metric.Selector)
+		}
+	case autoscalingv2.ExternalMetricSourceType:
+		if metric.External != nil {
+			key.metric, key.selector = metric.External.Metric.Name, metav1.FormatLabelSelector(metric.External.Metric.Selector)
+		}
+	}
+	return key
+}
+
+func metricSpecName(metric autoscalingv2.MetricSpec, namespace string) string {
 	switch metric.Type {
 	case autoscalingv2.ResourceMetricSourceType:
 		if metric.Resource != nil {
@@ -84,7 +144,7 @@ func metricSpecName(metric autoscalingv2.MetricSpec) string {
 		}
 	case autoscalingv2.ObjectMetricSourceType:
 		if metric.Object != nil {
-			return fmt.Sprintf("%s/%s/%s", metric.Object.DescribedObject.Kind, metric.Object.DescribedObject.Name, metric.Object.Metric.Name)
+			return objectMetricName(metric.Object.DescribedObject, metric.Object.Metric, namespace)
 		}
 	case autoscalingv2.ExternalMetricSourceType:
 		if metric.External != nil {
@@ -94,7 +154,7 @@ func metricSpecName(metric autoscalingv2.MetricSpec) string {
 	return "unknown"
 }
 
-func metricStatusName(metric autoscalingv2.MetricStatus) string {
+func metricStatusName(metric autoscalingv2.MetricStatus, namespace string) string {
 	switch metric.Type {
 	case autoscalingv2.ResourceMetricSourceType:
 		if metric.Resource != nil {
@@ -110,7 +170,7 @@ func metricStatusName(metric autoscalingv2.MetricStatus) string {
 		}
 	case autoscalingv2.ObjectMetricSourceType:
 		if metric.Object != nil {
-			return fmt.Sprintf("%s/%s/%s", metric.Object.DescribedObject.Kind, metric.Object.DescribedObject.Name, metric.Object.Metric.Name)
+			return objectMetricName(metric.Object.DescribedObject, metric.Object.Metric, namespace)
 		}
 	case autoscalingv2.ExternalMetricSourceType:
 		if metric.External != nil {
@@ -118,6 +178,23 @@ func metricStatusName(metric autoscalingv2.MetricStatus) string {
 		}
 	}
 	return "unknown"
+}
+
+func objectMetricRef(ref autoscalingv2.CrossVersionObjectReference, namespace string) resourceid.Ref {
+	result := resourceid.Ref{Group: resourceid.GroupFromAPIVersion(ref.APIVersion), Kind: ref.Kind, Namespace: namespace, Name: ref.Name}
+	if result.Kind == "Namespace" && result.Group == "" {
+		result.Name, result.Namespace = namespace, ""
+	}
+	return result
+}
+
+func objectMetricName(ref autoscalingv2.CrossVersionObjectReference, metric autoscalingv2.MetricIdentifier, namespace string) string {
+	resolved := objectMetricRef(ref, namespace)
+	kind := resolved.Kind
+	if resolved.Group != "" {
+		kind += " (" + resolved.Group + ")"
+	}
+	return fmt.Sprintf("%s/%s/%s", kind, resolved.Name, metric.Name)
 }
 
 func formatMetricTarget(metric autoscalingv2.MetricSpec) string {

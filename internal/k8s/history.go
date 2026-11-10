@@ -8,9 +8,11 @@ import (
 	"io"
 	"log"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
@@ -19,11 +21,14 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
 
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -39,6 +44,15 @@ type kindDiffFunc func(oldObj, newObj any) ([]FieldChange, []string)
 type kindDiffRegistration struct {
 	group string
 	diff  kindDiffFunc
+	// backstopRoot names the field whose changes the backstop reports when
+	// the diff function has no row for them (see untrackedSpecChanges): spec,
+	// or webhooks for admission webhook configurations. Set it only for kinds
+	// whose diff function uses the same path notation, or the backstop
+	// repeats its rows. Empty disables the backstop.
+	backstopRoot string
+	// backstopIgnored are paths under backstopRoot that controllers rewrite
+	// on their own, which the backstop does not report.
+	backstopIgnored []string
 }
 
 // diffFunctions is the single source of truth for kinds with audited diff
@@ -51,18 +65,21 @@ type kindDiffRegistration struct {
 // Versions within a group intentionally share a differ; a same-kind object
 // from any other group uses the generic unstructured differ instead.
 var diffFunctions = map[string]kindDiffRegistration{
-	"Deployment":                     {group: "apps", diff: diffDeployment},
+	"Deployment":                     {group: "apps", diff: diffDeployment, backstopRoot: "spec"},
 	"Pod":                            {group: "", diff: diffPod},
-	"Service":                        {group: "", diff: diffService},
+	"Service":                        {group: "", diff: chainDiffs(diffService, diffServicePolicy), backstopRoot: "spec"},
 	"ConfigMap":                      {group: "", diff: diffConfigMap},
 	"Secret":                         {group: "", diff: diffSecret},
 	"SealedSecret":                   {group: "bitnami.com", diff: diffSealedSecret},
-	"Ingress":                        {group: "networking.k8s.io", diff: diffIngress},
+	"Ingress":                        {group: "networking.k8s.io", diff: chainDiffs(diffIngress, diffIngressRouting), backstopRoot: "spec"},
+	"NetworkPolicy":                  {group: "networking.k8s.io", diff: diffNetworkPolicy},
 	"ReplicaSet":                     {group: "apps", diff: diffReplicaSet},
-	"DaemonSet":                      {group: "apps", diff: diffDaemonSet},
-	"StatefulSet":                    {group: "apps", diff: diffStatefulSet},
-	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: diffHPA},
-	"Job":                            {group: "batch", diff: diffJob},
+	"DaemonSet":                      {group: "apps", diff: diffDaemonSet, backstopRoot: "spec"},
+	"StatefulSet":                    {group: "apps", diff: diffStatefulSet, backstopRoot: "spec"},
+	"HorizontalPodAutoscaler":        {group: "autoscaling", diff: chainDiffs(diffHPA, diffHPAScalingConfig), backstopRoot: "spec", backstopIgnored: hpaBehaviorCovered},
+	"Job":                            {group: "batch", diff: diffJob, backstopRoot: "spec"},
+	"CronJob":                        {group: "batch", diff: diffCronJob, backstopRoot: "spec"},
+	"PodDisruptionBudget":            {group: "policy", diff: diffPDB, backstopRoot: "spec"},
 	"Node":                           {group: "", diff: diffNode},
 	"PersistentVolumeClaim":          {group: "", diff: diffPVC},
 	"Application":                    {group: "argoproj.io", diff: diffApplication},
@@ -71,18 +88,25 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"GitRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") }},
 	"OCIRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") }},
 	"HelmRepository":                 {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") }},
-	"Gateway":                        {group: "gateway.networking.k8s.io", diff: diffGateway},
-	"GatewayClass":                   {group: "gateway.networking.k8s.io", diff: diffGatewayClass},
-	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute},
-	"ReferenceGrant":                 {group: "gateway.networking.k8s.io", diff: diffReferenceGrant},
-	"ResourceQuota":                  {group: "", diff: diffResourceQuota},
-	"LimitRange":                     {group: "", diff: diffLimitRange},
-	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
-	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration},
-	"Rollout":                        {group: "argoproj.io", diff: diffRollout},
+	"Gateway":                        {group: "gateway.networking.k8s.io", diff: diffGateway, backstopRoot: "spec"},
+	"GatewayClass":                   {group: "gateway.networking.k8s.io", diff: diffGatewayClass, backstopRoot: "spec"},
+	"HTTPRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"GRPCRoute":                      {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"TCPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"UDPRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"TLSRoute":                       {group: "gateway.networking.k8s.io", diff: diffGatewayRoute, backstopRoot: "spec"},
+	"ReferenceGrant":                 {group: "gateway.networking.k8s.io", diff: diffReferenceGrant, backstopRoot: "spec"},
+	"ResourceQuota":                  {group: "", diff: diffResourceQuota, backstopRoot: "spec"},
+	"LimitRange":                     {group: "", diff: diffLimitRange, backstopRoot: "spec"},
+	"MutatingWebhookConfiguration":   {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
+	"ValidatingWebhookConfiguration": {group: "admissionregistration.k8s.io", diff: diffAdmissionWebhookConfiguration, backstopRoot: "webhooks", backstopIgnored: webhookControllerWrittenPaths},
+	"Rollout":                        {group: "argoproj.io", diff: chainDiffs(diffRollout, diffRolloutSpec), backstopRoot: "spec"},
+	"Role":                           {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"ClusterRole":                    {group: "rbac.authorization.k8s.io", diff: diffRBACRole},
+	"RoleBinding":                    {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
+	"ClusterRoleBinding":             {group: "rbac.authorization.k8s.io", diff: diffRBACBinding},
+	"Workload":                       {group: "kueue.x-k8s.io", diff: diffKueueWorkload, backstopRoot: "spec"},
+	"ProvisioningRequest":            {group: "autoscaling.x-k8s.io", diff: diffProvisioningRequest, backstopRoot: "spec"},
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind and
@@ -113,11 +137,21 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		}
 		return buildDiff(changes, summaryParts)
 	}
+	// The backstop compares the objects as received: the typed projection the
+	// explicit differs read drops fields the compiled types do not know.
+	backstopOld, backstopNew := oldObj, newObj
+	var projectedOld, projectedNew any
 	if oldU, newU, unstructured := unstructuredPair(oldObj, newObj); unstructured {
 		oldObj = diffInputForUnstructured(kind, oldU)
 		newObj = diffInputForUnstructured(kind, newU)
+		projectedOld, projectedNew = oldObj, newObj
 	}
 	changes, summaryParts := registration.diff(oldObj, newObj)
+	if registration.backstopRoot != "" {
+		untracked, untrackedSummary := untrackedSpecChanges(backstopOld, backstopNew, projectedOld, projectedNew, registration.backstopRoot, registration.backstopIgnored, changes)
+		changes = append(changes, untracked...)
+		summaryParts = append(summaryParts, untrackedSummary...)
+	}
 	if len(changes) == 0 {
 		return nil
 	}
@@ -146,6 +180,8 @@ func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
 		return typedOrUnstructured[corev1.Secret](u)
 	case "Ingress":
 		return typedOrUnstructured[networkingv1.Ingress](u)
+	case "NetworkPolicy":
+		return typedOrUnstructured[networkingv1.NetworkPolicy](u)
 	case "ReplicaSet":
 		return typedOrUnstructured[appsv1.ReplicaSet](u)
 	case "DaemonSet":
@@ -156,6 +192,10 @@ func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
 		return typedOrUnstructured[autoscalingv2.HorizontalPodAutoscaler](u)
 	case "Job":
 		return typedOrUnstructured[batchv1.Job](u)
+	case "CronJob":
+		return typedOrUnstructured[batchv1.CronJob](u)
+	case "PodDisruptionBudget":
+		return typedOrUnstructured[policyv1.PodDisruptionBudget](u)
 	case "Node":
 		return typedOrUnstructured[corev1.Node](u)
 	case "PersistentVolumeClaim":
@@ -164,6 +204,14 @@ func diffInputForUnstructured(kind string, u *unstructured.Unstructured) any {
 		return typedOrUnstructured[corev1.ResourceQuota](u)
 	case "LimitRange":
 		return typedOrUnstructured[corev1.LimitRange](u)
+	case "Role":
+		return typedOrUnstructured[rbacv1.Role](u)
+	case "ClusterRole":
+		return typedOrUnstructured[rbacv1.ClusterRole](u)
+	case "RoleBinding":
+		return typedOrUnstructured[rbacv1.RoleBinding](u)
+	case "ClusterRoleBinding":
+		return typedOrUnstructured[rbacv1.ClusterRoleBinding](u)
 	default:
 		return u.DeepCopy()
 	}
@@ -226,19 +274,58 @@ func KindHasDiffer(kind string) bool {
 func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
+	oldDesired, newDesired := genericDesiredState(oldU), genericDesiredState(newU)
 
-	if oldGen, newGen := oldU.GetGeneration(), newU.GetGeneration(); oldGen != newGen && oldGen > 0 && newGen > 0 {
+	if oldU.GetDeletionTimestamp() == nil && newU.GetDeletionTimestamp() != nil && reflect.DeepEqual(oldDesired, newDesired) {
+		// Without this row the update would read as "resource changed".
 		changes = append(changes, FieldChange{
-			Path:     "metadata.generation",
-			OldValue: oldGen,
-			NewValue: newGen,
+			Path:     "metadata.deletionTimestamp",
+			OldValue: nil,
+			NewValue: newU.GetDeletionTimestamp().UTC().Format(time.RFC3339),
 		})
-		summary = append(summary, fmt.Sprintf("spec changed (gen %d→%d, fields not specifically tracked)", oldGen, newGen))
+		summary = append(summary, "deletion started")
+	} else if oldGen, newGen := oldU.GetGeneration(), newU.GetGeneration(); oldGen != newGen && oldGen > 0 && newGen > 0 {
+		var paths []changedSpecPath
+		for _, root := range unionKeys(oldDesired, newDesired) {
+			oldValue, oldFound := oldDesired[root]
+			newValue, newFound := newDesired[root]
+			before := len(paths)
+			// A custom kind's list order may be significant (route or
+			// rule precedence), and its schema cannot say, so any reorder
+			// of a keyed list is reported.
+			collectChangedPaths(root, oldValue, newValue, "", func(string) bool { return true }, &paths)
+			if len(paths) == before && (oldFound != newFound || !reflect.DeepEqual(oldValue, newValue)) {
+				paths = append(paths, changedSpecPath{path: root + " (order or structure changed)", oldV: hiddenValueMarker, newV: hiddenValueMarker})
+			}
+		}
+		paths = collapseUntracked(paths, nil, nil)
+		for i := range paths {
+			// A bare key has no schema-backed identifier meaning on a CR.
+			if sensitivePath(paths[i].path) || slices.Contains(splitSpecPath(paths[i].path), "key") {
+				paths[i].oldV, paths[i].newV = hiddenValues(paths[i].oldV != nil, paths[i].newV != nil)
+			}
+		}
+		changes, summary = untrackedSpecRows("desired state", paths)
+		if len(changes) == 0 && desiredStateStripped(newU) {
+			changes = []FieldChange{{Path: "spec.versions[].schema or spec.conversion", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker}}
+			summary = []string{"schema or conversion changed (fields Radar does not keep)"}
+		}
+		if len(changes) > 0 {
+			changes = append(changes, FieldChange{Path: "metadata.generation", OldValue: oldGen, NewValue: newGen})
+		}
 	}
 
+	genChanged := len(changes) > 0
 	for _, change := range genericConditionChanges(oldU, newU, "status", "conditions") {
 		changes = append(changes, change)
 		summary = append(summary, fmt.Sprintf("%s changed", change.Path))
+	}
+
+	// Objects without a generation would otherwise report only their
+	// conditions when spec changed in the same update.
+	if !genChanged && len(changes) > 0 && !reflect.DeepEqual(oldU.Object["spec"], newU.Object["spec"]) {
+		changes = append(changes, FieldChange{Path: "spec", OldValue: hiddenValueMarker, NewValue: hiddenValueMarker})
+		summary = append(summary, "spec changed (fields not specifically tracked)")
 	}
 
 	if len(changes) > 0 {
@@ -256,6 +343,26 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 		OldValue: "changed",
 		NewValue: "changed",
 	}}, []string{"resource changed"}
+}
+
+// desiredStateStripped reports kinds whose informer transform removes
+// desired-state fields (pkg/k8score/transform.go drops CRD schemas and
+// conversion settings), so a generation bump with no visible desired-state
+// change is still an edit.
+func desiredStateStripped(u *unstructured.Unstructured) bool {
+	return u.GetKind() == "CustomResourceDefinition" && resourceid.GroupFromAPIVersion(u.GetAPIVersion()) == "apiextensions.k8s.io"
+}
+
+func genericDesiredState(u *unstructured.Unstructured) map[string]any {
+	out := make(map[string]any, len(u.Object))
+	for key, value := range u.Object {
+		switch key {
+		case "apiVersion", "kind", "metadata", "status":
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func genericConditionChanges(oldU, newU *unstructured.Unstructured, fields ...string) []FieldChange {
@@ -301,13 +408,15 @@ func genericConditionSignalMap(obj map[string]any, fields ...string) map[string]
 		}
 		status, _ := cond["status"].(string)
 		reason, _ := cond["reason"].(string)
-		out[typ] = status + "\x00" + reason
+		// Quote both components to avoid delimiter collisions and NULs in jsonb.
+		out[typ] = fmt.Sprintf("%q:%q", status, reason)
 	}
 	return out
 }
 
 func normalizedUnstructuredForTimeline(u *unstructured.Unstructured) map[string]any {
 	cp := u.DeepCopy().Object
+	unstructured.RemoveNestedField(cp, "metadata", "generation")
 	normalizeTimelineObject(cp)
 	return cp
 }
@@ -390,6 +499,14 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 	changes = append(changes, podTemplateChanges...)
 	summary = append(summary, podTemplateSummary...)
 
+	templateMetaChanges, templateMetaSummary := diffPodTemplateMetadata(oldDep.Spec.Template.ObjectMeta, newDep.Spec.Template.ObjectMeta)
+	changes = append(changes, templateMetaChanges...)
+	summary = append(summary, templateMetaSummary...)
+
+	rolloutChanges, rolloutSummary := diffDeploymentRolloutConfig(oldDep, newDep)
+	changes = append(changes, rolloutChanges...)
+	summary = append(summary, rolloutSummary...)
+
 	// Check paused state
 	if oldDep.Spec.Paused != newDep.Spec.Paused {
 		changes = append(changes, FieldChange{
@@ -455,6 +572,16 @@ func diffPod(oldObj, newObj any) ([]FieldChange, []string) {
 
 	var changes []FieldChange
 	var summary []string
+
+	// A label edit changes which Services and NetworkPolicies select the pod.
+	if !equalStringMaps(oldPod.Labels, newPod.Labels) {
+		changes = append(changes, FieldChange{
+			Path:     "metadata.labels",
+			OldValue: oldPod.Labels,
+			NewValue: newPod.Labels,
+		})
+		summary = append(summary, "labels changed")
+	}
 
 	// Check phase
 	if oldPod.Status.Phase != newPod.Status.Phase {
@@ -788,6 +915,7 @@ func limitRangeItemRefs(items []corev1.LimitRangeItem) []string {
 		appendQuantities("min", item.Min)
 		appendQuantities("default", item.Default)
 		appendQuantities("defaultRequest", item.DefaultRequest)
+		appendQuantities("maxLimitRequestRatio", item.MaxLimitRequestRatio)
 		out = append(out, strings.Join(parts, " "))
 	}
 	sort.Strings(out)
@@ -809,8 +937,12 @@ func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []str
 		return nil, nil
 	}
 
-	oldHooks := indexWebhooksByName(oldU)
-	newHooks := indexWebhooksByName(newU)
+	// Compare raw summaries; show summaries with selector values under
+	// secret-looking keys masked.
+	oldHooks := indexWebhooksByName(oldU, false)
+	newHooks := indexWebhooksByName(newU, false)
+	oldShown := indexWebhooksByName(oldU, true)
+	newShown := indexWebhooksByName(newU, true)
 
 	names := map[string]struct{}{}
 	for n := range oldHooks {
@@ -833,16 +965,22 @@ func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []str
 		if oldOK && newOK && oldS == newS {
 			continue
 		}
+		shownNew := newShown[name]
+		if oldOK && newOK && oldShown[name] == shownNew {
+			shownNew += " (masked values changed)"
+		}
 		changes = append(changes, FieldChange{
 			Path:     "webhooks[" + name + "]",
-			OldValue: valueOrNil(oldS, oldOK),
-			NewValue: valueOrNil(newS, newOK),
+			OldValue: valueOrNil(oldShown[name], oldOK),
+			NewValue: valueOrNil(shownNew, newOK),
 		})
 		switch {
 		case !oldOK:
 			summary = append(summary, "webhook "+name+" added")
 		case !newOK:
 			summary = append(summary, "webhook "+name+" removed")
+		case webhookSummaryWithoutCA(oldS) == webhookSummaryWithoutCA(newS):
+			summary = append(summary, "webhook "+name+" caBundle rotated")
 		default:
 			summary = append(summary, "webhook "+name+" changed")
 		}
@@ -852,7 +990,7 @@ func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []str
 
 // indexWebhooksByName maps each webhook's name to a compact, comparable summary
 // of the fields that matter for diagnosis. Unnamed entries are skipped.
-func indexWebhooksByName(u *unstructured.Unstructured) map[string]string {
+func indexWebhooksByName(u *unstructured.Unstructured, redact bool) map[string]string {
 	out := map[string]string{}
 	hooks, _, _ := unstructured.NestedSlice(u.Object, "webhooks")
 	for _, h := range hooks {
@@ -864,12 +1002,12 @@ func indexWebhooksByName(u *unstructured.Unstructured) map[string]string {
 		if name == "" {
 			continue
 		}
-		out[name] = webhookSummary(hm)
+		out[name] = webhookSummary(hm, redact)
 	}
 	return out
 }
 
-func webhookSummary(hm map[string]any) string {
+func webhookSummary(hm map[string]any, redact bool) string {
 	var parts []string
 	if fp, ok, _ := unstructured.NestedString(hm, "failurePolicy"); ok {
 		parts = append(parts, "failurePolicy="+fp)
@@ -915,10 +1053,10 @@ func webhookSummary(hm map[string]any) string {
 	// Selectors are the webhook's blast radius — a re-scoping change (e.g. now
 	// matching the prod namespace) must register. Without these, a selector-only
 	// update would diff empty and recordToTimelineStore would silently drop it.
-	if ns := webhookSelectorSummary(hm, "namespaceSelector"); ns != "" {
+	if ns := webhookSelectorSummary(hm, "namespaceSelector", redact); ns != "" {
 		parts = append(parts, "namespaceSelector={"+ns+"}")
 	}
-	if objSel := webhookSelectorSummary(hm, "objectSelector"); objSel != "" {
+	if objSel := webhookSelectorSummary(hm, "objectSelector", redact); objSel != "" {
 		parts = append(parts, "objectSelector={"+objSel+"}")
 	}
 	parts = append(parts, "rules="+webhookRulesSummary(hm))
@@ -927,7 +1065,7 @@ func webhookSummary(hm map[string]any) string {
 
 // webhookSelectorSummary renders a namespaceSelector/objectSelector compactly as
 // sorted matchLabels + matchExpressions. Empty (match-everything) selector → "".
-func webhookSelectorSummary(hm map[string]any, field string) string {
+func webhookSelectorSummary(hm map[string]any, field string, redact bool) string {
 	matchLabels, _, _ := unstructured.NestedStringMap(hm, field, "matchLabels")
 	exprs, _, _ := unstructured.NestedSlice(hm, field, "matchExpressions")
 	if len(matchLabels) == 0 && len(exprs) == 0 {
@@ -940,7 +1078,11 @@ func webhookSelectorSummary(hm map[string]any, field string) string {
 	sort.Strings(keys)
 	parts := make([]string, 0, len(keys)+len(exprs))
 	for _, k := range keys {
-		parts = append(parts, k+"="+matchLabels[k])
+		value := matchLabels[k]
+		if redact && envNameLooksSecret(k) {
+			value = "[REDACTED]"
+		}
+		parts = append(parts, k+"="+value)
 	}
 	exprStrs := make([]string, 0, len(exprs))
 	for _, e := range exprs {
@@ -951,6 +1093,9 @@ func webhookSelectorSummary(hm map[string]any, field string) string {
 		key, _, _ := unstructured.NestedString(em, "key")
 		op, _, _ := unstructured.NestedString(em, "operator")
 		vals, _, _ := unstructured.NestedStringSlice(em, "values")
+		if redact && envNameLooksSecret(key) && len(vals) > 0 {
+			vals = []string{"[REDACTED]"}
+		}
 		exprStrs = append(exprStrs, key+" "+op+" ["+strings.Join(vals, ",")+"]")
 	}
 	sort.Strings(exprStrs)
@@ -1020,7 +1165,14 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("removed keys: %v", removedKeys))
 	}
 	if len(modifiedKeys) > 0 {
-		structured, structuredSummary, fallback := diffConfigMapModifiedKeys(oldCM.Data, newCM.Data, modifiedKeys)
+		// A reordered key is named, not structurally diffed: the entry-level
+		// diff would report every moved entry as a change.
+		reordered := reorderedValueKeys(oldCM.Data, newCM.Data, modifiedKeys)
+		structured, structuredSummary, fallback := diffConfigMapModifiedKeys(oldCM.Data, newCM.Data, slices.DeleteFunc(slices.Clone(modifiedKeys), func(key string) bool {
+			return slices.Contains(reordered, key)
+		}))
+		fallback = append(fallback, reordered...)
+		sort.Strings(fallback)
 		changes = append(changes, structured...)
 		summary = append(summary, structuredSummary...)
 		if len(fallback) > 0 {
@@ -1031,9 +1183,10 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 			})
 			summary = append(summary, fmt.Sprintf("modified keys: %v", fallback))
 		}
+		appendReorderedKeys(&changes, &summary, "data", reordered)
 	}
 
-	appendSensitiveMapChanges(&changes, &summary, "binaryData", oldCM.BinaryData, newCM.BinaryData)
+	appendSensitiveMapChanges(&changes, &summary, "binaryData", oldCM.BinaryData, newCM.BinaryData, false)
 
 	// Immutable flag flips are user-meaningful (locks the CM until recreated).
 	oldImmut := oldCM.Immutable != nil && *oldCM.Immutable
@@ -1059,8 +1212,8 @@ func diffSecret(oldObj, newObj any) ([]FieldChange, []string) {
 
 	var changes []FieldChange
 	var summary []string
-	appendSensitiveMapChanges(&changes, &summary, "data", oldSecret.Data, newSecret.Data)
-	appendSensitiveMapChanges(&changes, &summary, "stringData", oldSecret.StringData, newSecret.StringData)
+	appendSensitiveMapChanges(&changes, &summary, "data", oldSecret.Data, newSecret.Data, true)
+	appendSensitiveMapChanges(&changes, &summary, "stringData", oldSecret.StringData, newSecret.StringData, true)
 
 	if oldSecret.Type != newSecret.Type {
 		changes = append(changes, FieldChange{Path: "type", OldValue: oldSecret.Type, NewValue: newSecret.Type})
@@ -1086,7 +1239,7 @@ func diffSealedSecret(oldObj, newObj any) ([]FieldChange, []string) {
 	newData, _, _ := unstructured.NestedMap(newSecret.Object, "spec", "encryptedData")
 	var changes []FieldChange
 	var summary []string
-	appendSensitiveMapChanges(&changes, &summary, "spec.encryptedData", oldData, newData)
+	appendSensitiveMapChanges(&changes, &summary, "spec.encryptedData", oldData, newData, false)
 	if len(changes) == 0 {
 		oldGeneration, newGeneration := oldSecret.GetGeneration(), newSecret.GetGeneration()
 		if oldGeneration != newGeneration && oldGeneration > 0 && newGeneration > 0 {
@@ -1103,7 +1256,12 @@ func diffSealedSecret(oldObj, newObj any) ([]FieldChange, []string) {
 	return changes, summary
 }
 
-func appendSensitiveMapChanges[T any](changes *[]FieldChange, summary *[]string, field string, oldData, newData map[string]T) {
+// appendSensitiveMapChanges records key names only, never values. With
+// orderAware, a modified key whose new value holds the same comma-separated
+// entries in another order is also listed under "(reordered keys)". It stays
+// under "(modified keys)" too, so a reader that doesn't know the annotation
+// still sees a change.
+func appendSensitiveMapChanges[T any](changes *[]FieldChange, summary *[]string, field string, oldData, newData map[string]T, orderAware bool) {
 	oldKeys := genericMapKeys(oldData)
 	newKeys := genericMapKeys(newData)
 	added := diffStringSlices(newKeys, oldKeys)
@@ -1132,6 +1290,17 @@ func appendSensitiveMapChanges[T any](changes *[]FieldChange, summary *[]string,
 		})
 		*summary = append(*summary, fmt.Sprintf("%s modified keys: %v", field, modified))
 	}
+	if orderAware {
+		appendReorderedKeys(changes, summary, field, reorderedValueKeys(oldData, newData, modified))
+	}
+}
+
+func appendReorderedKeys(changes *[]FieldChange, summary *[]string, field string, reordered []string) {
+	if len(reordered) == 0 {
+		return
+	}
+	*changes = append(*changes, FieldChange{Path: field + ReorderedKeysPathSuffix, OldValue: reordered, NewValue: reordered})
+	*summary = append(*summary, fmt.Sprintf("%s reordered keys: %v", field, reordered))
 }
 
 const (
@@ -1549,14 +1718,22 @@ func diffIngress(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
-	// Check rules count
-	if len(oldIng.Spec.Rules) != len(newIng.Spec.Rules) {
-		changes = append(changes, FieldChange{
-			Path:     "spec.rules",
-			OldValue: len(oldIng.Spec.Rules),
-			NewValue: len(newIng.Spec.Rules),
-		})
-		summary = append(summary, fmt.Sprintf("rules: %d→%d", len(oldIng.Spec.Rules), len(newIng.Spec.Rules)))
+	// Rules keyed by host report which rule came or went; otherwise only the
+	// count is comparable.
+	rulesKeyedByHost := false
+	if !reflect.DeepEqual(oldIng.Spec.Rules, newIng.Spec.Rules) {
+		if ruleChanges, ruleSummary, keyed := keyedListChanges("spec.rules", "rule", ingressRulesList(oldIng), ingressRulesList(newIng), ingressRuleBackends); keyed {
+			rulesKeyedByHost = true
+			changes = append(changes, ruleChanges...)
+			summary = append(summary, ruleSummary...)
+		} else if len(oldIng.Spec.Rules) != len(newIng.Spec.Rules) {
+			changes = append(changes, FieldChange{
+				Path:     "spec.rules",
+				OldValue: len(oldIng.Spec.Rules),
+				NewValue: len(newIng.Spec.Rules),
+			})
+			summary = append(summary, fmt.Sprintf("rules: %d→%d", len(oldIng.Spec.Rules), len(newIng.Spec.Rules)))
+		}
 	}
 
 	// Check TLS
@@ -1608,7 +1785,10 @@ func diffIngress(oldObj, newObj any) ([]FieldChange, []string) {
 			OldValue: oldHosts,
 			NewValue: newHosts,
 		})
-		summary = append(summary, "hosts changed")
+		// Host-keyed rule rows already name each host that came or went.
+		if !rulesKeyedByHost {
+			summary = append(summary, "hosts changed")
+		}
 	}
 
 	return changes, summary
@@ -1722,6 +1902,14 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 	changes = append(changes, podTemplateChanges...)
 	summary = append(summary, podTemplateSummary...)
 
+	templateMetaChanges, templateMetaSummary := diffPodTemplateMetadata(oldDS.Spec.Template.ObjectMeta, newDS.Spec.Template.ObjectMeta)
+	changes = append(changes, templateMetaChanges...)
+	summary = append(summary, templateMetaSummary...)
+
+	rolloutChanges, rolloutSummary := diffDaemonSetRolloutConfig(oldDS.Spec, newDS.Spec)
+	changes = append(changes, rolloutChanges...)
+	summary = append(summary, rolloutSummary...)
+
 	// Check desired/ready
 	if oldDS.Status.DesiredNumberScheduled != newDS.Status.DesiredNumberScheduled {
 		changes = append(changes, FieldChange{
@@ -1816,6 +2004,14 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
 	changes = append(changes, podTemplateChanges...)
 	summary = append(summary, podTemplateSummary...)
+
+	templateMetaChanges, templateMetaSummary := diffPodTemplateMetadata(oldSTS.Spec.Template.ObjectMeta, newSTS.Spec.Template.ObjectMeta)
+	changes = append(changes, templateMetaChanges...)
+	summary = append(summary, templateMetaSummary...)
+
+	rolloutChanges, rolloutSummary := diffStatefulSetRolloutConfig(oldSTS.Spec, newSTS.Spec)
+	changes = append(changes, rolloutChanges...)
+	summary = append(summary, rolloutSummary...)
 
 	// Check ready replicas
 	if oldSTS.Status.ReadyReplicas != newSTS.Status.ReadyReplicas {
@@ -2079,8 +2275,10 @@ func diffNode(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	// Check taints
-	oldTaints := getTaintKeys(oldNode.Spec.Taints)
-	newTaints := getTaintKeys(newNode.Spec.Taints)
+	oldTaintValues := nodeTaintsByKey(oldNode.Spec.Taints)
+	newTaintValues := nodeTaintsByKey(newNode.Spec.Taints)
+	oldTaints := genericMapKeys(oldTaintValues)
+	newTaints := genericMapKeys(newTaintValues)
 	if !equalStringSlices(oldTaints, newTaints) {
 		changes = append(changes, FieldChange{
 			Path:     "spec.taints",
@@ -2095,6 +2293,54 @@ func diffNode(oldObj, newObj any) ([]FieldChange, []string) {
 		if len(removed) > 0 {
 			summary = append(summary, fmt.Sprintf("taints removed: %v", removed))
 		}
+	}
+	for _, key := range oldTaints {
+		// Compare before redaction so sensitive value rotations remain visible.
+		if newValues, ok := newTaintValues[key]; ok && !reflect.DeepEqual(oldTaintValues[key], newValues) {
+			changes = append(changes, FieldChange{
+				Path:     "spec.taints[" + key + "]",
+				OldValue: nodeTaintDisplayValues(oldTaintValues[key]),
+				NewValue: nodeTaintDisplayValues(newValues),
+			})
+			summary = append(summary, fmt.Sprintf("taint %s changed", key))
+		}
+	}
+
+	joining := nodeJoining(newNode)
+	for _, key := range changedMapKeys(oldNode.Labels, newNode.Labels) {
+		if nodeMetadataKeyIgnored(key, false) {
+			continue
+		}
+		oldVal, oldOK := oldNode.Labels[key]
+		newVal, newOK := newNode.Labels[key]
+		if joining && !oldOK && !nodePolicyMetadataKey(key) {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     specPathKey("metadata.labels", key),
+			OldValue: templateLabelValue(key, oldVal, oldOK),
+			NewValue: templateLabelValue(key, newVal, newOK),
+		})
+		summary = append(summary, fmt.Sprintf("label %s %s", key, mapKeyVerb(oldOK, newOK)))
+	}
+	for _, key := range changedMapKeys(oldNode.Annotations, newNode.Annotations) {
+		if nodeMetadataKeyIgnored(key, true) {
+			continue
+		}
+		_, oldOK := oldNode.Annotations[key]
+		_, newOK := newNode.Annotations[key]
+		if joining && !oldOK && !nodePolicyMetadataKey(key) {
+			continue
+		}
+		// Like pod-template annotations, these can hold arbitrary config or
+		// credentials. Keep the field and presence without storing the value.
+		oldShown, newShown := hiddenValues(oldOK, newOK)
+		changes = append(changes, FieldChange{
+			Path:     specPathKey("metadata.annotations", key),
+			OldValue: oldShown,
+			NewValue: newShown,
+		})
+		summary = append(summary, fmt.Sprintf("annotation %s %s", key, mapKeyVerb(oldOK, newOK)))
 	}
 
 	// Check pressure + ready conditions. MemoryPressure / DiskPressure /
@@ -2339,24 +2585,20 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
-	// Check sync policy changes (auto-sync enabled/disabled)
-	oldAutoSync, oldAutoExists, _ := unstructured.NestedMap(oldApp.Object, "spec", "syncPolicy", "automated")
-	newAutoSync, newAutoExists, _ := unstructured.NestedMap(newApp.Object, "spec", "syncPolicy", "automated")
-
-	if !oldAutoExists && newAutoExists {
+	// Check sync policy changes (auto-sync enabled/disabled). Argo CD 3.x can
+	// switch automation off in place with `automated.enabled: false`, so
+	// compare the effective state, not whether the block exists.
+	if oldAutoEnabled, newAutoEnabled := gitops.ArgoAutoSyncEnabled(oldApp), gitops.ArgoAutoSyncEnabled(newApp); oldAutoEnabled != newAutoEnabled {
 		changes = append(changes, FieldChange{
 			Path:     "spec.syncPolicy.automated",
-			OldValue: nil,
-			NewValue: newAutoSync,
+			OldValue: argoAutomatedBlock(oldApp),
+			NewValue: argoAutomatedBlock(newApp),
 		})
-		summary = append(summary, "auto-sync enabled")
-	} else if oldAutoExists && !newAutoExists {
-		changes = append(changes, FieldChange{
-			Path:     "spec.syncPolicy.automated",
-			OldValue: oldAutoSync,
-			NewValue: nil,
-		})
-		summary = append(summary, "auto-sync disabled")
+		if newAutoEnabled {
+			summary = append(summary, "auto-sync enabled")
+		} else {
+			summary = append(summary, "auto-sync disabled")
+		}
 	}
 
 	// Check target revision change
@@ -2434,6 +2676,15 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	return changes, summary
+}
+
+// argoAutomatedBlock returns spec.syncPolicy.automated, or nil (not a nil map)
+// when the block is absent, so the change record reads null.
+func argoAutomatedBlock(app *unstructured.Unstructured) any {
+	if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+		return automated
+	}
+	return nil
 }
 
 // Step index, weights, pause conditions and abort/promoteFull all move without
@@ -3083,13 +3334,86 @@ func truncateSourceRevision(rev string) string {
 	return rev
 }
 
-// getTaintKeys extracts taint keys from a list of taints
-func getTaintKeys(taints []corev1.Taint) []string {
-	keys := make([]string, len(taints))
-	for i, t := range taints {
-		keys[i] = t.Key
+func nodeTaintsByKey(taints []corev1.Taint) map[string][]corev1.Taint {
+	values := make(map[string][]corev1.Taint)
+	for _, taint := range taints {
+		// Autoscaler values are controller timestamps, not user configuration.
+		switch taint.Key {
+		case "ToBeDeletedByClusterAutoscaler", "DeletionCandidateOfClusterAutoscaler":
+			taint.Value = ""
+		}
+		// TimeAdded is controller bookkeeping, not a scheduling change.
+		taint.TimeAdded = nil
+		values[taint.Key] = append(values[taint.Key], taint)
 	}
-	return keys
+	for _, taints := range values {
+		sort.Slice(taints, func(i, j int) bool { return taints[i].ToString() < taints[j].ToString() })
+	}
+	return values
+}
+
+func nodeTaintDisplayValues(taints []corev1.Taint) []string {
+	values := make([]string, 0, len(taints))
+	for _, taint := range taints {
+		taint.Value = fmt.Sprint(templateLabelValue(taint.Key, taint.Value, true))
+		values = append(values, taint.ToString())
+	}
+	sort.Strings(values)
+	return values
+}
+
+// nodeJoinWindow covers the metadata a new node collects after registering:
+// cloud-controller topology labels within a second, Karpenter instance labels
+// about 20s later, CNI annotations at boot.
+const nodeJoinWindow = 5 * time.Minute
+
+// nodeJoining reports whether keys added to this node now are most likely
+// join-time bookkeeping rather than a change someone made.
+func nodeJoining(node *corev1.Node) bool {
+	created := node.CreationTimestamp.Time
+	return !created.IsZero() && time.Since(created) < nodeJoinWindow
+}
+
+// nodePolicyMetadataKey is user-set disruption and scale-down policy, recorded
+// even on a joining node.
+func nodePolicyMetadataKey(key string) bool {
+	switch key {
+	case "karpenter.sh/do-not-disrupt", "karpenter.sh/do-not-evict", "karpenter.sh/do-not-repair",
+		"cluster-autoscaler.kubernetes.io/scale-down-disabled":
+		return true
+	}
+	return false
+}
+
+func nodeMetadataKeyIgnored(key string, annotation bool) bool {
+	if key == "node.alpha.kubernetes.io/ttl" || key == "nvidia.com/gfd.timestamp" || strings.HasPrefix(key, "rke2.io/") || strings.HasPrefix(key, "k3s.io/") {
+		return true
+	}
+	if !annotation {
+		return false
+	}
+	switch key {
+	case "volumes.kubernetes.io/controller-managed-attach-detach", "csi.volume.kubernetes.io/nodeid",
+		"alpha.kubernetes.io/provided-node-ip", "kubectl.kubernetes.io/last-applied-configuration", "kubevirt.io/heartbeat":
+		return true
+	// Rancher recomputes the node's pod request/limit totals every 15s.
+	case "management.cattle.io/pod-requests", "management.cattle.io/pod-limits":
+		return true
+	}
+	// User policy must remain visible even when the controller's runtime
+	// annotations are excluded. Karpenter labels also drive scheduling.
+	if nodePolicyMetadataKey(key) {
+		return false
+	}
+	for _, prefix := range []string{
+		"kubeadm.alpha.kubernetes.io/", "kubelet.alpha.kubernetes.io/",
+		"flannel.alpha.coreos.com/", "cluster-autoscaler.kubernetes.io/", "karpenter.sh/",
+	} {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // getNodeConditionStatus gets the status of a specific node condition
@@ -3256,7 +3580,12 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 			oldProbe := normalizedProbe(probeForName(oldC.Container, probeName))
 			newProbe := normalizedProbe(probeForName(newC.Container, probeName))
 			if !reflect.DeepEqual(oldProbe, newProbe) {
-				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: oldProbe, NewValue: newProbe})
+				oldShown, newShown := probeDisplay(oldProbe), probeDisplay(newProbe)
+				// Only hidden parts changed: say so, or the row reads as no change.
+				if m, ok := newShown.(map[string]any); ok && reflect.DeepEqual(oldShown, newShown) {
+					m["hiddenFieldsChanged"] = true
+				}
+				changes = append(changes, FieldChange{Path: newC.fieldPath(name, probeName), OldValue: oldShown, NewValue: newShown})
 				summary = append(summary, fmt.Sprintf("%s(%s) changed", probeName, name))
 			}
 		}
@@ -3317,7 +3646,8 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 		summary = append(summary, fmt.Sprintf("serviceAccountName: %s→%s", emptyAsNone(oldSpec.ServiceAccountName), emptyAsNone(newSpec.ServiceAccountName)))
 	}
 	if !reflect.DeepEqual(oldSpec.NodeSelector, newSpec.NodeSelector) {
-		changes = append(changes, FieldChange{Path: "spec.template.spec.nodeSelector", OldValue: oldSpec.NodeSelector, NewValue: newSpec.NodeSelector})
+		oldSel, newSel := redactedLabelMaps(oldSpec.NodeSelector, newSpec.NodeSelector)
+		changes = append(changes, FieldChange{Path: "spec.template.spec.nodeSelector", OldValue: oldSel, NewValue: newSel})
 		summary = append(summary, "nodeSelector changed")
 	}
 	if oldTol, newTol := tolerationRefs(oldSpec.Tolerations), tolerationRefs(newSpec.Tolerations); !equalStringSlices(oldTol, newTol) {
@@ -3575,6 +3905,48 @@ func probeForName(c corev1.Container, name string) *corev1.Probe {
 	}
 }
 
+// probeDisplay redacts a normalized probe for output: exec commands are
+// hidden, HTTP query values are hidden, and the rest goes through
+// secret-pattern redaction. Comparison uses the raw normalized probe.
+func probeDisplay(normalized any) any {
+	m, ok := normalized.(map[string]any)
+	if !ok {
+		return normalized
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	switch handler := out["handler"].(type) {
+	case string:
+		out["handler"] = aicontext.RedactSecrets(withoutQueryValues(handler))
+	case map[string]any:
+		// Exec probes routinely embed credentials in forms no argument
+		// classifier can bound (curl -u, quoted scripts), so the command is
+		// never shown; the row still says the probe changed.
+		if _, ok := handler["exec"]; ok {
+			out["handler"] = map[string]any{"exec": hiddenValueMarker}
+		}
+	}
+	return out
+}
+
+// withoutQueryValues keeps an HTTP probe path's query keys and hides every
+// value: tokens and API keys in probe URLs have no recognizable format.
+func withoutQueryValues(handler string) string {
+	path, query, ok := strings.Cut(handler, "?")
+	if !ok {
+		return handler
+	}
+	params := strings.Split(query, "&")
+	for i, param := range params {
+		if key, _, hasValue := strings.Cut(param, "="); hasValue {
+			params[i] = key + "=[REDACTED]"
+		}
+	}
+	return path + "?" + strings.Join(params, "&")
+}
+
 func normalizedProbe(p *corev1.Probe) any {
 	if p == nil {
 		return nil
@@ -3649,6 +4021,19 @@ func commandArgDisplayValue(value string) (string, bool) {
 	if trimmed == "" {
 		return value, false
 	}
+	// A shell script passed as one argument (sh -c "...") carries its own
+	// flags and values, and quoting makes their extent unknowable: if any
+	// word looks like a credential flag, hide the whole argument.
+	if words := strings.Fields(trimmed); len(words) > 1 {
+		for _, word := range words {
+			if _, inline := splitInlineSecretArg(word); inline || commandArgNameLooksSecret(word) || attachedUserCredential(word) {
+				return "[REDACTED script]", false
+			}
+		}
+	}
+	if attachedUserCredential(trimmed) {
+		return "[REDACTED]", false
+	}
 	if prefix, ok := splitInlineSecretArg(trimmed); ok {
 		return prefix + "[REDACTED]", false
 	}
@@ -3667,8 +4052,23 @@ func splitInlineSecretArg(value string) (string, bool) {
 	return "", false
 }
 
+// attachedUserCredential matches curl-style credentials attached to their
+// flag: -uuser:password, --user=user:password, --proxy-user=user:password.
+func attachedUserCredential(value string) bool {
+	v := strings.Trim(value, "\"'")
+	if strings.HasPrefix(v, "--user=") || strings.HasPrefix(v, "--proxy-user=") {
+		return true
+	}
+	return strings.HasPrefix(v, "-u") && !strings.HasPrefix(v, "--") && len(v) > 2
+}
+
 func commandArgNameLooksSecret(value string) bool {
 	name := strings.Trim(strings.TrimSpace(value), "\"'")
+	// curl and most HTTP clients take user:password after -u / --user.
+	switch name {
+	case "-u", "--user", "--proxy-user":
+		return true
+	}
 	name = strings.TrimLeft(name, "-")
 	if name == "key" {
 		return true
@@ -3843,7 +4243,10 @@ func diffGateway(oldObj, newObj any) ([]FieldChange, []string) {
 	// Check listener count
 	oldListeners, _, _ := unstructured.NestedSlice(oldGW.Object, "spec", "listeners")
 	newListeners, _, _ := unstructured.NestedSlice(newGW.Object, "spec", "listeners")
-	if len(oldListeners) != len(newListeners) {
+	if listenerChanges, listenerSummary, keyed := keyedListChanges("spec.listeners", "listener", oldListeners, newListeners, gatewayListenerString); keyed {
+		changes = append(changes, listenerChanges...)
+		summary = append(summary, listenerSummary...)
+	} else if len(oldListeners) != len(newListeners) {
 		changes = append(changes, FieldChange{
 			Path:     "spec.listeners",
 			OldValue: fmt.Sprintf("%d listeners", len(oldListeners)),
@@ -3883,7 +4286,7 @@ func diffGateway(oldObj, newObj any) ([]FieldChange, []string) {
 	return changes, summary
 }
 
-// diffGatewayRoute computes diff for Gateway API route resources (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+// diffGatewayRoute computes diff for Gateway API route resources (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
 func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 	oldRoute, ok1 := oldObj.(*unstructured.Unstructured)
 	newRoute, ok2 := newObj.(*unstructured.Unstructured)
@@ -3907,10 +4310,14 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("hostnames: %s→%s", strings.Join(oldHostnames, ","), strings.Join(newHostnames, ",")))
 	}
 
-	// Check rules count
+	// Named rules report which rule came or went; otherwise only the count
+	// is comparable.
 	oldRules, _, _ := unstructured.NestedSlice(oldRoute.Object, "spec", "rules")
 	newRules, _, _ := unstructured.NestedSlice(newRoute.Object, "spec", "rules")
-	if len(oldRules) != len(newRules) {
+	if ruleChanges, ruleSummary, keyed := keyedListChanges("spec.rules", "rule", oldRules, newRules, routeRuleBackends); keyed {
+		changes = append(changes, ruleChanges...)
+		summary = append(summary, ruleSummary...)
+	} else if len(oldRules) != len(newRules) {
 		changes = append(changes, FieldChange{
 			Path:     "spec.rules",
 			OldValue: fmt.Sprintf("%d rules", len(oldRules)),
@@ -4038,7 +4445,7 @@ func diffReferenceGrant(oldObj, newObj any) ([]FieldChange, []string) {
 	return changes, summary
 }
 
-// indexParentConditions extracts {parentKey -> {conditionType -> status}} from
+// indexParentConditions extracts {parentKey -> {conditionType -> "status (reason)"}} from
 // a Gateway-API route's status.parents. The parent key is
 // "<group>/<kind>/<ns>/<name>/<sectionName>/<port>" — Gateway API permits a
 // route to attach to the same Gateway twice via different listeners
@@ -4068,6 +4475,11 @@ func indexParentConditions(parents []any) map[string]map[string]string {
 			}
 			t, _ := cMap["type"].(string)
 			s, _ := cMap["status"].(string)
+			// The reason is part of the value: a route can stay False while its
+			// cause changes (BackendNotFound to RefNotPermitted).
+			if r, _ := cMap["reason"].(string); r != "" {
+				s += " (" + r + ")"
+			}
 			if t != "" {
 				conds[t] = s
 			}

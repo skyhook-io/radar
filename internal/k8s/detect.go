@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -23,7 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/rollouts"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 const probeFailureWindow = 10 * time.Minute
@@ -43,13 +47,17 @@ const ScaledToZeroReason = "Backing workload scaled to 0"
 
 const livenessProbeFailedReason = "LivenessProbeFailed"
 
+// startupProbeFailedReason is evidence only: a failed startup probe restarts
+// the container like a liveness failure, but it never becomes a row reason.
+const startupProbeFailedReason = "StartupProbeFailed"
+
 // Core ConfigMaps and Secrets have no kind-specific graceful termination phase.
 // Once deletion starts, a remaining finalizer is the only thing keeping the
 // object present, so delayed cleanup is actionable sooner than workload drain.
 const configMapSecretTerminatingWarningAfter = 2 * time.Minute
 
-const terminatingWarningAfter = 10 * time.Minute
-const terminatingCriticalAfter = 30 * time.Minute
+const terminatingWarningAfter = health.NodeRemovalWarningAfter
+const terminatingCriticalAfter = health.NodeRemovalCriticalAfter
 
 type NodeStartupCorroboration struct {
 	Node       string
@@ -74,8 +82,14 @@ type NodeStartupCorroboration struct {
 // successor to the v0 standalone "problems" feature, NOT a parallel surface to
 // issues.
 type Detection struct {
-	NodeStartupCorroboration   *NodeStartupCorroboration `json:"-"`
-	MessageBeforeCorroboration string                    `json:"-"`
+	TerminatingFinalizers []string `json:"-"`
+	// TerminatingRemovals maps each operator finalizer to a dry-run removal.
+	// Issue composition offers one only as a ConditionalCleanup, after finding
+	// no running copy of the finalizer's catalog controller.
+	TerminatingRemovals        map[string]issuesapi.FinalizerRemoval `json:"-"`
+	ConditionalCleanup         *issuesapi.ConditionalCleanup         `json:"-"`
+	NodeStartupCorroboration   *NodeStartupCorroboration             `json:"-"`
+	MessageBeforeCorroboration string                                `json:"-"`
 	Kind                       string
 	Namespace                  string
 	Name                       string
@@ -84,12 +98,15 @@ type Detection struct {
 	Reason                     string
 	Message                    string
 	RawMessage                 string
-	Age                        string // human-readable
-	AgeSeconds                 int64  // for sorting
-	Duration                   string // how long the problem has persisted
-	DurationSeconds            int64
-	OnsetAt                    time.Time
-	ResourceCreatedAt          time.Time
+	// MessageSource is issuesapi.MessageSourceRadar when Message is Radar's
+	// own summary rather than text from Kubernetes or a controller.
+	MessageSource     string
+	Age               string // human-readable
+	AgeSeconds        int64  // for sorting
+	Duration          string // how long the problem has persisted
+	DurationSeconds   int64
+	OnsetAt           time.Time
+	ResourceCreatedAt time.Time
 	// OnsetUnknown is set when the snapshot proves the issue exists but carries
 	// no defensible evidence for when the failing state began. Resource age may
 	// still be populated independently.
@@ -103,6 +120,23 @@ type Detection struct {
 	// mean either non-Pod problem or no crash data on this Pod yet.
 	RestartCount         int32
 	LastTerminatedReason string
+	// RestartLoop is set on a Pod crashloop row emitted because a container is
+	// in an active restart loop (see activeRestartLoop). Nil otherwise.
+	RestartLoop *issuesapi.RestartLoop
+	// EvictedFromNode is spec.nodeName of an Evicted pod: the node whose
+	// kubelet evicted it. The pod's own field, so it needs no node read.
+	EvictedFromNode string `json:"-"`
+	// AffectedRefs names resources a detection on another subject affects
+	// (the Services, workloads and Pods a NetworkPolicy isolates), so the issue
+	// also shows up on those resources. Ordered most to least important; the
+	// issues layer caps them.
+	AffectedRefs []issuesapi.Ref `json:"-"`
+	// RequiredReads names the inventories a detection read beyond its own
+	// resource whose access is checked per kind, such as a Secret's history.
+	// A caller who can't make them gets Degraded instead, or nothing when
+	// Degraded is nil.
+	RequiredReads []issuesapi.EvidenceRead   `json:"-"`
+	Degraded      *issuesapi.DegradedFinding `json:"-"`
 	// OwnerKind + OwnerName name the topmost stable controller of a Pod
 	// problem (Pod→Deployment, not the intermediate ReplicaSet), resolved
 	// via topOwnerForPod when the Pod is detected. Empty for non-Pod and
@@ -137,11 +171,15 @@ type Detection struct {
 	// names a structured one-click fix (e.g. "create-namespace") and
 	// RemediationTarget the resource it acts on.
 	// Cross-resource diagnosis must be withheld when its source is unreadable.
-	DiagnosisSource   *corev1.ObjectReference `json:"-"`
-	Cause             string
-	Action            string
-	RemediationKind   string
-	RemediationTarget string
+	DiagnosisSource      *corev1.ObjectReference `json:"-"`
+	Cause                string
+	Action               string
+	Hazard               string
+	ActionPrimary        string
+	ActionSecondaryTitle string
+	ActionSecondary      []string
+	RemediationKind      string
+	RemediationTarget    string
 	// OperationRetryCount / Stuck describe a controller operation that keeps
 	// failing: the retry count parsed from a GitOps controller's message and
 	// whether it has crossed the "no longer transient" threshold. Named
@@ -172,7 +210,7 @@ func setDetectionOnset(d *Detection, now, onsetAt time.Time) {
 	}
 	d.OnsetAt = onsetAt.UTC()
 	duration := now.Sub(onsetAt)
-	d.Duration = FormatAge(duration)
+	d.Duration = timeutil.FormatAgeShort(duration)
 	d.DurationSeconds = int64(duration.Seconds())
 	d.OnsetUnknown = false
 }
@@ -193,6 +231,15 @@ func podOwnerKindName(cache *ResourceCache, pod *corev1.Pod) (group, kind, name 
 // Does NOT include pods (consumers handle pod problems differently).
 // namespace="" scans all namespaces.
 func DetectProblems(cache *ResourceCache, namespace string) []Detection {
+	return DetectProblemsInScope(cache, namespace, nil)
+}
+
+// DetectProblemsInScope is DetectProblems sharing cluster-wide lookups with
+// the other runs of one compose through scope.
+func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *DetectScope) []Detection {
+	if scope == nil {
+		scope = NewDetectScope()
+	}
 	var problems []Detection
 	now := time.Now()
 	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
@@ -272,7 +319,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Action:            "Check the ReplicaSet's events — pod creation is being rejected (often a quota, admission webhook, or PodSecurity rule).",
 					Message:           replicaFailure.Message,
 					Fingerprint:       "deployment:replica-failure",
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					IssueTiming:       timingR.IssueTiming,
@@ -282,7 +329,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, detection)
 			}
 
-			if d.Status.UnavailableReplicas > 0 && stuck == nil && replicaFailure == nil {
+			if deploymentBelowDesiredAvailable(d) && !deploymentRolloutDipWithinBudget(d, now) && stuck == nil && replicaFailure == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				var availCondLTT time.Time
 				for _, cond := range d.Status.Conditions {
@@ -304,7 +351,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Group:             "apps",
 					Severity:          "critical",
 					Reason:            fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, desired),
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					IssueTiming:       timingR.IssueTiming,
@@ -316,7 +363,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 
 			if stuck != nil && replicaFailure == nil {
 				message := stuck.Message
-				if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
+				action := "Inspect the new pods (image, readiness probe, resources) — the rollout is waiting on them to become ready."
+				// The pod row's RollingUpdate Multi-Attach cause, when it holds,
+				// replaces the generic advice so both rows say the same thing.
+				cause := rolloutMultiAttachCause(cache, d)
+				if cause != "" {
+					action = rollingUpdateRWOFix
+				} else if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
 					if message != "" {
 						message += " " + detail
 					} else {
@@ -350,9 +403,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Group:             "apps",
 					Severity:          "critical",
 					Reason:            "Rollout stuck",
-					Action:            "Inspect the new pods (image, readiness probe, resources) — the rollout is waiting on them to become ready.",
+					Cause:             cause,
+					Action:            action,
 					Message:           message,
-					Age:               FormatAge(now.Sub(d.CreationTimestamp.Time)),
+					Age:               timeutil.FormatAgeShort(now.Sub(d.CreationTimestamp.Time)),
 					AgeSeconds:        int64(now.Sub(d.CreationTimestamp.Time).Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					IssueTiming:       timingR.IssueTiming,
@@ -387,14 +441,18 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			if ss.Status.ReadyReplicas < desired {
 				ageDur := now.Sub(ss.CreationTimestamp.Time)
+				severity := "critical"
+				if statefulSetRolloutWithinBudget(ss, desired) {
+					severity = "warning"
+				}
 				problems = append(problems, Detection{
 					Kind:              "StatefulSet",
 					Namespace:         ss.Namespace,
 					Name:              ss.Name,
 					Group:             "apps",
-					Severity:          "critical",
+					Severity:          severity,
 					Reason:            fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, desired),
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: ss.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -426,7 +484,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Severity:          severity,
 					Reason:            reason,
 					Fingerprint:       fingerprint,
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: ds.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -435,19 +493,25 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			if ds.Status.NumberMisscheduled > 0 {
 				appendDSProblem(fmt.Sprintf("%d misscheduled", ds.Status.NumberMisscheduled), "high", "daemonset:misscheduled")
 			}
+			// "not scheduled" stays critical even mid-rollout: status cannot tell
+			// the moment between deleting a node's old pod and creating its
+			// replacement from a replacement that can never be created.
 			if ds.Status.DesiredNumberScheduled > ds.Status.CurrentNumberScheduled {
 				appendDSProblem(fmt.Sprintf("%d not scheduled", ds.Status.DesiredNumberScheduled-ds.Status.CurrentNumberScheduled), "critical", "daemonset:not-scheduled")
 			} else if ds.Status.NumberUnavailable > 0 {
 				severity := "critical"
 				if daemonSetUnavailableIsByDesignUnschedulable(cache, ds, podsByNamespace) {
 					severity = "high"
+				} else if daemonSetRolloutWithinBudget(ds) {
+					severity = "warning"
 				}
 				appendDSProblem(fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable), severity, "daemonset:unavailable")
 			}
 		}
 	}
 
-	probeFailures := latestProbeFailures(cache, namespace, now)
+	probeFailures, containerProbeFailures := latestProbeFailures(cache, namespace, now)
+	var loopRows []loopRow
 	pvcPendingFailures := latestPVCPendingFailures(cache, namespace)
 
 	// Pod problems: high-signal container waiting/terminated states, old
@@ -459,9 +523,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, det)
 				continue
 			}
-			healthStr := health.Pod(pod, now).LegacyString()
+			podHealth := health.Pod(pod, now)
+			healthStr := podHealth.LegacyString()
 			earlyProbeTargetProblem, hasEarlyProbeTargetProblem := activeProbeTargetProblem(pod, "")
-			if healthStr == "healthy" && !hasEarlyProbeTargetProblem {
+			// A restart loop keeps its row through the ticks where the pod
+			// looks healthy between crashes; see restart_loop.go.
+			loop, looping := activeRestartLoop(pod, containerProbeFailures, now)
+			if healthStr == "healthy" && !hasEarlyProbeTargetProblem && !looping {
 				continue
 			}
 			// Unschedulable pods are owned by the scheduling source, which
@@ -478,10 +546,36 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 			reason := health.PodProblemReason(pod, now)
 			message := health.PodProblemMessage(pod)
-			if pf, ok := probeFailures[pod.Namespace+"/"+pod.Name]; ok && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
+			if reason == readinessGatesNotReadyReason {
+				message = podHealth.Message
+			}
+			if pf, ok := newestProbeFailure(probeFailures, pod, ""); ok && shouldUseProbeFailure(pod, reason, lastTermReason, pf.reason, now) {
 				reason = pf.reason
 				message = pf.message
 			}
+			// Every per-tick face of a restart loop (crash backoff, a bare
+			// phase, probe failures, high restarts) becomes the one crashloop
+			// row, so the issue id holds for the whole loop. Specific reasons
+			// (image pulls, create errors) and an active OOM keep their own
+			// paths. Applied before the structural checks below so an invalid
+			// probe target still wins on every tick, not only on some.
+			loopActive := looping
+			// An OOM loop replaces the OOM reason too: the row keeps the
+			// crashloop reason and classifies as oom_killed through the loop
+			// container's OOMKilled termination. Another container's active
+			// OOM still owns the row.
+			oomLoop := looping && loop.lastReason == "OOMKilled"
+			oomVeto := health.PodHasActiveOOMKilled(pod, now)
+			if oomLoop {
+				oomVeto = otherContainerActiveOOM(pod, loop.container, now)
+			}
+			if looping && (restartLoopMayReplace(reason) || (oomLoop && reason == "OOMKilled")) && !oomVeto {
+				reason = crashLoopReason
+				message = loop.message()
+			} else {
+				looping = false
+			}
+			rawMessage := ""
 			fingerprint := ""
 			if inv, ok := activeProbeTargetProblem(pod, reason); ok {
 				reason = inv.reason
@@ -491,18 +585,57 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				reason = earlyProbeTargetProblem.reason
 				message = earlyProbeTargetProblem.message
 				fingerprint = earlyProbeTargetProblem.fingerprint
-			} else if init, ok := stalledInitContainerProblem(pod, now); ok {
+			} else if init, ok := stalledInitContainerProblem(pod, now, loopingInitContainer(loop, looping)); ok {
 				reason = init.reason
 				message = init.message
 				fingerprint = init.fingerprint
 			}
-			cause, action, diagnosisSource := oomLimitDiagnosis(cache, pod, reason, lastTermReason, now)
+			// Severity is pinned for the loop (set by setLoopSeverities once
+			// every pod has been seen): serving or down at this instant is a
+			// per-tick fact, and letting it move the severity would drop the
+			// issue out of severity-filtered alerts and bring it back on every
+			// cycle. A structural root (an invalid probe target) that wins the
+			// row during a loop is pinned the same way.
+			pinLoopSeverity := loopActive && (fingerprint != "" || (looping && reason == crashLoopReason))
+			// Rows pinned for a loop carry its evidence, including a
+			// structural root's row: the evidence is what lets the issues
+			// layer fold the workload's availability row into either.
+			var restartLoopEvidence *issuesapi.RestartLoop
+			var oomStatuses []corev1.ContainerStatus
+			if pinLoopSeverity {
+				restartLoopEvidence = loop.evidence()
+			}
+			isLoopRow := looping && reason == crashLoopReason
+			if isLoopRow {
+				// The loop container's own restart count and last termination
+				// replace the pod-wide ones so every field on the row
+				// describes one container.
+				restartCount = loop.restartCount
+				lastTermReason = loop.lastReason
+				rawMessage = loop.lastMessage
+				oomStatuses = loop.oomStatuses()
+			}
+			cause, action, diagnosisSource := oomLimitDiagnosis(cache, pod, reason, lastTermReason, oomStatuses, now)
 			if cause == "" {
-				if reason == crashLoopReason {
+				if isLoopRow {
+					cause, action = loop.diagnosis()
+				} else if reason == crashLoopReason {
 					cause, action = health.PodCrashLoopDiagnosis(pod, now)
+				} else if reason == readinessGatesNotReadyReason {
+					cause = "Pod readiness is blocked by a declared gate."
+					action = "Check the controller that reports the declared readiness gate condition and its related resource events."
 				} else {
 					cause, action = imagePullDiagnosis(reason, message)
 				}
+			}
+			var evictedFrom, messageSource string
+			var evictedAt time.Time
+			if reason == health.PodEvictedReason && health.IsEvictedPod(pod) {
+				ev := evictedPodProblem(pod, ownerKind)
+				severity, message, rawMessage, fingerprint = ev.severity, ev.message, ev.raw, ev.fingerprint
+				cause, action, evictedAt = ev.cause, ev.action, ev.onset
+				messageSource = issuesapi.MessageSourceRadar
+				evictedFrom = pod.Spec.NodeName
 			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
@@ -601,12 +734,16 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:             severity,
 				Reason:               reason,
 				Message:              message,
+				RawMessage:           rawMessage,
+				MessageSource:        messageSource,
+				EvictedFromNode:      evictedFrom,
 				Fingerprint:          fingerprint,
-				Age:                  FormatAge(ageDur),
+				Age:                  timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
 				ResourceCreatedAt:    pod.CreationTimestamp.Time,
 				RestartCount:         restartCount,
 				LastTerminatedReason: lastTermReason,
+				RestartLoop:          restartLoopEvidence,
 				OwnerGroup:           ownerGroup,
 				OwnerKind:            ownerKind,
 				OwnerName:            ownerName,
@@ -618,10 +755,21 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			// The evidence above classifies workload/rollout timing, not when this
 			// Pod's specific waiting or termination reason began.
-			setDetectionOnset(&detection, now, time.Time{})
+			var onset time.Time
+			if reason == readinessGatesNotReadyReason {
+				onset, _ = health.PodReadinessGateFailure(pod, now)
+			}
+			if !evictedAt.IsZero() {
+				onset = evictedAt
+			}
+			setDetectionOnset(&detection, now, onset)
+			if pinLoopSeverity {
+				loopRows = append(loopRows, loopRow{index: len(problems), owner: loopOwnerKey(pod, ownerGroup, ownerKind, ownerName), fast: loop.fast()})
+			}
 			problems = append(problems, detection)
 		}
 	}
+	setLoopSeverities(cache, problems, loopRows, podsByNamespace)
 
 	// Service problems: routing health that workload .status often misses.
 	// EndpointSlice would be the strongest source for realized backend state,
@@ -651,7 +799,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Action:            "Check the cloud load-balancer controller and provider quota / subnet annotations.",
 					Message:           "Service is type LoadBalancer but has no assigned external address",
 					Fingerprint:       "svc:loadbalancer-pending",
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					OnsetUnknown:      true,
 					ResourceCreatedAt: svc.CreationTimestamp.Time,
@@ -660,6 +808,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			problems = append(problems, detectServiceBackendProblems(cache, svc, podsByNamespace[svc.Namespace], now)...)
 		}
 	}
+	problems = append(problems, detectNetworkPolicyDenyAllIngress(cache, namespace, podsByNamespace, now)...)
+	problems = append(problems, detectLiveTLSCertificates(cache, namespace, scope, now)...)
 
 	// HPA problems
 	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {
@@ -723,7 +873,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				// problems with distinct fixes. Fingerprint on the problem kind so
 				// they don't collapse into one hpa_limited_or_failed row.
 				Fingerprint:       "hpa:" + hp.Problem,
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: hpaCreatedAt,
 				IssueTiming:       hpaIssueTiming.IssueTiming,
@@ -751,7 +901,22 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		} else {
 			cronjobs, _ = cjLister.List(labels.Everything())
 		}
+		scheduleEvents := detectCronJobScheduleEvents(cache, namespace, cronjobs, now)
+		problems = append(problems, scheduleEvents.detections...)
+		withScheduleEvidence := make(map[types.NamespacedName]bool, len(scheduleEvents.detections))
+		for _, event := range scheduleEvents.detections {
+			withScheduleEvidence[types.NamespacedName{Namespace: event.Namespace, Name: event.Name}] = true
+		}
+		for _, cj := range cronjobs {
+			if cronJobScheduleEditPending(cj, scheduleEvents.evidence[cj.UID], now) {
+				withScheduleEvidence[types.NamespacedName{Namespace: cj.Namespace, Name: cj.Name}] = true
+			}
+		}
 		for _, cp := range DetectCronJobProblems(cronjobs, jobs, cache.cronJobScheduleObservations, now) {
+			if (cp.Problem == "stale" || cp.Problem == "never-scheduled") &&
+				withScheduleEvidence[types.NamespacedName{Namespace: cp.Namespace, Name: cp.Name}] {
+				continue
+			}
 			var createdAt time.Time
 			for _, cronjob := range cronjobs {
 				if cronjob.Namespace == cp.Namespace && cronjob.Name == cp.Name {
@@ -771,7 +936,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:          "medium",
 				Reason:            cp.Problem,
 				Message:           cp.Reason,
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: createdAt,
 			}
@@ -817,7 +982,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Action:            "Relax the PDB (minAvailable / maxUnavailable) or add replicas so drains and node upgrades can proceed.",
 				Message:           pdbBlocksEvictionsMessage(pdb),
 				Fingerprint:       "pdb:zero-disruptions",
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: pdb.CreationTimestamp.Time,
 			}
@@ -828,6 +993,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 
 	// Node problems (cluster-scoped, not filtered by namespace)
 	if nodeLister := cache.Nodes(); nodeLister != nil {
+		if namespace == "" {
+			problems = append(problems, nodeCertificateReports(cache, scope, now).detections...)
+		}
 		nodes, _ := nodeLister.List(labels.Everything())
 		for _, np := range DetectNodeProblems(nodes) {
 			ageDur := time.Duration(0)
@@ -839,11 +1007,14 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				}
 				ageDur = now.Sub(n.CreationTimestamp.Time)
 				nodeCreatedAt = n.CreationTimestamp.Time
+				if np.Problem == "Removal delayed" {
+					nodeOnsetAt = health.NodeLifecycle(n, now).StartedAt
+				}
 				// Map each problem type to its own condition so issue_timing and
 				// DurationSeconds reflect the right LTT:
 				//   NotReady      → NodeReady condition
 				//   *Pressure     → matching pressure condition
-				//   Cordoned      → no condition, omit issue_timing
+				//   Removal delayed → removal marker timestamp
 				var targetCondType corev1.NodeConditionType
 				switch np.Problem {
 				case "NotReady":
@@ -854,6 +1025,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					targetCondType = corev1.NodeDiskPressure
 				case "PIDPressure":
 					targetCondType = corev1.NodePIDPressure
+				case "NetworkUnavailable":
+					targetCondType = corev1.NodeNetworkUnavailable
 				}
 				if targetCondType != "" {
 					for _, cond := range n.Status.Conditions {
@@ -878,13 +1051,17 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Kind:              "Node",
 				Name:              np.NodeName,
 				Severity:          np.Severity,
+				Action:            np.Action,
 				Reason:            np.Problem,
 				Message:           np.Reason,
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: nodeCreatedAt,
 				IssueTiming:       nodeIssueTiming.IssueTiming,
 				IssueTimingBasis:  nodeIssueTiming.Basis,
+			}
+			if np.Problem != "NotReady" {
+				detection.Fingerprint = "node:" + np.Problem
 			}
 			setDetectionOnset(&detection, now, nodeOnsetAt)
 			problems = append(problems, detection)
@@ -914,7 +1091,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Reason:            "Lost",
 					Message:           "PVC has lost its bound volume",
 					Action:            "The bound PersistentVolume is gone — restore it from backup or recreate the PVC (data may be unrecoverable).",
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: pvc.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -943,7 +1120,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Reason:            resize.reason,
 					Message:           resize.message,
 					Fingerprint:       "pvc:resize:" + resize.reason,
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: pvc.CreationTimestamp.Time,
 					IssueTiming:       resizeIssueTiming.IssueTiming,
@@ -977,7 +1154,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						Severity:          "high",
 						Reason:            "Pending",
 						Message:           message,
-						Age:               FormatAge(ageDur),
+						Age:               timeutil.FormatAgeShort(ageDur),
 						AgeSeconds:        int64(ageDur.Seconds()),
 						ResourceCreatedAt: pvc.CreationTimestamp.Time,
 						Cause:             cause,
@@ -1012,7 +1189,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Reason:            "Failed",
 				Message:           pv.Status.Message,
 				Action:            "Check the volume's status message and the storage backend / CSI driver events; replace the PV only after confirming the data and its reclaim policy.",
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: pv.CreationTimestamp.Time,
 				OnsetUnknown:      true,
@@ -1023,7 +1200,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 
-	// Job problems: stuck active (running > 1h with no completions)
+	// Job problems: a terminal failure condition, or a Job being deleted. Age
+	// alone is not failure — a long-running active Job (training, migration, big
+	// batch) with no failure evidence is in progress, not failed.
 	if cache.Jobs() != nil {
 		for _, job := range jobs {
 			if det, ok := terminatingProblem("Job", "batch", job, now); ok {
@@ -1051,7 +1230,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Severity:          "critical",
 					Reason:            reason,
 					Message:           cond.Message,
-					Age:               FormatAge(ageDur),
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: job.CreationTimestamp.Time,
 				}
@@ -1059,34 +1238,18 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, detection)
 				continue
 			}
-			if stuckActiveJob(job, now) {
-				onsetAt := job.CreationTimestamp.Time
-				if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-					onsetAt = job.Status.StartTime.Time
-				}
-				detection := Detection{
-					Kind:              "Job",
-					Namespace:         job.Namespace,
-					Name:              job.Name,
-					Group:             "batch",
-					Severity:          "high",
-					Reason:            fmt.Sprintf("Running for %s with no completions", FormatAge(ageDur)),
-					Age:               FormatAge(ageDur),
-					AgeSeconds:        int64(ageDur.Seconds()),
-					ResourceCreatedAt: job.CreationTimestamp.Time,
-				}
-				setDetectionOnset(&detection, now, onsetAt)
-				problems = append(problems, detection)
-			}
 		}
 	}
 
-	// Multi-replica Deployment sharing a ReadWriteOnce volume: only one node can
-	// attach an RWO PVC, so a Deployment wanting >1 replica can never bring up
-	// the surplus — they sit unschedulable / multi-attach-failed. A config-level
-	// root cause we can name from spec, independent of whether the symptom has
-	// fired yet. StatefulSets are exempt (volumeClaimTemplates give each replica
-	// its own PVC); DaemonSets are one-per-node by design.
+	// Multi-replica Deployment sharing a single-node volume. ReadWriteOncePod
+	// admits one pod, so the surplus replicas can't run: an active problem named
+	// from spec. ReadWriteOnce limits the volume to one NODE, not one pod —
+	// replicas on that node share it fine, and only a replica placed on another
+	// node fails (Multi-Attach). From spec alone that is a risk, not a failure,
+	// so it is info (posture, kept off the issues stream); the failure itself is
+	// the pod's VolumeMultiAttach row, whose cause names this sharing.
+	// StatefulSets are exempt (volumeClaimTemplates give each replica its own
+	// PVC); DaemonSets are one-per-node by design.
 	if depLister := cache.Deployments(); depLister != nil {
 		var deps []*appsv1.Deployment
 		if namespace != "" {
@@ -1099,20 +1262,20 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				continue
 			}
 			ageDur := now.Sub(d.CreationTimestamp.Time)
-			for _, pvcName := range sharedRWOVolumeConflicts(cache, d) {
+			for _, pvc := range sharedRWOVolumeConflicts(cache, d) {
+				severity, reason, message := sharedRWOVolumeProblem(d, pvc)
 				problems = append(problems, Detection{
 					Kind:      "Deployment",
 					Namespace: d.Namespace,
 					Name:      d.Name,
 					Group:     "apps",
-					Severity:  "high",
-					Reason:    "ReadWriteOnce volume shared across replicas",
-					Message: fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOnce PVC %q — only one node can attach it, so the other replicas can't start. Use a ReadWriteMany volume, switch to a StatefulSet with volumeClaimTemplates (a volume per replica), or reduce to 1 replica.",
-						schedDesiredReplicas(d.Spec.Replicas), pvcName),
+					Severity:  severity,
+					Reason:    reason,
+					Message:   message,
 					// One Deployment can share multiple distinct RWO PVCs; fingerprint
 					// per PVC so each is its own row rather than collapsing into one.
-					Fingerprint:       "pvc-rwo-multireplica:" + pvcName,
-					Age:               FormatAge(ageDur),
+					Fingerprint:       "pvc-rwo-multireplica:" + pvc.Name,
+					Age:               timeutil.FormatAgeShort(ageDur),
 					AgeSeconds:        int64(ageDur.Seconds()),
 					ResourceCreatedAt: d.CreationTimestamp.Time,
 					OnsetUnknown:      true,
@@ -1150,6 +1313,8 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 				message += "; couldn't verify the backing workload yet (cache still syncing) - re-check shortly"
 			case rolloutLookupScopeUnverifiable:
 				message += "; the backing workload is outside this session's cache scope, so a scale-to-zero couldn't be confirmed - check the workload directly"
+			case rolloutLookupRefUnresolved:
+				message += "; a backing Argo Rollout delegates its pod template to a workload Radar couldn't resolve, so a scale-to-zero couldn't be confirmed - check the Rollout directly"
 			}
 		}
 		return []Detection{serviceBackendDetection(svc, ageDur, "warning", reason, message, fingerprint)}
@@ -1214,6 +1379,13 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 		if rolloutLookup == rolloutLookupForbidden {
 			det.Message = "no ready endpoints; couldn't check Argo Rollouts (no RBAC to list rollouts.argoproj.io) - if this workload is a Rollout intentionally scaled to zero, ignore this"
 		}
+		// An unresolvable Rollout workloadRef can't confirm an intentional
+		// scale-to-zero, but it must NOT soften a real zero-ready-pods outage: an
+		// unrelated broken reference in the namespace would otherwise downgrade this
+		// Service. Keep it critical and caveat it, as with a Rollout we can't list.
+		if rolloutLookup == rolloutLookupRefUnresolved {
+			det.Message = "no ready endpoints; couldn't check an Argo Rollout that delegates its pod template to a workload Radar couldn't resolve - if this workload is a Rollout intentionally scaled to zero, ignore this"
+		}
 		problems = append(problems, det)
 	}
 	if missing := unresolvedNamedTargetPorts(svc, selected); len(missing) > 0 {
@@ -1225,6 +1397,23 @@ func detectServiceBackendProblems(cache *ResourceCache, svc *corev1.Service, pod
 			"No selected pod declares a container port with this name",
 			"svc:unresolved-targetport",
 		))
+	}
+	if backends := AnalyzeServiceBackends(cache, svc, selected); backends.Mismatched() {
+		det := serviceBackendDetection(svc, ageDur, "warning", ServiceMixedBackendsReason, backends.Problem(svc.Name), ServiceMixedBackendsFingerprint)
+		det.Cause = backends.Cause()
+		det.Action = "If only one of these workloads should receive this traffic, narrow the Service selector to labels only its pods carry, or remove the matching label from the other workload's pod template."
+		// The workload names and their ports come from the Pods, and from the
+		// ReplicaSets behind them for a Deployment or Rollout.
+		det.RequiredReads = []issuesapi.EvidenceRead{{Resource: "pods", Namespace: svc.Namespace, Verb: "list"}}
+		if backends.ResolvedThroughReplicaSets {
+			det.RequiredReads = append(det.RequiredReads, issuesapi.EvidenceRead{Group: "apps", Resource: "replicasets", Namespace: svc.Namespace, Verb: "list"})
+		}
+		det.Degraded = &issuesapi.DegradedFinding{
+			Message: fmt.Sprintf("Service %s routes to pods of more than one %s", svc.Name, backends.Noun()),
+			Cause:   fmt.Sprintf("The Service selector matches pods of more than one %s, so part of its traffic reaches pods that may not serve it.", backends.Noun()),
+			Action:  det.Action,
+		}
+		problems = append(problems, det)
 	}
 	return problems
 }
@@ -1238,7 +1427,7 @@ func serviceBackendDetection(svc *corev1.Service, age time.Duration, severity, r
 		Reason:            reason,
 		Message:           message,
 		Fingerprint:       fingerprint,
-		Age:               FormatAge(age),
+		Age:               timeutil.FormatAgeShort(age),
 		AgeSeconds:        int64(age.Seconds()),
 		ResourceCreatedAt: svc.CreationTimestamp.Time,
 		OnsetUnknown:      true,
@@ -1324,18 +1513,28 @@ func missingNamedProbePort(c corev1.Container, probe *corev1.Probe) (string, boo
 	return port.StrVal, true
 }
 
-func stalledInitContainerProblem(pod *corev1.Pod, now time.Time) (podSpecificProblem, bool) {
+// stalledInitContainerProblem reports an init container that has been running
+// long enough to block the pod. skip names an init container already reported
+// as a restart loop: each of its long attempts is part of that loop, not a
+// separate stall.
+func stalledInitContainerProblem(pod *corev1.Pod, now time.Time, skip string) (podSpecificProblem, bool) {
 	if pod.Status.Phase != corev1.PodPending {
 		return podSpecificProblem{}, false
 	}
 	for _, cs := range pod.Status.InitContainerStatuses {
-		if cs.State.Running == nil || cs.State.Running.StartedAt.IsZero() {
+		if cs.State.Running == nil || cs.State.Running.StartedAt.IsZero() || cs.Name == skip {
+			continue
+		}
+		// A started native sidecar is meant to keep running and no longer
+		// blocks the pod. One whose startup probe has not passed
+		// (Started=false) still holds back the containers after it.
+		if isNativeSidecarName(pod, cs.Name) && cs.Started != nil && *cs.Started {
 			continue
 		}
 		if now.Sub(cs.State.Running.StartedAt.Time) < 5*time.Minute {
 			continue
 		}
-		msg := fmt.Sprintf("init container %q has been running for %s and is blocking the pod from starting", cs.Name, FormatAge(now.Sub(cs.State.Running.StartedAt.Time)))
+		msg := fmt.Sprintf("init container %q has been running for %s and is blocking the pod from starting", cs.Name, timeutil.FormatAgeShort(now.Sub(cs.State.Running.StartedAt.Time)))
 		if detail := initContainerSpecSummary(pod, cs.Name); detail != "" {
 			msg += "; " + detail
 		}
@@ -1506,10 +1705,17 @@ func pvcPendingFailureFromEvent(e *corev1.Event) (pvcPendingFailure, bool) {
 	return f, true
 }
 
-func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) map[string]probeFailure {
+// latestProbeFailures returns, per pod incarnation (probeFailureKey), the
+// newest liveness or readiness probe failure inside probeFailureWindow, and
+// the same newest failure per container and probe type (key + "/container/
+// reason"; container is empty when the event carries no container fieldPath).
+// Reducing within one incarnation keeps a predecessor's later-stamped event
+// from displacing the current pod's.
+func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) (map[string]probeFailure, map[string]probeFailure) {
 	out := map[string]probeFailure{}
+	byContainer := map[string]probeFailure{}
 	if cache == nil || cache.Events() == nil {
-		return out
+		return out, byContainer
 	}
 	var events []*corev1.Event
 	if namespace != "" {
@@ -1529,13 +1735,34 @@ func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) 
 		if t.IsZero() || now.Sub(t) > probeFailureWindow {
 			continue
 		}
-		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
+		key := probeFailureKey(e.InvolvedObject.Namespace, e.InvolvedObject.Name, e.InvolvedObject.UID)
+		pf := probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t}
+		containerKey := key + "/" + eventContainerName(e.InvolvedObject.FieldPath) + "/" + reason
+		if cur, exists := byContainer[containerKey]; !exists || t.After(cur.at) {
+			byContainer[containerKey] = pf
+		}
+		if reason == startupProbeFailedReason {
+			continue
+		}
 		if cur, exists := out[key]; exists && !t.After(cur.at) {
 			continue
 		}
-		out[key] = probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t}
+		out[key] = pf
 	}
-	return out
+	return out, byContainer
+}
+
+// eventContainerName extracts the container from a pod event's fieldPath
+// ("spec.containers{app}" or "spec.initContainers{proxy}"); empty otherwise.
+func eventContainerName(fieldPath string) string {
+	for _, prefix := range []string{"spec.containers{", "spec.initContainers{"} {
+		if rest, ok := strings.CutPrefix(fieldPath, prefix); ok {
+			if name, ok := strings.CutSuffix(rest, "}"); ok {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 func classifyProbeFailureEvent(reason, msg string) (string, bool) {
@@ -1548,6 +1775,8 @@ func classifyProbeFailureEvent(reason, msg string) (string, bool) {
 		return livenessProbeFailedReason, true
 	case strings.Contains(lower, "readiness probe failed"):
 		return readinessProbeFailedReason, true
+	case strings.Contains(lower, "startup probe failed"):
+		return startupProbeFailedReason, true
 	default:
 		return "", false
 	}
@@ -1575,15 +1804,19 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	if obj.GetDeletionTimestamp() == nil {
 		return Detection{}, false
 	}
+	return terminatingProblemSince(kind, group, obj, now, obj.GetDeletionTimestamp().Time)
+}
+
+func terminatingProblemSince(kind, group string, obj metav1.Object, now, startedAt time.Time) (Detection, bool) {
 	finalizers := obj.GetFinalizers()
 	usesShortWarningWindow := group == "" &&
 		(kind == "ConfigMap" || kind == "Secret") &&
-		hasNonGarbageCollectionFinalizer(finalizers)
+		HasNonGarbageCollectionFinalizer(finalizers)
 	warningAfter := terminatingWarningAfter
 	if usesShortWarningWindow {
 		warningAfter = configMapSecretTerminatingWarningAfter
 	}
-	duration := now.Sub(obj.GetDeletionTimestamp().Time)
+	duration := now.Sub(startedAt)
 	if duration < warningAfter {
 		return Detection{}, false
 	}
@@ -1603,7 +1836,7 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	// existed for a real window before deletion classifies post-healthy. A
 	// hardcoded post-healthy label would overstate the evidence for
 	// create-then-delete churn.
-	timingR := IssueTimingFromConditionLTT(obj.GetDeletionTimestamp().Time, obj.GetCreationTimestamp().Time, "deletion")
+	timingR := IssueTimingFromConditionLTT(startedAt, obj.GetCreationTimestamp().Time, "deletion")
 	detection := Detection{
 		Kind:              kind,
 		Group:             group,
@@ -1614,17 +1847,17 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		Action:            "Check for finalizers holding the object (metadata.finalizers) and whether their controller is running.",
 		Message:           msg,
 		Fingerprint:       "lifecycle:terminating",
-		Age:               FormatAge(now.Sub(obj.GetCreationTimestamp().Time)),
+		Age:               timeutil.FormatAgeShort(now.Sub(obj.GetCreationTimestamp().Time)),
 		AgeSeconds:        int64(now.Sub(obj.GetCreationTimestamp().Time).Seconds()),
 		ResourceCreatedAt: obj.GetCreationTimestamp().Time,
 		IssueTiming:       timingR.IssueTiming,
 		IssueTimingBasis:  timingR.Basis,
 	}
-	setDetectionOnset(&detection, now, obj.GetDeletionTimestamp().Time)
+	setDetectionOnset(&detection, now, startedAt)
 	return detection, true
 }
 
-func hasNonGarbageCollectionFinalizer(finalizers []string) bool {
+func HasNonGarbageCollectionFinalizer(finalizers []string) bool {
 	for _, finalizer := range finalizers {
 		// Garbage collection may legitimately wait for dependents to finish
 		// terminating, so it keeps the generic grace period.
@@ -1684,19 +1917,41 @@ func pdbBlocksEvictionsMessage(pdb *policyv1.PodDisruptionBudget) string {
 		pdb.Status.ExpectedPods)
 }
 
-// sharedRWOVolumeConflicts returns the names of PVCs the Deployment's pod
-// template MOUNTS whose bound access modes permit only single-node attach
-// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany). Pending PVCs are skipped
-// here because the binding/provisioning failure is the actionable blocker until a
-// real volume can attach.
-func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []string {
+const sharedRWOVolumeFix = "Use a ReadWriteMany volume, switch to a StatefulSet with volumeClaimTemplates (a volume per replica), or reduce to 1 replica."
+
+// Stable reason literals for the multi-replica single-node-volume row; the
+// issues category mapping keys on them.
+const (
+	SharedRWOVolumeReason  = "ReadWriteOnce volume shared across replicas"
+	SharedRWOPVolumeReason = "ReadWriteOncePod volume shared across replicas"
+)
+
+// sharedRWOVolumeProblem words the multi-replica single-node-volume row:
+// high for ReadWriteOncePod (one pod only), info for ReadWriteOnce (one node
+// only, so it fails only when replicas land on different nodes).
+func sharedRWOVolumeProblem(d *appsv1.Deployment, pvc *corev1.PersistentVolumeClaim) (severity, reason, message string) {
+	replicas := schedDesiredReplicas(d.Spec.Replicas)
+	if singleNodeAccessMode(pvc) == corev1.ReadWriteOncePod {
+		return "high", SharedRWOPVolumeReason, fmt.Sprintf("Deployment wants %d replicas but mounts ReadWriteOncePod PVC %q, which only one pod at a time can use, so only one replica can run. %s",
+			replicas, pvc.Name, sharedRWOVolumeFix)
+	}
+	return "info", SharedRWOVolumeReason, fmt.Sprintf("Deployment wants %d replicas that share ReadWriteOnce PVC %q. ReadWriteOnce lets only one node mount the volume: replicas on that node can share it, but a replica scheduled onto another node fails to attach (Multi-Attach). To spread replicas across nodes, use a ReadWriteMany volume or a StatefulSet with volumeClaimTemplates (a volume per replica).",
+		replicas, pvc.Name)
+}
+
+// sharedRWOVolumeConflicts returns the PVCs the Deployment's pod template
+// MOUNTS whose bound access modes permit only single-node attach
+// (ReadWriteOnce / ReadWriteOncePod, no ReadWriteMany), sorted by name. Pending
+// PVCs are skipped here because the binding/provisioning failure is the
+// actionable blocker until a real volume can attach.
+func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []*corev1.PersistentVolumeClaim {
 	pvcl := cache.PersistentVolumeClaims()
 	if pvcl == nil {
 		return nil
 	}
 	spec := d.Spec.Template.Spec
 	mounted := mountedVolumeNames(spec)
-	var out []string
+	var out []*corev1.PersistentVolumeClaim
 	for _, v := range spec.Volumes {
 		if v.PersistentVolumeClaim == nil || !mounted[v.Name] {
 			continue
@@ -1706,10 +1961,10 @@ func sharedRWOVolumeConflicts(cache *ResourceCache, d *appsv1.Deployment) []stri
 			continue
 		}
 		if pvc.Status.Phase == corev1.ClaimBound && pvcSingleNodeAccessOnly(pvc) {
-			out = append(out, pvc.Name)
+			out = append(out, pvc)
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -1722,7 +1977,7 @@ func rolloutRWOVolumeDetail(cache *ResourceCache, d *appsv1.Deployment) string {
 		return ""
 	}
 	return fmt.Sprintf("This Deployment mounts ReadWriteOnce PVC %q and uses RollingUpdate; a surge pod can be blocked while the old pod still holds the volume. Use strategy: Recreate, a ReadWriteMany volume, or per-replica volumes.",
-		pvcs[0])
+		pvcs[0].Name)
 }
 
 // mountedVolumeNames is the set of pod-template volume names actually mounted by
@@ -1845,6 +2100,59 @@ func daemonSetUnavailableIsByDesignUnschedulable(cache *ResourceCache, ds *appsv
 		byDesignTargets[targetNode] = true
 	}
 	return int32(len(byDesignTargets)) >= ds.Status.NumberUnavailable
+}
+
+// statefulSetRolloutWithinBudget reports whether a StatefulSet's shortfall is a
+// RollingUpdate replacing one pod at a time. Unlike a Deployment there is no
+// progress deadline to end a stuck rollout, so the caller lowers the row's
+// severity rather than hiding it. The controller takes a pod down only when
+// every other is available, and only allows more than one at a time behind a
+// feature gate Radar cannot see, so the budget is one available replica short.
+// Revisions also differ after a partitioned rollout finishes, so partitioned
+// sets keep the critical row.
+func statefulSetRolloutWithinBudget(ss *appsv1.StatefulSet, desired int32) bool {
+	strategy := ss.Spec.UpdateStrategy
+	if strategy.Type != "" && strategy.Type != appsv1.RollingUpdateStatefulSetStrategyType {
+		return false
+	}
+	if strategy.RollingUpdate != nil && strategy.RollingUpdate.Partition != nil && *strategy.RollingUpdate.Partition > 0 {
+		return false
+	}
+	return ss.Status.ObservedGeneration >= ss.Generation &&
+		ss.Status.UpdateRevision != "" && ss.Status.CurrentRevision != ss.Status.UpdateRevision &&
+		ss.Status.AvailableReplicas > 0 && desired-ss.Status.AvailableReplicas <= 1
+}
+
+// daemonSetRolloutWithinBudget reports whether a DaemonSet's unavailable nodes
+// are a RollingUpdate within its maxUnavailable budget, resolved as the
+// controller does: rounded up against the scheduled count, and 1 when neither
+// surge nor unavailability is allowed. No progress deadline ends a stuck
+// DaemonSet rollout, so the caller lowers the row's severity rather than hiding
+// it. updatedNumberScheduled counts pods before they are available, so the last
+// node's replacement turns the row critical again until it is up.
+func daemonSetRolloutWithinBudget(ds *appsv1.DaemonSet) bool {
+	if ds.Spec.UpdateStrategy.Type != appsv1.RollingUpdateDaemonSetStrategyType || ds.Spec.UpdateStrategy.RollingUpdate == nil {
+		return false
+	}
+	desired := ds.Status.DesiredNumberScheduled
+	if ds.Status.ObservedGeneration < ds.Generation || ds.Status.UpdatedNumberScheduled >= desired || ds.Status.NumberAvailable == 0 {
+		return false
+	}
+	rolling := ds.Spec.UpdateStrategy.RollingUpdate
+	maxUnavailable, err := intstr.GetScaledValueFromIntOrPercent(rolling.MaxUnavailable, int(desired), true)
+	if err != nil {
+		return false
+	}
+	maxSurge := 0
+	if rolling.MaxSurge != nil {
+		if maxSurge, err = intstr.GetScaledValueFromIntOrPercent(rolling.MaxSurge, int(desired), true); err != nil {
+			return false
+		}
+	}
+	if maxUnavailable == 0 && maxSurge == 0 {
+		maxUnavailable = 1
+	}
+	return int(ds.Status.NumberUnavailable) <= maxUnavailable
 }
 
 func daemonSetPodIsAssignedButUnavailable(pod *corev1.Pod) bool {
@@ -1970,9 +2278,11 @@ func selectorMatchesSucceededPod(svc *corev1.Service, pods []*corev1.Pod) bool {
 type rolloutLookupOutcome int
 
 const (
-	// rolloutLookupConclusive: the check ran to completion — CRD absent, or
-	// present and readable with no matching scaled-to-zero Rollout — and the
-	// typed workload informers authoritatively cover the namespace.
+	// rolloutLookupConclusive: the answer is certain. Either a matching workload
+	// is active (replicas>0), which disproves intentional dormancy outright; or
+	// the full scan ran to completion — every matching workload parked at 0, or
+	// no matching workload at all (CRD absent, or present and readable) — with the
+	// typed workload informers authoritatively covering the namespace.
 	rolloutLookupConclusive rolloutLookupOutcome = iota
 	// rolloutLookupTransient: the Rollout cache hasn't synced yet, or the
 	// list failed for a non-RBAC reason. Self-heals by the next poll.
@@ -1987,6 +2297,13 @@ const (
 	// start watching the namespace on a later poll — so a confident outage
 	// critical here would be a scope artifact, not a verified break.
 	rolloutLookupScopeUnverifiable
+	// rolloutLookupRefUnresolved: a matching (or possibly-matching) Argo Rollout
+	// delegates its pod template to a spec.workloadRef target Radar can't resolve
+	// (an unsupported ref kind, a malformed ref, or a referenced workload it can't
+	// read), so whether that Rollout is intentionally scaled to 0 is unknown.
+	// Treated like scope-unverifiable: keep the non-downgraded row rather than
+	// claim a confident outage.
+	rolloutLookupRefUnresolved
 )
 
 // scaledToZeroBackingWorkload reports whether the Service's selector matches a
@@ -2036,90 +2353,235 @@ func scaledToZeroBackingWorkload(cache *ResourceCache, svc *corev1.Service) (sca
 	if cache == nil || len(svc.Spec.Selector) == 0 {
 		return false, rolloutLookupConclusive
 	}
-	// The typed Deployment/StatefulSet Lists below only RULE OUT a scaled-to-zero
-	// backing workload when the informers authoritatively cover this namespace.
-	// Under namespace-scoped RBAC an empty List is indistinguishable from "not
-	// watched", so a negative there must not harden into a confident outage — a
-	// positive (a match we actually found) is always trustworthy. nonMatch
-	// downgrades every "found nothing" verdict to scope-unverifiable when either
-	// typed workload informer can't observe the namespace.
+	// Scan EVERY matching workload, not just the first one parked at 0: a paused
+	// workload must not mask an active sibling failing behind the same Service.
+	// A workload we positively observe is trustworthy; an EMPTY typed List is only
+	// authoritative when the informers cover this namespace (under namespace-scoped
+	// RBAC it is indistinguishable from "not watched"), which gates the dormant and
+	// no-match conclusions below.
 	typedCovered := cache.KindCoversNamespace("deployments", svc.Namespace) &&
 		cache.KindCoversNamespace("statefulsets", svc.Namespace)
-	nonMatch := func(outcome rolloutLookupOutcome) rolloutLookupOutcome {
-		if !typedCovered {
-			return rolloutLookupScopeUnverifiable
-		}
-		return outcome
-	}
 	sel := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
+
+	// Typed dormancy is tracked apart from Rollout dormancy: a found-dormant typed
+	// workload is trusted as benign even when Rollouts can't be listed/synced
+	// (preserving today's default-install reading), whereas a dormant verdict that
+	// rests ONLY on the Rollout cache needs that cache to have finished syncing -
+	// an incomplete Rollout scan could still be hiding an active sibling.
+	var sawActive, sawDormantTyped, sawDormantRollout, sawUnknownMatching bool
+
 	if dl := cache.Deployments(); dl != nil {
 		deps, _ := dl.Deployments(svc.Namespace).List(labels.Everything())
 		for _, d := range deps {
-			if d.Spec.Replicas != nil && *d.Spec.Replicas == 0 && sel.Matches(labels.Set(d.Spec.Template.Labels)) {
-				return true, rolloutLookupConclusive
+			if !sel.Matches(labels.Set(d.Spec.Template.Labels)) {
+				continue
+			}
+			if typedReplicasZero(d.Spec.Replicas) {
+				sawDormantTyped = true
+			} else {
+				sawActive = true
 			}
 		}
 	}
 	if sl := cache.StatefulSets(); sl != nil {
 		stss, _ := sl.StatefulSets(svc.Namespace).List(labels.Everything())
 		for _, s := range stss {
-			if s.Spec.Replicas != nil && *s.Spec.Replicas == 0 && sel.Matches(labels.Set(s.Spec.Template.Labels)) {
-				return true, rolloutLookupConclusive
+			if !sel.Matches(labels.Set(s.Spec.Template.Labels)) {
+				continue
+			}
+			if typedReplicasZero(s.Spec.Replicas) {
+				sawDormantTyped = true
+			} else {
+				sawActive = true
 			}
 		}
 	}
-	// Argo Rollouts are a Deployment-shaped CRD with their own spec.replicas.
-	// Best-effort via the dynamic cache: an absent CRD comes back as
-	// ErrUnknownDynamicKind and is correctly read as no-match. Other errors
-	// are NOT a definitive "not scaled to zero" - classify them so the caller
-	// can pick the honest framing. The dynamic List is a cache read, so a
-	// background context is sufficient.
-	rollouts, err := cache.ListDynamicWithGroup(context.Background(), "Rollout", svc.Namespace, "argoproj.io")
-	if err != nil {
+
+	// Argo Rollouts are a Deployment-shaped CRD with their own spec.replicas, read
+	// best-effort via the dynamic cache. A matching Rollout can be active (vetoes
+	// dormancy), dormant, or unresolvable (a spec.workloadRef we can't follow -
+	// unknown). The dynamic List is a cache read, so a background context suffices.
+	rolloutListOutcome := rolloutLookupConclusive
+	rolloutList, err := cache.ListDynamicWithGroup(context.Background(), "Rollout", svc.Namespace, "argoproj.io")
+	switch {
+	case err == nil:
+		for _, r := range rolloutList {
+			switch rolloutWorkloadMatch(cache, sel, r) {
+			case rolloutMatchActive:
+				sawActive = true
+			case rolloutMatchDormant:
+				sawDormantRollout = true
+			case rolloutMatchUnknown:
+				sawUnknownMatching = true
+			}
+		}
+	case errors.Is(err, ErrUnknownDynamicKind) || errors.Is(err, ErrDynamicNotReady):
 		// Absent CRD or dynamic support not wired = a clean no-match (Rollouts
 		// genuinely aren't in play).
-		if errors.Is(err, ErrUnknownDynamicKind) || errors.Is(err, ErrDynamicNotReady) {
-			return false, nonMatch(rolloutLookupConclusive)
-		}
-		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
 		// RBAC denial is persistent - the SA lacks `list rollouts.argoproj.io`
 		// (helm gates CRD groups behind rbac.crdGroups), so every future poll
-		// fails identically. Everything else is transient.
-		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
-			return false, nonMatch(rolloutLookupForbidden)
-		}
-		return false, nonMatch(rolloutLookupTransient)
+		// fails identically.
+		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+		rolloutListOutcome = rolloutLookupForbidden
+	default:
+		log.Printf("[detect] scale-to-zero Rollout lookup failed for Service %s/%s: %v", svc.Namespace, svc.Name, err)
+		rolloutListOutcome = rolloutLookupTransient
 	}
-	for _, r := range rollouts {
-		// spec.replicas can arrive as int64 (k8s typed decode) OR float64 (plain
-		// JSON decode) depending on how the object entered the cache, so read it
-		// tolerantly - unstructured.NestedInt64 alone would miss the float64 shape
-		// and never recognize a scaled-to-zero Rollout, condemning dormancy as an
-		// outage.
-		replicas, found := nestedNumberInt64(r.Object, "spec", "replicas")
-		if !found || replicas != 0 {
-			continue
-		}
-		tmpl, _, _ := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "labels")
-		if len(tmpl) > 0 && sel.Matches(labels.Set(tmpl)) {
+
+	// Ordered evidence: an active workload we actually observed
+	// disproves dormancy outright (a positive read is trustworthy regardless of
+	// scope); otherwise an unresolvable matching Rollout keeps today's
+	// non-downgraded row; otherwise an empty typed List is only authoritative when
+	// the informers cover this namespace. A found-dormant typed workload is then
+	// benign even if Rollouts are unreadable, but a Rollout-only dormant verdict
+	// is trusted only from a complete (synced) Rollout scan.
+	switch {
+	case sawActive:
+		return false, rolloutLookupConclusive
+	case sawUnknownMatching:
+		return false, rolloutLookupRefUnresolved
+	case !typedCovered:
+		return false, rolloutLookupScopeUnverifiable
+	case sawDormantTyped:
+		return true, rolloutLookupConclusive
+	case sawDormantRollout:
+		if rolloutListOutcome == rolloutLookupConclusive && rolloutNamespaceSynced(svc.Namespace) {
 			return true, rolloutLookupConclusive
 		}
-	}
-	// An empty Rollout list with no error is ambiguous: DynamicResourceCache.List
-	// doesn't gate on HasSynced, so the first read of a not-yet-watched Rollout GVR
-	// returns ([], nil) even when a scaled-to-zero Rollout exists. Verify the cache
-	// actually synced before concluding no-match - otherwise stay transient so the
-	// caller keeps the warning framing until the next poll.
-	if len(rollouts) == 0 {
-		if disc := GetResourceDiscovery(); disc != nil {
-			if gvr, ok := disc.GetGVRWithGroup("Rollout", "argoproj.io"); ok {
-				if dc := GetDynamicResourceCache(); dc != nil && !dc.IsSynced(gvr) {
-					return false, nonMatch(rolloutLookupTransient)
-				}
-			}
+		// An incomplete Rollout scan could be hiding an active sibling, so don't
+		// harden into benign; stay transient (self-heals next poll).
+		return false, rolloutLookupTransient
+	default:
+		// No matching workload anywhere. A Rollout read we couldn't trust keeps its
+		// outcome; an untrustworthy (not-yet-synced) empty read stays transient so
+		// the caller keeps the warning framing until the next poll.
+		if rolloutListOutcome != rolloutLookupConclusive {
+			return false, rolloutListOutcome
 		}
+		if !rolloutNamespaceSynced(svc.Namespace) {
+			return false, rolloutLookupTransient
+		}
+		return false, rolloutLookupConclusive
 	}
-	return false, nonMatch(rolloutLookupConclusive)
+}
+
+// typedReplicasZero reports whether a typed workload is parked at 0. A nil
+// Replicas pointer is Kubernetes' "unset", which defaults to 1 - an active
+// workload, not a dormant one.
+func typedReplicasZero(replicas *int32) bool {
+	return replicas != nil && *replicas == 0
+}
+
+type rolloutMatch int
+
+const (
+	rolloutMatchNone rolloutMatch = iota
+	rolloutMatchDormant
+	rolloutMatchActive
+	rolloutMatchUnknown
+)
+
+// rolloutWorkloadMatch classifies one Rollout against the Service selector. A
+// spec.workloadRef Rollout carries no inline pod template, so its selector labels
+// come from the referenced Deployment (resolved through the same resolver
+// /api/workloads uses). A Rollout whose template or desired scale can't be read -
+// an unsupported/malformed ref, or a referenced workload we can't observe -
+// classifies as unknown, never as a confident dormant/active.
+func rolloutWorkloadMatch(cache *ResourceCache, sel labels.Selector, r *unstructured.Unstructured) rolloutMatch {
+	tmplLabels, ok := rolloutTemplateLabels(cache, r)
+	if !ok {
+		return rolloutMatchUnknown
+	}
+	if len(tmplLabels) == 0 || !sel.Matches(labels.Set(tmplLabels)) {
+		return rolloutMatchNone
+	}
+	// Only now that the Rollout matches does its scale matter: a non-matching
+	// workload with unreadable replicas is irrelevant, not uncertain.
+	replicas, ok := rolloutDesiredReplicas(r)
+	if !ok {
+		return rolloutMatchUnknown
+	}
+	if replicas == 0 {
+		return rolloutMatchDormant
+	}
+	return rolloutMatchActive
+}
+
+// rolloutTemplateLabels returns the pod-template labels that a Rollout's pods
+// carry - inline, or from the Deployment named by spec.workloadRef. The second
+// bool is false when the reference can't be resolved (unsupported/malformed ref,
+// a non-Deployment target, or a referenced Deployment the cache can't read),
+// which the caller treats as unknown. The referenced Deployment is read from the
+// already-loaded typed cache, so this adds no API call or RBAC surface.
+func rolloutTemplateLabels(cache *ResourceCache, r *unstructured.Unstructured) (map[string]string, bool) {
+	// A present spec.workloadRef - even empty or partially populated - means the
+	// Rollout delegates its pod template. It must resolve fully, or the Rollout is
+	// unknown; never fall back to the (absent) inline template, which would make an
+	// unresolved reference look like a non-match.
+	if ref, hasRefField, _ := unstructured.NestedFieldNoCopy(r.Object, "spec", "workloadRef"); hasRefField && ref != nil {
+		if _, _, ok := rollouts.WorkloadRef(r); !ok {
+			return nil, false
+		}
+		target, err := rollouts.ResolveTemplateTarget(r)
+		if err != nil {
+			return nil, false
+		}
+		// Resolve only Deployment refs, cheaply, from the typed cache.
+		if target.GVR.Group != "apps" || target.GVR.Resource != "deployments" {
+			return nil, false
+		}
+		dl := cache.Deployments()
+		if dl == nil {
+			return nil, false
+		}
+		dep, err := dl.Deployments(r.GetNamespace()).Get(target.Name)
+		if err != nil {
+			return nil, false
+		}
+		return dep.Spec.Template.Labels, true
+	}
+	tmpl, _, _ := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "labels")
+	return tmpl, true
+}
+
+// rolloutDesiredReplicas reads a Rollout's desired replica count. An absent
+// spec.replicas defaults to 1 (Argo's default), so a matching Rollout with no
+// replicas field is active, not dormant. A present-but-unreadable value (a
+// fractional or non-numeric shape) reports not-ok, which the caller treats as
+// unknown.
+func rolloutDesiredReplicas(r *unstructured.Unstructured) (int64, bool) {
+	_, found, err := unstructured.NestedFieldNoCopy(r.Object, "spec", "replicas")
+	if err != nil {
+		return 0, false
+	}
+	if !found {
+		return 1, true
+	}
+	// spec.replicas can arrive as int64 (k8s typed decode) OR float64 (plain JSON
+	// decode) depending on how the object entered the cache, so read it tolerantly.
+	return nestedNumberInt64(r.Object, "spec", "replicas")
+}
+
+// rolloutNamespaceSynced reports whether an empty/negative Rollout read for the
+// namespace can be trusted. Only a cache we can positively see is NOT yet synced
+// forces the caller to stay transient; when sync state is indeterminate (no
+// discovery or dynamic cache wired) we trust the read rather than flap every
+// no-match into "re-check shortly".
+func rolloutNamespaceSynced(namespace string) bool {
+	disc := GetResourceDiscovery()
+	if disc == nil {
+		return true
+	}
+	gvr, ok := disc.GetGVRWithGroup("Rollout", "argoproj.io")
+	if !ok {
+		return true
+	}
+	dc := GetDynamicResourceCache()
+	if dc == nil {
+		return true
+	}
+	return dc.IsNamespaceSynced(gvr, namespace)
 }
 
 func isPodReadyForProblem(pod *corev1.Pod) bool {
@@ -2194,6 +2656,54 @@ func failedJobCondition(job *batchv1.Job) *batchv1.JobCondition {
 		}
 	}
 	return nil
+}
+
+// deploymentBelowDesiredAvailable reports whether fewer pods are available than
+// spec.replicas asks for. status.unavailableReplicas alone is not that signal:
+// the controller computes it as the sum of every ReplicaSet's spec.replicas
+// minus available, so a RollingUpdate's surge pod counts as unavailable while
+// it starts even though every desired replica is still serving. A surge pod
+// that never comes up surfaces on its own pod row and, past
+// progressDeadlineSeconds, as a stuck rollout. Requiring both keeps a scale-up
+// the controller has not yet observed (spec raised, status still from the
+// previous generation) quiet until the controller reports the shortfall.
+func deploymentBelowDesiredAvailable(dep *appsv1.Deployment) bool {
+	return dep.Status.UnavailableReplicas > 0 && dep.Status.AvailableReplicas < schedDesiredReplicas(dep.Spec.Replicas)
+}
+
+// deploymentRolloutDipWithinBudget reports whether a shortfall below
+// spec.replicas is a RollingUpdate taking pods down within its maxUnavailable
+// budget. The controller sets Available=True exactly when available >=
+// replicas - maxUnavailable, and keeps Progressing at ReplicaSetUpdated or
+// NewReplicaSetCreated until the rollout completes; a pod lost after completion
+// leaves the reason at NewReplicaSetAvailable, so steady-state capacity loss
+// still reports. (FoundNewReplicaSet is only written when a progress deadline is
+// first enabled, not by a rollout.) The guards keep a stale condition from
+// vouching for the dip: a paused Deployment or one with no progress deadline
+// never times out, a status older than the spec judged a different target, and
+// progress last recorded longer ago than the deadline should already have timed
+// out (a timestamp further ahead of this clock than ordinary skew can't vouch
+// for anything either). Zero available is an outage even when the budget
+// allows it.
+func deploymentRolloutDipWithinBudget(dep *appsv1.Deployment, now time.Time) bool {
+	deadline := dep.Spec.ProgressDeadlineSeconds
+	if dep.Spec.Paused || deadline == nil || *deadline == math.MaxInt32 ||
+		dep.Status.ObservedGeneration < dep.Generation || dep.Status.AvailableReplicas == 0 {
+		return false
+	}
+	var available, progressing bool
+	for _, cond := range dep.Status.Conditions {
+		switch cond.Type {
+		case appsv1.DeploymentAvailable:
+			available = cond.Status == corev1.ConditionTrue
+		case appsv1.DeploymentProgressing:
+			sinceProgress := now.Sub(cond.LastUpdateTime.Time)
+			progressing = cond.Status == corev1.ConditionTrue &&
+				(cond.Reason == "ReplicaSetUpdated" || cond.Reason == "NewReplicaSetCreated") &&
+				sinceProgress >= -onsetObservationMargin && sinceProgress <= time.Duration(*deadline)*time.Second
+		}
+	}
+	return available && progressing
 }
 
 func deploymentReplicaFailure(dep *appsv1.Deployment) *appsv1.DeploymentCondition {

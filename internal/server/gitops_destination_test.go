@@ -2,8 +2,14 @@ package server
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -151,6 +157,62 @@ func TestRegisteredClusterServers(t *testing.T) {
 			got := registeredClusterServers(tc.secrets, tc.scopedTo, tc.appNS, "prod")
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("servers = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitOpsDestinationGVRUsesExactGroup(t *testing.T) {
+	cases := []struct {
+		kind, group, wantGroup, wantResource string
+	}{
+		{"applications", "argoproj.io", "argoproj.io", "applications"},
+		{"Application", "", "argoproj.io", "applications"},
+		{"applications", "app.k8s.io", "", ""},
+		{"applications", "notargoproj.io", "", ""},
+		{"kustomizations", "kustomize.toolkit.fluxcd.io", "kustomize.toolkit.fluxcd.io", "kustomizations"},
+		{"helmreleases", "", "helm.toolkit.fluxcd.io", "helmreleases"},
+		{"kustomizations", "source.toolkit.fluxcd.io", "", ""},
+		{"helmreleases", "vendor.helm.toolkit.fluxcd.io", "", ""},
+		{"widgets", "vendor.io", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind+"/"+tc.group, func(t *testing.T) {
+			gvr, err := gitOpsDestinationGVR(tc.kind, tc.group)
+			if tc.wantGroup == "" {
+				if err == nil {
+					t.Fatalf("resolved foreign identity to %+v", gvr)
+				}
+				return
+			}
+			if err != nil || gvr.Group != tc.wantGroup || gvr.Resource != tc.wantResource {
+				t.Fatalf("GVR = %+v, error = %v", gvr, err)
+			}
+		})
+	}
+}
+
+func TestGitOpsDestinationRejectsForeignGroupBeforeClientLookup(t *testing.T) {
+	previous := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+
+	for _, identity := range []struct{ kind, group string }{
+		{"applications", "app.k8s.io"},
+		{"applications", "notargoproj.io"},
+		{"kustomizations", "source.toolkit.fluxcd.io"},
+	} {
+		t.Run(identity.kind+"/"+identity.group, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/?group="+identity.group, nil)
+			route := chi.NewRouteContext()
+			route.URLParams.Add("kind", identity.kind)
+			route.URLParams.Add("namespace", "shop")
+			route.URLParams.Add("name", "wordpress")
+			r = r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, route))
+			w := httptest.NewRecorder()
+			(&Server{}).handleGitOpsDestination(w, r)
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), identity.group) {
+				t.Fatalf("response = %d %s", w.Code, w.Body.String())
 			}
 		})
 	}

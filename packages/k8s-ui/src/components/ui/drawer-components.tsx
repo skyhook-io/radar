@@ -1,8 +1,11 @@
+import { dedupeResourceRefs, omitResourceRefs, resourceRefKey } from '../../utils/resource-refs'
+import { gapReasonText } from '../../utils/read-actions'
+import { customResourceDefinitionRef, getCRDDefinitionsSnapshot, subscribeCRDDefinitions } from '../../utils/navigation'
 import { Disclosure } from './Disclosure'
-import { createContext, useContext, useState } from 'react'
+import { createContext, useContext, useState, useSyncExternalStore } from 'react'
 import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatAge, formatDuration, formatResources } from '../resources/resource-utils'
+import { formatDuration, formatResources } from '../resources/resource-utils'
 import { getEffectiveResources } from '../../utils/extended-resources'
 import { Tooltip } from './Tooltip'
 import { getKindColorClass } from '../ui/Badge'
@@ -206,6 +209,12 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'NetworkUnavailable',
   // Core K8s — Pod
   'DisruptionTarget',
+  // Core K8s — Namespace
+  'NamespaceDeletionDiscoveryFailure',
+  'NamespaceDeletionGroupVersionParsingFailure',
+  'NamespaceDeletionContentFailure',
+  'NamespaceContentRemaining',
+  'NamespaceFinalizersRemaining',
   // Core K8s — workloads
   'ReplicaFailure',
   // NPD — upstream default configs
@@ -220,6 +229,9 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'ReadOnlyRootFileSystem',
   'ResourceExhausted',
   'Swap',
+  'StoragePressureRootFileSystem',
+  'DPv2MigrationUnsupportedCNI',
+  'UnsupportedEBPFPrograms',
   // NPD — AKS extensions (learn.microsoft.com/azure/aks/node-problem-detector)
   'FilesystemCorruptionProblem',
   'KubeletProblem',
@@ -273,7 +285,7 @@ const NEGATIVE_POLARITY_PATTERNS: RegExp[] = [
   /^Frequent/,
 ]
 
-function isInvertedPolarityCondition(type: string | undefined): boolean {
+export function isInvertedPolarityCondition(type: string | undefined): boolean {
   if (!type) return false
   if (NEGATIVE_POLARITY_TYPES.has(type)) return true
   return NEGATIVE_POLARITY_PATTERNS.some((re) => re.test(type))
@@ -284,9 +296,9 @@ function isConditionHealthy(cond: { type?: string; status?: string }): boolean {
   return inverted ? cond.status === 'False' : cond.status === 'True'
 }
 
-export type ConditionTone = 'ok' | 'warning' | 'fail' | 'unknown'
+export type ConditionTone = 'ok' | 'warning' | 'fail' | 'unknown' | 'neutral'
 
-export function defaultConditionTone(cond: { type?: string; status?: string }): ConditionTone {
+export function defaultConditionTone(cond: { type?: string; status?: string }): Exclude<ConditionTone, 'neutral'> {
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
   return isConditionHealthy(cond) ? 'ok' : 'fail'
 }
@@ -331,6 +343,7 @@ export function ConditionsSection({
             const isOk = tone === 'ok'
             const isWarning = tone === 'warning'
             const isFail = tone === 'fail'
+            const isNeutral = tone === 'neutral'
             return (
               <div key={cond.type} className={clsx(
                 'flex items-start py-1.5 pr-1 text-sm relative',
@@ -344,12 +357,14 @@ export function ConditionsSection({
                 {/* Timeline dot */}
                 <span className={clsx(
                   'w-3 h-3 rounded-full flex items-center justify-center shrink-0 mt-1 z-10 ring-2 ring-theme-surface',
-                  isOk ? 'bg-emerald-500/20 text-emerald-500 dark:bg-emerald-500/30'
+                  isNeutral ? 'bg-theme-elevated text-theme-text-tertiary'
+                    : isOk ? 'bg-emerald-500/20 text-emerald-500 dark:bg-emerald-500/30'
                     : tone === 'unknown' ? 'bg-gray-400/20 text-gray-400 dark:bg-gray-400/30'
                     : isWarning ? 'bg-amber-500/25 text-amber-600 dark:text-amber-400 dark:bg-amber-500/35'
                     : 'bg-red-500/25 text-red-500 dark:bg-red-500/35'
                 )}>
-                  {isOk ? <Check className="w-2 h-2" strokeWidth={4} />
+                  {isNeutral ? <Minus className="w-2 h-2" strokeWidth={4} />
+                    : isOk ? <Check className="w-2 h-2" strokeWidth={4} />
                     : tone === 'unknown' ? <Minus className="w-2 h-2" strokeWidth={4} />
                     : isWarning ? <AlertTriangle className="w-2 h-2" strokeWidth={4} />
                     : <X className="w-2 h-2" strokeWidth={4} />}
@@ -358,7 +373,8 @@ export function ConditionsSection({
                 <div className="min-w-0 flex-1 pl-2">
                   <span className={clsx(
                     'font-medium text-[13px]',
-                    isOk ? 'text-theme-text-primary'
+                    isNeutral ? 'text-theme-text-secondary'
+                      : isOk ? 'text-theme-text-primary'
                       : tone === 'unknown' ? 'text-theme-text-secondary'
                         : isWarning ? 'text-amber-600 dark:text-amber-400'
                           : 'text-red-600 dark:text-red-400'
@@ -382,6 +398,8 @@ export function ConditionsSection({
 // ============================================================================
 
 const ALERT_COLORS = {
+  alert:   { bg: 'status-alert', border: '', title: '', message: '', list: '', bullet: '' },
+  unknown: { bg: 'status-unknown', border: '', title: '', message: '', list: '', bullet: '' },
   error:   { bg: 'bg-red-50 dark:bg-red-950/30', border: 'border-red-200 dark:border-red-800/30', title: 'text-red-700 dark:text-red-300', message: 'text-red-600/80 dark:text-red-300/70', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-400/60 dark:text-red-400/50' },
   warning: { bg: 'bg-amber-50 dark:bg-amber-950/30', border: 'border-amber-200 dark:border-amber-800/30', title: 'text-amber-700 dark:text-amber-300', message: 'text-amber-600/80 dark:text-amber-300/70', list: 'text-amber-600 dark:text-amber-400', bullet: 'text-amber-400/60 dark:text-amber-400/50' },
   info:    { bg: 'bg-sky-50 dark:bg-sky-950/30', border: 'border-sky-200 dark:border-sky-800/30', title: 'text-sky-700 dark:text-sky-300', message: 'text-sky-600/80 dark:text-sky-300/70', list: 'text-sky-600 dark:text-sky-400', bullet: 'text-sky-400/60 dark:text-sky-400/50' },
@@ -389,6 +407,8 @@ const ALERT_COLORS = {
 } as const
 
 const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  alert: AlertTriangle,
+  unknown: AlertTriangle,
   error: AlertTriangle,
   warning: AlertTriangle,
   info: AlertTriangle,
@@ -396,26 +416,37 @@ const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>>
 }
 
 interface AlertBannerProps {
-  variant: 'error' | 'warning' | 'info' | 'success'
+  variant: keyof typeof ALERT_COLORS
   icon?: React.ComponentType<{ className?: string }>
   title: string
   message?: React.ReactNode
-  items?: string[]
+  items?: React.ReactNode[]
   children?: React.ReactNode
+  /** A control at the end of the title line, e.g. a link to where the problem is handled. */
+  action?: React.ReactNode
+  /** Replaces the default bottom margin (`mb-4`). */
+  className?: string
 }
 
-export function AlertBanner({ variant, icon, title, message, items, children }: AlertBannerProps) {
+export function AlertBanner({ variant, icon, title, message, items, children, action, className }: AlertBannerProps) {
   const colors = ALERT_COLORS[variant]
   const Icon = icon || DEFAULT_ICONS[variant]
   const hasBody = message || items || children
 
   return (
-    <div className={clsx('mb-4 p-3 border rounded-lg', colors.bg, colors.border)}>
+    <div className={clsx('p-3 border rounded-lg', className ?? 'mb-4', colors.bg, colors.border)}>
       <div className={clsx('flex gap-2', hasBody ? 'items-start' : 'items-center')}>
         <Icon className={clsx('w-4 h-4 shrink-0', colors.title, hasBody && 'mt-0.5')} />
         {hasBody ? (
           <div className="flex-1 min-w-0">
-            <div className={clsx('text-sm font-medium', colors.title, items && 'mb-1')}>{title}</div>
+            {action ? (
+              <div className={clsx('flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1', items && 'mb-1')}>
+                <div className={clsx('min-w-0 text-sm font-medium', colors.title)}>{title}</div>
+                <div className="shrink-0">{action}</div>
+              </div>
+            ) : (
+              <div className={clsx('text-sm font-medium', colors.title, items && 'mb-1')}>{title}</div>
+            )}
             {message && <div className={clsx('text-xs mt-1 break-words', colors.message)}>{message}</div>}
             {items && items.length > 0 && (
               <ul className={clsx('text-xs space-y-1', colors.list)}>
@@ -428,6 +459,11 @@ export function AlertBanner({ variant, icon, title, message, items, children }: 
               </ul>
             )}
             {children}
+          </div>
+        ) : action ? (
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <div className={clsx('min-w-0 text-sm font-medium', colors.title)}>{title}</div>
+            <div className="shrink-0">{action}</div>
           </div>
         ) : (
           <div className={clsx('text-sm font-medium', colors.title)}>{title}</div>
@@ -515,19 +551,22 @@ export function AnnotationsSection({ data }: { data: any }) {
   )
 }
 
-export function MetadataSection({ data }: { data: any }) {
+export function MetadataSection({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
+  useSyncExternalStore(subscribeCRDDefinitions, getCRDDefinitionsSnapshot, getCRDDefinitionsSnapshot)
   const meta = data.metadata
   if (!meta) return null
+  const definition = customResourceDefinitionRef(data.apiVersion, data.kind)
 
   return (
     <Section title="Metadata" defaultExpanded>
       <PropertyList>
+        {definition && <Property label="Definition" value={<ResourceLink {...definition} onNavigate={onNavigate} />} />}
         <Property label="UID" value={meta.uid} />
         <Property label="Resource Version" value={meta.resourceVersion} />
         <Property label="Generation" value={meta.generation} />
         <Property label="Created" value={meta.creationTimestamp ? (
           <Tooltip content={new Date(meta.creationTimestamp).toLocaleString()}>
-            <span className="border-b border-dotted border-theme-text-tertiary cursor-help">{formatAge(meta.creationTimestamp)}</span>
+            <span className="border-b border-dotted border-theme-text-tertiary cursor-help">{formatRelativeAgeTime(meta.creationTimestamp)}</span>
           </Tooltip>
         ) : '-'} />
       </PropertyList>
@@ -549,6 +588,26 @@ function ContainerResourcesLine({ resources }: { resources: any }) {
   )
 }
 
+// Pod-level budget (spec.resources) is shared by all containers, so it stays
+// its own row rather than being merged into the container rows.
+export function PodAggregateResources({ resources }: { resources: any }) {
+  const hasRequests = Object.keys(resources?.requests ?? {}).length > 0
+  const hasLimits = Object.keys(resources?.limits ?? {}).length > 0
+  if (!hasRequests && !hasLimits) return null
+  return (
+    <div className="rounded-[10px] border border-dashed border-theme-border p-3">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
+        <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
+      </div>
+      <div className="text-xs text-theme-text-secondary space-y-1">
+        {hasRequests && <div>Requests: {formatResources(resources.requests)}</div>}
+        {hasLimits && <div>Limits: {formatResources(resources.limits)}</div>}
+      </div>
+    </div>
+  )
+}
+
 export function PodTemplateSection({ template }: { template: any }) {
   if (!template) return null
   const initContainers = template.spec?.initContainers || []
@@ -556,6 +615,7 @@ export function PodTemplateSection({ template }: { template: any }) {
 
   return (
     <div className="space-y-2">
+      <PodAggregateResources resources={template.spec?.resources} />
       {initContainers.length > 0 && (
         <>
           <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide">Init Containers</div>
@@ -727,7 +787,7 @@ export function formatKindName(kind: string): string {
     pods: 'Pod', deployments: 'Deployment', daemonsets: 'DaemonSet', statefulsets: 'StatefulSet',
     replicasets: 'ReplicaSet', services: 'Service', endpointslices: 'EndpointSlice', ingresses: 'Ingress',
     gateways: 'Gateway', httproutes: 'HTTPRoute', grpcroutes: 'GRPCRoute',
-    tcproutes: 'TCPRoute', tlsroutes: 'TLSRoute', configmaps: 'ConfigMap',
+    tcproutes: 'TCPRoute', tlsroutes: 'TLSRoute', udproutes: 'UDPRoute', configmaps: 'ConfigMap',
     secrets: 'Secret', jobs: 'Job', cronjobs: 'CronJob', hpas: 'HPA',
     horizontalpodautoscalers: 'HPA', nodes: 'Node', namespaces: 'Namespace',
     persistentvolumeclaims: 'PVC', persistentvolumes: 'PV',
@@ -781,30 +841,57 @@ export type CopyHandler = (text: string, key: string) => void
 // RELATED RESOURCES SECTION
 // ============================================================================
 
-import type { TimelineEvent, Relationships, ResourceRef } from '../../types'
+import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, ManagerAnswer } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
-import { Link } from 'lucide-react'
+import { Info, Link } from 'lucide-react'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 interface RelatedResourcesSectionProps {
   relationships: Relationships | undefined
   onNavigate?: (ref: ResourceRef) => void
+  /** The URL plural of the object shown (e.g. `deployments`). */
+  kind?: string
+  /** The manager the resource's tracking metadata names, when every manager's
+   * list was read, that one's doesn't list the resource and another's does. */
+  trackedBy?: string
 }
 
-function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
-  const seen = new Set<string>()
-  return refs.filter(ref => {
-    const key = `${ref.kind}/${ref.namespace}/${ref.name}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
+// Kinds whose objects usually own others. An empty Children list for one of
+// these is surprising, so it says it covered only the kinds Radar checked;
+// for any other kind an empty list stays hidden, or nearly every leaf object
+// would carry the note.
+const KINDS_WITH_CHILDREN = new Set(['deployments', 'replicasets', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'services', 'rollouts'])
 
-export function RelatedResourcesSection({ relationships, onNavigate }: RelatedResourcesSectionProps) {
+export function RelatedResourcesSection({ relationships, onNavigate, kind, trackedBy }: RelatedResourcesSectionProps) {
   if (!relationships) return null
+
+  const configRefs = omitResourceRefs(relationships.configRefs ?? [], relationships.dependencies ?? [])
+  const consumers = omitResourceRefs(relationships.consumers ?? [], relationships.dependents ?? [])
+  const alsoOwnedBy = omitResourceRefs(relationships.owners ?? [], relationships.owner ? [relationships.owner] : [])
+  const managesNote = membersNote(relationships.ownership?.manages, (relationships.manages?.length ?? 0) > 0)
+  const managers = dedupeResourceRefs(relationships.managers ?? [])
+  const managedByNote = managersNote(relationships.ownership, managers.length, trackedBy)
+  const unanswered = ownershipUnanswered(relationships.ownership)
+  const several = !relationships.owner && relationships.ownership?.primaryOwnerState === 'several'
+  const ownerMissing = relationships.owner || several ? undefined : ownerNote(relationships.ownership)
+  let childrenCoverage = childrenNote(relationships.ownership)
+  const noChildren = !relationships.children?.length && !relationships.olderRevisions?.length
+  if (noChildren && childrenCoverage?.hint && !childrenCoverage.text && kind && KINDS_WITH_CHILDREN.has(kind)) {
+    childrenCoverage = { ...childrenCoverage, text: 'No children among the kinds Radar checked.' }
+  }
 
   const hasRelationships =
     relationships.owner ||
+    unanswered ||
+    ownerMissing ||
+    several ||
+    childrenCoverage?.text ||
+    (relationships.olderRevisions && relationships.olderRevisions.length > 0) ||
+    alsoOwnedBy.length > 0 ||
+    managers.length > 0 ||
+    managedByNote.text ||
+    (relationships.manages && relationships.manages.length > 0) ||
+    managesNote ||
     relationships.deployment ||
     relationships.node ||
     (relationships.children && relationships.children.length > 0) ||
@@ -820,6 +907,15 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.pdbs && relationships.pdbs.length > 0) ||
     (relationships.networkPolicies && relationships.networkPolicies.length > 0) ||
     (relationships.resourceClaims && relationships.resourceClaims.length > 0) ||
+    (relationships.dependencies && relationships.dependencies.length > 0) ||
+    (relationships.dependents && relationships.dependents.length > 0) ||
+    (relationships.monitors && relationships.monitors.length > 0) ||
+    (relationships.monitorTargets && relationships.monitorTargets.length > 0) ||
+    (relationships.backends && relationships.backends.length > 0) ||
+    (relationships.routedFrom && relationships.routedFrom.length > 0) ||
+    (relationships.protects && relationships.protects.length > 0) ||
+    (relationships.healthChecks && relationships.healthChecks.length > 0) ||
+    (relationships.stagedPolicies && relationships.stagedPolicies.length > 0) ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -827,8 +923,20 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   return (
     <Section title="Related Resources" icon={Link} defaultExpanded>
       <div className="space-y-3">
-        {relationships.owner && (
-          <RelationshipGroup label="Owner" refs={[relationships.owner]} onNavigate={onNavigate} />
+        {unanswered && <div className="text-xs text-theme-text-tertiary">{unanswered}</div>}
+        {(relationships.owner || ownerMissing) && (
+          <RelationshipGroup label="Owner" refs={relationships.owner ? [relationships.owner] : []} onNavigate={onNavigate} note={ownerMissing} />
+        )}
+        {(alsoOwnedBy.length > 0 || several) && (
+          <RelationshipGroup
+            label={relationships.owner || ownerMissing ? 'Also Owned By' : 'Owners'}
+            refs={dedupeResourceRefs(alsoOwnedBy)}
+            onNavigate={onNavigate}
+            note={several ? { text: alsoOwnedBy.length > 0 ? 'None of them is its controller.' : 'None of the owners it names can be shown.' } : undefined}
+          />
+        )}
+        {(managers.length > 0 || managedByNote.text) && (
+          <RelationshipGroup label={managersListOnly(relationships.ownership?.manager, managers) ? 'Listed By' : 'Managed By'} refs={managers} onNavigate={onNavigate} note={managedByNote} />
         )}
         {relationships.deployment && (
           <RelationshipGroup label="Deployment" refs={[relationships.deployment]} onNavigate={onNavigate} />
@@ -836,44 +944,81 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         {relationships.node && (
           <RelationshipGroup label="Node" refs={[relationships.node]} onNavigate={onNavigate} />
         )}
-        {relationships.children && relationships.children.length > 0 && (
-          <RelationshipGroup label="Children" refs={dedupeRefs(relationships.children)} onNavigate={onNavigate} />
+        {((relationships.children && relationships.children.length > 0) || childrenCoverage?.text || (relationships.olderRevisions && relationships.olderRevisions.length > 0)) && (
+          <RelationshipGroup
+            label="Children"
+            refs={dedupeResourceRefs(relationships.children ?? [])}
+            onNavigate={onNavigate}
+            note={childrenCoverage}
+            more={olderRevisions(relationships.olderRevisions)}
+            capped={relationships.ownership?.children?.truncated}
+          />
+        )}
+        {((relationships.manages && relationships.manages.length > 0) || managesNote) && (
+          <RelationshipGroup label="Manages" refs={dedupeResourceRefs(relationships.manages ?? [])} onNavigate={onNavigate} note={managesNote} capped={relationships.ownership?.manages?.truncated} />
         )}
         {relationships.services && relationships.services.length > 0 && (
-          <RelationshipGroup label="Services" refs={dedupeRefs(relationships.services)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Services" refs={dedupeResourceRefs(relationships.services)} onNavigate={onNavigate} />
         )}
         {relationships.ingresses && relationships.ingresses.length > 0 && (
-          <RelationshipGroup label="Ingresses" refs={dedupeRefs(relationships.ingresses)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Ingresses" refs={dedupeResourceRefs(relationships.ingresses)} onNavigate={onNavigate} />
         )}
         {relationships.gateways && relationships.gateways.length > 0 && (
-          <RelationshipGroup label="Gateways" refs={dedupeRefs(relationships.gateways)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Gateways" refs={dedupeResourceRefs(relationships.gateways)} onNavigate={onNavigate} />
         )}
         {relationships.routes && relationships.routes.length > 0 && (
-          <RelationshipGroup label="Routes" refs={dedupeRefs(relationships.routes)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Routes" refs={dedupeResourceRefs(relationships.routes)} onNavigate={onNavigate} />
         )}
         {relationships.pods && relationships.pods.length > 0 && (
-          <RelationshipGroup label="Pods" refs={dedupeRefs(relationships.pods)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Pods" refs={dedupeResourceRefs(relationships.pods)} onNavigate={onNavigate} />
         )}
-        {relationships.configRefs && relationships.configRefs.length > 0 && (
-          <RelationshipGroup label="Configuration" refs={dedupeRefs(relationships.configRefs)} onNavigate={onNavigate} />
+        {configRefs.length > 0 && (
+          <RelationshipGroup label="Configuration" refs={dedupeResourceRefs(configRefs)} onNavigate={onNavigate} />
         )}
-        {relationships.consumers && relationships.consumers.length > 0 && (
-          <RelationshipGroup label="Used By" refs={dedupeRefs(relationships.consumers)} onNavigate={onNavigate} />
+        {consumers.length > 0 && (
+          <RelationshipGroup label="Used By" refs={dedupeResourceRefs(consumers)} onNavigate={onNavigate} />
         )}
         {relationships.scalers && relationships.scalers.length > 0 && (
-          <RelationshipGroup label="Autoscaler" refs={dedupeRefs(relationships.scalers)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Autoscaler" refs={dedupeResourceRefs(relationships.scalers)} onNavigate={onNavigate} />
         )}
         {relationships.storageRefs && relationships.storageRefs.length > 0 && (
-          <RelationshipGroup label="Storage" refs={dedupeRefs(relationships.storageRefs)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Storage" refs={dedupeResourceRefs(relationships.storageRefs)} onNavigate={onNavigate} />
         )}
         {relationships.pdbs && relationships.pdbs.length > 0 && (
-          <RelationshipGroup label="Disruption Budget" refs={dedupeRefs(relationships.pdbs)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Disruption Budget" refs={dedupeResourceRefs(relationships.pdbs)} onNavigate={onNavigate} />
         )}
         {relationships.networkPolicies && relationships.networkPolicies.length > 0 && (
-          <RelationshipGroup label="Network Policies" refs={dedupeRefs(relationships.networkPolicies)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Network Policies" refs={dedupeResourceRefs(relationships.networkPolicies)} onNavigate={onNavigate} />
         )}
         {relationships.resourceClaims && relationships.resourceClaims.length > 0 && (
-          <RelationshipGroup label="Resource Claims" refs={dedupeRefs(relationships.resourceClaims)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Resource Claims" refs={dedupeResourceRefs(relationships.resourceClaims)} onNavigate={onNavigate} />
+        )}
+        {relationships.dependencies && relationships.dependencies.length > 0 && (
+          <RelationshipGroup label="Depends On" refs={dedupeResourceRefs(relationships.dependencies)} onNavigate={onNavigate} />
+        )}
+        {relationships.dependents && relationships.dependents.length > 0 && (
+          <RelationshipGroup label="Required By" refs={dedupeResourceRefs(relationships.dependents)} onNavigate={onNavigate} />
+        )}
+        {relationships.monitors && relationships.monitors.length > 0 && (
+          <RelationshipGroup label="Monitored By" refs={dedupeResourceRefs(relationships.monitors)} onNavigate={onNavigate} />
+        )}
+        {relationships.monitorTargets && relationships.monitorTargets.length > 0 && (
+          <RelationshipGroup label="Monitors" refs={dedupeResourceRefs(relationships.monitorTargets)} onNavigate={onNavigate} />
+        )}
+        {relationships.backends && relationships.backends.length > 0 && (
+          <RelationshipGroup label="Routes To" refs={dedupeResourceRefs(relationships.backends)} onNavigate={onNavigate} />
+        )}
+        {relationships.routedFrom && relationships.routedFrom.length > 0 && (
+          <RelationshipGroup label="Routed From" refs={dedupeResourceRefs(relationships.routedFrom)} onNavigate={onNavigate} />
+        )}
+        {relationships.protects && relationships.protects.length > 0 && (
+          <RelationshipGroup label="Selects" refs={dedupeResourceRefs(relationships.protects)} onNavigate={onNavigate} />
+        )}
+        {relationships.healthChecks && relationships.healthChecks.length > 0 && (
+          <RelationshipGroup label="Health Checks" refs={dedupeResourceRefs(relationships.healthChecks)} onNavigate={onNavigate} />
+        )}
+        {relationships.stagedPolicies && relationships.stagedPolicies.length > 0 && (
+          <RelationshipGroup label="Staged Policies" refs={dedupeResourceRefs(relationships.stagedPolicies)} onNavigate={onNavigate} />
         )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />
@@ -883,23 +1028,220 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   )
 }
 
+// ownershipUnanswered says why Owner and Children couldn't be answered at all.
+function ownershipUnanswered(coverage: OwnershipCoverage | undefined): string | undefined {
+  const reason = coverage?.unavailableReason
+  if (!reason) return undefined
+  if (reason === 'user_forbidden') return "Owner and children aren't shown: your access lets you open this object, but not list its kind here."
+  return `Owner and children couldn't be read: ${gapReasonText(reason)}.`
+}
+
+// ownerNote says why no owner is named, when there is an owner reference.
+export function ownerNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
+  const ref = coverage?.ownerRef
+  const named = ref?.kind && ref.name ? `${ref.kind} ${ref.name}` : 'the owner it names'
+  switch (coverage?.primaryOwnerState) {
+    case 'gone':
+      return { text: `${capitalize(named)} no longer exists.` }
+    case 'replaced':
+      return { text: `${capitalize(named)} was deleted and recreated; this object names the earlier one.` }
+    case 'unknown':
+      return { text: coverage?.ownerReason ? `Couldn't check ${named} (${gapReasonText(coverage.ownerReason)}).` : `Couldn't check ${named}.` }
+    case 'withheld':
+      return { text: 'Not visible to you.' }
+    case 'unresolvable':
+      return { text: "Its owner reference can't be resolved in this cluster." }
+    case 'excluded':
+      return { text: "Its owner reference names an Event, which Radar doesn't follow as an owner." }
+  }
+  return undefined
+}
+
+// childrenNote says what a Children list may be missing. Kinds Radar doesn't
+// collect are a hint, since most lists miss a few; kinds it couldn't check
+// for any other reason, a list cut short, and places the viewer may not read
+// are said outright.
+function childrenNote(coverage: OwnershipCoverage | undefined): RelationshipNote | undefined {
+  const children = coverage?.children
+  if (!children) return undefined
+  const uncollected = new Set<string>()
+  let someNamespaces = false
+  let undiscovered = false
+  const pressing = new Map<string, string>()
+  for (const g of children.notChecked ?? []) {
+    if (!g.kind) undiscovered = true
+    else if (g.reason === 'radar_kind_not_collected') uncollected.add(g.kind)
+    else if (g.reason === 'radar_namespace_not_collected') someNamespaces = true
+    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
+  }
+  const note: RelationshipNote = {}
+  const hint: string[] = []
+  if (uncollected.size > 0) hint.push(`Radar doesn't collect ${joinOr(Array.from(uncollected))} objects, so none of those are listed.`)
+  if (someNamespaces) hint.push("Radar doesn't collect every namespace, so children in the others aren't listed.")
+  // An API group whose discovery fails, often a metrics API with no server
+  // behind it, leaves every answer with this gap; most such groups hold no
+  // children, so it is a hint, not a warning.
+  if (undiscovered) hint.push("Radar's API discovery missed some API groups, so children of their kinds aren't listed.")
+  if (children.narrowed) hint.push('Only children you can view are listed.')
+  if (hint.length > 0) note.hint = hint
+  const text: string[] = []
+  if (pressing.size > 0) text.push(`Couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}.`)
+  if (children.truncated) text.push('More children than shown.')
+  if (text.length > 0) note.text = text.join(' ')
+  return note.hint || note.text ? note : undefined
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+function joinOr(items: string[]): string {
+  return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`
+}
+
+// membersNote says what a GitOps manager's status records beyond the members
+// Manages lists; listed says whether it lists any.
+function membersNote(manages: OwnershipCoverage['manages'] | undefined, listed: boolean): RelationshipNote | undefined {
+  if (!manages) return undefined
+  if (manages.membership === 'remote') return { text: "Its destination isn't this cluster as far as Radar can tell, so its members aren't listed." }
+  if (manages.membership === 'unreadable') {
+    const note: RelationshipNote = {}
+    const text: string[] = []
+    if (manages.unavailableReason) text.push(`Couldn't read the members its status records (${gapReasonText(manages.unavailableReason)}).`)
+    if (manages.truncated) text.push('More members than shown.')
+    if (text.length > 0) note.text = text.join(' ')
+    if (listed) note.hint = ["Its status has no member list Radar can read now, so these are the resources the topology links to it."]
+    else if (!manages.unavailableReason) note.hint = ["Its status has no member list Radar can read now."]
+    return note
+  }
+  const extra: string[] = []
+  if (manages.missing) extra.push(`${manages.missing} not in the cluster`)
+  if (manages.withheld) extra.push(`${manages.withheld} you can't view`)
+  if (manages.unknown) extra.push(`${manages.unknown} Radar can't check`)
+  const parts: string[] = []
+  if (extra.length > 0) parts.push(`Its status also lists ${extra.join(', ')}.`)
+  if (manages.truncated) parts.push('More members than shown.')
+  if (parts.length === 0 && !listed) parts.push('Its status records no members to show.')
+  return parts.length > 0 ? { text: parts.join(' ') } : undefined
+}
+
+export interface RelationshipNote {
+  /** Shown under the group. */
+  text?: string
+  /** Lines shown on hovering an info mark beside the label. */
+  hint?: string[]
+}
+
 interface RelationshipGroupProps {
   label: string
   refs: ResourceRef[]
   onNavigate?: (ref: ResourceRef) => void
+  note?: RelationshipNote
+  /** Refs shown only on request, such as a Deployment's old ReplicaSets. */
+  more?: MoreRefs
+  /** The server cut the list short, so refs is not every one. */
+  capped?: boolean
+}
+
+interface MoreRefs {
+  refs: ResourceRef[]
+  /** What the refs are, as "older ReplicaSets" reads after a count. */
+  label: string
+  /** Why they're kept apart, shown on hovering the toggle. */
+  hint: string
+}
+
+// olderRevisions are the ReplicaSets the server keeps out of Children because
+// they only hold rollback history: listed there, ten of them would bury the
+// ones running Pods.
+function olderRevisions(refs: ResourceRef[] | undefined): MoreRefs | undefined {
+  if (!refs || refs.length === 0) return undefined
+  const unique = dedupeResourceRefs(refs)
+  return {
+    refs: unique,
+    label: unique.length === 1 ? 'older ReplicaSet' : 'older ReplicaSets',
+    hint: 'Earlier revisions kept for rollback. They run no Pods.',
+  }
 }
 
 const RELATIONSHIP_TRUNCATE_LIMIT = 10
 
-export function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) {
+// Managed By sits next to Owner and reads like it, so it says how they differ
+// and which direction its answer comes from.
+const MANAGED_BY_HINT = [
+  'Argo CD Applications or Flux objects whose status lists this resource, and other controllers that manage it without an owner reference.',
+  "Kubernetes' garbage collector follows owner references, not these links.",
+]
+
+// managersListOnly: every manager shown is one whose list names the resource
+// while its metadata doesn't confirm it, which the chip calls Listed by.
+function managersListOnly(answer: ManagerAnswer | undefined, managers: ResourceRef[]): boolean {
+  if (!answer || answer.via || !['listed', 'shared', 'disagree'].includes(answer.state) || !managers.length) return false
+  const recorders = new Set((answer.direct.recorders ?? []).map(resourceRefKey))
+  return managers.every(m => recorders.has(resourceRefKey(m)))
+}
+
+// managersNote explains Managed By: where it comes from, more than one
+// manager, and the managers the search couldn't settle. With none listed, a
+// remote list naming the resource or a manager kind Radar couldn't search is
+// said outright, so an empty group doesn't read as "no GitOps manager". An
+// unreadable list stays in the hint: it may name any resource, so it would
+// otherwise show beside every one, and the controllers stamp tracking
+// metadata on what they apply, through which the topology names such a
+// manager anyway.
+function managersNote(coverage: OwnershipCoverage | undefined, listed: number, trackedBy?: string): RelationshipNote {
+  const hint = [...MANAGED_BY_HINT]
+  const open: string[] = []
+  const coverageOf = coverage?.managers
+  if (coverageOf?.unreadable) {
+    const n = coverageOf.unreadable
+    hint.push(n === 1 ? "1 manager's member list can't be read, so it may also list this resource." : `${n} managers' member lists can't be read, so they may also list this resource.`)
+  }
+  if (coverageOf?.remote) {
+    const n = coverageOf.remote
+    open.push(`${n} ${n === 1 ? 'manager lists' : 'managers list'} it for a cluster Radar can't confirm is this one`)
+  }
+  const pressing = new Map<string, string>()
+  for (const g of coverageOf?.notChecked ?? []) {
+    // An unserved manager kind under incomplete discovery reads as read_error
+    // on every resource, like discovery's own gap.
+    if (!g.kind) hint.push("Radar's API discovery missed some API groups, so managers of their kinds aren't checked.")
+    else if (g.reason === 'read_error') hint.push(`Radar couldn't search ${g.kind} objects, so those managers aren't checked.`)
+    else if (g.reason === 'radar_kind_not_collected') hint.push(`Radar doesn't collect ${g.kind} objects, so those managers aren't checked.`)
+    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
+  }
+  if (pressing.size > 0) open.push(`couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}`)
+  const text: string[] = []
+  if (trackedBy) text.push(`Its tracking label names ${trackedBy}, whose status doesn't list it.`)
+  if (open.length > 0) {
+    const sentence = `${capitalize(open.join('; '))}.`
+    if (listed === 0) text.push(sentence)
+    else hint.push(sentence)
+  }
+  if (listed > 1) text.push('More than one manager lists or links to it.')
+  const note: RelationshipNote = { hint: [...new Set(hint)] }
+  if (text.length > 0) note.text = text.join(' ')
+  return note
+}
+
+export function RelationshipGroup({ label, refs, onNavigate, note, more, capped }: RelationshipGroupProps) {
   const [showAll, setShowAll] = useState(false)
-  if (!refs || refs.length === 0) return null
+  if ((!refs || refs.length === 0) && !note && !more) return null
   const truncated = !showAll && refs.length > RELATIONSHIP_TRUNCATE_LIMIT
   const visibleRefs = truncated ? refs.slice(0, RELATIONSHIP_TRUNCATE_LIMIT) : refs
 
   return (
     <div>
-      <div className="text-xs text-theme-text-tertiary mb-1">{label}{refs.length > 1 ? ` (${refs.length})` : ''}</div>
+      <div className="text-xs text-theme-text-tertiary mb-1 flex items-center gap-1">
+        <span>{label}{refs.length > 1 ? ` (${refs.length}${capped ? '+' : ''})` : ''}</span>
+        {note?.hint && (
+          <Tooltip content={<div className="space-y-0.5">{note.hint.map((line) => <div key={line}>{line}</div>)}</div>} delay={150} className="max-h-64 overflow-y-auto">
+            <button type="button" className="inline-flex rounded text-theme-text-tertiary hover:text-theme-text-secondary" aria-label={note.hint.join(' ')}>
+              <Info className="w-3 h-3" aria-hidden="true" />
+            </button>
+          </Tooltip>
+        )}
+      </div>
       <div className="flex flex-wrap gap-1">
         {visibleRefs.map((resourceRef, i) => (
           <ResourceRefBadge key={`${resourceRef.kind}-${resourceRef.namespace}-${resourceRef.name}-${i}`} resourceRef={resourceRef} onClick={onNavigate} />
@@ -909,10 +1251,37 @@ export function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroup
             onClick={() => setShowAll(true)}
             className="px-2 py-0.5 text-xs rounded border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
           >
-            Show all {refs.length}
+            {capped ? `Show the ${refs.length} listed` : `Show all ${refs.length}`}
           </button>
         )}
       </div>
+      {more && <MoreRefsToggle more={more} onNavigate={onNavigate} />}
+      {note?.text && <div className="mt-1 text-xs text-theme-text-tertiary">{note.text}</div>}
+    </div>
+  )
+}
+
+function MoreRefsToggle({ more, onNavigate }: { more: MoreRefs; onNavigate?: (ref: ResourceRef) => void }) {
+  const [open, setOpen] = useState(false)
+  const { panelId, buttonProps } = useDisclosure(open)
+  return (
+    <div className="mt-1">
+      <button
+        {...buttonProps}
+        onClick={() => setOpen(!open)}
+        title={more.hint}
+        className="flex items-center gap-1 text-xs text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+      >
+        <CollapseChevron open={open} className="w-3 h-3" />
+        {open ? `Hide ${more.label}` : `Show ${more.refs.length} ${more.label}`}
+      </button>
+      <Collapse open={open} id={panelId} mountLazily>
+        <div className="flex flex-wrap gap-1 mt-1">
+          {more.refs.map((resourceRef, i) => (
+            <ResourceRefBadge key={`${resourceRef.kind}-${resourceRef.namespace}-${resourceRef.name}-${i}`} resourceRef={resourceRef} onClick={onNavigate} />
+          ))}
+        </div>
+      </Collapse>
     </div>
   )
 }
@@ -926,7 +1295,7 @@ export interface ResourceRefBadgeProps {
 /** Reusable chip/badge for showing a related resource with click-to-navigate */
 export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: ResourceRefBadgeProps) {
   const kindClass = getKindColor(resourceRef.kind)
-  const kindName = formatKindForRef(resourceRef.kind)
+  const kindName = formatKindForRef(resourceRef.kind, resourceRef.group)
   const content = wrapAtSeparator ? (
     <>
       <span className="shrink-0 opacity-60">{kindName}/</span>
@@ -989,8 +1358,10 @@ export function ResourceLink({ name, kind, namespace = '', group, label, onNavig
   )
 }
 
-function formatKindForRef(kind: string): string {
+function formatKindForRef(kind: string, group?: string): string {
   const k = kind.toLowerCase()
+  // A Knative Service shares its kind with core Services; use Knative's own short name.
+  if (k === 'service' && group === 'serving.knative.dev') return 'ksvc'
   const shortNames: Record<string, string> = {
     deployment: 'deploy',
     daemonset: 'ds',
@@ -1003,6 +1374,7 @@ function formatKindForRef(kind: string): string {
     httproute: 'hr',
     grpcroute: 'grpc',
     tcproute: 'tcp',
+    udproute: 'udp',
     tlsroute: 'tls',
     secret: 'secret',
     pod: 'pod',

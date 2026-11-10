@@ -55,8 +55,8 @@ func TestLatestPodEnvSourceChangesUsesLatestObservedKeyChange(t *testing.T) {
 func TestFindPodEnvChangesSkipsInvalidEnvFromKeys(t *testing.T) {
 	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	changes := map[podEnvSourceKey]podEnvSourceChange{
-		{kind: "ConfigMap", namespace: "shop", name: "app", key: "VALID"}:    {kind: "removed", changedAt: startedAt.Add(time.Minute)},
-		{kind: "ConfigMap", namespace: "shop", name: "app", key: "bad=name"}: {kind: "removed", changedAt: startedAt.Add(time.Minute)},
+		{kind: "ConfigMap", namespace: "shop", name: "app", key: "VALID"}:    observedPodEnvChange("removed", startedAt.Add(time.Minute)),
+		{kind: "ConfigMap", namespace: "shop", name: "app", key: "bad=name"}: observedPodEnvChange("removed", startedAt.Add(time.Minute)),
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "shop"},
@@ -72,7 +72,7 @@ func TestFindPodEnvChangesSkipsInvalidEnvFromKeys(t *testing.T) {
 	}
 
 	var got []PodEnvChange
-	appendEnvFromChanges(&got, pod, changes)
+	appendEnvFromChanges(&got, pod, changes, time.Now())
 	if len(got) != 1 || got[0].Variable != "VALID" {
 		t.Fatalf("envFrom changes = %+v, want only VALID", got)
 	}
@@ -81,7 +81,7 @@ func TestFindPodEnvChangesSkipsInvalidEnvFromKeys(t *testing.T) {
 func TestFindPodEnvChangesIncludesRunningInitContainers(t *testing.T) {
 	startedAt := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	changes := map[podEnvSourceKey]podEnvSourceChange{
-		{kind: "ConfigMap", namespace: "shop", name: "setup", key: "MODE"}: {kind: "modified", changedAt: startedAt.Add(time.Minute)},
+		{kind: "ConfigMap", namespace: "shop", name: "setup", key: "MODE"}: observedPodEnvChange("modified", startedAt.Add(time.Minute)),
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "shop"},
@@ -102,7 +102,7 @@ func TestFindPodEnvChangesIncludesRunningInitContainers(t *testing.T) {
 	}
 
 	var got []PodEnvChange
-	appendEnvFromChanges(&got, pod, changes)
+	appendEnvFromChanges(&got, pod, changes, time.Now())
 	if len(got) != 1 || got[0].Container != "setup" || got[0].Variable != "MODE" {
 		t.Fatalf("running init changes = %+v", got)
 	}
@@ -113,4 +113,39 @@ func TestFindPodEnvChangesIncludesRunningInitContainers(t *testing.T) {
 	if since := podEnvEvidenceHistorySince(pod, startedAt.Add(10*time.Minute)); !since.Equal(startedAt.Add(-time.Second)) {
 		t.Fatalf("running init history starts at %v, want %v", since, startedAt.Add(-time.Second))
 	}
+}
+
+// With the timeline down, the environment section must warn that changes could
+// not be checked, as it does when a query fails, and only for a Pod that has
+// sources to check.
+func TestFindPodEnvChangesWarnsWhenTheTimelineIsDown(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+
+	withSource := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api"},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "app",
+			EnvFrom: []corev1.EnvFromSource{{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app"}},
+			}},
+		}}},
+	}
+	if _, coverage := FindPodEnvChanges(t.Context(), nil, withSource, nil); !coverage.Degraded || coverage.DegradedReason == "" {
+		t.Fatalf("coverage = %+v, want degraded with a reason while the timeline is down", coverage)
+	}
+
+	noSources := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "plain"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	if _, coverage := FindPodEnvChanges(t.Context(), nil, noSources, nil); coverage.Degraded {
+		t.Fatalf("coverage = %+v, want no warning for a Pod with nothing to check", coverage)
+	}
+}
+
+func observedPodEnvChange(kind string, at time.Time) podEnvSourceChange {
+	var change podEnvSourceChange
+	change.observe(kind, at, false)
+	return change
 }

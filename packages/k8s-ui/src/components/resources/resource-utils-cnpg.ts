@@ -2,6 +2,9 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors, formatAge, formatDuration } from './resource-utils'
+import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
+export { CNPG_BARMAN_PLUGIN_NAME } from '../../utils/cnpg-backup'
+
 import { parseGoTimeString } from '../../utils/parse-go-time'
 
 // ============================================================================
@@ -9,6 +12,11 @@ import { parseGoTimeString } from '../../utils/parse-go-time'
 // ============================================================================
 
 export const CNPG_GROUP = 'postgresql.cnpg.io'
+
+export function getCNPGPostgresMajor(cluster: any): number | undefined {
+  const major = cluster?.status?.pgDataImageInfo?.majorVersion ?? cluster?.spec?.imageCatalogRef?.major
+  return typeof major === 'number' && Number.isInteger(major) && major > 0 ? major : undefined
+}
 
 /**
  * Exact API-group match for a resource's `apiVersion` ("group/version").
@@ -56,7 +64,11 @@ export const CNPG_CLUSTER_PHASES_TRANSIENT = [
 /** Losing the primary — degraded now, self-resolving only if a replica can take over. */
 export const CNPG_CLUSTER_PHASES_FAILING = ['Failing over'] as const
 
-/** Reconciliation has stopped. These need a human; none of them self-heal. */
+/**
+ * Reconciliation is blocked. The operator keeps retrying every one of these;
+ * only the plugin phases can clear without anyone changing something (a plugin
+ * Pod that comes back). See cnpgBlockedPhaseExplanation.
+ */
 export const CNPG_CLUSTER_PHASES_TERMINAL = [
   'Cluster is unrecoverable and needs manual intervention',
   // Not in 1.27 or 1.28; added upstream after 1.28 (PhaseDefinitionInvalid).
@@ -134,6 +146,34 @@ export function getCNPGClusterDisplayState(phase: string): string {
 }
 
 export type CNPGPhaseBucket = 'healthy' | 'transient' | 'failing' | 'terminal' | 'attention' | 'unknown'
+
+const CNPG_PLUGIN_BLOCKED_PHASES = new Set<string>([
+  'Cluster cannot proceed to reconciliation due to an unknown plugin being required',
+  'Cluster cannot proceed to reconciliation due to an error while interacting with plugins',
+])
+
+/**
+ * What a blocked phase means for whoever is on call, with the operator's own
+ * `status.phaseReason` when it set one. The operator requeues the plugin
+ * phases every 10–15 s, so they clear once the plugin loads and answers;
+ * the others keep failing until their cause is fixed; "unrecoverable" is the
+ * one upstream itself says needs manual intervention.
+ */
+export function cnpgBlockedPhaseExplanation(phase: string, phaseReason?: string): { title: string; message: string; body: string } {
+  const said = typeof phaseReason === 'string' ? phaseReason.trim() : ''
+  const reason = said ? ` The operator reports: ${/[.!?]$/.test(said) ? said : `${said}.`}` : ''
+  const out = (title: string, body: string) => ({ title, body: `${body}${reason}`, message: `${phase}. ${body}${reason}` })
+  if (phase === 'Cluster is unrecoverable and needs manual intervention') {
+    return out('Cluster is unrecoverable', 'The operator cannot bring it back by itself.')
+  }
+  if (CNPG_PLUGIN_BLOCKED_PHASES.has(phase)) {
+    return out(
+      'Reconciliation is blocked by a plugin',
+      'The operator retries every few seconds and continues once the plugin is loaded and answering, so a plugin Pod that is restarting clears on its own; check the operator and plugin logs if it does not.',
+    )
+  }
+  return out('Reconciliation is blocked', 'The operator keeps retrying, but this does not clear until its cause is fixed.')
+}
 
 export function classifyCNPGClusterPhase(phase: string): CNPGPhaseBucket {
   if (!phase) return 'unknown'
@@ -414,7 +454,6 @@ export function getCNPGClusterUpdateStrategy(resource: any): string {
   return resource.spec?.primaryUpdateStrategy || 'unsupervised'
 }
 
-export const CNPG_BARMAN_PLUGIN_NAME = 'barman-cloud.cloudnative-pg.io'
 
 /** The API group ObjectStore is served under. `objectstores` is a generic
  *  plural several operators ship, so every link to one has to be qualified —
@@ -438,20 +477,10 @@ export interface CNPGBarmanPlugin {
  * status.lastSuccessfulBackup / firstRecoverabilityPoint entirely.
  */
 export function getCNPGClusterBarmanPlugin(resource: any): CNPGBarmanPlugin | null {
-  const plugins = resource.spec?.plugins
-  if (!Array.isArray(plugins)) return null
-  const plugin = plugins.find(
-    (p: any) => p?.name === CNPG_BARMAN_PLUGIN_NAME && p?.enabled !== false
-  )
+  const plugin = cnpgBarmanPlugin(cnpgBackupDeclaration(resource))
   if (!plugin) return null
-  return {
-    name: plugin.name,
-    barmanObjectName: plugin.parameters?.barmanObjectName,
-    // ObjectStore keys the recovery window by the plugin's serverName when set,
-    // otherwise by the cluster name.
-    serverName: plugin.parameters?.serverName || resource.metadata?.name,
-    isWALArchiver: plugin.isWALArchiver === true,
-  }
+  const { name, barmanObjectName, serverName, isWALArchiver } = plugin
+  return { name, barmanObjectName, serverName, isWALArchiver }
 }
 
 export function getCNPGClusterBackupConfig(resource: any): {
@@ -518,7 +547,7 @@ export function getCNPGDeclarativeMessage(resource: any): string | undefined {
 export function getCNPGReclaimPolicy(resource: any): { value: string; destructive: boolean } {
   const spec = resource?.spec ?? {}
   const raw =
-    spec.databaseReclaimPolicy ?? spec.publicationReclaimPolicy ?? spec.subscriptionReclaimPolicy ?? 'retain'
+    spec.databaseReclaimPolicy ?? spec.publicationReclaimPolicy ?? spec.subscriptionReclaimPolicy ?? spec.databaseRoleReclaimPolicy ?? 'retain'
   return { value: raw, destructive: String(raw).toLowerCase() === 'delete' }
 }
 
@@ -600,7 +629,7 @@ export interface CNPGObjectStoreRecoveryWindow {
   firstRecoverabilityPoint?: string
   lastSuccessfulBackupTime?: string
   lastFailedBackupTime?: string
-  /** A failure newer than the last success — the window has stopped advancing. */
+  /** A failure newer than the last success, or a failure and no success at all. */
   failingSinceLastSuccess: boolean
 }
 
@@ -641,7 +670,7 @@ export function getCNPGObjectStoreRecoveryWindows(resource: any): CNPGObjectStor
 export function getCNPGObjectStoreStatus(resource: any): StatusBadge {
   const windows = getCNPGObjectStoreRecoveryWindows(resource)
   if (windows.length === 0) {
-    return { text: 'No backups yet', color: healthColors.unknown, level: 'unknown' }
+    return { text: 'No backup recorded', color: healthColors.unknown, level: 'unknown' }
   }
   if (windows.some((w) => w.failingSinceLastSuccess)) {
     return { text: 'Backups Failing', color: healthColors.unhealthy, level: 'unhealthy' }
@@ -649,7 +678,7 @@ export function getCNPGObjectStoreStatus(resource: any): StatusBadge {
   // Every timestamp on a recovery window is optional, so a server can be listed
   // with no recovery point at all. The entry existing is not a backup existing.
   if (!windows.some((w) => w.firstRecoverabilityPoint || w.lastSuccessfulBackupTime)) {
-    return { text: 'No recovery point', color: healthColors.unknown, level: 'unknown' }
+    return { text: 'Recovery point not reported', color: healthColors.unknown, level: 'unknown' }
   }
   return { text: 'Recoverable', color: healthColors.healthy, level: 'healthy' }
 }
@@ -865,10 +894,6 @@ export function getCNPGBackupStartedAt(resource: any): string {
   return resource.status?.startedAt ? formatAge(resource.status.startedAt) : '-'
 }
 
-export function getCNPGBackupStoppedAt(resource: any): string {
-  return resource.status?.stoppedAt ? formatAge(resource.status.stoppedAt) : '-'
-}
-
 export function getCNPGBackupName(resource: any): string {
   return resource.status?.backupName || '-'
 }
@@ -937,15 +962,15 @@ export function getCNPGScheduledBackupStatus(resource: any): StatusBadge {
 
   // If we have a last schedule time, it's active
   if (resource.status?.lastScheduleTime) {
-    return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
+    return { text: 'Enabled', color: healthColors.neutral, level: 'neutral' }
   }
 
   // Check if immediate flag is set and no schedule has run yet
   if (resource.spec?.immediate) {
-    return { text: 'Immediate', color: healthColors.healthy, level: 'healthy' }
+    return { text: 'Immediate run requested', color: healthColors.neutral, level: 'neutral' }
   }
 
-  return { text: 'Scheduled', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Enabled · not run yet', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getCNPGScheduledBackupCluster(resource: any): string {
@@ -1034,8 +1059,10 @@ export function getCNPGPoolerStatus(resource: any): StatusBadge {
     return { text: 'Paused', color: healthColors.degraded, level: 'degraded' }
   }
 
+  // status.instances counts scheduled Pods only; readiness lives on the
+  // Pooler's Deployment, so this badge must not read as healthy.
   if (desired > 0 && scheduled >= desired) {
-    return { text: 'Scheduled', color: healthColors.healthy, level: 'healthy' }
+    return { text: `${desired} instance${desired === 1 ? '' : 's'} requested`, color: healthColors.neutral, level: 'neutral' }
   }
 
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }

@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // SummaryOptions configures the compact per-result enrichment produced by
@@ -20,8 +21,8 @@ import (
 // the per-result digest in here.
 type SummaryOptions struct {
 	// ManagedBy is the compact owner/GitOps pointer attached to the summary.
-	// Callers derive this from topology.Relationships via
-	// ManagedByFromOwner; nil leaves the field absent.
+	// Callers project the canonical controller or manager answer; nil leaves
+	// the field absent. Omitted distinguishes incomplete from settled absence.
 	ManagedBy *ManagedByRef
 
 	// IssueCount is the count of internal issue-engine findings scoped to
@@ -35,6 +36,11 @@ type SummaryOptions struct {
 	// container readiness, replica-count workloads, and the standard
 	// Ready/Available condition on CRDs. Non-trivial kinds derive to "".
 	Health string
+
+	// Scanned, for a security-scan report, names the object it scanned.
+	Scanned *ScannedRef
+	// Omitted qualifies fields relative to the summary, including partial values.
+	Omitted []OmittedField
 }
 
 // BuildSummary produces the compact per-result ResourceSummaryContext
@@ -42,45 +48,53 @@ type SummaryOptions struct {
 // hits.
 //
 // Tightly bounded — only the triage fields needed to choose a next hop.
-// Returns nil when all three fields would be empty so callers can
+// Returns nil when every field would be empty so callers can
 // `omitempty` the entire object on bare results and keep the wire shape minimal.
 func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryContext {
 	health := opts.Health
 	if health == "" {
 		health = deriveHealth(obj)
 	}
-	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 {
+	pause := CrossplanePauseFor(obj)
+	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 && opts.Scanned == nil && pause == "" && len(opts.Omitted) == 0 {
 		return nil
 	}
 	return &ResourceSummaryContext{
-		ManagedBy:  opts.ManagedBy,
-		Health:     health,
-		IssueCount: opts.IssueCount,
+		CrossplanePause: pause,
+		ManagedBy:       opts.ManagedBy,
+		Health:          health,
+		IssueCount:      opts.IssueCount,
+		Scanned:         opts.Scanned,
+		Omitted:         opts.Omitted,
 	}
 }
 
-// ManagedByFromOwner assembles a compact ManagedByRef from raw owner
-// fields (typically pulled out of topology.Relationships in the handler).
-// Returns nil when ownerKind or ownerName is empty so callers don't
-// have to guard the assignment.
+// ManagedByFromOwner formats an identity; it establishes no ownership or
+// management evidence. Use ControllerSummary for controller/spec references
+// and ManagerSummary for a canonical manager answer. Returns nil when
+// ownerKind or ownerName is empty.
 //
 // Source classification:
 //   - "argocd" for argoproj.io kinds (Application, ApplicationSet, Rollout)
 //   - "flux" for *.fluxcd.io kinds (Kustomization, HelmRelease, GitRepository, …)
 //   - "helm" for the native Helm release pseudo-owner (kind "HelmRelease"
-//     with no group — emitted by topology's detectManagedByFromMeta to
+//     with no group — emitted by topology's ManagedByFromMeta to
 //     distinguish from Flux's HelmRelease CR in helm.toolkit.fluxcd.io)
 //   - "native" for everything else (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, …)
 func ManagedByFromOwner(ownerKind, ownerGroup, ownerNamespace, ownerName string) *ManagedByRef {
 	if ownerKind == "" || ownerName == "" {
 		return nil
 	}
-	return &ManagedByRef{
+	ref := &ManagedByRef{
 		Kind:      ownerKind,
 		Source:    sourceForOwner(ownerKind, ownerGroup),
 		Name:      ownerName,
 		Namespace: ownerNamespace,
 	}
+	if b, builtin := resourceid.BuiltinForKind(ownerKind); ref.Source == "native" && (!builtin || b.Group != ownerGroup) {
+		ref.Group = ownerGroup
+	}
+	return ref
 }
 
 func sourceForOwner(ownerKind, group string) string {
@@ -111,6 +125,8 @@ func deriveHealth(obj runtime.Object) string {
 	}
 	now := time.Now()
 	switch o := obj.(type) {
+	case *corev1.Node:
+		return levelToString(health.NodeLifecycle(o, now).Level)
 	case *corev1.Pod:
 		// PodDisplayLevel (not raw Pod) so an unschedulable / stuck-terminating pod
 		// reads degraded in AI/search context too, consistent with topology + timeline.
@@ -149,6 +165,20 @@ func levelToString(l health.Level) string {
 func unstructuredHealth(u *unstructured.Unstructured) string {
 	if u == nil {
 		return ""
+	}
+	if u.GroupVersionKind().Group == "opentelemetry.io" {
+		switch u.GetKind() {
+		case "OpenTelemetryCollector":
+			return levelToString(health.OpenTelemetryCollector(u).Level)
+		case "Instrumentation":
+			return levelToString(health.OpenTelemetryInstrumentation(u).Level)
+		}
+	}
+	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "Canary" {
+		return levelToString(health.FlaggerCanary(u).Level)
+	}
+	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "MetricTemplate" {
+		return "neutral"
 	}
 	conditions, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !found || len(conditions) == 0 {

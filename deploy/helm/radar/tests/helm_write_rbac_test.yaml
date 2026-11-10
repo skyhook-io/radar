@@ -1,0 +1,65 @@
+suite: Helm write RBAC for the ServiceAccount
+templates:
+  - clusterrole.yaml
+tests:
+  # Helm runs as the ServiceAccount only when nobody is signed in.
+  - it: grants the ServiceAccount write on every resource in no-auth installs
+    set:
+      rbac:
+        helm: true
+      auth:
+        mode: none
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["create", "update", "patch", "delete"]
+
+  # Under cloud mode Helm runs as the impersonated user; the wizard sets
+  # rbac.helm=true, which must not hand the ServiceAccount cluster-wide write.
+  - it: grants the ServiceAccount no write in cloud mode
+    set:
+      rbac:
+        helm: true
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["create", "update", "patch", "delete"]
+
+  - it: grants the ServiceAccount no write under auth
+    set:
+      rbac:
+        helm: true
+      auth:
+        mode: proxy
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["create", "update", "patch", "delete"]
+
+  - it: grants the ServiceAccount no write without rbac.helm
+    set:
+      rbac:
+        helm: false
+      auth:
+        mode: none
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["create", "update", "patch", "delete"]

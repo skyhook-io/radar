@@ -1,8 +1,8 @@
 import { Activity, Boxes, Server } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, AlertBanner, ConditionsSection } from '../../ui/drawer-components'
-import { formatAge } from '../resource-utils'
 import { canaryStepTemplateRefs } from './RolloutRenderer'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface ExperimentRendererProps {
   data: any
@@ -72,7 +72,7 @@ export function ExperimentRenderer({ data, onNavigate }: ExperimentRendererProps
           <Property label="Phase" value={<span className={clsx('badge', phaseClass(phase))}>{phase}</span>} />
           <Property label="Duration" value={spec.duration} />
           <Property label="Message" value={status.message} />
-          <Property label="Available At" value={status.availableAt ? formatAge(status.availableAt) : undefined} />
+          <Property label="Available At" value={status.availableAt ? <TimeValue timestamp={status.availableAt} /> : undefined} />
           {ownerRollout && (
             <Property
               label="Rollout"

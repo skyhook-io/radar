@@ -115,3 +115,23 @@ func TestSummarize_ExcludesRootAndGroupFromDegraded(t *testing.T) {
 		t.Errorf("OutOfSync = %d, want 1 (only the managed Deployment; not the app root)", s.OutOfSync)
 	}
 }
+
+// TestHealthToTopology pins the buckets the GitOps tree UI keys off. Its
+// "likely cause" tooltip shows only on 'unhealthy', so Degraded and Missing
+// must land there and Progressing and Suspended must not.
+func TestHealthToTopology(t *testing.T) {
+	cases := map[string]string{
+		"Healthy":     "healthy",
+		"Degraded":    "unhealthy",
+		"Missing":     "unhealthy",
+		"Progressing": "degraded",
+		"Suspended":   "degraded",
+		"Unknown":     "unknown",
+		"":            "unknown",
+	}
+	for health, want := range cases {
+		if got := healthToTopology(health); got != want {
+			t.Errorf("healthToTopology(%q) = %q, want %q", health, got, want)
+		}
+	}
+}

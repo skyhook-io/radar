@@ -3,13 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/k8s"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 )
@@ -141,5 +142,45 @@ func TestAuditResourceExactGroup(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A drawer asks for one resource's findings without naming a scope; it must be
+// served from a scan of that resource's namespace, which is also the entry a
+// view picked to that namespace shares, not trigger a cluster-wide scan.
+func TestAuditResourceDefaultsToItsOwnNamespace(t *testing.T) {
+	t.Cleanup(func() { auditCache.mu.Lock(); auditCache.results = nil; auditCache.mu.Unlock() })
+	withRoute := func(target string) *http.Request {
+		req := httptest.NewRequest("GET", target, nil)
+		route := chi.NewRouteContext()
+		route.URLParams.Add("kind", "Job")
+		route.URLParams.Add("namespace", "default")
+		route.URLParams.Add("name", "shared")
+		return req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, route))
+	}
+	scoped := withRoute("/api/audit/resource/Job/default/shared?raw=true&namespaces=default")
+	key := auditKey(k8s.GetResourceCache(), testServerSrv.parseNamespacesForUser(scoped), testServerSrv.auditOptions(scoped))
+	auditCache.mu.Lock()
+	auditCache.results = &bp.ScanResults{Findings: []bp.Finding{{Kind: "Job", Group: "batch", Namespace: "default", Name: "shared", CheckID: "from-scoped-scan"}}}
+	auditCache.key = key
+	auditCache.expiresAt = time.Now().Add(time.Minute)
+	auditCache.mu.Unlock()
+
+	rec := httptest.NewRecorder()
+	testServerSrv.handleAuditResource(rec, withRoute("/api/audit/resource/Job/default/shared?raw=true&group=batch"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got []bp.Finding
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].CheckID != "from-scoped-scan" {
+		t.Fatalf("drawer request didn't use the resource's namespace scan: %+v", got)
+	}
+	auditCache.mu.RLock()
+	defer auditCache.mu.RUnlock()
+	if auditCache.key != key {
+		t.Fatal("drawer request replaced the shared scoped scan")
 	}
 }

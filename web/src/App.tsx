@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
@@ -9,8 +9,8 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
-import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
+import { resetNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -23,7 +23,6 @@ import { HelmView } from './components/helm/HelmView'
 import { HelmCompareRoute } from './components/helm/HelmCompareRoute'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
-import { CapacityView } from './components/capacity/CapacityView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
@@ -38,27 +37,35 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
+import { resourceExpandedPath, resourceKindListTitle } from './integrations/resourceHosts'
+import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
+import { WorkspaceScreen } from './integrations/workspaceScreens'
+import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
-import { ConnectionProvider, useConnection } from './context/ConnectionContext'
-import { ConnectionErrorView } from './components/ConnectionErrorView'
+import { ConnectionProvider, useConnection, refreshQueriesAfterReconnect } from './context/ConnectionContext'
+import { DisconnectedView, FailedSwitchView } from './components/SwitchAwareConnectionError'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
+import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
+import { RadarUpgradeProvider } from './context/RadarUpgrade'
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
 import { useUsageData, useUsageRecording } from './api/usage-data'
 import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
+import { ProductHuntNotice } from './components/product-hunt/ProductHuntNotice'
+import { useProductHuntRailEntry } from './components/product-hunt/useProductHuntRailEntry'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
-import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
+import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
-import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
+import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
@@ -70,7 +77,9 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams } from './utils/navigation'
+import { createViewMemory } from './utils/viewMemory'
+import { createKindFilterStore } from './utils/kindFilterStore'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, writeViewParams, CROSS_VIEW_PARAMS, namespacesFromSearch } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -78,9 +87,9 @@ import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
-  'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute',
+  'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute', 'UDPRoute',
   'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
-  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'PersistentVolumeClaim', 'Namespace',
+  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'ServiceAccount', 'SealedSecret', 'ServiceMonitor', 'PodMonitor', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'JobSet', 'PersistentVolumeClaim', 'Namespace',
   'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
   'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
   'Broker', 'Trigger', 'PingSource', 'ApiServerSource', 'ContainerSource', 'SinkBinding', 'Channel',
@@ -123,7 +132,12 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+
+// Views that have been laid out for phone width (640px and below). The rest
+// keep their desktop width on a phone and scroll sideways; add a view here in
+// the PR that gives it a phone layout.
+const PHONE_READY_VIEWS: ReadonlySet<ExtendedMainView> = new Set<ExtendedMainView>(['issues', 'resources', 'helm', 'home', 'topology', 'capacity'])
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -136,7 +150,8 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'helm') return 'helm'
   if (path === 'traffic') return 'traffic'
   if (path === 'cost') return 'cost'
-  if (path === 'capacity') return 'capacity'
+  const workspace = workspaceForPath(pathname)
+  if (workspace) return workspace.id
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -161,13 +176,14 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 
 // The screen a crash is counted under. Fixed names, because release builds
 // shorten component names and the component stack can't say which screen.
-const CRASH_LABELS: Record<ExtendedMainView, string> = {
+const CRASH_LABELS = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
-}
+  ...workspaceLabels,
+} satisfies Record<ExtendedMainView, string>
 
 // The namespace scope filter is meaningful only on namespaced surfaces. On
 // cluster-scoped views it does nothing, so we disable it with an explanation
@@ -197,12 +213,8 @@ function namespaceFilterDisabled(
       tooltip: 'Cost is reported per namespace across the whole cluster — the namespace filter doesn’t apply here.',
     }
   }
-  if (view === 'capacity') {
-    return {
-      disabled: true,
-      tooltip: 'Capacity is reported across the cluster — the namespace filter doesn’t apply here.',
-    }
-  }
+  const workspace = workspaceForView(view)
+  if (workspace?.namespaceScope === 'cluster') return { disabled: true, tooltip: workspace.namespaceFilterTooltip }
   if (view === 'checks' && pathname.startsWith('/checks/upgrade')) {
     return {
       disabled: true,
@@ -257,6 +269,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     const resourceName = decode(pathSegments[1] ?? '')
     if (!resourceName) return 'Resources'
     const group = new URLSearchParams(search).get('apiGroup') || ''
+    const hostTitle = resourceKindListTitle({ name: resourceName, group })
+    if (hostTitle) return hostTitle
     const match = findAPIResourceForRoute(apiResources, resourceName, group)
     return pluralKindTitle(match?.kind ?? pluralToKind(resourceName), resourceName)
   }
@@ -275,12 +289,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
   if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
 
   // The landing view reads "Overview" rather than "Home" in the tab.
-  if (view === 'capacity') {
-    if (pathSegments[1] === 'pools') return decode(pathSegments[2] ?? '') || 'Capacity'
-    if (pathSegments[1] === 'demand') return 'Capacity Demand'
-    if (pathSegments[1] === 'activity') return 'Capacity Activity'
-  }
-
+  const workspace = workspaceForView(view)
+  if (workspace) return workspace.pageTitle(pathname)
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -339,6 +349,7 @@ interface AppProps {
 }
 
 function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
+  useLayoutEffect(() => () => resetNavigationMap(), [])
   const navigate = useNavigate()
   const location = useLocation()
   const navigationType = useNavigationType()
@@ -412,24 +423,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
   }, [navigate])
 
-  // Parse namespaces from URL (supports both 'namespaces' and legacy 'namespace')
-  const parseNamespacesFromURL = (params: URLSearchParams): string[] => {
-    // Prefer 'namespaces' (plural, comma-separated)
-    const nsParam = params.get('namespaces')
-    if (nsParam) {
-      return nsParam.split(',').map(s => s.trim()).filter(Boolean)
-    }
-    // Fall back to 'namespace' (singular) for backward compatibility
-    const ns = params.get('namespace')
-    if (ns) {
-      return [ns]
-    }
-    return []
-  }
-
   // Initialize state from URL
   const getInitialState = () => {
-    const namespaces = parseNamespacesFromURL(searchParams)
+    const namespaces = namespacesFromSearch(searchParams)
     return {
       namespaces,
       topologyMode: (searchParams.get('mode') as TopologyMode) || 'resources',
@@ -440,6 +436,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
+  const activeWorkspace = workspaceForView(mainView)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
 
   // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
@@ -447,12 +444,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // A status cached by another screen must not start recording inside a host.
   useUsageRecording(usageView(location.pathname, mainView, upgradeReadinessRoute), navCustomization.embedded ? undefined : usageData.data)
 
-  // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
-  // mount) so the omnibar can open a CRD hit with an irregular plural from any
-  // view — kindToPlural would otherwise English-guess the route before a
-  // resources view has run initNavigationMap().
+  // The omnibar needs discovered plurals even before ResourcesView mounts.
   const { data: navApiResources } = useAPIResources()
-  useEffect(() => { if (navApiResources) initNavigationMap(navApiResources) }, [navApiResources])
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
   // chip isn't a dead control next to the cluster switcher.
@@ -470,15 +463,45 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     return slug || 'pods'
   }, [location.pathname])
 
-  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to `/resources/pods`.
+  // Section memory and Resources filters are kept per cluster; inert until the context is known.
+  const { data: clusterInfoData, isLoading: clusterInfoLoading } = useClusterInfo()
+  const clusterContext = clusterInfoData?.context
+  const viewMemory = useMemo(
+    () => (clusterContext ? createViewMemory(`${getApiBase()}|${clusterContext}`) : undefined),
+    [clusterContext],
+  )
+  const kindFilterStore = useMemo(
+    () => (clusterContext ? createKindFilterStore(`${getApiBase()}|${clusterContext}`) : undefined),
+    [clusterContext],
+  )
+  useEffect(() => {
+    viewMemory?.record(mainView, location.pathname, location.search)
+    if (mainView === 'resources') kindFilterStore?.recordLastKind(location.pathname, location.search)
+  }, [viewMemory, kindFilterStore, mainView, location.pathname, location.search])
+  const rememberedKindSearch = useMemo(
+    () => kindFilterStore && ((kind: { name: string; group: string }) => kindFilterStore.get(kind.name, kind.group)),
+    [kindFilterStore],
+  )
+  const saveKindFilters = useMemo(
+    () => kindFilterStore && ((kind: { name: string; group: string }, search: string) => kindFilterStore.set(kind.name, kind.group, search)),
+    [kindFilterStore],
+  )
+
+  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to
+  // the last kind (hosts such as Radar Hub link to bare `/resources`), else Pods.
   useEffect(() => {
     const path = location.pathname.replace(/\/+$/, '') || '/'
-    if (path !== '/resources') return
+    // Wait for the cluster so its last kind can be read; landing on Pods first would overwrite it.
+    if (path !== '/resources' || clusterInfoLoading) return
+    const current = new URLSearchParams(location.search)
+    const onlyCrossView = [...current.keys()].every(key => (CROSS_VIEW_PARAMS as readonly string[]).includes(key))
+    const destination = new URL((onlyCrossView && kindFilterStore?.lastKind()) || '/resources/pods', 'http://radar.invalid')
+    current.forEach((value, key) => destination.searchParams.set(key, value))
     navigate(
-      { pathname: '/resources/pods', search: location.search, hash: location.hash },
+      { pathname: destination.pathname, search: destination.search, hash: location.hash },
       { replace: true },
     )
-  }, [location.pathname, location.search, location.hash, navigate])
+  }, [location.pathname, location.search, location.hash, navigate, kindFilterStore, clusterInfoLoading])
 
   // Set mainView by navigating to the path
   const setMainView = useCallback((view: ExtendedMainView, params?: Record<string, string>) => {
@@ -494,6 +517,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         goHost(href)
         return
       }
+    }
+
+    // Explicit params are a link with its own state; otherwise go back to where the user left this section.
+    const remembered = params
+      ? undefined
+      : viewMemory?.sectionPath(view) ?? (view === 'resources' ? kindFilterStore?.lastKind() : undefined)
+    if (remembered) {
+      navigate(withCrossViewParams(remembered, location.search))
+      return
     }
 
     const path = view === 'home' ? '/' : `/${view}`
@@ -520,16 +552,17 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [location.search, navigate, takeover, goHost])
+  }, [location.search, navigate, takeover, goHost, viewMemory, kindFilterStore])
 
   const whatsNewStatus = useWhatsNewStatus()
+  const productHuntRailEntry = useProductHuntRailEntry()
 
   const navigateToPath = useCallback((path: string) => {
     navigate(withCrossViewParams(path, location.search))
   }, [location.search, navigate])
 
-  // The standalone rail expresses intent to leave the full-width investigation
-  // workspace. Close it before routing so the destination is immediately visible;
+  // The standalone rail expresses intent to leave the full-width investigations
+  // page. Close it before routing so the destination is immediately visible;
   // docked investigations stay open across views as a persistent side panel.
   const handlePrimaryNavigate = useCallback((view: ExtendedMainView) => {
     navigateFromPrimaryRail(
@@ -573,7 +606,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const [showPolicyEffect, setShowPolicyEffect] = useState(false)
   // Topology filter state
   const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(DEFAULT_VISIBLE_KINDS))
-  const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
+  // Phones start with the filters collapsed to their icon rail: expanded, the
+  // panel took two thirds of the width from the graph.
+  const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(PHONE_MEDIA_QUERY).matches,
+  )
   // Topology node-search → canvas focus request (nonce lets the same node re-focus)
   const [topologyFocus, setTopologyFocus] = useState<{ id: string; nonce: number } | null>(null)
   // The topology pane element — the search overlay portals into it so its
@@ -625,6 +662,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Diagnostics overlay state
   const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [diagnosticsFocus, setDiagnosticsFocus] = useState<DiagnosticsFocus>()
 
   // The peek drawer "expanded" into a fullscreen overlay = ?full=1 with a selected
   // resource, on ANY view (resources list, topology graph, GitOps, Applications…) —
@@ -634,8 +672,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // actually renders) — see further down.
   const drawerExpanded = !!selectedResource && searchParams.get('full') === '1'
 
-  // On mobile there's no room for the side drawer — a resource detail is always full-screen.
-  const isMobile = useMediaQuery('(max-width: 639px)')
+  // On a phone there's no room for the side drawer: a resource detail is always full-screen.
+  const isMobile = usePhoneLayout()
+  // Views with a deliberate phone layout. On a phone every other view keeps
+  // its desktop width and scrolls sideways rather than squeezing.
+  const phoneScroll = isMobile && !PHONE_READY_VIEWS.has(mainView)
 
   // On a history Pop (back/forward) the URL is authoritative. The URL-write
   // effect, running with not-yet-synced state, would otherwise write the stale
@@ -780,7 +821,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     navigate({ pathname: `/resources/${pluralKind}`, search: newParams.toString() })
   }, [searchParams, navigate])
 
-  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null) => {
+  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null, observed?: boolean) => {
     const newParams = new URLSearchParams()
     const globalNamespaces = searchParams.get('namespaces')
     if (globalNamespaces) {
@@ -791,7 +832,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       newParams.set('releaseStorage', storageNamespace)
     }
     if (investigationRunID) newParams.set('ai-run', investigationRunID)
-    setSelectedHelmRelease({ namespace, name, storageNamespace })
+    setSelectedHelmRelease({ namespace, name, storageNamespace, observed })
     if (mainView === 'helm') {
       setSearchParams(newParams, { replace: true })
       return
@@ -874,7 +915,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -941,7 +982,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       category: 'General' as const,
       scope: 'global' as const,
       allowInInputs: true,
-      handler: () => setShowDiagnostics(prev => !prev),
+      handler: () => { setDiagnosticsFocus(undefined); setShowDiagnostics(prev => !prev) },
     },
     // Settings exposes local-binary controls that don't apply to embedded hosts.
     // Register the shortcut only when standalone (matching the gear button) —
@@ -995,13 +1036,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Fetch available namespaces
   const { data: availableNamespaces } = useNamespaces()
 
-  // Per-user view filter served by the backend. Loaded eagerly so the
-  // picker can render its current state without showing the multi-select
-  // fallback during the initial scope fetch.
+  // This tab's namespace pick plus the picker's source list (see
+  // utils/namespacePick). Loaded eagerly so the picker can render its current
+  // state without showing the multi-select fallback during the initial fetch.
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, failedSwitch, setFailedSwitch, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
   const { connection, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
@@ -1014,7 +1055,26 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // empty drawer over a not-yet-loaded view. Gating both on the SAME readiness so
   // a drawer only ever sits over a real content surface.
   const contentReady = !isSwitching && !authMePending &&
-    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
+    !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && !failedSwitch
+
+  // The last context that was connected, so a screen about a cluster that
+  // won't connect can offer a way back to it.
+  const [lastConnectedContext, setLastConnectedContext] = useState<string | null>(null)
+  useEffect(() => {
+    if (connection.state === 'connected' && connection.context) setLastConnectedContext(connection.context)
+  }, [connection.state, connection.context])
+  // A refused switch is about the cluster that was still connected. Once that
+  // connection changes in any way (dropped, reconnecting, or switched from
+  // another tab), the screen is stale.
+  const failedSwitchFrom = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!failedSwitch) {
+      failedSwitchFrom.current = undefined
+      return
+    }
+    failedSwitchFrom.current ??= connection.context
+    if (connection.state !== 'connected' || connection.context !== failedSwitchFrom.current) setFailedSwitch(null)
+  }, [failedSwitch, connection.state, connection.context, setFailedSwitch])
 
   // Progressive shell during the initial informer sync: once the server
   // publishes per-kind sync progress, render the app instead of the splash.
@@ -1057,12 +1117,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   //     update that arrived *after* the fast structural flush already ran.
   const fastInvalidationRef = useRef<{
     changedKinds: Set<string>   // every changed kind (any op) → detail drawer
+    changedObjects: Set<string> // resourceEventKey of every event → detail views that got a 404
     structuralKinds: Set<string> // add/delete kinds → list membership + counts + dashboard
     environmentNamespaces: Set<string>
     environmentPods: Map<string, Set<string>>
     secretsChanged: boolean
     timer: number | null
-  }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
+  }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
+  const cnpgInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1094,8 +1156,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const structural = event.operation === 'add' || event.operation === 'delete'
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
+    if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
+
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
+    fast.changedObjects.add(resourceEventKey(kind, event.namespace ?? '', event.name))
     if (structural) fast.structuralKinds.add(kind)
     if (kind === 'secrets') fast.secretsChanged = true
     if ((kind === 'configmaps' || kind === 'secrets') && event.namespace) fast.environmentNamespaces.add(event.namespace)
@@ -1113,7 +1178,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       fast.timer = window.setTimeout(() => {
         const f = fastInvalidationRef.current
         for (const k of f.changedKinds) {
-          queryClient.invalidateQueries({ queryKey: ['resource', k] }) // open detail drawer stays live
+          // Open detail drawers stay live; a deleted one is left alone unless
+          // an event names it.
+          queryClient.invalidateQueries({
+            queryKey: ['resource', k],
+            predicate: (q) => refetchOnResourceEvents(q, k, f.changedObjects),
+          })
         }
         for (const k of f.structuralKinds) {
           queryClient.invalidateQueries({ queryKey: ['resources', k] }) // list membership changed
@@ -1137,7 +1207,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
-        fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
+        if (cnpgInvalidationPendingRef.current) {
+          cnpgInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
+        }
+        fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
     }
 
@@ -1166,7 +1240,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
+    fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
     timelineInvalidationRef.current = { timer: null }
   }, [])
@@ -1179,17 +1253,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: (context) => {
-      // Clear all React Query caches when cluster context changes
-      // This ensures helm releases, resources, etc. are refetched from the new cluster
-      // removeQueries clears cached data, invalidateQueries triggers refetch
-      queryClient.removeQueries()
-      queryClient.invalidateQueries()
+      resetNavigationMap()
+
+      // Reconnects also emit context_changed. Preserve only this context's drain record.
+      refreshQueriesAfterReconnect(queryClient, connection.context, context)
 
       // Cancel any pending SSE-driven invalidation — old cluster's events are irrelevant
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
       if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-      fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
+      fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
       timelineInvalidationRef.current = { timer: null }
 
@@ -1222,6 +1295,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         const nextParams = new URLSearchParams()
         const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
         if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
+        for (const [key, value] of workspaceContextSwitchSearch(location.pathname, new URLSearchParams(location.search))) nextParams.set(key, value)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -1307,8 +1381,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     showClusterWarmupLabel ? clusterLoadState.message :
     crdDiscoveryStatus === 'discovering' ? 'Discovering Custom Resources…' :
     ''
+  // A settings error (ConnectionErrorView) clears only on restart.
   const showHeaderReconnect =
-    clusterConnectionState === 'disconnected' ||
+    (clusterConnectionState === 'disconnected' && connection.errorType !== 'settings') ||
     liveUpdatesDisconnected
   const headerReconnect = clusterConnectionState === 'disconnected' ? retryConnection : reconnectEventStream
   const headerReconnectPending = clusterConnectionState === 'disconnected' ? isRetrying : false
@@ -1377,18 +1452,20 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Serialize namespaces for stable dependency tracking
   const namespacesKey = namespaces.join(',')
 
-  // The server is canonical for the per-user namespace pick. Mirror its
+  // The scope query holds this tab's namespace pick. Mirror its
   // `actives` into App.tsx state so consumer hooks (SSE, dashboard, resource
   // lists) stay in lockstep with the picker. The dedicated URL-write effect
   // below propagates the mirrored state to `?namespaces=`.
   const setActiveNamespace = useSetActiveNamespace()
   // Defer the state flip to onSuccess. Setting namespaces to [] before the
   // server-side pref has actually been cleared makes React Query refetch
-  // under the new empty key while the server still returns the previous
-  // pick's scope, caching stale data under the new key with no later
-  // invalidation. onSettled would do the same on errors, leaving the UI
-  // showing "All namespaces" while data is still namespace-scoped — onSuccess
-  // keeps state aligned with the server.
+  // under the new empty key while a Radar that applies the stored pick to
+  // reads naming no namespace (Hub embeds this UI against such Radars) returns
+  // the previous pick's scope, caching stale data under the new key with no
+  // later invalidation.
+  // onSettled would do the same on errors, leaving the UI showing "All
+  // namespaces" while data is still namespace-scoped — onSuccess keeps state
+  // aligned with the server.
   //
   // Don't touch the URL here either: setSearchParams on a still-set state
   // trips the URL→state sync into firing setNamespaces([]) and a duplicate
@@ -1399,9 +1476,38 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (namespaces.length === 0) return
     setActiveNamespace.mutate(
       { namespaces: [] },
-      { onSuccess: () => setNamespaces([]) },
+      // A clear answered after a newer switch landed must not override it.
+      { onSuccess: (_scope, _vars, start) => { if (isAppliedNamespaceSwitch(start)) setNamespaces([]) } },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
+  // Same write as the header picker, which then mirrors it into `namespaces`.
+  // The flash shows where that scope lives from now on. The picker owns the
+  // namespace scope from then on, so no kind keeps a Namespace column filter.
+  const [namespacePickerFlash, setNamespacePickerFlash] = useState(0)
+  const applyNamespacesToAllSections = useCallback(
+    (picked: string[]) => setActiveNamespace.mutateAsync({ namespaces: picked }).then(() => {
+      kindFilterStore?.clearColumn('namespace')
+      setNamespacePickerFlash(n => n + 1)
+    }),
+    [setActiveNamespace, kindFilterStore],
+  )
+  const issuesShowNamespace = useMemo(() => {
+    if (namespaceScope?.cacheScoped) {
+      if (!namespaceScope.namespaceRescope) return undefined
+      return {
+        mode: 'switch' as const,
+        show: (ns: string) => { setNamespaces([ns]); setActiveNamespace.mutate({ namespaces: [ns] }) },
+      }
+    }
+    return {
+      mode: 'add' as const,
+      show: (ns: string) => {
+        const next = namespaces.includes(ns) ? namespaces : [...namespaces, ns]
+        setNamespaces(next)
+        setActiveNamespace.mutate({ namespaces: next })
+      },
+    }
+  }, [namespaceScope?.cacheScoped, namespaceScope?.namespaceRescope, namespaces, setActiveNamespace])
   const initialBookmarkReconciledRef = useRef(false)
   const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
   const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
@@ -1480,32 +1586,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (skipUrlWriteAfterPopRef.current) return
     const currentSearch = window.location.search
     const params = new URLSearchParams(currentSearch)
-
-    // Update namespaces param
-    if (namespaces.length > 0) {
-      params.set('namespaces', namespaces.join(','))
-    } else {
-      params.delete('namespaces')
-    }
-    // Remove legacy 'namespace' param if present
-    params.delete('namespace')
-
-    // Topology-specific params: only set when on topology view, clean up otherwise
-    if (mainView === 'topology') {
-      if (topologyMode !== 'resources') {
-        params.set('mode', topologyMode)
-      } else {
-        params.delete('mode')
-      }
-      if (groupingMode !== 'none' && (namespaces.length === 0 || groupingMode !== 'namespace')) {
-        params.set('group', groupingMode)
-      } else {
-        params.delete('group')
-      }
-    } else {
-      params.delete('mode')
-      params.delete('group')
-    }
+    writeViewParams(params, namespaces, mainView === 'topology' ? { mode: topologyMode, grouping: groupingMode } : null)
 
     // Only update if params actually changed vs current URL
     if (params.toString() !== new URLSearchParams(currentSearch).toString()) {
@@ -1526,7 +1607,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // server while the per-user pick was still narrowed — the picker would
   // show the server scope but lists/dashboard would stay on "all namespaces".
   useEffect(() => {
-    const urlNamespaces = parseNamespacesFromURL(searchParams)
+    const urlNamespaces = namespacesFromSearch(searchParams)
     debugNamespaceLog('app:url-sync', {
       search: searchParams.toString(),
       urlNamespaces,
@@ -1563,7 +1644,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (slashIdx > 0) {
         const ns = releaseParam.slice(0, slashIdx)
         const name = releaseParam.slice(slashIdx + 1)
-        setSelectedHelmRelease({ namespace: ns, name, storageNamespace: searchParams.get('releaseStorage') || undefined })
+        const storageNamespace = searchParams.get('releaseStorage') || undefined
+        // Keep what a row click knows about the release; the URL doesn't carry it.
+        setSelectedHelmRelease(prev => (prev?.namespace === ns && prev.name === name && prev.storageNamespace === storageNamespace ? prev : { namespace: ns, name, storageNamespace }))
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- run only when searchParams change; namespacesKey/namespaceScope are read for that transition
@@ -1748,17 +1831,21 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : activeWorkspace?.navView ?? mainView
 
   return (
     <PortForwardProvider>
     {/* Preserve the ~800px content floor: the rail is a fixed-width sibling, so
         the outer minimum must include it (176px pinned / 56px collapsed) or the
         content column (min-w-0, shrinkable) would fall below the old desktop
-        floor at small windows. Embedded mode has no rail → plain 800. */}
+        floor at small windows. Embedded mode has no rail → plain 800.
+        Phones get a 360px floor instead (the narrowest current phones): the
+        content column clips horizontally, so the 800px floor hid the right half
+        of every view with no way to scroll to it. Views without a phone layout
+        scroll sideways at desktop width instead (see PHONE_READY_VIEWS). */}
     <div
       className={`relative flex bg-theme-base ${navCustomization.embedded ? 'h-full min-h-0' : 'h-screen'}`}
-      style={{ minWidth: 800 + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
+      style={{ minWidth: (isMobile ? 360 : 800) + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
       {showNavRail && (
         <PrimaryNavRail
@@ -1770,6 +1857,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onOpenSettings={() => openSettings()}
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
           whatsNew={whatsNewStatus.available ? { unread: whatsNewStatus.unread, onOpen: openWhatsNew } : undefined}
+          productHunt={productHuntRailEntry}
         />
       )}
       {/* `relative` makes this column the containing block for the absolute
@@ -1791,7 +1879,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             <ScopePill>
               <ContextSwitcher ref={contextSwitcherRef} variant="segment" />
               <NamespaceSwitcher
+                key={namespacePickerFlash}
                 ref={namespaceSwitcherRef}
+                className={namespacePickerFlash ? 'reach-flash' : undefined}
                 variant="segment"
                 disabled={namespaceFilter.disabled}
                 disabledTooltip={namespaceFilter.tooltip}
@@ -1889,11 +1979,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
-            <Tooltip content="Open local terminal">
+            <Tooltip content={connection.context || connection.state === 'disconnected' ? 'Open local terminal' : 'Waiting for a context to open a terminal'}>
             <button
               onClick={() => openLocalTerminal()}
+              disabled={!connection.context && connection.state !== 'disconnected'}
               aria-label="Open local terminal"
-              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+              className="p-1.5 rounded-md bg-theme-elevated enabled:hover:bg-theme-hover text-theme-text-secondary enabled:hover:text-theme-text-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <SquareTerminal className="w-4 h-4" />
             </button>
@@ -1941,11 +2032,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Connection error view - show when disconnected */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'disconnected' && (
-        <ConnectionErrorView
+        <DisconnectedView
           connection={connection}
           onRetry={retryConnection}
           isRetrying={isRetrying}
+          lastConnectedContext={lastConnectedContext}
         />
+      )}
+
+      {/* A switch refused before leaving the current cluster: the error screen
+          for the cluster that didn't answer, over the still-connected app. */}
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && failedSwitch && (
+        <FailedSwitchView currentContext={connection.context} />
       )}
 
       {/* Connecting view — shown during initial connection or retry.
@@ -2008,11 +2106,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         </PaneLoader>
       )}
 
+      {contentReady && <NoClusterAccessBanner />}
       {/* Main content - only show when connected and authenticated */}
       {/* inert while a fullscreen detail overlay covers the views — keeps the
           retained background list out of the focus order + a11y tree (the visual
           cover already blocks pointer events). */}
-      {(contentReady || shellDuringSync) && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
+      {(contentReady || shellDuringSync) && <div className={phoneScroll ? 'flex-1 flex overflow-x-auto overflow-y-hidden' : 'flex-1 flex overflow-hidden'} inert={expandedView}>
+        {/* A view without a phone layout keeps its desktop width on a phone and
+            scrolls sideways; `contents` leaves every other layout untouched. */}
+        <div className={phoneScroll ? 'flex flex-1 min-h-0 min-w-[800px]' : 'contents'}>
         {/* Search included, not just the path: selection inside a view rides in
             the query (?resource=, ?release=), so a path-only key would still
             strand a crash on the view that produced it. */}
@@ -2037,7 +2139,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onNavigateToView={setMainView}
             onNavigateToHelmRelease={navCustomization.embedded ? undefined : navigateToHelmRelease}
             onNavigateToManagerPath={navCustomization.embedded || takeover.gitops ? undefined : navigateToPath}
-            onShowWhatsNew={!navCustomization.embedded && whatsNewStatus.available ? openWhatsNew : undefined}
             // Upgrade impact lives under /checks, which a Cloud host takes
             // over wholesale — its fleet pages have no upgrade sub-route, so
             // the version line stays plain text there.
@@ -2121,8 +2222,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                 </div>
               </div>
             ) : (
-              <>
-                {/* Filter sidebar */}
+              // On a phone, its own positioned box so the filter overlay below
+              // anchors to the topology area, not the whole content column.
+              <div className={isMobile ? 'relative flex flex-1 min-w-0 min-h-0' : 'contents'}>
+                {/* Filter sidebar. On phones, expanded it overlays the graph
+                    instead of squeezing it. */}
+                <div className={isMobile && !filterSidebarCollapsed ? 'absolute inset-y-0 left-0 z-20 flex shadow-theme-lg' : 'contents'}>
                 <TopologyFilterSidebar
                   nodes={filterSidebarNodes}
                   visibleKinds={visibleKinds}
@@ -2137,6 +2242,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     console.log(`[topology] User requested to show hidden kind: ${kind}`)
                   }}
                 />
+                </div>
 
                 <div ref={setTopologyPane} className="flex-1 relative">
                   <TopologyGraph
@@ -2156,8 +2262,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     {/* Overlay row: left column (namespace breadcrumb over search)
                         + controls. items-start pins the controls to the top even
                         when the breadcrumb grows the left column; w-full so
-                        justify-between spans the canvas. */}
-                    <div className="flex w-full items-start justify-between gap-2">
+                        justify-between spans the canvas. Phones: the controls
+                        wrap below the search instead of running off the canvas. */}
+                    <div className="flex w-full items-start justify-between gap-2 phone:flex-wrap">
                       <div className="flex flex-col items-start gap-2">
                         {namespaces.length === 1 && (
                           <TopologyBreadcrumb
@@ -2199,13 +2306,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     </div>
                   </TopologyGraph>
                 </div>
-              </>
+              </div>
             )}
           </>
         )}
 
         {/* Resources view */}
-        {mainView === 'resources' && (
+        {/* Bare /resources waits for App's redirect to the last kind; mounted, the view would redirect to Pods first. */}
+        {mainView === 'resources' && (location.pathname.replace(/\/+$/, '') || '/') !== '/resources' && (
           <ResourcesView
             namespaces={namespaces}
             selectedResource={routeSelectedResource}
@@ -2213,6 +2321,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
             onClearNamespaces={clearAllNamespaces}
+            rememberedKindSearch={rememberedKindSearch}
+            onKindFiltersChange={saveKindFilters}
+            // Embedded hosts own their namespace picker, and a cache-scoped
+            // Radar can't take an arbitrary set.
+            onApplyNamespacesToAllSections={namespaceScope?.cacheScoped || !kindFilterStore ? undefined : applyNamespacesToAllSections}
           />
         )}
 
@@ -2232,6 +2345,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               setNamespaces([ns])
               setActiveNamespace.mutate({ namespaces: [ns] })
             }}
+            onOpenDiagnostics={() => { setDiagnosticsFocus('timeline'); setShowDiagnostics(true) }}
           />
         )}
 
@@ -2239,7 +2353,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <HelmView
             namespaces={namespaces}
             selectedRelease={selectedHelmRelease}
-            onReleaseClick={navigateToHelmRelease}
+            onReleaseClick={(namespace, name, storageNamespace, observed) => navigateToHelmRelease(namespace, name, storageNamespace, undefined, observed)}
           />
         )}
 
@@ -2288,7 +2402,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Traffic view */}
         {!viewsSyncGated && mainView === 'traffic' && (
-          <TrafficView namespaces={namespaces} />
+          <TrafficView namespaces={namespaces} onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }} />
         )}
 
         {/* Cost detail view */}
@@ -2296,8 +2410,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
-        {!viewsSyncGated && mainView === 'capacity' && (
-          <CapacityView onOpenResource={navigateToResource} />
+        {!viewsSyncGated && activeWorkspace && (
+          <WorkspaceScreen
+            workspace={activeWorkspace}
+            namespaces={namespaces}
+            selectedResource={routeSelectedResource}
+            onOpenResource={navigateToResource}
+            onCloseResource={() => setSelectedResource(null)}
+            onClearNamespaces={clearAllNamespaces}
+          />
         )}
 
         {/* Takeover splash. When the host claims the current view via
@@ -2330,6 +2451,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <IssuesPane
             namespaces={namespaces}
             onNavigateToResource={navigateFromIssue}
+            showNamespace={issuesShowNamespace}
           />
         )}
 
@@ -2348,6 +2470,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         {!viewsSyncGated && mainView === 'compare' && <CompareViewRoute />}
 
         </ErrorBoundary>
+        </div>
       </div>}
       </div>{/* /body frame */}
 
@@ -2367,7 +2490,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onClose={closeDrawer}
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
-          onExpand={(_res, opts) => {
+          onExpand={(res, opts) => {
+            const detailPath = resourceExpandedPath(res, connection.context || undefined, opts?.yaml ? 'yaml' : undefined)
+            if (detailPath) {
+              navigate(
+                detailPath,
+                { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } },
+              )
+              return
+            }
             // Grow the peek into a fullscreen overlay (?full=1, pushed so Back
             // collapses) over whatever view is underneath — list, topology graph,
             // GitOps, Applications — which stays mounted. Carry the YAML tab when
@@ -2480,9 +2611,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {!navCustomization.embedded && <UpdateNotification />}
       {!navCustomization.embedded && <WhatsNew onNavigate={navigateToPath} usageData={usageData.data} />}
       {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
+      {!navCustomization.embedded && <ProductHuntNotice usageData={usageData.data} usageDataPending={usageData.isPending} />}
 
       {/* Bottom Dock for Terminal/Logs */}
-      <BottomDock />
+      <BottomDock viewNamespaces={namespaces} />
 
       {/* Spacer for dock */}
       <DockSpacer />
@@ -2491,7 +2623,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {helpOverlay.shouldRender && <ShortcutHelpOverlay isOpen={helpOverlay.isOpen} onClose={() => setShowHelp(false)} currentView={mainView} />}
 
       {/* Diagnostics overlay */}
-      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} onClose={() => setShowDiagnostics(false)} />}
+      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
 
       {/* Settings dialog — My permissions is rendered inline in its own section */}
       <SettingsDialog
@@ -2533,17 +2665,19 @@ function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadSt
   return (
     <ConnectionProvider>
       <CapabilitiesProvider>
-        <ContextSwitchProvider>
-          <DockProvider>
-            <KeyboardShortcutProvider>
-              <AppInner
-                manageDocumentTitle={manageDocumentTitle}
-                documentTitleSuffix={documentTitleSuffix}
-                onClusterLoadStateChange={onClusterLoadStateChange}
-              />
-            </KeyboardShortcutProvider>
-          </DockProvider>
-        </ContextSwitchProvider>
+        <RadarUpgradeProvider>
+          <ContextSwitchProvider>
+            <DockProvider>
+              <KeyboardShortcutProvider>
+                <AppInner
+                  manageDocumentTitle={manageDocumentTitle}
+                  documentTitleSuffix={documentTitleSuffix}
+                  onClusterLoadStateChange={onClusterLoadStateChange}
+                />
+              </KeyboardShortcutProvider>
+            </DockProvider>
+          </ContextSwitchProvider>
+        </RadarUpgradeProvider>
       </CapabilitiesProvider>
     </ConnectionProvider>
   )

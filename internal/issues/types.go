@@ -68,6 +68,10 @@ const (
 // owner/affected deep-links can disambiguate CRDs from core kinds.
 type Ref = issuesapi.Ref
 
+type EvidenceRead = issuesapi.EvidenceRead
+
+type DegradedFinding = issuesapi.DegradedFinding
+
 // Issue is the unified cluster-health record.
 //
 // Flat (pre-group) rows are snapshot-derived. GroupIssues folds them and sets

@@ -28,14 +28,23 @@ import {
   createRun,
   recordConsent,
   DiagnoseError,
+  investigationRefusal,
+  investigationCapacity,
 } from "../../api/diagnose";
 import { getApiBase } from "../../api/config";
+import { useContexts } from "../../api/client";
 import {
+  type InvestigationRefusal,
   type RunSummary,
   type AgentInfo,
   type ExecutionProfile,
 } from "../../api/diagnose";
-import { runTargetKey } from "./target";
+import { isQuestionOnly, runTargetKey } from "./target";
+import {
+  type LastInvestigation,
+  lastInvestigations,
+} from "./lastInvestigation";
+import { isExampleInvestigation } from "./exampleInvestigation";
 import { knownKindForPluralWithGroup } from "../../utils/navigation";
 
 export interface Target {
@@ -52,23 +61,76 @@ export interface Target {
    *  the consent-deferred path replays one object — a parallel "was it fresh?"
    *  state is a thing that can fall out of sync with the target it describes. */
   fresh?: boolean;
+  /** The engineer's question. With an empty kind and name, the run is about
+   *  the question alone. */
+  question?: string;
+  namespaces?: string[];
+  lookBack?: string;
+  /** When the question was first asked, for a run that re-runs or narrows
+   *  an earlier one; absent means now. */
+  askedAt?: string;
+  /** Started from the question composer, which hands its draft over to the
+   *  start: a start that never becomes a run gives the question back. */
+  fromComposer?: boolean;
+  /** The cluster the start was made in; set when it is opened. */
+  context?: string;
 }
 export type DiagnoseView = "home" | "investigation";
+
+// What the question composer opens with when something hands it a start:
+// the resource to pin, the words typed so far. seq makes a second hand-off
+// with the same content still land.
+export interface QuestionDraft {
+  seq: number;
+  text?: string;
+  pin?: { kind: string; group: string; namespace: string; name: string };
+  namespaces?: string[];
+  lookBack?: string;
+  /** A question handed back because its start never became a run: a
+   *  composer already holding other words keeps them. */
+  restore?: boolean;
+  /** Open the resource picker with it: choose the resource to ask about. */
+  pickResource?: boolean;
+  /** When the handed-over question was first asked; kept while its words are. */
+  askedAt?: string;
+  /** The cluster the pin and namespaces were chosen in. */
+  context?: string;
+  /** A hand-off that brings no words of its own (Ask about a resource):
+   *  whatever the engineer already wrote stays. */
+  keepWords?: boolean;
+}
 
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
 //  - "needs-install": the feature is supported here but no agent CLI is installed
-//  - "needs-restart": a supported agent is now on PATH but Radar booted before it
-//                     existed (the engine is decided once, at startup)
+//  - "needs-restart": a supported agent is installed but investigations are
+//                     still off. The server picks up new installs whenever the
+//                     agent list is fetched, so locally this means RADAR_AI_CLI_BIN
+//                     pins the engine to a file Radar can't run (cliOverride); an
+//                     embedding host may report it when its own runner is down
 //  - "off":           not available in this deployment (proxy/OIDC auth, --no-mcp,
 //                     or an embed host) — no install nudge would help
-export type DiagnoseSetup = "ready" | "needs-install" | "needs-restart" | "off";
+//  - "unknown":       the agents probe hasn't answered (in flight, or it failed
+//                     and was swallowed). Nothing about the machine or the
+//                     deployment is established yet, so say nothing about either
+export type DiagnoseSetup =
+  "ready" | "needs-install" | "needs-restart" | "off" | "unknown";
 
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
   setupState: DiagnoseSetup; // readiness for the setup nudge (see DiagnoseSetup)
+  // Re-reads the agent list; the server turns investigations on if a CLI was
+  // installed since the last check. Resolves once the new state is applied.
+  recheckAgents: () => Promise<void>;
+  checkingAgents: boolean;
+  // The latest agent check failed to reach the server, so nothing about the
+  // machine is known from it.
+  agentsCheckFailed: boolean;
+  // RADAR_AI_CLI_BIN is set; with "needs-restart" it is what's broken.
+  cliOverride: boolean;
   agentLabel: string; // label of the selected agent, e.g. "Claude Code"
   hosted: boolean; // selected agent runs on the host's backend, not this machine
+  questions: boolean; // the selected agent's backend opens a run from a question
   agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
   selectedAgent: string; // name of the chosen backend ("claude"/"codex")
   setSelectedAgent: (name: string) => void;
@@ -85,7 +147,15 @@ interface DiagnoseCtx {
   runsLoadFailed: boolean; // latest runs fetch failed (poll keeps retrying)
   historyDegraded: boolean; // persistence broke — history won't survive a restart
   needsConsent: boolean; // a start is pending the one-time consent
+  pendingTarget: Target | null; // what that pending start is about
   startError: string | null;
+  // The host's refusal behind startError, when it sent one, so the surface can
+  // offer the host's action beside the message.
+  startRefusal: InvestigationRefusal | null;
+  // Set when the start failed because every investigation slot is taken: the
+  // start to retry once one is free, how many run at once, and the cluster
+  // the start was refused in.
+  startCapacity: StartCapacity | null;
   // Kept apart from startError: the consent card renders this as "why your
   // approval was refused", and a run-start failure landing in the same slot
   // would be read as exactly that — the two paths don't share a lifecycle.
@@ -93,6 +163,12 @@ interface DiagnoseCtx {
   openInvestigation: (t: Target) => void;
   openRun: (id: string) => void;
   openHome: () => void;
+  // Opens Home's question composer with a resource pinned or words typed.
+  openQuestion: (draft: Omit<QuestionDraft, "seq">) => void;
+  // Keeps the composer's unsent content when it unmounts, without handing it
+  // back to the composer as a new start.
+  saveQuestionDraft: (draft: Omit<QuestionDraft, "seq">) => void;
+  questionDraft: QuestionDraft | null;
   openWorkspace: (runID?: string | null) => void;
   restoreWorkspace: () => void;
   canRestoreWorkspace: boolean;
@@ -124,7 +200,13 @@ interface DiagnoseLayoutCtx {
   panelBounds: { min: number; max: number };
   panelWidthKey: string;
   runningKeys: ReadonlySet<string>; // resources with a live investigation (see runTargetKey)
+  // The live run behind each running key, so "view it" opens that run rather
+  // than starting another: a question someone asked about the resource
+  // doesn't stand in for a fresh resource start.
+  runningRunIds: ReadonlyMap<string, string>;
   runningCount: number;
+  // The newest recent assessment of each resource on the cluster in use.
+  lastInvestigations: ReadonlyMap<string, LastInvestigation>;
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -167,6 +249,31 @@ const MIN_APP_LEFT_OF_PANEL = 900;
 // area instead. Radar's own minimum width is about 856px, so this is the
 // drawer's floor: below it the investigation is the screen.
 const MIN_APP_PEEK_BESIDE_OVERLAY = 320;
+// resolveSetupState is the ONE mapping from the agents probe to what every
+// surface renders. Exported so it can be pinned by test, since each state drives
+// a different user-facing claim.
+//
+// "unknown" is not the same as "off". `eligible` starts false and the probe's
+// catch leaves it that way, so without a separate state a pending or failed
+// request reads as a confirmed deployment restriction. A non-empty agent list
+// while the engine is off means a drivable CLI appeared after Radar booted.
+export function resolveSetupState({
+  available,
+  eligibilityResolved,
+  eligible,
+  supportedAgentCount,
+}: {
+  available: boolean;
+  eligibilityResolved: boolean;
+  eligible: boolean;
+  supportedAgentCount: number;
+}): DiagnoseSetup {
+  if (available) return "ready";
+  if (!eligibilityResolved) return "unknown";
+  if (!eligible) return "off";
+  return supportedAgentCount > 0 ? "needs-restart" : "needs-install";
+}
+
 export function investigationPanelFillsViewport(
   viewportWidth: number,
   panelWidth: number,
@@ -184,6 +291,20 @@ const AGENT_LABELS: Record<string, string> = {
 
 export function agentLabelFor(name: string, fallbackLabel?: string): string {
   return AGENT_LABELS[name] || fallbackLabel || name || "your AI agent";
+}
+
+export interface StartCapacity {
+  target: Target;
+  limit: number;
+  context?: string;
+}
+
+function startCapacity(
+  error: unknown,
+  target: Target,
+): StartCapacity | undefined {
+  const capacity = investigationCapacity(error);
+  return capacity ? { target, ...capacity } : undefined;
 }
 
 // openDiagnoseSettings opens the Settings dialog (App.tsx listens for this DOM
@@ -423,10 +544,57 @@ function RoutedDiagnoseProvider({
   );
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
+  const [listedAt, setListedAt] = useState(() => Date.now());
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
   const [historyDegraded, setHistoryDegraded] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
-  const [startError, setStartError] = useState<string | null>(null);
+  // The question composer's content outside the composer, so a hand-off can
+  // fill it and a start that never became a run (consent cancelled, a refused
+  // start) hands the engineer's words back instead of losing them.
+  const [questionDraft, setQuestionDraft] = useState<QuestionDraft | null>(
+    null,
+  );
+  const consentApprovalRef = useRef(0);
+  // The cluster in use now. A start waiting on consent names things in the
+  // cluster it was made in; if the cluster changes first, it is dropped
+  // rather than run against same-named things in the new one.
+  const { data: contexts } = useContexts();
+  const currentContext = contexts?.find((context) => context.isCurrent)?.name;
+  const currentContextRef = useRef(currentContext);
+  currentContextRef.current = currentContext;
+  // A question that never became a run goes back to the composer, unless the
+  // engineer has written something else there since.
+  const giveQuestionBack = useCallback((t: Target) => {
+    if (!t.fromComposer || !t.question) return;
+    setQuestionDraft((previous) =>
+      previous?.text?.trim()
+        ? previous
+        : {
+            seq: (previous?.seq ?? 0) + 1,
+            text: t.question,
+            pin: t.name
+              ? {
+                  kind: t.kind,
+                  group: t.group,
+                  namespace: t.namespace,
+                  name: t.name,
+                }
+              : undefined,
+            // An empty list is an explicit "all namespaces", not "follow the
+            // header": hand it back as it was.
+            namespaces: t.namespaces,
+            lookBack: t.lookBack,
+            askedAt: t.askedAt,
+            context: t.context,
+            restore: true,
+          },
+    );
+  }, []);
+  const [startFailure, setStartFailure] = useState<{
+    message: string;
+    refusal: InvestigationRefusal | null;
+    capacity?: StartCapacity;
+  } | null>(null);
   const [consentError, setConsentError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
     try {
@@ -444,52 +612,79 @@ function RoutedDiagnoseProvider({
   const narrow = viewportW - width < MIN_APP_LEFT_OF_PANEL;
   const fullWidthForced = investigationPanelFillsViewport(viewportW, width);
 
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let live = true;
-    fetchAgents()
-      .then((r) => {
-        if (!live) return;
-        setConsented(r.consented ?? {});
-        setEligible(!!r.eligible);
-        const supported = r.agents.filter(
-          (a) =>
-            a.supported &&
-            (a.hosted ||
-              (!!a.profiles?.length &&
-                a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
-        );
-        setAvailable(r.enabled && supported.length > 0);
-        setAgents(supported);
-        // Keep the stored pick only if it's still installed; else default to the
-        // first supported agent (matches the server's default selection).
-        const stored = readStored(AGENT_KEY) || "";
-        const next =
-          stored && supported.some((a) => a.name === stored)
-            ? stored
-            : (supported[0]?.name ?? "");
-        setSelectedAgentState(next);
-        const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
-        const storedProfile =
-          (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
-        if (!profiles.includes(storedProfile) && profiles[0]) {
-          setProfileState(profiles[0]);
-          writeStored(PROFILE_KEY, profiles[0]);
-        }
-        // Model/effort are agent-specific; if the stored agent is gone, its values
-        // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
-        if (next !== stored) {
-          setModelState("");
-          writeStored(MODEL_KEY, "");
-          setEffortState("");
-          writeStored(EFFORT_KEY, "");
-        }
-        setAgentEligibilityResolved(true);
-      })
-      .catch(() => {});
+    mountedRef.current = true;
     return () => {
-      live = false;
+      mountedRef.current = false;
     };
   }, []);
+  const [checkingAgents, setCheckingAgents] = useState(false);
+  const [agentsCheckFailed, setAgentsCheckFailed] = useState(false);
+  const [cliOverride, setCliOverride] = useState(false);
+  // A click and a window-focus re-check can overlap; only the newest one may
+  // apply its answer, or a stale "nothing installed" could land last.
+  const agentCheckSeq = useRef(0);
+  // The agent in use now, picked by hand or by default. A check compares
+  // against it, not just the stored pick, so seeing the same agent again
+  // keeps the model and effort set for it.
+  const agentInUseRef = useRef(selectedAgent);
+  const recheckAgents = useCallback(async () => {
+    const seq = ++agentCheckSeq.current;
+    const latest = () => mountedRef.current && seq === agentCheckSeq.current;
+    setCheckingAgents(true);
+    try {
+      const r = await fetchAgents();
+      if (!latest()) return;
+      setAgentsCheckFailed(false);
+      setCliOverride(!!r.cliOverride);
+      setConsented(r.consented ?? {});
+      setEligible(!!r.eligible);
+      const supported = r.agents.filter(
+        (a) =>
+          a.supported &&
+          (a.hosted ||
+            (!!a.profiles?.length &&
+              a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
+      );
+      setAvailable(r.enabled && supported.length > 0);
+      setAgents(supported);
+      // Keep the stored pick only if it's still installed; else default to the
+      // first supported agent. Runs always name it, so the server's own default
+      // doesn't apply.
+      const stored = readStored(AGENT_KEY) || "";
+      const next =
+        stored && supported.some((a) => a.name === stored)
+          ? stored
+          : (supported[0]?.name ?? "");
+      setSelectedAgentState(next);
+      const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
+      const storedProfile =
+        (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
+      if (!profiles.includes(storedProfile) && profiles[0]) {
+        setProfileState(profiles[0]);
+        writeStored(PROFILE_KEY, profiles[0]);
+      }
+      // Model/effort are agent-specific; if the agent changed, its values
+      // don't apply to the new one (e.g. a Codex slug under Claude), so drop them.
+      if (next !== agentInUseRef.current) {
+        setModelState("");
+        writeStored(MODEL_KEY, "");
+        setEffortState("");
+        writeStored(EFFORT_KEY, "");
+      }
+      agentInUseRef.current = next;
+      setAgentEligibilityResolved(true);
+    } catch {
+      // Leaves the previous state in place; "unknown" until a probe answers.
+      if (latest()) setAgentsCheckFailed(true);
+    } finally {
+      if (latest()) setCheckingAgents(false);
+    }
+  }, []);
+  useEffect(() => {
+    void recheckAgents();
+  }, [recheckAgents]);
 
   const setModel = useCallback((v: string) => {
     setModelState(v);
@@ -503,6 +698,7 @@ function RoutedDiagnoseProvider({
     (name: string) => {
       setSelectedAgentState(name);
       writeStored(AGENT_KEY, name);
+      agentInUseRef.current = name;
       const nextProfile = agents.find((agent) => agent.name === name)
         ?.profiles?.[0];
       if (nextProfile) {
@@ -533,15 +729,21 @@ function RoutedDiagnoseProvider({
     ? "standard"
     : (selectedAgentInfo?.consentSurfaces?.[effectiveProfile] ?? "");
 
-  // `agents` holds only supported CLIs (filtered on fetch), so a non-empty list
-  // while the engine is off means a drivable agent appeared on PATH after boot.
-  const setupState: DiagnoseSetup = available
-    ? "ready"
-    : !eligible
-      ? "off"
-      : agents.length > 0
-        ? "needs-restart"
-        : "needs-install";
+  const setupState = resolveSetupState({
+    available,
+    eligibilityResolved: agentEligibilityResolved,
+    eligible,
+    supportedAgentCount: agents.length,
+  });
+
+  // Coming back from a terminal after installing a CLI is when to look again,
+  // so the setup notice clears without the user hunting for a button.
+  useEffect(() => {
+    if (setupState === "ready" || setupState === "off") return;
+    const onFocus = () => void recheckAgents();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [setupState, recheckAgents]);
 
   useEffect(() => {
     const onResize = () => setViewportW(window.innerWidth);
@@ -549,10 +751,17 @@ function RoutedDiagnoseProvider({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // Fetches overlap (polling, focus, a cluster switch). One that started
+  // before the list last changed is dropped, or an older snapshot could
+  // restore cleared runs; a slow fetch still lands if nothing newer did.
+  const listSeqRef = useRef(0);
+  const appliedListSeqRef = useRef(0);
   const refreshRuns = useCallback(async () => {
     if (!available) return;
+    const seq = ++listSeqRef.current;
     try {
       const r = await listRuns();
+      if (seq < appliedListSeqRef.current) return;
       const focusedID = activeRunIdRef.current;
       let focusedRun: RunSummary | null = null;
       let retainFocusedSnapshot = false;
@@ -561,7 +770,11 @@ function RoutedDiagnoseProvider({
         : undefined;
       if (focusedID && listedFocusedRun) {
         unavailableRunIDsRef.current.delete(focusedID);
-      } else if (focusedID && !unavailableRunIDsRef.current.has(focusedID)) {
+      } else if (
+        focusedID &&
+        !isExampleInvestigation(focusedID) &&
+        !unavailableRunIDsRef.current.has(focusedID)
+      ) {
         try {
           // A stable deep link can target a retained run older than the bounded
           // history page. Refresh it directly too: its status and capabilities
@@ -577,6 +790,9 @@ function RoutedDiagnoseProvider({
           retainFocusedSnapshot = !unavailable;
         }
       }
+      if (seq < appliedListSeqRef.current) return;
+      appliedListSeqRef.current = seq;
+      setListedAt(Date.now());
       setRuns((prev) => {
         let nextRuns = r.runs;
         if (focusedRun) nextRuns = [focusedRun, ...nextRuns];
@@ -603,6 +819,7 @@ function RoutedDiagnoseProvider({
       setRunsLoadFailed(false);
       setHistoryDegraded(!!r.historyDegraded);
     } catch {
+      if (seq < appliedListSeqRef.current) return;
       // Leave runsLoaded false (a missing-run verdict needs a real list) but
       // record the failure so the panel can say "retrying" instead of
       // pretending nothing happened. The 4s poll keeps retrying while open.
@@ -640,18 +857,57 @@ function RoutedDiagnoseProvider({
   // A content-stable signature of the resources with a live investigation,
   // so per-resource Investigate buttons only re-render when their live targets
   // change.
+  // A plain resource run sorts after a question about the same resource, so
+  // it is the one a key maps to when both are live.
+  // A local run names the kubeconfig context it ran in, so a same-named
+  // resource on another cluster isn't it. A hosted list is already one
+  // cluster's and labels it differently. Until the cluster in use is known, a
+  // live run can't be ruled out by it.
+  const scopeByContext = !hosted && !!currentContext;
   const runningSig = runningRuns
-    .map((r) => runTargetKey(r.kind, r.namespace, r.name, r.group))
+    .filter(
+      (r) =>
+        !isQuestionOnly(r) && (!scopeByContext || r.context === currentContext),
+    )
+    .map(
+      (r) =>
+        `${runTargetKey(r.kind, r.namespace, r.name, r.group)}\t${r.question ? 0 : 1}\t${r.id}`,
+    )
     .sort()
-    // resourceKey itself is pipe-delimited; newlines cannot occur in a
-    // Kubernetes group, Kind, namespace, or name.
+    // resourceKey itself is pipe-delimited; newlines and tabs cannot occur in
+    // a Kubernetes group, Kind, namespace, or name.
     .join("\n");
-  const runningKeys = useMemo(
-    () => new Set(runningSig ? runningSig.split("\n") : []),
+  const runningRunIds = useMemo(
+    () =>
+      new Map(
+        (runningSig ? runningSig.split("\n") : []).map((line) => {
+          const [key, , id] = line.split("\t");
+          return [key, id] as const;
+        }),
+      ),
     [runningSig],
+  );
+  const runningKeys = useMemo(
+    () => new Set(runningRunIds.keys()),
+    [runningRunIds],
   );
   const runningCount = runningRuns.length;
   const hasRunning = runningCount > 0;
+  // The clock the cutoff reads moves on each fetch and hourly, so an entry
+  // ages out while nothing polls.
+  useEffect(() => {
+    const t = setInterval(() => setListedAt(Date.now()), 60 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+  // Serialized so the buttons re-render only when an entry changes, not on
+  // every poll that returns a fresh array.
+  const lastSig = JSON.stringify(
+    hosted ? [] : [...lastInvestigations(runs, currentContext, listedAt)],
+  );
+  const lastInvestigationsByKey = useMemo(
+    () => new Map<string, LastInvestigation>(JSON.parse(lastSig)),
+    [lastSig],
+  );
 
   // Keep the run list (statuses, new background runs) fresh while the surface is open
   // OR while any investigation is still running — so the button indicator stays live
@@ -664,6 +920,22 @@ function RoutedDiagnoseProvider({
     const t = setInterval(refreshRuns, 4000);
     return () => clearInterval(t);
   }, [open, available, hasRunning, refreshRuns]);
+
+  // A resource shows its last investigation without the panel open, so the
+  // list also catches up when the window comes back (another tab's run, a
+  // cleared history, a failed first fetch) and when the cluster changes.
+  useEffect(() => {
+    if (!available) return;
+    window.addEventListener("focus", refreshRuns);
+    return () => window.removeEventListener("focus", refreshRuns);
+  }, [available, refreshRuns]);
+  const listedContextRef = useRef(currentContext);
+  useEffect(() => {
+    if (listedContextRef.current === currentContext) return;
+    const switched = listedContextRef.current !== undefined;
+    listedContextRef.current = currentContext;
+    if (switched) refreshRuns();
+  }, [currentContext, refreshRuns]);
 
   const consentedRef = useRef(consented);
   consentedRef.current = consented;
@@ -693,25 +965,39 @@ function RoutedDiagnoseProvider({
         writeFocusedRunID(run.id, true);
       })
       .catch((e) => {
+        // The picked agent may have been uninstalled since the list was
+        // fetched; refresh it so the picker shows what's installed now.
+        void recheckAgents();
         if (seq !== startSeqRef.current) return;
-        setStartError(
-          e instanceof DiagnoseError
-            ? e.message
-            : "Couldn't start the investigation.",
-        );
+        giveQuestionBack(t);
+        setStartFailure({
+          message:
+            e instanceof DiagnoseError
+              ? e.message
+              : "Couldn't start the investigation.",
+          refusal: investigationRefusal(e),
+          capacity: startCapacity(e, t),
+        });
       });
   };
 
   const openInvestigation = useCallback(
-    (t: Target) => {
-      setStartError(null);
+    (opened: Target) => {
+      const t = {
+        ...opened,
+        context: opened.context ?? currentContextRef.current,
+      };
+      setStartFailure(null);
       setConsentError(null);
       setOpen(true);
       if (!hosted && !consentSurface) {
         setPendingTarget(null);
-        setStartError(
-          "Radar can’t run this agent with a verified execution profile.",
-        );
+        setStartFailure({
+          message:
+            "Radar can’t run this agent with a verified execution profile.",
+          refusal: null,
+        });
+        giveQuestionBack(t);
         setView("investigation");
         return;
       }
@@ -723,16 +1009,20 @@ function RoutedDiagnoseProvider({
       setView("investigation");
       startRunRef.current(t);
     },
-    [consentSurface, hosted],
+    [consentSurface, hosted, giveQuestionBack],
   );
   const openRun = useCallback(
     (id: string) => {
       unavailableRunIDsRef.current.delete(id);
-      setStartError(null);
+      // A start still in flight no longer owns the pane: its refusal must not
+      // replace the run the user just chose.
+      startSeqRef.current++;
+      setStartFailure(null);
       setActiveRunId(id);
       setView("investigation");
       setOpen(true);
       writeFocusedRunID(id, true);
+      if (isExampleInvestigation(id)) return;
       // A Fleet issue can point at a retained automatic run older than the
       // bounded history page. Resolve the exact id instead of waiting for list.
       getRun(id)
@@ -748,7 +1038,7 @@ function RoutedDiagnoseProvider({
   );
 
   // Browser navigation is the source of truth for presentation: a dedicated
-  // /investigations route is the full workspace, while ?ai-run keeps the
+  // /investigations route is the full investigations page, while ?ai-run keeps the
   // contextual drawer on its underlying page. Fetch exact ids rather than
   // assuming the bounded recent list contains them.
   useEffect(() => {
@@ -756,7 +1046,7 @@ function RoutedDiagnoseProvider({
       return;
     const workspace = isInvestigationWorkspacePath(location.pathname);
     // Eligibility is unresolved until the agent probe returns. Once it has
-    // definitively resolved to off, workspace routes cannot render anything
+    // definitively resolved to off, investigations-page routes cannot render anything
     // useful; return to the app instead of leaving an eternal loading panel.
     if (agentEligibilityResolved && !eligible) {
       setActiveRunId(null);
@@ -823,10 +1113,11 @@ function RoutedDiagnoseProvider({
 
     urlRunIdRef.current = id;
     unavailableRunIDsRef.current.delete(id);
-    setStartError(null);
+    setStartFailure(null);
     setActiveRunId(id);
     setView("investigation");
     setOpen(true);
+    if (isExampleInvestigation(id)) return;
     getRun(id)
       .then(updateRunSummary)
       .catch((error) => {
@@ -856,14 +1147,36 @@ function RoutedDiagnoseProvider({
     unavailableRunIDsRef.current.clear();
     setActiveRunId(null);
     setView("home");
-    setStartError(null);
+    setStartFailure(null);
     setOpen(true);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
+  const openQuestion = useCallback(
+    (draft: Omit<QuestionDraft, "seq">) => {
+      setQuestionDraft((previous) =>
+        draft.text === undefined
+          ? {
+              ...draft,
+              text: previous?.text,
+              askedAt: previous?.askedAt,
+              keepWords: true,
+              seq: (previous?.seq ?? 0) + 1,
+            }
+          : { ...draft, seq: (previous?.seq ?? 0) + 1 },
+      );
+      openHome();
+    },
+    [openHome],
+  );
+  const saveQuestionDraft = useCallback(
+    (draft: Omit<QuestionDraft, "seq">) =>
+      setQuestionDraft((previous) => ({ ...draft, seq: previous?.seq ?? 0 })),
+    [],
+  );
   const openWorkspace = useCallback(
     (preferredRunID?: string | null) => {
       setOpen(true);
-      setStartError(null);
+      setStartFailure(null);
       if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) {
         if (preferredRunID) {
           setActiveRunId(preferredRunID);
@@ -876,8 +1189,8 @@ function RoutedDiagnoseProvider({
         return;
       }
       const current = locationRef.current;
-      // The global entry remains visible in the workspace. Treat clicking it
-      // there as an idempotent reveal rather than pushing another workspace
+      // The global entry remains visible on the investigations page. Treat clicking it
+      // there as an idempotent reveal rather than pushing another page
       // entry and replacing the page that Close should return to.
       if (isInvestigationWorkspacePath(current.pathname)) {
         setMaximized(true);
@@ -927,14 +1240,14 @@ function RoutedDiagnoseProvider({
     unavailableRunIDsRef.current.clear();
     setActiveRunId(null);
     setView("home");
-    setStartError(null);
+    setStartFailure(null);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
   const dismissForNavigation = useCallback(() => {
     unavailableRunIDsRef.current.clear();
     setOpen(false);
     setView("home");
-    setStartError(null);
+    setStartFailure(null);
   }, []);
   const close = useCallback(() => {
     unavailableRunIDsRef.current.clear();
@@ -968,11 +1281,22 @@ function RoutedDiagnoseProvider({
     consentBusyRef.current = true;
     setConsentError(null);
     const t = pendingTarget;
+    const approval = ++consentApprovalRef.current;
     // The server ENFORCES consent at start, so the acknowledgment must land
     // before the run request — awaiting also makes it durable for the CLI.
     recordConsent(consentSurface)
       .then(() => {
         setConsented((prev) => ({ ...prev, [consentSurface]: true }));
+        // Cancelled while the acknowledgment was in flight, or the cluster
+        // changed under it: consent is recorded, but the start never runs.
+        if (approval !== consentApprovalRef.current) return;
+        if (
+          t?.context &&
+          currentContextRef.current &&
+          t.context !== currentContextRef.current
+        ) {
+          return;
+        }
         // Cleared only on success: a failed write keeps the consent card up
         // (needsConsent = !!pendingTarget) so "try again" works in place.
         setPendingTarget(null);
@@ -994,12 +1318,30 @@ function RoutedDiagnoseProvider({
       });
   }, [consentSurface, pendingTarget]);
   const cancelConsent = useCallback(() => {
+    consentApprovalRef.current++;
+    if (pendingTarget) giveQuestionBack(pendingTarget);
     setPendingTarget(null);
     setConsentError(null);
     setOpen(true);
     if (!activeRunIdRef.current) setView("home");
-  }, []);
-  const dismissError = useCallback(() => setStartError(null), []);
+  }, [pendingTarget, giveQuestionBack]);
+  const dismissError = useCallback(() => setStartFailure(null), []);
+  useEffect(() => {
+    if (!pendingTarget || !currentContext) return;
+    // A start opened before the cluster was known belongs to the first one
+    // known, so a later switch still drops it.
+    if (!pendingTarget.context) {
+      setPendingTarget({ ...pendingTarget, context: currentContext });
+      return;
+    }
+    if (pendingTarget.context !== currentContext) {
+      consentApprovalRef.current++;
+      giveQuestionBack(pendingTarget);
+      setPendingTarget(null);
+      setConsentError(null);
+      if (!activeRunIdRef.current) setView("home");
+    }
+  }, [currentContext, pendingTarget, giveQuestionBack]);
 
   // Reserve a right gutter on the CONTENT area (not the navbar/rail — those stay
   // global and static) so docked content reflows beside the panel. Wide viewports
@@ -1009,8 +1351,13 @@ function RoutedDiagnoseProvider({
   const value: DiagnoseCtx = {
     available,
     setupState,
+    recheckAgents,
+    checkingAgents,
+    agentsCheckFailed,
+    cliOverride,
     agentLabel,
     hosted,
+    questions: selectedAgentInfo?.questions === true,
     agents,
     selectedAgent,
     setSelectedAgent,
@@ -1029,11 +1376,17 @@ function RoutedDiagnoseProvider({
     // pendingTarget is set ONLY when the current agent's consent is missing, and
     // cleared on approve/cancel — so its presence is exactly "consent needed now".
     needsConsent: !!pendingTarget,
-    startError,
+    pendingTarget,
+    startError: startFailure?.message ?? null,
+    startRefusal: startFailure?.refusal ?? null,
+    startCapacity: startFailure?.capacity ?? null,
     consentError,
     openInvestigation,
     openRun,
     openHome,
+    openQuestion,
+    saveQuestionDraft,
+    questionDraft,
     openWorkspace,
     restoreWorkspace,
     canRestoreWorkspace,
@@ -1066,7 +1419,9 @@ function RoutedDiagnoseProvider({
       panelBounds: PANEL_BOUNDS,
       panelWidthKey: WIDTH_KEY,
       runningKeys,
+      runningRunIds,
       runningCount,
+      lastInvestigations: lastInvestigationsByKey,
     }),
     [
       open,
@@ -1078,7 +1433,9 @@ function RoutedDiagnoseProvider({
       width,
       narrow,
       runningKeys,
+      runningRunIds,
       runningCount,
+      lastInvestigationsByKey,
       setMaximized,
       setWidth,
     ],

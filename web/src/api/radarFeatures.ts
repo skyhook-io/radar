@@ -1,0 +1,200 @@
+import type { FeatureCapabilities, RadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
+import { compareVersions } from '../utils/version'
+
+// Radar Hub embeds the newest @skyhook-io/radar-app against whatever Radar is
+// installed in each cluster, so these endpoints can be missing on a connected
+// Radar. A Radar that advertises the feature's `features` flag is always
+// trusted; otherwise the release that first served the endpoint decides.
+//
+// Adding an optional endpoint: advertise a flag for it in
+// FeatureCapabilities (internal/k8s/capabilities.go) in the same change, add
+// an entry here with that flag and `flagShippedWithEndpoint: true`, and guard
+// its hook with useRadarFeature. TestFeatureFlagsHaveFrontendGates keeps the
+// two lists in step. `minimumVersion` can wait for the release to be cut:
+// until then the note asks for the latest Radar. A behavior change on an
+// existing endpoint is gated the same way, except that the control relying on
+// it is disabled: an older Radar still answers the request, wrongly.
+export interface RadarFeatureSpec {
+  /** Plural noun phrase; the upgrade note reads "<label> need Radar vX or newer." */
+  label: string
+  /** First release that served the endpoint, once known. */
+  minimumVersion?: string
+  flag?: keyof FeatureCapabilities
+  /**
+   * The flag shipped in the same release as the endpoint, so a Radar whose
+   * capabilities omit it is too old regardless of its version. False for the
+   * entries below, whose flags were added after their endpoints.
+   */
+  flagShippedWithEndpoint?: boolean
+  requireAffirmativeSupport?: boolean
+}
+
+export const RADAR_FEATURES = {
+  resourceReadCoverage: { label: 'Resource read coverage', flag: 'resourceReadCoverage', flagShippedWithEndpoint: true },
+  searchCoverage: { label: 'Search coverage and object filters', flag: 'searchCoverage', flagShippedWithEndpoint: true },
+  applicationEvidence: { label: 'Application evidence collection', flag: 'applicationEvidence', flagShippedWithEndpoint: true },
+  searchEventContent: { label: 'Event reason and message searches', flag: 'searchEventContent', flagShippedWithEndpoint: true },
+  resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
+  resourceIssueCoverage: { label: 'Resource-specific issue views', flag: 'resourceIssueCoverage', flagShippedWithEndpoint: true },
+  podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
+  policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },
+  capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
+  // Radars from v1.15.0 serve the route without advertising the flag.
+  rayClusterPods: { label: 'RayCluster runtime Pods', minimumVersion: 'v1.15.0', flag: 'rayClusterPods' },
+  upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },
+  drainPlan: { label: 'Drain plans', minimumVersion: 'v1.14.0' },
+  applications: { label: 'Applications', minimumVersion: 'v1.7.7' },
+  workloadHistory: { label: 'Workload history', flag: 'workloadHistory', flagShippedWithEndpoint: true },
+  cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
+  cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
+  gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
+  serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
+  trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },
+  kueuePendingPosition: { label: 'Kueue queue positions', flag: 'kueuePendingPosition', flagShippedWithEndpoint: true },
+  kueueQueueWorkloads: { label: 'Workload lists on Kueue queues', flag: 'kueueQueueWorkloads', flagShippedWithEndpoint: true },
+  // One flag, two controls. An older Radar's rollback never runs, and its
+  // resume reports success while leaving automated.enabled: false in place.
+  argoRollback: { label: 'Argo CD rollbacks', flag: 'argoRollbackSync', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  argoAutoSyncEnable: { label: 'Auto-sync controls for Applications with automated.enabled: false', flag: 'argoRollbackSync', flagShippedWithEndpoint: true, requireAffirmativeSupport: true },
+  // Never blocks a control. An older Radar's sync drops the Application's
+  // sync options when the request omits them, and prunes when it omits prune,
+  // so useArgoSync sends both explicitly unless this is supported. Also tells
+  // the UI that Enable auto-sync on a never-suspended Application starts with
+  // prune off.
+  argoSyncInheritance: { label: "Syncs that keep the Application's sync options", flag: 'argoSyncInheritance', flagShippedWithEndpoint: true },
+  // Never blocks a control: tells the UI that Enable auto-sync on a
+  // never-suspended Application starts with selfHeal off; an older Radar
+  // turns it on.
+  argoEnableSelfHealOff: { label: 'Auto-sync that starts without self-heal', flag: 'argoEnableSelfHealOff', flagShippedWithEndpoint: true },
+  helmSourceIdentity: { label: 'Helm source selection', flag: 'helmSourceIdentity', flagShippedWithEndpoint: true },
+  // Never blocks a control: on an older Radar the Helm view reads /helm/releases.
+  helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
+  agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
+} as const satisfies Record<string, RadarFeatureSpec>
+
+export type RadarFeature = keyof typeof RADAR_FEATURES
+
+export type RadarFeatureSupport = 'supported' | 'unsupported' | 'unknown'
+
+export interface RadarVersions {
+  currentVersion?: string
+  latestVersion?: string
+}
+
+// Only a plain release can be placed against a minimum. Dev, dirty and
+// pre-release builds stay unknown so a custom build is never wrongly gated.
+const RELEASE_VERSION = /^v?\d+\.\d+\.\d+$/
+
+/**
+ * `capabilities` is the /api/capabilities answer, or undefined while it is
+ * still loading; only a loaded answer can prove a flag is absent.
+ */
+export function radarSpecSupport(
+  spec: RadarFeatureSpec,
+  capabilities: { features?: FeatureCapabilities } | undefined,
+  currentVersion: string | undefined,
+): RadarFeatureSupport {
+  if (spec.flag && capabilities?.features?.[spec.flag] === true) return 'supported'
+  // Unflagged entries all predate the first flag added for this table, so a
+  // Radar that advertises it serves them, whatever version the host reported.
+  if (!spec.flag && capabilities?.features?.resourceIssues === true) return 'supported'
+  if (spec.flag && spec.flagShippedWithEndpoint && capabilities) return 'unsupported'
+  const version = currentVersion?.trim()
+  if (!spec.minimumVersion || !version || !RELEASE_VERSION.test(version)) return 'unknown'
+  const order = compareVersions(version, spec.minimumVersion)
+  if (order === null) return 'unknown'
+  return order < 0 ? 'unsupported' : 'supported'
+}
+
+export function radarFeatureSupport(
+  feature: RadarFeature,
+  capabilities: { features?: FeatureCapabilities } | undefined,
+  currentVersion: string | undefined,
+): RadarFeatureSupport {
+  return radarSpecSupport(RADAR_FEATURES[feature], capabilities, currentVersion)
+}
+
+/**
+ * Whether a control backed by `feature` renders disabled with the upgrade
+ * note. A request can be probed, but a control's outcome can't, so a control
+ * also stays disabled when /api/capabilities failed, as CapabilitiesContext
+ * fails closed on the same error. While it loads, the control stays enabled.
+ */
+export function radarControlBlocked(support: RadarFeatureSupport, capabilitiesFailed: boolean): boolean {
+  return support === 'unsupported' || (support === 'unknown' && capabilitiesFailed)
+}
+
+export function radarControlBlockedReason(feature: RadarFeature, support: RadarFeatureSupport, capabilitiesFailed: boolean): string | undefined {
+  const spec: RadarFeatureSpec = RADAR_FEATURES[feature]
+  if (!spec.requireAffirmativeSupport) return undefined
+  if (capabilitiesFailed) return "Couldn't check this cluster's Radar support. Refresh to try again."
+  return support === 'unknown' ? "Checking this cluster's Radar…" : undefined
+}
+
+export function radarUpgradeRequirement(feature: RadarFeature, versions: RadarVersions): RadarUpgradeRequirement {
+  const spec: RadarFeatureSpec = RADAR_FEATURES[feature]
+  return {
+    feature: spec.label,
+    ...(spec.minimumVersion ? { minimumVersion: spec.minimumVersion } : {}),
+    ...(versions.currentVersion ? { currentVersion: versions.currentVersion } : {}),
+    ...(versions.latestVersion ? { latestVersion: versions.latestVersion } : {}),
+  }
+}
+
+/**
+ * The connected Radar predates `feature`. Carries `radarUpgrade` so k8s-ui
+ * components can render the upgrade note without importing this class.
+ */
+export class RadarFeatureUnsupportedError extends Error {
+  readonly feature: RadarFeature
+  readonly radarUpgrade: RadarUpgradeRequirement
+
+  constructor(feature: RadarFeature, versions: RadarVersions) {
+    const requirement = radarUpgradeRequirement(feature, versions)
+    super(`${requirement.feature} need a newer Radar`)
+    this.name = 'RadarFeatureUnsupportedError'
+    this.feature = feature
+    this.radarUpgrade = requirement
+  }
+}
+
+export function isRadarFeatureUnsupported(error: unknown, feature?: RadarFeature): boolean {
+  return error instanceof RadarFeatureUnsupportedError && (feature === undefined || error.feature === feature)
+}
+
+/**
+ * Runs `request` unless the connected Radar is known to predate `feature`.
+ * When its version is unknown, chi's unknown-route 404 (ApiError.unknownRoute)
+ * is read as the same answer; on a Radar known to serve the feature that 404
+ * is a routing failure and stays an error.
+ */
+export async function guardRadarFeature<T>(
+  feature: RadarFeature,
+  support: RadarFeatureSupport,
+  versions: RadarVersions,
+  request: () => Promise<T>,
+): Promise<T> {
+  if (support === 'unsupported') throw new RadarFeatureUnsupportedError(feature, versions)
+  try {
+    return await request()
+  } catch (error) {
+    if (support === 'unknown' && (error as { unknownRoute?: unknown } | null)?.unknownRoute === true) {
+      throw new RadarFeatureUnsupportedError(feature, versions)
+    }
+    throw error
+  }
+}
+
+/**
+ * Query retry policy: an unsupported feature or a client error (other than a
+ * timeout or rate limit) gives the same answer on every attempt, so retrying
+ * only repeats the request against the cluster.
+ */
+export function shouldRetryRadarQuery(failureCount: number, error: unknown): boolean {
+  if (error instanceof RadarFeatureUnsupportedError) return false
+  const status = (error as { status?: unknown } | null)?.status
+  if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+    return false
+  }
+  return failureCount < 1
+}

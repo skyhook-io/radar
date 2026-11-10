@@ -3,8 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
@@ -167,7 +170,7 @@ func TestEventsForWorkload_MatchesKindAndName(t *testing.T) {
 			{InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Name: "api"}, Reason: "ProgressDeadlineExceeded", Type: "Warning", Message: "deployment stalled"},
 		},
 	}
-	got := eventsForWorkload(byObject, "apps", "Deployment", "api", nil)
+	got := eventsForWorkload(byObject, "apps", "Deployment", "api", "", nil)
 	if len(got) != 1 {
 		t.Fatalf("eventsForWorkload returned %d events: %+v", len(got), got)
 	}
@@ -186,13 +189,51 @@ func TestEventsForWorkloadPreservesAPIGroup(t *testing.T) {
 		},
 	}
 
-	core := eventsForWorkload(byObject, "batch", "Job", "train", nil)
-	volcano := eventsForWorkload(byObject, "batch.volcano.sh", "Job", "train", nil)
+	core := eventsForWorkload(byObject, "batch", "Job", "train", "", nil)
+	volcano := eventsForWorkload(byObject, "batch.volcano.sh", "Job", "train", "", nil)
 	if len(core) != 1 || core[0].Reason != "BackoffLimitExceeded" {
 		t.Fatalf("core Job events = %+v", core)
 	}
 	if len(volcano) != 1 || volcano[0].Reason != "VolcanoFailed" {
 		t.Fatalf("Volcano Job events = %+v", volcano)
+	}
+}
+
+// A replaced same-name Pod or workload leaves Warning events behind; they must
+// not join the current workload's "why is it broken" feed, which hosts render
+// as current issues and the history summary headlines as the latest incident.
+func TestEventsForWorkload_KeepsOnlyCurrentIncarnations(t *testing.T) {
+	warning := func(kind, name, uid, reason string) *corev1.Event {
+		return &corev1.Event{InvolvedObject: corev1.ObjectReference{Kind: kind, Name: name, UID: types.UID(uid)}, Reason: reason, Type: "Warning"}
+	}
+	byObject := map[string][]*corev1.Event{
+		resourceid.ResourceKey("apps", "StatefulSet", "", "db"): {
+			warning("StatefulSet", "db", "db-now", "FailedCreate"),
+			warning("StatefulSet", "db", "db-before", "RecreatedRootFailure"),
+		},
+		resourceid.ResourceKey("", "Pod", "", "db-0"): {
+			warning("Pod", "db-0", "pod-now", "BackOff"),
+			warning("Pod", "db-0", "pod-before", "Failed"),
+			warning("Pod", "db-0", "pod-before", "BackOff"),
+			warning("Pod", "db-0", "", "UIDless"),
+		},
+		resourceid.ResourceKey("", "Pod", "", "db-static"): {
+			warning("Pod", "db-static", "static-uid", "Unhealthy"),
+		},
+	}
+	pods := []*corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "db-0", UID: "pod-now"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "db-static", UID: "mirror-uid", Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "static-uid"}}},
+	}
+	got := eventsForWorkload(byObject, "apps", "StatefulSet", "db", "db-now", pods)
+	var reasons []string
+	for _, e := range got {
+		reasons = append(reasons, e.Object+":"+e.Reason+":"+strconv.Itoa(e.Count))
+	}
+	// The earlier Pod's BackOff must not be summed into the current one.
+	want := "StatefulSet/db:FailedCreate:1,Pod/db-0:BackOff:1,Pod/db-0:UIDless:1,Pod/db-static:Unhealthy:1"
+	if strings.Join(reasons, ",") != want {
+		t.Fatalf("current events = %v, want %s", reasons, want)
 	}
 }
 
@@ -547,7 +588,6 @@ func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
 	foreign.rootKind = "Application"
 	foreign.rootGroup = "apps.example.io"
 	foreign.rootIdentity = resourceid.ResourceKey(foreign.rootGroup, foreign.rootKind, "operators", "platform")
-	foreign.source = sourceRefForInput(nil, foreign.rootKind, foreign.rootGroup, foreign.rootKey)
 
 	rows := groupApplications([]appWorkloadInput{foreign})
 	if len(rows) != 1 {
@@ -562,17 +602,16 @@ func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
 func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 	helmApp := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	helmApp.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	helmApp.source = sourceRefForInput(helmApp.overlay, helmApp.rootKind, helmApp.rootGroup, helmApp.rootKey)
+	helmApp.source = &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
 
 	labelApp := overlayInput("Deployment", "prod", "payments-worker", "1.0", "healthy", subject.TierPartOf, "prod/app/payments", subject.ConfidenceMedium)
 	labelApp.overlay.Winner.Ref = subject.Ref{Kind: "app", Namespace: "prod", Name: "payments"}
-	labelApp.source = sourceRefForInput(labelApp.overlay, labelApp.rootKind, labelApp.rootGroup, labelApp.rootKey)
 
 	structuralApp := rawInput("Deployment", "prod", "admin", "1.0", "healthy")
 	structuralApp.rootKey, structuralApp.rootKind = "argocd/Application/admin", "Application"
 	structuralApp.rootGroup = "argoproj.io"
 	structuralApp.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "argocd", "admin")
-	structuralApp.source = sourceRefForInput(structuralApp.overlay, structuralApp.rootKind, structuralApp.rootGroup, structuralApp.rootKey)
+	structuralApp.source = &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "admin"}
 
 	rows := groupApplications([]appWorkloadInput{helmApp, labelApp, structuralApp})
 
@@ -593,7 +632,7 @@ func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 func TestGroupApplications_SourceRefRequiresEveryWorkload(t *testing.T) {
 	api := overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	api.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	api.source = sourceRefForInput(api.overlay, api.rootKind, api.rootGroup, api.rootKey)
+	api.source = &appSourceRef{Type: "helm", Tool: "helm", Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
 
 	worker := overlayInput("Deployment", "prod", "checkout-worker", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 
@@ -857,9 +896,20 @@ func TestGroupApplications_EntrypointRefsDeduplicateAndClassify(t *testing.T) {
 }
 
 func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
+	// Route kinds are custom resources; the builder records their apiVersion.
+	apiVersions := map[string]string{
+		"HTTPRoute":      "gateway.networking.k8s.io/v1",
+		"IngressRoute":   "traefik.io/v1alpha1",
+		"VirtualService": "networking.istio.io/v1",
+		"HTTPProxy":      "projectcontour.io/v1",
+	}
 	node := func(kind, ns, name string) topology.Node {
 		id := strings.ToLower(kind) + "/" + ns + "/" + name
-		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: map[string]any{"namespace": ns}}
+		data := map[string]any{"namespace": ns}
+		if apiVersion := apiVersions[kind]; apiVersion != "" {
+			data["apiVersion"] = apiVersion
+		}
+		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: data}
 	}
 	edge := func(src, dst string, typ topology.EdgeType) topology.Edge {
 		return topology.Edge{ID: src + "->" + dst, Source: src, Target: dst, Type: typ}
@@ -1000,6 +1050,46 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 	}
 }
 
+// A JobSet's member Jobs resolve to the JobSet as their structural root, as an
+// operator CR's workloads do, so they group as one application rather than one
+// per Job.
+func TestStructuralRoot_JobSetMembersShareTheJobSetRoot(t *testing.T) {
+	jobSetID := "jobset/ml/train/jobset.x-k8s.io"
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: jobSetID, Kind: topology.KindJobSet, Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "jobset.x-k8s.io/v1alpha2"}},
+			{ID: "job/ml/train-driver-0", Kind: topology.KindJob, Name: "train-driver-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/train-workers-0", Kind: topology.KindJob, Name: "train-workers-0", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+			{ID: "job/ml/standalone", Kind: topology.KindJob, Name: "standalone", Data: map[string]any{"namespace": "ml", "apiVersion": "batch/v1"}},
+		},
+		Edges: []topology.Edge{
+			{Source: jobSetID, Target: "job/ml/train-driver-0", Type: topology.EdgeManages},
+			{Source: jobSetID, Target: "job/ml/train-workers-0", Type: topology.EdgeManages},
+		},
+	}
+	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+	for _, node := range topo.Nodes {
+		g.byID[node.ID] = node
+		kind := topology.KubernetesKindForNode(&node)
+		ns, _ := node.Data["namespace"].(string)
+		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
+	}
+
+	want := resourceid.ResourceKey("jobset.x-k8s.io", "JobSet", "ml", "train")
+	if root, kind, group, identity := g.rootOf("jobset.x-k8s.io", "JobSet", "ml", "train"); root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+		t.Fatalf("JobSet workload root = %q %q %q %q", root, kind, group, identity)
+	}
+	for _, name := range []string{"train-driver-0", "train-workers-0"} {
+		root, kind, group, identity := g.rootOf("batch", "Job", "ml", name)
+		if root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
+			t.Fatalf("%s root = %q %q %q %q, want the JobSet", name, root, kind, group, identity)
+		}
+	}
+	if root, _, _, _ := g.rootOf("batch", "Job", "ml", "standalone"); root != "ml/Job/standalone" {
+		t.Fatalf("a Job outside the JobSet resolved to %q", root)
+	}
+}
+
 func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
@@ -1040,7 +1130,6 @@ func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
 			node("httproute/prod/web", "HTTPRoute", "prod", "web"),
 		},
 		Edges: []topology.Edge{
-			// A Gateway routes to an HTTPRoute → rel.Routes for the Gateway query.
 			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
 		},
 	}
@@ -1284,22 +1373,6 @@ func TestGroupApplications_MatchKeys(t *testing.T) {
 	}
 }
 
-func TestImageRepo(t *testing.T) {
-	cases := map[string]string{
-		"nginx:1.27":                "nginx",
-		"ghcr.io/acme/api:1.2.0":    "ghcr.io/acme/api",
-		"registry:5000/team/img:v1": "registry:5000/team/img", // registry port colon is not the tag separator
-		"repo/img@sha256:abc":       "repo/img",
-		"registry:5000/team/img":    "registry:5000/team/img", // no tag
-		"":                          "",
-	}
-	for in, want := range cases {
-		if got := imageRepo(in); got != want {
-			t.Errorf("imageRepo(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // A real class mix (service + scheduled job) reports "mixed", not "unknown" —
 // the per-workload classes are confident and the UI shows the composition.
 // service+worker stays "service" (operated primarily as a service), and an
@@ -1496,12 +1569,12 @@ func TestWarningEventIndexResolvesOnlyUnambiguousGroups(t *testing.T) {
 		"argo": {Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "argoproj.io/v1alpha1"}},
 	}}
 	index := indexWarningEventsByObject(cache, []string{"dev"}, graph)
-	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", nil); len(got) != 1 {
+	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 1 {
 		t.Fatalf("unambiguous warning missing: %+v", index)
 	}
 	graph.byID["other"] = topology.Node{Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "other.io/v1"}}
 	index = indexWarningEventsByObject(cache, []string{"dev"}, graph)
-	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", nil); len(got) != 0 {
+	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 0 {
 		t.Fatalf("ambiguous warning attributed: %+v", got)
 	}
 }
@@ -1528,5 +1601,53 @@ func TestManagedSourceRefs_IgnoreRemoteArgoDestinations(t *testing.T) {
 	ref := commonManagedSourceRef([]appWorkload{{Group: "apps", Kind: "Deployment", Namespace: "sealed-secrets", Name: "controller"}}, sources)
 	if ref == nil || ref.Name != "sealed-secrets-hub" {
 		t.Fatalf("source ref = %+v, want the in-cluster Application only", ref)
+	}
+}
+
+func TestApplicationsViewRestricted(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		requested  []string
+		effective  []string
+		unreadable string
+		want       bool
+	}{
+		{name: "all namespaces, all visible", unreadable: "none", want: false},
+		{name: "all namespaces, user narrowed", effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "all namespaces, no access", effective: []string{}, unreadable: "none", want: true},
+		{name: "all namespaces, Radar can't read them all", unreadable: "", want: true},
+		{name: "explicit filter fully granted", requested: []string{"a", "b"}, effective: []string{"a", "b"}, unreadable: "none", want: false},
+		{name: "explicit filter partly granted", requested: []string{"a", "b"}, effective: []string{"a"}, unreadable: "none", want: true},
+		{name: "explicit filter inside what Radar reads", requested: []string{"a"}, effective: []string{"a"}, unreadable: "b", want: false},
+		{name: "explicit filter outside what Radar reads", requested: []string{"b"}, effective: []string{"b"}, unreadable: "b", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			readable := func(namespaces []string) bool { return !slices.Contains(namespaces, tc.unreadable) }
+			if got := applicationsViewRestricted(tc.requested, tc.effective, readable); got != tc.want {
+				t.Fatalf("applicationsViewRestricted() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewestRevisionByOwner(t *testing.T) {
+	older := metav1.NewTime(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	newer := metav1.NewTime(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC))
+	revision := func(owner types.UID, at metav1.Time) metav1.Object {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: at,
+			OwnerReferences:   []metav1.OwnerReference{{UID: owner}},
+		}}
+	}
+
+	// A rollback bumps the revision number on an old object, so creation time
+	// has to win over listing order.
+	got := newestRevisionByOwner([]metav1.Object{
+		revision("api", newer),
+		revision("api", older),
+		revision("worker", older),
+	})
+	if !got["api"].Equal(newer.Time) || !got["worker"].Equal(older.Time) || len(got) != 2 {
+		t.Fatalf("newestRevisionByOwner() = %v", got)
 	}
 }

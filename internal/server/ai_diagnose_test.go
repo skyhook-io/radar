@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -133,7 +137,12 @@ func TestListAgents_Eligible(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := &Server{authConfig: auth.Config{Mode: c.mode}, mcpHandler: c.mcp}
+			s := &Server{
+				authConfig:              auth.Config{Mode: c.mode},
+				mcpHandler:              c.mcp,
+				mcpInvestigationHandler: c.mcp,
+				aiInvestigationRefs:     investigationrefs.NewRegistry(),
+			}
 			rec := httptest.NewRecorder()
 			s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
 			var resp struct {
@@ -149,75 +158,56 @@ func TestListAgents_Eligible(t *testing.T) {
 	}
 }
 
-// TestDiagnoseConsentOriginGate pins the CSRF guard on the process-spawning
-// diagnose POSTs at the handler layer: the guard must admit a genuinely
-// same-origin browser POST even on a non-loopback listener
-// (Origin == the authority the browser actually connected to) and still reject
-// a foreign origin. We assert only whether the origin gate blocked the request
-// (403) — a request that clears the gate falls through to later checks whose
-// status is irrelevant here, so the test must not couple to it.
-func TestDiagnoseConsentOriginGate(t *testing.T) {
-	cases := []struct {
-		name        string
-		host        string
-		origin      string
-		devMode     bool
-		fetchSite   string
-		wantBlocked bool // true => origin gate must 403; false => gate must let it through
-	}{
-		{name: "same-origin non-loopback listener", host: "192.168.1.100:9280", origin: "http://192.168.1.100:9280"},
-		{name: "same-origin loopback", host: "127.0.0.1:9280", origin: "http://127.0.0.1:9280"},
-		{name: "non-browser client (no Origin)", host: "192.168.1.100:9280"},
-		{name: "vite dev proxy loopback-to-loopback", host: "localhost:9280", origin: "http://localhost:9273", devMode: true},
-		{name: "foreign origin", host: "192.168.1.100:9280", origin: "https://evil.example", wantBlocked: true},
-		{name: "loopback origin against non-loopback host", host: "192.168.1.100:9280", origin: "http://127.0.0.1:9280", wantBlocked: true},
-		{name: "lookalike hostname", host: "192.168.1.100:9280", origin: "http://192.168.1.100.evil.com", wantBlocked: true},
-		{name: "cross-site metadata without Origin", host: "192.168.1.100:9280", fetchSite: "cross-site", wantBlocked: true},
-		{name: "opaque (null) origin", host: "192.168.1.100:9280", origin: "null", wantBlocked: true},
+// TestListAgents_NoneInstalledIsAnEmptyList pins the wire shape a machine with
+// no agent CLI gets: an empty array, never null.
+func TestListAgents_NoneInstalledIsAnEmptyList(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", "")
+	t.Setenv("LOCALAPPDATA", "")
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	s := &Server{
+		authConfig:              auth.Config{Mode: "none"},
+		mcpHandler:              mcp,
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := &Server{devMode: c.devMode}
-			r := httptest.NewRequest(http.MethodPost, "/api/diagnose/consent", nil)
-			r.Host = c.host
-			if c.origin != "" {
-				r.Header.Set("Origin", c.origin)
-			}
-			if c.fetchSite != "" {
-				r.Header.Set("Sec-Fetch-Site", c.fetchSite)
-			}
-			w := httptest.NewRecorder()
-			s.handleDiagnoseConsent(w, r)
-			blocked := w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "cross-origin request rejected")
-			if blocked != c.wantBlocked {
-				t.Errorf("origin gate blocked = %v (status %d), want blocked = %v", blocked, w.Code, c.wantBlocked)
-			}
-		})
+	t.Cleanup(func() {
+		if runs := s.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
+	rec := httptest.NewRecorder()
+	s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+	var resp struct {
+		Agents json.RawMessage `json:"agents"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Detection also probes fixed system directories, so a machine with a CLI
+	// in /usr/local/bin returns a populated list here. Either way, never null.
+	if string(resp.Agents) == "null" {
+		t.Fatal(`agents encoded as null, want an array ("[]" when nothing is installed)`)
 	}
 }
 
-func TestDiagnoseMutatingHandlersRejectCrossOriginRequests(t *testing.T) {
-	s := &Server{}
-	handlers := map[string]http.HandlerFunc{
-		"consent":       s.handleDiagnoseConsent,
-		"start":         s.handleDiagnoseStart,
-		"clear history": s.handleDiagnoseHistoryClear,
-		"follow-up":     s.handleDiagnoseTurn,
-		"stop":          s.handleDiagnoseStop,
-	}
-	for name, handler := range handlers {
-		t.Run(name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/api/diagnose/test", nil)
-			r.Host = "192.168.1.100:9280"
-			r.Header.Set("Origin", "https://evil.example")
-			w := httptest.NewRecorder()
-
-			handler(w, r)
-
-			if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "cross-origin request rejected") {
-				t.Fatalf("response = %d %q, want origin rejection", w.Code, w.Body.String())
-			}
-		})
+// The UI names RADAR_AI_CLI_BIN only when the server says it is set; an
+// embedding host that never sends the field must not get that explanation.
+func TestListAgents_ReportsTheCLIOverride(t *testing.T) {
+	for _, value := range []string{"", "/opt/typo/claude"} {
+		t.Setenv("RADAR_AI_CLI_BIN", value)
+		s := &Server{authConfig: auth.Config{Mode: "proxy"}}
+		rec := httptest.NewRecorder()
+		s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+		var resp struct {
+			CLIOverride bool `json:"cliOverride"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if want := value != ""; resp.CLIOverride != want {
+			t.Errorf("RADAR_AI_CLI_BIN=%q: cliOverride = %v, want %v", value, resp.CLIOverride, want)
+		}
 	}
 }
 
@@ -278,5 +268,44 @@ func TestMergeDetectedWithDrivableUsesTheActualBackendSet(t *testing.T) {
 	}
 	if len(got) != 3 || got[2].Name != "cursor-agent" || !got[2].Supported {
 		t.Fatalf("an override-only backend must still be advertised: %+v", got)
+	}
+}
+
+func TestParseDiagnoseQuestionNormalizesScope(t *testing.T) {
+	question, namespaces, lookBack, msg := parseDiagnoseQuestion("  checkout is slow \n", []string{" shop", "payments", "shop"}, "1h")
+	if msg != "" || question != "checkout is slow" || lookBack != "1h" || !slices.Equal(namespaces, []string{"shop", "payments"}) {
+		t.Fatalf("got %q %v %q %q", question, namespaces, lookBack, msg)
+	}
+	if _, _, _, msg := parseDiagnoseQuestion("", nil, ""); msg != "" {
+		t.Fatalf("a resource-only run has no question to validate: %q", msg)
+	}
+	many := make([]string, maxDiagnoseNamespaces+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("ns-%d", i)
+	}
+	if _, _, _, msg := parseDiagnoseQuestion("why?", many, ""); msg == "" {
+		t.Fatal("more namespaces than the cap must be refused")
+	}
+}
+
+func TestParseDiagnoseAskedAt(t *testing.T) {
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	if got, msg := parseDiagnoseAskedAt("", "why?", now); msg != "" || !got.IsZero() {
+		t.Fatalf("empty means now: %v %q", got, msg)
+	}
+	if got, msg := parseDiagnoseAskedAt("2026-10-27T09:30:00+02:00", "why?", now); msg != "" || !got.Equal(time.Date(2026, 10, 27, 7, 30, 0, 0, time.UTC)) {
+		t.Fatalf("an earlier asking time is kept: %v %q", got, msg)
+	}
+	for name, raw := range map[string]string{
+		"not a time": "yesterday",
+		"future":     "2026-10-29T12:00:00Z",
+		"too old":    "2026-08-01T12:00:00Z",
+	} {
+		if _, msg := parseDiagnoseAskedAt(raw, "why?", now); msg == "" {
+			t.Errorf("%s: %q must be refused", name, raw)
+		}
+	}
+	if _, msg := parseDiagnoseAskedAt("2026-10-27T09:30:00Z", "", now); msg == "" {
+		t.Fatal("askedAt without a question must be refused")
 	}
 }

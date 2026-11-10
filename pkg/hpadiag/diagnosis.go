@@ -45,10 +45,11 @@ const (
 )
 
 type Diagnosis struct {
-	State   State           `json:"state"`
-	Summary string          `json:"summary"`
-	Target  TargetRef       `json:"target"`
-	Bounds  ReplicaBounds   `json:"bounds"`
+	State   State         `json:"state"`
+	Summary string        `json:"summary"`
+	Target  TargetRef     `json:"target"`
+	Bounds  ReplicaBounds `json:"bounds"`
+	// Spec order keeps source references paired with values; unmatched status entries follow.
 	Metrics []MetricSummary `json:"metrics,omitempty"`
 	Reasons []Reason        `json:"reasons,omitempty"`
 }

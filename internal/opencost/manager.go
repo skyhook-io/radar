@@ -100,6 +100,7 @@ const (
 	prometheusCostAbsent prometheusCostState = iota
 	prometheusCostAvailable
 	prometheusCostUnknown
+	prometheusCostUnreachable
 )
 
 type Manager struct {
@@ -353,7 +354,7 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 		if prometheusState == prometheusCostAvailable {
 			return m.commitSelection(generation, Connection{Source: SourcePrometheus})
 		}
-		if prometheusState == prometheusCostUnknown {
+		if prometheusState == prometheusCostUnknown || prometheusState == prometheusCostUnreachable {
 			if connection, ok := m.renewProvisionalKubecostSelection(generation); ok {
 				return connection, nil
 			}
@@ -361,7 +362,7 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 		if !shouldAttemptKubecost(prometheusState, detectionErr) {
 			return m.commitAutoFallback(generation)
 		}
-		provisionalKubecost = prometheusState == prometheusCostUnknown
+		provisionalKubecost = prometheusState == prometheusCostUnknown || prometheusState == prometheusCostUnreachable
 	}
 
 	connection, err := m.connectKubecost(ctx, config)
@@ -371,6 +372,9 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 		}
 		if config.Source == SourceAuto && !errors.Is(err, ErrKubecostContextMismatch) && !hasExplicitKubecostConfig(config) {
 			if errors.Is(err, ErrKubecostNotFound) || errors.Is(err, ErrKubecostDiscovery) {
+				if provisionalKubecost {
+					return m.commitAutoFallback(generation)
+				}
 				log.Printf("[opencost] Auto mode found no usable cost source: %s", k8s.SanitizeForLog(err.Error()))
 				return m.commitSelectionFailure(generation, fmt.Errorf("%w: %v", ErrNoCostSource, err))
 			}
@@ -385,7 +389,7 @@ func (m *Manager) Selected(ctx context.Context) (Connection, error) {
 }
 
 func shouldAttemptKubecost(prometheusState prometheusCostState, detectionErr error) bool {
-	return prometheusState == prometheusCostAbsent ||
+	return prometheusState == prometheusCostAbsent || prometheusState == prometheusCostUnreachable ||
 		(prometheusState == prometheusCostUnknown && errors.Is(detectionErr, context.DeadlineExceeded))
 }
 
@@ -541,6 +545,9 @@ func detectPrometheusCostState(ctx context.Context) prometheusCostState {
 		return prometheusCostUnknown
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
+		if prometheuspkg.IsUnreachable(err) {
+			return prometheusCostUnreachable
+		}
 		if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
 			return prometheusCostAbsent
 		}

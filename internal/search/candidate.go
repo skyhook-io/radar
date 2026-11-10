@@ -11,6 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
 // fromObject builds a candidate from a typed K8s object. Returns ok=false
@@ -29,14 +31,18 @@ func fromObject(obj runtime.Object, kind string) (candidate, bool) {
 		Annotations: m.GetAnnotations(),
 	}
 	c.Images = imagesForTyped(obj)
+	c.IPs = ipsForTyped(obj)
 	c.Content = contentForTyped(obj, kind)
 	return c, true
 }
 
-// fromUnstructured builds a candidate from a CRD object. The kind is
-// already known by the caller (we don't trust the unstructured's Kind
-// since informers strip TypeMeta).
-func fromUnstructured(u *unstructured.Unstructured, kind, group string) candidate {
+// identityFromUnstructured builds a CRD candidate without Content: enough to
+// evaluate modifiers, so a candidate they reject never pays for content
+// extraction (addUnstructuredContent). The kind is already known by the
+// caller (we don't trust the unstructured's Kind since informers strip
+// TypeMeta). A Trivy report's scanned image is part of identity, for image:
+// modifiers.
+func identityFromUnstructured(u *unstructured.Unstructured, kind, group string) candidate {
 	c := candidate{
 		Kind:        kind,
 		Group:       group,
@@ -46,8 +52,21 @@ func fromUnstructured(u *unstructured.Unstructured, kind, group string) candidat
 		Annotations: u.GetAnnotations(),
 	}
 	c.Images = imagesFromUnstructured(u)
-	c.Content = contentFromUnstructured(u, kind)
+	if group == trivyGroup {
+		if img := aicontext.TrivyArtifactImage(asMap(u.Object["report"])); img != "" {
+			c.Images = append(c.Images, img)
+		}
+	}
 	return c
+}
+
+// addUnstructuredContent fills Content, which only free tokens read.
+func addUnstructuredContent(c *candidate, u *unstructured.Unstructured, findings *findingsScan) {
+	c.Content = contentFromUnstructured(u, c.Kind)
+	if c.Group == trivyGroup && findings.allow() {
+		c.report = asMap(u.Object["report"])
+		c.findings = findings
+	}
 }
 
 func contentForTyped(obj runtime.Object, kind string) []ContentField {
@@ -64,7 +83,18 @@ func contentForTyped(obj runtime.Object, kind string) []ContentField {
 	if err != nil {
 		return nil
 	}
+	if _, ok := obj.(*corev1.Event); ok {
+		return eventContent(m)
+	}
 	return contentFromMap(m, kind)
+}
+
+func eventContent(obj map[string]any) []ContentField {
+	var out []ContentField
+	for _, field := range []string{"reason", "message", "type", "involvedObject", "related"} {
+		walkContent(field, obj[field], &out)
+	}
+	return out
 }
 
 func contentFromUnstructured(u *unstructured.Unstructured, kind string) []ContentField {
@@ -86,6 +116,10 @@ func contentFromMap(obj map[string]any, kind string) []ContentField {
 	walkContent("spec", obj["spec"], &out)
 	walkContent("status", obj["status"], &out)
 	walkContent("data", obj["data"], &out)
+	// Admission webhook configs keep their content in a top-level list.
+	if kind == "MutatingWebhookConfiguration" || kind == "ValidatingWebhookConfiguration" {
+		walkContent("webhooks", obj["webhooks"], &out)
+	}
 	return out
 }
 
@@ -112,6 +146,11 @@ func walkContent(path string, v any, out *[]ContentField) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			// A base64 CA bundle is kilobytes of noise that substring-matches
+			// short tokens like "api" or "ops".
+			if k == "caBundle" {
+				continue
+			}
 			walkContent(path+"."+k, x[k], out)
 		}
 	case []any:

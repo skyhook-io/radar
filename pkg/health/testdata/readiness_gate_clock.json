@@ -1,0 +1,208 @@
+{
+  "now": "2026-10-25T12:00:00Z",
+  "vectors": [
+    {
+      "name": "two-second clock skew old other transition",
+      "blocked": false,
+      "object": {
+        "metadata": {
+          "creationTimestamp": "2026-10-25T10:00:00Z"
+        },
+        "spec": {
+          "readinessGates": [
+            {
+              "conditionType": "example.com/ready"
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "ReadinessGatesNotReady",
+              "lastTransitionTime": "2026-10-25T12:00:02Z"
+            },
+            {
+              "type": "ContainersReady",
+              "status": "True",
+              "lastTransitionTime": "2026-10-25T11:53:00Z"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "app",
+              "ready": true,
+              "state": {
+                "running": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "two-second clock skew missing other transition",
+      "blocked": false,
+      "object": {
+        "metadata": {
+          "creationTimestamp": "2026-10-25T10:00:00Z"
+        },
+        "spec": {
+          "readinessGates": [
+            {
+              "conditionType": "example.com/ready"
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "ReadinessGatesNotReady",
+              "lastTransitionTime": "2026-10-25T12:00:02Z"
+            },
+            {
+              "type": "ContainersReady",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "app",
+              "ready": true,
+              "state": {
+                "running": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "far-future old other transition",
+      "blocked": true,
+      "object": {
+        "metadata": {
+          "creationTimestamp": "2026-10-25T10:00:00Z"
+        },
+        "spec": {
+          "readinessGates": [
+            {
+              "conditionType": "example.com/ready"
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "ReadinessGatesNotReady",
+              "lastTransitionTime": "2026-10-25T12:10:02Z"
+            },
+            {
+              "type": "ContainersReady",
+              "status": "True",
+              "lastTransitionTime": "2026-10-25T11:53:00Z"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "app",
+              "ready": true,
+              "state": {
+                "running": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "far-future missing other transition",
+      "blocked": true,
+      "object": {
+        "metadata": {
+          "creationTimestamp": "2026-10-25T10:00:00Z"
+        },
+        "spec": {
+          "readinessGates": [
+            {
+              "conditionType": "example.com/ready"
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "ReadinessGatesNotReady",
+              "lastTransitionTime": "2026-10-25T12:10:02Z"
+            },
+            {
+              "type": "ContainersReady",
+              "status": "True"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "app",
+              "ready": true,
+              "state": {
+                "running": {}
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "far-future date with sane fresh other transition",
+      "blocked": false,
+      "object": {
+        "metadata": {
+          "creationTimestamp": "2026-10-25T10:00:00Z"
+        },
+        "spec": {
+          "readinessGates": [
+            {
+              "conditionType": "example.com/ready"
+            }
+          ]
+        },
+        "status": {
+          "phase": "Running",
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "reason": "ReadinessGatesNotReady",
+              "lastTransitionTime": "2026-10-25T12:10:02Z"
+            },
+            {
+              "type": "ContainersReady",
+              "status": "True",
+              "lastTransitionTime": "2026-10-25T11:59:00Z"
+            }
+          ],
+          "containerStatuses": [
+            {
+              "name": "app",
+              "ready": true,
+              "state": {
+                "running": {}
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

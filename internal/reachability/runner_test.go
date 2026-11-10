@@ -521,3 +521,20 @@ func TestResolveImage_DevFallsBackToLatestRelease(t *testing.T) {
 		t.Errorf("a failed release lookup keeps the version default, got %q", got)
 	}
 }
+
+// A probe pod with a sidecar proxy, injected as a regular container or a
+// native sidecar, marks its results with the mesh.
+func TestWithProbeMeshMarksSidecarResults(t *testing.T) {
+	results := func() []probe.Result { return []probe.Result{{Layer: probe.LayerTCP, Target: "svc:80", OK: true}} }
+	for name, pod := range map[string]*corev1.Pod{
+		"regular container": radarPod("ns", corev1.Container{Name: "probe"}, corev1.Container{Name: "istio-proxy"}),
+		"native sidecar":    {Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "probe"}}, InitContainers: []corev1.Container{{Name: "linkerd-proxy"}}}},
+	} {
+		if got := withProbeMesh(results(), pod); got[0].Mesh == "" {
+			t.Errorf("%s: result not marked with the mesh", name)
+		}
+	}
+	if got := withProbeMesh(results(), radarPod("ns", corev1.Container{Name: "probe"})); got[0].Mesh != "" {
+		t.Errorf("plain probe pod marked with mesh %q", got[0].Mesh)
+	}
+}

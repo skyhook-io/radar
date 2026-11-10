@@ -2,6 +2,8 @@ package topology
 
 import (
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	"strings"
 	"testing"
 )
 
@@ -114,5 +116,37 @@ func BenchmarkIndexByResource(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = IndexByResource(topo)
+	}
+}
+
+func BenchmarkGetRelationships_PodConsumersPerRequest(b *testing.B) {
+	topo := buildSyntheticTopology(5000)
+	topo.podConsumers = map[string][]ResourceRef{}
+	for i := range topo.Nodes {
+		node := &topo.Nodes[i]
+		parts := strings.Split(node.ID, "/")
+		ns := parts[1]
+		node.Data = map[string]any{"namespace": ns}
+		if node.Kind != KindPod {
+			continue
+		}
+		ref := ResourceRef{Kind: "Pod", Namespace: ns, Name: node.Name}
+		app := strings.Split(node.Name, "-pod-")[0]
+		for _, target := range []ResourceRef{{Kind: "ConfigMap", Namespace: ns, Name: app + "-config"}, {Kind: "Secret", Namespace: ns, Name: app + "-secret"}, {Kind: "ConfigMap", Namespace: ns, Name: "kube-root-ca.crt"}, {Kind: "ServiceAccount", Namespace: ns, Name: "default"}} {
+			key := resourceid.ResourceKey("", target.Kind, target.Namespace, target.Name)
+			topo.podConsumers[key] = append(topo.podConsumers[key], ref)
+		}
+	}
+	for i := range 50 {
+		ns := fmt.Sprintf("ns-%d", i)
+		topo.Nodes = append(topo.Nodes, Node{ID: "configmap/" + ns + "/kube-root-ca.crt", Kind: KindConfigMap, Name: "kube-root-ca.crt", Data: map[string]any{"namespace": ns}}, Node{ID: "serviceaccount/" + ns + "/default", Kind: KindServiceAccount, Name: "default", Data: map[string]any{"namespace": ns}})
+	}
+	for _, target := range []struct{ kind, name string }{{"Deployment", "app-0"}, {"ConfigMap", "app-0-config"}, {"ConfigMap", "kube-root-ca.crt"}} {
+		b.Run(target.kind+"/"+target.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				_ = GetRelationshipsWithObject(target.kind, "ns-0", target.name, nil, topo, nil, nil, nil)
+			}
+		})
 	}
 }

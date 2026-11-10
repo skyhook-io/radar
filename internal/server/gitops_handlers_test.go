@@ -1,101 +1,28 @@
 package server
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
+	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
-
-// makePodWithStatus constructs a minimal Pod with the container statuses
-// summarizeControllerHealth inspects. Phase + ContainerStatuses are the
-// only fields the function reads.
-func makePodWithStatus(phase corev1.PodPhase, statuses ...corev1.ContainerStatus) *corev1.Pod {
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "pod"},
-		Status:     corev1.PodStatus{Phase: phase, ContainerStatuses: statuses},
-	}
-}
-
-// TestSummarizeControllerHealth pins the exact wording of the
-// finalizer-owner status string. The output is concatenated into the
-// lifecycle Issue's Cause field surfaced to operators, so a copy-paste
-// regression that changed "1 pod ready" to "1 pods ready" or "Healthy"
-// to "healthy" is part of the user-visible contract — assertions are
-// exact-match on purpose.
-func TestSummarizeControllerHealth(t *testing.T) {
-	ready := corev1.ContainerStatus{Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}
-	notReady := corev1.ContainerStatus{Ready: false}
-	crashing := corev1.ContainerStatus{Ready: false, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}
-	erroring := corev1.ContainerStatus{Ready: false, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "Error"}}}
-
-	tests := []struct {
-		name string
-		pods []*corev1.Pod
-		want string
-	}{
-		{
-			name: "single ready pod uses singular form",
-			pods: []*corev1.Pod{makePodWithStatus(corev1.PodRunning, ready)},
-			want: "argocd-application-controller is healthy (1 pod ready)",
-		},
-		{
-			name: "two ready pods uses plural form",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodRunning, ready),
-				makePodWithStatus(corev1.PodRunning, ready),
-			},
-			want: "argocd-application-controller is healthy (2 pods ready)",
-		},
-		{
-			name: "any crashloop pod dominates aggregate",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodRunning, ready),
-				makePodWithStatus(corev1.PodRunning, crashing),
-			},
-			want: "argocd-application-controller is CrashLoopBackOff (1/2 pods)",
-		},
-		{
-			name: "Error reason surfaces alongside crashing count",
-			pods: []*corev1.Pod{makePodWithStatus(corev1.PodRunning, erroring)},
-			want: "argocd-application-controller is Error (1/1 pods)",
-		},
-		{
-			name: "all pending and zero ready reports pending",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodPending),
-				makePodWithStatus(corev1.PodPending),
-			},
-			want: "argocd-application-controller is pending start (2/2 pods Pending)",
-		},
-		{
-			name: "partial ready falls back to degraded",
-			pods: []*corev1.Pod{
-				makePodWithStatus(corev1.PodRunning, ready),
-				makePodWithStatus(corev1.PodRunning, notReady),
-			},
-			want: "argocd-application-controller is degraded (1/2 pods ready)",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := summarizeControllerHealth("argocd-application-controller", tt.pods)
-			if got != tt.want {
-				t.Fatalf("summarizeControllerHealth =\n  got:  %q\n  want: %q", got, tt.want)
-			}
-		})
-	}
-}
 
 // TestWriteGitOpsErrorStatusMapping pins the typed-sentinel → HTTP
 // status mapping that every GitOps mutating handler depends on. The
@@ -154,6 +81,21 @@ func TestWriteGitOpsErrorStatusMapping(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name:       "wrapped ErrInvalidRevision → 400",
+			err:        errors.Join(gitops.ErrInvalidRevision, errors.New("multi-source Application")),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "wrapped ErrAutoSyncEnabled → 409",
+			err:        errors.Join(gitops.ErrAutoSyncEnabled, errors.New("extra context")),
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name:       "ErrHistoryEntryNotRollbackable → 400",
+			err:        gitops.ErrHistoryEntryNotRollbackable,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "unrecognized error → 500",
 			err:        errors.New("something else"),
 			wantStatus: http.StatusInternalServerError,
@@ -205,7 +147,7 @@ func TestEventMatchesGroup(t *testing.T) {
 
 // HasNamespaceAccess is the gitopsRequest method that handlers call before
 // running the (potentially expensive) topology+tree build. It mirrors the
-// noNamespaceAccess contract (tested in server_auth_test.go) but as a
+// readscope.NoNamespaceAccess contract (tested in server_auth_test.go) but as a
 // method on the request struct, so this guards against the predicate
 // drifting out of sync with the underlying helper.
 func TestGitopsRequestHasNamespaceAccess(t *testing.T) {
@@ -231,6 +173,7 @@ func TestGitopsRequestHasNamespaceAccess(t *testing.T) {
 func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	s := &Server{permCache: auth.NewPermissionCache()}
 	s.permCache.Set("gitops-tree-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
+	s.permCache.Get("gitops-tree-user", nil).SetCanI("get", "apps", "deployments", "team-a", true)
 	req := &gitopsRequest{AllowedNamespaces: []string{"team-a"}}
 	tree := &gitopstree.ResourceTree{
 		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot, Ref: gitopstree.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "app"}},
@@ -266,5 +209,221 @@ func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	}
 	if len(got.Warnings) == 0 || !strings.Contains(got.Warnings[0], "hidden by RBAC") {
 		t.Fatalf("expected RBAC warning, got %#v", got.Warnings)
+	}
+}
+
+func TestGitOpsFinalizerEmptyOwnerNamespace(t *testing.T) {
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Pods() == nil {
+		t.Fatal("test cache unavailable")
+	}
+	resolver := &insightsResolver{cache: cache, canAccess: func(string, string, string, string) bool {
+		t.Fatal("empty namespace catalog owner reached inventory access")
+		return true
+	}}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("operator.victoriametrics.com/v1")
+	if got := resolver.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", root); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGitOpsFinalizerHealthDuringControllerRollout(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}}
+	pod.SetName("rollout-source-controller")
+	pod.SetNamespace("flux-system")
+	pod.SetLabels(map[string]string{"app": "source-controller"})
+	pod.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("source.toolkit.fluxcd.io/v1")
+	if got := resolver.FinalizerOwnerStatus("finalizers.source.toolkit.fluxcd.io", root); got != "source-controller is healthy (1 pod ready)" {
+		t.Fatalf("rollout changed GitOps controller health text: %q", got)
+	}
+}
+
+func TestGitOpsFinalizerOwnerMayRunOffCluster(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("argoproj.io/v1alpha1")
+	if got := resolver.FinalizerOwnerStatus("resources-finalizer.argocd.argoproj.io", root); !strings.Contains(got, "argocd-application-controller has no pods in namespace argocd (it may run outside the cluster under Amazon EKS Capabilities") {
+		t.Fatalf("managed Argo CD read as missing: %q", got)
+	}
+}
+
+func TestGitOpsTreeDeniesUnreadableKindInsideAllowedNamespace(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("source-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	s.permCache.Get("source-user", nil).SetCanI("get", "", "secrets", "team", false)
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	tree := &gitopstree.ResourceTree{
+		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot},
+		Nodes: []gitopstree.Node{
+			{ID: "root", Role: gitopstree.RoleRoot},
+			{ID: "source", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "team", Name: "unreadable"}, Data: map[string]any{"labels": map[string]string{"private": "metadata"}}},
+		},
+		Edges: []gitopstree.Edge{{Source: "root", Target: "source", Type: gitopstree.EdgeSource}},
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "source-user"}))
+	filtered := s.filterGitOpsTreeForUser(r, req, tree)
+	if len(filtered.Nodes) != 1 || len(filtered.Edges) != 0 || filtered.Summary.Declared != 0 {
+		t.Fatalf("unreadable kind metadata leaked: %+v", filtered)
+	}
+}
+
+func TestGitOpsUnknownNamespacedDeclarationIsNotReadDenied(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("declaration-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "declaration-user"}))
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	if !s.canAccessGitOpsRef(r, req, "not-installed.example", "RemoteWidget", "team", "declared", false) {
+		t.Fatal("unknown discovery erased readable inventory declaration")
+	}
+	if s.canAccessGitOpsRef(r, req, "not-installed.example", "RemoteWidget", "other", "declared", false) {
+		t.Fatal("unknown kind bypassed namespace scope")
+	}
+	if s.canAccessGitOpsRef(r, req, "", "Secret", "team", "private", false) {
+		t.Fatal("known kind denial bypassed by unknown handling")
+	}
+}
+
+func TestSyntheticPodGroupReadsPodsInsteadOfPodGroupAPIs(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	permissions.SetCanI("get", "", "pods", "team", true)
+	s.permCache.Set("group-user", nil, permissions)
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "group-user"}))
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	if !s.canAccessGitOpsRef(r, req, "", "PodGroup", "team", "display", false) {
+		t.Fatal("synthetic group did not use cached pod access")
+	}
+	permissions.SetCanI("get", "", "pods", "team", false)
+	if s.canAccessGitOpsRef(r, req, "", "PodGroup", "team", "display", false) {
+		t.Fatal("synthetic group ignored pod denial")
+	}
+}
+
+func TestRemoteDeclaredTreeNodePreservesRootInventory(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("fleet-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"argocd"}})
+	root := gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot}
+	remote := gitopstree.Node{ID: "remote", Role: gitopstree.RoleDeclared, Remote: true, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "remote", Name: "declared"}, Sync: "Synced"}
+	tree := &gitopstree.ResourceTree{Root: root, Nodes: []gitopstree.Node{root, remote}, Edges: []gitopstree.Edge{{Source: "root", Target: "remote", Type: gitopstree.EdgeOwns}}}
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "fleet-user"}))
+	filtered := s.filterGitOpsTreeForUser(r, &gitopsRequest{AllowedNamespaces: []string{"argocd"}}, tree)
+	if len(filtered.Nodes) != 2 || len(filtered.Edges) != 1 {
+		t.Fatalf("local permissions erased remote inventory: %+v", filtered)
+	}
+}
+
+func TestRemoteInsightPreservesOnlyRemoteInventoryDeclarations(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("fleet-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"argocd"}})
+	remote := gitopstree.Node{ID: "remote", Role: gitopstree.RoleDeclared, Remote: true, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "destination", Name: "declared"}}
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{remote}}
+	ref := gitopsinsights.Ref{Kind: "Secret", Namespace: "destination", Name: "declared"}
+	local := gitopsinsights.Ref{Kind: "Secret", Namespace: "other-local", Name: "private"}
+	input := gitopsinsights.Insight{Changes: []gitopsinsights.Change{{Ref: ref}, {Ref: local}}}
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "fleet-user"}))
+	out := s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"argocd"}}, input, tree)
+	if len(out.Changes) != 1 || out.Changes[0].Ref != ref {
+		t.Fatalf("remote inventory dropped or unrelated local ref exposed: %+v", out.Changes)
+	}
+}
+
+func TestFluxSourceInsightDropsDeniedStatusText(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team", "shared"}}
+	s.permCache.Set("source-user", nil, permissions)
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "source-user"}))
+	source := gitopsinsights.Ref{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "private"}
+	issue := gitopsinsights.Issue{Severity: gitopsinsights.SeverityWarning, Scope: gitopsinsights.ScopeTree, Reason: "SourceNotReady", Message: "GitRepository shared/private can't fetch updates: private status text. No artifact has been fetched yet.", Refs: []gitopsinsights.Ref{source}}
+	input := gitopsinsights.Insight{Issues: []gitopsinsights.Issue{issue}}
+	out := s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, input, nil)
+	if len(out.Issues) != 0 {
+		t.Fatalf("denied source status leaked: %+v", out.Issues)
+	}
+	if len(input.Issues) != 1 || len(input.Issues[0].Refs) != 1 {
+		t.Fatal("filter mutated shared insight")
+	}
+	out = s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team", "shared"}}, input, nil)
+	if len(out.Issues) != 1 || out.Issues[0].Message != issue.Message || len(out.Issues[0].Refs) != 1 {
+		t.Fatalf("readable source issue lost: %+v", out)
+	}
+}
+
+func TestFluxTreeResummarizesDependenciesAfterFiltering(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	permissions.SetCanI("get", "apps", "deployments", "team", true)
+	s.permCache.Set("tree-user", nil, permissions)
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "tree-user"}))
+	root := gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot}
+	nodes := []gitopstree.Node{root, {ID: "source", Role: gitopstree.RoleDeclared, Dependency: true, Ref: gitopstree.ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "repo"}, Health: "Degraded"}, {ID: "workload", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "team", Name: "app"}, Health: "Degraded", Sync: "OutOfSync"}}
+	input := &gitopstree.ResourceTree{Root: root, Nodes: nodes, Summary: gitopstree.Summarize(nodes)}
+	out := s.filterGitOpsTreeForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, input)
+	if len(out.Nodes) != 2 || out.Summary.Dependencies != 0 || out.Summary.Declared != 1 || out.Summary.Degraded != 1 || out.Summary.OutOfSync != 1 || input.Summary.Dependencies != 1 {
+		t.Fatalf("filtered summary: %+v", out)
+	}
+}
+
+func TestFluxBlockerConditionSurvivesDeniedSource(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("blocker-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/insights", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "blocker-user"}))
+	source := gitopsinsights.Ref{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "private"}
+	issue := gitopsinsights.Issue{Severity: gitopsinsights.SeverityCritical, Scope: gitopsinsights.ScopeCondition, Reason: "ArtifactFailed", Message: "Source artifact not found, retrying in 30s", Cause: "GitRepository private: private status text", Refs: []gitopsinsights.Ref{source}}
+	out := s.filterGitOpsInsightForUser(r, &gitopsRequest{AllowedNamespaces: []string{"team"}}, gitopsinsights.Insight{Issues: []gitopsinsights.Issue{issue}}, nil)
+	if len(out.Issues) != 1 || out.Issues[0].Message != issue.Message || out.Issues[0].Cause != "" || len(out.Issues[0].Refs) != 0 {
+		t.Fatalf("root condition lost or source status leaked: %+v", out.Issues)
+	}
+}
+
+// A request the client abandoned is not a server failure.
+func TestWriteGitOpsBuildErrorIgnoresAbandonedRequest(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&Server{}).writeGitOpsBuildError(rec, &gitopsRequest{}, fmt.Errorf("build: %w", context.Canceled))
+	if rec.Code == http.StatusInternalServerError || rec.Body.Len() != 0 {
+		t.Fatalf("abandoned request answered %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// A root that is not an Argo CD or Flux object is a bad request, not a
+// server failure, and the message names it.
+func TestWriteGitOpsBuildErrorRefusesNonGitOpsRoot(t *testing.T) {
+	s := &Server{}
+	req := &gitopsRequest{Kind: "applications", Namespace: "shop", Name: "wordpress", Group: "app.k8s.io"}
+	err := fmt.Errorf("Application.app.k8s.io shop/wordpress is %w, so it has no GitOps view", gitopstree.ErrNotGitOpsResource)
+	rec := httptest.NewRecorder()
+	s.writeGitOpsBuildError(rec, req, err)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "Application.app.k8s.io shop/wordpress is not a supported Argo CD or Flux resource") {
+		t.Fatalf("body = %s", rec.Body.String())
 	}
 }

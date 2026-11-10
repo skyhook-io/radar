@@ -1,0 +1,273 @@
+[
+  {
+    "name": "none",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {}
+    },
+    "method": "",
+    "plugin": "",
+    "hasDestination": false,
+    "blockerCode": "no_destination",
+    "destinationPlugin": "",
+    "barman": null
+  },
+  {
+    "name": "in-tree empty",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "backup": {
+          "barmanObjectStore": {}
+        }
+      }
+    },
+    "method": "barmanObjectStore",
+    "plugin": "",
+    "hasDestination": false,
+    "blockerCode": "no_destination",
+    "destinationPlugin": "",
+    "barman": null
+  },
+  {
+    "name": "in-tree",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "backup": {
+          "barmanObjectStore": {
+            "destinationPath": "s3://backups"
+          }
+        }
+      }
+    },
+    "method": "",
+    "plugin": "",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "",
+    "barman": null
+  },
+  {
+    "name": "snapshots",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "backup": {
+          "volumeSnapshot": {}
+        }
+      }
+    },
+    "method": "volumeSnapshot",
+    "plugin": "",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "",
+    "barman": null
+  },
+  {
+    "name": "snapshot method mismatch",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "backup": {
+          "volumeSnapshot": {}
+        }
+      }
+    },
+    "method": "barmanObjectStore",
+    "plugin": "",
+    "hasDestination": true,
+    "blockerCode": "method_destination_missing",
+    "destinationPlugin": "",
+    "barman": null
+  },
+  {
+    "name": "disabled Barman",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "barman-cloud.cloudnative-pg.io",
+            "enabled": false,
+            "parameters": {
+              "barmanObjectName": "store"
+            }
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "barman-cloud.cloudnative-pg.io",
+    "hasDestination": false,
+    "blockerCode": "no_destination",
+    "destinationPlugin": "",
+    "barman": null
+  },
+  {
+    "name": "Barman without store",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "barman-cloud.cloudnative-pg.io",
+            "isWALArchiver": true
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "barman-cloud.cloudnative-pg.io",
+    "hasDestination": false,
+    "blockerCode": "no_destination",
+    "destinationPlugin": "",
+    "barman": {
+      "objectStore": "",
+      "serverName": "pg"
+    }
+  },
+  {
+    "name": "enabled Barman",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "barman-cloud.cloudnative-pg.io",
+            "parameters": {
+              "barmanObjectName": "store"
+            }
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "barman-cloud.cloudnative-pg.io",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "barman-cloud.cloudnative-pg.io",
+    "barman": {
+      "objectStore": "store",
+      "serverName": "pg"
+    }
+  },
+  {
+    "name": "Barman with explicit server",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "barman-cloud.cloudnative-pg.io",
+            "parameters": {
+              "barmanObjectName": "store",
+              "serverName": "archive"
+            }
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "barman-cloud.cloudnative-pg.io",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "barman-cloud.cloudnative-pg.io",
+    "barman": {
+      "objectStore": "store",
+      "serverName": "archive"
+    }
+  },
+  {
+    "name": "opaque plugin",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "custom"
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "custom",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "custom",
+    "barman": null
+  },
+  {
+    "name": "plugin name mismatch",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "custom"
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "missing",
+    "hasDestination": true,
+    "blockerCode": "method_destination_missing",
+    "destinationPlugin": "custom",
+    "barman": null
+  },
+  {
+    "name": "disabled then enabled plugin",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "barman-cloud.cloudnative-pg.io",
+            "enabled": false
+          },
+          {
+            "name": "barman-cloud.cloudnative-pg.io",
+            "parameters": {
+              "barmanObjectName": "store"
+            }
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "barman-cloud.cloudnative-pg.io",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "barman-cloud.cloudnative-pg.io",
+    "barman": {
+      "objectStore": "store",
+      "serverName": "pg"
+    }
+  }
+]

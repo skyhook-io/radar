@@ -45,8 +45,8 @@ var configuredImage string
 // version-matched image never exists on the registry - without this, every
 // in-cluster test from a locally-built binary ImagePullBackOffs. Released
 // binaries keep their exact version-matched default and never consult it.
-// Returns "" when the release lookup fails, which falls through to
-// DefaultImageRef so the (informative) pull error still names the situation.
+// Uses the latest stable tag when version checks are disabled or the release
+// lookup fails.
 var LatestReleaseImage func() string
 
 // SetConfiguredImage records the operator's --reachability-image override so
@@ -390,7 +390,8 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 			// namespaces.
 			if term := probeContainerTerminated(&pod); term != nil {
 				if term.ExitCode == 0 {
-					return readProbeResults(ctx, client, namespace, pod.Name)
+					results, err := readProbeResults(ctx, client, namespace, pod.Name)
+					return withProbeMesh(results, &pod), err
 				}
 				raw, _ := readPodLogs(ctx, client, namespace, pod.Name)
 				return nil, probeFailedError(raw, term)
@@ -401,6 +402,17 @@ func waitAndReadProbeJob(ctx context.Context, client kubernetes.Interface, names
 			}
 		}
 	}
+}
+
+// withProbeMesh records a sidecar proxy in the probe pod on its results: the
+// proxy can accept a connection before the backend does.
+func withProbeMesh(results []probe.Result, pod *corev1.Pod) []probe.Result {
+	if mesh := k8s.PodMesh(pod); mesh != "" {
+		for i := range results {
+			results[i].Mesh = mesh
+		}
+	}
+	return results
 }
 
 // probeContainerTerminated returns the "probe" container's terminated state, or

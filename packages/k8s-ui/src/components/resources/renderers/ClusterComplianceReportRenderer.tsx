@@ -4,10 +4,10 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../../ui/Collapse'
 import { Input } from '../../ui/Input'
-import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, SEVERITY_ORDER } from './trivy-shared'
 import { pluralize } from '../../../utils/pluralize'
 import { BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface ClusterComplianceReportRendererProps {
   data: any
@@ -97,7 +97,7 @@ export function ClusterComplianceReportRenderer({ data }: ClusterComplianceRepor
           {compliance.description && <Property label="Description" value={compliance.description} />}
           {compliance.version && <Property label="Version" value={compliance.version} />}
           {compliance.platform && <Property label="Platform" value={compliance.platform} />}
-          <Property label="Last Updated" value={status.updateTimestamp ? formatAge(status.updateTimestamp) + ' ago' : '-'} />
+          <Property label="Last Updated" value={<TimeValue timestamp={status.updateTimestamp} />} />
         </PropertyList>
       </Section>
 

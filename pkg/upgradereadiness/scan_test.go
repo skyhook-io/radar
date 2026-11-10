@@ -224,8 +224,20 @@ func TestScanDeprecatedAPIRequests(t *testing.T) {
 	input.DeprecatedAPIRequests = nil
 	got, _ = Scan(input, "1.35", "1.36")
 	check = checkByID(t, got, "deprecated-api-requests")
-	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "/metrics") || len(check.References) < 2 {
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "not collected") || strings.Contains(check.Caveat, "Grant") {
 		t.Fatalf("unavailable metrics should be actionable and unknown: %+v", check)
+	}
+	input.DeprecatedAPIMetricsFailure = APIMetricsForbidden
+	got, err = Scan(input, "1.35", "1.36")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check = checkByID(t, got, "deprecated-api-requests")
+	if !strings.Contains(check.Caveat, "Grant get") {
+		t.Fatalf("forbidden metrics should explain the required access: %+v", check)
+	}
+	if !slices.Contains(check.References, cloudMetricsPermissionReference) {
+		t.Fatal("forbidden metrics should include the permission reference")
 	}
 }
 

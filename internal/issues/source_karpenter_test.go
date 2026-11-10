@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -186,6 +187,42 @@ func TestComposeKarpenterMissingNodeClassRequiresAuthoritativeCoverage(t *testin
 	}
 	if _, exists := byName["unknown-coverage"]; exists {
 		t.Fatalf("partial coverage produced a false missing assertion: %+v", byName["unknown-coverage"])
+	}
+}
+
+// A NodeClass kind whose group had partial discovery can't be checked, so
+// its NodePools' "NodeClass missing" issues are reported as unchecked.
+func TestComposeKarpenterPartialNodeClassDiscoveryIsUnchecked(t *testing.T) {
+	poolGVR := schema.GroupVersionResource{Group: karpenter.Group, Version: "v1", Resource: "nodepools"}
+	pools := []*unstructured.Unstructured{
+		karpenterIssueTestPool("unknown-coverage", "partial.acme.io", "PartialNodeClass", "default", "True", "Ready", ""),
+	}
+	p := newFakeKarpenterIssueProvider(map[schema.GroupVersionResource]struct {
+		kind  string
+		items []*unstructured.Unstructured
+	}{poolGVR: {kind: karpenter.NodePoolKind, items: pools}})
+	p.inventories[karpenterNodeClassType{group: "partial.acme.io", kind: "PartialNodeClass"}] = karpenterResourceInventory{
+		Coverage: karpenterCoverageUnknown, Gap: issuesapi.UncheckedReasonReadFailed,
+	}
+
+	out, stats := ComposeWithStats(p, Filters{Limit: NoLimit})
+	if len(out) != 0 {
+		t.Fatalf("issues = %+v, want none asserted on unknown coverage", out)
+	}
+	want := []issuesapi.UncheckedSource{{
+		Source: issuesapi.UncheckedSourceKarpenter, Reason: issuesapi.UncheckedReasonReadFailed,
+		Kinds: []issuesapi.UncheckedKind{{Group: "partial.acme.io", Kind: "PartialNodeClass"}},
+	}}
+	if !reflect.DeepEqual(stats.Unchecked, want) {
+		t.Fatalf("unchecked = %+v, want %+v", stats.Unchecked, want)
+	}
+	// Its issues land on NodePools, so a NodePool request names it too; a
+	// Pod request doesn't.
+	if _, stats = ComposeWithStats(p, Filters{Limit: NoLimit, Kinds: []string{"NodePool"}}); !reflect.DeepEqual(stats.Unchecked, want) {
+		t.Fatalf("NodePool request: unchecked = %+v, want %+v", stats.Unchecked, want)
+	}
+	if _, stats = ComposeWithStats(p, Filters{Limit: NoLimit, Kinds: []string{"Pod"}}); stats.Unchecked != nil {
+		t.Fatalf("Pod request: unchecked = %+v, want none", stats.Unchecked)
 	}
 }
 

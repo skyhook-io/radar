@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { X, Copy, Check, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayTransitionStyle } from '../../utils/animation'
@@ -7,15 +7,29 @@ import { useDiagnostics } from '../../api/client'
 import type { DiagnosticsSnapshot, DiagEnvVar, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow } from '../../api/client'
 import { getK8sUIPerfSnapshot, type K8sUIPerfSnapshot } from '@skyhook-io/k8s-ui'
 
+export type DiagnosticsFocus = 'timeline'
+
 interface DiagnosticsOverlayProps {
   onClose: () => void
   isOpen?: boolean
+  /** Section to scroll to on open, for callers linking to one specific problem. */
+  focus?: DiagnosticsFocus
 }
 
-export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverlayProps) {
+export function DiagnosticsOverlay({ onClose, isOpen = true, focus }: DiagnosticsOverlayProps) {
   const { data, isLoading, error } = useDiagnostics(true)
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
   const [reportOpened, setReportOpened] = useState(false)
+  const timelineRef = useRef<HTMLDivElement>(null)
+  const hasData = data != null
+
+  // Once, when the snapshot first renders: the overlay polls, and re-scrolling
+  // on every refresh would yank the reader back while they read other sections.
+  useEffect(() => {
+    if (isOpen && hasData && focus === 'timeline') {
+      timelineRef.current?.scrollIntoView({ block: 'start' })
+    }
+  }, [isOpen, hasData, focus])
 
   // Close on Escape (capture phase) — only while logically open: the overlay
   // stays mounted through its exit.
@@ -119,6 +133,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
               <CacheSection data={data} />
               <MetricsSection data={data} />
               <EventPipelineSection data={data} />
+              <div ref={timelineRef} className="scroll-mt-4"><TimelineSection data={data} /></div>
               <InformersSection data={data} />
               <PrometheusSection data={data} />
               <TrafficSection data={data} />
@@ -326,6 +341,20 @@ function EventPipelineSection({ data }: { data: DiagnosticsSnapshot }) {
           ))}
         </div>
       )}
+    </Section>
+  )
+}
+
+function TimelineSection({ data }: { data: DiagnosticsSnapshot }) {
+  if (!data.timeline) return null
+  const t = data.timeline
+  return (
+    <Section title="Timeline" warn={t.degraded}>
+      <Row label="Storage" value={t.storageType} warn={t.degraded} />
+      {t.degraded && t.degradedReason && <Row label="Unavailable" value={t.degradedReason} warn />}
+      {/* An unreachable database has no count to report; 0 would read as empty. */}
+      {(!t.degraded || t.storageType === 'memory') && <Row label="Events" value={t.totalEvents.toLocaleString()} />}
+      <Row label="Dropped" value={t.totalDrops.toLocaleString()} warn={t.totalDrops > 0} />
     </Section>
   )
 }
@@ -593,6 +622,7 @@ function ConfigSection({ data }: { data: DiagnosticsSnapshot }) {
     <Section title="Config">
       <Row label="Port" value={cfg.port} />
       <Row label="Dev Mode" value={cfg.devMode ? 'Yes' : 'No'} />
+      <Row label="Profiling (pprof)" value={cfg.pprof === undefined ? 'Unknown' : cfg.pprof ? 'Yes' : 'No'} />
       {cfg.namespace && <Row label="Namespace Filter" value={cfg.namespace} />}
       <Row label="Timeline Storage" value={cfg.timelineStorage} />
       <Row label="History Limit" value={cfg.historyLimit.toLocaleString()} />
@@ -702,6 +732,9 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
     const t = data.timeline
     lines.push(`### Timeline`)
     lines.push(`- Storage: \`${t.storageType}\` | Events: ${t.totalEvents.toLocaleString()} | Errors: ${t.storeErrors} | Drops: ${t.totalDrops}`)
+    if (t.degraded && t.degradedReason) {
+      lines.push(`- Unavailable: ${t.degradedReason}`)
+    }
     lines.push(``)
   }
 
@@ -832,7 +865,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.config) {
     const cfg = data.config
     lines.push(`### Config`)
-    lines.push(`- Port: ${cfg.port} | Dev: ${cfg.devMode} | Timeline: \`${cfg.timelineStorage}\` | History: ${cfg.historyLimit} | MCP: ${cfg.mcpEnabled} | Prometheus URL: ${cfg.hasPrometheusURL ? 'manual' : 'auto'}`)
+    lines.push(`- Port: ${cfg.port} | Dev: ${cfg.devMode} | Pprof: ${cfg.pprof ?? 'unknown'} | Timeline: \`${cfg.timelineStorage}\` | History: ${cfg.historyLimit} | MCP: ${cfg.mcpEnabled} | Prometheus URL: ${cfg.hasPrometheusURL ? 'manual' : 'auto'}`)
     lines.push(``)
   }
 

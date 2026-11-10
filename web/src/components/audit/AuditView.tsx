@@ -83,6 +83,9 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
     )
   }
 
+  const annotationIgnored = Object.values(data.annotationIgnoredByNamespace ?? {})
+    .reduce((sum, byNS) => sum + Object.values(byNS).reduce((a, n) => a + n, 0), 0)
+
   const onResourceClick = (ref: CheckResourceRef) =>
     onNavigateToResource({ kind: ref.kind, namespace: ref.namespace, name: ref.name, group: ref.group })
 
@@ -108,6 +111,11 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
             {ignoredCount > 0 && (
               <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
             )}
+            {annotationIgnored > 0 && (
+              <Tooltip content={`Resources that opted out of a check with the ${data.ignoreChecksAnnotation} annotation`}>
+                <span className="text-xs text-theme-text-tertiary">{annotationIgnored} {annotationIgnored === 1 ? 'finding' : 'findings'} hidden by annotation</span>
+              </Tooltip>
+            )}
             <Tooltip content="Checks settings">
             <button
               onClick={() => setShowSettings(true)}
@@ -129,6 +137,7 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
         onResourceClick={onResourceClick}
         onHideCheck={canEdit ? hideCheck : undefined}
         onHideCategory={canEdit ? hideCategory : undefined}
+        ignoreChecksAnnotation={data.ignoreChecksAnnotation}
       />
 
       {showSettings && <AuditSettingsDialog namespaces={namespaces} onClose={() => setShowSettings(false)} />}

@@ -5,6 +5,7 @@ import { evidenceKindIsAdverse } from "./investigationEvidenceKinds";
 import {
   DiagnoseError,
   type DiagnoseStreamEvent,
+  type InvestigationRefusal,
   type RunSummary,
 } from "../../api/diagnose";
 import type { Turn } from "./parts";
@@ -121,6 +122,48 @@ export function investigationAssessmentNeedsCurrentStateVerification(input: {
   }
 
   return input.localApplyAttemptAssessmentIdx >= input.currentAssessmentIdx;
+}
+
+// Which failure the activity pane shows, and the host refusal behind it. A
+// request's own error is newer than a saved verification turn's: it is cleared
+// when the next request starts and when a new verification turn streams.
+// A status warning keeps first place, since it is what stops a second Apply
+// before anyone checks; a newer failed follow-up shows beside it, not instead.
+export function investigationFailureShown(input: {
+  actionError: string | null;
+  actionRefusal: InvestigationRefusal | null;
+  verificationError: string | null;
+  verificationRefusal: InvestigationRefusal | null;
+  savedVerificationError: string | null;
+  applyOutcomeUncertain: string | null;
+}): {
+  verificationError: string | null;
+  statusCheckError: string | null;
+  message: string | null;
+  refusal: InvestigationRefusal | null;
+  followUp: { message: string; refusal: InvestigationRefusal | null } | null;
+} {
+  const verificationError =
+    input.verificationError || input.savedVerificationError;
+  const statusCheckError = verificationError || input.applyOutcomeUncertain;
+  if (statusCheckError) {
+    return {
+      verificationError,
+      statusCheckError,
+      message: statusCheckError,
+      refusal: input.verificationError ? input.verificationRefusal : null,
+      followUp: input.actionError
+        ? { message: input.actionError, refusal: input.actionRefusal }
+        : null,
+    };
+  }
+  return {
+    verificationError: null,
+    statusCheckError: null,
+    message: input.actionError,
+    refusal: input.actionError ? input.actionRefusal : null,
+    followUp: null,
+  };
 }
 
 export function investigationApplyRejectionIsDefinitive(
@@ -757,6 +800,34 @@ export function canStopInvestigation(
   );
 }
 
+// The hand-off resumes the agent's own session, so it waits until no turn is
+// writing to that session. A finished transcript outranks a run summary that
+// still says running, as for Stop; stopping does not, because Stop writes its
+// terminal frame before the agent process has exited.
+export function canContinueInOwnAgent(input: {
+  run: RunSummary;
+  busy: boolean;
+  requestPending: boolean;
+  gone: boolean;
+  streamReady: boolean;
+  verificationPending: boolean;
+  latestTurnStatus?: Turn["status"];
+}): boolean {
+  const { run, latestTurnStatus } = input;
+  const transcriptTerminal =
+    latestTurnStatus === "done" || latestTurnStatus === "error";
+  return (
+    input.streamReady &&
+    !input.busy &&
+    !input.requestPending &&
+    !input.verificationPending &&
+    !input.gone &&
+    run.status !== "stopping" &&
+    latestTurnStatus !== "running" &&
+    (transcriptTerminal || run.status !== "running")
+  );
+}
+
 export function canContinueInvestigation(
   run: RunSummary,
   latestTurnStatus?: Turn["status"],
@@ -773,6 +844,14 @@ export function canContinueInvestigation(
     run.status !== "stale" &&
     run.status !== "stopping" &&
     (run.canContinue !== false || summaryIsLaggingTerminalTranscript)
+  );
+}
+
+// readOnlyNotice is what an interactive run that can't take a follow-up shows
+// where the follow-up box would be: the host's reason when it gave one.
+export function readOnlyNotice(run: RunSummary): string {
+  return (
+    run.continueBlockedReason?.trim() || "This investigation is read-only."
   );
 }
 

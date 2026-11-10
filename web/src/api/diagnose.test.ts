@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRun, subscribeRun, type DiagnoseStreamEvent } from "./diagnose";
+import {
+  addTurn,
+  createRun,
+  DiagnoseError,
+  fetchAgents,
+  investigationCapacity,
+  investigationRefusal,
+  subscribeRun,
+  type DiagnoseStreamEvent,
+} from "./diagnose";
 
 type SSEListener = (event: { data: string; lastEventId: string }) => void;
 
@@ -264,5 +273,168 @@ describe("investigation start requests", () => {
       agent: "hub",
     });
     expect(JSON.parse(init.body as string).issueId).toBe("issue-1");
+  });
+});
+
+describe("refused requests", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const target = { kind: "Pod", group: "", namespace: "prod", name: "api-0" };
+
+  const refuse = (status: number, body: string) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(body, { status })),
+    );
+
+  const startError = async () => {
+    try {
+      await createRun(target);
+    } catch (e) {
+      return e as DiagnoseError;
+    }
+    throw new Error("createRun resolved");
+  };
+
+  it("shows the sentence a host sends in detail, not its code", async () => {
+    refuse(
+      402,
+      JSON.stringify({
+        error: "ai_quota_exhausted",
+        detail: "Your organization has used this month's investigations.",
+        reason: "allowance_used_free",
+        action: "upgrade",
+      }),
+    );
+    const e = await startError();
+    expect(e).toBeInstanceOf(DiagnoseError);
+    expect(e.status).toBe(402);
+    expect(e.message).toBe(
+      "Your organization has used this month's investigations.",
+    );
+    expect(e.code).toBe("ai_quota_exhausted");
+    expect(e.reason).toBe("allowance_used_free");
+    expect(e.action).toBe("upgrade");
+  });
+
+  it("reads Radar's capacity refusal as recoverable, not a host refusal", async () => {
+    refuse(
+      409,
+      JSON.stringify({
+        error: "3 investigations are already running.",
+        code: "investigations_at_capacity",
+        limit: 3,
+        context: "kind-dev",
+      }),
+    );
+    const e = await startError();
+    expect(e.message).toBe("3 investigations are already running.");
+    expect(investigationCapacity(e)).toEqual({ limit: 3, context: "kind-dev" });
+    expect(investigationRefusal(e)).toBeNull();
+  });
+
+  it("does not read other conflicts as capacity", async () => {
+    refuse(409, JSON.stringify({ error: "Codex isn't installed." }));
+    expect(investigationCapacity(await startError())).toBeNull();
+  });
+
+  it("applies the same reading to follow-up turns", async () => {
+    refuse(
+      402,
+      JSON.stringify({ error: "ai_quota_exhausted", detail: "Limit reached." }),
+    );
+    await expect(addTurn("run-1", { question: "why?" })).rejects.toMatchObject({
+      status: 402,
+      message: "Limit reached.",
+      code: "ai_quota_exhausted",
+    });
+  });
+
+  it("reads a code sent beside a sentence repeated in error", async () => {
+    const sentence = "This investigation has reached its follow-up limit.";
+    refuse(
+      409,
+      JSON.stringify({
+        error: sentence,
+        detail: sentence,
+        code: "investigation_turn_limit",
+      }),
+    );
+    await expect(addTurn("run-1", { question: "why?" })).rejects.toMatchObject({
+      status: 409,
+      message: sentence,
+      code: "investigation_turn_limit",
+    });
+  });
+
+  it("never reports the sentence as the code", async () => {
+    const sentence = "Busy.";
+    refuse(409, JSON.stringify({ error: sentence, detail: sentence }));
+    expect((await startError()).code).toBeUndefined();
+  });
+
+  it("shows error when it is the only sentence", async () => {
+    refuse(409, JSON.stringify({ error: "Too many investigations running." }));
+    const e = await startError();
+    expect(e.message).toBe("Too many investigations running.");
+    expect(e.code).toBeUndefined();
+    expect(e.reason).toBeUndefined();
+    expect(e.action).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "an empty detail",
+      JSON.stringify({ error: "Busy.", detail: "" }),
+      "Busy.",
+    ],
+    ["a non-JSON body", "upstream timeout", "request failed (502)"],
+    [
+      "no message at all",
+      JSON.stringify({ error: "  " }),
+      "request failed (502)",
+    ],
+  ])("falls back past %s", async (_name, body, message) => {
+    refuse(502, body);
+    expect((await startError()).message).toBe(message);
+  });
+});
+
+describe("fetchAgents agents normalisation", () => {
+  const withFetch = async (body: unknown) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    try {
+      return await fetchAgents();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  it("turns the server's null agent list into an empty array", async () => {
+    // Older servers send null for a machine with no CLI installed, the case
+    // callers most need to survive.
+    const r = await withFetch({
+      agents: null,
+      enabled: false,
+      eligible: true,
+      consented: {},
+    });
+    expect(r.agents).toEqual([]);
+    expect(r.eligible).toBe(true);
+  });
+
+  it("leaves a populated list alone", async () => {
+    const r = await withFetch({
+      agents: [{ name: "claude", label: "Claude Code", supported: true }],
+      enabled: true,
+      eligible: true,
+      consented: {},
+    });
+    expect(r.agents.map((a) => a.name)).toEqual(["claude"]);
   });
 });

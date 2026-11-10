@@ -17,4 +17,17 @@ describe('supportsLogsWithoutPods', () => {
     expect(supportsLogsWithoutPods('jobs', 'Job', 'batch', 'batch/v1')).toBe(true)
     expect(supportsLogsWithoutPods('jobs', 'Job', 'example.io', 'example.io/v1')).toBe(false)
   })
+
+  it('offers a CloudNativePG Cluster its merged instance logs, but not other Cluster kinds', () => {
+    expect(supportsLogsWithoutPods('clusters', 'Cluster', 'postgresql.cnpg.io', 'postgresql.cnpg.io/v1')).toBe(true)
+    expect(supportsLogsWithoutPods('clusters', 'Cluster', undefined, 'postgresql.cnpg.io/v1')).toBe(true)
+    expect(supportsLogsWithoutPods('clusters', 'Cluster', 'cluster.x-k8s.io', 'cluster.x-k8s.io/v1beta1')).toBe(false)
+  })
+
+  it('offers a KubeRay RayCluster its owned-Pod logs without recorded Pods, but not other RayCluster kinds', () => {
+    expect(supportsLogsWithoutPods('rayclusters', 'RayCluster', 'ray.io', 'ray.io/v1')).toBe(true)
+    expect(supportsLogsWithoutPods('rayclusters', 'RayCluster', 'ray.io', undefined)).toBe(true)
+    expect(supportsLogsWithoutPods('rayclusters', 'RayCluster', 'ray.io', 'ray.io/v1alpha1')).toBe(false)
+    expect(supportsLogsWithoutPods('rayclusters', 'RayCluster', 'example.io', 'example.io/v1')).toBe(false)
+  })
 })

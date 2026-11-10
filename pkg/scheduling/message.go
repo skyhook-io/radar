@@ -33,7 +33,9 @@ type Reason struct {
 }
 
 var (
-	nodesAvailablePattern = regexp.MustCompile(`(\d+)/(\d+)\s+nodes? are available`)
+	// kube-scheduler says "0/5 nodes are available:"; Volcano says
+	// "Node: 0/5 nodes are unavailable:".
+	nodesAvailablePattern = regexp.MustCompile(`(\d+)/(\d+)\s+nodes? are (?:un)?available`)
 	leadingCountPattern   = regexp.MustCompile(`^\s*(\d+)\s+`)
 	insufficientPattern   = regexp.MustCompile(`Insufficient\s+([A-Za-z0-9./_-]+)`)
 	taintPattern          = regexp.MustCompile(`\{([^}]*)\}`)
@@ -51,14 +53,32 @@ func ParseMessage(message string) (totalNodes int, reasons []Reason) {
 		message = before
 	}
 
-	if match := nodesAvailablePattern.FindStringSubmatch(message); match != nil {
-		totalNodes, _ = strconv.Atoi(match[2])
+	match := nodesAvailablePattern.FindStringSubmatchIndex(message)
+	if match == nil {
+		whole := NormalizeClause(message)
+		// A single clause without the per-node frame ("2 Too many pods", the
+		// unbound-volume verdict) reads as itself.
+		if !strings.ContainsAny(whole, ",;:") {
+			if reason, ok := classifyClause(whole); ok {
+				return 0, []Reason{reason}
+			}
+			return 0, nil
+		}
+		// Longer text without the frame is one statement, not a list of node
+		// clauses: Volcano's gang-scheduling "pod group is not ready, 1 Pending,
+		// …; Pending: 1 Unschedulable" says nothing about nodes.
+		if reason, ok := classifyClause(whole); ok && reason.Class == VolumeBinding {
+			return 0, []Reason{reason}
+		}
+		if IsIgnoredClause(whole) {
+			return 0, nil
+		}
+		return 0, []Reason{{Class: Other, Raw: whole}}
 	}
+	totalNodes, _ = strconv.Atoi(message[match[4]:match[5]])
 
-	clauses := message
-	if _, rest, ok := strings.Cut(message, ":"); ok {
-		clauses = rest
-	}
+	clauses := message[match[1]:]
+	clauses = strings.TrimPrefix(strings.TrimSpace(clauses), ":")
 	clauses = strings.TrimRight(strings.TrimSpace(clauses), ".")
 	if clauses == "" {
 		return totalNodes, nil
@@ -120,7 +140,9 @@ func classifyClause(clause string) (Reason, bool) {
 	case strings.Contains(clause, "Insufficient"):
 		reason.Class = InsufficientResource
 		if match := insufficientPattern.FindStringSubmatch(clause); match != nil {
-			reason.Resource = match[1]
+			// A sentence break inside the clause ("Insufficient memory. no new claims
+			// to deallocate") would otherwise end the resource name with a dot.
+			reason.Resource = strings.TrimRight(match[1], ".")
 		}
 	case strings.Contains(lower, "too many pods"):
 		reason.Class = InsufficientResource
@@ -131,7 +153,15 @@ func classifyClause(clause string) (Reason, bool) {
 		if IsNodeLifecycleTaint(reason.TaintKey) {
 			reason.Class = NodeUnschedulable
 		}
-	case strings.Contains(lower, "volume node affinity"):
+	// Volume topology must match before the generic "node affinity" case:
+	// kube-scheduler's VolumeBinding plugin says "didn't match
+	// PersistentVolume's node affinity" (older releases: "had volume node
+	// affinity conflict"), and VolumeZone says "had no available volume zone".
+	// All mean the Pod's bound volume can't attach on those nodes, not that the
+	// Pod's own nodeSelector/affinity is wrong.
+	case strings.Contains(lower, "volume node affinity"),
+		strings.Contains(lower, "persistentvolume") && strings.Contains(lower, "node affinity"),
+		strings.Contains(lower, "volume zone"):
 		reason.Class = VolumeNodeAffinity
 	case strings.Contains(lower, "anti-affinity"):
 		reason.Class = PodAntiAffinity

@@ -2,6 +2,9 @@ import { Globe, ArrowRight, Network, Filter } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
+import { gatewayBackendResourceRef, gatewayParentResourceRef } from '../../../utils/gateway-references'
+import { concreteHostname } from '../../../utils/host-url'
+import { HostLinkActions } from '../../ui/HostLinkActions'
 
 interface GRPCRouteRendererProps {
   data: any
@@ -32,22 +35,8 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
     ? parentStatuses[0].conditions
     : undefined
 
-  function toGatewayRef(ref: any): ResourceRef {
-    return {
-      kind: 'Gateway',
-      namespace: ref.namespace || routeNs,
-      name: ref.name,
-      group: 'gateway.networking.k8s.io',
-    }
-  }
-
-  function toServiceRef(backend: any): ResourceRef {
-    return {
-      kind: 'Service',
-      namespace: backend.namespace || routeNs,
-      name: backend.name,
-    }
-  }
+  const toParentRef = (ref: any) => gatewayParentResourceRef(ref, routeNs)
+  const toBackendRef = (ref: any) => gatewayBackendResourceRef(ref, routeNs)
 
   return (
     <>
@@ -59,8 +48,8 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
             const cond = (p.conditions || []).find((c: any) => c.type === 'Accepted' && c.status === 'False')
             const gwName = p.parentRef?.name || 'unknown'
             return cond?.reason
-              ? `Gateway "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
-              : `Gateway "${gwName}" has not accepted this route.`
+              ? `Parent "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
+              : `Parent "${gwName}" has not accepted this route.`
           }).join('; ')}
         />
       )}
@@ -79,10 +68,16 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
             label="Hostnames"
             value={
               hostnames.length > 0 ? (
-                <div className="flex flex-wrap gap-1">
-                  {hostnames.map((h: string) => (
-                    <Badge key={h} tone="structural">{h}</Badge>
-                  ))}
+                <div className="flex flex-col items-start gap-1">
+                  {hostnames.map((h: string) => {
+                    const copyable = concreteHostname(h)
+                    return (
+                      <div key={h} className="flex max-w-full items-center gap-1">
+                        <Badge tone="structural" className="min-w-0 break-all">{h}</Badge>
+                        {copyable && <HostLinkActions hostname={copyable} />}
+                      </div>
+                    )
+                  })}
                 </div>
               ) : (
                 <span className="text-xs text-theme-text-tertiary">Any</span>
@@ -90,12 +85,12 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
             }
           />
           <Property
-            label="Parent Gateways"
+            label="Parents"
             value={
               parentRefs.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
                   {parentRefs.map((ref: any, i: number) => (
-                    <ResourceRefBadge key={`${ref.namespace || ''}-${ref.name}-${i}`} resourceRef={toGatewayRef(ref)} onClick={onNavigate} />
+                    <ResourceRefBadge key={`${ref.namespace || ''}-${ref.name}-${i}`} resourceRef={toParentRef(ref)} onClick={onNavigate} />
                   ))}
                 </div>
               ) : 'None'
@@ -129,7 +124,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
                     <div className="text-xs text-theme-text-secondary flex flex-wrap items-center gap-1.5">
                       <span className="italic text-theme-text-tertiary">all</span>
                       <ArrowRight className="w-3 h-3 text-theme-text-tertiary shrink-0" />
-                      <ResourceRefBadge resourceRef={toServiceRef(backendRefs[0])} onClick={onNavigate} />
+                      <ResourceRefBadge resourceRef={toBackendRef(backendRefs[0])} onClick={onNavigate} />
                       {backendRefs[0].port && <span className="text-theme-text-tertiary">:{backendRefs[0].port}</span>}
                     </div>
                   )}
@@ -141,7 +136,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
                         return (
                           <div key={bi} className="text-xs text-theme-text-secondary flex items-center gap-1.5 pl-1">
                             <ArrowRight className="w-3 h-3 text-theme-text-tertiary shrink-0" />
-                            <ResourceRefBadge resourceRef={toServiceRef(b)} onClick={onNavigate} />
+                            <ResourceRefBadge resourceRef={toBackendRef(b)} onClick={onNavigate} />
                             {b.port && <span className="text-theme-text-tertiary">:{b.port}</span>}
                             {pct !== null && <span className="text-theme-text-tertiary text-[10px]">{pct}%</span>}
                           </div>
@@ -176,7 +171,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
                       {matchIdx === 0 && backendRefs.length === 1 && (
                         <>
                           <ArrowRight className="w-3 h-3 text-theme-text-tertiary shrink-0" />
-                          <ResourceRefBadge resourceRef={toServiceRef(backendRefs[0])} onClick={onNavigate} />
+                          <ResourceRefBadge resourceRef={toBackendRef(backendRefs[0])} onClick={onNavigate} />
                           {backendRefs[0].port && <span className="text-theme-text-tertiary">:{backendRefs[0].port}</span>}
                         </>
                       )}
@@ -189,7 +184,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
                       return (
                         <div key={bi} className="text-xs text-theme-text-secondary flex items-center gap-1.5 pl-1">
                           <ArrowRight className="w-3 h-3 text-theme-text-tertiary shrink-0" />
-                          <ResourceRefBadge resourceRef={toServiceRef(b)} onClick={onNavigate} />
+                          <ResourceRefBadge resourceRef={toBackendRef(b)} onClick={onNavigate} />
                           {b.port && <span className="text-theme-text-tertiary">:{b.port}</span>}
                           {pct !== null && <span className="text-theme-text-tertiary text-[10px]">{pct}%</span>}
                         </div>

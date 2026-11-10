@@ -9,6 +9,11 @@ on:
     # Weekly on Monday at 9am UTC
     - cron: '0 9 * * 1'
 
+# Same scheme as ci.yml: only a PR's superseded runs are cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   security-events: write
@@ -21,7 +26,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [go, javascript-typescript]
+        # Go analysis takes ~12 minutes, so it runs on main and weekly, not on
+        # PRs. JavaScript/TypeScript (~3 minutes) still runs on PRs.
+        language: ${{ fromJSON(github.event_name == 'pull_request' && '["javascript-typescript"]' || '["go", "javascript-typescript"]') }}
 
     steps:
       - uses: actions/checkout@v7

@@ -22,8 +22,8 @@ import {
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
 import { veleroPhaseLabel } from '../resource-utils-velero'
-import { formatAge } from '../resource-utils'
 import { VeleroRunMessages, type VeleroRunMessagesFetch } from './VeleroRunMessages'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroRestoreRendererProps {
   data: any
@@ -125,10 +125,10 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
             />
           } />
           {status.startTimestamp && (
-            <Property label="Started" value={formatAge(status.startTimestamp) + ' ago'} />
+            <Property label="Started" value={<TimeValue timestamp={status.startTimestamp} />} />
           )}
           {status.completionTimestamp && (
-            <Property label="Completed" value={formatAge(status.completionTimestamp) + ' ago'} />
+            <Property label="Completed" value={<TimeValue timestamp={status.completionTimestamp} />} />
           )}
           <Property label="Duration" value={getRestoreDuration(data)} />
           <Property label="Errors" value={

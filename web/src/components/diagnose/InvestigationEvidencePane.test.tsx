@@ -1982,7 +1982,7 @@ describe("InvestigationEvidencePane honest result states", () => {
       projection.limitations.every((item) => item.presentation === "history"),
     ).toBe(true);
     const html = render(projection);
-    expect(html).toContain("Change history is limited");
+    expect(html).toContain("Radar&#x27;s coverage · 1 routine limit<");
     expect(html).not.toContain("Evidence coverage is incomplete");
     expect(html).not.toContain("access restrictions");
     const header = html.match(
@@ -2029,8 +2029,68 @@ describe("InvestigationEvidencePane honest result states", () => {
     );
     const html = render(projection);
     expect(html).toContain("Evidence coverage is incomplete");
-    expect(html).not.toContain("Change history is limited");
+    expect(html).not.toContain("routine limit");
     expect(investigationEvidenceCoverageLimited(projection)).toBe(true);
+  });
+
+  it("calls sampling caps and history bounds routine, in a neutral tone, and still lists each", () => {
+    const projection = project(
+      tool("empty-history", "get_changes", { changes: [] }),
+      tool("issues-capped", "issues", {
+        issues: [],
+        total: 0,
+        total_matched: 0,
+        recent_changes_truncated: true,
+      }),
+    );
+    expect(
+      projection.limitations.every(
+        (item) =>
+          item.kind === "truncated" ||
+          (item.kind === "unknown" && item.presentation === "history"),
+      ),
+    ).toBe(true);
+    const html = render(projection);
+    const header =
+      html.match(
+        /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+      )?.[0] ?? "";
+    expect(header).toContain("Radar&#x27;s coverage · 2 routine limits");
+    expect(header).not.toContain("Evidence coverage is incomplete");
+    expect(header).not.toContain("text-red");
+    expect(header).not.toContain("text-amber");
+    // Folded, not dropped: every source keeps its row inside the strip.
+    const region = html.slice(
+      html.indexOf('id="investigation-evidence-coverage"'),
+    );
+    expect(region).toContain("Recent changes");
+    expect(region).toContain("Issue-related changes");
+  });
+
+  it("keeps a real failure red and first even when the other limits are routine", () => {
+    const projection = project(
+      tool("empty-history", "get_changes", { changes: [] }),
+      tool(
+        "denied-logs",
+        "get_pod_logs",
+        { error: "pods/log is forbidden" },
+        { isError: true },
+      ),
+    );
+    const html = render(projection);
+    const header =
+      html.match(
+        /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+      )?.[0] ?? "";
+    expect(header).toContain("Evidence coverage is incomplete");
+    expect(header).toContain("text-red-400");
+    expect(header).not.toContain("routine limit");
+    const region = html.slice(
+      html.indexOf('id="investigation-evidence-coverage"'),
+    );
+    expect(region.indexOf("pods/log is forbidden")).toBeLessThan(
+      region.indexOf("Recent changes"),
+    );
   });
 
   it("summarizes incomplete coverage and points to Activity for review", () => {
@@ -2742,6 +2802,63 @@ describe("cited broader cards and coverage rows", () => {
     expect(render(projection)).toContain(
       "4 results about other resources are not shown; they appear here when the assessment cites them.",
     );
+    // A question with no resource has no "other" resource to speak of.
+    expect(
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+          withoutTarget
+        />,
+      ),
+    ).toContain(
+      "4 results the assessment didn’t cite are not shown; they appear here when the assessment cites them.",
+    );
+    // Before there is an assessment nothing has been passed over yet.
+    expect(
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          collecting
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+          withoutTarget
+          assessmentPending
+        />,
+      ),
+    ).toContain(
+      "4 results are held for the assessment; the ones it cites appear here.",
+    );
+    // A run that stopped without one will never cite anything: show it all.
+    const stopped = partitionInvestigationEvidence(
+      projection.groups,
+      undefined,
+      undefined,
+      false,
+      true,
+    );
+    expect(stopped.hiddenBroader).toBe(0);
+    expect(stopped.main.length + stopped.workload.length).toBe(4);
+    const stoppedMarkup = renderToStaticMarkup(
+      <InvestigationEvidencePane
+        projection={projection}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={onViewSource}
+        onViewActivity={() => {}}
+        withoutTarget
+        assessmentPending
+        showUncited
+      />,
+    );
+    expect(stoppedMarkup).not.toContain("not shown");
+    expect(stoppedMarkup).toContain("Evidence collected");
+    expect(stoppedMarkup).not.toContain("about this resource");
+    expect(stoppedMarkup).not.toContain("No relevant evidence");
 
     const resolution = resolveInvestigationRootCauseEvidence(
       projection,
@@ -2921,6 +3038,107 @@ describe("InvestigationEvidencePane metrics cards", () => {
       selectors,
     };
   }
+
+  it.each([true, false, "true"])(
+    "validates partial=%s while keeping valid charts",
+    (partial) => {
+      const projection = project(
+        tool("prom", "query_prometheus", {
+          ...rangeResult(targetSelectors),
+          partial,
+        }),
+      );
+      if (typeof partial !== "boolean") {
+        expect(projection.groups).toHaveLength(0);
+        expect(projection.limitations).toHaveLength(1);
+        return;
+      }
+      expect(render(projection)).toContain("Memory working set");
+      expect(projection.limitations).toHaveLength(partial ? 1 : 0);
+      if (partial) {
+        expect(projection.limitations[0]).toMatchObject({
+          kind: "unknown",
+          message:
+            "The metrics backend returned a partial result, so some series may be missing.",
+        });
+      }
+    },
+  );
+
+  it.each([
+    [
+      { infos: ["PromQL info: metric might not be a counter"] },
+      [
+        "Prometheus noted about this query: PromQL info: metric might not be a counter",
+      ],
+    ],
+    [
+      { warnings: ["a", "b"], annotationsOmitted: 2 },
+      [
+        "The metrics backend returned 2 warnings with this result: a; b",
+        "2 more backend messages were left out to keep the result small.",
+      ],
+    ],
+    [
+      { warnings: ["store down"], infos: ["note"] },
+      [
+        "The metrics backend returned a warning with this result: store down",
+        "Prometheus noted about this query: note",
+      ],
+    ],
+    [
+      { annotationsOmitted: 1 },
+      ["1 more backend message was left out to keep the result small."],
+    ],
+  ])(
+    "keeps the chart and surfaces backend annotations %j",
+    (extra, messages) => {
+      const projection = project(
+        tool("prom", "query_prometheus", {
+          ...rangeResult(targetSelectors),
+          ...extra,
+        }),
+      );
+      const html = render(projection);
+      expect(html).toContain("Memory working set");
+      const annotated = extra as { warnings?: string[]; infos?: string[] };
+      for (const text of [
+        ...(annotated.warnings ?? []),
+        ...(annotated.infos ?? []),
+      ]) {
+        expect(html).toContain(text);
+      }
+      if (annotated.warnings?.length) expect(html).toContain("Backend warning");
+      if (annotated.infos?.length) expect(html).toContain("Prometheus noted:");
+      const omitted = (extra as { annotationsOmitted?: number })
+        .annotationsOmitted;
+      if (omitted)
+        expect(html).toContain(
+          `${omitted} more backend ${omitted === 1 ? "message" : "messages"} left out.`,
+        );
+      expect(projection.limitations.map((item) => item.message)).toEqual(
+        messages,
+      );
+      for (const item of projection.limitations)
+        expect(item.kind).toBe("unknown");
+    },
+  );
+
+  it.each([
+    { warnings: "x" },
+    { warnings: [1] },
+    { infos: [true] },
+    { annotationsOmitted: "1" },
+  ])("rejects a malformed annotation field %j", (extra) => {
+    const projection = project(
+      tool("prom", "query_prometheus", {
+        ...rangeResult(targetSelectors),
+        ...extra,
+      }),
+    );
+    expect(projection.groups).toHaveLength(0);
+    expect(projection.limitations).toHaveLength(1);
+  });
 
   it("keeps an uncited target-scoped chart in the workload collection", () => {
     const projection = project(

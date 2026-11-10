@@ -13,18 +13,30 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
-// applyUpdate on Linux replaces the current binary with the downloaded one.
-// Falls back to saving in ~/Downloads with instructions if permission denied.
-func applyUpdate(_ context.Context, assetPath string) error {
+// launchedExecutable is the binary this process was started from, resolved
+// before anything moves it. Linux reads os.Executable from /proc/self/exe,
+// which follows the running file: once applyUpdate renames it to .old and
+// deletes it, os.Executable names the deleted .old file.
+var launchedExecutable = sync.OnceValues(func() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("get executable path: %w", err)
+		return "", fmt.Errorf("get executable path: %w", err)
 	}
 	exe, err = filepath.EvalSymlinks(exe)
 	if err != nil {
-		return fmt.Errorf("resolve executable symlinks: %w", err)
+		return "", fmt.Errorf("resolve executable symlinks: %w", err)
+	}
+	return exe, nil
+})
+
+// applyUpdate on Linux replaces the current binary with the downloaded one.
+func applyUpdate(_ context.Context, assetPath string) error {
+	exe, err := launchedExecutable()
+	if err != nil {
+		return err
 	}
 
 	// Extract tar.gz
@@ -83,9 +95,9 @@ func applyUpdate(_ context.Context, assetPath string) error {
 
 // Relaunch re-executes the current binary and exits.
 func Relaunch() error {
-	exe, err := os.Executable()
+	exe, err := launchedExecutable()
 	if err != nil {
-		return fmt.Errorf("get executable path: %w", err)
+		return err
 	}
 
 	log.Printf("[updater] Relaunching %s", exe)
@@ -182,14 +194,9 @@ func copyFile(src, dst string) error {
 }
 
 func cleanupPlatform() {
-	exe, err := os.Executable()
+	exe, err := launchedExecutable()
 	if err != nil {
-		log.Printf("[updater] Cleanup: could not determine executable path: %v", err)
-		return
-	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		log.Printf("[updater] Cleanup: could not resolve symlinks: %v", err)
+		log.Printf("[updater] Cleanup: %v", err)
 		return
 	}
 	oldExe := exe + ".old"

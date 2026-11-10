@@ -103,8 +103,8 @@ type AppOverlay struct {
 // ResolveOverlay is the Tier-2 entrypoint. It COLLECTS ALL matching signals from
 // obj's labels/annotations, sorts by Tier, returns the winner + retained
 // conflicts, or nil when nothing reaches TierAppName (TierBareApp alone is opt-in via
-// allowBareApp; default off => never silent). SUBSUMES detectManagedByFromMeta
-// (tiers 1-5, first-hit-return REPLACED by collect-all). The native-Helm
+// allowBareApp; default off => never silent). It covers topology.ManagedByFromMeta's
+// signals (tiers 1-5) but keeps every match, not only the first. The native-Helm
 // sentinel {Kind:"HelmRelease",Group:""} the Source classifier keys on is set
 // here; enrichRef MUST NOT be applied to tier 1-5 refs (Group is hand-set) —
 // pkg/subject does no dp enrichment at all.

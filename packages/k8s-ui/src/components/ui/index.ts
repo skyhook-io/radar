@@ -19,7 +19,9 @@ export type { SelectMenuOption } from './SelectMenu'
 export { Input } from './Input'
 export { FilterPill } from './FilterPill'
 export type { FilterPillTone } from './FilterPill'
-export { StatusDot, mapHealthToTone } from './status-tone'
+export { StatusDot, mapHealthToTone, toneFillClass, toneTextClass, worseTone } from './status-tone'
+export { RefLink, type NavigateToRef } from './RefLink'
+export { FoldSection, SectionHeading, type FoldSummary } from './FoldSection'
 export type { StatusTone, StatusDotProps } from './status-tone'
 export { DialogPortal } from './DialogPortal'
 export { ConfirmDialog } from './ConfirmDialog'
@@ -31,7 +33,7 @@ export { Disclosure } from './Disclosure'
 export { ResourceBar } from './ResourceBar'
 export { ForceDeleteConfirmDialog } from './ForceDeleteConfirmDialog'
 export { InClusterConsentDialog } from './InClusterConsentDialog'
-export { ToastProvider, useToast, showApiError, showApiSuccess } from './Toast'
+export { ToastProvider, useToast, showApiError, showApiSuccess, showApiNotice } from './Toast'
 export { CodeViewer } from './CodeViewer'
 export { YamlEditor, YamlDiffEditor } from './YamlEditor'
 // Boots the self-hosted Monaco runtime (bundled editor, local workers) without
@@ -74,3 +76,12 @@ export {
 export type { CardSectionTone } from "./CardSection";
 export { MultiSelectPicker } from "./MultiSelectPicker";
 export type { MultiSelectPickerProps } from "./MultiSelectPicker";
+export {
+  RadarUpgradeNote,
+  RadarUpgradeAction,
+  RadarUpgradeContext,
+  radarUpgradeDetail,
+  radarUpgradeHeadline,
+  radarUpgradeNoteText,
+} from "./RadarUpgradeNote";
+export type { RadarUpgradeActions } from "./RadarUpgradeNote";

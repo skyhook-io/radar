@@ -2,8 +2,7 @@ import { useNavCustomization } from '../../context/NavCustomization'
 import { useCapabilities } from '../../api/client'
 import { openCloudFunnel } from '../CloudFunnelButton'
 
-// The one sentence a standalone Radar adds after "this application deploys
-// to another cluster": the thing the user just ran into is what Radar Cloud
+// The one sentence a standalone Radar adds for a remote destination: what Radar Cloud
 // does. "Radar Cloud" opens the same dialog as the top-right button, so
 // there is one pitch and one connect flow. That dialog connects THIS
 // cluster; the destination is a second connect from Cloud, which is why the
@@ -16,7 +15,7 @@ export function RemoteDestinationCloudHint() {
   if (embedded || !capabilities.data?.cloudConnect) return null
   return (
     <>
-      Connect both clusters to{' '}
+      For resources on another cluster, connect both clusters to{' '}
       <button type="button" onClick={openCloudFunnel} className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary">
         Radar Cloud
       </button>{' '}

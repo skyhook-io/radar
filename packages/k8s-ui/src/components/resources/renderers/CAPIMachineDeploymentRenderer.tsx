@@ -1,8 +1,8 @@
 import { Server, Settings } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
-import { formatAge } from '../resource-utils'
 import { getMachineDeploymentStatus, getMachineDeploymentVersion, getMachineClusterName } from '../resource-utils-capi'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface Props {
   data: any
@@ -56,7 +56,7 @@ export function CAPIMachineDeploymentRenderer({ data, onNavigate }: Props) {
           <Property label="Cluster" value={clusterName} />
           <Property label="Version" value={version} />
           {readyCond?.lastTransitionTime && (
-            <Property label="Since" value={formatAge(readyCond.lastTransitionTime)} />
+            <Property label="Since" value={<TimeValue timestamp={readyCond.lastTransitionTime} />} />
           )}
         </PropertyList>
       </Section>

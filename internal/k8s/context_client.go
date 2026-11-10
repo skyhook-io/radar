@@ -25,7 +25,7 @@ import (
 // Server.getClientForRequest for consistency.
 func ClientFromContext(ctx context.Context) kubernetes.Interface {
 	if user := pkgauth.UserFromContext(ctx); user != nil {
-		client, err := ImpersonatedClient(user.Username, user.Groups)
+		client, err := UserClient(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
 			return nil
@@ -46,7 +46,7 @@ func ClientFromContext(ctx context.Context) kubernetes.Interface {
 // Same nil-on-impersonation-failure contract.
 func DynamicClientFromContext(ctx context.Context) dynamic.Interface {
 	if user := pkgauth.UserFromContext(ctx); user != nil {
-		client, err := ImpersonatedDynamicClient(user.Username, user.Groups)
+		client, err := UserDynamicClient(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
 			return nil
@@ -64,7 +64,7 @@ func DynamicClientFromContext(ctx context.Context) dynamic.Interface {
 // Returns nil on impersonation failure (same fail-closed contract).
 func ConfigFromContext(ctx context.Context) *rest.Config {
 	if user := pkgauth.UserFromContext(ctx); user != nil {
-		cfg, err := ImpersonatedConfig(user.Username, user.Groups)
+		cfg, err := UserConfig(user)
 		if err != nil {
 			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
 			return nil

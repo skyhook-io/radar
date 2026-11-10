@@ -128,13 +128,10 @@ func TestStampInClusterProbes_CrossNSResultSkipsSubjectNSTwin(t *testing.T) {
 	}
 }
 
-// The one mutating action here is creating probe Pods in the customer's
-// cluster. The Cloud-role gate (Member+) is the only thing between a Cloud
-// Viewer and that - regression means a viewer creates pods.
-func TestTraceInClusterRequiresCloudMember(t *testing.T) {
-	// Only recognized sub-Member tiers are denied: an unrecognized tier group
-	// maps to RoleNone, which AtLeast() deliberately bypasses so non-Cloud
-	// deploys aren't gated.
+// Probe pods are created with the caller's impersonated client, so Kubernetes
+// RBAC decides who may run the test. A Cloud-role refusal here would block a
+// viewer whose IdP group grants pod create in the namespace.
+func TestTraceInClusterNotGatedOnCloudRole(t *testing.T) {
 	for _, tier := range []string{"cloud:viewer", "radar:viewer"} {
 		t.Run(tier, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/trace/Service/prod/web/in-cluster", strings.NewReader(`{}`))
@@ -148,11 +145,8 @@ func TestTraceInClusterRequiresCloudMember(t *testing.T) {
 
 			(&Server{}).handleTraceInCluster(rec, req)
 
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
-			}
-			if !strings.Contains(rec.Body.String(), auth.ErrCodeCloudRoleInsufficient) {
-				t.Fatalf("body %q missing %q", rec.Body.String(), auth.ErrCodeCloudRoleInsufficient)
+			if strings.Contains(rec.Body.String(), auth.ErrCodeCloudRoleInsufficient) {
+				t.Fatalf("status = %d body = %s; want no Cloud-role refusal", rec.Code, rec.Body.String())
 			}
 		})
 	}

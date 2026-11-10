@@ -12,6 +12,8 @@ const capabilitiesMock = vi.hoisted(() => ({ localTerminal: true }))
 
 vi.mock('@skyhook-io/k8s-ui', () => ({
   ClusterName: ({ name }: { name: string }) => <span>{name}</span>,
+}))
+vi.mock('./dock/DockContext', () => ({
   useOpenLocalTerminal: () => vi.fn(),
 }))
 vi.mock('../api/client', () => ({
@@ -187,5 +189,50 @@ describe('ConnectionErrorView kubeconfig guidance', () => {
     const markup = renderError('config', '')
 
     expect(markup).not.toContain('Switch context')
+  })
+})
+
+describe('ConnectionErrorView settings error', () => {
+  it('shows the message itself and no action a restart is needed to clear', () => {
+    const markup = renderError('settings', 'prod')
+
+    expect(markup).toContain('safe error')
+    expect(markup).not.toContain('id="connection-raw-error"')
+    expect(markup).not.toContain('Retry Connection')
+    expect(markup).not.toContain('Switch context')
+  })
+})
+
+describe('ConnectionErrorView after a refused switch', () => {
+  const connection = { state: 'disconnected' as const, context: 'staging-eu', errorType: 'auth', error: 'safe error' }
+
+  it('offers a way back to the cluster the person was using', () => {
+    const markup = renderToStaticMarkup(
+      <ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} back={{ label: 'kind-radar-ph-video', onBack: () => {} }} variant="switch" />,
+    )
+    expect(markup).toContain('Back to kind-radar-ph-video')
+  })
+
+  it('does not promise background re-checks for a cluster it never connected to', () => {
+    const switchMarkup = renderToStaticMarkup(
+      <ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} variant="switch" />,
+    )
+    const connectionMarkup = renderToStaticMarkup(
+      <ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} />,
+    )
+    expect(connectionMarkup).toContain('re-checks in the background')
+    expect(switchMarkup).not.toContain('re-checks in the background')
+    expect(switchMarkup).not.toContain('Back to')
+  })
+})
+
+describe('ConnectionErrorView after a refused switch with a stuck credential plugin', () => {
+  it('does not say Radar keeps checking a cluster it never connected to', () => {
+    const connection = { state: 'disconnected' as const, context: 'prod', errorType: 'auth-plugin-stuck', error: 'safe error' }
+    const switchMarkup = renderToStaticMarkup(<ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} variant="switch" />)
+    const connectionMarkup = renderToStaticMarkup(<ConnectionErrorView connection={connection} onRetry={() => {}} isRetrying={false} />)
+    expect(connectionMarkup).toContain('keep checking in the background')
+    expect(switchMarkup).not.toContain('keep checking in the background')
+    expect(switchMarkup).toContain('use Retry Connection')
   })
 })

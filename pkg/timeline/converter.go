@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // informerEventID derives a deterministic id from the resource's observable
@@ -68,8 +70,7 @@ func K8sEventSubject(event *corev1.Event) resourceid.Reference {
 // the row reflects the latest revision instead of dropping the bump, while an
 // identical informer/historical relist dupe stays collapsed to the first row.
 func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
-	// Use lastTimestamp or firstTimestamp
-	ts := event.LastTimestamp.Time
+	ts := k8score.EventLastObservedTime(event)
 	if ts.IsZero() {
 		ts = event.FirstTimestamp.Time
 	}
@@ -96,7 +97,7 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 		Reason:     event.Reason,
 		Message:    event.Message,
 		Owner:      owner,
-		Count:      event.Count,
+		Count:      k8score.EventOccurrences(event),
 	}
 }
 
@@ -183,9 +184,6 @@ func ExtractLabels(obj any) map[string]string {
 	}
 
 	allLabels := meta.GetLabels()
-	if len(allLabels) == 0 {
-		return nil
-	}
 
 	// Only keep labels that are useful for grouping. The GitOps identity
 	// labels must ride along or the app-membership matchKeys the server ships
@@ -214,11 +212,43 @@ func ExtractLabels(obj any) map[string]string {
 			relevant[key] = v
 		}
 	}
+	if cluster := cnpgOwningCluster(obj, allLabels); cluster != "" {
+		relevant[CNPGClusterLabel] = cluster
+	}
 
 	if len(relevant) == 0 {
 		return nil
 	}
 	return relevant
+}
+
+// CNPGClusterLabel is the retained label naming the CloudNativePG Cluster a
+// row's subject belongs to.
+const CNPGClusterLabel = "cnpg.io/cluster"
+
+// cnpgOwningCluster names the CloudNativePG Cluster an object belongs to, so a
+// child's rows stay attributable after it is deleted. CNPG children that
+// reference their Cluster through spec.cluster.name (Backup, Pooler, Database,
+// ...) are not all labelled; the operator only labels what it creates.
+func cnpgOwningCluster(obj any, labels map[string]string) string {
+	switch o := obj.(type) {
+	case *corev1.Pod:
+		return labels[CNPGClusterLabel]
+	case *unstructured.Unstructured:
+		group := resourceid.GroupFromAPIVersion(o.GetAPIVersion())
+		if group == "" && o.GetKind() == "Pod" {
+			return labels[CNPGClusterLabel]
+		}
+		if group != "postgresql.cnpg.io" && group != "barmancloud.cnpg.io" {
+			return ""
+		}
+		if v := labels[CNPGClusterLabel]; v != "" {
+			return v
+		}
+		name, _, _ := unstructured.NestedString(o.Object, "spec", "cluster", "name")
+		return name
+	}
+	return ""
 }
 
 // Resource health classification for timeline events lives with the canonical

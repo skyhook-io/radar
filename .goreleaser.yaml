@@ -55,9 +55,13 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
+      # The optional (scope) group matters: '^docs:' is a literal prefix, so it
+      # matches "docs: x" but not "docs(mcp): x". Scoped commits have been
+      # leaking into public release notes because of it.
+      - '^docs(\(.+\))?:'
+      - '^test(\(.+\))?:'
+      - '^chore(\(.+\))?:'
+      - '^deps(\(.+\))?:'
       - Merge pull request
       - Merge branch
 
@@ -153,6 +157,8 @@ brews:
       owner: skyhook-io
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    # A prerelease tag (v1.2.3-rc.1) must not replace the formula users install.
+    skip_upload: auto
     directory: Formula
     homepage: "https://github.com/skyhook-io/radar"
     description: "Modern Kubernetes visibility — topology, traffic, and Helm management"
@@ -170,6 +176,7 @@ scoops:
       owner: skyhook-io
       name: scoop-bucket
       token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    skip_upload: auto
     homepage: "https://github.com/skyhook-io/radar"
     description: "Modern Kubernetes visibility — topology, traffic, and Helm management"
     license: Apache-2.0

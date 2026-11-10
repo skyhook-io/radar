@@ -504,12 +504,6 @@ export function getBSLLastValidation(resource: any): string {
   return formatAge(lastValidation)
 }
 
-export function getBSLLastSynced(resource: any): string {
-  const lastSynced = resource.status?.lastSyncedTime
-  if (!lastSynced) return '-'
-  return formatAge(lastSynced)
-}
-
 // Why the location is unavailable, in the validation controller's own words.
 // A BackupStorageLocation carries no conditions, so status.message is the only
 // place the reason exists — without it the phase is the whole story a reader
@@ -569,12 +563,6 @@ export function getBackupRepositoryLocation(resource: any): string {
 
 export function getBackupRepositoryMaintenanceFrequency(resource: any): string {
   return resource.spec?.maintenanceFrequency || '-'
-}
-
-export function getBackupRepositoryLastMaintenance(resource: any): string {
-  const at = resource.status?.lastMaintenanceTime
-  if (!at) return '-'
-  return formatAge(at)
 }
 
 // Why the repository is not ready, in the controller's own words. Velero writes

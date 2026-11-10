@@ -12,24 +12,31 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/cronsched"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 // ResourceSummary is the typed output for Summary-level minification.
 // Typed struct ensures no extra fields can leak.
+// Common fields carry kind-specific display facts. Native projections stay in
+// typed, provider-qualified blocks; new integrations must not redefine another
+// provider's counters, lookup outcomes or omission rules.
 type ResourceSummary struct {
 	Kind      string `json:"kind"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
-	// Status is the DISPLAY state, computed the way `kubectl get` computes its
-	// STATUS column: what is true about this object right now.
+	// Status is the display state, including intentional lifecycle states.
 	Status string `json:"status,omitempty"`
-	Ready  string `json:"ready,omitempty"`
+	// Ready is kind-specific display text, often from controller-reported status,
+	// not a normalized readiness measure or proof of current runtime health.
+	Ready string `json:"ready,omitempty"`
 	// Issue is the diagnostic hint — a reason worth looking at. It is
 	// deliberately NOT the same concept as Status and is allowed to be broader:
 	// it surfaces recent history too, so a pod that OOMKilled and recovered
@@ -51,6 +58,13 @@ type ResourceSummary struct {
 	// Pruned when empty.
 	Finalizers []string `json:"finalizers,omitempty"`
 
+	CrossplanePause        resourcecontext.CrossplanePauseState `json:"crossplanePause,omitempty"`
+	OpenTelemetryCollector *OpenTelemetryCollectorSummary       `json:"openTelemetryCollector,omitempty"`
+	FlaggerCanary          *FlaggerCanarySummary                `json:"flaggerCanary,omitempty"`
+	// OpenTelemetryInstrumentation is absent without a readable non-empty
+	// recorded upgrade-block map; absence does not prove no blocks exist.
+	OpenTelemetryInstrumentation *OpenTelemetryInstrumentationSummary `json:"openTelemetryInstrumentation,omitempty"`
+
 	// Type-specific fields (only populated when relevant)
 	Image     string   `json:"image,omitempty"`
 	Ports     string   `json:"ports,omitempty"`
@@ -69,27 +83,28 @@ type ResourceSummary struct {
 	LastTerminatedReason string `json:"lastTerminatedReason,omitempty"`
 	// LastRestartedAge is how long ago that termination happened, mirroring
 	// kubectl's "2 (5m ago)" RESTARTS column. Empty when nothing restarted.
-	LastRestartedAge string   `json:"lastRestartedAge,omitempty"`
-	Node             string   `json:"node,omitempty"`
-	Strategy         string   `json:"strategy,omitempty"`
-	Completions      string   `json:"completions,omitempty"`
-	Duration         string   `json:"duration,omitempty"`
-	Suspended        *bool    `json:"suspended,omitempty"`
-	Unschedulable    *bool    `json:"unschedulable,omitempty"`
-	Active           int      `json:"active,omitempty"`
-	Target           string   `json:"target,omitempty"`
-	MinReplicas      *int32   `json:"minReplicas,omitempty"`
-	MaxReplicas      int32    `json:"maxReplicas,omitempty"`
-	Current          int32    `json:"current,omitempty"`
-	Desired          int32    `json:"desired,omitempty"`
-	Roles            []string `json:"roles,omitempty"`
-	Version          string   `json:"version,omitempty"`
-	Pressures        []string `json:"pressures,omitempty"`
-	Keys             []string `json:"keys,omitempty"`
-	StorageClass     string   `json:"storageClass,omitempty"`
-	Capacity         string   `json:"capacity,omitempty"`
-	AccessModes      []string `json:"accessModes,omitempty"`
-	Owner            string   `json:"owner,omitempty"`
+	LastRestartedAge string `json:"lastRestartedAge,omitempty"`
+	Node             string `json:"node,omitempty"`
+	// Strategy is kind-specific display text, not a cross-provider enum.
+	Strategy      string   `json:"strategy,omitempty"`
+	Completions   string   `json:"completions,omitempty"`
+	Duration      string   `json:"duration,omitempty"`
+	Suspended     *bool    `json:"suspended,omitempty"`
+	Unschedulable *bool    `json:"unschedulable,omitempty"`
+	Active        int      `json:"active,omitempty"`
+	Target        string   `json:"target,omitempty"`
+	MinReplicas   *int32   `json:"minReplicas,omitempty"`
+	MaxReplicas   int32    `json:"maxReplicas,omitempty"`
+	Current       int32    `json:"current,omitempty"`
+	Desired       int32    `json:"desired,omitempty"`
+	Roles         []string `json:"roles,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	Pressures     []string `json:"pressures,omitempty"`
+	Keys          []string `json:"keys,omitempty"`
+	StorageClass  string   `json:"storageClass,omitempty"`
+	Capacity      string   `json:"capacity,omitempty"`
+	AccessModes   []string `json:"accessModes,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
 
 	// SummaryContext is the per-row enrichment attached by AI-facing list
 	// surfaces (REST /api/ai/resources/{kind}, MCP list_resources, search
@@ -115,6 +130,8 @@ func summarize(obj runtime.Object) (*ResourceSummary, error) {
 	}
 	var s *ResourceSummary
 	switch o := obj.(type) {
+	case *unstructured.Unstructured:
+		return summarizeUnstructured(o), nil
 	case *corev1.Pod:
 		s = summarizePod(o)
 	case *appsv1.Deployment:
@@ -466,7 +483,7 @@ func summarizeJob(job *batchv1.Job) *ResourceSummary {
 	// Duration
 	if job.Status.StartTime != nil && job.Status.CompletionTime != nil {
 		d := job.Status.CompletionTime.Sub(job.Status.StartTime.Time)
-		s.Duration = formatDuration(d)
+		s.Duration = timeutil.FormatAgeShort(d)
 	}
 
 	return s
@@ -545,6 +562,7 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 	// Status and pressure conditions
 	for _, c := range node.Status.Conditions {
 		if c.Type == corev1.NodeReady {
+			s.Ready = string(c.Status)
 			if c.Status == corev1.ConditionTrue {
 				s.Status = "Ready"
 			} else {
@@ -564,15 +582,21 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 		}
 	}
 
-	// Cordoned/unschedulable status
+	lifecycle := health.NodeLifecycle(node, time.Now())
+	s.Status = lifecycle.Label
+	if !lifecycle.ReadinessFailed {
+		s.Issue = ""
+	}
+	if lifecycle.Delayed {
+		if s.Issue != "" {
+			s.Issue += "; Removal delayed"
+		} else {
+			s.Issue = "Removal delayed"
+		}
+	}
 	if node.Spec.Unschedulable {
 		unschedulable := true
 		s.Unschedulable = &unschedulable
-		if s.Status != "" {
-			s.Status += ",SchedulingDisabled"
-		} else {
-			s.Status = "SchedulingDisabled"
-		}
 	}
 
 	return s
@@ -867,6 +891,9 @@ func isPodInitialized(pod *corev1.Pod) bool {
 
 // getPodIssue extracts the primary issue from a pod's status.
 func getPodIssue(pod *corev1.Pod) string {
+	if verdict := health.Pod(pod, time.Now()); verdict.Reason == "ReadinessGatesNotReady" {
+		return verdict.Reason
+	}
 	// Check container statuses for waiting reasons
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
@@ -897,18 +924,5 @@ func age(created time.Time) string {
 		return ""
 	}
 	d := time.Since(created)
-	return formatDuration(d)
-}
-
-func formatDuration(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return timeutil.FormatAgeShort(d)
 }

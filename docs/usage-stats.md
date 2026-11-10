@@ -10,7 +10,8 @@ Settings > Privacy shows the exact report before anything is sent.
 ## When Radar asks
 
 - **A local Radar** asks once, in a small card the first time it runs, and in
-  the What's New dialog after an upgrade. "No thanks" is final. If you close
+  the What's New dialog after an upgrade (it opens by itself only for releases
+  with enough to show; otherwise from the nav rail). "No thanks" is final. If you close
   the question without answering, Radar asks again after three months.
 - **A shared Radar** never asks; its operator decides. See
   [Shared Radar](#shared-radar).
@@ -23,12 +24,24 @@ Once a day, and only if Radar was used:
 
 - Radar's version, OS, architecture, install method, and whether it runs
   locally or in a cluster.
-- Radar's setup: auth mode, timeline storage, whether MCP and Prometheus are
-  on, cost source, and browser family.
+- Radar's setup: auth mode, timeline storage, whether MCP is on, whether
+  Prometheus was found in the cluster or set by hand, cost source, and browser
+  family.
+- Yes or no: whether you set up Radar's AI investigations (an agent Radar can
+  use is installed and you accepted Radar's AI disclosure for it). Having
+  Claude Code or Codex installed doesn't count on its own. Which traffic source
+  is in use, from a fixed list.
 - How often each view, action and MCP tool was used, how often the command
-  palette and search were opened, which requests failed, and which screens
-  crashed. Actions are named by Radar's own route, never by what they acted
-  on, for example `POST /api/helm/releases/{namespace}/{name}/rollback`.
+  palette and search were opened, which buttons on an issue were used (such as
+  Investigate), which requests failed, and which screens crashed. Actions are
+  named by Radar's own route, never by what they acted on, for example
+  `POST /api/helm/releases/{namespace}/{name}/rollback`. A failed request
+  carries its status code when it is a common one, such as `403` or `503`, and
+  otherwise only `4xx` or `5xx`.
+  Deletes also name the kind when it is built into Kubernetes, such as
+  `pods`. Your own resource types are never named.
+- How often connecting to a cluster failed, by the kind of failure, such as
+  `auth`, `network` or `tls`.
 - Sessions, and active time as a range.
 - How many kubeconfig contexts you have, as a range, and for each cluster used:
   Kubernetes minor version, platform, node count as a range, and known

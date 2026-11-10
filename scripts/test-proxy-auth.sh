@@ -231,11 +231,11 @@ restricted_ns=$(curl -s \
     "$BASE/api/namespaces" | jq 'length')
 echo -e "  ${YELLOW}INFO${NC} restricted user sees $restricted_ns namespaces (expect 0 or very few)"
 
-restricted_pods=$(curl -s \
+restricted_pods_status=$(curl -s -o /dev/null -w '%{http_code}' \
     -H 'X-Forwarded-User: no-rbac-user@test' \
     -H 'X-Forwarded-Groups: no-access-group' \
-    "$BASE/api/resources/pods" | jq 'length')
-echo -e "  ${YELLOW}INFO${NC} restricted user sees $restricted_pods pods"
+    "$BASE/api/resources/pods")
+check "restricted user resource list is explicitly denied" "403" "$restricted_pods_status"
 
 # --- Summary ---
 echo ""

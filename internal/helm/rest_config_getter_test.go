@@ -1,6 +1,7 @@
 package helm
 
 import (
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +12,7 @@ import (
 
 func TestRESTConfigGetter_ToRESTConfig_NoImpersonation(t *testing.T) {
 	src := &rest.Config{Host: "https://kubernetes.default.svc"}
-	g := newRESTConfigGetter(src, "kube-system", "", nil)
+	g := newRESTConfigGetter(src, "kube-system", nil)
 
 	cfg, err := g.ToRESTConfig()
 	if err != nil {
@@ -33,7 +34,7 @@ func TestRESTConfigGetter_ToRESTConfig_NoImpersonation(t *testing.T) {
 func TestRESTConfigGetter_ToRESTConfig_WithImpersonation(t *testing.T) {
 	src := &rest.Config{Host: "https://kubernetes.default.svc"}
 	srcGroups := []string{"viewers"}
-	g := newRESTConfigGetter(src, "default", "alice@example.com", srcGroups)
+	g := newRESTConfigGetter(src, "default", &pkgauth.User{Username: "alice@example.com", Groups: srcGroups})
 
 	cfg, err := g.ToRESTConfig()
 	if err != nil {
@@ -57,14 +58,14 @@ func TestRESTConfigGetter_ToRESTConfig_WithImpersonation(t *testing.T) {
 }
 
 func TestRESTConfigGetter_ToRESTConfig_NilConfig(t *testing.T) {
-	g := newRESTConfigGetter(nil, "default", "", nil)
+	g := newRESTConfigGetter(nil, "default", nil)
 	if _, err := g.ToRESTConfig(); err == nil {
 		t.Fatal("ToRESTConfig with nil config: want error, got nil")
 	}
 }
 
 func TestRESTConfigGetter_ToRawKubeConfigLoader_NamespaceOverride(t *testing.T) {
-	g := newRESTConfigGetter(&rest.Config{Host: "https://example"}, "my-ns", "", nil)
+	g := newRESTConfigGetter(&rest.Config{Host: "https://example"}, "my-ns", nil)
 	loader := g.ToRawKubeConfigLoader()
 	ns, _, err := loader.Namespace()
 	if err != nil {
@@ -85,7 +86,7 @@ func TestRESTConfigGetter_ToRawKubeConfigLoader_NamespaceOverride(t *testing.T) 
 // lazy (no network until a request is made), so we get to test the
 // locking discipline without standing up a fake apiserver.
 func TestRESTConfigGetter_DiscoveryAndMapper_NoDeadlock(t *testing.T) {
-	g := newRESTConfigGetter(&rest.Config{Host: "https://nowhere.invalid"}, "default", "", nil)
+	g := newRESTConfigGetter(&rest.Config{Host: "https://nowhere.invalid"}, "default", nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -177,5 +178,41 @@ func TestBuildRESTClientGetter(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRESTConfigGetter_ToRESTConfig_UserTokenMode(t *testing.T) {
+	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
+	t.Cleanup(func() { pkgauth.SetCredentialMode(pkgauth.CredentialsImpersonate) })
+	src := &rest.Config{Host: "https://kubernetes.default.svc", BearerToken: "sa-token", BearerTokenFile: "/var/run/secrets/token"}
+	g := newRESTConfigGetter(src, "default", &pkgauth.User{Username: "oidc:alice", Token: "alice-token"})
+
+	cfg, err := g.ToRESTConfig()
+	if err != nil {
+		t.Fatalf("ToRESTConfig: %v", err)
+	}
+	if cfg.BearerToken != "alice-token" || cfg.BearerTokenFile != "" || cfg.Impersonate.UserName != "" {
+		t.Fatalf("Helm config = token %q file %q impersonate %q, want only the user's token", cfg.BearerToken, cfg.BearerTokenFile, cfg.Impersonate.UserName)
+	}
+}
+
+func TestBuildRESTClientGetter_UserTokenModeIgnoresKubeconfigFlags(t *testing.T) {
+	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
+	t.Cleanup(func() { pkgauth.SetCredentialMode(pkgauth.CredentialsImpersonate) })
+	got, err := buildRESTClientGetter(restClientGetterParams{
+		kubeconfig: "/home/user/.kube/config",
+		restConfig: &rest.Config{Host: "https://example"},
+		namespace:  "default",
+		user:       &pkgauth.User{Username: "oidc:alice", Token: "alice-token"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := got.ToRESTConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BearerToken != "alice-token" {
+		t.Fatalf("getter = %T with token %q, want the user's token on the resolved config", got, cfg.BearerToken)
 	}
 }

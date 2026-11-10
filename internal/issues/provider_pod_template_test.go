@@ -151,9 +151,9 @@ func TestTemplateWebhookScopeAndDecoys(t *testing.T) {
 		{"known empty namespace labels", func(c *admissionv1.MutatingWebhookConfiguration) {
 			c.Webhooks[0].NamespaceSelector = &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{{Key: "skip", Operator: metav1.LabelSelectorOpDoesNotExist}}}
 		}, labels.Set{}, "CREATE"},
-		{"cel unverified", func(c *admissionv1.MutatingWebhookConfiguration) {
-			c.Webhooks[0].MatchConditions = []admissionv1.MatchCondition{{Name: "filter", Expression: "true"}}
-		}, nil, ""},
+		{"cel unevaluated still matches", func(c *admissionv1.MutatingWebhookConfiguration) {
+			c.Webhooks[0].MatchConditions = []admissionv1.MatchCondition{{Name: "filter", Expression: "false"}}
+		}, nil, "CREATE"},
 		{"created after pod", func(c *admissionv1.MutatingWebhookConfiguration) {
 			c.CreationTimestamp = metav1.NewTime(time.Now().Add(time.Hour))
 		}, nil, ""},
@@ -220,7 +220,7 @@ func TestPodTemplateCurrentCandidatesAreAuthorizedAndBounded(t *testing.T) {
 	differences := []templateDifference{{path: "priorityClassName", templateMissing: true}, {path: "containers[app].resources.requests.cpu", resource: corev1.ResourceCPU, resourceKind: "requests", value: resource.MustParse("1"), templateMissing: true}}
 	for _, denied := range []string{"", "PriorityClass", "MutatingWebhookConfiguration", "LimitRange"} {
 		provider := NewCacheProvider()
-		candidates := provider.templateCandidates(pod, differences, podTemplateAccess{related: func(ref Ref) bool { return ref.Kind != denied }})
+		candidates, _ := provider.templateCandidates(pod, differences, podTemplateAccess{related: func(ref Ref) bool { return ref.Kind != denied }})
 		want := 3
 		if denied != "" {
 			want = 2
@@ -235,7 +235,7 @@ func TestPodTemplateCurrentCandidatesAreAuthorizedAndBounded(t *testing.T) {
 		}
 	}
 	provider := NewCacheProvider()
-	candidates := provider.templateCandidates(pod, differences, podTemplateAccess{cluster: func(string, string) bool { return false }})
+	candidates, _ := provider.templateCandidates(pod, differences, podTemplateAccess{cluster: func(string, string) bool { return false }})
 	if len(candidates) != 1 || candidates[0].ref.Kind != "LimitRange" {
 		t.Fatalf("cluster scope denial: %+v", candidates)
 	}
@@ -260,8 +260,8 @@ func TestPodTemplateGroupedCacheEvidenceAndCaps(t *testing.T) {
 		}
 		objects = append(objects, pod)
 	}
-	for n := 0; n < 4; n++ {
-		objects = append(objects, &corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("default-%d", n), Namespace: "test"}, Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{Type: corev1.LimitTypeContainer, Default: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")}}}}})
+	for n := 0; n < 12; n++ {
+		objects = append(objects, &corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("default-%02d", n), Namespace: "test"}, Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{Type: corev1.LimitTypeContainer, Default: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")}}}}})
 	}
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatal(err)
@@ -280,11 +280,20 @@ func TestPodTemplateGroupedCacheEvidenceAndCaps(t *testing.T) {
 			if row.Kind != "Deployment" || row.Name != "app" || row.Count != 2 {
 				t.Fatalf("wrong subject: %+v", row)
 			}
-			if len(fact.Refs) != 5 || !strings.Contains(fact.Message, "Showing 3 of 4") || !strings.Contains(fact.Message, "1 further matching candidate") || !strings.Contains(fact.Message, "every replica") {
+			// 2 subject refs + 10 named candidates: 5 full lines, 5 names only.
+			if len(fact.Refs) != 12 || !strings.Contains(fact.Message, "Showing 3 of 4") || !strings.Contains(fact.Message, "Also matching: LimitRange default-05, LimitRange default-06, LimitRange default-07, LimitRange default-08, LimitRange default-09.") || !strings.Contains(fact.Message, "2 more matching candidate objects are not named") || !strings.Contains(fact.Message, "every replica") {
 				t.Fatalf("unbounded/unclear fact: %+v", fact)
 			}
-			if strings.Contains(fact.Message, "default-3") || strings.Contains(fact.Message, "VPA") || strings.Contains(fact.Message, "vertical autoscaler") {
-				t.Fatalf("omitted candidate or writer blamed: %+v", fact)
+			if strings.Contains(fact.Message, "default-10") || strings.Count(fact.Message, "Candidate LimitRange") != 5 {
+				t.Fatalf("budget not applied: %+v", fact)
+			}
+			// The annotation is reported as what the Pod records, absent from
+			// its template — never as the writer.
+			if !strings.Contains(fact.Message, `vpaUpdates annotation, absent from the template, reads "Pod resources updated by a vertical autoscaler"`) || !strings.Contains(fact.Message, "Writer and timing are unknown") {
+				t.Fatalf("self-reported mutator missing or overclaimed: %+v", fact)
+			}
+			if !strings.Contains(fact.Message, "Mutating webhook configurations were not inspected: Radar has not cached them.") {
+				t.Fatalf("webhook coverage gap not stated: %+v", fact)
 			}
 		}
 	}
@@ -313,7 +322,7 @@ func TestPodTemplateUpdateCandidatesOnlyForImageChanges(t *testing.T) {
 		p.podTemplateSources.webhooks = []templateWebhook{{configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "MutatingWebhookConfiguration", Name: "update-only"}, name: "update.test", update: true, namespace: labels.Everything(), object: labels.Everything()}}
 	})
 	for _, path := range []string{"priorityClassName", "nodeSelector", "affinity.nodeAffinity.required", "tolerations", "containers[app].resources.requests.cpu", "containers[app].resources.limits.memory", "containers[app].image"} {
-		got := p.templateCandidates(templateTestPod(), []templateDifference{{path: path}}, podTemplateAccess{})
+		got, _ := p.templateCandidates(templateTestPod(), []templateDifference{{path: path}}, podTemplateAccess{})
 		want := 0
 		if strings.HasSuffix(path, ".image") {
 			want = 1

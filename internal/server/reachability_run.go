@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/reachability"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/trace"
 	"github.com/skyhook-io/radar/pkg/probe"
 )
@@ -64,17 +65,8 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 	// Mirror the POST's namespace boundary so the capability answer matches what the
 	// POST will actually allow - never report "allowed" for an out-of-scope namespace.
 	namespaces := s.traceNamespaceCeiling(r)
-	if noNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
+	if readscope.NoNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
 		resp.Reason = fmt.Sprintf("no access to namespace %q", namespace)
-		s.writeJSON(w, resp)
-		return
-	}
-	// The POST gate is additive: K8s RBAC AND the Cloud-role tier (Member). Mirror
-	// the Cloud-role half here (without the 403) so the capability answer matches
-	// what the POST will actually do - a radar:viewer with the right RBAC must not
-	// see allowed=true and then get a 403 cloud_role_insufficient on submit.
-	if !auth.CloudRoleFromContext(r.Context()).AtLeast(auth.RoleMember) {
-		resp.Reason = "your Radar Cloud role cannot run an in-cluster reachability test"
 		s.writeJSON(w, resp)
 		return
 	}
@@ -118,16 +110,10 @@ func (s *Server) handleTraceInCluster(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "trace is only supported for Service, Ingress, HTTPRoute, GRPCRoute, or Gateway")
 		return
 	}
-	// Creating transient probe pods is the one mutating action here - gate on the
-	// Cloud-role tier every mutating handler enforces (Member), mirroring the MCP
-	// diagnose(inCluster) path.
-	if !s.requireCloudRole(w, r, auth.RoleMember, "run an in-cluster reachability test") {
-		return
-	}
 	namespaces := s.traceNamespaceCeiling(r)
 	// Mirror handleTrace: never leak that a resource exists outside the caller's
 	// namespace scope - return an unknown-verdict trace instead.
-	if noNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
+	if readscope.NoNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
 		s.writeJSON(w, traceInClusterResponse{Trace: &trace.Trace{
 			Subject:    trace.ResourceRef{Kind: kind, Namespace: namespace, Name: name},
 			Downstream: []trace.Hop{},
@@ -154,6 +140,13 @@ func (s *Server) handleTraceInCluster(w http.ResponseWriter, r *http.Request) {
 		Issues:            issues.NewCacheProvider(),
 		Client:            k8s.ClientFromContext(r.Context()),
 		AllowedNamespaces: namespaces,
+		IssueAccess: trace.IssueAccess{
+			CanReadClusterScoped: s.issueClusterScopedAccess(r),
+			CanReadRelated:       s.issueRelatedResourceAccess(r),
+			CanReadSubject:       s.issueSubjectAccess(r),
+			CanReadEvidence:      s.issueEvidenceAccess(r),
+		},
+		CanReadWorkload: s.workloadReadAccess(r),
 	}
 	// Probe must run so routes carry their per-route InClusterRequest; an
 	// in-cluster test with no probed routes would be a silent no-op.

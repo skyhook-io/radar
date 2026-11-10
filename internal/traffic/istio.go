@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -29,13 +30,14 @@ var istioNamespaces = []string{"istio-system", "istio", "default"}
 // rather than maintaining its own connection state.
 type IstioSource struct {
 	k8sClient kubernetes.Interface
+	queryFn   promQueryFunc
 }
 
 // NewIstioSource creates a new Istio traffic source
 func NewIstioSource(client kubernetes.Interface) *IstioSource {
-	return &IstioSource{
-		k8sClient: client,
-	}
+	s := &IstioSource{k8sClient: client}
+	s.queryFn = s.defaultQuery
+	return s
 }
 
 // Name returns the source identifier
@@ -133,10 +135,24 @@ func (s *IstioSource) getPrometheusClient() (*promclient.Client, error) {
 	return client, nil
 }
 
-// GetFlows retrieves flows from Istio metrics via the shared Prometheus client
-func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
+// errIstioPrometheusUnavailable marks a query that never reached Prometheus
+// because there is no client to send it through.
+var errIstioPrometheusUnavailable = errors.New("prometheus not available for Istio metrics")
+
+func (s *IstioSource) defaultQuery(ctx context.Context, query string) (*prom.QueryResult, error) {
 	client, err := s.getPrometheusClient()
 	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errIstioPrometheusUnavailable, err)
+	}
+	return client.Query(ctx, query)
+}
+
+// GetFlows retrieves flows from Istio metrics via the shared Prometheus client
+func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
+	var missing []string
+
+	httpFlows, err := s.queryHTTPFlows(ctx, opts, &missing)
+	if errors.Is(err, errIstioPrometheusUnavailable) {
 		return &FlowsResponse{
 			Source:    "istio",
 			Timestamp: time.Now(),
@@ -144,9 +160,6 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 			Warning:   "Prometheus not available for Istio metrics",
 		}, nil
 	}
-
-	// Build HTTP request rate query
-	httpFlows, err := s.queryHTTPFlows(ctx, client, opts)
 	if err != nil {
 		log.Printf("[istio] Error querying HTTP flows: %v", err)
 		return &FlowsResponse{
@@ -157,20 +170,35 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}, nil
 	}
 
-	// Query TCP connections
-	tcpFlows, err := s.queryTCPFlows(ctx, client, opts)
-	if err != nil {
-		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", err)
+	tcpFlows, tcpErr := s.queryTCPFlows(ctx, opts)
+	if tcpErr != nil {
+		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", tcpErr)
+		missing = append(missing, "TCP connections")
 	} else {
 		httpFlows = append(httpFlows, tcpFlows...)
 	}
 
 	log.Printf("[istio] Retrieved %d flows from Prometheus", len(httpFlows))
-	return &FlowsResponse{
+	response := &FlowsResponse{
 		Source:    "istio",
 		Timestamp: time.Now(),
 		Flows:     httpFlows,
-	}, nil
+	}
+	// With no flows a missing enrichment qualifies nothing, but missing TCP
+	// connections can be why there are no flows: a TCP-only mesh whose query
+	// failed must not read as idle.
+	if len(missing) > 0 && (len(httpFlows) > 0 || tcpErr != nil) {
+		// Without this the edges read as measured: a failed 5xx query shows as no
+		// errors, and failed TCP or byte queries as no traffic of that kind.
+		response.Warning = fmt.Sprintf("Istio metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(missing, ", "))
+		// Missing figures qualify the edges shown. Missing TCP connections are
+		// edges that may not be shown at all, which holds whatever is filtered.
+		response.WarningKind = WarningPartial
+		if tcpErr != nil {
+			response.WarningKind = WarningTransient
+		}
+	}
+	return response, nil
 }
 
 // flowKey uniquely identifies a source→destination service pair for map lookups
@@ -181,58 +209,91 @@ type flowKey struct {
 	dstNs       string
 }
 
+// istioSeriesKey identifies one request series. A workload pair can carry
+// several — one per destination Service and protocol — so every figure joined
+// onto a series has to be keyed this finely, or the pair's total is attached to
+// each of them and counted once per series.
+type istioSeriesKey struct {
+	flowKey
+	dstService string
+	protocol   string
+}
+
+// istioHTTPGroupBy is shared by every HTTP query so their series join one to one.
+const istioHTTPGroupBy = "source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol"
+
+// istioRateQuery builds `sum by (groupBy) (rate(metric{reporter="destination"extra}[5m]))`.
+// A namespace filter has to become two OR'd selectors: PromQL cannot express
+// "source OR destination namespace matches" inside one label selector.
+func istioRateQuery(groupBy, metric, extra, namespace string) string {
+	sum := func(more string) string {
+		return fmt.Sprintf(`sum by (%s) (rate(%s{reporter="destination"%s%s}[5m]))`, groupBy, metric, extra, more)
+	}
+	if namespace == "" {
+		return sum("")
+	}
+	safeNS := prom.SanitizeLabelValue(namespace)
+	return sum(fmt.Sprintf(`, source_workload_namespace="%s"`, safeNS)) + " or " +
+		sum(fmt.Sprintf(`, destination_workload_namespace="%s"`, safeNS))
+}
+
+func istioSeriesKeyFrom(labels map[string]string) istioSeriesKey {
+	return istioSeriesKey{
+		flowKey: flowKey{
+			srcWorkload: labels["source_workload"],
+			srcNs:       labels["source_workload_namespace"],
+			dstWorkload: labels["destination_workload"],
+			dstNs:       labels["destination_workload_namespace"],
+		},
+		dstService: labels["destination_service_name"],
+		protocol:   labels["request_protocol"],
+	}
+}
+
+// queryHTTPSeriesRates reads an enrichment query's values by series. A zero or
+// negative rate is no measurement, so it is left out rather than joined as one.
+func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (map[istioSeriesKey]float64, error) {
+	result, err := s.queryFn(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	rates := make(map[istioSeriesKey]float64)
+	for _, series := range result.Series {
+		if len(series.DataPoints) == 0 || series.DataPoints[0].Value <= 0 {
+			continue
+		}
+		rates[istioSeriesKeyFrom(series.Labels)] += series.DataPoints[0].Value
+	}
+	return rates, nil
+}
+
 // queryHTTPFlows queries istio_requests_total for HTTP/gRPC traffic.
 // Response codes are aggregated (not split per-code) and a separate error query
-// provides 5xx error rates per service pair.
-func (s *IstioSource) queryHTTPFlows(ctx context.Context, client *promclient.Client, opts FlowOptions) ([]Flow, error) {
-	// Main query: all requests, no response_code grouping
-	query := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol, reporter) (rate(istio_requests_total{reporter="destination"}[5m]))`
-	if opts.Namespace != "" {
-		safeNS := prom.SanitizeLabelValue(opts.Namespace)
-		query = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol, reporter) (rate(istio_requests_total{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol, reporter) (rate(istio_requests_total{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			safeNS, safeNS)
-	}
-
-	// Error query: 5xx only
-	errorQuery := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, reporter) (rate(istio_requests_total{reporter="destination", response_code=~"5.."}[5m]))`
-	if opts.Namespace != "" {
-		safeNS := prom.SanitizeLabelValue(opts.Namespace)
-		errorQuery = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, reporter) (rate(istio_requests_total{reporter="destination", response_code=~"5..", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, reporter) (rate(istio_requests_total{reporter="destination", response_code=~"5..", destination_workload_namespace="%s"}[5m]))`,
-			safeNS, safeNS)
-	}
-
-	result, err := client.Query(ctx, query)
+// provides 5xx error rates per series. Optional figures that cannot be read are
+// appended to missing.
+func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, missing *[]string) ([]Flow, error) {
+	result, err := s.queryFn(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", "", opts.Namespace))
 	if err != nil {
 		return nil, err
 	}
 
-	// Build error rate map
-	errorRates := make(map[flowKey]float64)
-	errorResult, err := client.Query(ctx, errorQuery)
+	errorRates, err := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", `, response_code=~"5.."`, opts.Namespace))
 	if err != nil {
 		log.Printf("[istio] Error querying 5xx rates (continuing without error data): %v", err)
-	} else {
-		for _, series := range errorResult.Series {
-			if len(series.DataPoints) == 0 {
-				continue
-			}
-			val := series.DataPoints[0].Value
-			if val <= 0 {
-				continue
-			}
-			labels := series.Labels
-			key := flowKey{
-				srcWorkload: labels["source_workload"],
-				srcNs:       labels["source_workload_namespace"],
-				dstWorkload: labels["destination_workload"],
-				dstNs:       labels["destination_workload_namespace"],
-			}
-			errorRates[key] = val
-		}
+		*missing = append(*missing, "5xx error rates")
 	}
 
-	// Query byte metrics
-	bytesSentMap, bytesRecvMap := s.queryByteMetrics(ctx, client, opts)
+	bytesSent, sentErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_request_bytes_sum", "", opts.Namespace))
+	if sentErr != nil {
+		log.Printf("[istio] Error querying request bytes (continuing without byte data): %v", sentErr)
+	}
+	bytesRecv, recvErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_response_bytes_sum", "", opts.Namespace))
+	if recvErr != nil {
+		log.Printf("[istio] Error querying response bytes (continuing without byte data): %v", recvErr)
+	}
+	if sentErr != nil || recvErr != nil {
+		*missing = append(*missing, "request/response bytes")
+	}
 
 	flows := make([]Flow, 0, len(result.Series))
 	for _, series := range result.Series {
@@ -246,23 +307,12 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, client *promclient.Cli
 			continue
 		}
 
-		connections := int64(val)
-		if connections == 0 {
-			connections = 1 // fractional rate (< 1 req/s) still means traffic exists
-		}
-
 		protocol := strings.ToLower(labels["request_protocol"])
 		if protocol == "" {
 			protocol = "http"
 		}
 
-		srcWorkload := labels["source_workload"]
-		srcNs := labels["source_workload_namespace"]
-		dstWorkload := labels["destination_workload"]
-		dstNs := labels["destination_workload_namespace"]
-		dstService := labels["destination_service_name"]
-
-		key := flowKey{srcWorkload: srcWorkload, srcNs: srcNs, dstWorkload: dstWorkload, dstNs: dstNs}
+		key := istioSeriesKeyFrom(labels)
 		errRate := errorRates[key]
 
 		verdict := "forwarded"
@@ -270,28 +320,27 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, client *promclient.Cli
 			verdict = "error"
 		}
 
-		// Approximate bytes from rate * window (5m = 300s)
-		bytesSent := int64(bytesSentMap[key] * 300)
-		bytesRecv := int64(bytesRecvMap[key] * 300)
-
 		flow := Flow{
 			Source: Endpoint{
-				Name:      srcWorkload,
-				Namespace: srcNs,
+				Name:      key.srcWorkload,
+				Namespace: key.srcNs,
 				Kind:      "Pod",
-				Workload:  srcWorkload,
+				Workload:  key.srcWorkload,
 			},
 			Destination: Endpoint{
-				Name:      dstWorkload,
-				Namespace: dstNs,
+				Name:      key.dstWorkload,
+				Namespace: key.dstNs,
 				Kind:      "Pod",
-				Workload:  dstWorkload,
+				Workload:  key.dstWorkload,
 			},
 			Protocol:    protocol,
 			L7Protocol:  strings.ToUpper(protocol),
-			Connections: connections,
-			BytesSent:   bytesSent,
-			BytesRecv:   bytesRecv,
+			DestService: key.dstService,
+			// A fractional rate below one request a second still means traffic.
+			Connections: RoundRate(val),
+			// Approximate bytes from rate * window (5m = 300s)
+			BytesSent:   int64(bytesSent[key] * 300),
+			BytesRecv:   int64(bytesRecv[key] * 300),
 			Verdict:     verdict,
 			LastSeen:    time.Now(),
 			RequestRate: val,
@@ -300,8 +349,8 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, client *promclient.Cli
 
 		// Use destination service name if workload is unknown
 		if flow.Destination.Name == "" || flow.Destination.Name == "unknown" {
-			if dstService != "" {
-				flow.Destination.Name = dstService
+			if key.dstService != "" {
+				flow.Destination.Name = key.dstService
 				flow.Destination.Kind = "Service"
 			}
 		}
@@ -320,72 +369,11 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, client *promclient.Cli
 	return flows, nil
 }
 
-// queryByteMetrics queries istio_request_bytes_sum and istio_response_bytes_sum
-// to get byte throughput per service pair. Returns maps of (src,dst) → bytes/sec rate.
-func (s *IstioSource) queryByteMetrics(ctx context.Context, client *promclient.Client, opts FlowOptions) (sent map[flowKey]float64, recv map[flowKey]float64) {
-	sent = make(map[flowKey]float64)
-	recv = make(map[flowKey]float64)
-
-	sentQuery := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_request_bytes_sum{reporter="destination"}[5m]))`
-	recvQuery := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_response_bytes_sum{reporter="destination"}[5m]))`
-	if opts.Namespace != "" {
-		safeNS := prom.SanitizeLabelValue(opts.Namespace)
-		sentQuery = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_request_bytes_sum{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_request_bytes_sum{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			safeNS, safeNS)
-		recvQuery = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_response_bytes_sum{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_response_bytes_sum{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			safeNS, safeNS)
-	}
-
-	parseByteResult := func(result *prom.QueryResult, target map[flowKey]float64) {
-		if result == nil {
-			return
-		}
-		for _, series := range result.Series {
-			if len(series.DataPoints) == 0 {
-				continue
-			}
-			val := series.DataPoints[0].Value
-			if val <= 0 {
-				continue
-			}
-			labels := series.Labels
-			key := flowKey{
-				srcWorkload: labels["source_workload"],
-				srcNs:       labels["source_workload_namespace"],
-				dstWorkload: labels["destination_workload"],
-				dstNs:       labels["destination_workload_namespace"],
-			}
-			target[key] = val
-		}
-	}
-
-	sentResult, err := client.Query(ctx, sentQuery)
-	if err != nil {
-		log.Printf("[istio] Error querying request bytes (continuing without byte data): %v", err)
-	} else {
-		parseByteResult(sentResult, sent)
-	}
-
-	recvResult, err := client.Query(ctx, recvQuery)
-	if err != nil {
-		log.Printf("[istio] Error querying response bytes (continuing without byte data): %v", err)
-	} else {
-		parseByteResult(recvResult, recv)
-	}
-
-	return sent, recv
-}
-
 // queryTCPFlows queries istio_tcp_connections_opened_total for TCP traffic
-func (s *IstioSource) queryTCPFlows(ctx context.Context, client *promclient.Client, opts FlowOptions) ([]Flow, error) {
-	query := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter) (rate(istio_tcp_connections_opened_total{reporter="destination"}[5m]))`
-	if opts.Namespace != "" {
-		safeNS := prom.SanitizeLabelValue(opts.Namespace)
-		query = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter) (rate(istio_tcp_connections_opened_total{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter) (rate(istio_tcp_connections_opened_total{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			safeNS, safeNS)
-	}
+func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions) ([]Flow, error) {
+	query := istioRateQuery("source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name", "istio_tcp_connections_opened_total", "", opts.Namespace)
 
-	result, err := client.Query(ctx, query)
+	result, err := s.queryFn(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -400,11 +388,6 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, client *promclient.Clie
 		val := series.DataPoints[0].Value
 		if val <= 0 {
 			continue
-		}
-
-		connections := int64(val)
-		if connections == 0 {
-			connections = 1
 		}
 
 		srcWorkload := labels["source_workload"]
@@ -427,7 +410,8 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, client *promclient.Clie
 				Workload:  dstWorkload,
 			},
 			Protocol:    "tcp",
-			Connections: connections,
+			DestService: dstService,
+			Connections: RoundRate(val),
 			Verdict:     "forwarded",
 			LastSeen:    time.Now(),
 		}

@@ -427,3 +427,23 @@ func TestGatewayPolicyStatusToleratesMalformedInput(t *testing.T) {
 		t.Error("a non-list ancestors field should fall through, not be reported as a policy")
 	}
 }
+
+func TestKedaSummaryKeepsDefaultedTargetIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target map[string]any
+		want   string
+	}{
+		{"default kind and group", map[string]any{"name": "web"}, "Deployment (apps)/web"},
+		{"empty fields", map[string]any{"kind": "", "apiVersion": "", "name": "web"}, "Deployment (apps)/web"},
+		{"bare Rollout", map[string]any{"kind": "Rollout", "name": "worker"}, "Rollout (apps)/worker"},
+		{"explicit Argo", map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "name": "worker"}, "Rollout (argoproj.io)/worker"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": "ScaledObject", "metadata": map[string]any{"name": "scaler", "namespace": "team"}, "spec": map[string]any{"scaleTargetRef": tc.target}}}
+			if got := summarizeUnstructured(obj).Target; got != tc.want {
+				t.Fatalf("target = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -1,3 +1,21 @@
+import { apiVersionToGroup, kindToPluralWithGroup } from '../../utils/navigation'
+import type { ResourceRef } from '../../types/core'
+
+/** KReference records apiVersion or an explicit nonempty group. */
+export function getKnativeReference(reference: any, defaultNamespace: string): ResourceRef | undefined {
+  const version = reference?.apiVersion
+  let group = reference?.group
+  if (typeof version === 'string' && version) {
+    const parts = version.split('/')
+    if (parts.length > 2 || parts.some(part => !part)) return undefined
+    const observed = apiVersionToGroup(version)
+    if (group && group !== observed) return undefined
+    group = observed
+  } else if (typeof group !== 'string' || !group) return undefined
+  if (typeof reference?.kind !== 'string' || !reference.kind || typeof reference?.name !== 'string' || !reference.name) return undefined
+  return { group, kind: kindToPluralWithGroup(reference.kind, group), name: reference.name, namespace: reference.namespace || defaultNamespace }
+}
+
 // KNative CRD utility functions
 
 import type { StatusBadge } from './resource-utils'

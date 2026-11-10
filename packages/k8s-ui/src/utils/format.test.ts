@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { formatCPUString, formatMemoryString, parseMemoryToBytes, parseQuantityToNumber } from './format'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { formatCompactAge, formatCPUString, formatMemoryString, formatRelativeAgeTime, parseCPUToNanocores, parseMemoryToBytes, parseQuantity, parseQuantityToNumber } from './format'
 
 describe('formatCPUString', () => {
   it('renders exact zero as zero, not a fabricated near-zero', () => {
@@ -40,6 +40,22 @@ describe('parseMemoryToBytes', () => {
     expect(parseMemoryToBytes('1Ei')).toBe(1024 ** 6)
     expect(parseMemoryToBytes('1P')).toBe(1000 ** 5)
     expect(parseMemoryToBytes('1E')).toBe(1000 ** 6)
+  })
+
+  // The API server keeps a quoted exponent quantity as written, and defaults a
+  // request from it the same way ("1e9" limit → "500e6" request).
+  it('parses decimal-exponent quantities', () => {
+    expect(parseMemoryToBytes('1e9')).toBe(1e9)
+    expect(parseMemoryToBytes('500e6')).toBe(5e8)
+    expect(parseMemoryToBytes('1E3')).toBe(1000)
+    expect(formatMemoryString('1e9')).toBe('954 MiB')
+  })
+
+  it('reads sub-unit suffixes as fractions of a byte', () => {
+    expect(parseMemoryToBytes('1181116006400m')).toBeCloseTo(1181116006.4)
+    expect(parseMemoryToBytes('1000000u')).toBeCloseTo(1)
+    expect(parseMemoryToBytes('1000000000n')).toBeCloseTo(1)
+    expect(formatMemoryString('18360985190400m')).toBe('17.1 GiB')
   })
 })
 
@@ -113,5 +129,79 @@ describe('parseQuantityToNumber', () => {
     expect(parseQuantityToNumber(0)).toBe(0)
     expect(parseQuantityToNumber(Number.NaN)).toBe(0)
     expect(parseQuantityToNumber(Number.POSITIVE_INFINITY)).toBe(0)
+  })
+})
+
+describe('relative ages', () => {
+  const now = Date.parse('2026-10-11T12:00:00Z')
+  const ago = (ms: number) => new Date(now - ms).toISOString()
+  const MIN = 60_000
+  const DAY = 24 * 60 * MIN
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('counts days past a month instead of rounding to months or years', () => {
+    expect(formatCompactAge(ago(212 * DAY))).toBe('212d')
+    expect(formatCompactAge(ago(364 * DAY))).toBe('364d')
+    expect(formatRelativeAgeTime(ago(364 * DAY))).toBe('364d ago')
+  })
+
+  it('says just now for the current moment and for small clock skew', () => {
+    expect(formatRelativeAgeTime(ago(0))).toBe('just now')
+    expect(formatRelativeAgeTime(ago(-30_000))).toBe('just now')
+    expect(formatRelativeAgeTime(ago(5 * MIN))).toBe('5m ago')
+  })
+
+  it('shows a real future time as a date, not a negative age', () => {
+    const future = ago(-2 * 60 * MIN)
+    expect(formatRelativeAgeTime(future)).toBe(new Date(future).toLocaleString())
+  })
+
+  it('keeps missing and unparseable input visible', () => {
+    expect(formatRelativeAgeTime(undefined)).toBe('-')
+    expect(formatRelativeAgeTime('', '')).toBe('')
+    expect(formatRelativeAgeTime('not a time')).toBe('not a time')
+  })
+})
+
+describe('parseCPUToNanocores', () => {
+  it.each([
+    ['', 0],
+    ['2', 2_000_000_000],
+    ['1.5', 1_500_000_000],
+    ['.5', 500_000_000],
+    ['1.', 1_000_000_000],
+    ['250m', 250_000_000],
+    ['98753000n', 98_753_000],
+    // metrics-server's shortest exact form for the same reading
+    ['98753u', 98_753_000],
+    ['2k', 2_000_000_000_000],
+    ['garbage', 0],
+  ])('%s -> %d', (input, want) => {
+    expect(parseCPUToNanocores(input)).toBe(want)
+  })
+})
+
+describe('parseQuantity', () => {
+  it.each([
+    ['+1Gi', 1024 ** 3],
+    ['.5Ki', 512],
+    ['-.5', -0.5],
+    ['1.e3', 1000],
+    ['0', 0],
+  ])('%s -> %d', (input, want) => {
+    expect(parseQuantity(input)).toBe(want)
+    expect(parseMemoryToBytes(input)).toBe(want)
+  })
+
+  it.each(['', 'abcMi', '.', '1.2.3', '5Xi', null, undefined])('cannot read %s', (input) => {
+    expect(parseQuantity(input)).toBeNull()
+    expect(parseQuantityToNumber(input)).toBe(0)
   })
 })

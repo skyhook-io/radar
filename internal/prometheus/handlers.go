@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -80,7 +82,10 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, status)
 			return
 		}
-		errorlog.Record("prometheus", "error", "connection failed: %v", err)
+		// Turned-off port-forwarding is the operator's setting, not a failure.
+		if !errors.Is(err, portforward.ErrAutoDisabled) {
+			errorlog.Record("prometheus", "error", "connection failed: %v", err)
+		}
 		writeError(w, http.StatusBadGateway, "Prometheus connection failed: "+err.Error())
 		return
 	}
@@ -227,7 +232,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
 			return
 		}
-		resolved, err := ResolvePodScope(cache, kind, namespace, name, restMaxScopePods)
+		resolved, err := ResolvePodScope(r.Context(), cache, kind, namespace, name, restMaxScopePods)
 		if err != nil {
 			switch {
 			case errors.Is(err, k8s.ErrWorkloadCacheWarming):
@@ -237,9 +242,15 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 				// identity may not have, or a namespace its informer was
 				// scoped away from. Retrying will not change it, and 503
 				// tells the caller it might.
-				writeError(w, http.StatusForbidden, "cluster cache cannot list the workload's pods: "+err.Error())
+				writeError(w, http.StatusForbidden, "cluster cache cannot establish the workload's Pod membership: "+err.Error())
 			case errors.Is(err, ErrPodScopeUnsupportedKind):
 				writeError(w, http.StatusBadRequest, "cannot resolve pods for "+kind)
+			case errors.Is(err, context.Canceled):
+				// The caller left while a Rollout or Workflow inventory was
+				// still starting; there is nobody to answer.
+				return
+			case errors.Is(err, k8s.ErrUnknownDynamicKind):
+				writeError(w, http.StatusBadRequest, k8s.CanonicalWorkloadKind(kind)+" (argoproj.io) is not installed or not yet discovered in this cluster")
 			default:
 				log.Printf("[prometheus] Pod scope failed for %q/%q/%q: %v", kind, namespace, name, err)
 				writeError(w, http.StatusBadGateway, "could not resolve the workload's pods: "+err.Error())

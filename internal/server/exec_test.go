@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -152,42 +153,6 @@ func TestDefaultExecCommand(t *testing.T) {
 // TestWindowsDefaultShellScript is a tripwire — if you edit the script,
 // manually verify against both Nano Server (no PowerShell) and Server Core
 // (PowerShell present) before merging.
-// TestDefaultExecContainer pins the container-selection precedence: a valid
-// kubectl.kubernetes.io/default-container annotation wins, otherwise the first
-// container. This is what keeps mesh-injected pods (sidecar at containers[0])
-// from execing into a shell-less proxy.
-func TestDefaultExecContainer(t *testing.T) {
-	podWith := func(annotation string, containers ...string) *corev1.Pod {
-		pod := &corev1.Pod{}
-		if annotation != "" {
-			pod.Annotations = map[string]string{defaultContainerAnnotation: annotation}
-		}
-		for _, name := range containers {
-			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})
-		}
-		return pod
-	}
-
-	tests := []struct {
-		name string
-		pod  *corev1.Pod
-		want string
-	}{
-		{"annotation honored over first container", podWith("app", "istio-proxy", "app"), "app"},
-		{"no annotation falls back to first", podWith("", "istio-proxy", "app"), "istio-proxy"},
-		{"annotation naming missing container ignored", podWith("ghost", "istio-proxy", "app"), "istio-proxy"},
-		{"single container", podWith("", "app"), "app"},
-		{"no containers", podWith(""), ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := defaultExecContainer(tt.pod); got != tt.want {
-				t.Errorf("defaultExecContainer() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestWindowsDefaultShellScript(t *testing.T) {
 	const expected = `where powershell >nul 2>&1 && powershell || cmd`
 	if windowsDefaultShellScript != expected {
@@ -466,6 +431,31 @@ func TestLooksLikeShellNotFound(t *testing.T) {
 			got := looksLikeShellNotFound(tc.errMsg)
 			if got != tc.want {
 				t.Errorf("looksLikeShellNotFound(%q) = %v, want %v (%s)", tc.errMsg, got, tc.want, tc.comment)
+			}
+		})
+	}
+}
+
+func TestDefaultExecContainer(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		containers       []string
+		annotation, want string
+	}{
+		{name: "mesh and app", containers: []string{"istio-proxy", "app"}, want: "app"},
+		{name: "proxy only", containers: []string{"istio-proxy", "linkerd-proxy"}, want: "istio-proxy"},
+		{name: "explicit annotation", containers: []string{"first", "second"}, annotation: "second", want: "second"},
+		{name: "missing annotation", containers: []string{"first"}, annotation: "missing", want: "first"},
+		{name: "no containers"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := &corev1.Pod{}
+			pod.Annotations = map[string]string{k8score.DefaultContainerAnnotation: tc.annotation}
+			for _, name := range tc.containers {
+				pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})
+			}
+			if got := defaultExecContainer(pod); got != tc.want {
+				t.Fatalf("container=%q want %q", got, tc.want)
 			}
 		})
 	}

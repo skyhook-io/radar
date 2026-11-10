@@ -38,7 +38,16 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	if scope != nil && scope.Namespaces != nil && len(namespaces) == 0 {
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
+	storage := collectStorageInput(cache, namespaces, scope)
+	// Read consumers after storage coverage checks, so a snapshot taken before
+	// initial informer sync cannot be treated as evidence of absence.
 	input := CollectTypedInput(cache, namespaces)
+	input.PersistentVolumeClaims = storage.PersistentVolumeClaims
+	input.PersistentVolumes = storage.PersistentVolumes
+	input.StorageClasses = storage.StorageClasses
+	input.Events = storage.Events
+	input.PVCConsumerNamespaces = storage.PVCConsumerNamespaces
+	input.PVDeletionEventsComplete = storage.PVDeletionEventsComplete
 	if !scope.hasSecretSubjects(namespaces) {
 		input.Secrets = nil
 	} else if scope != nil {
@@ -53,8 +62,13 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
-		input.ClusterVersion = opts.ClusterVersion
+		if opts.ClusterVersion != "" {
+			input.ClusterVersion = opts.ClusterVersion
+		}
 		input.ServedAPIs = opts.ServedAPIs
+	}
+	if input.ClusterVersion == "" {
+		input.ClusterVersion = k8s.GetServerVersion()
 	}
 
 	// Crossplane Managed Resources / Composites / Claims live in the dynamic
@@ -87,6 +101,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// CloudNativePG clusters + their backup schedules for the declarative-backup
 	// posture check. Nil inventory (CNPG absent / RBAC denied) → check no-ops.
 	input.CNPGClusters, input.CNPGScheduledBackups, input.CNPGScheduledBackupsAuthoritative = listCNPGDynamic(namespaces)
+	input.PDPlacement = collectPDPlacement(cache, namespaces, scope)
 
 	results := bp.RunChecks(input)
 	if !hasCompleteSecretInput(cache, namespaces, scope) && !slices.Contains(results.MissingInputs, "secrets") {

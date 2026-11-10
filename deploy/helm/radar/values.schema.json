@@ -61,8 +61,10 @@
       "properties": {
         "create": { "type": "boolean" },
         "additionalRules": { "type": "array", "items": { "type": "object" } },
+        "namespaces": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" }, "description": "Limit Radar's ServiceAccount and the Radar Cloud bindings to these namespaces. Leave unset for cluster-wide access." },
         "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
         "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user." },
+        "viewAdmissionPolicies": { "type": "boolean", "description": "Allow reading native ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding resources. Auto-enabled under auth or cloud mode." },
         "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
         "podLogs": { "type": "boolean" },
         "portForward": { "type": "boolean" },
@@ -73,9 +75,11 @@
           "type": "object",
           "additionalProperties": { "type": "boolean" },
           "properties": {
-            "all": { "type": "boolean", "description": "Grant read access to ALL CRDs (overrides individual flags)." },
+            "all": { "type": "boolean", "description": "Grant get/list/watch on all API groups and resources, including core Secrets and credential-bearing CRDs (overrides individual flags and exclusions)." },
+            "antrea": { "type": "boolean" },
             "apiRegistration": { "type": "boolean" },
             "argo": { "type": "boolean" },
+            "awsNetworkPolicy": { "type": "boolean" },
             "awx": { "type": "boolean" },
             "calico": { "type": "boolean" },
             "certManager": { "type": "boolean" },
@@ -87,6 +91,7 @@
             "envoyGateway": { "type": "boolean" },
             "externalDns": { "type": "boolean" },
             "externalSecrets": { "type": "boolean" },
+            "flagger": { "type": "boolean", "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)." },
             "flux": { "type": "boolean" },
             "gatewayApi": { "type": "boolean" },
             "gcpMonitoring": { "type": "boolean" },
@@ -99,6 +104,7 @@
             "kured": { "type": "boolean" },
             "kyverno": { "type": "boolean" },
             "mariadb": { "type": "boolean" },
+            "multus": { "type": "boolean" },
             "nginx": { "type": "boolean" },
             "openshift": { "type": "boolean" },
             "opentelemetry": { "type": "boolean" },
@@ -106,6 +112,7 @@
             "reflector": { "type": "boolean" },
             "reloader": { "type": "boolean" },
             "sealedSecrets": { "type": "boolean" },
+            "secretsStoreCsi": { "type": "boolean" },
             "strimzi": { "type": "boolean" },
             "tekton": { "type": "boolean" },
             "traefik": { "type": "boolean" },
@@ -120,6 +127,7 @@
         }
       }
     },
+    "disableExec": { "type": "boolean", "description": "Turn off pod exec through Radar for everyone on this cluster. Wins over rbac.podExec and mcp.execTools." },
     "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
     "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
     "podSecurityContext": { "type": "object" },
@@ -137,6 +145,22 @@
       "type": "string",
       "pattern": "^$|^/?[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*(/[A-Za-z0-9._~-]*[A-Za-z0-9_~-][A-Za-z0-9._~-]*)*/?$",
       "description": "Optional URL path prefix served by Radar itself, e.g. /radar. Use when ingress forwards the subpath without stripping it. Path segments accept letters, digits, '-', '_', '.' and '~', and no segment may be '.' or '..' — matching the server's --base-path validation, so an invalid value fails at install time instead of crash-looping the pod."
+    },
+    "allowedHosts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(\\*|(\\*\\.)?[^\\s/:@*,.][^\\s/:@*,]*)$"
+      },
+      "description": "Hostnames besides localhost, IP addresses and Kubernetes Service names that Radar answers when auth.mode is none, e.g. radar.internal. Ingress and HTTPRoute hostnames are added automatically. Exact names, or *.example.com for names under a domain; \"*\" turns the check off."
+    },
+    "trustedOrigins": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^https?://(\\[[0-9A-Fa-f:.]+\\]|[^/*?#@,:\\[\\]\\s]+)(:(6553[0-5]|655[0-2][0-9]|65[0-4][0-9]{2}|6[0-4][0-9]{3}|[1-5][0-9]{4}|[1-9][0-9]{0,3}))?/?$"
+      },
+      "description": "Origins besides Radar's own address that may use Radar's API, including changes and pod terminals, e.g. http://radar.internal. Needed only when a proxy rewrites the Host header. Exact scheme://host[:port], no wildcards or paths. An entry the server cannot use is logged at startup and ignored."
     },
     "ingress": {
       "type": "object",
@@ -242,6 +266,7 @@
         "existingSecret": { "type": "string" },
         "existingSecretKey": { "type": "string" },
         "cookieTTL": { "type": "string", "description": "Go duration string, e.g. \"4h\"." },
+        "kubernetesCredentials": { "type": "string", "enum": ["impersonate", "user-token"] },
         "proxy": {
           "type": "object",
           "additionalProperties": false,
@@ -266,6 +291,7 @@
             "existingSecret": { "type": "string" },
             "clientSecretKey": { "type": "string" },
             "redirectURL": { "type": "string" },
+            "usernameClaim": { "type": "string" },
             "groupsClaim": { "type": "string" },
             "postLogoutRedirectURL": { "type": "string" },
             "usernamePrefix": { "type": "string" },
@@ -324,7 +350,26 @@
             "nodeOps": { "type": "boolean" }
           }
         },
-        "insecureSkipVerify": { "type": "boolean" }
+        "systemRbac": { "type": "boolean" },
+        "aiRbac": { "type": "boolean" },
+        "insecureSkipVerify": { "type": "boolean" },
+        "hubURL": {
+          "type": "string",
+          "pattern": "^(https?://.*)?$",
+          "description": "Hub address for joining with an enrollment key. Must start with https:// (http:// only for localhost)."
+        },
+        "enrollment": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "key": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "existingSecretKey": { "type": "string" }
+          }
+        },
+        "clusterNamePrefix": { "type": "string" },
+        "clusterNameSuffix": { "type": "string" },
+        "caBundle": { "type": "string" }
       }
     },
     "usageReporting": {
@@ -338,7 +383,9 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": { "type": "boolean" },
+        "execTools": { "type": "boolean" },
+        "httpTools": { "type": "boolean" }
       }
     },
     "cost": {
@@ -386,10 +433,10 @@
       "additionalProperties": true,
       "properties": {
         "prometheusUrl": { "type": "string" },
-        "prometheusSingleCluster": { "type": "boolean", "description": "Optional workload-metrics scope override for a dedicated backend. Replaces automatic matching; does not scope other metrics features. Leave false with empty prometheusClusterLabels for automatic matching." },
+        "prometheusSingleCluster": { "type": "boolean", "description": "Optional workload/PVC metrics scope override for a dedicated backend. Replaces automatic matching; does not scope rightsizing, node/HPA or legacy network/storage metrics. Leave false with empty prometheusClusterLabels for automatic matching." },
         "prometheusClusterLabels": {
           "type": "object",
-          "description": "Optional exact cluster label/value pairs for workload metrics, combined with AND. Alternative to prometheusSingleCluster; does not scope other metrics features.",
+          "description": "Optional exact cluster label/value pairs for workload metrics and PVC usage, combined with AND. Labels must exist on each affected metric source. Alternative to prometheusSingleCluster; does not scope rightsizing, node/HPA or legacy network/storage metrics.",
           "propertyNames": {"pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$", "not": {"pattern": "^__"}},
           "additionalProperties": {"type": "string", "minLength": 1}
         },
@@ -445,6 +492,11 @@
     "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
     "tolerations": { "type": "array", "items": { "type": "object" } },
     "affinity": { "type": "object" },
+    "extraArgs": {
+      "type": "array",
+      "description": "Additional command-line flags appended to the container args, after the flags the chart derives from other values. A repeated scalar flag wins; a repeatable flag is appended, so do not duplicate a --prometheus-cluster-label key here. Each entry is rendered through tpl.",
+      "items": { "type": "string" }
+    },
     "env": {
       "type": "array",
       "items": {

@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { seriesColor, seriesFill, computeShortLabels, seriesDisplayLabels } from './colors'
-import { formatMetricValue, formatTimestamp } from './format'
+import { alignedTimeAxisTicks, datesNeedYear, formatFullTimestamp, formatMetricValue, formatTimeAxisLabels, labelWidthEm, type TimeAxisTick } from './format'
 import { layoutAnnotations } from './annotations'
-import { chartLayout, integerAxisTop, isCountUnit, yAxisValues } from './axis'
+import { chartLayout, integerAxisTop, isCountUnit, xLabelMaxWidthEm, yAxisValues } from './axis'
 import type { TimeSeries, ReferenceLine, ChartAnnotation } from './types'
 import { nearestSample } from './nearestSample'
 
@@ -13,7 +13,13 @@ import { nearestSample } from './nearestSample'
 export const ANNOTATION_LABEL_MIN_WIDTH_PX = 420
 const ANNOTATION_HOVER_TOLERANCE = 8
 
-export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, stepSeconds, layout = 'full' }: {
+/** A time range on the chart's X axis, in unix seconds. */
+export interface ChartTimeRange {
+  start: number
+  end: number
+}
+
+export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, stepSeconds, layout = 'full', height: dashboardHeight = 240, shadedRanges, selection, onSelectRange }: {
   series: TimeSeries[]
   color: string
   fillColor: string
@@ -39,10 +45,25 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
    * keeps text and plot height stable as its container resizes.
    */
   layout?: 'full' | 'auto' | 'compact' | 'dashboard'
+  /** Rendered height in px of the 'dashboard' layout; ignored by the others. */
+  height?: number
+  /** Ranges drawn hatched, e.g. where no sample exists; `label` says why and shows on hover. */
+  shadedRanges?: (ChartTimeRange & { label?: string })[]
+  /** A selected range, drawn as a band. */
+  selection?: ChartTimeRange | null
+  /**
+   * Enables range selection: drag across the plot, or click to pick the one
+   * step-wide window around the pointer (needs `stepSeconds`; clipped at the domain edges).
+   */
+  onSelectRange?: (range: ChartTimeRange) => void
 }) {
+  const hatchId = `hatch-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
+  const [drag, setDrag] = useState<{ from: number; to: number } | null>(null)
+  const dragRef = useRef<{ from: number; to: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
+  const [keyboardFocus, setKeyboardFocus] = useState(false)
   const [labelsFit, setLabelsFit] = useState(true)
   const [renderedWidth, setRenderedWidth] = useState(0)
   const multiSeries = series.length > 1
@@ -70,6 +91,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       minTs = domain.start
       maxTs = domain.end
     }
+    if (!Number.isFinite(minTs) || !Number.isFinite(maxTs)) return null
     if (minTs === maxTs) maxTs = minTs + 60
     if (maxVal === 0 && minVal === 0) {
       // Unit-appropriate floor so the Y-axis isn't misleadingly large.
@@ -96,7 +118,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   // Layout constants. marginLeft sized for the widest expected Y-tick label
   // ("422.4 MiB" etc.) — narrow grid panels squeeze the X axis so labels
   // need extra viewBox-space to survive the down-scale.
-  const base = chartLayout(compact, layout === 'dashboard', renderedWidth)
+  const measured = chartLayout(compact, layout === 'dashboard', renderedWidth)
+  const base = layout === 'dashboard' ? { ...measured, height: dashboardHeight } : measured
   const { width, height, marginRight, marginTop, marginBottom, fontSize, yIntervals, xIntervals } = base
   const yValues = chartData ? yAxisValues(chartData.yMin, chartData.yMax, yIntervals, countAxis) : []
   const yLabels = yValues.map(val => formatMetricValue(val, unit))
@@ -129,14 +152,30 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   const xTicks = useMemo(() => {
     if (!chartData) return []
     const { minTs, maxTs } = chartData
-    return Array.from({ length: xIntervals + 1 }, (_, i) => {
-      const ts = minTs + ((maxTs - minTs) / xIntervals) * i
-      // In the compact layout the two labels sit at the plot edges and would
-      // otherwise spill past the viewBox.
-      const anchor: 'start' | 'middle' | 'end' = !(compact || layout === 'dashboard') ? 'middle' : i === 0 ? 'start' : i === xIntervals ? 'end' : 'middle'
-      return { ts, x: toX(ts), label: formatTimestamp(ts), anchor }
+    // A window longer than a day gets ticks on local midnights (and clock
+    // hours between) when at least two fit, positioned where they fall; the
+    // centred labels are nudged inside the viewBox so an end one isn't clipped.
+    const place = (ticks: TimeAxisTick[]) => ticks.map(({ ts, label }) => {
+      const halfWidth = (labelWidthEm(label) * fontSize) / 2
+      return { ts, x: Math.min(Math.max(toX(ts), halfWidth), width - halfWidth), halfWidth, label, anchor: 'middle' as const }
     })
-  }, [chartData, xIntervals, compact, layout, marginLeft, plotWidth])
+    const separated = (ticks: TimeAxisTick[]) => place(ticks).every((tick, i, all) =>
+      i === 0 || tick.x - tick.halfWidth - (all[i - 1].x + all[i - 1].halfWidth) >= fontSize)
+    const aligned = xIntervals >= 2 ? alignedTimeAxisTicks(minTs, maxTs, xIntervals + 1, separated) : null
+    if (aligned) return place(aligned)
+    // In the compact layout the two labels sit at the plot edges and would
+    // otherwise spill past the viewBox.
+    const edgeAnchored = compact || layout === 'dashboard'
+    const timestamps = Array.from({ length: xIntervals + 1 }, (_, i) => minTs + ((maxTs - minTs) / xIntervals) * i)
+    const labels = formatTimeAxisLabels(timestamps, xLabelMaxWidthEm(plotWidth, xIntervals, fontSize, edgeAnchored))
+    const multiDay = maxTs - minTs > 24 * 60 * 60
+    return timestamps.map((ts, i) => {
+      const anchor: 'start' | 'middle' | 'end' = !edgeAnchored ? 'middle' : i === 0 ? 'start' : i === xIntervals ? 'end' : 'middle'
+      const halfWidth = (labelWidthEm(labels[i]) * fontSize) / 2
+      const x = multiDay && !edgeAnchored ? Math.min(Math.max(toX(ts), halfWidth), width - halfWidth) : toX(ts)
+      return { ts, x, label: labels[i], anchor }
+    })
+  }, [chartData, xIntervals, compact, layout, marginLeft, plotWidth, fontSize, width])
 
   const paths = useMemo(() => {
     if (!chartData) return []
@@ -264,16 +303,76 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       p => Math.abs(p.x - clampedX) <= ANNOTATION_HOVER_TOLERANCE,
     )
 
-    return { ts, x: clampedX, points, nearbyAnnotations }
-  }, [hoverX, chartData, placedAnnotations, seriesLabels, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, stepSeconds])
+    const shaded = shadedRanges?.find(r => ts >= r.start && ts <= r.end && r.label)
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<SVGRectElement>) => {
-    const svg = svgRef.current
-    if (!svg) return
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return
-    setHoverX((e.clientX - ctm.e) / ctm.a)
+    return { ts, x: clampedX, points, nearbyAnnotations, shaded }
+  }, [hoverX, chartData, placedAnnotations, seriesLabels, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, stepSeconds, shadedRanges])
+
+  const pointerX = useCallback((e: { clientX: number }) => {
+    const ctm = svgRef.current?.getScreenCTM()
+    return ctm ? (e.clientX - ctm.e) / ctm.a : null
   }, [])
+
+  const clampX = (x: number) => Math.max(marginLeft, Math.min(marginLeft + plotWidth, x))
+  const tsAt = (x: number) => {
+    if (!chartData) return 0
+    return chartData.minTs + ((clampX(x) - marginLeft) / plotWidth) * (chartData.maxTs - chartData.minTs)
+  }
+  const selectAt = (from: number, to: number) => {
+    if (!onSelectRange || !chartData) return
+    const a = tsAt(Math.min(from, to))
+    const b = tsAt(Math.max(from, to))
+    if (Math.abs(to - from) >= 6) {
+      onSelectRange({ start: Math.round(a), end: Math.round(b) })
+    } else if (stepSeconds && stepSeconds > 0) {
+      const half = stepSeconds / 2
+      onSelectRange({ start: Math.round(Math.max(chartData.minTs, a - half)), end: Math.round(Math.min(chartData.maxTs, a + half)) })
+    }
+  }
+  const cancelDrag = () => {
+    dragRef.current = null
+    setDrag(null)
+  }
+  const handlePointerMove = (e: React.PointerEvent<SVGRectElement>) => {
+    const x = pointerX(e)
+    if (x === null) return
+    setHoverX(x)
+    if (dragRef.current) {
+      dragRef.current = { ...dragRef.current, to: clampX(x) }
+      setDrag(dragRef.current)
+    }
+  }
+  const handlePointerDown = (e: React.PointerEvent<SVGRectElement>) => {
+    if (e.button !== 0) return
+    const x = pointerX(e)
+    if (x === null) return
+    setHoverX(x)
+    if (!onSelectRange) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = { from: clampX(x), to: clampX(x) }
+    setDrag(dragRef.current)
+  }
+  const handlePointerUp = (e: React.PointerEvent<SVGRectElement>) => {
+    const current = dragRef.current
+    const x = pointerX(e)
+    cancelDrag()
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    if (current && x !== null) selectAt(current.from, clampX(x))
+  }
+  const handleKeyDown = (e: React.KeyboardEvent<SVGRectElement>) => {
+    if (!chartData || !onSelectRange) return
+    if (e.key === 'Escape') { cancelDrag(); setHoverX(null); return }
+    if (!stepSeconds || stepSeconds <= 0) return
+    const x = hoverX ?? marginLeft
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault()
+      const step = (stepSeconds / (chartData.maxTs - chartData.minTs)) * plotWidth
+      setHoverX(clampX(x + (e.key === 'ArrowRight' ? step : -step)))
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      selectAt(x, x)
+    }
+  }
 
   // Hook calls above run unconditionally; bail out of rendering only after
   // every hook has been invoked (Rules of Hooks).
@@ -288,10 +387,16 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
         className="w-full h-full"
-        style={layout === 'dashboard' ? { height: 240 } : undefined}
+        style={layout === 'dashboard' ? { height: dashboardHeight } : undefined}
         preserveAspectRatio="xMidYMid meet"
         data-chart-layout={compact ? 'compact' : 'full'}
       >
+        <defs>
+          <pattern id={hatchId} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="6" stroke="currentColor" strokeWidth="2" className="text-theme-border" />
+          </pattern>
+        </defs>
+
         {/* Grid lines */}
         {yTicks.map((tick, i) => (
           <line
@@ -358,6 +463,32 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
             fill={p.areaFillColor}
           />
         ))}
+
+        {shadedRanges?.map((r, i) => {
+          const x1 = Math.max(marginLeft, toX(r.start))
+          const x2 = Math.min(marginLeft + plotWidth, toX(r.end))
+          if (x2 <= x1) return null
+          return <rect key={`shade-${i}`} data-chart-gap x={x1} y={marginTop} width={x2 - x1} height={plotHeight} fill={`url(#${hatchId})`} opacity="0.7" />
+        })}
+
+        {selection && (() => {
+          const x1 = Math.max(marginLeft, toX(selection.start))
+          const x2 = Math.min(marginLeft + plotWidth, toX(selection.end))
+          if (x2 < x1) return null
+          return <rect data-chart-selection x={x1} y={marginTop} width={Math.max(2, x2 - x1)} height={plotHeight} fill="currentColor" className="text-accent" opacity="0.15" />
+        })()}
+
+        {drag && Math.abs(drag.to - drag.from) >= 2 && (
+          <rect
+            x={Math.max(marginLeft, Math.min(drag.from, drag.to))}
+            y={marginTop}
+            width={Math.abs(drag.to - drag.from)}
+            height={plotHeight}
+            fill="currentColor"
+            className="text-accent"
+            opacity="0.2"
+          />
+        )}
 
         {/* Lines */}
         {paths.map(p => p && (
@@ -510,9 +641,23 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
           x={marginLeft} y={marginTop}
           width={plotWidth} height={plotHeight}
           fill="transparent"
-          style={{ cursor: 'crosshair' }}
-          onMouseMove={handleMouseMove}
+          onPointerMove={handlePointerMove}
+          onPointerDown={handlePointerDown}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={cancelDrag}
+          onLostPointerCapture={cancelDrag}
+          onPointerLeave={(e) => { if (e.pointerType !== 'touch') setHoverX(null) }}
           onMouseLeave={() => setHoverX(null)}
+          tabIndex={onSelectRange && stepSeconds && stepSeconds > 0 ? 0 : undefined}
+          role={onSelectRange && stepSeconds && stepSeconds > 0 ? 'button' : undefined}
+          aria-label={onSelectRange && stepSeconds && stepSeconds > 0 ? 'Select chart interval: use arrow keys to move, then Enter to select' : undefined}
+          onKeyDown={handleKeyDown}
+          onFocus={() => setKeyboardFocus(true)}
+          onBlur={() => { setKeyboardFocus(false); setHoverX(null); cancelDrag() }}
+          stroke={keyboardFocus ? 'currentColor' : undefined}
+          strokeWidth={keyboardFocus ? 2 : undefined}
+          className={keyboardFocus ? 'text-accent' : undefined}
+          style={{ cursor: onSelectRange ? 'col-resize' : 'crosshair', touchAction: onSelectRange ? 'none' : undefined }}
         />
       </svg>
 
@@ -527,7 +672,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
         >
           <div className="bg-theme-surface border border-theme-border rounded-lg shadow-lg px-3 py-2 text-xs whitespace-nowrap">
             <div className="text-theme-text-tertiary mb-1.5 font-mono">
-              {new Date(hoverData.ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              {formatFullTimestamp(hoverData.ts, datesNeedYear(chartData.maxTs - chartData.minTs))}
             </div>
             {hoverData.nearbyAnnotations.map((placed, i) => (
               <div key={`annotation-${i}`} className="flex items-center gap-2 py-0.5">
@@ -538,6 +683,9 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
                 </span>
               </div>
             ))}
+            {hoverData.shaded && (
+              <div className="py-0.5 text-theme-text-secondary">{hoverData.shaded.label}</div>
+            )}
             {hoverData.points.map((p, i) => (
               <div key={i} className="flex items-center gap-2 py-0.5">
                 <div

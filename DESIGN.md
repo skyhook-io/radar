@@ -61,6 +61,8 @@ Full Skyhook brand scale: `--color-skyhook-50` (`#EBF2FA`) through `--color-skyh
 | Error | `--color-error` | `#EF4444` | Unhealthy, failed, crashloop |
 | Info | `--color-info` | `#3B82F6` | Completed, informational |
 
+Crossplane’s declared reconciliation pause is neutral context alongside recorded readiness and independent errors. A requested operation that pause may defer, such as deletion cleanup, gets an inline warning.
+
 ### Selection/Highlight
 | Token | CSS Variable | Use for |
 |-------|-------------|---------|
@@ -172,6 +174,24 @@ Use CSS classes from `components.css` for status cells in table rows:
 | `.border-r-subtle` | Right border |
 | `.border-t-subtle` | Top border |
 
+### Unknown, partial and denied values
+
+Keep unavailable values visible and name why they could not be read; never substitute zero, “none” or a healthy tone. Partial totals are bounds (`CertaintyGlyph`), not exact counts. Recorded declarations and observed state need distinct source labels. Use `FactValue` with `FactSource` for values and their provenance, and `worseTone` when combining health readings so an unread part cannot produce a healthy result. Workspace problem presentation maps issue severity to the canonical health tones; it does not classify evidence or authorize reads.
+
+### Times and Ages
+Every relative time uses the shared tiers — seconds, minutes, hours, days (`45s`, `12m`, `4h`, `212d`) — never months or years, matching kubectl. What the text says depends on what the reader is asking:
+
+| The value answers | Shows | Use |
+|-------------------|-------|-----|
+| When did it happen? ("Started", "Last Reconciled", "Last Seen", "Created") | `5m ago`, `just now` | `<TimeValue>` for a drawer property (adds the exact local time on hover); `formatRelativeAgeTime` in lists and sentences |
+| How long has it existed or lasted? ("Age", "5m old", "Terminating for") | `5m` | `formatAge` / `formatCompactAge` |
+
+A bare `5m` under "Started" or "Finished" reads as a duration, so a moment in a drawer, list or sentence always says "ago".
+
+Table columns are a judgment call per screen, because the header already names the event. Choose what reads clearest there. Columns that mirror `kubectl get` (Age, Last Seen, Last Schedule) stay bare, as kubectl prints them. Radar's own views don't have to look like CLI output: the GitOps fleet's Last Sync and the Leases list's Last Renewed say "ago" because it reads more naturally. Keep sibling columns on one screen consistent with each other.
+
+Go text uses `pkg/timeutil.FormatAgeShort`, with the same tiers.
+
 ## 5. Layout Principles
 
 ### Spacing
@@ -218,6 +238,7 @@ One curve, a handful of durations, and a primitive per surface. All timing lives
 | Dialog / command palette | `DialogPortal`, or the same recipe with `'dialog'` | 220ms in / 160ms out |
 | Bottom sheet | recipe with `'sheet'` | 280ms in / 220ms out |
 | Side drawer | `TRANSITION_DRAWER`; backdrop uses `'drawer'` | 300ms both ways |
+| Hover-revealed row action (row content that swaps for an action on hover / keyboard focus) | `HOVER_REVEAL_REST` on what it replaces, `HOVER_REVEAL_ACTION` on the overlay that brings the action in, `HOVER_REVEAL_HIT` on the control inside it, all in one `group` | `DURATION_HOVER_REVEAL_IN` 200ms after `HOVER_INTENT_DELAY` 60ms / `DURATION_HOVER_REVEAL_OUT` 120ms with no delay, 3px of travel. Slower than the menu clock to match Radar's 150–200ms hover effects; the delay stops actions rippling in as the pointer sweeps a long list. Only the control takes clicks, and only while shown |
 | Dock height, drawer↔fullscreen morph | `DURATION_DOCK`, `DURATION_DRAWER_MORPH` | Deliberately their own clocks — direct manipulation, not a reveal |
 
 The curve everywhere is `CSS_EASE` = `cubic-bezier(0.32, 0.72, 0, 1)` (fast out of the gate, gentle settle: the click reads as the cause of the motion and content is legible early).

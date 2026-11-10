@@ -18,6 +18,9 @@ interface ServiceRendererProps {
   copied: string | null
   endpointSlices?: any[]
   endpointSlicesLoading?: boolean
+  endpointSlicesEnabled?: boolean
+  endpointSlicesError?: string
+  endpointSlicesTruncated?: boolean
   onNavigate?: (ref: ResourceRef) => void
   renderPortAction?: (props: ServicePortRenderProps) => ReactNode
   renderPortPanel?: (props: ServicePortRenderProps) => ReactNode
@@ -38,7 +41,7 @@ function endpointSliceReadyClass(ready: number, total: number): string {
   return 'status-unhealthy'
 }
 
-export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpointSlicesLoading, onNavigate, renderPortAction, renderPortPanel }: ServiceRendererProps) {
+export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpointSlicesLoading, endpointSlicesEnabled, endpointSlicesError, endpointSlicesTruncated, onNavigate, renderPortAction, renderPortPanel }: ServiceRendererProps) {
   const spec = data.spec || {}
   const ports = spec.ports || []
   const lbIngress = data.status?.loadBalancer?.ingress || []
@@ -111,10 +114,12 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
         </Section>
       )}
 
-      {hasNoSelector && !isExternalName && (
-        <Section title="EndpointSlices" icon={Radio}>
+      {!isExternalName && (hasNoSelector || endpointSlicesEnabled) && (
+        <Section title="EndpointSlices" icon={Radio} defaultExpanded>
           {endpointSlicesLoading ? (
             <div className="text-sm text-theme-text-tertiary">Loading EndpointSlices…</div>
+          ) : endpointSlicesError ? (
+            <AlertBanner variant="warning" title="EndpointSlice inventory unavailable" message={endpointSlicesError} />
           ) : endpointSlices && endpointSlices.length > 0 ? (
             <div className="space-y-2">
               {endpointSlices.map((slice: any) => {
@@ -147,6 +152,9 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
                   </button>
                 )
               })}
+              {endpointSlicesTruncated && (
+                <div className="text-xs text-theme-text-tertiary">Showing the first {endpointSlices.length} EndpointSlices.</div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-theme-text-tertiary">No EndpointSlices found for this Service.</div>

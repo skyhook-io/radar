@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/timeline"
+	versionpkg "github.com/skyhook-io/radar/internal/version"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -31,8 +32,12 @@ type DesktopApp struct {
 	setWindowTitle func(title string)
 
 	// onWindowReady runs once, the first time the webview's DOM is ready.
-	onWindowReady func()
-	windowReady   sync.Once
+	onWindowReady  func()
+	windowReady    sync.Once
+	updateCheckMu  sync.Mutex
+	cancel         context.CancelFunc
+	checkForUpdate func(context.Context) *versionpkg.UpdateInfo
+	execJS         func(string)
 }
 
 func NewDesktopApp(srv *server.Server, timelineStoreCfg timeline.StoreConfig) *DesktopApp {
@@ -46,6 +51,8 @@ func NewDesktopApp(srv *server.Server, timelineStoreCfg timeline.StoreConfig) *D
 		}
 		wailsRuntime.WindowSetTitle(a.ctx, title)
 	}
+	a.checkForUpdate = versionpkg.CheckForUpdateManual
+	a.execJS = func(script string) { wailsRuntime.WindowExecJS(a.ctx, script) }
 	return a
 }
 
@@ -67,7 +74,7 @@ func (a *DesktopApp) updateWindowTitle(contextName string) {
 
 // startup is called when the Wails app starts.
 func (a *DesktopApp) startup(ctx context.Context) {
-	a.ctx = ctx
+	a.ctx, a.cancel = context.WithCancel(ctx)
 	startNativeMouseMonitor(ctx)
 	a.srv.SetSaveFileFunc(a.saveFile)
 	a.srv.SetSaveFileStreamFunc(a.saveFileStream)
@@ -238,6 +245,9 @@ func (a *DesktopApp) beforeClose(ctx context.Context) bool {
 
 // shutdown is called when the application is shutting down.
 func (a *DesktopApp) shutdown(ctx context.Context) {
+	if a.cancel != nil {
+		a.cancel()
+	}
 	stopNativeMouseMonitor()
 	log.Println("Desktop app shutting down...")
 	app.Shutdown(a.srv)

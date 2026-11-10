@@ -3,6 +3,9 @@ package topology
 import (
 	"fmt"
 	"log"
+	"maps"
+	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -18,7 +21,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
@@ -357,6 +362,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	jobToCronJob := make(map[string]string) // jobKey -> cronJobID (for shortcut edges)
 	scaledJobIDs := make(map[string]string)
 	jobToScaledJob := make(map[string]string) // jobKey -> scaledJobID (for shortcut edges)
+	jobIncarnation := jobIncarnations{uids: map[string]types.UID{}, jobSets: map[types.UID]string{}}
 	workflowIDs := make(map[string]string)
 	cronWorkflowIDs := make(map[string]string)
 	workflowToCronWorkflow := make(map[string]string) // workflowKey -> cronWorkflowID (for shortcut edges)
@@ -440,7 +446,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Track ConfigMap/Secret/PVC references
-		refs := extractWorkloadReferences(deploy.Spec.Template.Spec)
+		refs := extractWorkloadReferences(deploy.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(deployID, deploy.Namespace, refs)
 	}
 
@@ -616,7 +622,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			// Extract pod template spec for config references
 			template, _, _ := unstructured.NestedMap(spec, "template", "spec")
 			if template != nil {
-				refs := extractWorkloadReferencesFromMap(template)
+				refs, err := extractWorkloadReferencesFromMap(template, opts.ForRelationshipCache)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("Rollout %s/%s PodSpec could not be fully decoded; readable configuration references retained", ns, name))
+				}
 				trackWorkloadRefs(rolloutID, ns, refs)
 			}
 		}
@@ -797,7 +806,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		gitRepoGVR, hasGitRepos = resourceDiscovery.GetGVRWithGroup("GitRepository", "source.toolkit.fluxcd.io")
 	}
-	gitRepoIDs := make(map[string]string) // ns/name -> gitRepoID
+	var helmReleaseResources []*unstructured.Unstructured
 	if hasGitRepos && dynamicCache != nil {
 		gitRepos, err := dynamicCache.ListNamespaces(gitRepoGVR, opts.Namespaces)
 		if err != nil {
@@ -812,7 +821,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := repo.GetName()
 
 			repoID := fmt.Sprintf("gitrepository/%s/%s", ns, name)
-			gitRepoIDs[ns+"/"+name] = repoID
 
 			// Extract status fields
 			status, _, _ := unstructured.NestedMap(repo.Object, "status")
@@ -877,6 +885,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 			name := hr.GetName()
 
+			helmReleaseResources = append(helmReleaseResources, hr)
 			hrID := fmt.Sprintf("helmrelease/%s/%s", ns, name)
 			helmReleaseIDs[ns+"/"+name] = hrID
 			if !gitops.FluxTargetsLocalCluster(hr) {
@@ -940,6 +949,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		certificateGVR, hasCertificates = resourceDiscovery.GetGVRWithGroup("Certificate", "cert-manager.io")
 	}
 	var certificateResources []unstructured.Unstructured
+	certBySecret := make(map[string]string)
 	if hasCertificates && dynamicCache != nil {
 		certs, certErr := dynamicCache.ListNamespaces(certificateGVR, opts.Namespaces)
 		if certErr != nil {
@@ -966,6 +976,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 			certificateResources = append(certificateResources, *cert)
+			if secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName"); secretName != "" {
+				certBySecret[ns+"/"+secretName] = certID
+			}
 		}
 	}
 
@@ -1152,7 +1165,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// NodePool → NodeClass edges via spec.template.spec.nodeClassRef
+	// NodeClass → NodePool edges via spec.template.spec.nodeClassRef
 	if len(nodeClassIDs) > 0 {
 		for _, np := range cachedNodePools {
 			npName := np.GetName()
@@ -1163,9 +1176,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if ref, valid := karpenter.NodeClassRefForNodePool(np); valid {
 				if ncID, ok := nodeClassIDs[karpenterNodeClassKey(ref.Group, ref.Kind, ref.Name)]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", npID, ncID),
-						Source: npID,
-						Target: ncID,
+						ID:     fmt.Sprintf("%s-to-%s", ncID, npID),
+						Source: ncID,
+						Target: npID,
 						Type:   EdgeConfigures,
 					})
 				}
@@ -1173,7 +1186,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	var kedaAuthenticationDependencies []declaredDependency
+
 	// 1i. Add KEDA ScaledObject and ScaledJob nodes (CRD - fetched via dynamic cache)
+	// Targets resolve after the StatefulSet pass: StatefulSet IDs aren't
+	// registered yet here, and a ScaledObject may scale one.
+	type pendingScaleTarget struct{ sourceID, kind, key string }
+	var scaledObjectTargets []pendingScaleTarget
 	var scaledObjectGVR schema.GroupVersionResource
 	hasScaledObjects := false
 	if resourceDiscovery != nil {
@@ -1205,32 +1224,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 
-			// ScaledObject → target workload edge (via spec.scaleTargetRef)
-			targetAPIVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
-			targetKind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
-			targetName, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
-			if targetKind == "" {
-				targetKind = "Deployment" // KEDA defaults to Deployment when kind is omitted
+			for _, ref := range configrefs.KEDAAuthenticationReferences(so) {
+				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledObject", ns, name), Target: ref, Label: "authentication", Configuration: true})
 			}
-			if targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
-				targetKey := ns + "/" + targetName
-				var targetID string
-				switch targetKind {
-				case "Deployment":
-					targetID = deploymentIDs[targetKey]
-				case "StatefulSet":
-					targetID = statefulSetIDs[targetKey]
-				case "Rollout":
-					targetID = rolloutIDs[targetKey]
-				}
-				if targetID != "" {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", soID, targetID),
-						Source: soID,
-						Target: targetID,
-						Type:   EdgeUses,
-					})
-				}
+
+			// ScaledObject → target workload edge (via spec.scaleTargetRef)
+			targetAPIVersion, targetKind, targetName, hasTarget := configrefs.KEDAScaleTarget(so)
+			if hasTarget && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
+				scaledObjectTargets = append(scaledObjectTargets, pendingScaleTarget{soID, targetKind, ns + "/" + targetName})
 			}
 		}
 	}
@@ -1266,8 +1267,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion": sj.GetAPIVersion(),
 				},
 			})
+			for _, ref := range configrefs.KEDAAuthenticationReferences(sj) {
+				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledJob", ns, name), Target: ref, Label: "authentication", Configuration: true})
+			}
+
 		}
 	}
+
+	// 1i-a. Add JobSet nodes. Their member Jobs attach in the Job pass.
+	var jobSets jobSetRoots
+	nodes, warnings, jobSets = b.addJobSetNodes(nodes, warnings, opts)
 
 	// 1i-b. Add Cluster API (CAPI) nodes and edges
 	capiClusterIDs := make(map[string]string) // ns/name -> clusterID
@@ -1308,7 +1317,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// CAPI ClusterClass nodes + ClusterClass → Cluster edges
-	clusterClassIDs := make(map[string]string) // name -> classID (cluster-scoped)
+	clusterClassIDs := make(map[string]string) // ns/name -> classID
 	var capiClusterClassGVR schema.GroupVersionResource
 	hasCAPIClusterClasses := false
 	if resourceDiscovery != nil {
@@ -1341,7 +1350,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 		}
 
-		// ClusterClass → Cluster edges (via spec.topology.class)
+		// ClusterClass is namespaced: a Cluster names its class's namespace or
+		// uses its own.
 		if len(clusterClassIDs) > 0 {
 			for _, cl := range cachedCAPIClusters {
 				ns := cl.GetNamespace()
@@ -1352,15 +1362,21 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !ok {
 					continue
 				}
-				className, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "class")
+				// v1beta2 names the class in topology.classRef; earlier versions
+				// in topology.class and topology.classNamespace.
+				className, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "name")
+				classNS, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "namespace")
+				if className == "" {
+					className, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "class")
+					classNS, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classNamespace")
+				}
 				if className == "" {
 					continue
 				}
-				// ClusterClass can be in same namespace or cluster-scoped
-				ccID, ok := clusterClassIDs[ns+"/"+className]
-				if !ok {
-					ccID, ok = clusterClassIDs["/"+className]
+				if classNS == "" {
+					classNS = ns
 				}
+				ccID, ok := clusterClassIDs[classNS+"/"+className]
 				if ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ccID, clID),
@@ -1408,7 +1424,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Cluster → KCP edge via ownerRef
 			for _, ownerRef := range kcp.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", clID, kcpID),
@@ -1457,7 +1473,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Cluster → MachineDeployment edge via ownerRef
 			for _, ownerRef := range md.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", clID, mdID),
@@ -1506,7 +1522,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Cluster → MachinePool edge via ownerRef
 			for _, ownerRef := range mp.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", clID, mpID),
@@ -1555,7 +1571,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// MachineDeployment → MachineSet edge via ownerRef
 			for _, ownerRef := range ms.GetOwnerReferences() {
-				if ownerRef.Kind == "MachineDeployment" {
+				if ownerRef.Kind == "MachineDeployment" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if mdID, ok := machineDeploymentIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", mdID, msID),
@@ -1604,12 +1620,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			// Owner edges: MachineSet, KCP, or MachinePool → Machine
 			for _, ownerRef := range m.GetOwnerReferences() {
 				var ownerID string
-				switch ownerRef.Kind {
-				case "MachineSet":
+				switch (resourceid.GroupKind{Group: resourceid.GroupFromAPIVersion(ownerRef.APIVersion), Kind: ownerRef.Kind}) {
+				case resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "MachineSet"}:
 					ownerID = capiMachineSetIDs[ns+"/"+ownerRef.Name]
-				case "KubeadmControlPlane":
+				case resourceid.GroupKind{Group: "controlplane.cluster.x-k8s.io", Kind: "KubeadmControlPlane"}:
 					ownerID = kcpIDs[ns+"/"+ownerRef.Name]
-				case "MachinePool":
+				case resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "MachinePool"}:
 					ownerID = machinePoolIDs[ns+"/"+ownerRef.Name]
 				}
 				if ownerID != "" {
@@ -1698,7 +1714,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// MHC → Cluster edge via ownerRef
 			for _, ownerRef := range mhc.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", mhcID, clID),
@@ -1746,6 +1762,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 1k. Add Istio VirtualService nodes (CRD - fetched via dynamic cache)
 	// VirtualService edges are created in a second pass after service IDs are populated
+	istioDomain := ""
+	istioDomainLoaded := false
+	loadIstioDomain := func() {
+		if !istioDomainLoaded {
+			istioDomain = b.istioServiceDomain()
+			istioDomainLoaded = true
+		}
+	}
 	var virtualServiceGVR schema.GroupVersionResource
 	hasVirtualServices := false
 	if resourceDiscovery != nil {
@@ -1754,6 +1778,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	virtualServiceIDs := make(map[string]string)             // ns/name -> vsID
 	var virtualServiceResources []*unstructured.Unstructured // Store for second pass
 	if hasVirtualServices && dynamicCache != nil {
+		loadIstioDomain()
 		virtualServices, vsErr := dynamicCache.ListNamespaces(virtualServiceGVR, opts.Namespaces)
 		if vsErr != nil {
 			log.Printf("WARNING [topology] Failed to list Istio VirtualServices: %v", vsErr)
@@ -1790,12 +1815,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: nodeStatus,
 				Data: map[string]any{
-					"namespace":  ns,
-					"hosts":      hosts,
-					"gateways":   gateways,
-					"routeCount": routeCount,
-					"labels":     vs.GetLabels(),
-					"apiVersion": vs.GetAPIVersion(),
+					"namespace":          ns,
+					"hosts":              hosts,
+					"gateways":           gateways,
+					"routeCount":         routeCount,
+					"labels":             vs.GetLabels(),
+					"apiVersion":         vs.GetAPIVersion(),
+					"istioServiceDomain": istioDomain,
 				},
 			})
 
@@ -1813,6 +1839,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	destinationRuleIDs := make(map[string]string)             // ns/name -> drID
 	var destinationRuleResources []*unstructured.Unstructured // Store for second pass
 	if hasDestinationRules && dynamicCache != nil {
+		loadIstioDomain()
 		destinationRules, drErr := dynamicCache.ListNamespaces(destinationRuleGVR, opts.Namespaces)
 		if drErr != nil {
 			log.Printf("WARNING [topology] Failed to list Istio DestinationRules: %v", drErr)
@@ -1842,11 +1869,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: nodeStatus,
 				Data: map[string]any{
-					"namespace":   ns,
-					"host":        host,
-					"subsetCount": len(subsets),
-					"labels":      dr.GetLabels(),
-					"apiVersion":  dr.GetAPIVersion(),
+					"namespace":          ns,
+					"host":               host,
+					"subsetCount":        len(subsets),
+					"labels":             dr.GetLabels(),
+					"apiVersion":         dr.GetAPIVersion(),
+					"istioServiceDomain": istioDomain,
 				},
 			})
 
@@ -2157,7 +2185,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		{"SinkBinding", KindSinkBinding, "sinkbinding"},
 	}
 	var knativeSourceResources []*unstructured.Unstructured // Store all sources for second pass edge creation
-	knativeSourceKinds := make(map[*unstructured.Unstructured]knativeSourceDef)
 	for _, srcDef := range knativeSourceDefs {
 		var srcGVR schema.GroupVersionResource
 		hasSrc := false
@@ -2195,44 +2222,32 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			knativeSourceResources = append(knativeSourceResources, src)
-			knativeSourceKinds[src] = srcDef
 		}
 	}
 
-	// KNative Channel (needs group-qualified lookup — "Channel" could collide with other CRDs)
-	var knativeChannelGVR schema.GroupVersionResource
-	hasKnativeChannels := false
-	if resourceDiscovery != nil {
-		knativeChannelGVR, hasKnativeChannels = resourceDiscovery.GetGVRWithGroup("Channel", "messaging.knative.dev")
-	}
-	knativeChannelIDs := make(map[string]string) // ns/name -> channelID
-	if hasKnativeChannels && dynamicCache != nil {
-		knativeChannels, chanErr := dynamicCache.ListNamespaces(knativeChannelGVR, opts.Namespaces)
-		if chanErr != nil {
-			log.Printf("WARNING [topology] Failed to list KNative Channels: %v", chanErr)
-			warnings = append(warnings, fmt.Sprintf("Failed to list KNative Channels: %v", chanErr))
+	// Knative Channels and their actual in-memory backing channels are distinct
+	// resources, even when the controller gives them the same name.
+	var knativeChannelResources []*unstructured.Unstructured
+	for _, kind := range []string{"Channel", "InMemoryChannel"} {
+		if resourceDiscovery == nil || dynamicCache == nil {
+			continue
 		}
-		for _, ch := range knativeChannels {
-			ns := ch.GetNamespace()
-			if !opts.MatchesNamespaceFilter(ns) {
+		gvr, ok := resourceDiscovery.GetGVRWithGroup(kind, "messaging.knative.dev")
+		if !ok {
+			continue
+		}
+		items, err := dynamicCache.ListNamespaces(gvr, opts.Namespaces)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("Failed to list Knative %s: %v", kind, err))
+		}
+		for _, ch := range items {
+			if !opts.MatchesNamespaceFilter(ch.GetNamespace()) {
 				continue
 			}
-			name := ch.GetName()
-
-			chID := fmt.Sprintf("channel/%s/%s", ns, name)
-			knativeChannelIDs[ns+"/"+name] = chID
-
-			nodes = append(nodes, Node{
-				ID:     chID,
-				Kind:   KindChannel,
-				Name:   name,
-				Status: extractGenericStatus(ch),
-				Data: map[string]any{
-					"namespace":  ns,
-					"labels":     ch.GetLabels(),
-					"apiVersion": ch.GetAPIVersion(),
-				},
-			})
+			nodes = append(nodes, Node{ID: strings.ToLower(kind) + "/" + ch.GetNamespace() + "/" + ch.GetName(), Kind: NodeKind(kind), Name: ch.GetName(), Status: extractGenericStatus(ch), Data: map[string]any{
+				"namespace": ch.GetNamespace(), "labels": ch.GetLabels(), "apiVersion": ch.GetAPIVersion(),
+			}})
+			knativeChannelResources = append(knativeChannelResources, ch)
 		}
 	}
 
@@ -2620,7 +2635,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
-		refs := extractWorkloadReferences(ds.Spec.Template.Spec)
+		refs := extractWorkloadReferences(ds.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(dsID, ds.Namespace, refs)
 	}
 
@@ -2672,8 +2687,28 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
-		refs := extractWorkloadReferences(sts.Spec.Template.Spec)
+		refs := extractWorkloadReferences(sts.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(stsID, sts.Namespace, refs)
+	}
+
+	for _, target := range scaledObjectTargets {
+		var targetID string
+		switch target.kind {
+		case "Deployment":
+			targetID = deploymentIDs[target.key]
+		case "StatefulSet":
+			targetID = statefulSetIDs[target.key]
+		case "Rollout":
+			targetID = rolloutIDs[target.key]
+		}
+		if targetID != "" {
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", target.sourceID, targetID),
+				Source: target.sourceID,
+				Target: targetID,
+				Type:   EdgeUses,
+			})
+		}
 	}
 
 	// 4. Add CronJob nodes
@@ -2711,7 +2746,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Track ConfigMap/Secret/PVC references
-		refs := extractWorkloadReferences(cj.Spec.JobTemplate.Spec.Template.Spec)
+		refs := extractWorkloadReferences(cj.Spec.JobTemplate.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(cjID, cj.Namespace, refs)
 	}
 
@@ -2899,6 +2934,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		jobID := fmt.Sprintf("job/%s/%s", job.Namespace, job.Name)
 		jobIDs[job.Namespace+"/"+job.Name] = jobID
+		jobIncarnation.uids[job.Namespace+"/"+job.Name] = job.UID
 
 		// Determine status
 		status := getJobStatus(job)
@@ -2931,8 +2967,21 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Track ConfigMap/Secret/PVC references
-		refs := extractWorkloadReferences(job.Spec.Template.Spec)
+		refs := extractWorkloadReferences(job.Spec.Template.Spec, opts.ForRelationshipCache)
 		trackWorkloadRefs(jobID, job.Namespace, refs)
+
+		if root, ok := jobSets.controllerOf(job); ok {
+			jobSetID := jobSetNodeID(root.GetNamespace(), root.GetName())
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", jobSetID, jobID),
+				Source: jobSetID,
+				Target: jobID,
+				Type:   EdgeManages,
+			})
+			if job.UID != "" {
+				jobIncarnation.jobSets[job.UID] = jobSetID
+			}
+		}
 
 		// Connect to owner CronJob or KEDA ScaledJob
 		for _, ownerRef := range job.OwnerReferences {
@@ -3126,6 +3175,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Data:   rsData,
 			})
 
+			if opts.ForRelationshipCache {
+				trackWorkloadRefs(rsID, rs.Namespace, extractWorkloadReferences(rs.Spec.Template.Spec, true))
+			}
+
 			// Connect to owner Deployment or Rollout
 			for _, ownerRef := range rs.OwnerReferences {
 				if !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
@@ -3166,6 +3219,43 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 		pods = ps
 	}
+
+	// Admitted defaults describe individual Pods, not application boundaries.
+	// Retain observed targets for per-Pod projection even when Pods are grouped.
+	podConfigTargets := make(map[workloadRefKey]bool)
+	podSecretTargets := make(map[workloadRefKey]bool)
+	podPVCTargets := make(map[workloadRefKey]bool)
+	podServiceAccountTargets := make(map[workloadRefKey]bool)
+	podConsumers := make(map[string][]ResourceRef)
+	if opts.ForRelationshipCache {
+		for _, pod := range pods {
+			if !opts.MatchesNamespaceFilter(pod.Namespace) {
+				continue
+			}
+			seen := make(map[configrefs.Ref]bool)
+			configrefs.VisitPodSpecReferences(pod.Namespace, pod.Spec, func(ref configrefs.PodSpecReference) {
+				if seen[ref.Ref] {
+					return
+				}
+				seen[ref.Ref] = true
+				key := workloadRefKey{namespace: ref.Namespace, name: ref.Name}
+				if ref.Kind == "ConfigMap" || ref.Kind == "Secret" || ref.Kind == "PersistentVolumeClaim" || ref.Kind == "ServiceAccount" {
+					identity := resourceid.ResourceKey("", ref.Kind, ref.Namespace, ref.Name)
+					podConsumers[identity] = append(podConsumers[identity], ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+				}
+				switch ref.Kind {
+				case "ConfigMap":
+					podConfigTargets[key] = true
+				case "Secret":
+					podSecretTargets[key] = true
+				case "PersistentVolumeClaim":
+					podPVCTargets[key] = true
+				case "ServiceAccount":
+					podServiceAccountTargets[key] = true
+				}
+			})
+		}
+	}
 	// podSummaries accumulates per-workload pod health in summary mode; stamped
 	// onto the workload nodes just before return. Empty (and the stamp a no-op)
 	// in normal mode.
@@ -3187,7 +3277,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !opts.MatchesNamespaceFilter(pod.Namespace) {
 				continue
 			}
-			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, workflowIDs)
+			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobIncarnation, workflowIDs)
 			if workloadID == "" {
 				addPodHealth(orphanByNS, pod.Namespace, pod)
 				orphanRestarts[pod.Namespace] += ComputePodRestarts(pod)
@@ -3202,6 +3292,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		// Group pods using shared grouping logic
 		groupingResult := GroupPods(pods, PodGroupingOptions{
 			Namespaces: opts.Namespaces,
+			JobUIDs:    jobIncarnation.uids,
 		})
 
 		// Create nodes and edges for each group
@@ -3217,18 +3308,20 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				for _, pod := range group.Pods {
 					podID := GetPodID(pod)
 					podNode := CreatePodNode(pod, b.provider, true) // includeNodeName=true for resources view
+					jobIncarnation.markEarlierJobRun(&podNode, []*corev1.Pod{pod})
 					if role := podRolloutTrafficRole(pod, replicaSetToRollout, rolloutTrafficByID); role != "" {
 						podNode.Data["trafficRole"] = role
 					}
 					nodes = append(nodes, podNode)
 
 					// Connect to owner (resources view specific)
-					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow)...)
+					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobIncarnation, workflowIDs, workflowToCronWorkflow)...)
 				}
 			} else {
 				// Large group - create PodGroup
 				podGroupID := GetPodGroupID(group)
 				podGroupNode := CreatePodGroupNode(group, b.provider)
+				jobIncarnation.markEarlierJobRun(&podGroupNode, group.Pods)
 
 				// A large group's pods can span more than one owning
 				// ReplicaSet and traffic role at once (a Rollout mid-
@@ -3254,7 +3347,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						podRoleByKey[p.Namespace+"/"+p.Name] = role
 					}
 					for _, ref := range p.OwnerReferences {
-						ownerKey := p.Namespace + "/" + ref.Kind + "/" + ref.Name
+						ownerKey := podOwnerKey(p.Namespace, ref)
 						if _, ok := ownerReps[ownerKey]; !ok {
 							ownerReps[ownerKey] = p
 						}
@@ -3276,7 +3369,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				// below and pod_grouping.go's "ownerKey" on each pod.
 				ownerKeyToSourceIDs := map[string][]string{}
 				for ownerKey, p := range ownerReps {
-					for _, e := range b.createPodOwnerEdges(p, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow) {
+					for _, e := range b.createPodOwnerEdges(p, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, jobIncarnation, workflowIDs, workflowToCronWorkflow) {
 						ownerKeyToSourceIDs[ownerKey] = append(ownerKeyToSourceIDs[ownerKey], e.Source)
 						if !seenEdgeID[e.ID] {
 							seenEdgeID[e.ID] = true
@@ -3622,23 +3715,21 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
+		refs := workloadRefs{secrets: make(map[string]bool)}
+		for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+			refs.secrets[ref.Name] = true
+		}
+		trackWorkloadRefs(ingID, ing.Namespace, refs)
+
 		// Connect to backend Services
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					if svcID, ok := serviceIDs[svcKey]; ok {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-							Source: ingID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			if svcID, ok := serviceIDs[ing.Namespace+"/"+svcName]; ok {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
+					Source: ingID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}
@@ -3729,8 +3820,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Add Gateway API route nodes (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
-	gatewayRouteKindList := []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"}
+	// Add Gateway API route nodes (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
+	gatewayRouteKindList := []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"}
 	for _, routeKind := range gatewayRouteKindList {
 		var routeGVR schema.GroupVersionResource
 		hasRoutes := false
@@ -3779,6 +3870,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	nodes, edges, kedaAuthenticationWarnings := addObservedDependencyEdges(nodes, edges, kedaAuthenticationDependencies, dynamicCache, opts)
+	warnings = append(warnings, kedaAuthenticationWarnings...)
+
 	// 8. Add ConfigMap nodes (if enabled)
 	if opts.IncludeConfigMaps {
 		configmaps, cmErr := b.provider.ConfigMaps()
@@ -3805,7 +3899,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 
-			if len(consumers) > 0 {
+			if len(consumers) > 0 || podConfigTargets[workloadRefKey{namespace: cm.Namespace, name: cm.Name}] {
 				nodes = append(nodes, configMapNode(cm))
 			}
 		}
@@ -3813,8 +3907,22 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 9. Add Secret nodes (if enabled and RBAC permits)
 	visibleSecretIDs := make(map[workloadRefKey]string)
+	observedSecrets := make(map[string]*corev1.Secret)
+	var secrets []*corev1.Secret
+	var secretsErr error
+	secretsLoaded := false
+	loadObservedSecrets := func() {
+		if secretsLoaded {
+			return
+		}
+		secretsLoaded = true
+		secrets, secretsErr = b.provider.Secrets()
+		for _, secret := range secrets {
+			observedSecrets["secret/"+secret.Namespace+"/"+secret.Name] = secret
+		}
+	}
 	if opts.IncludeSecrets {
-		secrets, secretsErr := b.provider.Secrets()
+		loadObservedSecrets()
 		if secretsErr != nil {
 			log.Printf("WARNING [topology] Failed to list Secrets: %v", secretsErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Secrets: %v", secretsErr))
@@ -3825,7 +3933,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 
-			// Only include Secrets that are referenced by workloads in the same namespace
 			secretID := fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name)
 			consumers := secretConsumers[workloadRefKey{namespace: secret.Namespace, name: secret.Name}]
 
@@ -3838,7 +3945,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 
-			if len(consumers) > 0 {
+			if (opts.ForRelationshipCache && certBySecret[secret.Namespace+"/"+secret.Name] != "") || len(consumers) > 0 || podSecretTargets[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] {
 				visibleSecretIDs[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] = secretID
 				nodes = append(nodes, secretNode(secret))
 			}
@@ -3863,7 +3970,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 			key := workloadRefKey{namespace: serviceAccount.Namespace, name: serviceAccount.Name}
 			consumers := consumersByServiceAccount[key]
-			if len(consumers) == 0 {
+			if len(consumers) == 0 && !podServiceAccountTargets[key] {
 				continue
 			}
 			serviceAccountID := fmt.Sprintf("serviceaccount/%s/%s", serviceAccount.Namespace, serviceAccount.Name)
@@ -3894,10 +4001,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !opts.MatchesNamespaceFilter(namespace) {
 					continue
 				}
-				targetName, _, _ := unstructured.NestedString(sealedSecret.Object, "spec", "template", "metadata", "name")
-				if targetName == "" {
-					targetName = sealedSecret.GetName()
-				}
+				// The controller forces the produced Secret's name to the
+				// SealedSecret's own name; spec.template.metadata.name is
+				// overwritten and does not name the output Secret.
+				targetName := sealedSecret.GetName()
 				key := workloadRefKey{namespace: namespace, name: targetName}
 				consumers := secretConsumers[key]
 				if len(consumers) == 0 {
@@ -3945,7 +4052,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 
-			if len(consumers) > 0 {
+			if len(consumers) > 0 || podPVCTargets[workloadRefKey{namespace: pvc.Namespace, name: pvc.Name}] {
 				// Get storage info
 				var storageSize string
 				if pvc.Spec.Resources.Requests != nil {
@@ -4372,10 +4479,17 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			// Connect to target workload via spec.targetRef
-			targetAPIVersion, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "apiVersion")
 			targetKind, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "kind")
 			targetName, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "name")
-			if targetKind != "" && targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
+			targetAPIVersion, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "apiVersion")
+			if targetAPIVersion == "" {
+				builtin, ok := resourceid.BuiltinForKind(targetKind)
+				if !ok {
+					continue
+				}
+				targetAPIVersion = builtin.APIVersion()
+			}
+			if targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
 				targetKey := ns + "/" + targetName
 				var targetID string
 				switch targetKind {
@@ -4402,245 +4516,67 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 13. Create Flux source edges. Managed-resource edges are resolved after
-	// generic CRD nodes have been added so their exact API identity is available.
-	for _, ks := range kustomizationResources {
-		ns := ks.GetNamespace()
-		name := ks.GetName()
-		ksID := kustomizationIDs[ns+"/"+name]
+	// Source dependencies are not owners. Join all supported source kinds and
+	// referenced charts through the shared observed-target path.
+	fluxRoots := append(append([]*unstructured.Unstructured(nil), kustomizationResources...), helmReleaseResources...)
+	nodes, edges, fluxSourceWarnings := addFluxSourceEdges(nodes, edges, fluxRoots, dynamicCache, opts)
+	warnings = append(warnings, fluxSourceWarnings...)
 
-		// Also create edge from GitRepository to Kustomization if source ref exists
-		spec, _, _ := unstructured.NestedMap(ks.Object, "spec")
-		if spec != nil {
-			if sourceRef, ok, _ := unstructured.NestedMap(spec, "sourceRef"); ok && sourceRef != nil {
-				refKind, _ := sourceRef["kind"].(string)
-				refName, _ := sourceRef["name"].(string)
-				refNS, _ := sourceRef["namespace"].(string)
-				if refNS == "" {
-					refNS = ns // Default to same namespace
-				}
-
-				if refKind == "GitRepository" {
-					gitRepoID := gitRepoIDs[refNS+"/"+refName]
-					if gitRepoID != "" {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", gitRepoID, ksID),
-							Source: gitRepoID,
-							Target: ksID,
-							Type:   EdgeManages, // GitRepo provides source for Kustomization
-						})
-					}
-				}
-			}
-		}
-	}
-
-	// 14. Create FluxCD HelmRelease edges to managed resources
-	// HelmReleases don't have inventory - match by labels:
-	// - helm.toolkit.fluxcd.io/name (FluxCD-specific, preferred)
-	// - app.kubernetes.io/instance (standard Helm label)
-	for hrKey, hrID := range helmReleaseIDs {
-		parts := strings.Split(hrKey, "/")
-		// A release applied to another cluster installed nothing here; a local
-		// workload with matching labels belongs to some other release.
-		if len(parts) != 2 || remoteHelmReleases[hrKey] {
+	// 14. FluxCD HelmRelease edges by origin labels, for releases whose status
+	// records no inventory (older helm-controllers). A release that records
+	// one gets its edges from it, beside Kustomizations, in
+	// addGitOpsManagedResourceEdges. A release applied to another cluster
+	// installed nothing here; a local workload with its labels belongs to
+	// some other release.
+	labelledReleases := make(map[resourceid.Ref]string)
+	for _, hr := range helmReleaseResources {
+		key := hr.GetNamespace() + "/" + hr.GetName()
+		if remoteHelmReleases[key] || gitops.FluxMembersReadable(hr) {
 			continue
 		}
-		hrNS := parts[0]
-		hrName := parts[1]
-
-		// Find Deployments with matching label
-		for depKey, depID := range deploymentIDs {
-			depParts := strings.Split(depKey, "/")
-			if len(depParts) != 2 {
-				continue
+		labelledReleases[resourceid.NewRef("helm.toolkit.fluxcd.io", "HelmRelease", hr.GetNamespace(), hr.GetName())] = helmReleaseIDs[key]
+	}
+	if len(labelledReleases) > 0 {
+		addLabelledRelease := func(obj metav1.Object, targetID string) {
+			if targetID == "" {
+				return
 			}
-			depNS := depParts[0]
-			depName := depParts[1]
-
-			// Must be in same namespace
-			if depNS != hrNS {
-				continue
+			release, ok := gitops.FluxHelmLabelledRelease(obj)
+			if !ok {
+				return
 			}
-
-			// Check if deployment has matching label
-			var dep *appsv1.Deployment
-			for _, d := range deployments {
-				if d.Namespace == depNS && d.Name == depName {
-					dep = d
-					break
-				}
-			}
-			if dep == nil {
-				continue
-			}
-
-			if matchesHelmRelease(dep.Labels, hrName, hrNS) {
+			if hrID := labelledReleases[release]; hrID != "" {
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, depID),
+					ID:     fmt.Sprintf("%s-to-%s", hrID, targetID),
 					Source: hrID,
-					Target: depID,
+					Target: targetID,
 					Type:   EdgeManages,
 				})
 			}
 		}
-
-		// Find Services with matching label
-		for svcKey, svcID := range serviceIDs {
-			svcParts := strings.Split(svcKey, "/")
-			if len(svcParts) != 2 {
-				continue
-			}
-			svcNS := svcParts[0]
-			svcName := svcParts[1]
-
-			// Must be in same namespace
-			if svcNS != hrNS {
-				continue
-			}
-
-			// Check if service has matching label
-			var svc *corev1.Service
-			for _, s := range services {
-				if s.Namespace == svcNS && s.Name == svcName {
-					svc = s
-					break
-				}
-			}
-			if svc == nil {
-				continue
-			}
-
-			if matchesHelmRelease(svc.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, svcID),
-					Source: hrID,
-					Target: svcID,
-					Type:   EdgeManages,
-				})
+		for _, d := range deployments {
+			addLabelledRelease(d, deploymentIDs[d.Namespace+"/"+d.Name])
+		}
+		for _, s := range services {
+			addLabelledRelease(s, serviceIDs[s.Namespace+"/"+s.Name])
+		}
+		for _, s := range statefulsets {
+			addLabelledRelease(s, statefulSetIDs[s.Namespace+"/"+s.Name])
+		}
+		for _, d := range daemonsets {
+			if opts.MatchesNamespaceFilter(d.Namespace) {
+				addLabelledRelease(d, fmt.Sprintf("daemonset/%s/%s", d.Namespace, d.Name))
 			}
 		}
-
-		// Find StatefulSets with matching label
-		for stsKey, stsID := range statefulSetIDs {
-			stsParts := strings.Split(stsKey, "/")
-			if len(stsParts) != 2 {
-				continue
-			}
-			stsNS := stsParts[0]
-			stsName := stsParts[1]
-
-			// Must be in same namespace
-			if stsNS != hrNS {
-				continue
-			}
-
-			// Check if statefulset has matching label
-			var sts *appsv1.StatefulSet
-			for _, s := range statefulsets {
-				if s.Namespace == stsNS && s.Name == stsName {
-					sts = s
-					break
-				}
-			}
-			if sts == nil {
-				continue
-			}
-
-			if matchesHelmRelease(sts.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, stsID),
-					Source: hrID,
-					Target: stsID,
-					Type:   EdgeManages,
-				})
-			}
+		for _, j := range jobs {
+			addLabelledRelease(j, jobIDs[j.Namespace+"/"+j.Name])
 		}
-
-		// Find DaemonSets with matching label
-		for _, ds := range daemonsetsByNS[hrNS] {
-			if matchesHelmRelease(ds.Labels, hrName, hrNS) {
-				dsID := fmt.Sprintf("daemonset/%s/%s", ds.Namespace, ds.Name)
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, dsID),
-					Source: hrID,
-					Target: dsID,
-					Type:   EdgeManages,
-				})
-			}
+		for _, c := range cronjobs {
+			addLabelledRelease(c, cronJobIDs[c.Namespace+"/"+c.Name])
 		}
-
-		// Find Jobs with matching label
-		for jobKey, jobID := range jobIDs {
-			jobParts := strings.Split(jobKey, "/")
-			if len(jobParts) != 2 || jobParts[0] != hrNS {
-				continue
-			}
-			var job *batchv1.Job
-			for _, j := range jobs {
-				if j.Namespace == jobParts[0] && j.Name == jobParts[1] {
-					job = j
-					break
-				}
-			}
-			if job == nil {
-				continue
-			}
-			if matchesHelmRelease(job.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, jobID),
-					Source: hrID,
-					Target: jobID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find CronJobs with matching label
-		for cjKey, cjID := range cronJobIDs {
-			cjParts := strings.Split(cjKey, "/")
-			if len(cjParts) != 2 || cjParts[0] != hrNS {
-				continue
-			}
-			var cj *batchv1.CronJob
-			for _, c := range cronjobs {
-				if c.Namespace == cjParts[0] && c.Name == cjParts[1] {
-					cj = c
-					break
-				}
-			}
-			if cj == nil {
-				continue
-			}
-			if matchesHelmRelease(cj.Labels, hrName, hrNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, cjID),
-					Source: hrID,
-					Target: cjID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find Rollouts with matching label
-		if hasRollouts && dynamicCache != nil {
-			for rolloutKey, rolloutID := range rolloutIDs {
-				rolloutParts := strings.Split(rolloutKey, "/")
-				if len(rolloutParts) != 2 || rolloutParts[0] != hrNS {
-					continue
-				}
-				rolloutRes, rolloutGetErr := dynamicCache.Get(rolloutGVR, rolloutParts[0], rolloutParts[1])
-				if rolloutGetErr != nil || rolloutRes == nil {
-					continue
-				}
-				if matchesHelmRelease(rolloutRes.GetLabels(), hrName, hrNS) {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", hrID, rolloutID),
-						Source: hrID,
-						Target: rolloutID,
-						Type:   EdgeManages,
-					})
-				}
+		for _, ns := range slices.Sorted(maps.Keys(rolloutsByNamespace)) {
+			for _, r := range rolloutsByNamespace[ns] {
+				addLabelledRelease(r, rolloutIDs[ns+"/"+r.GetName()])
 			}
 		}
 	}
@@ -4685,7 +4621,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// addVSToSvcEdge is a helper that deduplicates VS→Service edges
 		addVSToSvcEdge := func(protocol string, destHost string) {
-			svcName, svcNs := parseIstioHost(destHost, vsNs)
+			svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
 			svcID, ok := serviceIDs[svcNs+"/"+svcName]
 			if !ok {
 				return
@@ -4779,7 +4715,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 
-		svcName, svcNs := parseIstioHost(host, drNs)
+		svcName, svcNs := parseIstioHost(host, drNs, istioDomain)
 		if svcID, ok := serviceIDs[svcNs+"/"+svcName]; ok {
 			edges = append(edges, Edge{
 				ID:     fmt.Sprintf("%s-to-%s", drID, svcID),
@@ -4803,7 +4739,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range kcfg.GetOwnerReferences() {
-			if ref.Kind == "Service" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
+			if ref.Kind == "Service" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				if ownerID, ok := knativeServiceIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, kcfgID),
@@ -4824,7 +4760,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range kroute.GetOwnerReferences() {
-			if ref.Kind == "Service" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
+			if ref.Kind == "Service" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				if ownerID, ok := knativeServiceIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, krouteID),
@@ -4845,7 +4781,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range krev.GetOwnerReferences() {
-			if ref.Kind == "Configuration" {
+			if ref.Kind == "Configuration" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				if ownerID, ok := knativeConfigIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, krevID),
@@ -4863,7 +4799,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range deploy.OwnerReferences {
-			if ref.Kind == "Revision" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
+			if ref.Kind == "Revision" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				deployID := deploymentIDs[deploy.Namespace+"/"+deploy.Name]
 				if krevID, ok := knativeRevisionIDs[deploy.Namespace+"/"+ref.Name]; ok && deployID != "" {
 					edges = append(edges, Edge{
@@ -4908,17 +4844,27 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// KnativeService → K8s Services (EdgeExposes)
 	// Connects to: same-name service (ExternalName DNS alias) + per-revision private services (actual pod routing)
+	knativeFrontDoors := map[string]bool{}
+	for _, svc := range services {
+		for _, owner := range svc.OwnerReferences {
+			if owner.Kind == "Route" && resourceid.GroupFromAPIVersion(owner.APIVersion) == "serving.knative.dev" && owner.Name == svc.Name {
+				knativeFrontDoors[svc.Namespace+"/"+svc.Name] = true
+			}
+		}
+	}
 	for _, ksvc := range knativeServiceResources {
 		ksvcNs := ksvc.GetNamespace()
 		ksvcName := ksvc.GetName()
 		ksvcID := knativeServiceIDs[ksvcNs+"/"+ksvcName]
 
-		// Same-name service (ExternalName)
-		if svcID, ok := serviceIDs[ksvcNs+"/"+ksvcName]; ok {
+		// The same-name core Service is the Route's front door: an ExternalName
+		// alias for the ingress that callers address. Traffic enters through it,
+		// so it exposes the Knative Service, not the other way round.
+		if svcID, ok := serviceIDs[ksvcNs+"/"+ksvcName]; ok && knativeFrontDoors[ksvcNs+"/"+ksvcName] {
 			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", ksvcID, svcID),
-				Source: ksvcID,
-				Target: svcID,
+				ID:     fmt.Sprintf("%s-to-%s", svcID, ksvcID),
+				Source: svcID,
+				Target: ksvcID,
 				Type:   EdgeExposes,
 			})
 		}
@@ -4971,7 +4917,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// Broker → Trigger (data flow: Broker dispatches events to matching Triggers)
 		brokerName, _, _ := unstructured.NestedString(trigger.Object, "spec", "broker")
-		if brokerName != "" {
+		_, hasBrokerRef, _ := unstructured.NestedFieldNoCopy(trigger.Object, "spec", "brokerRef")
+		if brokerName != "" && !hasBrokerRef {
 			if brokerID, ok := knativeBrokerIDs[triggerNs+"/"+brokerName]; ok {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", brokerID, triggerID),
@@ -4982,53 +4929,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 
-		// Trigger → subscriber target
-		subRefKind, _, _ := unstructured.NestedString(trigger.Object, "spec", "subscriber", "ref", "kind")
-		subRefName, _, _ := unstructured.NestedString(trigger.Object, "spec", "subscriber", "ref", "name")
-		subRefNs, _, _ := unstructured.NestedString(trigger.Object, "spec", "subscriber", "ref", "namespace")
-		if subRefNs == "" {
-			subRefNs = triggerNs
-		}
-		if subRefKind != "" && subRefName != "" {
-			targetID := resolveKnativeRef(subRefKind, subRefNs, subRefName, serviceIDs, knativeServiceIDs, knativeBrokerIDs, knativeChannelIDs)
-			if targetID != "" {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-sub-to-%s", triggerID, targetID),
-					Source: triggerID,
-					Target: targetID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
 	}
 
-	// Sources → sink target (EdgeExposes, via spec.sink.ref)
-	for _, src := range knativeSourceResources {
-		srcDef := knativeSourceKinds[src]
-		srcNs := src.GetNamespace()
-		srcName := src.GetName()
-		srcID := fmt.Sprintf("%s/%s/%s", srcDef.prefix, srcNs, srcName)
-
-		sinkRefKind, _, _ := unstructured.NestedString(src.Object, "spec", "sink", "ref", "kind")
-		sinkRefName, _, _ := unstructured.NestedString(src.Object, "spec", "sink", "ref", "name")
-		sinkRefNs, _, _ := unstructured.NestedString(src.Object, "spec", "sink", "ref", "namespace")
-		if sinkRefNs == "" {
-			sinkRefNs = srcNs
-		}
-		if sinkRefKind != "" && sinkRefName != "" {
-			targetID := resolveKnativeRef(sinkRefKind, sinkRefNs, sinkRefName, serviceIDs, knativeServiceIDs, knativeBrokerIDs, knativeChannelIDs)
-			if targetID != "" {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-sink-to-%s", srcID, targetID),
-					Source: srcID,
-					Target: targetID,
-					Type:   EdgeExposes,
-				})
-			}
-		}
-	}
-
-	// 15. Create Gateway API edges (Gateway → Route, Route → Service)
+	// 15. Create Gateway API edges (Gateway → Route, Route → Service).
+	// Several parentRefs (one per listener) or rules can name the same object.
+	gatewayEdgeSeen := make(map[string]bool)
 	for i, route := range gatewayRouteResources {
 		ns := route.GetNamespace()
 		name := route.GetName()
@@ -5042,15 +4947,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !ok {
 				continue
 			}
-			parentName, _ := pMap["name"].(string)
-			parentNS, _ := pMap["namespace"].(string)
-			if parentNS == "" {
-				parentNS = ns // Default to route's namespace
+			if !configrefs.GatewayParentIsGateway(pMap) {
+				continue
 			}
+			parentName, _ := pMap["name"].(string)
+			parentNS := configrefs.GatewayRefNamespace(pMap, ns)
 			gwID := gatewayIDs[parentNS+"/"+parentName]
-			if gwID != "" {
+			if edgeID := fmt.Sprintf("%s-to-%s", gwID, routeID); gwID != "" && !gatewayEdgeSeen[edgeID] {
+				gatewayEdgeSeen[edgeID] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
+					ID:     edgeID,
 					Source: gwID,
 					Target: routeID,
 					Type:   EdgeRoutesTo,
@@ -5072,15 +4978,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 				backendName, _ := bMap["name"].(string)
-				backendNS, _ := bMap["namespace"].(string)
-				if backendNS == "" {
-					backendNS = ns // Default to route's namespace
-				}
-				// Default kind is Service if not specified
-				backendKind, _ := bMap["kind"].(string)
-				if backendKind == "" || backendKind == "Service" {
+				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
+				if configrefs.GatewayBackendIsService(bMap) {
 					svcKey := backendNS + "/" + backendName
-					if svcID, ok := serviceIDs[svcKey]; ok {
+					if svcID, ok := serviceIDs[svcKey]; ok && !gatewayEdgeSeen[routeID+"-to-"+svcID] {
+						gatewayEdgeSeen[routeID+"-to-"+svcID] = true
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
 							Source: routeID,
@@ -5117,55 +5019,15 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 15c. Create cert-manager Certificate → Issuer/ClusterIssuer edges (via spec.issuerRef)
-	// Build a lookup of existing node IDs for matching
-	existingNodeIDs := make(map[string]bool, len(nodes))
-	for _, node := range nodes {
-		existingNodeIDs[node.ID] = true
-	}
-	for _, cert := range certificateResources {
-		ns := cert.GetNamespace()
-		certID := fmt.Sprintf("certificate/%s/%s", ns, cert.GetName())
-
-		issuerKind, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "kind")
-		issuerName, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
-		if issuerKind == "" || issuerName == "" {
-			continue
-		}
-
-		var issuerID string
-		switch issuerKind {
-		case "ClusterIssuer":
-			issuerID = fmt.Sprintf("clusterissuer//%s", issuerName)
-		case "Issuer":
-			issuerID = fmt.Sprintf("issuer/%s/%s", ns, issuerName)
-		}
-		if issuerID != "" && existingNodeIDs[issuerID] {
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", certID, issuerID),
-				Source: certID,
-				Target: issuerID,
-				Type:   EdgeUses,
-			})
-		}
-	}
-
-	// Build Certificate lookup by secretName (for IngressRoute → Certificate edges)
-	certBySecret := make(map[string]string) // "ns/secretName" → certificateID
-	for _, cert := range certificateResources {
-		ns := cert.GetNamespace()
-		secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
-		if secretName != "" {
-			certBySecret[ns+"/"+secretName] = fmt.Sprintf("certificate/%s/%s", ns, cert.GetName())
-		}
-	}
+	nodes, edges, issuerWarnings := addCertificateIssuerEdges(nodes, edges, certificateResources, dynamicCache, opts)
+	warnings = append(warnings, issuerWarnings...)
 
 	// 15d. Create Traefik edges
 	// IngressRoute/TCP/UDP → Service/TraefikService (EdgeExposes)
-	// IngressRoute/TCP → Middleware/MiddlewareTCP (EdgeConfigures)
-	// IngressRoute/TCP → TLSOption, TLSStore, ServersTransport/TCP (EdgeConfigures)
+	// Middleware/MiddlewareTCP → IngressRoute/TCP (EdgeConfigures)
+	// TLSOption, ServersTransport/TCP → IngressRoute/TCP (EdgeConfigures)
 	// TraefikService → Service/TraefikService (EdgeExposes)
-	// Middleware → Middleware chain (EdgeConfigures)
+	// Child Middleware → Middleware chain (EdgeConfigures)
 	traefikEdgeSeen := make(map[string]bool) // dedup: sourceID|targetID
 
 	for _, res := range traefikRouteResources {
@@ -5183,9 +5045,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 
-			// Route → Service/TraefikService edges
-			// When a serversTransport is present: IngressRoute → Transport → Service
-			// Otherwise: IngressRoute → Service (direct)
+			// Route → Service/TraefikService edges. A serversTransport only
+			// configures how Traefik dials the backend: it is configuration of
+			// the route, never a hop between the route and its Service.
 			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
 			for _, svc := range svcs {
 				svcMap, ok := svc.(map[string]any)
@@ -5202,6 +5064,29 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 				svcKind, _ := svcMap["kind"].(string)
 
+				// The route uses its transport whether or not the backend exists.
+				// Traefik resolves an HTTP transport in the backend Service's
+				// namespace and a TCP transport in the route's, and ignores it
+				// on a TraefikService backend.
+				if stName, _ := svcMap["serversTransport"].(string); stName != "" && svcKind != "TraefikService" {
+					stPrefix, stNs := "serverstransport", svcNs
+					if def.kind == "IngressRouteTCP" {
+						stPrefix, stNs = "serverstransporttcp", routeNs
+					}
+					if stID := traefikConfigIDs[stPrefix+":"+stNs+"/"+stName]; stID != "" {
+						dedupeKey := stID + "|" + routeID
+						if !traefikEdgeSeen[dedupeKey] {
+							traefikEdgeSeen[dedupeKey] = true
+							edges = append(edges, Edge{
+								ID:     fmt.Sprintf("%s-to-%s", stID, routeID),
+								Source: stID,
+								Target: routeID,
+								Type:   EdgeConfigures,
+							})
+						}
+					}
+				}
+
 				var targetID string
 				if svcKind == "TraefikService" {
 					targetID = traefikServiceIDs[svcNs+"/"+svcName]
@@ -5212,58 +5097,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if targetID == "" {
 					continue
 				}
-
-				// Check for ServersTransport reference
-				stName, _ := svcMap["serversTransport"].(string)
-				var stID string
-				if stName != "" {
-					stPrefix := "serverstransport"
-					if def.kind == "IngressRouteTCP" {
-						stPrefix = "serverstransporttcp"
-					}
-					// ServersTransport is resolved relative to the IngressRoute's namespace, not the service's
-					stID = traefikConfigIDs[stPrefix+":"+routeNs+"/"+stName]
+				dedupeKey := routeID + "|" + targetID
+				if traefikEdgeSeen[dedupeKey] {
+					continue
 				}
-
-				if stID != "" {
-					// Chain: IngressRoute → ServersTransport → Service
-					dedupeKey := routeID + "|" + stID
-					if !traefikEdgeSeen[dedupeKey] {
-						traefikEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, stID),
-							Source: routeID,
-							Target: stID,
-							Type:   EdgeConfigures,
-						})
-					}
-					dedupeKey2 := stID + "|" + targetID
-					if !traefikEdgeSeen[dedupeKey2] {
-						traefikEdgeSeen[dedupeKey2] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", stID, targetID),
-							Source: stID,
-							Target: targetID,
-							Type:   EdgeConfigures,
-						})
-					}
-				} else {
-					// Direct: IngressRoute → Service
-					dedupeKey := routeID + "|" + targetID
-					if traefikEdgeSeen[dedupeKey] {
-						continue
-					}
-					traefikEdgeSeen[dedupeKey] = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
-						Source: routeID,
-						Target: targetID,
-						Type:   EdgeExposes,
-					})
-				}
+				traefikEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
+					Source: routeID,
+					Target: targetID,
+					Type:   EdgeExposes,
+				})
 			}
 
-			// Route → Middleware/MiddlewareTCP edges
 			middlewares, _, _ := unstructured.NestedSlice(routeMap, "middlewares")
 			for _, mw := range middlewares {
 				mwMap, ok := mw.(map[string]any)
@@ -5293,9 +5139,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", routeID, mwID),
-					Source: routeID,
-					Target: mwID,
+					ID:     fmt.Sprintf("%s-to-%s", mwID, routeID),
+					Source: mwID,
+					Target: routeID,
 					Type:   EdgeConfigures,
 				})
 			}
@@ -5315,37 +5161,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					if !traefikEdgeSeen[dedupeKey] {
 						traefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, tlsOptID),
-							Source: routeID,
-							Target: tlsOptID,
+							ID:     fmt.Sprintf("%s-to-%s", tlsOptID, routeID),
+							Source: tlsOptID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}
 				}
 			}
 
-			tlsStoreName, _, _ := unstructured.NestedString(res.Object, "spec", "tls", "store", "name")
-			if tlsStoreName != "" {
-				tlsStoreNs, _, _ := unstructured.NestedString(res.Object, "spec", "tls", "store", "namespace")
-				if tlsStoreNs == "" {
-					tlsStoreNs = routeNs
-				}
-				tlsStoreID := traefikConfigIDs["tlsstore:"+tlsStoreNs+"/"+tlsStoreName]
-				if tlsStoreID != "" {
-					dedupeKey := routeID + "|" + tlsStoreID
-					if !traefikEdgeSeen[dedupeKey] {
-						traefikEdgeSeen[dedupeKey] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, tlsStoreID),
-							Source: routeID,
-							Target: tlsStoreID,
-							Type:   EdgeConfigures,
-						})
-					}
-				}
-			}
+			// spec.tls.store is not drawn: Traefik serves every route from the
+			// default TLSStore and ignores a route's store reference.
 
-			// IngressRoute → Certificate (via spec.tls.secretName matching cert-manager Certificate)
+			// Certificate → IngressRoute (via spec.tls.secretName matching cert-manager Certificate)
 			tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "tls", "secretName")
 			if tlsSecretName != "" {
 				certID := certBySecret[routeNs+"/"+tlsSecretName]
@@ -5354,9 +5182,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					if !traefikEdgeSeen[dedupeKey] {
 						traefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, certID),
-							Source: routeID,
-							Target: certID,
+							ID:     fmt.Sprintf("%s-to-%s", certID, routeID),
+							Source: certID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}
@@ -5466,7 +5294,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Middleware → Middleware chain edges (spec.chain.middlewares[])
+	// Child Middleware → Middleware chain edges (spec.chain.middlewares[])
 	for _, mw := range middlewareResources {
 		mwNs := mw.GetNamespace()
 		mwID := middlewareIDs["middleware:"+mwNs+"/"+mw.GetName()]
@@ -5496,24 +5324,42 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !traefikEdgeSeen[dedupeKey] {
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", mwID, targetID),
-					Source: mwID,
-					Target: targetID,
+					ID:     fmt.Sprintf("%s-to-%s", targetID, mwID),
+					Source: targetID,
+					Target: mwID,
 					Type:   EdgeConfigures,
 				})
 			}
 		}
 	}
 
-	// ServersTransport → Secret edges (via spec.rootCAsSecrets[] and spec.certificatesSecrets[])
-	// TLSOption → Secret edges (via spec.clientAuth.secretNames[])
-	// TLSStore → Secret edges (via spec.defaultCertificate.secretName)
-	// Creates Secret nodes on-demand since IncludeSecrets may be false
+	// Secret/ConfigMap → ServersTransport/TCP edges (via configrefs.TraefikTransportRefs)
+	// Secret → TLSOption edges (via spec.clientAuth.secretNames[])
+	// Secret → TLSStore edges (via configrefs.TraefikTLSStoreSecrets)
+	// Creates Secret and ConfigMap nodes on demand, since IncludeSecrets and
+	// IncludeConfigMaps may be false.
 	existingSecretNodes := make(map[string]bool)
+	existingConfigMapNodes := make(map[string]bool)
 	for _, node := range nodes {
-		if node.Kind == KindSecret {
+		switch node.Kind {
+		case KindSecret:
 			existingSecretNodes[node.ID] = true
+		case KindConfigMap:
+			existingConfigMapNodes[node.ID] = true
 		}
+	}
+	ensureSecretNode := func(namespace, name string) string {
+		id := "secret/" + namespace + "/" + name
+		if !existingSecretNodes[id] {
+			existingSecretNodes[id] = true
+			loadObservedSecrets()
+			if secret := observedSecrets[id]; secret != nil {
+				nodes = append(nodes, secretNode(secret))
+			} else {
+				nodes = append(nodes, Node{ID: id, Kind: KindSecret, Name: name, Status: StatusUnknown, Data: map[string]any{"namespace": namespace, "labels": map[string]string{}}})
+			}
+		}
+		return id
 	}
 	for _, ste := range serversTransportResources {
 		st := ste.resource
@@ -5523,23 +5369,15 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 
-		// Collect secret names from rootCAsSecrets and certificatesSecrets
-		var secretNames []string
-		rootCAsSecrets, _, _ := unstructured.NestedStringSlice(st.Object, "spec", "rootCAsSecrets")
-		secretNames = append(secretNames, rootCAsSecrets...)
-		certSecrets, _, _ := unstructured.NestedStringSlice(st.Object, "spec", "certificatesSecrets")
-		secretNames = append(secretNames, certSecrets...)
-
-		for _, secretName := range secretNames {
-			secretNodeID := fmt.Sprintf("secret/%s/%s", stNs, secretName)
-
-			// Create Secret node if it doesn't already exist
-			if !existingSecretNodes[secretNodeID] {
-				existingSecretNodes[secretNodeID] = true
+		secretNames, configMapNames := configrefs.TraefikTransportRefs(st.Object, ste.prefix == "serverstransporttcp")
+		for _, cmName := range configMapNames {
+			cmNodeID := fmt.Sprintf("configmap/%s/%s", stNs, cmName)
+			if !existingConfigMapNodes[cmNodeID] {
+				existingConfigMapNodes[cmNodeID] = true
 				nodes = append(nodes, Node{
-					ID:     secretNodeID,
-					Kind:   KindSecret,
-					Name:   secretName,
+					ID:     cmNodeID,
+					Kind:   KindConfigMap,
+					Name:   cmName,
 					Status: StatusUnknown,
 					Data: map[string]any{
 						"namespace": stNs,
@@ -5547,21 +5385,38 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					},
 				})
 			}
+			dedupeKey := stID + "|" + cmNodeID
+			if !traefikEdgeSeen[dedupeKey] {
+				traefikEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", cmNodeID, stID),
+					Source: cmNodeID,
+					Target: stID,
+					Type:   EdgeConfigures,
+				})
+			}
+		}
+
+		for _, secretName := range secretNames {
+			secretNodeID := fmt.Sprintf("secret/%s/%s", stNs, secretName)
+
+			// Create Secret node if it doesn't already exist
+			ensureSecretNode(stNs, secretName)
 
 			dedupeKey := stID + "|" + secretNodeID
 			if !traefikEdgeSeen[dedupeKey] {
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", stID, secretNodeID),
-					Source: stID,
-					Target: secretNodeID,
+					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, stID),
+					Source: secretNodeID,
+					Target: stID,
 					Type:   EdgeConfigures,
 				})
 			}
 		}
 	}
 
-	// TLSOption → Secret edges (via spec.clientAuth.secretNames[])
+	// Secret → TLSOption edges (via spec.clientAuth.secretNames[])
 	for _, entry := range tlsOptionResources {
 		res := entry.resource
 		ns := res.GetNamespace()
@@ -5572,33 +5427,21 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		secretNames, _, _ := unstructured.NestedStringSlice(res.Object, "spec", "clientAuth", "secretNames")
 		for _, secretName := range secretNames {
 			secretNodeID := fmt.Sprintf("secret/%s/%s", ns, secretName)
-			if !existingSecretNodes[secretNodeID] {
-				existingSecretNodes[secretNodeID] = true
-				nodes = append(nodes, Node{
-					ID:     secretNodeID,
-					Kind:   KindSecret,
-					Name:   secretName,
-					Status: StatusUnknown,
-					Data: map[string]any{
-						"namespace": ns,
-						"labels":    map[string]string{},
-					},
-				})
-			}
+			ensureSecretNode(ns, secretName)
 			dedupeKey := optID + "|" + secretNodeID
 			if !traefikEdgeSeen[dedupeKey] {
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", optID, secretNodeID),
-					Source: optID,
-					Target: secretNodeID,
+					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, optID),
+					Source: secretNodeID,
+					Target: optID,
 					Type:   EdgeConfigures,
 				})
 			}
 		}
 	}
 
-	// TLSStore → Secret edges (via spec.defaultCertificate.secretName)
+	// Secret → TLSStore edges (via spec.defaultCertificate and spec.certificates[])
 	for _, entry := range tlsStoreResources {
 		res := entry.resource
 		ns := res.GetNamespace()
@@ -5606,40 +5449,26 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		if storeID == "" {
 			continue
 		}
-		secretName, _, _ := unstructured.NestedString(res.Object, "spec", "defaultCertificate", "secretName")
-		if secretName == "" {
-			continue
-		}
-		secretNodeID := fmt.Sprintf("secret/%s/%s", ns, secretName)
-		if !existingSecretNodes[secretNodeID] {
-			existingSecretNodes[secretNodeID] = true
-			nodes = append(nodes, Node{
-				ID:     secretNodeID,
-				Kind:   KindSecret,
-				Name:   secretName,
-				Status: StatusUnknown,
-				Data: map[string]any{
-					"namespace": ns,
-					"labels":    map[string]string{},
-				},
-			})
-		}
-		dedupeKey := storeID + "|" + secretNodeID
-		if !traefikEdgeSeen[dedupeKey] {
-			traefikEdgeSeen[dedupeKey] = true
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", storeID, secretNodeID),
-				Source: storeID,
-				Target: secretNodeID,
-				Type:   EdgeConfigures,
-			})
+		for _, secretName := range configrefs.TraefikTLSStoreSecrets(res.Object) {
+			secretNodeID := fmt.Sprintf("secret/%s/%s", ns, secretName)
+			ensureSecretNode(ns, secretName)
+			dedupeKey := storeID + "|" + secretNodeID
+			if !traefikEdgeSeen[dedupeKey] {
+				traefikEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, storeID),
+					Source: secretNodeID,
+					Target: storeID,
+					Type:   EdgeConfigures,
+				})
+			}
 		}
 	}
 
 	// 15e. Create Contour HTTPProxy edges
 	// HTTPProxy → Service (EdgeExposes, via spec.routes[].services[])
 	// HTTPProxy → HTTPProxy (EdgeExposes, via spec.includes[])
-	// HTTPProxy → Secret (EdgeConfigures, via spec.virtualhost.tls.secretName)
+	// Secret → HTTPProxy (EdgeConfigures, via spec.virtualhost.tls.secretName)
 	// HTTPProxy → Service via tcpproxy (EdgeExposes, via spec.tcpproxy.services[])
 	contourEdgeSeen := make(map[string]bool) // dedup: sourceID|targetID
 
@@ -5718,44 +5547,35 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 		}
 
-		// HTTPProxy → Secret edges (via spec.virtualhost.tls.secretName)
-		tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "tls", "secretName")
-		if tlsSecretName != "" {
-			secretNodeID := fmt.Sprintf("secret/%s/%s", resNs, tlsSecretName)
-			// Create stub Secret node if it doesn't already exist (same pattern as Traefik)
-			if !existingSecretNodes[secretNodeID] {
-				existingSecretNodes[secretNodeID] = true
-				nodes = append(nodes, Node{
-					ID:     secretNodeID,
-					Kind:   KindSecret,
-					Name:   tlsSecretName,
-					Status: StatusUnknown,
-					Data: map[string]any{
-						"namespace": resNs,
-						"labels":    map[string]string{},
-					},
-				})
+		// Secret → HTTPProxy configuration edges
+		for _, secretRef := range configrefs.ContourSecretReferences(res) {
+			secretNS, tlsSecretName := secretRef.Namespace, secretRef.Name
+			if !opts.MatchesNamespaceFilter(secretNS) {
+				continue
 			}
+			secretNodeID := fmt.Sprintf("secret/%s/%s", secretNS, tlsSecretName)
+			// Create stub Secret node if it doesn't already exist (same pattern as Traefik)
+			ensureSecretNode(secretNS, tlsSecretName)
 			dedupeKey := resID + "|" + secretNodeID
 			if !contourEdgeSeen[dedupeKey] {
 				contourEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", resID, secretNodeID),
-					Source: resID,
-					Target: secretNodeID,
+					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, resID),
+					Source: secretNodeID,
+					Target: resID,
 					Type:   EdgeConfigures,
 				})
 			}
 			// Also check for cert-manager Certificate edge
-			certID := certBySecret[resNs+"/"+tlsSecretName]
+			certID := certBySecret[secretNS+"/"+tlsSecretName]
 			if certID != "" {
 				dedupeKey2 := resID + "|" + certID
 				if !contourEdgeSeen[dedupeKey2] {
 					contourEdgeSeen[dedupeKey2] = true
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", resID, certID),
-						Source: resID,
-						Target: certID,
+						ID:     fmt.Sprintf("%s-to-%s", certID, resID),
+						Source: certID,
+						Target: resID,
 						Type:   EdgeConfigures,
 					})
 				}
@@ -5801,8 +5621,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 17. Add generic CRD nodes connected via owner references
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {
-		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
+		var issuance []declaredDependency
+		nodes, edges, issuance = b.enrollGenericCRDNodes(nodes, edges, opts, jobSets.uids())
+		var issuerWarnings []string
+		nodes, edges, issuerWarnings = addObservedDependencyEdges(nodes, edges, issuance, b.dynamic, opts)
+		warnings = append(warnings, issuerWarnings...)
 	}
+	edges = addKnativeReferenceEdges(nodes, edges, knativeTriggerResources, knativeSourceResources, knativeChannelResources)
 	edges = addGitOpsManagedResourceEdges(
 		nodes,
 		edges,
@@ -5811,6 +5636,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		applicationDestNamespaces,
 		kustomizationResources,
 		kustomizationIDs,
+		helmReleaseResources,
+		helmReleaseIDs,
 	)
 
 	// 17. Annotate workload nodes with NetworkPolicy coverage (optional)
@@ -5821,7 +5648,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// Summary mode: stamp collapsed pod counts onto their workload nodes.
 	stampPodSummaries(nodes, podSummaries)
 
-	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings}
+	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings, podConsumers: podConsumers}
 
 	// Add CRD discovery status
 	if b.dynamic != nil {
@@ -5839,6 +5666,8 @@ func addGitOpsManagedResourceEdges(
 	applicationDestNamespaces map[string]string,
 	kustomizations []*unstructured.Unstructured,
 	kustomizationIDs map[string]string,
+	helmReleases []*unstructured.Unstructured,
+	helmReleaseIDs map[string]string,
 ) []Edge {
 	resourceIDs := make(map[string]string, len(nodes))
 	for i := range nodes {
@@ -5872,7 +5701,7 @@ func addGitOpsManagedResourceEdges(
 		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
 		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
 		"Gateway": true, "HTTPRoute": true, "GRPCRoute": true,
-		"TCPRoute": true, "TLSRoute": true,
+		"TCPRoute": true, "TLSRoute": true, "UDPRoute": true,
 	}
 	for _, app := range applications {
 		// A remote destination's status.resources name objects in that
@@ -5904,26 +5733,30 @@ func addGitOpsManagedResourceEdges(
 		"Deployment": true, "StatefulSet": true, "DaemonSet": true,
 		"Service": true, "Rollout": true, "Job": true, "CronJob": true,
 		"Ingress": true, "Gateway": true, "HTTPRoute": true,
-		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true,
+		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true, "UDPRoute": true,
 	}
-	for _, kustomization := range kustomizations {
-		if !gitops.FluxTargetsLocalCluster(kustomization) {
-			continue
-		}
-		ksID := kustomizationIDs[kustomization.GetNamespace()+"/"+kustomization.GetName()]
-		entries, _, _ := unstructured.NestedSlice(kustomization.Object, "status", "inventory", "entries")
-		for _, entry := range entries {
-			m, ok := entry.(map[string]any)
-			if !ok {
+	addFluxInventory := func(managers []*unstructured.Unstructured, ids map[string]string) {
+		for _, manager := range managers {
+			if !gitops.FluxTargetsLocalCluster(manager) {
 				continue
 			}
-			group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(gitops.StringValue(m["id"]))
-			if !ok || !fluxKinds[kind] {
-				continue
+			managerID := ids[manager.GetNamespace()+"/"+manager.GetName()]
+			entries, _, _ := unstructured.NestedSlice(manager.Object, "status", "inventory", "entries")
+			for _, entry := range entries {
+				m, ok := entry.(map[string]any)
+				if !ok {
+					continue
+				}
+				group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(gitops.StringValue(m["id"]))
+				if !ok || !fluxKinds[kind] {
+					continue
+				}
+				appendManaged(managerID, group, kind, namespace, name)
 			}
-			appendManaged(ksID, group, kind, namespace, name)
 		}
 	}
+	addFluxInventory(kustomizations, kustomizationIDs)
+	addFluxInventory(helmReleases, helmReleaseIDs)
 
 	return edges
 }
@@ -5981,7 +5814,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				trafficGateways = gws
 			}
 		}
-		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 			if rGVR, ok := trafficResourceDiscovery.GetGVRWithGroup(routeKind, "gateway.networking.k8s.io"); ok {
 				rts, err := trafficDynamicCache.ListNamespaces(rGVR, opts.Namespaces)
 				if err != nil {
@@ -6034,22 +5867,50 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 	}
+	// A DomainMapping publishes its Knative Service on a custom domain, even
+	// one that is otherwise cluster-local. It may name the Service or the
+	// Route the Service generates, which shares its name.
+	domainMappedKnativeServices := map[string][]string{} // ns/name -> mapped domains
+	// Whether the absence of a mapping is known; only then can a node be
+	// labelled cluster-local.
+	domainMappingsKnown := true
+	if trafficDynamicCache != nil && trafficResourceDiscovery != nil && len(trafficKnativeServices) > 0 {
+		if dmGVR, ok := trafficResourceDiscovery.GetGVRWithGroup("DomainMapping", "serving.knative.dev"); ok {
+			dms, err := trafficDynamicCache.ListNamespaces(dmGVR, opts.Namespaces)
+			if err != nil {
+				domainMappingsKnown = false
+				log.Printf("WARNING [topology/traffic] Failed to list KNative DomainMappings: %v", err)
+				warnings = append(warnings, fmt.Sprintf("Failed to list KNative DomainMappings: %v", err))
+			}
+			for _, dm := range dms {
+				ref, _, _ := unstructured.NestedMap(dm.Object, "spec", "ref")
+				apiVersion, _ := ref["apiVersion"].(string)
+				kind, _ := ref["kind"].(string)
+				name, _ := ref["name"].(string)
+				if (kind != "Service" && kind != "Route") || resourceid.GroupFromAPIVersion(apiVersion) != "serving.knative.dev" || name == "" {
+					continue
+				}
+				ns, _ := ref["namespace"].(string)
+				if ns == "" {
+					ns = dm.GetNamespace()
+				}
+				domainMappedKnativeServices[ns+"/"+name] = append(domainMappedKnativeServices[ns+"/"+name], dm.GetName())
+			}
+		}
+	}
+
+	istioDomain := "cluster.local"
+	if len(trafficVirtualServices) > 0 {
+		istioDomain = b.istioServiceDomain()
+	}
 
 	// Step 1: Find services referenced by ingresses
 	for _, ing := range ingresses {
 		if !opts.MatchesNamespaceFilter(ing.Namespace) {
 			continue
 		}
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					servicesFromIngress[svcKey] = true
-				}
-			}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			servicesFromIngress[ing.Namespace+"/"+svcName] = true
 		}
 	}
 
@@ -6073,14 +5934,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 				backendName, _ := bMap["name"].(string)
-				backendNS, _ := bMap["namespace"].(string)
-				if backendNS == "" {
-					backendNS = ns
-				}
-				backendKind, _ := bMap["kind"].(string)
-				if backendKind == "" || backendKind == "Service" {
-					svcKey := backendNS + "/" + backendName
-					servicesFromGateway[svcKey] = true
+				if configrefs.GatewayBackendIsService(bMap) {
+					servicesFromGateway[configrefs.GatewayRefNamespace(bMap, ns)+"/"+backendName] = true
 				}
 			}
 		}
@@ -6114,7 +5969,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					if destHost == "" {
 						continue
 					}
-					svcName, svcNs := parseIstioHost(destHost, vsNs)
+					svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
 					svcKey := svcNs + "/" + svcName
 					servicesFromIstio[svcKey] = true
 				}
@@ -6407,24 +6262,17 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Connect to backend Services (only if service is included)
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					if _, ok := servicesToInclude[svcKey]; ok {
-						svcID := fmt.Sprintf("service/%s/%s", ing.Namespace, path.Backend.Service.Name)
-						serviceIDs[svcKey] = svcID
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-							Source: ingID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			svcKey := ing.Namespace + "/" + svcName
+			if _, ok := servicesToInclude[svcKey]; ok {
+				svcID := fmt.Sprintf("service/%s/%s", ing.Namespace, svcName)
+				serviceIDs[svcKey] = svcID
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
+					Source: ingID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}
@@ -6468,6 +6316,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 	}
 
+	trafficGatewayEdgeSeen := make(map[string]bool)
 	for i, route := range trafficRoutes {
 		ns := route.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -6502,12 +6351,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			if !ok {
 				continue
 			}
-			parentName, _ := pMap["name"].(string)
-			parentNS, _ := pMap["namespace"].(string)
-			if parentNS == "" {
-				parentNS = ns
+			if !configrefs.GatewayParentIsGateway(pMap) {
+				continue
 			}
-			if gwID, ok := trafficGwIDMap[parentNS+"/"+parentName]; ok {
+			parentName, _ := pMap["name"].(string)
+			if gwID, ok := trafficGwIDMap[configrefs.GatewayRefNamespace(pMap, ns)+"/"+parentName]; ok && !trafficGatewayEdgeSeen[gwID+"-to-"+routeID] {
+				trafficGatewayEdgeSeen[gwID+"-to-"+routeID] = true
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
 					Source: gwID,
@@ -6530,16 +6379,16 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 				backendName, _ := bMap["name"].(string)
-				backendNS, _ := bMap["namespace"].(string)
-				if backendNS == "" {
-					backendNS = ns
-				}
-				backendKind, _ := bMap["kind"].(string)
-				if backendKind == "" || backendKind == "Service" {
+				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
+				if configrefs.GatewayBackendIsService(bMap) {
 					svcKey := backendNS + "/" + backendName
 					if _, ok := servicesToInclude[svcKey]; ok {
 						svcID := fmt.Sprintf("service/%s/%s", backendNS, backendName)
 						serviceIDs[svcKey] = svcID
+						if trafficGatewayEdgeSeen[routeID+"-to-"+svcID] {
+							continue
+						}
+						trafficGatewayEdgeSeen[routeID+"-to-"+svcID] = true
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
 							Source: routeID,
@@ -6623,12 +6472,13 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			Name:   vsName,
 			Status: nodeStatus,
 			Data: map[string]any{
-				"namespace":  vsNs,
-				"hosts":      hosts,
-				"gateways":   gateways,
-				"routeCount": routeCount,
-				"labels":     vs.GetLabels(),
-				"apiVersion": vs.GetAPIVersion(),
+				"namespace":          vsNs,
+				"hosts":              hosts,
+				"gateways":           gateways,
+				"routeCount":         routeCount,
+				"labels":             vs.GetLabels(),
+				"apiVersion":         vs.GetAPIVersion(),
+				"istioServiceDomain": istioDomain,
 			},
 		})
 
@@ -6671,7 +6521,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					if destHost == "" {
 						continue
 					}
-					svcName, svcNs := parseIstioHost(destHost, vsNs)
+					svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
 					svcKey := svcNs + "/" + svcName
 					if _, ok := servicesToInclude[svcKey]; !ok {
 						continue
@@ -6697,7 +6547,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	// Step 3d: Build KNative Serving nodes/edges for traffic view
 	// KNative traffic flow: Internet → KnativeService → K8s Service → Pods
 	// KnativeRoute shown as subtitle data on KnativeService (URL comes from Route)
-	trafficKnativeServiceIDs := make([]string, 0)
+	publicKnativeServiceIDs := make([]string, 0)
 	for _, ksvc := range trafficKnativeServices {
 		ns := ksvc.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -6705,10 +6555,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 		name := ksvc.GetName()
 		ksvcID := fmt.Sprintf("knativeservice/%s/%s", ns, name)
-		trafficKnativeServiceIDs = append(trafficKnativeServiceIDs, ksvcID)
 
 		// Get URL from status (set by KNative Route)
 		url, _, _ := unstructured.NestedString(ksvc.Object, "status", "url")
+		mappedDomains := slices.Sorted(slices.Values(domainMappedKnativeServices[ns+"/"+name]))
+		clusterLocal := knativeServiceIsClusterLocal(ksvc, url)
+		if len(mappedDomains) > 0 || !clusterLocal {
+			publicKnativeServiceIDs = append(publicKnativeServiceIDs, ksvcID)
+		}
 		latestRevision, _, _ := unstructured.NestedString(ksvc.Object, "status", "latestReadyRevisionName")
 
 		// Get traffic splits from status
@@ -6743,6 +6597,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"apiVersion":     ksvc.GetAPIVersion(),
 			},
 		})
+		if internalURL, _, _ := unstructured.NestedString(ksvc.Object, "status", "address", "url"); internalURL != "" {
+			nodes[len(nodes)-1].Data["internalUrl"] = internalURL
+		}
+		if len(mappedDomains) > 0 {
+			nodes[len(nodes)-1].Data["mappedDomains"] = mappedDomains
+		} else if clusterLocal && domainMappingsKnown {
+			nodes[len(nodes)-1].Data["visibility"] = "cluster-local"
+		}
 
 		// KnativeService → revision private services (the ones that actually select pods)
 		for _, tt := range trafficTargets {
@@ -7100,7 +6962,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 
-			// Route → Middleware edges
 			middlewares, _, _ := unstructured.NestedSlice(routeMap, "middlewares")
 			for _, mw := range middlewares {
 				mwMap, ok := mw.(map[string]any)
@@ -7125,9 +6986,9 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					if !trafficTraefikEdgeSeen[dedupeKey] {
 						trafficTraefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, mwID),
-							Source: routeID,
-							Target: mwID,
+							ID:     fmt.Sprintf("%s-to-%s", mwID, routeID),
+							Source: mwID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}
@@ -7301,7 +7162,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// Step 4: Add Internet node if we have ingresses, gateways, Istio gateways, or KNative services with URLs
-	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(trafficKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 || len(trafficHTTPProxyIDs) > 0 {
+	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(publicKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 || len(trafficHTTPProxyIDs) > 0 {
 		nodes = append([]Node{{
 			ID:     "internet",
 			Kind:   KindInternet,
@@ -7334,7 +7195,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				Type:   EdgeRoutesTo,
 			})
 		}
-		for _, ksvcID := range trafficKnativeServiceIDs {
+		for _, ksvcID := range publicKnativeServiceIDs {
 			edges = append(edges, Edge{
 				ID:     fmt.Sprintf("internet-to-%s", ksvcID),
 				Source: "internet",
@@ -7397,8 +7258,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		// are emitted; the Service nodes (built above) carry the counts.
 		podSummaries := make(map[string]*PodSummary)
 		for _, group := range groupingResult.Groups {
-			for svcID := range group.ServiceIDs {
-				for _, pod := range group.Pods {
+			for i, pod := range group.Pods {
+				for _, svcID := range group.PodServiceIDs[i] {
 					addPodHealth(podSummaries, svcID, pod)
 				}
 			}
@@ -7415,12 +7276,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		for _, group := range groupingResult.Groups {
 			if len(group.Pods) <= maxIndividualPods {
 				// Small group - show as individual nodes
-				for _, pod := range group.Pods {
+				for i, pod := range group.Pods {
 					podID := GetPodID(pod)
 					nodes = append(nodes, CreatePodNode(pod, b.provider, false)) // includeNodeName=false for traffic view
 
 					// Add edges from services to pod (traffic view specific)
-					for svcID := range group.ServiceIDs {
+					for _, svcID := range group.PodServiceIDs[i] {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", svcID, podID),
 							Source: svcID,
@@ -7432,16 +7293,43 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			} else {
 				// Large group - create PodGroup node
 				podGroupID := GetPodGroupID(group)
-				nodes = append(nodes, CreatePodGroupNode(group, b.provider))
+				podGroupNode := CreatePodGroupNode(group, b.provider)
+				nodes = append(nodes, podGroupNode)
 
-				// Add edges from services to pod group (traffic view specific)
-				for svcID := range group.ServiceIDs {
-					edges = append(edges, Edge{
+				// Add edges from services to pod group (traffic view specific).
+				// A Service selecting only part of the group says how much.
+				selected := make(map[string]int, len(group.ServiceIDs))
+				for _, svcIDs := range group.PodServiceIDs {
+					for _, svcID := range svcIDs {
+						selected[svcID]++
+					}
+				}
+				mixed := false
+				for svcID, count := range selected {
+					edge := Edge{
 						ID:     fmt.Sprintf("%s-to-%s", svcID, podGroupID),
 						Source: svcID,
 						Target: podGroupID,
 						Type:   EdgeRoutesTo,
-					})
+					}
+					if count < len(group.Pods) {
+						edge.Label = fmt.Sprintf("%d of %d pods", count, len(group.Pods))
+						mixed = true
+					}
+					edges = append(edges, edge)
+				}
+				// Expanding a mixed group reconnects each pod to only the
+				// Services that select it.
+				if pods, ok := podGroupNode.Data["pods"].([]map[string]any); ok && mixed {
+					servicesByPod := make(map[string][]string, len(group.Pods))
+					for i, pod := range group.Pods {
+						servicesByPod[pod.Namespace+"/"+pod.Name] = group.PodServiceIDs[i]
+					}
+					for _, pd := range pods {
+						namespace, _ := pd["namespace"].(string)
+						name, _ := pd["name"].(string)
+						pd["ownerIds"] = servicesByPod[namespace+"/"+name]
+					}
 				}
 			}
 		}
@@ -7473,6 +7361,7 @@ func (b *Builder) resolvePodWorkloadID(
 	replicaSetToDeployment map[string]string,
 	replicaSetToRollout map[string]string,
 	jobIDs map[string]string,
+	jobs jobIncarnations,
 	workflowIDs map[string]string,
 ) string {
 	if workflowName := pod.Labels["workflows.argoproj.io/workflow"]; workflowName != "" {
@@ -7518,7 +7407,7 @@ func (b *Builder) resolvePodWorkloadID(
 			}
 			return ""
 		case "Job":
-			if jobID, ok := jobIDs[ownerKey]; ok {
+			if jobID, ok := jobIDs[ownerKey]; ok && jobs.current(ownerKey, ownerRef) {
 				return jobID
 			}
 			return ""
@@ -7585,6 +7474,7 @@ func (b *Builder) createPodOwnerEdges(
 	jobIDs map[string]string,
 	jobToCronJob map[string]string,
 	jobToScaledJob map[string]string,
+	jobs jobIncarnations,
 	workflowIDs map[string]string,
 	workflowToCronWorkflow map[string]string,
 ) []Edge {
@@ -7708,7 +7598,18 @@ func (b *Builder) createPodOwnerEdges(
 				Type:   EdgeManages,
 			})
 		case "Job":
-			if ownerID, ok := jobIDs[ownerKey]; ok {
+			if earlier := jobs.earlierJob(pod); earlier != nil && earlier.UID == ownerRef.UID {
+				// The replacement Job supplies context, not ownership of the old Pods.
+				if jobSetID := jobs.jobSets[jobs.uids[ownerKey]]; jobSetID != "" {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s-earlier-run", jobSetID, targetID),
+						Source: jobSetID, Target: targetID, Type: EdgeUses,
+						Label: "Same Job name",
+					})
+				}
+				continue
+			}
+			if ownerID, ok := jobIDs[ownerKey]; ok && jobs.current(ownerKey, ownerRef) {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
 					Source: ownerID,
@@ -7729,6 +7630,15 @@ func (b *Builder) createPodOwnerEdges(
 					edges = append(edges, Edge{
 						ID:                fmt.Sprintf("%s-to-%s-shortcut", scaledJobID, targetID),
 						Source:            scaledJobID,
+						Target:            targetID,
+						Type:              EdgeManages,
+						SkipIfKindVisible: string(KindJob),
+					})
+				}
+				if jobSetID, ok := jobs.jobSets[ownerRef.UID]; ok && ownerRef.UID != "" {
+					edges = append(edges, Edge{
+						ID:                fmt.Sprintf("%s-to-%s-shortcut", jobSetID, targetID),
+						Source:            jobSetID,
 						Target:            targetID,
 						Type:              EdgeManages,
 						SkipIfKindVisible: string(KindJob),
@@ -7853,7 +7763,7 @@ func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
 
 func argoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
 	for _, ref := range wf.GetOwnerReferences() {
-		if ref.Kind == "CronWorkflow" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
+		if ref.Kind == "CronWorkflow" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "argoproj.io" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
 			return ref.Name
 		}
 	}
@@ -8008,7 +7918,7 @@ func matchesSelector(labels, selector map[string]string) bool {
 		return false
 	}
 	for k, v := range selector {
-		if labels[k] != v {
+		if lv, ok := labels[k]; !ok || lv != v {
 			return false
 		}
 	}
@@ -8055,65 +7965,6 @@ func monitorNodeData(monitor *unstructured.Unstructured, endpointField string) m
 	}
 }
 
-// matchesHelmRelease checks if a resource's labels indicate it's managed by a FluxCD HelmRelease
-// Checks both FluxCD-specific labels and standard Helm labels
-func matchesHelmRelease(labels map[string]string, hrName, hrNamespace string) bool {
-	// FluxCD adds these labels to resources deployed by HelmRelease
-	// helm.toolkit.fluxcd.io/name: <helmrelease-name>
-	// helm.toolkit.fluxcd.io/namespace: <helmrelease-namespace>
-	fluxName := labels["helm.toolkit.fluxcd.io/name"]
-	fluxNS := labels["helm.toolkit.fluxcd.io/namespace"]
-	if fluxName == hrName && (fluxNS == "" || fluxNS == hrNamespace) {
-		return true
-	}
-
-	// Fallback to standard Helm label (app.kubernetes.io/instance)
-	// This is set by charts that follow Helm best practices
-	instanceLabel := labels["app.kubernetes.io/instance"]
-	if instanceLabel == hrName {
-		return true
-	}
-
-	return false
-}
-
-// parseIstioHost parses an Istio service host reference into service name and namespace.
-// Istio hosts can be: "reviews", "reviews.default", "reviews.default.svc.cluster.local"
-// Returns (serviceName, namespace). If no namespace is found, defaultNs is used.
-func parseIstioHost(host, defaultNs string) (string, string) {
-	parts := strings.Split(host, ".")
-	if len(parts) == 1 {
-		return parts[0], defaultNs
-	}
-	// "reviews.default" or "reviews.default.svc.cluster.local"
-	return parts[0], parts[1]
-}
-
-// resolveKnativeRef resolves a KNative object reference (kind/ns/name) to a topology node ID.
-// It checks K8s Services, KNative Services, Brokers, and Channels — the most common sink/subscriber targets.
-func resolveKnativeRef(kind, ns, name string, serviceIDs, knativeServiceIDs, brokerIDs, channelIDs map[string]string) string {
-	key := ns + "/" + name
-	switch kind {
-	case "Service":
-		// Could be a K8s Service or a KNative Service — check KNative first (more specific)
-		if id, ok := knativeServiceIDs[key]; ok {
-			return id
-		}
-		if id, ok := serviceIDs[key]; ok {
-			return id
-		}
-	case "Broker":
-		if id, ok := brokerIDs[key]; ok {
-			return id
-		}
-	case "Channel", "InMemoryChannel":
-		if id, ok := channelIDs[key]; ok {
-			return id
-		}
-	}
-	return ""
-}
-
 type workloadRefs struct {
 	configMaps     map[string]bool
 	secrets        map[string]bool
@@ -8121,153 +7972,91 @@ type workloadRefs struct {
 	serviceAccount string
 }
 
-func extractWorkloadReferences(spec corev1.PodSpec) workloadRefs {
-	refs := workloadRefs{
-		configMaps:     make(map[string]bool),
-		secrets:        make(map[string]bool),
-		pvcs:           make(map[string]bool),
-		serviceAccount: spec.ServiceAccountName,
-	}
-
-	// From containers
-	for _, container := range append(spec.Containers, spec.InitContainers...) {
-		for _, env := range container.Env {
-			if env.ValueFrom != nil {
-				if env.ValueFrom.ConfigMapKeyRef != nil {
-					refs.configMaps[env.ValueFrom.ConfigMapKeyRef.Name] = true
-				}
-				if env.ValueFrom.SecretKeyRef != nil {
-					refs.secrets[env.ValueFrom.SecretKeyRef.Name] = true
+func extractWorkloadReferences(spec corev1.PodSpec, forRelationships bool) workloadRefs {
+	refs := workloadRefs{configMaps: map[string]bool{}, secrets: map[string]bool{}, pvcs: map[string]bool{}, serviceAccount: spec.ServiceAccountName}
+	configrefs.VisitPodSpecReferences("", spec, func(reference configrefs.PodSpecReference) {
+		// Expanded declaration paths belong in resource reads, without redefining application grouping.
+		if !forRelationships {
+			switch reference.Path {
+			case "volumes[].configMap.name", "volumes[].secret.secretName", "volumes[].persistentVolumeClaim.claimName", "serviceAccountName":
+			default:
+				if !strings.HasPrefix(reference.Path, "containers[].env") && !strings.HasPrefix(reference.Path, "initContainers[].env") {
+					return
 				}
 			}
 		}
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.ConfigMapRef != nil {
-				refs.configMaps[envFrom.ConfigMapRef.Name] = true
-			}
-			if envFrom.SecretRef != nil {
-				refs.secrets[envFrom.SecretRef.Name] = true
-			}
+		switch reference.Kind {
+		case "ConfigMap":
+			refs.configMaps[reference.Name] = true
+		case "Secret":
+			refs.secrets[reference.Name] = true
+		case "PersistentVolumeClaim":
+			refs.pvcs[reference.Name] = true
 		}
-	}
-
-	// From volumes
-	for _, volume := range spec.Volumes {
-		if volume.ConfigMap != nil {
-			refs.configMaps[volume.ConfigMap.Name] = true
-		}
-		if volume.Secret != nil {
-			refs.secrets[volume.Secret.SecretName] = true
-		}
-		if volume.PersistentVolumeClaim != nil {
-			refs.pvcs[volume.PersistentVolumeClaim.ClaimName] = true
-		}
-	}
-
+	})
 	return refs
 }
 
-// extractWorkloadReferencesFromMap extracts ConfigMap/Secret/PVC refs from unstructured pod spec
-func extractWorkloadReferencesFromMap(spec map[string]any) workloadRefs {
-	refs := workloadRefs{
-		configMaps: make(map[string]bool),
-		secrets:    make(map[string]bool),
-		pvcs:       make(map[string]bool),
+func extractWorkloadReferencesFromMap(spec map[string]any, forRelationships bool) (workloadRefs, error) {
+	var podSpec corev1.PodSpec
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(spec, &podSpec); err != nil {
+		return recoverWorkloadReferencesFromMap(spec, forRelationships), err
 	}
+	return extractWorkloadReferences(podSpec, forRelationships), nil
+}
 
-	// Helper to get string from nested map
-	getString := func(m map[string]any, key string) string {
-		if v, ok := m[key]; ok {
-			if s, ok := v.(string); ok {
-				return s
-			}
-		}
-		return ""
-	}
-	refs.serviceAccount = getString(spec, "serviceAccountName")
-
-	// Process containers
-	processContainers := func(containersField string) {
-		containers, ok := spec[containersField].([]any)
-		if !ok {
+// Unrelated malformed fields must not hide declarations that can still be read.
+func recoverWorkloadReferencesFromMap(spec map[string]any, forRelationships bool) workloadRefs {
+	refs := extractWorkloadReferences(corev1.PodSpec{}, forRelationships)
+	collect := func(part map[string]any) {
+		var podSpec corev1.PodSpec
+		if runtime.DefaultUnstructuredConverter.FromUnstructured(part, &podSpec) != nil {
 			return
 		}
-		for _, c := range containers {
-			container, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			// Check env
-			if env, ok := container["env"].([]any); ok {
-				for _, e := range env {
-					envVar, ok := e.(map[string]any)
-					if !ok {
-						continue
+		partRefs := extractWorkloadReferences(podSpec, forRelationships)
+		maps.Copy(refs.configMaps, partRefs.configMaps)
+		maps.Copy(refs.secrets, partRefs.secrets)
+		maps.Copy(refs.pvcs, partRefs.pvcs)
+		if partRefs.serviceAccount != "" {
+			refs.serviceAccount = partRefs.serviceAccount
+		}
+	}
+	for _, field := range []string{"containers", "initContainers", "ephemeralContainers"} {
+		containers, _ := spec[field].([]any)
+		for _, raw := range containers {
+			container, _ := raw.(map[string]any)
+			for _, envField := range []string{"env", "envFrom"} {
+				entries, _ := container[envField].([]any)
+				for _, entry := range entries {
+					if envField == "env" {
+						variable, _ := entry.(map[string]any)
+						entry = map[string]any{"valueFrom": variable["valueFrom"]}
 					}
-					if valueFrom, ok := envVar["valueFrom"].(map[string]any); ok {
-						if cmRef, ok := valueFrom["configMapKeyRef"].(map[string]any); ok {
-							if name := getString(cmRef, "name"); name != "" {
-								refs.configMaps[name] = true
-							}
-						}
-						if secRef, ok := valueFrom["secretKeyRef"].(map[string]any); ok {
-							if name := getString(secRef, "name"); name != "" {
-								refs.secrets[name] = true
-							}
-						}
-					}
-				}
-			}
-			// Check envFrom
-			if envFrom, ok := container["envFrom"].([]any); ok {
-				for _, ef := range envFrom {
-					envFromItem, ok := ef.(map[string]any)
-					if !ok {
-						continue
-					}
-					if cmRef, ok := envFromItem["configMapRef"].(map[string]any); ok {
-						if name := getString(cmRef, "name"); name != "" {
-							refs.configMaps[name] = true
-						}
-					}
-					if secRef, ok := envFromItem["secretRef"].(map[string]any); ok {
-						if name := getString(secRef, "name"); name != "" {
-							refs.secrets[name] = true
-						}
-					}
+					collect(map[string]any{field: []any{map[string]any{envField: []any{entry}}}})
 				}
 			}
 		}
 	}
-
-	processContainers("containers")
-	processContainers("initContainers")
-
-	// Process volumes
-	if volumes, ok := spec["volumes"].([]any); ok {
-		for _, v := range volumes {
-			volume, ok := v.(map[string]any)
-			if !ok {
-				continue
-			}
-			if cm, ok := volume["configMap"].(map[string]any); ok {
-				if name := getString(cm, "name"); name != "" {
-					refs.configMaps[name] = true
+	volumes, _ := spec["volumes"].([]any)
+	for _, raw := range volumes {
+		volume, _ := raw.(map[string]any)
+		for field, value := range volume {
+			if field == "projected" {
+				projection, _ := value.(map[string]any)
+				sources, _ := projection["sources"].([]any)
+				for _, source := range sources {
+					collect(map[string]any{"volumes": []any{map[string]any{"projected": map[string]any{"sources": []any{source}}}}})
 				}
-			}
-			if sec, ok := volume["secret"].(map[string]any); ok {
-				if name := getString(sec, "secretName"); name != "" {
-					refs.secrets[name] = true
-				}
-			}
-			if pvc, ok := volume["persistentVolumeClaim"].(map[string]any); ok {
-				if name := getString(pvc, "claimName"); name != "" {
-					refs.pvcs[name] = true
-				}
+			} else {
+				collect(map[string]any{"volumes": []any{map[string]any{field: value}}})
 			}
 		}
 	}
-
+	pullSecrets, _ := spec["imagePullSecrets"].([]any)
+	for _, secret := range pullSecrets {
+		collect(map[string]any{"imagePullSecrets": []any{secret}})
+	}
+	collect(map[string]any{"serviceAccountName": spec["serviceAccountName"]})
 	return refs
 }
 
@@ -8438,6 +8227,20 @@ func sealedSecretHealth(resource *unstructured.Unstructured) HealthStatus {
 
 // extractGenericStatus determines health from common CRD status patterns
 func extractGenericStatus(resource *unstructured.Unstructured) HealthStatus {
+	if resource.GroupVersionKind().Group == "opentelemetry.io" {
+		switch resource.GetKind() {
+		case "OpenTelemetryCollector":
+			return healthLevelToStatus(health.OpenTelemetryCollector(resource).Level)
+		case "Instrumentation":
+			return healthLevelToStatus(health.OpenTelemetryInstrumentation(resource).Level)
+		}
+	}
+	if resource.GroupVersionKind().Group == "flagger.app" && resource.GetKind() == "Canary" {
+		return healthLevelToStatus(health.FlaggerCanary(resource).Level)
+	}
+	if resource.GroupVersionKind().Group == "flagger.app" && resource.GetKind() == "MetricTemplate" {
+		return StatusNeutral
+	}
 	status, found, _ := unstructured.NestedMap(resource.Object, "status")
 	if !found {
 		return StatusUnknown
@@ -8532,21 +8335,7 @@ func extractKarpenterNodeClaimStatus(nc unstructured.Unstructured) HealthStatus 
 
 // extractNodeStatus reads the Ready condition from a Kubernetes Node
 func extractNodeStatus(node corev1.Node) HealthStatus {
-	for _, cond := range node.Status.Conditions {
-		if cond.Type == corev1.NodeReady {
-			if cond.Status != corev1.ConditionTrue {
-				return StatusUnhealthy
-			}
-			// Ready but cordoned = lost scheduling capacity — degraded (amber),
-			// matching the node table badge + drawer + Cordoned audit, so the same
-			// node doesn't read green here while it's flagged elsewhere.
-			if node.Spec.Unschedulable {
-				return StatusDegraded
-			}
-			return StatusHealthy
-		}
-	}
-	return StatusUnknown
+	return healthLevelToStatus(health.NodeLifecycle(&node, time.Now()).Level)
 }
 
 // extractKedaScaledObjectStatus reads conditions and annotations from a KEDA ScaledObject
@@ -8746,7 +8535,7 @@ var genericCRDExclusions = map[string]map[string]bool{
 	"cert-manager.io":             {"certificate": true},
 	"gateway.networking.k8s.io": {
 		"gateway": true, "gatewayclass": true, "httproute": true,
-		"grpcroute": true, "tcproute": true, "tlsroute": true,
+		"grpcroute": true, "tcproute": true, "tlsroute": true, "udproute": true,
 	},
 	"karpenter.sh": {"nodepool": true, "nodeclaim": true},
 	"keda.sh":      {"scaledobject": true, "scaledjob": true},
@@ -8819,10 +8608,22 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 // multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
 // intermediate nodes only become resolvable after their parents are added.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
+	nodes, edges, _ = b.enrollGenericCRDNodes(nodes, edges, opts, nil)
+	return nodes, edges
+}
+
+// enrollGenericCRDNodes is addGenericCRDNodes that also returns the issuer
+// dependencies of the cert-manager issuance stages it admitted, parsed from
+// the objects enrollment already read so the issuer join lists nothing again.
+//
+// ownerUIDs (resource key -> UID) names the incarnation of owners the caller
+// drew from their objects; an owner reference naming another UID for one of
+// them, an earlier same-named owner's, draws no edge.
+func (b *Builder) enrollGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions, ownerUIDs map[string]types.UID) ([]Node, []Edge, []declaredDependency) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
 	if dynamicCache == nil || resourceDiscovery == nil {
-		return nodes, edges
+		return nodes, edges, nil
 	}
 
 	// Build indexes for both graph IDs and exact Kubernetes resource identities.
@@ -8833,6 +8634,14 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		existingIDs[node.ID] = true
 		for _, resourceKey := range nodeResourceKeys(node) {
 			existingResourceIDs[resourceKey] = node.ID
+		}
+	}
+
+	type ownerPair struct{ source, target string }
+	existingOwnerEdges := make(map[ownerPair]bool)
+	for _, edge := range edges {
+		if edge.Type == EdgeManages {
+			existingOwnerEdges[ownerPair{edge.Source, edge.Target}] = true
 		}
 	}
 
@@ -8855,10 +8664,14 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		nodeID      string
 		node        Node
 		ownerRefs   []ResourceRef
+		ownerUIDs   []types.UID
 		resourceKey string
 		typeKey     string
+		existing    bool
+		issuer      *declaredDependency
 	}
 	var candidates []candidate
+	var issuance []declaredDependency
 
 	type watchedCRD struct {
 		gvr  schema.GroupVersionResource
@@ -8925,21 +8738,21 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 
 			name := resource.GetName()
 			resourceKey := resourceid.ResourceKey(gvr.Group, kind, ns, name)
-			if _, exists := existingResourceIDs[resourceKey]; exists {
-				continue
-			}
-			nodeID := fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
-
-			// Skip if already in topology
-			if existingIDs[nodeID] {
-				continue
+			nodeID, existing := existingResourceIDs[resourceKey]
+			if !existing {
+				nodeID = fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
+				if existingIDs[nodeID] {
+					continue
+				}
 			}
 
 			var ownerResources []ResourceRef
+			var ownerResourceUIDs []types.UID
 			for _, ref := range ownerRefs {
 				if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
 					continue
 				}
+				ownerResourceUIDs = append(ownerResourceUIDs, ref.UID)
 				ownerResources = append(ownerResources, ResourceRef{
 					Group: resourceid.GroupFromAPIVersion(ref.APIVersion), Kind: ref.Kind, Namespace: ns, Name: ref.Name,
 				})
@@ -8961,8 +8774,11 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 					},
 				},
 				ownerRefs:   ownerResources,
+				ownerUIDs:   ownerResourceUIDs,
 				resourceKey: resourceKey,
 				typeKey:     typeKey,
+				existing:    existing,
+				issuer:      issuanceIssuerDependency(resource),
 			})
 		}
 	}
@@ -8972,15 +8788,20 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		added := 0
 		remaining := candidates[:0] // reuse slice
 		for _, c := range candidates {
-			if crdCounts[c.typeKey] >= maxPerKind {
+			if !c.existing && crdCounts[c.typeKey] >= maxPerKind {
 				continue // drop — kind at capacity
 			}
 
 			var ownerEdges []Edge
-			for _, owner := range c.ownerRefs {
-				ownerID, ok := existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, owner.Namespace, owner.Name)]
+			for i, owner := range c.ownerRefs {
+				ownerKey := resourceid.ResourceKey(owner.Group, owner.Kind, owner.Namespace, owner.Name)
+				ownerID, ok := existingResourceIDs[ownerKey]
 				if !ok && owner.Namespace != "" {
-					ownerID, ok = existingResourceIDs[resourceid.ResourceKey(owner.Group, owner.Kind, "", owner.Name)]
+					ownerKey = resourceid.ResourceKey(owner.Group, owner.Kind, "", owner.Name)
+					ownerID, ok = existingResourceIDs[ownerKey]
+				}
+				if drawn := ownerUIDs[ownerKey]; ok && drawn != "" && c.ownerUIDs[i] != "" && c.ownerUIDs[i] != drawn {
+					ok = false
 				}
 				if ok {
 					ownerEdges = append(ownerEdges, Edge{
@@ -8993,11 +8814,22 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			}
 
 			if len(ownerEdges) > 0 {
-				nodes = append(nodes, c.node)
-				edges = append(edges, ownerEdges...)
-				existingIDs[c.nodeID] = true
-				existingResourceIDs[c.resourceKey] = c.nodeID
-				crdCounts[c.typeKey]++
+				if !c.existing {
+					nodes = append(nodes, c.node)
+					existingIDs[c.nodeID] = true
+					existingResourceIDs[c.resourceKey] = c.nodeID
+					crdCounts[c.typeKey]++
+				}
+				if c.issuer != nil {
+					issuance = append(issuance, *c.issuer)
+				}
+				for _, edge := range ownerEdges {
+					key := ownerPair{edge.Source, edge.Target}
+					if !existingOwnerEdges[key] {
+						edges = append(edges, edge)
+						existingOwnerEdges[key] = true
+					}
+				}
 				added++
 			} else {
 				remaining = append(remaining, c)
@@ -9009,7 +8841,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		}
 	}
 
-	return nodes, edges
+	return nodes, edges, issuance
 }
 
 // annotateNodePolicyCoverage adds "policyStatus" to workload node Data
@@ -9108,7 +8940,7 @@ func matchesStringMap(labels map[string]string, selector map[string]any) bool {
 		if !ok {
 			return false // non-string selector value cannot match string labels
 		}
-		if labels[k] != sv {
+		if lv, ok := labels[k]; !ok || lv != sv {
 			return false
 		}
 	}
@@ -9119,3 +8951,25 @@ func matchesStringMap(labels map[string]string, selector map[string]any) bool {
 var _ = appsv1.Deployment{}
 var _ = networkingv1.Ingress{}
 var _ = strings.Contains
+
+// knativeServiceIsClusterLocal reports whether a Knative Service is reachable
+// only inside the cluster: labelled networking.knative.dev/visibility=
+// cluster-local, or published at its cluster-local address. A private Route's
+// URL is built from the same cluster-local template as its address, on any
+// cluster domain; a public URL uses the external domain. The label may sit on
+// the Route instead, and the URL reflects either.
+func knativeServiceIsClusterLocal(ksvc *unstructured.Unstructured, statusURL string) bool {
+	if ksvc.GetLabels()["networking.knative.dev/visibility"] == "cluster-local" {
+		return true
+	}
+	addressURL, _, _ := unstructured.NestedString(ksvc.Object, "status", "address", "url")
+	published, err := url.Parse(statusURL)
+	if err != nil || published.Hostname() == "" {
+		return false
+	}
+	address, err := url.Parse(addressURL)
+	if err != nil {
+		return false
+	}
+	return published.Hostname() == address.Hostname()
+}

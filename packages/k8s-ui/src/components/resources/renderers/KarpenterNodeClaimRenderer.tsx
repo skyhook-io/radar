@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
 import { CAPACITY_TYPE_BADGE, BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { formatRelativeAgeTime } from '../../../utils/format'
 import {
   getNodeClaimStatus,
   getNodeClaimInstanceType,
@@ -13,19 +14,6 @@ import {
   getNodeClaimNodeClassRef,
   getNodeClaimExpireAfter,
 } from '../resource-utils-karpenter'
-
-function formatRelativeTime(isoString: string): string {
-  const date = new Date(isoString)
-  if (isNaN(date.getTime())) return ''
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000)
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
 
 interface KarpenterNodeClaimRendererProps {
   data: any
@@ -205,7 +193,7 @@ export function KarpenterNodeClaimRenderer({ data, onNavigate }: KarpenterNodeCl
                 </span>
                 {transitionTime && (
                   <span className="text-xs text-theme-text-tertiary shrink-0">
-                    {formatRelativeTime(transitionTime)}
+                    {formatRelativeAgeTime(transitionTime, '')}
                   </span>
                 )}
               </div>

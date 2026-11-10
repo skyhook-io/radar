@@ -20,6 +20,13 @@
       "./src/components/resources/*.tsx"
     ],
     "./components/resources/KueueAdmissionSection": "./src/components/resources/KueueAdmissionSection.tsx",
+    "./components/kueue/AdmissionPath": "./src/components/kueue/AdmissionPath.tsx",
+    "./components/kueue/QueueEvidence": "./src/components/kueue/QueueEvidence.tsx",
+    "./components/kueue/*": [
+      "./src/components/kueue/*.ts",
+      "./src/components/kueue/*.tsx"
+    ],
+    "./components/resources/KueuePendingPosition": "./src/components/resources/KueuePendingPosition.tsx",
     "./components/resources/renderers/*": [
       "./src/components/resources/renderers/*.tsx",
       "./src/components/resources/renderers/*.ts"
@@ -71,11 +78,12 @@
     "@monaco-editor/react": "^4.7.0",
     "html-to-image": "^1.11.0",
     "monaco-yaml": "5.5.1",
-    "react-virtuoso": "^4.18.13",
-    "shiki": "^4.4.2"
+    "react-virtuoso": "^4.18.16",
+    "shiki": "^4.5.0"
   },
   "peerDependencies": {
     "@xterm/addon-fit": ">=0.10.0",
+    "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-web-links": ">=0.11.0",
     "@xterm/xterm": ">=5.0.0",
     "@xyflow/react": ">=12.0.0",
@@ -83,29 +91,30 @@
     "diff": ">=5.0.0",
     "elkjs": ">=0.9.0",
     "lucide-react": ">=0.400.0",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.57.0",
     "react": ">=18.0.0",
     "react-dom": ">=18.0.0",
     "yaml": ">=2.0.0"
   },
   "devDependencies": {
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
-    "@xyflow/react": "^12.11.2",
+    "@xyflow/react": "^12.12.0",
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "elkjs": "^0.11.1",
     "jsdom": "^29.1.1",
-    "lucide-react": "^1.37.0",
-    "monaco-editor": "0.55.1",
+    "lucide-react": "^1.48.0",
+    "monaco-editor": "0.57.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "^6.0.2",
-    "vitest": "^4.1.11",
-    "yaml": "^2.9.0"
+    "vitest": "^5.0.3",
+    "yaml": "^2.9.1"
   }
 }

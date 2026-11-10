@@ -423,3 +423,48 @@ func TestParseArgoTrackingID(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedByFromMeta(t *testing.T) {
+	obj := func(labels, annos map[string]string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion("postgresql.cnpg.io/v1")
+		u.SetKind("Cluster")
+		u.SetNamespace("db")
+		u.SetName("pg")
+		u.SetLabels(labels)
+		u.SetAnnotations(annos)
+		return u
+	}
+	cases := []struct {
+		name string
+		obj  *unstructured.Unstructured
+		want *ResourceRef
+	}{
+		{"argo tracking-id, apps in any namespace", obj(nil, map[string]string{argoTrackingIDAnnotation: "team-a_orders:postgresql.cnpg.io/Cluster:db/pg"}),
+			&ResourceRef{Kind: "Application", Group: argoApplicationGroup, Namespace: "team-a", Name: "orders"}},
+		{"argo tracking-id, default form names no namespace", obj(nil, map[string]string{argoTrackingIDAnnotation: "orders:postgresql.cnpg.io/Cluster:db/pg"}),
+			&ResourceRef{Kind: "Application", Group: argoApplicationGroup, Name: "orders"}},
+		{"argo instance label", obj(map[string]string{argoInstanceLabel: "orders"}, nil),
+			&ResourceRef{Kind: "Application", Group: argoApplicationGroup, Name: "orders"}},
+		{"flux kustomization", obj(map[string]string{fluxKustomizeNameLabel: "databases", fluxKustomizeNSLabel: "flux-system"}, nil),
+			&ResourceRef{Kind: "Kustomization", Group: fluxKustomizeGroup, Namespace: "flux-system", Name: "databases"}},
+		{"flux kustomization without its namespace label is not a signal", obj(map[string]string{fluxKustomizeNameLabel: "databases"}, nil), nil},
+		{"native helm has no group", obj(nil, map[string]string{helmReleaseNameAnno: "pg", helmReleaseNSAnno: "db"}),
+			&ResourceRef{Kind: "HelmRelease", Namespace: "db", Name: "pg"}},
+		{"none", obj(map[string]string{"app": "pg"}, nil), nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ManagedByFromMeta(c.obj)
+			switch {
+			case c.want == nil && got != nil:
+				t.Errorf("got %+v, want none", *got)
+			case c.want != nil && (got == nil || *got != *c.want):
+				t.Errorf("got %+v, want %+v", got, *c.want)
+			}
+		})
+	}
+	if ManagedByFromMeta(nil) != nil {
+		t.Error("nil object has a manager")
+	}
+}

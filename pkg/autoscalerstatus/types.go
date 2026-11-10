@@ -9,7 +9,7 @@
 // best-effort by design — a field a payload does not carry stays nil, and a
 // published-but-null timestamp (live GKE payloads publish explicit
 // `lastProbeTime: null` for inactive groups) also stays nil. Nil is "not
-// published", never zero.
+// published", except structured NoCandidates proves a zero omitted by upstream.
 package autoscalerstatus
 
 import "time"
@@ -71,6 +71,7 @@ type Condition struct {
 	// Status as published: "NoActivity", "InProgress", "NoCandidates",
 	// "CandidatesPresent", "Backoff", or "" when not stated.
 	Status         string
+	Candidates     *int
 	Backoff        *Backoff
 	LastProbeTime  *time.Time
 	LastTransition *time.Time

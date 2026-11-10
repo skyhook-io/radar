@@ -52,17 +52,18 @@ func GroupTitle(g CategoryGroup) string {
 // enum + group map.
 var catalogOrder = []Category{
 	// Scheduling
-	CategoryUnschedulable, CategoryQuotaExceeded, CategoryAdmissionWebhookBlocking,
+	CategoryUnschedulable, CategoryQuotaExceeded, CategoryAdmissionWebhookBlocking, CategoryQueueAdmissionBlocked,
 	// Startup
 	CategoryImagePullFailed, CategoryContainerWaiting, CategoryInitContainerFailed,
 	// Runtime
 	CategoryCrashLoop, CategoryOOMKilled, CategoryLivenessProbeFail, CategoryReadinessFailed,
-	CategoryWorkloadDegraded, CategoryHighRestart, CategoryJobFailed, CategoryCronJobFailed,
+	CategoryWorkloadDegraded, CategoryHighRestart, CategoryPodEvicted, CategoryJobFailed, CategoryCronJobFailed,
+	CategoryBatchRunStopped,
 	// Configuration
 	CategoryMissingConfigRef, CategoryInvalidConfiguration, CategoryPDBBlocksEvictions, CategorySecretSyncFailed,
 	// Networking
-	CategoryServiceNoEndpoints, CategoryIngressBackendMissing, CategoryIngressClassMissing, CategoryLoadBalancerPending,
-	CategoryGatewayNotReady, CategoryGatewayRouteInvalid, CategoryDNSFailure,
+	CategoryServiceNoEndpoints, CategoryServiceMixedBackends, CategoryIngressBackendMissing, CategoryIngressClassMissing, CategoryLoadBalancerPending,
+	CategoryGatewayNotReady, CategoryGatewayRouteInvalid, CategoryDNSFailure, CategoryNetworkPolicyDenied,
 	// Storage
 	CategoryPVCPending, CategoryPVCLost, CategoryPVFailed, CategoryPVCResizeFailed,
 	CategoryVolumeMountFailed, CategoryVolumeAccessModeConflict,
@@ -70,11 +71,11 @@ var catalogOrder = []Category{
 	// Scaling
 	CategoryRolloutStalled, CategoryHPALimitedOrFailed,
 	// Security
-	CategoryRBACForbidden, CategoryCertificateNotReady, CategoryPodSecurityViolation,
+	CategoryRBACForbidden, CategoryCertificateNotReady, CategoryCertificateRenewalFailed, CategoryPodSecurityViolation,
 	// Control plane
 	CategoryTerminationStuck, CategoryNodeNotReady, CategoryAPIServiceUnavailable,
 	CategoryNodeProvisioningFail, CategoryCrossplaneReconcile, CategoryOperatorConditionFail,
-	CategoryGitOpsSyncFailed, CategoryGitOpsRenderFailed, CategoryGitOpsSpecInvalid,
+	CategoryGitOpsResourceWarning, CategoryGitOpsSyncFailed, CategoryGitOpsRenderFailed, CategoryGitOpsSpecInvalid,
 	CategoryGitOpsOperationFailed, CategoryGitOpsOutOfSync, CategoryGitOpsHealthDegraded,
 	CategoryGitOpsStale,
 	CategoryHelmReleaseFailed, CategoryWebhookBackendDown, CategoryControlPlaneNotReady, CategoryMachineNotReady,
@@ -86,40 +87,43 @@ var catalogOrder = []Category{
 // imply Radar detects something it can't (you can't hide what never fires).
 // When a detector lands, move the category into catalogOrder + categoryDescription
 // and drop it from here. TestCatalogComplete enforces both directions.
-var categoriesWithoutDetector = map[Category]bool{
-	CategoryNetworkPolicyBlock: true,
-}
+var categoriesWithoutDetector = map[Category]bool{}
 
 var categoryDescription = map[Category]string{
 	// Scheduling
 	CategoryUnschedulable:            "Pods can't be placed on any node — none satisfies their CPU/memory requests, node selector, affinity, taints, or topology constraints.",
 	CategoryQuotaExceeded:            "A ResourceQuota or LimitRange rejected the workload — the namespace is out of its CPU, memory, or object budget.",
-	CategoryAdmissionWebhookBlocking: "An admission webhook denied the request or its call failed, blocking resource creation.",
+	CategoryAdmissionWebhookBlocking: "An admission webhook denied the request or its call failed, or the API server timed out creating the resource (for example while waiting on slow webhooks), blocking resource creation.",
+	CategoryQueueAdmissionBlocked:    "Kueue will not admit a batch run as configured (the queue offers no quota for a requested resource, its namespace or queue is wrong, or an admission check rejected it), or a queue admits nothing because its configuration is broken.",
 	// Startup
 	CategoryImagePullFailed:     "A container image can't be pulled — wrong name/tag, a private registry without credentials, or the registry is unreachable (ImagePullBackOff).",
 	CategoryContainerWaiting:    "A container is stuck Waiting and never reached Running — blocked on config, secrets, volumes, its image, or a pod sandbox / IP from the CNI.",
 	CategoryInitContainerFailed: "An init container is failing or looping, so the main containers never start.",
 	// Runtime
-	CategoryCrashLoop:         "A container keeps crashing and restarting (CrashLoopBackOff) — it exits non-zero shortly after starting.",
+	CategoryCrashLoop:         "A container keeps exiting and being restarted (CrashLoopBackOff or repeated restarts) — it crashes, fails a liveness or startup probe, or its process exits, whatever the exit code.",
 	CategoryOOMKilled:         "A container was OOMKilled — it hit its own memory limit, or the node ran out of memory. Check usage vs limits and node memory pressure before raising limits.",
 	CategoryLivenessProbeFail: "The liveness probe keeps failing, so the kubelet repeatedly restarts the container.",
-	CategoryReadinessFailed:   "The readiness probe is failing, so the pod is kept out of Service endpoints and receives no traffic.",
+	CategoryReadinessFailed:   "A readiness probe is failing or a declared readiness gate has not passed; the Pod is not ready for normal Service traffic.",
 	CategoryWorkloadDegraded:  "A workload has fewer ready replicas than desired — some pods are unavailable.",
 	CategoryHighRestart:       "A container has restarted many times — unstable even if it's currently running.",
-	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline — or has been running too long with no completions.",
+	CategoryPodEvicted:        "The kubelet evicted a pod because its node ran low on memory, disk, or PIDs, or because the pod exceeded its own ephemeral-storage limit.",
+	CategoryJobFailed:         "A Job failed — it exhausted its retries (backoffLimit) or hit its deadline (activeDeadlineSeconds).",
 	CategoryCronJobFailed:     "A CronJob's recent runs are failing, or its schedule isn't producing successful jobs.",
+	CategoryBatchRunStopped:   "Kueue stopped trying a batch run: it was requeued too many times, or it exceeded its maximum execution time.",
 	// Configuration
 	CategoryMissingConfigRef:     "A pod references a ConfigMap, Secret, or volume that doesn't exist, so it can't start.",
 	CategoryInvalidConfiguration: "A workload contains contradictory or redundant configuration that can make the application behave differently from its manifest's apparent intent.",
 	CategoryPDBBlocksEvictions:   "A PodDisruptionBudget is blocking evictions — node drains and upgrades can't make progress.",
-	CategorySecretSyncFailed:     "An external secret sync (e.g. External Secrets Operator) failed to materialize a Secret.",
+	CategorySecretSyncFailed:     "A secret-producing controller (e.g. External Secrets Operator, or a SealedSecret) failed to materialize a Secret.",
 	// Networking
 	CategoryServiceNoEndpoints:    "A Service has no ready endpoints — its selector matches no ready pods, so traffic to it fails.",
-	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s.",
+	CategoryServiceMixedBackends:  "A Service's selector matches pods of workloads that don't all serve it (different applications, or a port some don't declare), so part of its traffic reaches pods that may not serve it.",
+	CategoryIngressBackendMissing: "An Ingress points at a Service that doesn't exist — incoming requests get 503s — or a Traefik router needs a Service or Middleware that doesn't exist, so Traefik doesn't load it.",
 	CategoryIngressClassMissing:   "An Ingress names an IngressClass that doesn't exist, so no matching controller can serve it.",
 	CategoryLoadBalancerPending:   "A LoadBalancer Service is stuck Pending — the cloud controller hasn't provisioned an external IP.",
 	CategoryGatewayNotReady:       "A Gateway (Gateway API) isn't accepted or programmed — its listeners aren't serving.",
 	CategoryGatewayRouteInvalid:   "An HTTPRoute (or other route) was rejected or not accepted by its parent Gateway.",
+	CategoryNetworkPolicyDenied:   "A NetworkPolicy leaves a Service's pods with no allowed inbound traffic, so new connections to it would be dropped where the network plugin enforces the policy. Existing connections can keep working, so this often shows no symptom at first.",
 	CategoryDNSFailure:            "CoreDNS's Corefile has a rule (an NXDOMAIN template or a rewrite) that can override Kubernetes service DNS — a misconfiguration that risks breaking in-cluster name resolution.",
 	// Storage
 	CategoryPVCPending:               "A PersistentVolumeClaim is stuck Pending — no matching volume and provisioning hasn't completed.",
@@ -127,7 +131,7 @@ var categoryDescription = map[Category]string{
 	CategoryPVFailed:                 "A PersistentVolume is in Failed state — its reclaim or backing storage failed.",
 	CategoryPVCResizeFailed:          "A volume expansion didn't complete — the requested resize failed or is stuck.",
 	CategoryVolumeMountFailed:        "A pod can't mount a volume — attach/mount failed (wrong node, missing CSI driver, or permissions).",
-	CategoryVolumeAccessModeConflict: "A volume's access mode conflicts with how it's mounted (e.g. an RWO volume claimed by pods on different nodes).",
+	CategoryVolumeAccessModeConflict: "A volume's access mode conflicts with how it's mounted (e.g. a multi-replica Deployment mounting a ReadWriteOncePod volume, which only one pod can use).",
 	CategoryBackupFailed:             "A backup or restore run failed, partially failed, or was rejected in validation, or a database's continuous archiving has stopped — the recovery point you'd expect to have may not exist.",
 	CategoryBackupTargetUnavailable:  "The backup destination itself is unhealthy — an object-store location or backup repository the backup tool can't reach or validate.",
 	CategoryBackupStalled:            "A backup or restore run is still in flight long past the time its own tool allows, so nothing appears to be advancing it — it has neither succeeded nor failed, and no new recovery point is being written.",
@@ -135,16 +139,18 @@ var categoryDescription = map[Category]string{
 	CategoryRolloutStalled:     "A workload rollout is stuck — the new revision isn't progressing (progressDeadlineExceeded).",
 	CategoryHPALimitedOrFailed: "A HorizontalPodAutoscaler can't scale — missing metrics, pinned at max replicas, or scaling errors.",
 	// Security
-	CategoryRBACForbidden:        "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
-	CategoryCertificateNotReady:  "A cert-manager Certificate isn't issued — issuance is failing or still pending.",
-	CategoryPodSecurityViolation: "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
+	CategoryRBACForbidden:            "A workload can't create its pods — its controller's ServiceAccount is denied pod creation by RBAC.",
+	CategoryCertificateNotReady:      "A certificate needs attention: cert-manager issuance is failing or pending, a CloudNativePG certificate is expiring or expired, a live Ingress or Gateway uses an invalid or nearly expired TLS Secret, or an RKE2/K3s node monitor reported a certificate warning. Retained node warnings with stale or incomplete evidence have unverified current status.",
+	CategoryCertificateRenewalFailed: "Failed issuance after cert-manager's reported renewal time, with the latest failure, retry status and recorded certificate expiry.",
+	CategoryPodSecurityViolation:     "Pod Security admission is rejecting pods — they violate the namespace's enforced Pod Security Standard.",
 	// Control plane
-	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer's owning controller is unhealthy.",
+	CategoryTerminationStuck:      "A resource is stuck Terminating past the cleanup window — a finalizer hasn't been released, often because its controller is down, missing, or failing its cleanup.",
 	CategoryNodeNotReady:          "A node is NotReady — its kubelet isn't reporting healthy, putting the pods on it at risk.",
 	CategoryAPIServiceUnavailable: "An aggregated APIService is unavailable — its backing extension API server isn't responding.",
 	CategoryNodeProvisioningFail:  "Node provisioning failed — the autoscaler or Karpenter couldn't bring up a node.",
 	CategoryCrossplaneReconcile:   "A Crossplane managed or composite resource can't reconcile — its Ready or Synced condition is False.",
 	CategoryOperatorConditionFail: "An operator-managed resource is reporting a failed status condition.",
+	CategoryGitOpsResourceWarning: "Argo CD reports shared tracking, repeated rendering, or orphaned resources. Repeated rendering is info-level and excluded from the live critical/warning Issues stream.",
 	CategoryGitOpsSyncFailed:      "A GitOps app failed to sync (catch-all) — Argo CD or Flux couldn't reconcile it to the desired state.",
 	CategoryGitOpsRenderFailed:    "GitOps couldn't render manifests from Git — a kustomize/helm build or source fetch failed.",
 	CategoryGitOpsSpecInvalid:     "A GitOps app's spec is invalid — a bad destination, source, or project reference.",
@@ -152,7 +158,7 @@ var categoryDescription = map[Category]string{
 	CategoryGitOpsOutOfSync:       "Live state has drifted from Git — the GitOps app is OutOfSync.",
 	CategoryGitOpsHealthDegraded:  "A GitOps app's managed resources are unhealthy or missing.",
 	CategoryGitOpsStale:           "A GitOps app's sync/drift verdict is frozen — the application-controller is down or backed up re-comparing.",
-	CategoryHelmReleaseFailed:     "A native Helm release is failed or stuck pending — its latest install, upgrade, or rollback did not complete cleanly.",
+	CategoryHelmReleaseFailed:     "A native Helm release is failed or stuck — its latest install, upgrade, rollback, or uninstall did not complete cleanly.",
 	CategoryWebhookBackendDown:    "An admission webhook points at a backend Service that doesn't exist — matching requests are blocked (failurePolicy=Fail) or silently bypassed (Ignore).",
 	CategoryControlPlaneNotReady:  "A managed control plane (Cluster API) isn't ready — the cluster's control plane is unhealthy or still provisioning.",
 	CategoryMachineNotReady:       "A Cluster API Machine isn't ready — the underlying instance failed to join or is unhealthy.",

@@ -99,6 +99,7 @@ export interface FluxCondition {
   reason?: string
   message?: string
   lastTransitionTime?: string
+  observedGeneration?: number
 }
 
 // ============================================================================
@@ -141,8 +142,11 @@ function hasGenerationDrift(gen?: FluxGeneration): boolean {
  * - suspend                                   → Suspended (sync from Ready, unless drifted)
  * - Stalled=True                              → OutOfSync / Degraded
  * - Ready=True and no generation drift        → Synced, health from Healthy
+ * - Ready=False with a failure reason about
+ *   the current generation                    → OutOfSync / Degraded
  * - drift, or Reconciling with Ready not True → Reconciling / Progressing
- * - Ready=False                               → OutOfSync
+ * - Ready=False                               → OutOfSync / Degraded, or
+ *   Progressing for a retry/wait reason
  */
 export function fluxConditionsToGitOpsStatus(
   conditions: FluxCondition[],
@@ -203,6 +207,25 @@ export function fluxConditionsToGitOpsStatus(
     }
   }
 
+  // A failure the controller reported outranks activity too: a source that
+  // can't clone keeps Reconciling=True and never records observedGeneration
+  // while it retries, and reading that as "in progress" hid it.
+  const readyReason = readyCondition?.reason || ''
+  const transientReason = readyReason.includes('Progress') || readyReason.includes('Retry') || readyReason.includes('Wait')
+  // Only a failure about the current spec counts: after a fix, the old
+  // Ready=False describes an older generation until the controller looks again.
+  const currentFailure = readyCondition?.observedGeneration !== undefined && readyCondition.observedGeneration === generation?.generation
+  if (readyCondition?.status === 'False' && !transientReason && currentFailure) {
+    return {
+      sync: 'OutOfSync',
+      health: 'Degraded',
+      message: readyCondition.message,
+      lastSyncTime: readyCondition.lastTransitionTime,
+      suspended: false,
+      ...activity,
+    }
+  }
+
   // Genuinely not applied: the controller has not observed the current spec, or
   // it is working and has not reached Ready.
   if (drifted || isReconciling) {
@@ -216,14 +239,11 @@ export function fluxConditionsToGitOpsStatus(
     }
   }
 
-  // Handle not ready state
+  // A retry or remediation in flight is out of sync, but not a settled failure.
   if (readyCondition?.status === 'False') {
-    const reason = readyCondition.reason || ''
-    const isTransient = reason.includes('Progress') || reason.includes('Retry') || reason.includes('Wait')
-
     return {
       sync: 'OutOfSync',
-      health: isTransient ? 'Progressing' : 'Degraded',
+      health: transientReason ? 'Progressing' : 'Degraded',
       message: readyCondition.message,
       lastSyncTime: readyCondition.lastTransitionTime,
       suspended: false,
@@ -426,9 +446,7 @@ export function argoApplicationSetConditionsToGitOpsStatus(
 export function parseFluxInventory(entries: Array<{ id: string; v?: string }>): ManagedResource[] {
   return entries
     .map(entry => {
-      // Format: namespace_name_group_kind
-      // The challenge is that namespace, name, and group can all contain underscores
-      // But the format is always: ns_name_group_kind where kind is the last part
+      // Format: namespace_name_group_kind; only the name can hold an underscore.
       const id = entry.id || ''
       const parts = id.split('_')
 
@@ -440,9 +458,11 @@ export function parseFluxInventory(entries: Array<{ id: string; v?: string }>): 
       // Kind is always last, group is second-to-last
       const kind = parts[parts.length - 1]
       const group = parts[parts.length - 2]
-      // Namespace is first, name is everything in between
+      // Namespace is first, name is everything in between. Flux writes a colon
+      // in an RBAC object's name as a double underscore (system:metrics-server
+      // is system__metrics-server) and reads every "__" back as a colon.
       const namespace = parts[0]
-      const name = parts.slice(1, -2).join('_')
+      const name = parts.slice(1, -2).join('_').replaceAll('__', ':')
 
       // Validate required fields
       if (!kind || !name) {

@@ -64,6 +64,10 @@ export function routePath(path: string): string {
   return prefix + path;
 }
 
+export function mcpEndpointUrl(readOnly = false): string {
+  return `${window.location.origin}${routePath(readOnly ? '/mcp-readonly' : '/mcp')}`;
+}
+
 /**
  * Inverse of `routePath`: strips the configured basename from a window-level
  * path so it can be handed to React Router's navigate(), which re-applies the
@@ -94,9 +98,9 @@ export function getWsUrl(path: string): string {
   return `${protocol}//${window.location.host}${base}${path}`;
 }
 
-/** Convenience: `${apiBase}${path}` for fetch call sites. */
-export function apiUrl(path: string): string {
-  return getApiBase() + path;
+/** An explicit base keeps a queued request on its original API host. */
+export function apiUrl(path: string, base = getApiBase()): string {
+  return base + path;
 }
 
 /**
@@ -128,4 +132,25 @@ export function setCredentialsMode(mode: RequestCredentials): void {
 
 export function getCredentialsMode(): RequestCredentials {
   return credentialsMode;
+}
+
+let markAutomaticRequests = false;
+
+/**
+ * Internal: Radar's own entry point turns the automatic-request mark on at
+ * startup, and the usage status then keeps it on only while usage data is
+ * recorded. Off, requests carry nothing extra, which also keeps an embedding
+ * host free of a header its proxy might refuse.
+ */
+export function setAutomaticRequestMarking(on: boolean): void {
+  markAutomaticRequests = on;
+}
+
+/**
+ * Headers for a request the UI makes on its own (a background probe, a
+ * reconnect attempt) rather than for something the user did, so the opt-in
+ * usage report does not count it as an action.
+ */
+export function automaticRequestHeaders(): Record<string, string> {
+  return markAutomaticRequests ? { 'X-Radar-Request-Origin': 'auto' } : {};
 }

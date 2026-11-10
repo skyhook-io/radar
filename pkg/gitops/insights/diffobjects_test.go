@@ -82,7 +82,10 @@ func TestDiffObjects(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			entries := DiffObjects(tc.desired, tc.live)
+			entries, truncated := DiffObjectsTruncated(tc.desired, tc.live)
+			if truncated {
+				t.Errorf("truncated = true for %d entries", len(entries))
+			}
 			got := make(map[string]bool, len(entries))
 			paths := make([]string, 0, len(entries))
 			for _, e := range entries {
@@ -121,9 +124,12 @@ func TestDiffObjectsSortedAndCapped(t *testing.T) {
 		lSpec[key] = "live"
 	}
 
-	entries := DiffObjects(desired, live)
+	entries, truncated := DiffObjectsTruncated(desired, live)
 	if len(entries) != driftEntryCap {
 		t.Fatalf("entry count = %d, want cap %d", len(entries), driftEntryCap)
+	}
+	if !truncated {
+		t.Errorf("truncated = false, want true when the diff exceeds the cap")
 	}
 	for i := 1; i < len(entries); i++ {
 		if entries[i-1].Path > entries[i].Path {
@@ -136,5 +142,41 @@ func TestDiffObjectsSortedAndCapped(t *testing.T) {
 	first := entries[0].Path
 	if first != "spec.field000" {
 		t.Errorf("first entry = %q, want spec.field000 (sort applied before cap)", first)
+	}
+}
+
+// TestDiffObjectsNoDifferencesIsEmptyNotNil pins that an identical pair yields
+// an empty, non-nil slice: callers serialize it, and null breaks consumers that
+// read its length.
+func TestDiffObjectsNoDifferencesIsEmptyNotNil(t *testing.T) {
+	obj := map[string]any{"spec": map[string]any{"replicas": int64(1)}}
+	entries, truncated := DiffObjectsTruncated(obj, obj)
+	if entries == nil {
+		t.Fatal("entries = nil, want an empty slice")
+	}
+	if len(entries) != 0 || truncated {
+		t.Errorf("entries = %v, truncated = %v; want empty, false", entries, truncated)
+	}
+	if DiffObjects(obj, obj) == nil {
+		t.Fatal("DiffObjects = nil, want an empty slice")
+	}
+}
+
+// TestDiffObjectsValuesNotHTMLEscaped pins that values render as typed: a
+// redaction marker or a shell command must not show up as <...>.
+func TestDiffObjectsValuesNotHTMLEscaped(t *testing.T) {
+	entries := DiffObjects(
+		map[string]any{"data": map[string]any{"password": "<redacted:desired>", "cmd": "a && b > c"}},
+		map[string]any{"data": map[string]any{"password": "<redacted:live>", "cmd": "a"}},
+	)
+	got := map[string]string{}
+	for _, e := range entries {
+		got[e.Path] = e.Desired
+	}
+	if got["data.password"] != `"<redacted:desired>"` {
+		t.Errorf("data.password desired = %s", got["data.password"])
+	}
+	if got["data.cmd"] != `"a && b > c"` {
+		t.Errorf("data.cmd desired = %s", got["data.cmd"])
 	}
 }

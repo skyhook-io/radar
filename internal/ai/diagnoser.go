@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,10 @@ type Request struct {
 	// Metrics is the RunManager's probe of the metrics backend for this turn.
 	// Only a confirmed connection reaches the prompt; the zero value says nothing.
 	Metrics MetricsAvailability
+	// Opening is the run's opening question, carried on every turn but read
+	// only by the opening turn and the system prompt. Question above is this
+	// turn's own follow-up and is empty on the opening turn.
+	Opening investigation.Question
 }
 
 // MetricsAvailability is the prompt's view of the metrics probe.
@@ -114,6 +119,10 @@ func turnPrompt(req Request) string {
 	}
 	opts := investigation.Options{Citations: investigation.CiteRun, Metrics: req.Metrics}
 	switch {
+	case strings.TrimSpace(req.Question) == "" && req.Opening.Text != "" && req.Name == "":
+		return investigation.QuestionTaskPrompt(req.Opening, opts)
+	case strings.TrimSpace(req.Question) == "" && req.Opening.Text != "":
+		return investigation.TargetQuestionPrompt(target, req.Health, req.Opening, opts)
 	case strings.TrimSpace(req.Question) == "":
 		return investigation.TaskPrompt(target, req.Health, opts)
 	case req.Verify:
@@ -121,6 +130,16 @@ func turnPrompt(req Request) string {
 	default:
 		return investigation.FollowUpPrompt(req.Question, opts)
 	}
+}
+
+// systemPrompt frames a fresh session. A run opened by a question keeps its
+// question framing on read-only turns; an apply turn acts on one confirmed
+// resource and always gets the resource framing.
+func systemPrompt(req Request) string {
+	if req.Opening.Text != "" && !req.Apply {
+		return investigation.QuestionSystemPrompt
+	}
+	return investigation.SystemPrompt
 }
 
 // ResourceHealthSignal is the health frame captured when a run starts; the
@@ -259,9 +278,12 @@ func ResolveCLI() string {
 // Diagnoser drives one or more resolved agent CLIs via Agent backends (Claude,
 // Codex, …). A run picks a backend by name; defName is used when none is given.
 type Diagnoser struct {
+	// mu guards agents and defName: Refresh changes the set while runs read it.
+	mu           sync.RWMutex
 	agents       map[string]Agent
 	defName      string
 	evidenceRefs *investigationrefs.Registry
+	signin       *signinChecker
 }
 
 func newDiagnoser(backends []Agent, evidenceRefs *investigationrefs.Registry) *Diagnoser {
@@ -306,14 +328,73 @@ func NewDetected(ctx context.Context, evidenceRefs *investigationrefs.Registry) 
 	return newDiagnoser(backends, evidenceRefs), nil
 }
 
+// Refresh brings the backend set in line with what is installed now: it adds a
+// supported agent CLI installed since the last refresh, re-points one that moved
+// (Claude Code's switch from npm to its native installer replaces the path), and
+// drops one that is gone. A CLI installed, moved or removed while Radar runs is
+// then reflected without a restart. Runs already in flight keep the backend they
+// started with. The default backend changes only if it was removed. With
+// RADAR_AI_CLI_BIN set, nothing else is searched: only the pinned file is
+// checked, and its backend dropped or restored as it stops or starts being
+// runnable. Returns the names it added, re-pointed or dropped.
+func (d *Diagnoser) Refresh(ctx context.Context) []string {
+	detected := map[string]string{}
+	if strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "" {
+		if bin := ResolveCLI(); bin != "" {
+			detected[resolveAgent(bin).Name()] = bin
+		}
+	} else {
+		for _, info := range DetectAgents(ctx, false) {
+			if info.Supported {
+				detected[info.Name] = info.Path
+			}
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.agents == nil {
+		d.agents = map[string]Agent{}
+	}
+	var changed []string
+	for _, name := range agentCLICandidates {
+		path, installed := detected[name]
+		current, have := d.agents[name]
+		switch {
+		case installed && (!have || current.Path() != path):
+			d.agents[name] = resolveAgent(path)
+		case !installed && have:
+			delete(d.agents, name)
+		default:
+			continue
+		}
+		changed = append(changed, name)
+	}
+	if _, ok := d.agents[d.defName]; !ok {
+		d.defName = ""
+		for _, name := range agentCLICandidates {
+			if _, ok := d.agents[name]; ok {
+				d.defName = name
+				break
+			}
+		}
+	}
+	return changed
+}
+
 // DefaultAgent is the backend chosen when a run doesn't name one.
-func (d *Diagnoser) DefaultAgent() string { return d.defName }
+func (d *Diagnoser) DefaultAgent() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.defName
+}
 
 // AgentInfos reports the exact backends this Diagnoser can drive.
 func (d *Diagnoser) AgentInfos(ctx context.Context, withVersions bool) []AgentInfo {
 	var infos []AgentInfo
 	for _, name := range agentCLICandidates {
+		d.mu.RLock()
 		agent, ok := d.agents[name]
+		d.mu.RUnlock()
 		if !ok {
 			continue
 		}
@@ -334,21 +415,45 @@ func (d *Diagnoser) AgentInfos(ctx context.Context, withVersions bool) []AgentIn
 	return infos
 }
 
+// CheckSignin asks an installed agent's CLI whether it is signed in for runs
+// with profile, before the user consents to one. ok is false when no such
+// backend is installed. refresh discards a cached answer (the user's "check
+// again").
+func (d *Diagnoser) CheckSignin(ctx context.Context, name string, profile ExecutionProfile, refresh bool) (SigninStatus, bool) {
+	d.mu.Lock()
+	agent, ok := d.agents[name]
+	if d.signin == nil {
+		d.signin = newSigninChecker()
+	}
+	checker := d.signin
+	d.mu.Unlock()
+	if !ok {
+		return SigninStatus{}, false
+	}
+	return checker.check(ctx, agent, profile, refresh), true
+}
+
 // AgentName normalizes a client-requested backend name to one that actually
 // exists, falling back to the default — so a run records the agent it really used.
 func (d *Diagnoser) AgentName(name string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if _, ok := d.agents[name]; ok {
 		return name
 	}
 	return d.defName
 }
 
-// resolveTurnAgent picks the backend for a turn: the named one, else the default.
+// resolveTurnAgent picks the backend for a turn: the named one, or the default
+// when none is named. A named backend that isn't installed any more yields nil:
+// a follow-up carries that agent's session, which another agent can't resume.
 func (d *Diagnoser) resolveTurnAgent(name string) Agent {
-	if a, ok := d.agents[name]; ok {
-		return a
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if name == "" {
+		return d.agents[d.defName]
 	}
-	return d.agents[d.defName]
+	return d.agents[name]
 }
 
 func maxTurns() int {
@@ -370,6 +475,9 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		return Diagnosis{}, errors.New("ai: MCP address not set")
 	}
 	agent := d.resolveTurnAgent(req.Agent)
+	if agent == nil && req.Agent != "" {
+		return Diagnosis{}, fmt.Errorf("ai: %s is no longer installed, so this investigation can't continue", AgentLabel(req.Agent))
+	}
 	if agent == nil {
 		return Diagnosis{}, ErrNoCLI
 	}
@@ -382,9 +490,9 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	}
 
 	// Read-only investigation turns get the private read-only MCP mount with
-	// evidence correlation; an apply turn (user-confirmed) gets the ordinary full
-	// mount with write tools and no investigation-only result markers.
-	path := "/mcp"
+	// evidence correlation; an apply turn gets a private remediation mount
+	// whose server excludes tools that require a richer approval flow.
+	path := "/mcp-apply"
 	evidenceScope := ""
 	var evidenceLease *investigationrefs.Scope
 	if !req.Apply {
@@ -419,7 +527,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	prompt := turnPrompt(req)
 	sys := ""
 	if sessionID == "" {
-		sys = investigation.SystemPrompt // a fresh session establishes the SRE + security framing
+		sys = systemPrompt(req)
 	}
 
 	cmd, cleanup, err := agent.command(ctx, turnSpec{
@@ -432,6 +540,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		return Diagnosis{}, err
 	}
 	defer cleanup()
+	addAgentDirToPath(cmd)
 
 	// Process lifecycle is agent-agnostic. The platform helper kills the whole
 	// process group/tree on cancel so no child agent process outlives the run.
@@ -570,6 +679,58 @@ var (
 	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_"}
 )
 
+// addAgentDirToPath appends the agent's own directory to the child's PATH when
+// detection found it outside PATH. npm-installed agents are scripts run by the
+// `node` installed beside them (Homebrew, Linuxbrew), so without this the CLI
+// Radar found would fail to start. The directory goes last, so it never shadows
+// what the user's PATH resolves.
+func addAgentDirToPath(cmd *exec.Cmd) {
+	dir := filepath.Dir(cmd.Path)
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	for i, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || !isPathKey(key) {
+			continue
+		}
+		for _, entry := range filepath.SplitList(value) {
+			if entry != "" && samePathEntry(filepath.Clean(entry), dir) {
+				return
+			}
+		}
+		if value == "" {
+			env[i] = key + "=" + dir
+		} else {
+			env[i] = kv + string(os.PathListSeparator) + dir
+		}
+		cmd.Env = env
+		return
+	}
+	// No PATH at all: a child would search the system default, so keep that
+	// and add the agent's directory after it rather than replace it.
+	if runtime.GOOS != "windows" {
+		cmd.Env = append(env, "PATH=/usr/bin:/bin"+string(os.PathListSeparator)+dir)
+	}
+}
+
+// Windows environment names and paths are case-insensitive, and PATH is
+// usually spelled "Path" there.
+func isPathKey(key string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(key, "PATH")
+	}
+	return key == "PATH"
+}
+
+func samePathEntry(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
 // scrubbedEnv returns a minimal environment: the CLI ingests untrusted cluster
 // data, so it shouldn't inherit unrelated host env. Provider-auth vars pass
 // through so subscription / API-key / Bedrock / Vertex all work.
@@ -580,7 +741,7 @@ func scrubbedEnv() []string {
 		if !ok {
 			continue
 		}
-		if envAllowExact[k] {
+		if envAllowExact[k] || isPathKey(k) {
 			out = append(out, kv)
 			continue
 		}

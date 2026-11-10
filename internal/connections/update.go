@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 type SecretEdit struct {
@@ -345,8 +346,8 @@ func editSettings(c *config.IntegrationSettings, req Update) error {
 				return errors.New("keep must not include a secret value")
 			}
 			if token != "" && previousURL != newURL {
-				before, ok := prom.NormalizeOrigin(previousURL)
-				after, valid := prom.NormalizeOrigin(newURL)
+				before, ok := urlutil.NormalizeOrigin(previousURL)
+				after, valid := urlutil.NormalizeOrigin(newURL)
 				if !ok || !valid || before != after {
 					return errors.New("changing servers requires replacing or clearing the saved credential")
 				}

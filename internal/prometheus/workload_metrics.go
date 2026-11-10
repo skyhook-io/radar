@@ -84,7 +84,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
 		return
 	}
-	scope, err := ResolvePodScope(cache, kind, namespace, name, 100)
+	scope, err := ResolvePodScope(r.Context(), cache, kind, namespace, name, 100)
 	if err != nil {
 		status := http.StatusBadGateway
 		message := "Could not resolve current workload Pods. Retry after checking the Kubernetes connection."

@@ -4,6 +4,7 @@ import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers, Maximize
 import { clsx } from 'clsx'
 import { useDock, DockTab } from './DockContext'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
+import { Tooltip } from '../ui/Tooltip'
 
 const MIN_HEIGHT = 200
 const MAX_HEIGHT_RATIO = 0.7
@@ -224,7 +225,13 @@ function TabButton({
       onClick={onSelect}
     >
       <Icon className="w-3.5 h-3.5" />
-      <span className="truncate max-w-[120px]">{tab.title}</span>
+      {tab.titleTooltip ? (
+        <Tooltip content={tab.titleTooltip} wrapperClassName="min-w-0">
+          <span className="block truncate max-w-[120px]">{tab.title}</span>
+        </Tooltip>
+      ) : (
+        <span className="truncate max-w-[120px]">{tab.title}</span>
+      )}
       <button
         onClick={(e) => {
           e.stopPropagation()

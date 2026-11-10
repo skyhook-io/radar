@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -349,7 +350,7 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 			{ID: "sealedsecret/demo/web", Kind: KindSealedSecret, Name: "web"},
 			{ID: "configmap/demo/web", Kind: KindConfigMap, Name: "web"},
 			{ID: "destinationrule/demo/web", Kind: KindDestinationRule, Name: "web"},
-			{ID: "podmonitor/demo/web", Kind: KindPodMonitor, Name: "web"},
+			{ID: "podmonitor/demo/web", Kind: KindPodMonitor, Name: "web", Data: map[string]any{"apiVersion": "monitoring.coreos.com/v1"}},
 		},
 		Edges: []Edge{
 			{ID: "sa-to-web", Source: "serviceaccount/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
@@ -384,14 +385,31 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 	}
 }
 
+func TestGetRelationships_ConfigRefsListsEachTargetOnce(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
+			{ID: "configmap/demo/web", Kind: KindConfigMap, Name: "web"},
+		},
+		Edges: []Edge{
+			{ID: "config-env-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
+			{ID: "config-volume-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
+		},
+	}
+	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	if rel == nil || len(rel.ConfigRefs) != 1 {
+		t.Fatalf("expected one ConfigRef for a ConfigMap reached by two configuration edges, got %+v", rel)
+	}
+}
+
 func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 	topo := &Topology{
 		Nodes: []Node{
 			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
 			{ID: "service/demo/web", Kind: KindService, Name: "web"},
 			{ID: "ingress/demo/web", Kind: KindIngress, Name: "web"},
-			{ID: "httproute/demo/web", Kind: KindHTTPRoute, Name: "web"},
-			{ID: "ingressroute/demo/web", Kind: KindIngressRoute, Name: "web"},
+			{ID: "httproute/demo/web", Kind: KindHTTPRoute, Name: "web", Data: map[string]any{"apiVersion": "gateway.networking.k8s.io/v1"}},
+			{ID: "ingressroute/demo/web", Kind: KindIngressRoute, Name: "web", Data: map[string]any{"apiVersion": "traefik.io/v1alpha1"}},
 		},
 		Edges: []Edge{
 			{ID: "service-to-workload", Source: "service/demo/web", Target: "deployment/demo/web", Type: EdgeExposes},
@@ -420,8 +438,8 @@ func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 	}
 
 	serviceRel := GetRelationshipsWithIndex("Service", "demo", "web", topo, nil, nil, IndexByResource(topo))
-	if serviceRel == nil || len(serviceRel.Routes) != 1 || serviceRel.Routes[0].Kind != "IngressRoute" {
-		t.Fatalf("Service Routes = %+v, want IngressRoute", serviceRel)
+	if serviceRel == nil || len(serviceRel.Routes) != 2 {
+		t.Fatalf("Service Routes = %+v, want HTTPRoute and IngressRoute", serviceRel)
 	}
 	if len(serviceRel.Services) != 0 {
 		t.Fatalf("Service Services = %+v, route CRDs must not be labeled as Services", serviceRel.Services)
@@ -452,7 +470,7 @@ func TestGetRelationships_ServiceEntrypointsUseExactAPIGroup(t *testing.T) {
 		t.Fatalf("core workload borrowed custom Service entrypoints: %+v", core)
 	}
 	custom := GetRelationshipsWithIndex("Deployment", "demo", "custom", topo, nil, nil, idx)
-	if custom == nil || len(custom.Services) != 1 || custom.Services[0].Group != "platform.example.io" || len(custom.Routes) != 0 || len(custom.Ingresses) != 0 {
+	if custom == nil || len(custom.Services) != 0 || len(custom.RoutedFrom) != 1 || custom.RoutedFrom[0].Group != "platform.example.io" || len(custom.Routes) != 0 || len(custom.Ingresses) != 0 {
 		t.Fatalf("custom Service kind was given core Service entrypoint semantics: %+v", custom)
 	}
 }
@@ -466,7 +484,7 @@ func TestGetRelationships_ServiceEntrypointsSkipKnativeService(t *testing.T) {
 		},
 		Edges: []Edge{
 			{ID: "ingress-to-knative", Source: "ingress/demo/web", Target: "knativeservice/demo/web", Type: EdgeRoutesTo},
-			{ID: "knative-to-service", Source: "knativeservice/demo/web", Target: "service/demo/web", Type: EdgeExposes},
+			{ID: "service-to-knative", Source: "service/demo/web", Target: "knativeservice/demo/web", Type: EdgeExposes},
 		},
 	}
 
@@ -521,7 +539,7 @@ func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
 			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
 			{ID: "poddisruptionbudget/demo/web-pdb", Kind: KindPDB, Name: "web-pdb"},
 			{ID: "networkpolicy/demo/web-np", Kind: KindNetworkPolicy, Name: "web-np"},
-			{ID: "ciliumnetworkpolicy/demo/web-cnp", Kind: KindCiliumNetworkPolicy, Name: "web-cnp"},
+			{ID: "ciliumnetworkpolicy/demo/web-cnp", Kind: KindCiliumNetworkPolicy, Name: "web-cnp", Data: map[string]any{"apiVersion": "cilium.io/v2"}},
 		},
 		Edges: []Edge{
 			{ID: "pdb-to-web", Source: "poddisruptionbudget/demo/web-pdb", Target: "deployment/demo/web", Type: EdgeProtects},
@@ -589,20 +607,7 @@ func TestGetRelationships_IncomingEdgeUsesSplitsScalersFromStorage(t *testing.T)
 	}
 }
 
-// TestGetRelationships_OutgoingEdgeProtects_NotSurfaced verifies that outgoing
-// EdgeProtects edges (a PDB / NetworkPolicy / CiliumNetworkPolicy / etc. pointing
-// at the workloads it protects) are intentionally NOT projected into the
-// Relationships of the source resource. The PDBs / NetworkPolicies fields are
-// reserved for the INCOMING-direction semantic ("things that act on me").
-//
-// Surfacing the outgoing direction requires a new Protects/SelectedWorkloads
-// field, which is out of scope here. Until that field lands, querying a PDB
-// or NetworkPolicy that has only outgoing protects edges returns nil.
-//
-// This also guards B1 (the old bug that wrote outgoing protects into
-// rel.ScaleTarget) and the post-B1 over-fix (writing them into rel.PDBs,
-// which conflated PDB-side and NP-side outgoing edges).
-func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
+func TestGetRelationships_OutgoingEdgeProtects_SelectsTargets(t *testing.T) {
 	cases := []struct {
 		name       string
 		queryKind  string
@@ -619,7 +624,7 @@ func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			topo := &Topology{
 				Nodes: []Node{
-					{ID: c.sourceID, Kind: c.sourceKind, Name: c.queryName},
+					{ID: c.sourceID, Kind: c.sourceKind, Name: c.queryName, Data: map[string]any{"apiVersion": map[NodeKind]string{KindPDB: "policy/v1", KindNetworkPolicy: "networking.k8s.io/v1", KindCiliumNetworkPolicy: "cilium.io/v2"}[c.sourceKind]}},
 					{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
 					{ID: "deployment/demo/api", Kind: KindDeployment, Name: "api"},
 				},
@@ -649,12 +654,9 @@ func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
 				}
 			}
 
-			// Actual assertion: querying from the source policy side should
-			// NOT surface its targets (outgoing direction intentionally
-			// unsurfaced until a Protects[] field exists).
 			rel := GetRelationships(c.queryKind, "demo", c.queryName, topo, nil, nil)
-			if rel != nil {
-				t.Errorf("want nil (outgoing protects intentionally not surfaced), got %+v", rel)
+			if rel == nil || len(rel.Protects) != 2 || len(rel.NetworkPolicies) != 0 || len(rel.PDBs) != 0 {
+				t.Errorf("policy targets must appear under Selects: %+v", rel)
 			}
 		})
 	}
@@ -683,5 +685,99 @@ func TestGetRelationships_NoProtects_FieldsOmitted(t *testing.T) {
 	}
 	if len(rel.NetworkPolicies) != 0 {
 		t.Errorf("rel.NetworkPolicies: want empty, got %+v", rel.NetworkPolicies)
+	}
+}
+
+func TestGetRelationships_UsesSeparatesDependenciesFromScaling(t *testing.T) {
+	topo := &Topology{Nodes: []Node{
+		{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"apiVersion": "cert-manager.io/v1"}},
+		{ID: "issuer/team/ca", Kind: NodeKind("Issuer"), Name: "ca", Data: map[string]any{"apiVersion": "cert-manager.io/v1"}},
+		{ID: "deployment/team/app", Kind: KindDeployment, Name: "app"},
+		{ID: "scaledobject/team/scale", Kind: KindScaledObject, Name: "scale", Data: map[string]any{"apiVersion": "keda.sh/v1alpha1"}},
+		{ID: "triggerauthentication/team/credential", Kind: NodeKind("TriggerAuthentication"), Name: "credential", Data: map[string]any{"apiVersion": "keda.sh/v1alpha1"}},
+	}, Edges: []Edge{
+		{Source: "certificate/team/tls", Target: "issuer/team/ca", Type: EdgeUses},
+		{Source: "scaledobject/team/scale", Target: "deployment/team/app", Type: EdgeUses},
+		{Source: "scaledobject/team/scale", Target: "triggerauthentication/team/credential", Type: EdgeUses},
+	}}
+	cert := GetRelationships("Certificate", "team", "tls", topo, nil, nil)
+	if cert == nil || cert.ScaleTarget != nil || len(cert.Dependencies) != 1 || cert.Dependencies[0].Name != "ca" {
+		t.Fatalf("certificate relationship = %+v, want issuer dependency without scale target", cert)
+	}
+	if len(cert.ConfigRefs) != 1 || cert.ConfigRefs[0] != cert.Dependencies[0] {
+		t.Fatalf("versioned UI configuration projection = %+v", cert.ConfigRefs)
+	}
+	issuer := GetRelationships("Issuer", "team", "ca", topo, nil, nil)
+	if issuer == nil || len(issuer.Scalers) != 0 || len(issuer.Dependents) != 1 || issuer.Dependents[0].Name != "tls" {
+		t.Fatalf("issuer relationship = %+v, want certificate dependent without scaler", issuer)
+	}
+	if len(issuer.Consumers) != 1 || issuer.Consumers[0] != issuer.Dependents[0] {
+		t.Fatalf("versioned UI consumer projection = %+v", issuer.Consumers)
+	}
+	scaler := GetRelationships("ScaledObject", "team", "scale", topo, nil, nil)
+	if scaler == nil || scaler.ScaleTarget == nil || scaler.ScaleTarget.Name != "app" || len(scaler.Dependencies) != 1 || scaler.Dependencies[0].Name != "credential" {
+		t.Fatalf("scaler relationship = %+v, want workload target and authentication dependency", scaler)
+	}
+	if len(scaler.ConfigRefs) != 1 || scaler.ConfigRefs[0] != scaler.Dependencies[0] {
+		t.Fatalf("versioned UI authentication projection = %+v", scaler.ConfigRefs)
+	}
+	app := GetRelationships("Deployment", "team", "app", topo, nil, nil)
+	if app == nil || len(app.Scalers) != 1 || len(app.Dependents) != 0 {
+		t.Fatalf("workload relationship = %+v, want scaler only", app)
+	}
+}
+
+func TestScalingRelationshipRequiresExactAPIGroup(t *testing.T) {
+	for _, source := range []ResourceRef{
+		{Kind: "HorizontalPodAutoscaler", Group: "example.com", Namespace: "team"},
+		{Kind: "VerticalPodAutoscaler", Group: "example.com", Namespace: "team"},
+		{Kind: "ScaledObject", Group: "example.com", Namespace: "team"},
+		{Kind: "Certificate", Group: "cert-manager.io", Namespace: "team"},
+	} {
+		if isScalingRelationship(&source, &ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "team"}) {
+			t.Fatalf("classified non-scaler as scaling: %+v", source)
+		}
+	}
+	if isStorageResourceRef(&ResourceRef{Kind: "PersistentVolumeClaim", Group: "example.com"}) {
+		t.Fatal("classified custom resource as core storage")
+	}
+}
+
+func TestScalingRelationshipAcceptsExactScalersInTheTargetNamespace(t *testing.T) {
+	target := &ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "team"}
+	for _, source := range []ResourceRef{
+		{Kind: "HorizontalPodAutoscaler", Group: "autoscaling", Namespace: "team"},
+		{Kind: "VerticalPodAutoscaler", Group: "autoscaling.k8s.io", Namespace: "team"},
+		{Kind: "ScaledObject", Group: "keda.sh", Namespace: "team"},
+		{Kind: "ScaledJob", Group: "keda.sh", Namespace: "team"},
+	} {
+		if !isScalingRelationship(&source, target) {
+			t.Errorf("did not classify %+v as scaling", source)
+		}
+		other := source
+		other.Namespace = "other"
+		if isScalingRelationship(&other, target) {
+			t.Errorf("classified cross-namespace %+v as scaling", other)
+		}
+	}
+}
+
+func TestGetRelationships_SharedClaimListsEachConsumerOnce(t *testing.T) {
+	const consumers = 20000
+	topo := &Topology{Nodes: []Node{{ID: "persistentvolumeclaim/team/shared", Kind: NodeKind("PersistentVolumeClaim"), Name: "shared"}}}
+	for i := range consumers {
+		id := fmt.Sprintf("job/team/run-%d", i)
+		topo.Nodes = append(topo.Nodes, Node{ID: id, Kind: KindJob, Name: fmt.Sprintf("run-%d", i)})
+		topo.Edges = append(topo.Edges, Edge{Source: "persistentvolumeclaim/team/shared", Target: id, Type: EdgeUses})
+	}
+	topo.Edges = append(topo.Edges, Edge{Source: "persistentvolumeclaim/team/shared", Target: "job/team/run-0", Type: EdgeUses})
+
+	rel := GetRelationships("PersistentVolumeClaim", "team", "shared", topo, nil, nil)
+	if rel == nil || len(rel.Consumers) != consumers {
+		t.Fatalf("consumers = %d, want %d", len(rel.Consumers), consumers)
+	}
+	job := GetRelationships("Job", "team", "run-0", topo, nil, nil)
+	if job == nil || len(job.StorageRefs) != 1 {
+		t.Fatalf("storage refs = %+v, want the shared claim once", job)
 	}
 }

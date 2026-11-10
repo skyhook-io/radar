@@ -96,6 +96,8 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
     state === 'not_found' ||
     state === 'no_cost_source' ||
     state === 'source_unavailable' ||
+    state === 'metrics_port_forward_disabled' ||
+    state === 'kubecost_port_forward_disabled' ||
     state === 'authentication_error' ||
     state === 'configuration_mismatch' ||
     state === 'deployment_configuration_error' ||
@@ -307,6 +309,8 @@ export function getWorkloadCostState(
     reason === 'access_denied' ||
     reason === 'not_found' ||
     reason === 'source_unavailable' ||
+    reason === 'metrics_port_forward_disabled' ||
+    reason === 'kubecost_port_forward_disabled' ||
     reason === 'authentication_error' ||
     reason === 'configuration_mismatch' ||
     reason === 'deployment_configuration_error' ||
@@ -363,10 +367,8 @@ function WorkloadCostUnavailable({
     costIntegrationUnavailableMessage(state, settingsAvailable) ??
     (state === 'no_prometheus'
       ? 'No compatible metrics backend was found. OpenCost workload cost requires OpenCost metrics in a PromQL-compatible backend.'
-      : state === 'query_error'
-        ? 'Cost data is temporarily unavailable. A metrics backend was found, but workload cost queries failed.'
-        : state === 'history_unsupported'
-          ? 'Historical workload cost is not available for Kubecost yet.'
+      : state === 'history_unsupported'
+        ? 'Historical workload cost is not available for Kubecost yet.'
         : state === 'access_denied'
           ? 'You do not have access to view cost for this workload.'
           : state === 'not_found'

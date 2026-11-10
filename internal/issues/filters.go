@@ -19,12 +19,25 @@ func applyFilters(in []Issue, f Filters) []Issue {
 		if len(wantSev) > 0 && !wantSev[i.Severity] {
 			continue
 		}
-		if len(wantKind) > 0 && !wantKind[strings.ToLower(i.Kind)] {
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(i.Kind)] && !affectsKind(i, wantKind) {
 			continue
 		}
 		out = append(out, i)
 	}
 	return out
+}
+
+// affectsKind reports whether the issue affects a resource of a wanted kind:
+// an expired TLS Secret matches kind=Ingress through the Ingresses using it,
+// as related-issue lookups and issue counts already do. AffectedRefs are
+// redacted to the caller's readable resources before filters run.
+func affectsKind(i Issue, wantKind map[string]bool) bool {
+	for _, ref := range i.AffectedRefs {
+		if wantKind[strings.ToLower(ref.Kind)] {
+			return true
+		}
+	}
+	return false
 }
 
 func applyClusterScopedAccess(in []Issue, f Filters) []Issue {
@@ -49,6 +62,46 @@ func applyClusterScopedAccess(in []Issue, f Filters) []Issue {
 		}
 	}
 	return out
+}
+
+// applySubjectAccess drops namespaced rows whose own resource the caller can't
+// read. Cluster-scoped rows are applyClusterScopedAccess's.
+func applySubjectAccess(in []Issue, canRead func(Ref) bool) []Issue {
+	if canRead == nil {
+		return in
+	}
+	out := make([]Issue, 0, len(in))
+	for _, i := range in {
+		if i.Namespace == "" || canRead(Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name}) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+func applyOwnerAccess(in []Issue, f Filters) []Issue {
+	for idx := range in {
+		in[idx] = WithReadableOwner(in[idx], f.CanReadSubject, f.CanReadClusterScoped)
+	}
+	return in
+}
+
+// WithReadableOwner makes a row whose owner the caller can't read its own
+// subject. Grouping would otherwise publish the owner as the issue, and
+// dropping the row would hide a failure of a resource the caller can read.
+func WithReadableOwner(i Issue, canReadSubject func(Ref) bool, canReadClusterScoped func(kind, group string) bool) Issue {
+	if i.Owner.Kind == "" {
+		return i
+	}
+	readable := canReadSubject == nil || canReadSubject(i.Owner)
+	if i.Owner.Namespace == "" {
+		readable = canReadClusterScoped == nil || canReadClusterScoped(i.Owner.Kind, i.Owner.Group)
+	}
+	if !readable {
+		i.Owner = Ref{}
+		enrichIdentity(&i)
+	}
+	return i
 }
 
 // SeverityRank orders the normalized issue severity, higher = worse. Shared by

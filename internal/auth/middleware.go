@@ -2,12 +2,14 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 // cloudMode reports whether Radar is running under Radar Cloud. Reads
@@ -114,12 +116,24 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 				username := r.Header.Get(cfg.UserHeader)
 				if username != "" {
 					var groups []string
-					if g := r.Header.Get(cfg.GroupsHeader); g != "" {
+					// Proxies send groups as one comma-separated header or as
+					// one header per group; accept both.
+					for _, g := range r.Header.Values(cfg.GroupsHeader) {
 						for _, part := range strings.Split(g, ",") {
 							if trimmed := strings.TrimSpace(part); trimmed != "" {
 								groups = append(groups, trimmed)
 							}
 						}
+					}
+
+					if cloudProxyMode && pkgauth.UserTokenMode() {
+						user, ok := userTokenIdentity(w, r, cfg, username, groups)
+						if !ok {
+							return
+						}
+						logAcceptedForwardedIdentity(user)
+						next.ServeHTTP(w, r.WithContext(ContextWithUser(r.Context(), user)))
+						return
 					}
 
 					// Never impersonate reserved K8s principals (system:masters etc.);
@@ -175,9 +189,8 @@ func rejectDisallowedIdentity(w http.ResponseWriter, username string, cloud bool
 func isExemptPath(path string) bool {
 	// Under cloud-mode, the full handler is reachable only via the authenticated
 	// tunnel and the ordinary TCP listener is health-only. Keep this auth-layer
-	// check as defense in depth: /debug/pprof/* in particular leaks the entire
-	// in-memory K8s cache, so it must never bypass the Hub identity boundary (and
-	// is not mounted at all under cloud-mode — see server.go).
+	// check as defense in depth: process diagnostics must never bypass the
+	// Hub identity boundary. Profiling routes are omitted entirely in Cloud mode.
 	if cloudMode() {
 		// Cloud owns authentication; Radar's own login/callback endpoints must
 		// not be reachable without the Hub identity boundary. The exact health
@@ -199,12 +212,9 @@ func isExemptPath(path string) bool {
 			return true
 		}
 	}
-	// Static assets don't require auth. /debug/* (pprof) is excluded: it's
-	// mounted on every non-cloud build, and the fallthrough would otherwise
-	// expose it unauthenticated whenever auth is enabled — /debug/pprof/heap
-	// leaks the entire in-memory K8s cache (every Secret, ConfigMap, Pod
-	// spec). /metrics stays open by this fallthrough: operational counters
-	// only, scraped by Prometheus.
+	// Static assets don't require auth. /debug/* (pprof) is excluded so
+	// process diagnostics remain authenticated whenever profiling is enabled.
+	// /metrics stays open: operational counters only, scraped by Prometheus.
 	if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/mcp") && !strings.HasPrefix(path, "/debug/") {
 		return true
 	}
@@ -230,13 +240,25 @@ func AuditLog(r *http.Request, namespace, name string) {
 }
 
 type AuditActionDetails struct {
-	Action    string
-	Namespace string
-	Name      string
-	Container string
-	Variable  string
-	Source    string
-	Outcome   string
+	InvocationID  string
+	Kind          string
+	Group         string
+	Action        string
+	Namespace     string
+	Name          string
+	Container     string
+	Variable      string
+	Source        string
+	Outcome       string
+	Executable    string
+	ArgumentCount int
+	CommandHash   string
+	RequestedKind string
+	RequestedName string
+	SelectedUID   string
+	Node          string
+	ExitCode      *int
+	Duration      time.Duration
 }
 
 func AuditLogAction(r *http.Request, details AuditActionDetails) {
@@ -246,7 +268,29 @@ func AuditLogAction(r *http.Request, details AuditActionDetails) {
 		username = user.Username
 		groups = user.Groups
 	}
-	log.Printf("[audit] user=%q groups=%q action=%q path=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
-		username, groups, details.Action, r.URL.Path, details.Namespace, details.Name,
+	line := fmt.Sprintf("[audit] user=%q groups=%q action=%q path=%q kind=%q api_group=%q ns=%q name=%q container=%q variable=%q source=%q outcome=%q",
+		username, groups, details.Action, r.URL.Path, details.Kind, details.Group, details.Namespace, details.Name,
 		details.Container, details.Variable, details.Source, details.Outcome)
+	if details.InvocationID != "" {
+		line += fmt.Sprintf(" invocationID=%q", details.InvocationID)
+	}
+	if details.CommandHash != "" {
+		line += fmt.Sprintf(" executable=%q argumentCount=%d commandHash=%q", details.Executable, details.ArgumentCount, details.CommandHash)
+	}
+	if details.RequestedName != "" {
+		line += fmt.Sprintf(" requestedKind=%q requestedName=%q", details.RequestedKind, details.RequestedName)
+	}
+	if details.SelectedUID != "" {
+		line += fmt.Sprintf(" selectedUID=%q", details.SelectedUID)
+	}
+	if details.Node != "" {
+		line += fmt.Sprintf(" node=%q", details.Node)
+	}
+	if details.ExitCode != nil {
+		line += fmt.Sprintf(" exitCode=%d", *details.ExitCode)
+	}
+	if details.Duration != 0 {
+		line += fmt.Sprintf(" duration=%s", details.Duration)
+	}
+	log.Print(line)
 }

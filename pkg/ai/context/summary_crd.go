@@ -5,16 +5,42 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // summarizeUnstructured produces a Summary for CRDs and dynamic resources.
 // Uses known CRD extractors where available, falls back to generic extraction.
 func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
+	if obj == nil {
+		return &ResourceSummary{Kind: "Unknown"}
+	}
+	pause := resourcecontext.CrossplanePauseFor(obj)
+	s := summarizeUnstructuredKind(obj, pause)
+	applyLifecycleFields(s, obj)
+	s.CrossplanePause = pause
+	return s
+}
+
+func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecontext.CrossplanePauseState) *ResourceSummary {
 	kind := obj.GetKind()
 	group := obj.GroupVersionKind().Group
 
 	// Known CRD extractors
 	switch {
+	case group == "opentelemetry.io" && kind == "OpenTelemetryCollector":
+		return summarizeOpenTelemetryCollector(obj)
+	case group == "opentelemetry.io" && kind == "Instrumentation":
+		return summarizeOpenTelemetryInstrumentation(obj)
+	case group == "flagger.app" && kind == "Canary":
+		return summarizeFlaggerCanary(obj)
+	case group == "flagger.app" && kind == "MetricTemplate":
+		return summarizeFlaggerMetricTemplate(obj)
+	case group == TrivyGroup && obj.Object["report"] != nil:
+		return summarizeTrivyReport(obj)
 	case group == "argoproj.io" && kind == "Application":
 		return summarizeArgoApp(obj)
 	case group == "argoproj.io" && kind == "Rollout":
@@ -43,7 +69,7 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 		return summarizeKedaTriggerAuthentication(obj)
 	case group == "gateway.networking.k8s.io" && kind == "GatewayClass":
 		return summarizeGatewayClass(obj)
-	case group == "gateway.networking.k8s.io" && (kind == "HTTPRoute" || kind == "GRPCRoute" || kind == "TCPRoute" || kind == "TLSRoute"):
+	case group == "gateway.networking.k8s.io" && (kind == "HTTPRoute" || kind == "GRPCRoute" || kind == "TCPRoute" || kind == "TLSRoute" || kind == "UDPRoute"):
 		return summarizeGatewayRoute(obj)
 	case group == "projectcontour.io" && kind == "HTTPProxy":
 		return summarizeContourHTTPProxy(obj)
@@ -78,7 +104,7 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 	}
 
 	// Generic fallback
-	return summarizeGenericCRD(obj)
+	return summarizeGenericCRD(obj, pause)
 }
 
 // draRequestDeviceClasses collects deviceClassName values across all API
@@ -380,7 +406,12 @@ func summarizeArgoAnalysisRun(obj *unstructured.Unstructured) *ResourceSummary {
 	switch {
 	case len(failing) > 0:
 		s.Issue = strings.Join(failing, "; ")
-	default:
+	// Argo writes status.message only when a run finishes, and a finished run
+	// can be fine: Argo stops a run once the Rollout no longer needs it (a
+	// canary completing with background analysis, a newer revision, an abort,
+	// a promote-full, a fast rollback), and that run ends Successful with
+	// "Run Terminated". So the message is an issue only on a bad verdict.
+	case s.Status == "Failed", s.Status == "Error", s.Status == "Inconclusive":
 		s.Issue, _, _ = unstructured.NestedString(obj.Object, "status", "message")
 	}
 
@@ -444,12 +475,26 @@ func summarizeGateway(obj *unstructured.Unstructured) *ResourceSummary {
 	return s
 }
 
-func summarizeGenericCRD(obj *unstructured.Unstructured) *ResourceSummary {
+func summarizeGenericCRD(obj *unstructured.Unstructured, pause resourcecontext.CrossplanePauseState) *ResourceSummary {
 	s := &ResourceSummary{
 		Kind:      obj.GetKind(),
 		Name:      obj.GetName(),
 		Namespace: obj.GetNamespace(),
 		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	if pause != "" {
+		if ready, found := conditions.Find(obj, "Ready"); found {
+			s.Ready = ready.Status
+		} else if available, found := conditions.Find(obj, "Available"); found {
+			s.Ready = available.Status
+		}
+		if synced, found := conditions.Find(obj, "Synced"); found && synced.Status == "False" && synced.Reason != "ReconcilePaused" {
+			s.Issue = synced.Reason
+			if s.Issue == "" {
+				s.Issue = "NotSynced"
+			}
+		}
 	}
 
 	// Gateway API policies (GEP-713) report per-ancestor, at
@@ -907,10 +952,12 @@ func summarizeKedaScaledObject(obj *unstructured.Unstructured) *ResourceSummary 
 	}
 
 	// Target ref
-	targetKind, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "kind")
-	targetName, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "name")
-	if targetKind != "" && targetName != "" {
-		s.Target = fmt.Sprintf("%s/%s", targetKind, targetName)
+	if apiVersion, kind, name, ok := configrefs.KEDAScaleTarget(obj); ok {
+		group := resourceid.GroupFromAPIVersion(apiVersion)
+		if group == "" {
+			group = "core"
+		}
+		s.Target = fmt.Sprintf("%s (%s)/%s", kind, group, name)
 	}
 
 	// Min/max replicas

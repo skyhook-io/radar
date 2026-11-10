@@ -1,9 +1,13 @@
 import { Globe, Shield, Clock } from 'lucide-react'
+import type { ResourceRef } from '../../../types'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { kindToPluralWithGroup } from '../../../utils/navigation'
+import { ingressHostUsesTLS, ingressRuleTarget } from '../../../utils/host-url'
+import { HostLinkActions } from '../../ui/HostLinkActions'
 
 interface IngressRendererProps {
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: (ref: ResourceRef) => void
 }
 
 export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
@@ -15,7 +19,10 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
   // Check for issues
   const hasNoAddress = lbIngress.length === 0
   const hasNoClass = !spec.ingressClassName && !data.metadata?.annotations?.['kubernetes.io/ingress.class']
-  const hasNoRules = rules.length === 0
+  const defaultService = spec.defaultBackend?.service
+  const defaultResource = spec.defaultBackend?.resource
+  // An Ingress with only a default backend still routes everything to it.
+  const hasNoRules = rules.length === 0 && !spec.defaultBackend
 
   return (
     <>
@@ -42,23 +49,53 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
 
       <Section title="Ingress" icon={Globe}>
         <PropertyList>
-          <Property label="Class" value={spec.ingressClassName || data.metadata?.annotations?.['kubernetes.io/ingress.class']} />
+          <Property label="Class" value={spec.ingressClassName
+            ? <ResourceLink name={spec.ingressClassName} kind="ingressclasses" group="networking.k8s.io" onNavigate={onNavigate} />
+            : data.metadata?.annotations?.['kubernetes.io/ingress.class']
+          } />
           {lbIngress.length > 0 && (
             <Property label="Address" value={lbIngress[0].ip || lbIngress[0].hostname} />
+          )}
+          {defaultService?.name && (
+            <Property label="Default Backend" value={
+              <ResourceLink
+                name={defaultService.name}
+                kind="services"
+                namespace={data.metadata?.namespace || ''}
+                label={<span className="text-blue-400">{defaultService.name}:{defaultService.port?.number || defaultService.port?.name}</span>}
+                onNavigate={onNavigate}
+              />
+            } />
+          )}
+          {defaultResource?.name && (
+            <Property label="Default Backend" value={
+              <ResourceLink
+                name={defaultResource.name}
+                kind={kindToPluralWithGroup(defaultResource.kind, defaultResource.apiGroup || '')}
+                group={defaultResource.apiGroup || ''}
+                namespace={data.metadata?.namespace || ''}
+                label={<span className="text-blue-400">{`${defaultResource.kind}/${defaultResource.name}`}</span>}
+                onNavigate={onNavigate}
+              />
+            } />
           )}
           <Property label="TLS" value={tls.length > 0 ? `${tls.length} certificate(s)` : 'None'} />
         </PropertyList>
       </Section>
 
-      <Section title="Rules" defaultExpanded>
+      {rules.length > 0 && <Section title="Rules" defaultExpanded>
         <div className="space-y-3">
-          {rules.map((rule: any, i: number) => (
+          {rules.map((rule: any, i: number) => {
+            const target = ingressRuleTarget(rule, tls)
+            return (
             <div key={i} className="card-inner-lg">
               <div className="flex items-center gap-2 mb-2">
-                {tls.some((t: any) => t.hosts?.includes(rule.host)) && (
+                {ingressHostUsesTLS(rule.host, tls) && (
                   <Shield className="w-3.5 h-3.5 text-green-400" />
                 )}
-                <span className="text-sm font-medium text-theme-text-primary">{rule.host || '*'}</span>
+                <span className="text-sm font-medium text-theme-text-primary break-all">{rule.host || '*'}</span>
+                {target?.kind === 'url' && <HostLinkActions url={target.url} />}
+                {target?.kind === 'hostname' && <HostLinkActions hostname={target.hostname} />}
               </div>
               <div className="space-y-1">
                 {rule.http?.paths?.map((path: any) => (
@@ -81,9 +118,10 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
                 ))}
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
-      </Section>
+      </Section>}
 
       {tls.length > 0 && (
         <Section title="TLS" icon={Shield}>

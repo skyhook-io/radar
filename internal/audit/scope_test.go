@@ -20,7 +20,7 @@ import (
 )
 
 func TestReadScopeSeparatesSubjectsAndSecretGrants(t *testing.T) {
-	scope := resolveReadScope([]string{"b", "a"}, []string{"b"}, nil, nil)
+	scope := resolveReadScope([]string{"b", "a"}, []string{"b"}, nil, denyAll)
 	for _, tc := range []struct{ selected, want []string }{
 		{nil, []string{"a", "b"}}, {[]string{}, []string{"a", "b"}}, {[]string{"b", "outside"}, []string{"b"}}, {[]string{"outside"}, []string{}},
 	} {
@@ -38,8 +38,8 @@ func TestReadScopeSeparatesSubjectsAndSecretGrants(t *testing.T) {
 	if !scope.allows(schema.GroupVersionResource{Resource: "pods"}, "a") {
 		t.Fatal("namespace policy changed")
 	}
-	all := resolveReadScope(nil, nil, nil, nil)
-	none := resolveReadScope([]string{}, []string{}, nil, nil)
+	all := resolveReadScope(nil, nil, nil, denyAll)
+	none := resolveReadScope([]string{}, []string{}, nil, denyAll)
 	a, _ := json.Marshal(all)
 	n, _ := json.Marshal(none)
 	if string(a) == string(n) || !all.allows(secrets, "any") || none.allows(secrets, "any") {
@@ -53,6 +53,9 @@ func TestReadScopeWatchedGrantsWithoutDiscovery(t *testing.T) {
 	other := gvr
 	other.Version = "v2"
 	scope := resolveReadScope([]string{"app"}, nil, []schema.GroupVersionResource{gvr, other, {Group: "pkg.crossplane.io", Resource: "providers"}}, func(group, resource, ns string) bool {
+		if pdPlacementResource(group, resource) {
+			return true
+		}
 		calls.Add(1)
 		if group != gvr.Group || resource != gvr.Resource || ns != "" {
 			t.Errorf("unexpected SAR: %s/%s/%s", group, resource, ns)
@@ -72,6 +75,37 @@ func TestReadScopeWatchedGrantsWithoutDiscovery(t *testing.T) {
 	denied := resolveReadScope(nil, nil, []schema.GroupVersionResource{gvr}, func(string, string, string) bool { return false })
 	if denied.allows(gvr, "") {
 		t.Fatal("denied cluster subject allowed")
+	}
+}
+
+func denyAll(string, string, string) bool { return false }
+
+func pdPlacementResource(group, resource string) bool {
+	for _, gvr := range pdPlacementClusterResources {
+		if gvr.Group == group && gvr.Resource == resource {
+			return true
+		}
+	}
+	return false
+}
+
+// The Persistent Disk placement check reads nodes, PVs and StorageClasses
+// cluster-wide, so every scope resolves those grants, and a reader missing
+// any one of them gets no placement evidence.
+func TestReadScopeResolvesPDPlacementGrants(t *testing.T) {
+	scope := resolveReadScope(nil, nil, nil, func(group, resource, ns string) bool {
+		if ns != "" {
+			t.Errorf("cluster-scoped grant resolved with namespace %q", ns)
+		}
+		return resource != "storageclasses"
+	})
+	for _, gvr := range pdPlacementClusterResources {
+		if want := gvr.Resource != "storageclasses"; scope.allows(gvr, "") != want {
+			t.Errorf("%s: allows = %v, want %v", gvr.Resource, !want, want)
+		}
+	}
+	if collectPDPlacement(nil, nil, scope) != nil {
+		t.Fatal("a reader without StorageClass access must get no placement evidence")
 	}
 }
 

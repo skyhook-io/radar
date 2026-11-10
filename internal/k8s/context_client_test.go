@@ -44,9 +44,9 @@ func TestClientFromContext_Impersonation(t *testing.T) {
 	}
 	// Concrete type carries the impersonated REST config; assert we got
 	// the user-scoped config back by rebuilding through the primitive.
-	cfg, err := ImpersonatedConfig(user.Username, user.Groups)
+	cfg, err := UserConfig(user)
 	if err != nil {
-		t.Fatalf("ImpersonatedConfig failed: %v", err)
+		t.Fatalf("UserConfig failed: %v", err)
 	}
 	if cfg.Impersonate.UserName != "alice" {
 		t.Errorf("Impersonate.UserName = %q, want %q", cfg.Impersonate.UserName, "alice")

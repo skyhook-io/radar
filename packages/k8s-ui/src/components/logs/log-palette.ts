@@ -53,6 +53,8 @@ export interface LogPalette {
   levelActiveWarn: string
   levelActiveInfo: string
   levelActiveDebug: string
+  /** Lines with no recognizable level */
+  levelActiveOther: string
 
   // Level-badge colors used inside StructuredLogLine
   levelBadgeError: string
@@ -110,6 +112,7 @@ const DARK_PALETTE: LogPalette = {
   levelActiveWarn: 'bg-amber-500/20 text-amber-400 border-amber-500/40',
   levelActiveInfo: 'bg-blue-500/20 text-blue-400 border-blue-500/40',
   levelActiveDebug: 'bg-slate-700 text-slate-300 border-slate-600',
+  levelActiveOther: 'bg-transparent text-slate-300 border-slate-500',
 
   levelBadgeError: 'bg-red-500/20 text-red-400 border border-red-500/40',
   levelBadgeWarn: 'bg-amber-500/20 text-amber-400 border border-amber-500/40',
@@ -166,6 +169,7 @@ const LIGHT_PALETTE: LogPalette = {
   levelActiveWarn: 'bg-amber-100 text-amber-700 border-amber-400',
   levelActiveInfo: 'bg-blue-100 text-blue-700 border-blue-400',
   levelActiveDebug: 'bg-slate-200 text-slate-700 border-slate-400',
+  levelActiveOther: 'bg-white text-slate-700 border-slate-400',
 
   levelBadgeError: 'bg-red-100 text-red-700 border border-red-400',
   levelBadgeWarn: 'bg-amber-100 text-amber-700 border border-amber-400',

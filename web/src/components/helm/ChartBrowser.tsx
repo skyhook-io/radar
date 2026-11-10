@@ -3,12 +3,13 @@ import { Search, RefreshCw, Package, Database, AlertCircle, ExternalLink, Chevro
 import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmRepositories, useSearchCharts, useUpdateRepository, useUpdateRepositorySilent, useArtifactHubSearch, type ArtifactHubSortOption } from '../../api/client'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmWrite, useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
 import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '../../types'
-import { formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
+import { artifactHubPublisher, isArtifactHubOfficial } from '../../utils/artifacthub'
+import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 
 interface ChartBrowserProps {
   onChartSelect: (repo: string, chart: string, version: string, source: ChartSource) => void
@@ -25,12 +26,11 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false)
   const [artifactHubSort, setArtifactHubSort] = useState<ArtifactHubSortOption>('relevance')
 
-  // Repo refresh is gated only by `requireHelmWrite` on the backend
-  // (handleUpdateRepository deliberately skips requireCloudRole — it
-  // mutates pod-local chart cache, not cluster state). So the frontend gate
-  // here must NOT include the Cloud role check, or Cloud viewers with
-  // rbac.helm=true would be blocked from a refresh the backend allows.
-  const canHelmWrite = useCanHelmWrite()
+  // Refreshing repositories only touches Radar's own chart cache. With auth on,
+  // any signed-in user may do it; without auth it follows rbac.helm.
+  const helmWrite = useCanHelmWrite()
+  const authEnabled = useIsAuthEnabled()
+  const canHelmWrite = helmWrite || authEnabled
   const helmWriteReason = canHelmWrite ? '' : 'Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.'
 
   // Local repo hooks
@@ -124,8 +124,8 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
+      {/* Toolbar. Phones: the controls wrap and search takes its own row. */}
+      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0 phone:flex-wrap phone:gap-2 phone:px-3">
         <div className="flex items-center gap-2 text-theme-text-secondary">
           <Package className="w-5 h-5" />
           <span className="font-medium">Charts</span>
@@ -214,7 +214,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
 
         {/* ArtifactHub filters */}
         {chartSource === 'artifacthub' && (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 phone:flex-wrap phone:gap-x-3 phone:gap-y-2">
             <label className="flex items-center gap-1.5 text-sm text-theme-text-secondary">
               <input
                 type="checkbox"
@@ -252,7 +252,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
         )}
 
         {/* Search */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative phone:order-last phone:basis-full">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
           <Input
             placeholder={chartSource === 'local' ? "Search charts..." : "Search ArtifactHub..."}
@@ -432,7 +432,7 @@ function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, ca
         {repo.name}
         {repo.lastUpdated && (
           <span className="text-xs text-theme-text-tertiary ml-2">
-            {formatAge(repo.lastUpdated)}
+            {formatRelativeAgeTime(repo.lastUpdated)}
           </span>
         )}
       </button>
@@ -515,7 +515,7 @@ interface ArtifactHubChartCardProps {
 function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
   // Format Unix timestamp to relative age
   const lastUpdated = chart.updatedAt
-    ? formatAge(new Date(chart.updatedAt * 1000).toISOString())
+    ? formatRelativeAgeTime(new Date(chart.updatedAt * 1000).toISOString())
     : null
 
   return (
@@ -549,7 +549,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <div className="flex items-center gap-2 mt-0.5 text-xs text-theme-text-tertiary">
             <span className="flex items-center gap-1">
               <Building2 className="w-3 h-3" />
-              {chart.repository.organizationName || chart.repository.name}
+              {artifactHubPublisher(chart.repository)}
             </span>
             <span className="flex items-center gap-1">
               <Globe className="w-3 h-3" />
@@ -631,12 +631,12 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           </Tooltip>
 
           {/* Official */}
-          <Tooltip content={chart.repository.official ? 'Official package' : 'Community package'}>
+          <Tooltip content={isArtifactHubOfficial(chart) ? 'Official package' : 'Community package'}>
             <span className={clsx(
               'p-1.5 rounded',
-              chart.repository.official ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
+              isArtifactHubOfficial(chart) ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
             )}>
-              <Star className={clsx('w-4 h-4', chart.repository.official && 'fill-current')} />
+              <Star className={clsx('w-4 h-4', isArtifactHubOfficial(chart) && 'fill-current')} />
             </span>
           </Tooltip>
         </div>

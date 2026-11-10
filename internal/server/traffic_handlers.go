@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
@@ -81,8 +85,16 @@ func flowVisibleForNamespaces(flow traffic.Flow, allowed map[string]bool) bool {
 		(flow.Destination.Namespace != "" && allowed[flow.Destination.Namespace])
 }
 
+const recentSourcesMaxAge = 2 * time.Minute
+
 // handleGetTrafficSources returns available traffic sources and recommendations
 // GET /api/traffic/sources
+//
+// ?recent=1 accepts a detection up to recentSourcesMaxAge old, so browsing
+// workloads or opening the Traffic view from one doesn't re-probe every source.
+// Callers detect afresh when the answer will be shown as setup advice, or when
+// connecting to the reused source failed. A Radar without this parameter
+// ignores it and detects, as before.
 func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -92,8 +104,17 @@ func (s *Server) handleGetTrafficSources(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	response, err := manager.DetectSources(ctx)
+	var response *traffic.SourcesResponse
+	var err error
+	if r.URL.Query().Get("recent") == "1" {
+		response, err = manager.RecentSources(ctx, recentSourcesMaxAge)
+	} else {
+		response, err = manager.DetectSources(ctx)
+	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return // the client left
+		}
 		log.Printf("[traffic] Error detecting sources: %v", err)
 		s.writeError(w, http.StatusInternalServerError, "Failed to detect traffic sources")
 		return
@@ -113,27 +134,15 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse query parameters
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	}
-	sinceStr := r.URL.Query().Get("since")
-
-	opts := traffic.DefaultFlowOptions()
-	// Traffic only supports single namespace filter
-	if len(namespaces) == 1 {
-		opts.Namespace = namespaces[0]
-	}
-
-	if sinceStr != "" {
-		duration, err := time.ParseDuration(sinceStr)
-		if err != nil {
-			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid 'since' duration format: %s (expected format like '5m', '1h')", sinceStr))
-			return
-		}
-		opts.Since = duration
+	opts, err := trafficFlowOptions(r, namespaces)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	response, err := manager.GetFlows(ctx, opts)
@@ -143,45 +152,174 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The source only filters by a single namespace; restrict multi-namespace
-	// users here so flows outside their allowed namespaces aren't returned.
-	flows := response.Flows
-	if allowed := namespaceLookup(namespaces); allowed != nil {
-		kept := make([]traffic.Flow, 0, len(flows))
-		for _, f := range flows {
-			if flowVisibleForNamespaces(f, allowed) {
-				kept = append(kept, f)
-			}
+	flows := resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows)
+	byPod := r.URL.Query().Get("groupBy") == "pod"
+	s.writeJSON(w, trafficFlowsPayload(response, s.visibleFlows(r, flows, namespaces, opts), byPod))
+}
+
+// resolveFlowWorkloads sets each pod endpoint's workload from Radar's pod
+// cache: the controller that ultimately owns it, through ReplicaSets and
+// Jobs. A source's own answer is kept for a pod the cache does not hold —
+// one already deleted, or in a namespace Radar cannot list.
+func resolveFlowWorkloads(cache *k8s.ResourceCache, flows []traffic.Flow) []traffic.Flow {
+	if cache == nil || cache.Pods() == nil {
+		return flows
+	}
+	pods := cache.Pods()
+	type owner struct{ kind, name string }
+	resolved := map[string]*owner{}
+	resolve := func(e *traffic.Endpoint) {
+		if e.Kind != traffic.EndpointKindPod || e.Namespace == "" || e.Name == "" {
+			return
 		}
-		flows = kept
+		key := e.Namespace + "/" + e.Name
+		o, seen := resolved[key]
+		if !seen {
+			if pod, err := pods.Pods(e.Namespace).Get(e.Name); err == nil {
+				// A pod nothing owns is its own unit, and so is a static pod,
+				// which the kubelet marks as owned by its Node: grouping by
+				// that would put a node's control-plane pods into one box.
+				// Either way a stale guess from the source must not group it
+				// with something else.
+				o = &owner{}
+				if top := k8s.TopOwnerForPod(cache, pod); top != nil && top.Kind != "Node" {
+					o = &owner{kind: top.Kind, name: top.Name}
+				}
+			}
+			resolved[key] = o
+		}
+		if o != nil {
+			e.Workload, e.WorkloadKind = o.name, o.kind
+		}
 	}
 	for i := range flows {
-		flows[i].PolicyVerdict = s.redactPolicyRefs(r, flows[i].PolicyVerdict)
+		resolve(&flows[i].Source)
+		resolve(&flows[i].Destination)
 	}
+	return flows
+}
 
-	s.writeJSON(w, trafficFlowsPayload(response, flows))
+// trafficFlowSample is how many records the flows response carries for the
+// flow list. The graph is built from the aggregation of all of them; sending
+// every record as well made the response grow with the cluster — tens of
+// megabytes from a large Hubble install — for a list that shows a screenful.
+// The list asks /traffic/flows/records for the traffic behind a selection.
+const trafficFlowSample = 1000
+
+// trafficRecordsLimit caps a records response at what the flow list shows for
+// the sample, so a selection is never the larger payload of the two.
+const trafficRecordsLimit = trafficFlowSample
+
+// maxTrafficMatchBytes bounds the decoded selection a records request carries
+// in its query string. The UI keeps the encoded request line far below it, for
+// the 8 KiB limits of the proxies in front; this guards the server.
+const maxTrafficMatchBytes = 16 << 10
+
+// trafficFlowOptions reads the query parameters the flows and records
+// endpoints share. namespaces is the caller's resolved namespace scope.
+func trafficFlowOptions(r *http.Request, namespaces []string) (traffic.FlowOptions, error) {
+	q := r.URL.Query()
+	opts := traffic.DefaultFlowOptions()
+	opts.Namespaces = namespaces
+	if len(namespaces) == 1 {
+		opts.Namespace = namespaces[0]
+	}
+	if sinceStr := q.Get("since"); sinceStr != "" {
+		duration, err := time.ParseDuration(sinceStr)
+		if err != nil {
+			return opts, fmt.Errorf("invalid 'since' duration format: %s (expected format like '5m', '1h')", sinceStr)
+		}
+		opts.Since = duration
+	}
+	for _, ns := range strings.Split(q.Get("excludeNamespaces"), ",") {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			opts.ExcludeNamespaces = append(opts.ExcludeNamespaces, ns)
+		}
+	}
+	opts.ExcludeHost = q.Get("excludeHost") == "true"
+	return opts, nil
+}
+
+// visibleFlows keeps the flows this caller may see and the request did not
+// exclude, with policy names the caller may not read removed. The source may
+// filter by namespace itself, but this is the check that holds for every
+// source; and a source that cannot apply the exclusions has them applied here.
+func (s *Server) visibleFlows(r *http.Request, flows []traffic.Flow, namespaces []string, opts traffic.FlowOptions) []traffic.Flow {
+	allowed := namespaceLookup(namespaces)
+	kept := make([]traffic.Flow, 0, len(flows))
+	for _, f := range flows {
+		if flowVisibleForNamespaces(f, allowed) && !opts.Excludes(f) && opts.Match.Matches(f) {
+			kept = append(kept, f)
+		}
+	}
+	for i := range kept {
+		kept[i].PolicyVerdict = s.redactPolicyRefs(r, kept[i].PolicyVerdict)
+	}
+	return kept
+}
+
+// newestFlows returns up to limit flows, newest first.
+func newestFlows(flows []traffic.Flow, limit int) []traffic.Flow {
+	sorted := slices.Clone(flows)
+	slices.SortStableFunc(sorted, func(a, b traffic.Flow) int { return b.LastSeen.Compare(a.LastSeen) })
+	if len(sorted) > limit {
+		sorted = sorted[:limit]
+	}
+	return sorted
 }
 
 // trafficFlowsPayload shapes the flows response. Split out so it can be tested
 // directly: the payload is hand-built rather than marshalled from a struct, so a
 // field the source sets is easy to drop here without anything failing.
-func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) map[string]any {
+//
+// The aggregation draws pods by workload unless byPod asks for one node per
+// pod.
+func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow, byPod bool) map[string]any {
+	graphFlows := traffic.GraphFlows(flows)
+	if byPod {
+		graphFlows = flows
+	}
 	result := map[string]any{
 		"source":     response.Source,
 		"timestamp":  response.Timestamp,
-		"flows":      flows,
-		"aggregated": traffic.AggregateFlows(flows),
+		"flows":      newestFlows(flows, trafficFlowSample),
+		"flowsTotal": len(flows),
+		"aggregated": traffic.AggregateFlows(graphFlows),
+		// L7 responses arrive on their request's edge, caller to callee on the
+		// server's port. A client pairing responses with requests needs to know
+		// that rather than guess it from which records happen to be present.
+		"l7ResponsesCallerOriented": true,
 	}
+	addFlowsCoverage(result, response)
+	addFlowsWarning(result, response, flows)
+	return result
+}
+
+// addFlowsCoverage carries what the source said about how much of the window
+// it covers. It describes what the source returned, not what this user may
+// see, so it stays when filtering removes flows: it explains a thin view.
+func addFlowsCoverage(result map[string]any, response *traffic.FlowsResponse) {
+	if response.CoveredSince != nil {
+		result["coveredSince"] = response.CoveredSince
+		result["nodeFlowLimit"] = response.NodeFlowLimit
+	}
+	if response.FlowLimit > 0 {
+		result["flowLimit"] = response.FlowLimit
+	}
+}
+
+func addFlowsWarning(result map[string]any, response *traffic.FlowsResponse, flows []traffic.Flow) {
 
 	// A partial-data warning qualifies the flows it came with. If the namespace
 	// filtering above removed all of them, it now qualifies nothing this user can
 	// see — and describing the shape of edges they have no access to is both
-	// confusing and more than they asked. A source that returned no flows in the
-	// first place is different: there the warning is the explanation for the empty
-	// result, which is exactly what it is for.
+	// confusing and more than they asked. An incomplete one stays: it means flows
+	// may be missing, which may be exactly why this user sees none. A source
+	// that returned no flows in the first place is different again: there the
+	// warning is the explanation for the empty result, which is what it is for.
 	filteredEverythingOut := len(flows) == 0 && len(response.Flows) > 0
 	if response.WarningKind == traffic.WarningPartial && filteredEverythingOut {
-		return result
+		return
 	}
 
 	if response.Warning != "" {
@@ -194,7 +332,72 @@ func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) 
 			result["warningKind"] = response.WarningKind
 		}
 	}
-	return result
+}
+
+// handleGetTrafficRecords returns the newest flow records behind one graph
+// selection, for the flow list.
+// GET /api/traffic/flows/records?match=<FlowMatch JSON>&since=…&excludeNamespaces=…&excludeHost=true
+//
+// A GET carrying the selection in the query string rather than a POST: a
+// read-only Radar Hub proxy refuses every POST, and this is a read. The
+// selection names the raw endpoints behind a graph node or edge — the graph
+// renames and merges endpoints, so only the client knows which ones a
+// selection stands for. It re-queries the source instead of reusing the
+// graph's fetch so that a quiet edge on a busy cluster is not crowded out of
+// a capped result; the answer is as of this request, not the graph's.
+func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request) {
+	raw := r.URL.Query().Get("match")
+	if len(raw) > maxTrafficMatchBytes {
+		s.writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("selection is larger than %d bytes", maxTrafficMatchBytes))
+		return
+	}
+	var match traffic.FlowMatch
+	if err := json.Unmarshal([]byte(raw), &match); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid 'match': "+err.Error())
+		return
+	}
+	if match.Size() == 0 {
+		s.writeError(w, http.StatusBadRequest, "'match' must name at least one endpoint or pair")
+		return
+	}
+
+	if !s.requireConnected(w) {
+		return
+	}
+	namespaces := s.parseNamespacesForUser(r)
+	if readscope.NoNamespaceAccess(namespaces) {
+		s.writeJSON(w, map[string]any{"flows": []traffic.Flow{}, "matched": 0})
+		return
+	}
+	opts, err := trafficFlowOptions(r, namespaces)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	opts.Match = &match
+
+	manager := traffic.GetManager()
+	if manager == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Traffic manager not initialized")
+		return
+	}
+	response, err := manager.GetFlows(r.Context(), opts)
+	if err != nil {
+		log.Printf("[traffic] Error getting flow records: %v", err)
+		s.writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	flows := s.visibleFlows(r, resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows), namespaces, opts)
+	result := map[string]any{
+		"source":                    response.Source,
+		"timestamp":                 response.Timestamp,
+		"flows":                     newestFlows(flows, trafficRecordsLimit),
+		"matched":                   len(flows),
+		"l7ResponsesCallerOriented": true,
+	}
+	addFlowsCoverage(result, response)
+	addFlowsWarning(result, response, flows)
+	s.writeJSON(w, result)
 }
 
 // handleTrafficFlowsStream provides SSE stream of traffic flows
@@ -211,7 +414,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 	// Enforce per-user namespace access (parseNamespacesForUser intersects the
 	// requested ?namespace= with the user's RBAC-allowed namespaces).
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeError(w, http.StatusForbidden, "no namespace access")
 		return
 	}

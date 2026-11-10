@@ -1,7 +1,7 @@
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
 import { apiVersionToGroup, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
-import type { SelectedResource, Topology } from '@skyhook-io/k8s-ui/types/core'
+import type { GroupingMode, SelectedResource, Topology, TopologyMode } from '@skyhook-io/k8s-ui/types/core'
 import type { SearchHit } from '../api/client'
 
 /**
@@ -134,10 +134,61 @@ export function openExternal(url: string): void {
     })
 }
 
+/** The header picker's namespace selection as the URL carries it: App keeps
+ *  ?namespaces= in sync with its state (legacy ?namespace= still read). */
+export function namespacesFromSearch(params: URLSearchParams): string[] {
+  const nsParam = params.get('namespaces')
+  if (nsParam) {
+    return nsParam.split(',').map(s => s.trim()).filter(Boolean)
+  }
+  const ns = params.get('namespace')
+  if (ns) {
+    return [ns]
+  }
+  return []
+}
+
 // setMainView's cross-view params. A navigation whose search omits
 // ?namespaces= reads as an empty pick to App's URL sync, which clears the
 // user's namespace scope.
-const CROSS_VIEW_PARAMS = ['namespaces', 'ai-run'] as const
+export const CROSS_VIEW_PARAMS = ['namespaces', 'ai-run'] as const
+
+/** A Resources list route (`/resources/<plural>`), as opposed to bare `/resources` or a detail page. */
+export const RESOURCE_LIST_PATH = /^\/resources\/[^/]+$/
+
+/**
+ * Writes App's view state into the query string. Topology's `mode` and
+ * `group` are dropped on every other view, so no other view can use those
+ * names for params of its own.
+ */
+export function writeViewParams(
+  params: URLSearchParams,
+  namespaces: string[],
+  topology: { mode: TopologyMode; grouping: GroupingMode } | null,
+): void {
+  if (namespaces.length > 0) {
+    params.set('namespaces', namespaces.join(','))
+  } else {
+    params.delete('namespaces')
+  }
+  // Legacy single-namespace param
+  params.delete('namespace')
+  if (!topology) {
+    params.delete('mode')
+    params.delete('group')
+    return
+  }
+  if (topology.mode !== 'resources') {
+    params.set('mode', topology.mode)
+  } else {
+    params.delete('mode')
+  }
+  if (topology.grouping !== 'none' && (namespaces.length === 0 || topology.grouping !== 'namespace')) {
+    params.set('group', topology.grouping)
+  } else {
+    params.delete('group')
+  }
+}
 
 /** Carries the current cross-view params onto an in-app path that doesn't set them itself. */
 export function withCrossViewParams(path: string, currentSearch: string): string {

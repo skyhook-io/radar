@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -106,7 +107,7 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		// No Velero on this cluster, so nothing is stored anywhere.
 		s.writeJSON(w, VeleroStoredBackupsResponse{Backups: []VeleroStoredBackup{}})
 		return
-	case errors.Is(err, errDynamicNotSynced):
+	case errors.Is(err, integration.ErrDynamicNotSynced):
 		s.writeError(w, http.StatusServiceUnavailable, "backups are still loading")
 		return
 	default:

@@ -9,6 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/probe"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -1268,15 +1269,18 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 	gwGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
 	httpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 	tcpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "tcproutes"}
+	udpGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Resource: "udproutes"}
 	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
 			gwGVR:   "GatewayList",
 			httpGVR: "HTTPRouteList",
 			tcpGVR:  "TCPRouteList",
+			udpGVR:  "UDPRouteList",
 		},
 		attachedHTTPRoute("web", "ns", "gw", "ns"),
 		attachedL4Route("TCPRoute", "db-route", "ns", "gw", "ns"),
+		attachedL4Route("UDPRoute", "dns-route", "ns", "gw", "ns"),
 	)
 	if err := dynClient.Tracker().Create(gwGVR, gatewayObject("gw", "ns"), "ns"); err != nil {
 		t.Fatalf("tracker create gateway: %v", err)
@@ -1285,11 +1289,12 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true, Verbs: []string{"list", "watch"}},
 		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
 		{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "TCPRoute", Name: "tcproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
+		{Group: "gateway.networking.k8s.io", Version: "v1alpha2", Kind: "UDPRoute", Name: "udproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
 	}); err != nil {
 		t.Fatalf("InitTestDynamicResourceCache: %v", err)
 	}
 	dynCache := k8s.GetDynamicResourceCache()
-	for _, gvr := range []schema.GroupVersionResource{gwGVR, httpGVR, tcpGVR} {
+	for _, gvr := range []schema.GroupVersionResource{gwGVR, httpGVR, tcpGVR, udpGVR} {
 		if err := dynCache.EnsureWatching(gvr); err != nil {
 			t.Fatalf("EnsureWatching %s: %v", gvr.Resource, err)
 		}
@@ -1304,11 +1309,13 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 		t.Fatalf("BuildTraceWithOptions: %v", err)
 	}
 
-	var l4, http *Hop
+	var l4, udp, http *Hop
 	for i := range tr.Downstream {
 		switch tr.Downstream[i].Resource.Kind {
 		case "TCPRoute":
 			l4 = &tr.Downstream[i]
+		case "UDPRoute":
+			udp = &tr.Downstream[i]
 		case "HTTPRoute":
 			http = &tr.Downstream[i]
 		}
@@ -1328,6 +1335,12 @@ func TestTraceGatewayEntry_ListsL4RoutesStaticOnly(t *testing.T) {
 	}
 	if f.Severity != SeverityInfo {
 		t.Errorf("l4 not-traced note severity = %q, want info (presence is not a problem)", f.Severity)
+	}
+	if udp == nil {
+		t.Fatalf("UDPRoute attachment missing from the Gateway inventory; got %+v", tr.Downstream)
+	}
+	if uf := findingByCode(udp.Findings, "gateway:l4-route-not-traced"); uf == nil || !strings.Contains(uf.Message, "UDP listeners aren't probed") || strings.Contains(uf.Message, "TCP reachability") {
+		t.Errorf("UDPRoute note must not claim a TCP probe, got %+v", udp.Findings)
 	}
 	if findingCodePresent(http.Findings, "gateway:l4-route-not-traced") {
 		t.Errorf("HTTPRoute hop must not carry the l4 note, got %+v", http.Findings)
@@ -1455,6 +1468,243 @@ func TestIngressUpstreamsForService_SyncedCacheAuthoritative(t *testing.T) {
 	}
 }
 
+// TestTraceCacheStillSyncing: Pods and Ingresses are first-paint informers,
+// but a slow one is moved to the background and keeps loading after the
+// cache reports its first phase complete. Until it has synced, its empty lists
+// must read as unreadable / non-authoritative, never as "no backend pods" or
+// "no Ingress references this Service".
+func TestTraceCacheStillSyncing(t *testing.T) {
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team-a"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "api"}, Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	loading := map[string]bool{"pods": true, "ingresses": true}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:          fake.NewClientset(svc),
+		ResourceScopes:  map[string]k8score.ResourceScope{"services": {Enabled: true}, "pods": {Enabled: true}, "ingresses": {Enabled: true}},
+		DeferredTypes:   loading,
+		DebugSyncDelays: map[string]time.Duration{"pods": time.Hour, "ingresses": time.Hour},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+	if !cache.IsSyncComplete() || cache.IsKindReady("pods") || cache.IsKindReady("ingresses") || cache.Pods() == nil || cache.Ingresses() == nil {
+		t.Fatal("fixture must model a completed first phase with Pods and Ingresses still loading behind non-nil listers")
+	}
+	deps := Deps{Cache: cache}
+	if pods, unreadable := selectedPods(deps, svc); !unreadable || pods != nil {
+		t.Errorf("Pods still syncing: got pods=%v unreadable=%v, want nil/true", pods, unreadable)
+	}
+	if _, authoritative := ingressUpstreamsForService(deps, svc); authoritative {
+		t.Error("Ingresses still syncing: the Ingress walk must not claim an authoritative enumeration")
+	}
+}
+
+// TestTraceRouteEntry_DrainedUnreadableBackendKeepsVerdict: a route sends all
+// traffic to a healthy backend and weights a second one to 0, in a namespace
+// the Services cache doesn't collect. The drained backend carries no traffic,
+// so not being able to read it must not leave the whole trace unknown: the
+// verdict is the same as for the route without it. Without probes a Route
+// entry can't read healthy from declared config alone, so the baseline is that
+// route's own verdict and reason rather than a fixed "healthy".
+func TestTraceRouteEntry_DrainedUnreadableBackendKeepsVerdict(t *testing.T) {
+	labelsMap := map[string]string{"app": "api"}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+		Spec: corev1.ServiceSpec{
+			Selector: labelsMap,
+			Ports:    []corev1.ServicePort{{Name: "http", Port: 80, TargetPort: intstr.FromString("http")}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "prod", Labels: labelsMap},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:  "main",
+			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+			ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromString("http")},
+			}},
+		}}},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now())}},
+		},
+	}
+	route := func(backends ...map[string]any) *unstructured.Unstructured {
+		refs := make([]any, 0, len(backends))
+		for _, b := range backends {
+			refs = append(refs, b)
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata":   map[string]any{"name": "web", "namespace": "prod"},
+			"spec":       map[string]any{"rules": []any{map[string]any{"backendRefs": refs}}},
+		}}
+	}
+	active := map[string]any{"name": "api", "port": int64(80), "weight": int64(100)}
+	drained := map[string]any{"name": "old", "namespace": "legacy", "port": int64(80), "weight": int64(0)}
+
+	trace := func(t *testing.T, r *unstructured.Unstructured) *Trace {
+		t.Helper()
+		defer k8s.ResetTestState()
+		defer k8s.ResetTestDynamicState()
+		// Services are collected in prod only, so the legacy backend can't be read.
+		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(svc, pod), map[string]k8score.ResourceScope{
+			"services": {Enabled: true, Namespace: "prod"},
+			"pods":     {Enabled: true},
+		}); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
+		gwGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gateways"}
+		dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+			map[schema.GroupVersionResource]string{gwGVR: "GatewayList", routeGVR: "HTTPRouteList"}, r)
+		if err := k8s.InitTestDynamicResourceCache(dynClient, []k8s.APIResource{
+			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Name: "gateways", Namespaced: true, Verbs: []string{"list", "watch"}},
+			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Namespaced: true, Verbs: []string{"list", "watch"}},
+		}); err != nil {
+			t.Fatalf("InitTestDynamicResourceCache: %v", err)
+		}
+		dynCache := k8s.GetDynamicResourceCache()
+		for _, gvr := range []schema.GroupVersionResource{gwGVR, routeGVR} {
+			if err := dynCache.EnsureWatching(gvr); err != nil {
+				t.Fatalf("EnsureWatching %s: %v", gvr.Resource, err)
+			}
+			if !dynCache.WaitForSync(gvr, 2*time.Second) {
+				t.Fatalf("dynamic cache did not sync %s", gvr.Resource)
+			}
+		}
+		deps := Deps{Cache: k8s.GetResourceCache(), Dynamic: dynCache, Discovery: k8s.GetResourceDiscovery(), Issues: issues.NewCacheProvider()}
+		tr, err := BuildTraceWithOptions(context.Background(), deps, "HTTPRoute", "prod", "web", Options{})
+		if err != nil {
+			t.Fatalf("BuildTraceWithOptions: %v", err)
+		}
+		return tr
+	}
+
+	baseline := trace(t, route(active))
+	if hasUnverifiableEndpoints(baseline) || baseline.Verdict == VerdictBroken {
+		t.Fatalf("route with only the healthy backend reads %q (%s); the comparison below would be meaningless", baseline.Verdict, baseline.Reason)
+	}
+	withDrained := trace(t, route(active, drained))
+	var sawDrained bool
+	for _, hop := range withDrained.Downstream {
+		if hop.Resource.Name == "old" {
+			sawDrained = isDrainedBackendHop(hop)
+		}
+	}
+	if !sawDrained {
+		t.Fatalf("no drained hop for the weight-0 backend: %+v", withDrained.Downstream)
+	}
+	if hasUnverifiableEndpoints(withDrained) {
+		t.Error("an unreadable drained backend marked the trace unverifiable")
+	}
+	if withDrained.Verdict != baseline.Verdict || withDrained.Reason != baseline.Reason {
+		t.Errorf("an unreadable drained backend changed the verdict: %q (%s), want %q (%s)", withDrained.Verdict, withDrained.Reason, baseline.Verdict, baseline.Reason)
+	}
+}
+
+// TestBuildPodsHop_PartialSelectionDoesNotClaimNoneReady: a Pods store still
+// filling its initial sync can hold a crash-looping pod before its ready
+// siblings. That selection is unreadable, and "none are Ready" can't be said
+// from it; a complete selection of the same pod still says it.
+func TestBuildPodsHop_PartialSelectionDoesNotClaimNoneReady(t *testing.T) {
+	defer k8s.ResetTestState()
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team-a"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "api"}, Ports: []corev1.ServicePort{{Port: 80}}},
+	}
+	crashing := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "team-a", Labels: map[string]string{"app": "api"}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "main", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		}}},
+	}
+	deps := Deps{Cache: k8s.GetResourceCache(), Issues: issues.NewCacheProvider()}
+	hasNoReady := func(hop Hop) bool {
+		for _, f := range hop.Findings {
+			if f.Code == "pods:no-ready-endpoints" {
+				return true
+			}
+		}
+		return false
+	}
+	if !hasNoReady(buildPodsHop(deps, svc, []*corev1.Pod{crashing}, false)) {
+		t.Fatal("a complete selection of only a crash-looping pod must say none are ready; the check below would be vacuous")
+	}
+	partial := buildPodsHop(deps, svc, []*corev1.Pod{crashing}, true)
+	if hasNoReady(partial) {
+		t.Errorf("an unreadable selection must not claim none are ready: %+v", partial.Findings)
+	}
+	if src, _ := partial.Meta["endpointSource"].(string); src != "unknown" {
+		t.Errorf("unreadable selection: endpointSource = %q, want unknown", src)
+	}
+}
+
+// TestBuildTrace_IngressBackendServiceStillSyncing: an Ingress whose backend
+// Service can't be found because the Services informer is still loading. The
+// missing-reference check stays silent then, so the backend hop itself must
+// say it couldn't be read; otherwise nothing marks the path and it reads
+// healthy. Once Services has synced, the same miss is a confirmed absence and
+// carries no such marker.
+func TestBuildTrace_IngressBackendServiceStillSyncing(t *testing.T) {
+	ing := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team-a"},
+		Spec: networkingv1.IngressSpec{
+			DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "api", Port: networkingv1.ServiceBackendPort{Number: 80}}},
+		},
+	}
+	backendSource := func(t *testing.T, loading bool) (string, bool) {
+		t.Helper()
+		defer k8s.ResetTestState()
+		delays := map[string]time.Duration{}
+		if loading {
+			delays["services"] = time.Hour
+		}
+		if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+			Client:          fake.NewClientset(ing),
+			ResourceScopes:  map[string]k8score.ResourceScope{"ingresses": {Enabled: true}, "services": {Enabled: true}, "pods": {Enabled: true}},
+			DeferredTypes:   map[string]bool{"services": true},
+			DebugSyncDelays: delays,
+		}); err != nil {
+			t.Fatalf("init: %v", err)
+		}
+		cache := k8s.GetResourceCache()
+		if !loading {
+			waitFor(t, func() bool { return cache.IsKindReady("services") })
+		}
+		deps := Deps{Cache: cache, Issues: issues.NewCacheProvider()}
+		tr, err := BuildTraceWithOptions(context.Background(), deps, "Ingress", "team-a", "web", Options{})
+		if err != nil {
+			t.Fatalf("BuildTrace: %v", err)
+		}
+		for _, hop := range tr.Downstream {
+			if hop.Resource.Kind == "Service" && hop.Resource.Name == "api" {
+				src, _ := hop.Meta["endpointSource"].(string)
+				return src, true
+			}
+		}
+		return "", false
+	}
+
+	src, found := backendSource(t, true)
+	if !found {
+		t.Fatal("no backend Service hop; the assertion below would be vacuous")
+	}
+	if src != "unknown" {
+		t.Errorf("backend Service unreadable while Services loads: endpointSource = %q, want unknown", src)
+	}
+	if src, found := backendSource(t, false); !found || src == "unknown" {
+		t.Errorf("synced Services, Service absent: hop found=%v endpointSource=%q, want a hop without the unknown marker", found, src)
+	}
+}
+
 // TestBuildTrace_GatewaySubjectNilDiscoveryDegrades (nil-Discovery): a Gateway
 // trace when Discovery failed to init must degrade honestly to Unknown, never
 // nil-deref panic on deps.Discovery.GetGVRWithGroup.
@@ -1496,5 +1746,118 @@ func TestBuildTrace_ServiceSubjectNilDiscoveryNoPanic(t *testing.T) {
 	}
 	if !findingCodePresent(tr.Downstream[0].Findings, "trace:upstreams-incomplete") {
 		t.Errorf("nil Discovery must flag upstreams incomplete, got %+v", tr.Downstream[0].Findings)
+	}
+}
+
+func mixedBackendPod(name, owner, image string, port int32) *corev1.Pod {
+	controller := true
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "prod", Labels: map[string]string{"tier": "web"},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "StatefulSet", Name: owner, Controller: &controller}},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: owner, Image: image, Ports: []corev1.ContainerPort{{ContainerPort: port}},
+		}}},
+		Status: corev1.PodStatus{
+			Phase:      corev1.PodRunning,
+			PodIP:      "10.0.0.1",
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(time.Now())}},
+		},
+	}
+}
+
+// A Service whose selector reaches a second application must not read healthy:
+// the issues engine's warning lands on the Service hop, and the Pods hop names
+// both workloads. A same-image canary gets the breakdown but stays healthy.
+func TestBuildTrace_ServiceWithMixedBackends(t *testing.T) {
+	cases := []struct {
+		name        string
+		second      *corev1.Pod
+		denyKind    string
+		wantVerdict string
+		wantSummary string
+	}{
+		{
+			name:        "different application",
+			second:      mixedBackendPod("search-0", "search", "hotel/app:v1", 8082),
+			wantVerdict: VerdictDegraded,
+			wantSummary: "Selects 2 pods from 2 workloads: frontend (1), search (1)",
+		},
+		{
+			name:        "caller who can't read the workloads gets the warning without the breakdown",
+			second:      mixedBackendPod("search-0", "search", "hotel/app:v1", 8082),
+			denyKind:    "StatefulSet",
+			wantVerdict: VerdictDegraded,
+		},
+		{
+			name:        "same-image canary",
+			second:      mixedBackendPod("frontend-canary-0", "frontend-canary", "hotel/app:v2", 5000),
+			wantVerdict: VerdictHealthy,
+			wantSummary: "Selects 2 pods from 2 workloads: frontend (1), frontend-canary (1)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer k8s.ResetTestState()
+			svc := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod", CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Hour))},
+				Spec: corev1.ServiceSpec{
+					Selector:  map[string]string{"tier": "web"},
+					ClusterIP: "10.0.0.10",
+					Ports:     []corev1.ServicePort{{Port: 5000, TargetPort: intstr.FromInt32(5000)}},
+				},
+			}
+			client := fake.NewClientset(svc, mixedBackendPod("frontend-0", "frontend", "hotel/app:v1", 5000), tc.second)
+			if err := k8s.InitTestResourceCache(client); err != nil {
+				t.Fatalf("init: %v", err)
+			}
+			deps := Deps{
+				Cache:     k8s.GetResourceCache(),
+				Dynamic:   k8s.GetDynamicResourceCache(),
+				Discovery: k8s.GetResourceDiscovery(),
+				Issues:    issues.NewCacheProvider(),
+				CanReadWorkload: func(_, kind, _ string) bool {
+					return kind != tc.denyKind
+				},
+			}
+			var trace *Trace
+			waitFor(t, func() bool {
+				tr, err := BuildTraceWithOptions(context.Background(), deps, "Service", "prod", "frontend", Options{})
+				if err != nil || len(tr.Downstream) != 2 || tr.Downstream[1].Meta["selected"] != 2 {
+					return false
+				}
+				trace = tr
+				return trace.Verdict == tc.wantVerdict
+			})
+			pods := trace.Downstream[1]
+			var summary string
+			for _, f := range pods.Findings {
+				if f.Code == "pods:multiple-workloads" {
+					summary = f.Message
+					if f.Severity != SeverityInfo {
+						t.Errorf("breakdown severity = %q, want info", f.Severity)
+					}
+				}
+			}
+			if summary != tc.wantSummary {
+				t.Errorf("breakdown = %q, want %q", summary, tc.wantSummary)
+			}
+			if rows, ok := pods.Meta["workloads"].([]map[string]any); (tc.wantSummary != "") != (ok && len(rows) == 2) {
+				t.Errorf("pods hop workloads = %#v", pods.Meta["workloads"])
+			}
+			mixed := false
+			for _, f := range trace.Downstream[0].Findings {
+				if f.Code == k8s.ServiceMixedBackendsFingerprint {
+					mixed = true
+					if f.Severity != SeverityWarning {
+						t.Errorf("mixed-backends severity = %q, want warning", f.Severity)
+					}
+				}
+			}
+			if mixed != (tc.wantVerdict == VerdictDegraded) {
+				t.Errorf("Service hop findings = %+v", trace.Downstream[0].Findings)
+			}
+		})
 	}
 }

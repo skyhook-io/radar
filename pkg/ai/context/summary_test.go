@@ -1,6 +1,7 @@
 package context
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -622,7 +623,7 @@ func TestSummary_Node(t *testing.T) {
 					NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.28.0"},
 				},
 			},
-			wantStatus:    "Ready",
+			wantStatus:    "Ready · Memory pressure",
 			wantPressures: []string{"MemoryPressure"},
 			wantVersion:   "v1.28.0",
 		},
@@ -976,5 +977,70 @@ func TestSummary_GenericFallback_TypedNilSafe(t *testing.T) {
 	}
 	if got := raw.(*ResourceSummary).Kind; got != "Unknown" {
 		t.Errorf("Kind = %q, want Unknown for typed-nil obj", got)
+	}
+}
+
+func TestNodeSummaryExpectedRemoval(t *testing.T) {
+	now := time.Now().UTC()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "removing"},
+		Spec:       corev1.NodeSpec{Unschedulable: true, Taints: []corev1.Taint{{Key: "ToBeDeletedByClusterAutoscaler", Value: fmt.Sprint(now.Add(-time.Minute).Unix()), Effect: corev1.TaintEffectNoSchedule}}},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: metav1.NewTime(now.Add(-time.Second)), Reason: "NodeStatusUnknown"}}},
+	}
+	s := summarizeNode(node)
+	if s.Status != "Removing (cluster autoscaler)" || s.Issue != "" || s.Ready != "Unknown" {
+		t.Fatalf("normal removal misreported: %+v", s)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Hour))
+	if s := summarizeNode(node); s.Issue != "NodeStatusUnknown" || s.Status != "Removing (cluster autoscaler) · NotReady" {
+		t.Fatalf("preexisting failure hidden: %+v", s)
+	}
+	node.Spec.Taints[0].Value = fmt.Sprint(now.Add(-15 * time.Minute).Unix())
+	if s := summarizeNode(node); s.Issue != "NodeStatusUnknown; Removal delayed" {
+		t.Fatalf("delayed removal hid the readiness failure: %+v", s)
+	}
+}
+
+func TestPodSummaryReadinessGateIssue(t *testing.T) {
+	now := time.Now()
+	for _, status := range []string{"missing", "False", "Unknown", "True"} {
+		t.Run(status, func(t *testing.T) {
+			p := makePod("gate", withReadyContainers(1, 1))
+			p.Spec.ReadinessGates = []corev1.PodReadinessGate{{ConditionType: "example.com/ready"}}
+			p.Status.Conditions = []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionFalse, Reason: "ReadinessGatesNotReady", LastTransitionTime: metav1.NewTime(now.Add(-10 * time.Minute))},
+				{Type: corev1.ContainersReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(now.Add(-7 * time.Minute))},
+			}
+			if status != "missing" {
+				p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{Type: "example.com/ready", Status: corev1.ConditionStatus(status)})
+			}
+			want := "ReadinessGatesNotReady"
+			if status == "True" {
+				want = ""
+			}
+			if got := summarizePod(p).Issue; got != want {
+				t.Fatalf("issue=%q want%q", got, want)
+			}
+			p.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, FinishedAt: metav1.NewTime(now.Add(-time.Hour))}}
+			if status != "True" {
+				if got := summarizePod(p).Issue; got != "ReadinessGatesNotReady" {
+					t.Fatalf("old history masked current gate: %q", got)
+				}
+			}
+			p.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137, FinishedAt: metav1.NewTime(now.Add(-time.Minute))}}
+			p.Status.ContainerStatuses[0].State = corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-30 * time.Second))}}
+			if got := summarizePod(p).Issue; got != "OOMKilled" {
+				t.Fatalf("gate masked active OOM: %q", got)
+			}
+			p.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{}
+			p.Status.Conditions[1].LastTransitionTime = metav1.NewTime(now.Add(-time.Minute))
+			if got := summarizePod(p).Issue; got != "" {
+				t.Fatalf("fresh gate issue=%q", got)
+			}
+			p.Status.Phase = corev1.PodSucceeded
+			if got := summarizePod(p).Issue; got != "" {
+				t.Fatalf("completed gate issue=%q", got)
+			}
+		})
 	}
 }

@@ -31,6 +31,7 @@ func TestClassify(t *testing.T) {
 		{"coredns service rewrite", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS service DNS rewrite"}, issuesapi.CategoryDNSFailure},
 		{"env missing service", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Missing referenced Service"}, issuesapi.CategoryMissingConfigRef},
 		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryMissingConfigRef},
+		{"networkpolicy denies all ingress", classifyInput{Source: SourceProblem, Kind: "NetworkPolicy", APIGroup: "networking.k8s.io", Reason: k8s.NetworkPolicyDenyAllIngressReason}, issuesapi.CategoryNetworkPolicyDenied},
 		{"deployment duplicate env", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
 		{"job duplicate env is not job failure", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
 		{"cronjob duplicate env", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "DuplicateEnvVar"}, issuesapi.CategoryInvalidConfiguration},
@@ -56,6 +57,7 @@ func TestClassify(t *testing.T) {
 		{"init container stalled", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "InitContainerStalled"}, issuesapi.CategoryInitContainerFailed},
 
 		// problem / GitOps reconcilers (DetectGitOpsProblems → SourceProblem)
+		{"argo empty auto-sync guard", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "AutoSyncBlockedEmpty"}, issuesapi.CategoryGitOpsSyncFailed},
 		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, issuesapi.CategoryGitOpsHealthDegraded},
 		{"argo app missing", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthMissing"}, issuesapi.CategoryGitOpsHealthDegraded},
 		{"argo app outofsync", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OutOfSync"}, issuesapi.CategoryGitOpsOutOfSync},
@@ -63,6 +65,7 @@ func TestClassify(t *testing.T) {
 		{"argo controller stalled is gitops_stale", classifyInput{Source: SourceProblem, Kind: "StatefulSet", APIGroup: "apps", Reason: "GitOpsControllerStalled"}, issuesapi.CategoryGitOpsStale},
 		{"argo comparisons stale rollup is gitops_stale", classifyInput{Source: SourceProblem, Kind: "StatefulSet", APIGroup: "apps", Reason: "GitOpsComparisonsStale"}, issuesapi.CategoryGitOpsStale},
 		{"argo comparison stale per-app is gitops_stale", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "ComparisonStale"}, issuesapi.CategoryGitOpsStale},
+		{"argo rollback mismatch", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "RollbackRevisionMismatch"}, issuesapi.CategoryGitOpsOperationFailed},
 		{"argo operation failed", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OperationFailed"}, issuesapi.CategoryGitOpsOperationFailed},
 		{"argo comparison error is render", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "ComparisonError"}, issuesapi.CategoryGitOpsRenderFailed},
 		{"argo invalid spec", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "InvalidSpecError"}, issuesapi.CategoryGitOpsSpecInvalid},
@@ -84,13 +87,17 @@ func TestClassify(t *testing.T) {
 		{"deploy degraded", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "3/5 available"}, issuesapi.CategoryWorkloadDegraded},
 		{"deploy rollout stuck", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Rollout stuck"}, issuesapi.CategoryRolloutStalled},
 		{"deploy replica failure", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "ReplicaFailure"}, issuesapi.CategoryRolloutStalled},
+		{"deploy RWOP volume shared", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: k8s.SharedRWOPVolumeReason}, issuesapi.CategoryVolumeAccessModeConflict},
+		{"deploy RWO volume shared", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: k8s.SharedRWOVolumeReason}, issuesapi.CategoryVolumeAccessModeConflict},
 		{"statefulset degraded", classifyInput{Source: SourceProblem, Kind: "StatefulSet", Reason: "2/3 ready"}, issuesapi.CategoryWorkloadDegraded},
 		{"daemonset degraded", classifyInput{Source: SourceProblem, Kind: "DaemonSet", Reason: "1 unavailable"}, issuesapi.CategoryWorkloadDegraded},
 		{"webhook backend unavailable", classifyInput{Source: SourceScheduling, Kind: "Deployment", Reason: "WebhookUnavailable"}, issuesapi.CategoryAdmissionWebhookBlocking},
+		{"pod create timed out", classifyInput{Source: SourceScheduling, Kind: "ReplicaSet", Reason: "CreateTimeout"}, issuesapi.CategoryAdmissionWebhookBlocking},
 
 		// problem / service
 		{"service no pods", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "Selector matches no pods"}, issuesapi.CategoryServiceNoEndpoints},
 		{"service 0 ready", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "0/3 selected pods ready"}, issuesapi.CategoryServiceNoEndpoints},
+		{"service mixed backends", classifyInput{Source: SourceProblem, Kind: "Service", Reason: k8s.ServiceMixedBackendsReason}, issuesapi.CategoryServiceMixedBackends},
 		{"service load balancer pending", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
 		{"ingress load balancer pending", classifyInput{Source: SourceProblem, Kind: "Ingress", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
 
@@ -109,7 +116,6 @@ func TestClassify(t *testing.T) {
 		{"job failed condition", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "BackoffLimitExceeded"}, issuesapi.CategoryJobFailed},
 		{"job failure reason beats embedded forbidden message", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "BackoffLimitExceeded", Message: `workflowtaskresults.argoproj.io is forbidden: User "system:serviceaccount:ci:default" cannot create resource "workflowtaskresults"`}, issuesapi.CategoryJobFailed},
 		{"job failed fallback", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "Failed"}, issuesapi.CategoryJobFailed},
-		{"job stuck active", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "Running for 3h with no completions"}, issuesapi.CategoryJobFailed},
 		{"cronjob stale", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale"}, issuesapi.CategoryCronJobFailed},
 		{"cronjob stale reason beats embedded forbidden message", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale", Message: `jobs.batch is forbidden: User "system:serviceaccount:ci:default" cannot create resource "jobs"`}, issuesapi.CategoryCronJobFailed},
 		{"cronjob never scheduled", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "never-scheduled"}, issuesapi.CategoryCronJobFailed},
@@ -127,6 +133,8 @@ func TestClassify(t *testing.T) {
 		{"ingress alb action invalid", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Invalid ALB action annotation"}, issuesapi.CategoryIngressBackendMissing},
 		{"ingress class missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing IngressClass"}, issuesapi.CategoryIngressClassMissing},
 		{"gateway backend missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway backend Service"}, issuesapi.CategoryGatewayRouteInvalid},
+		{"traefik router service missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingServiceReason}, issuesapi.CategoryIngressBackendMissing},
+		{"traefik router middleware missing", classifyInput{Source: SourceMissingRef, Kind: "IngressRoute", APIGroup: "traefik.io", Reason: k8s.TraefikRouterMissingMiddlewareReason}, issuesapi.CategoryIngressBackendMissing},
 		{"gateway reference grant missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway ReferenceGrant"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"ingress tls secret is config", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing TLS Secret"}, issuesapi.CategoryMissingConfigRef},
 		{"webhook backend down", classifyInput{Source: SourceMissingRef, Kind: "ValidatingWebhookConfiguration", APIGroup: "admissionregistration.k8s.io", Reason: k8s.MissingWebhookBackendReason}, issuesapi.CategoryWebhookBackendDown},
@@ -143,6 +151,9 @@ func TestClassify(t *testing.T) {
 		{"gateway route unresolved refs", classifyInput{Source: SourceCondition, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "ResolvedRefs: BackendNotFound"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"aggregated api unavailable", classifyInput{Source: SourceCondition, Kind: "APIService", APIGroup: "apiregistration.k8s.io", Reason: "Available: MissingEndpoints"}, issuesapi.CategoryAPIServiceUnavailable},
 		{"external secret sync failed", classifyInput{Source: SourceCondition, Kind: "ExternalSecret", APIGroup: "external-secrets.io", Reason: "Ready: SecretSyncedError"}, issuesapi.CategorySecretSyncFailed},
+		{"sealed secret synced false is sync failed", classifyInput{Source: SourceCondition, Kind: "SealedSecret", APIGroup: "bitnami.com", Reason: "Synced: UnsealError"}, issuesapi.CategorySecretSyncFailed},
+		{"sealed secret non-synced condition is NOT sync failed", classifyInput{Source: SourceCondition, Kind: "SealedSecret", APIGroup: "bitnami.com", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
+		{"other bitnami kind is generic", classifyInput{Source: SourceCondition, Kind: "SealedSecretOther", APIGroup: "bitnami.com", Reason: "Synced=False"}, issuesapi.CategoryOperatorConditionFail},
 		{"keda scaler failed", classifyInput{Source: SourceCondition, Kind: "ScaledObject", APIGroup: "keda.sh", Reason: "Ready: ScalerNotActive"}, issuesapi.CategoryHPALimitedOrFailed},
 		{"karpenter nodeclaim failed", classifyInput{Source: SourceCondition, Kind: "NodeClaim", APIGroup: "karpenter.sh", Reason: "Ready: LaunchFailed"}, issuesapi.CategoryNodeProvisioningFail},
 		{"crossplane package failed", classifyInput{Source: SourceCondition, Kind: "Provider", APIGroup: "pkg.crossplane.io", Reason: "Healthy: UnhealthyPackageRevision"}, issuesapi.CategoryCrossplaneReconcile},
@@ -174,5 +185,15 @@ func TestClassify(t *testing.T) {
 				t.Errorf("category %q has no categoryGroup rollup (→ issuesapi.GroupUnknown)", tc.want)
 			}
 		})
+	}
+}
+
+func TestArgoResourceWarningsCategory(t *testing.T) {
+	for _, source := range []Source{SourceCondition, SourceProblem} {
+		for _, reason := range []string{"SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning"} {
+			if got := Classify(classifyInput{Source: source, APIGroup: "argoproj.io", Kind: "Application", Reason: reason}); got != issuesapi.CategoryGitOpsResourceWarning {
+				t.Errorf("%s/%s: %s", source, reason, got)
+			}
+		}
 	}
 }

@@ -5,19 +5,25 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // PodGroup represents a collection of pods grouped by app label or owner
 type PodGroup struct {
-	Key        string          // Unique key: namespace/groupKind/groupName
+	Key        string          // Unique key: namespace/groupKind/groupName, plus /<uid> for an earlier same-named Job's Pods (see PodGroupingOptions.JobUIDs)
 	GroupKind  string          // "app", "ReplicaSet", "DaemonSet", etc.
 	GroupName  string          // App name or owner name
 	Namespace  string          // Namespace of the pods
 	Pods       []*corev1.Pod   // Pods in this group
-	ServiceIDs map[string]bool // Service IDs that route to this group (for traffic view)
-	Healthy    int             // Count of healthy pods
-	Degraded   int             // Count of degraded pods
-	Unhealthy  int             // Count of unhealthy pods
+	ServiceIDs map[string]bool // Service IDs that route to at least one pod in this group (for traffic view)
+	// PodServiceIDs[i] are the Services whose selectors match Pods[i]. Pods
+	// group by app label, so one group can hold stable and canary pods that
+	// different Services select.
+	PodServiceIDs [][]string
+	Healthy       int // Count of healthy pods
+	Degraded      int // Count of degraded pods
+	Unhealthy     int // Count of unhealthy pods
 }
 
 // PodGroupingResult contains the result of grouping pods
@@ -31,6 +37,11 @@ type PodGroupingOptions struct {
 	ServiceMatching bool                                  // Whether to match pods to services (for traffic view)
 	ServicesByNS    map[string]map[string]*corev1.Service // Namespace -> svcKey -> service
 	ServiceIDs      map[string]string                     // svcKey -> serviceID
+	// JobUIDs (namespace/name -> UID of the drawn Job) puts the Pods of an
+	// earlier Job with the same name in a group of their own, so a recreated
+	// Job's group counts only its own Pods. A nil map, a missing entry or an
+	// unknown UID on either side leaves grouping as it was.
+	JobUIDs map[string]types.UID
 }
 
 // matchesNamespaceFilter returns true if the given namespace matches the filter.
@@ -67,6 +78,13 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 
 		// Determine group key
 		groupKey, groupKind, groupName := determineGroupKey(pod)
+		// Whatever label grouped it, a Pod of an earlier same-named Job
+		// stays out of the current Job's group.
+		if ref := metav1.GetControllerOf(pod); ref != nil && ref.Kind == "Job" && ownerGroupMatches(ref.Kind, ref.APIVersion) {
+			if drawn := opts.JobUIDs[pod.Namespace+"/"+ref.Name]; drawn != "" && ref.UID != "" && ref.UID != drawn {
+				groupKey += "/" + string(ref.UID)
+			}
+		}
 
 		if _, exists := result.Groups[groupKey]; !exists {
 			result.Groups[groupKey] = &PodGroup{
@@ -81,6 +99,7 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 
 		group := result.Groups[groupKey]
 		group.Pods = append(group.Pods, pod)
+		group.PodServiceIDs = append(group.PodServiceIDs, matchingServiceIDs)
 
 		// Track services (for traffic view)
 		for _, svcID := range matchingServiceIDs {
@@ -181,6 +200,10 @@ func CreatePodNode(pod *corev1.Pod, provider ResourceProvider, includeNodeName b
 	if includeNodeName {
 		data["nodeName"] = pod.Spec.NodeName
 	}
+	// A Pod being deleted keeps phase Running while it drains; the card says so.
+	if pod.DeletionTimestamp != nil {
+		data["terminating"] = 1
+	}
 
 	return Node{
 		ID:     podID,
@@ -245,6 +268,9 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 			// tracks that across the kubelet's Waiting->Running oscillation.
 			"status": string(getPodStatus(pod)),
 		}
+		if pod.DeletionTimestamp != nil {
+			detail["terminating"] = true
+		}
 		// ownerKey identifies which of the group's (possibly several — see
 		// the large-group path in builder.go) distinct owners this specific
 		// pod belongs to, so the caller can later resolve it to the exact
@@ -253,7 +279,7 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 		// which pod goes with which owner.
 		if len(pod.OwnerReferences) > 0 {
 			ref := pod.OwnerReferences[0]
-			detail["ownerKey"] = pod.Namespace + "/" + ref.Kind + "/" + ref.Name
+			detail["ownerKey"] = podOwnerKey(pod.Namespace, ref)
 		}
 		podDetails = append(podDetails, detail)
 	}

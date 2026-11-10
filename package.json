@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "overrides": {
-    "dompurify": "3.4.0"
+    "dompurify": "3.4.17"
   },
   "devDependencies": {
     "typescript-7": "npm:typescript@^7.0.2"

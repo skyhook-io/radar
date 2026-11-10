@@ -338,8 +338,10 @@ export function adaptPrometheusRules(
   // every alerting rule (a name or group filter never looked at the rest), a
   // complete list, every rule evaluated, and every returned instance placed
   // in another namespace outright. An instance this projection merely fails
-  // to recognize is not evidence of absence.
+  // to recognize is not evidence of absence. A run with no resource has
+  // nothing for an alert to miss.
   if (
+    builder.target.name &&
     source.confirmedSuccess &&
     !truncated &&
     !namesTarget &&
@@ -439,6 +441,30 @@ function exactPodSet(value: string): string[] | undefined {
   return names.every((name) => /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(name))
     ? names
     : undefined;
+}
+/**
+ * The one Pod a query is about, when every selector names exactly that Pod
+ * and nothing else. A query over two Pods is about neither alone, and a
+ * selector without a pod matcher is about whatever else it selects.
+ */
+export function metricsSelectedPod(
+  selectors: readonly InvestigationMetricsSelector[],
+): string | undefined {
+  let pod: string | undefined;
+  for (const selector of selectors) {
+    const named = selector.matchers.filter(
+      (matcher) => matcher.label === "pod",
+    );
+    if (named.length === 0) return undefined;
+    for (const { op, value } of named) {
+      const names =
+        op === "=" ? [value] : op === "=~" ? exactPodSet(value) : undefined;
+      if (names?.length !== 1 || (pod !== undefined && names[0] !== pod))
+        return undefined;
+      pod = names[0];
+    }
+  }
+  return pod;
 }
 /**
  * Whether a workload identity label names the target: the label
@@ -620,6 +646,14 @@ const METRIC_FAMILY_LABELS: Record<string, string> = {
   container_fs_usage_bytes: "Filesystem usage",
   up: "Scrape target up",
 };
+
+function optionalStringList(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) && value.every((item) => typeof item === "string"))
+  );
+}
+
 export function adaptQueryPrometheus(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
@@ -635,7 +669,12 @@ export function adaptQueryPrometheus(
     !Array.isArray(value.selectors) ||
     (value.selectorsUnknown !== undefined &&
       typeof value.selectorsUnknown !== "boolean") ||
-    (value.truncated !== undefined && typeof value.truncated !== "boolean")
+    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+    (value.partial !== undefined && typeof value.partial !== "boolean") ||
+    !optionalStringList(value.warnings) ||
+    !optionalStringList(value.infos) ||
+    (value.annotationsOmitted !== undefined &&
+      typeof value.annotationsOmitted !== "number")
   ) {
     invalidPayload(builder, source, "Prometheus query");
     return;
@@ -653,6 +692,43 @@ export function adaptQueryPrometheus(
     invalidPayload(builder, source, "Prometheus query");
     return;
   }
+  if (value.partial === true) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      "The metrics backend returned a partial result, so some series may be missing.",
+      "unknown",
+    );
+  }
+  const warnings = (value.warnings as string[] | undefined) ?? [];
+  const infos = (value.infos as string[] | undefined) ?? [];
+  if (warnings.length > 0) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `The metrics backend returned ${warnings.length === 1 ? "a warning" : `${warnings.length} warnings`} with this result: ${warnings.join("; ")}`,
+      "unknown",
+    );
+  }
+  if (infos.length > 0) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `Prometheus noted about this query: ${infos.join("; ")}`,
+      "unknown",
+    );
+  }
+  if (
+    typeof value.annotationsOmitted === "number" &&
+    value.annotationsOmitted > 0
+  ) {
+    builder.limit(
+      source,
+      "Prometheus query",
+      `${value.annotationsOmitted} more backend ${value.annotationsOmitted === 1 ? "message was" : "messages were"} left out to keep the result small.`,
+      "unknown",
+    );
+  }
   const selectorsUnknown = value.selectorsUnknown === true;
   const relevance = metricsScope(
     builder.target,
@@ -663,7 +739,19 @@ export function adaptQueryPrometheus(
   const start = nonEmptyString(value.start) ? value.start : undefined;
   const end = nonEmptyString(value.end) ? value.end : undefined;
   const step = nonEmptyString(value.step) ? value.step : undefined;
-  const note = nonEmptyString(value.note) ? value.note : undefined;
+  const qualifications = [
+    warnings.length > 0
+      ? `Backend warning${warnings.length === 1 ? "" : "s"}: ${warnings.join("; ")}.`
+      : "",
+    infos.length > 0 ? `Prometheus noted: ${infos.join("; ")}.` : "",
+    typeof value.annotationsOmitted === "number" && value.annotationsOmitted > 0
+      ? `${value.annotationsOmitted} more backend ${value.annotationsOmitted === 1 ? "message" : "messages"} left out.`
+      : "",
+  ].filter(Boolean);
+  const note =
+    [nonEmptyString(value.note) ? value.note : "", ...qualifications]
+      .filter(Boolean)
+      .join(" ") || undefined;
   if (value.truncated === true) {
     const summary = record(value.summary);
     const cardinality = record(summary?.labelCardinality);
@@ -685,7 +773,8 @@ export function adaptQueryPrometheus(
       source,
       "Prometheus query",
       `The result of \`${value.query}\` was too large to keep${parts.length ? ` (${parts.join(", ")})` : ""}, so Radar cannot chart it.${note ? ` ${note}` : ""}`,
-      "truncated",
+      // No series is kept, so this is an unknown, not a sample of the answer.
+      "unknown",
     );
     return;
   }

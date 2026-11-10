@@ -1,0 +1,32 @@
+# A cluster restored from pg-runtime's backups in minio-store.
+#
+# Created by the script only AFTER a pg-runtime Backup reaches `completed`:
+# before that the object store holds WAL but no base backup, and recovery fails
+# with nothing to restore from.
+#
+# No spec.plugins here on purpose. Archiving this cluster into minio-store under
+# its own default serverName would work, but archiving it under `pg-runtime`
+# (the name it restores FROM) would corrupt the source's archive — keeping it
+# non-archiving removes that footgun from the fixture entirely.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-runtime-restore
+  namespace: pgrt
+spec:
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:17.5
+  storage:
+    size: 1Gi
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+  bootstrap:
+    recovery:
+      source: pg-runtime-origin
+  externalClusters:
+    - name: pg-runtime-origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: minio-store
+          serverName: pg-runtime

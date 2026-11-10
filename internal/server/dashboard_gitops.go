@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	controllerhealth "github.com/skyhook-io/radar/pkg/health"
 )
 
 // DashboardGitOpsControllers is the Home dashboard summary of in-cluster
@@ -49,7 +50,7 @@ const (
 )
 
 // gitopsControllerProbe is a label selector + namespace pair to look up.
-// Independent of pkg/gitops/insights/finalizers.go's catalog: that one is
+// Independent of pkg/finalizers/catalog.go's catalog: that one is
 // for finalizer resolution, this one for dashboard discovery.
 type gitopsControllerProbe struct {
 	Name      string
@@ -149,11 +150,10 @@ func (s *Server) getDashboardGitOpsControllers(cache *k8s.ResourceCache, allowed
 }
 
 // summarizeControllerForDashboard distills the pod slice into the
-// per-controller card row. Logic mirrors summarizeControllerHealth in
-// gitops_handlers.go but emits structured fields rather than a string
+// per-controller card row. Logic mirrors the shared controller-health summarizer but emits structured fields rather than a string
 // (the dashboard card renders bespoke chrome around the data).
 func summarizeControllerForDashboard(probe gitopsControllerProbe, pods []*corev1.Pod) DashboardGitOpsController {
-	health := summarizeControllerPods(pods)
+	health := controllerhealth.SummarizeControllerPods(pods)
 	status := ctrlStatusHealthy
 	switch {
 	case health.Crashing > 0:

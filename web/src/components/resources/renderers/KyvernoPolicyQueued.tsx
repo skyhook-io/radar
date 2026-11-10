@@ -7,6 +7,7 @@ import { formatAge } from '@skyhook-io/k8s-ui/components/resources/resource-util
 import { isForbiddenError } from '../../../api/client'
 import { isKyvernoMutateExistingEnabled } from '@skyhook-io/k8s-ui/components/resources/resource-utils-kyverno-modern'
 import { usePolicyQueued } from '../../../api/policy'
+import { TimeValue } from '@skyhook-io/k8s-ui/components/ui/ScheduleValue'
 
 /** A request sitting this long is not mid-flight. Kyverno retries on every
  *  reconcile, so past this point a backlog grows rather than drains. */
@@ -160,7 +161,7 @@ export function KyvernoPolicyQueued({ data }: { data: any }) {
             />
           ))}
           {oldestPending && (
-            <Property label="Oldest Pending" value={`${formatAge(oldestPending)} ago`} />
+            <Property label="Oldest Pending" value={<TimeValue timestamp={oldestPending} />} />
           )}
         </PropertyList>
         {messages.length > 0 && (

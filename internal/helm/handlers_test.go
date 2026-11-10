@@ -1,8 +1,8 @@
 package helm
 
 import (
-	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,77 +10,95 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"helm.sh/helm/v3/pkg/storage/driver"
+	authv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
-// TestRequireCloudRole exercises the role gate without standing up a
-// Helm client — the gate runs first, so we never hit the client. This
-// guards the gate against regressions ("forgot to wire requireCloudRole
-// on a new write endpoint", "swapped the comparison the wrong way").
-func TestRequireCloudRole(t *testing.T) {
-	cases := []struct {
-		name     string
-		groups   []string
-		min      auth.CloudRole
-		wantOK   bool
-		wantCode string // expected error_code when wantOK == false
-	}{
-		// No user attached (OSS / non-Cloud): gate bypasses.
-		{name: "no user — bypass", groups: nil, min: auth.RoleMember, wantOK: true},
+func TestChartSourceRoutesAndWriteAuthorization(t *testing.T) {
+	old := globalClient
+	globalClient = nil
+	defer func() { globalClient = old }()
+	router := chi.NewRouter()
+	NewHandlers(nil).RegisterRoutes(router)
 
-		// Cloud user without role group (header stripped, misconfig):
-		// CloudRole is RoleNone, AtLeast bypasses. This is permissive
-		// by design — the assumption is that radar-hub guarantees the
-		// role group when forwarding.
-		{name: "user without radar:* — bypass", groups: []string{"developers"}, min: auth.RoleOwner, wantOK: true},
-
-		// Cloud-attributed users — gate enforces.
-		{name: "viewer denied member-required op", groups: []string{"radar:viewer"}, min: auth.RoleMember,
-			wantOK: false, wantCode: auth.ErrCodeCloudRoleInsufficient},
-		{name: "viewer denied owner-required op", groups: []string{"radar:viewer"}, min: auth.RoleOwner,
-			wantOK: false, wantCode: auth.ErrCodeCloudRoleInsufficient},
-		{name: "viewer allowed viewer-required op", groups: []string{"radar:viewer"}, min: auth.RoleViewer, wantOK: true},
-		{name: "member allowed member-required op", groups: []string{"radar:member"}, min: auth.RoleMember, wantOK: true},
-		{name: "member denied owner-required op", groups: []string{"radar:member"}, min: auth.RoleOwner,
-			wantOK: false, wantCode: auth.ErrCodeCloudRoleInsufficient},
-		{name: "owner allowed owner-required op", groups: []string{"radar:owner"}, min: auth.RoleOwner, wantOK: true},
-
-		// Defensive: a stuffed lower tier alongside owner shouldn't
-		// downgrade the user. CloudRoleFromGroups picks the highest.
-		{name: "stuffed viewer + owner — allowed", groups: []string{"radar:viewer", "radar:owner"}, min: auth.RoleOwner, wantOK: true},
+	get := httptest.NewRequest(http.MethodGet, "/helm/releases/default/example/source", nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET source status = %d, want registered route status %d", getRec.Code, http.StatusServiceUnavailable)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodGet, "/test", nil)
-			ctx := req.Context()
-			if tc.groups != nil {
-				ctx = auth.ContextWithUser(ctx, &auth.User{Username: "test-user", Groups: tc.groups})
-			} else {
-				_ = context.Background()
-			}
-			req = req.WithContext(ctx)
-			rec := httptest.NewRecorder()
+	// Both writes change a release Secret, so a caller whose RBAC denies
+	// secrets/create in the release namespace is refused before any client
+	// or network work.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
+			writeK8sStatus(t, w, http.StatusNotFound, "NotFound", "unexpected test request")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		writeTestJSON(t, w, authv1.SubjectAccessReview{
+			TypeMeta: metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"},
+			Status:   authv1.SubjectAccessReviewStatus{Allowed: false},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	if err != nil {
+		t.Fatalf("create test client: %v", err)
+	}
+	prev := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prev) })
+	prevStatus := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prevStatus) })
 
-			ok := requireCloudRole(rec, req, tc.min, "test-op")
-			if ok != tc.wantOK {
-				t.Errorf("requireCloudRole = %v, want %v (status=%d, body=%s)",
-					ok, tc.wantOK, rec.Code, rec.Body.String())
-			}
-			if !tc.wantOK {
-				if rec.Code != http.StatusForbidden {
-					t.Errorf("status = %d, want 403", rec.Code)
-				}
-				var resp map[string]string
-				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-					t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
-				}
-				if resp["error_code"] != tc.wantCode {
-					t.Errorf("error_code = %q, want %q", resp["error_code"], tc.wantCode)
-				}
-				if resp["error"] == "" {
-					t.Error("error message is empty")
-				}
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPut, "/helm/releases/default/example/source", `{"type":"repository","reference":"repo","url":"https://example.test"}`},
+		{http.MethodPost, "/helm/releases/default/example/source/upgrade", `{}`},
+		{http.MethodPost, "/helm/releases/default/example/source/upgrade-stream", `{}`},
+		{http.MethodPost, "/helm/releases/default/example/source/preview", `{}`},
+		{http.MethodPost, "/helm/repositories", `{"name":"repo","url":"https://example.test","namespace":"default","releaseName":"example"}`},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "chart-source-viewer", Groups: []string{"radar:viewer"}}))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s = %d, want RBAC-gated 403 (body %s)", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestChartSourceErrorStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "invalid source", err: fmt.Errorf("%w: bad selection", errInvalidChartSource), want: http.StatusBadRequest},
+		{name: "invalid repository", err: fmt.Errorf("%w: bad URL", errInvalidRepositoryRequest), want: http.StatusBadRequest},
+		{name: "alias conflict", err: fmt.Errorf("%w: alias owned", errRepositoryConflict), want: http.StatusConflict},
+		{name: "missing release", err: fmt.Errorf("get release: %w", driver.ErrReleaseNotFound), want: http.StatusNotFound},
+		{name: "kubernetes denial", err: fmt.Errorf("update release: %w", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "sh.helm.release.v1.example.v1", errors.New("denied"))), want: http.StatusForbidden},
+		{name: "repository 401", err: errors.New("failed to fetch https://charts.example.test/index.yaml : 401 Unauthorized"), want: http.StatusInternalServerError},
+		{name: "storage failure", err: errors.New("storage unavailable"), want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chartSourceErrorStatus(tc.err); got != tc.want {
+				t.Fatalf("chartSourceErrorStatus(%v) = %d, want %d", tc.err, got, tc.want)
 			}
 		})
 	}
@@ -176,25 +194,15 @@ func TestDecodeApplyValuesRequest(t *testing.T) {
 	})
 }
 
-// TestSensitiveHelmHandlers_GateOnViewer asserts that every Helm
-// handler we believe is gated actually 403s a Cloud viewer with
-// error_code=cloud_role_insufficient. The unit test above
-// (TestRequireCloudRole) covers the gate function in isolation; this
-// test covers the *application* of the gate to each handler.
-//
-// Why both: the gate was retrofitted as a one-line `if !requireCloudRole(...)
-// { return }` at the top of each handler. A future refactor that drops
-// the line (or reorders it after a side-effecting call) would silently
-// regress without the unit test failing. This test fails the moment
-// the gate disappears from any covered handler.
-//
-// We don't need a real Helm client because the gate runs first; the
-// handler short-circuits before touching `helm.GetClient()`.
-func TestSensitiveHelmHandlers_GateOnViewer(t *testing.T) {
+// TestHelmHandlers_NotGatedOnCloudRole pins that Helm operations are not
+// refused on the caller's Radar Cloud role. They run as the impersonated user,
+// so Kubernetes RBAC decides; a role check here would override IdP-group
+// bindings that grant the user access (a viewer whose group can edit a
+// namespace must be able to roll back there). Other refusals (no Helm client,
+// rbac.helm off) are fine here; only a role refusal fails.
+func TestHelmHandlers_NotGatedOnCloudRole(t *testing.T) {
 	h := NewHandlers(nil)
 
-	// (name, method, handler) for every endpoint we believe is gated.
-	// Sensitive reads → member; writes → member.
 	cases := []struct {
 		name    string
 		method  string
@@ -202,6 +210,7 @@ func TestSensitiveHelmHandlers_GateOnViewer(t *testing.T) {
 	}{
 		{"GetManifest", http.MethodGet, h.handleGetManifest},
 		{"GetValues", http.MethodGet, h.handleGetValues},
+		{"GetValuesDiff", http.MethodGet, h.handleGetValuesDiff},
 		{"GetDiff", http.MethodGet, h.handleGetDiff},
 		{"GetNotesDiff", http.MethodGet, h.handleGetNotesDiff},
 		{"GetHooksDiff", http.MethodGet, h.handleGetHooksDiff},
@@ -222,22 +231,35 @@ func TestSensitiveHelmHandlers_GateOnViewer(t *testing.T) {
 			req := httptest.NewRequest(tc.method, "/test", nil)
 			req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{
 				Username: "viewer-test",
-				Groups:   []string{"radar:viewer"},
+				Groups:   []string{"radar:viewer", "radar:idp:team-a-devs"},
 			}))
 			rec := httptest.NewRecorder()
 
 			tc.handler(rec, req)
 
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403 (gate should fire before any helm work)", rec.Code)
-			}
-			var resp map[string]string
-			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-				t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
-			}
-			if resp["error_code"] != auth.ErrCodeCloudRoleInsufficient {
-				t.Errorf("error_code = %q, want %q", resp["error_code"], auth.ErrCodeCloudRoleInsufficient)
+			body := rec.Body.String()
+			if strings.Contains(body, auth.ErrCodeCloudRoleInsufficient) || strings.Contains(body, "Radar Cloud role") {
+				t.Fatalf("status = %d body = %s; a Cloud viewer must reach Kubernetes RBAC, not a role gate", rec.Code, body)
 			}
 		})
+	}
+}
+
+// A release read runs as the caller, so a Kubernetes denial is a 403 the UI
+// can explain, not a 500 recorded as a server fault.
+func TestWriteReleaseReadError(t *testing.T) {
+	cases := []struct {
+		err  error
+		want int
+	}{
+		{errors.New(`secrets is forbidden: User "alice" cannot list resource "secrets" in API group "" in the namespace "team-a"`), http.StatusForbidden},
+		{errors.New("release: not found"), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		writeReleaseReadError(rec, tc.err)
+		if rec.Code != tc.want {
+			t.Errorf("%q: status = %d, want %d", tc.err, rec.Code, tc.want)
+		}
 	}
 }

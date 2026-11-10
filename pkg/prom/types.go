@@ -41,8 +41,15 @@ type Status struct {
 
 // QueryResult is the parsed result of a Prometheus query.
 type QueryResult struct {
-	ResultType string   `json:"resultType"`
-	Series     []Series `json:"series"`
+	ResultType  string           `json:"resultType"`
+	Series      []Series         `json:"series"`
+	Annotations QueryAnnotations `json:"-"`
+}
+
+type QueryAnnotations struct {
+	Warnings []string
+	Infos    []string
+	Partial  bool
 }
 
 // Series is a single time series from a Prometheus query.
@@ -77,6 +84,7 @@ func (d DataPoint) MarshalJSON() ([]byte, error) {
 // /api/v1/query and /api/v1/query_range endpoints.
 type promResponse struct {
 	Warnings  []string        `json:"warnings"`
+	Infos     []string        `json:"infos"`
 	IsPartial bool            `json:"isPartial"`
 	Status    string          `json:"status"`
 	Data      json.RawMessage `json:"data"`

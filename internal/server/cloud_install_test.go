@@ -3,21 +3,21 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
@@ -585,34 +585,6 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 		}
 	})
 
-	t.Run("cross-origin mutations are refused", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			path    string
-			handler func(*Server, http.ResponseWriter, *http.Request)
-		}{
-			{"prepare", "/api/cloud/install/prepare", (*Server).handleCloudInstallPrepare},
-			{"start", "/api/cloud/install/start", (*Server).handleCloudInstallStart},
-			{"cancel", "/api/cloud/install/cancel", (*Server).handleCloudInstallCancel},
-			{"dismiss", "/api/cloud/install/dismiss", (*Server).handleCloudInstallDismiss},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				srv := newSrv("127.0.0.1")
-				req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader("{}"))
-				req.Header.Set("Origin", "https://evil.example")
-				w := httptest.NewRecorder()
-				tt.handler(srv, w, req)
-				if w.Code != http.StatusForbidden {
-					t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
-				}
-				if body := w.Body.String(); !strings.Contains(body, "cross-origin requests are not allowed") {
-					t.Fatalf("body = %q, want the cross-origin rejection", body)
-				}
-			})
-		}
-	})
-
 	t.Run("tunnel-configured deployment gets no capability at all", func(t *testing.T) {
 		srv := newSrv("127.0.0.1")
 		srv.cloudConnectCfg.CloudTunnelConfigured = true
@@ -812,83 +784,6 @@ func TestCloudInstallLoopbackNeedsNoSharedAcknowledgement(t *testing.T) {
 	st := waitForState(t, fx.m, cloudFlowReady)
 	if _, err := fx.m.start(cloudInstallStartRequest{FlowID: st.FlowID}); err != nil {
 		t.Fatalf("start on loopback: %v", err)
-	}
-}
-
-// The shared-listener lane must work for the browser it exists for: a page
-// served from the same non-loopback authority is same-origin and must pass,
-// while a genuinely foreign origin must not.
-func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
-	cases := []struct {
-		name, host, origin string
-		devMode            bool
-		fetchSite          string
-		want               bool
-	}{
-		{name: "no origin (non-browser)", host: "10.0.0.5:9280", want: true},
-		{name: "same non-loopback authority", host: "10.0.0.5:9280", origin: "http://10.0.0.5:9280", want: true},
-		{name: "hostname case is ignored", host: "Radar.Example.com:9280", origin: "http://radar.example.com:9280", want: true},
-		{name: "same loopback authority", host: "127.0.0.1:9280", origin: "http://127.0.0.1:9280", want: true},
-		{name: "vite dev proxy, loopback to loopback", host: "localhost:9280", origin: "http://localhost:9273", devMode: true, want: true},
-		{name: "vite port outside dev mode", host: "localhost:9280", origin: "http://localhost:9273", want: false},
-		{name: "unrelated port in dev mode", host: "localhost:9280", origin: "http://localhost:9274", devMode: true, want: false},
-		{name: "bracketed IPv6 Vite proxy", host: "[::1]", origin: "http://[::1]:9273", devMode: true, want: true},
-		{name: "foreign origin", host: "10.0.0.5:9280", origin: "http://evil.example", want: false},
-		{name: "lookalike hostname", host: "10.0.0.5:9280", origin: "http://localhost.evil.com", want: false},
-		{name: "different port on the same non-loopback host", host: "10.0.0.5:9280", origin: "http://10.0.0.5:9999", want: false},
-		{name: "loopback origin against a non-loopback host", host: "10.0.0.5:9280", origin: "http://127.0.0.1:9280", want: false},
-		{name: "cross-site metadata without origin", host: "10.0.0.5:9280", fetchSite: "cross-site", want: false},
-		{name: "same-origin metadata survives rewritten host", host: "internal:9280", origin: "https://radar.example.com", fetchSite: "same-origin", want: true},
-		{name: "unparseable origin", host: "10.0.0.5:9280", origin: "://nope", want: false},
-		{name: "opaque (null) origin", host: "10.0.0.5:9280", origin: "null", want: false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/api/cloud/install/prepare", nil)
-			r.Host = tc.host
-			if tc.origin != "" {
-				r.Header.Set("Origin", tc.origin)
-			}
-			if tc.fetchSite != "" {
-				r.Header.Set("Sec-Fetch-Site", tc.fetchSite)
-			}
-			s := &Server{devMode: tc.devMode}
-			if got := s.sameOriginOK(r); got != tc.want {
-				t.Fatalf("sameOriginOK(host=%q, origin=%q) = %v, want %v", tc.host, tc.origin, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestSameOriginOKRejectsSchemeDowngrade(t *testing.T) {
-	cases := []struct {
-		name           string
-		tls            bool
-		forwardedProto string
-		origin         string
-		want           bool
-	}{
-		{"https request, http origin (downgrade)", true, "", "http://10.0.0.5:9280", false},
-		{"https request, https origin", true, "", "https://10.0.0.5:9280", true},
-		{"forwarded https, http origin (downgrade)", false, "https", "http://10.0.0.5:9280", false},
-		{"forwarded https, https origin", false, "https", "https://10.0.0.5:9280", true},
-		{"plain http request, http origin", false, "", "http://10.0.0.5:9280", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/api/cloud/install/prepare", nil)
-			r.Host = "10.0.0.5:9280"
-			if tc.tls {
-				r.TLS = &tls.ConnectionState{}
-			}
-			if tc.forwardedProto != "" {
-				r.Header.Set("X-Forwarded-Proto", tc.forwardedProto)
-			}
-			r.Header.Set("Origin", tc.origin)
-			if got := (&Server{}).sameOriginOK(r); got != tc.want {
-				t.Fatalf("sameOriginOK(tls=%v xfp=%q origin=%q) = %v, want %v", tc.tls, tc.forwardedProto, tc.origin, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -1111,5 +1006,133 @@ func TestDiscoverConnectedNamesAlreadyCloudDeployments(t *testing.T) {
 	}
 	if got.Connected[3].Namespace != "legacy" || got.Connected[3].ClusterURL != "" || got.Connected[3].HubHost != "" {
 		t.Errorf("settings without a resolvable URL say nothing about where, and sort last: %+v", got.Connected[3])
+	}
+}
+
+// gatedPrepare makes each preparation step wait for its run's gate. A run is
+// named by the prepareRunKey on its context, so a test with two preparations
+// in flight releases exactly the one it means to.
+type prepareRunKey struct{}
+
+type gatedRuns struct {
+	entered chan string // "<run>:<stage>" as each step begins
+	mu      sync.Mutex
+	gates   map[string]chan struct{}
+}
+
+func (g *gatedRuns) gate(run string) chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.gates[run] == nil {
+		g.gates[run] = make(chan struct{})
+	}
+	return g.gates[run]
+}
+
+func (g *gatedRuns) step(ctx context.Context, stage string) {
+	run, _ := ctx.Value(prepareRunKey{}).(string)
+	g.entered <- run + ":" + stage
+	<-g.gate(run)
+}
+
+func gatedPrepare(fx *managerFixture) *gatedRuns {
+	g := &gatedRuns{entered: make(chan string, 16), gates: map[string]chan struct{}{}}
+	inspect, prepare, preflight := fx.m.backend.inspectPlan, fx.m.backend.prepare, fx.m.backend.preflight
+	fx.m.backend.inspectPlan = func(ctx context.Context, c cloudInstallClients, ns, rel string) (cloudinstall.InstallPlan, error) {
+		g.step(ctx, attemptStageInspect)
+		return inspect(ctx, c, ns, rel)
+	}
+	fx.m.backend.prepare = func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error) {
+		g.step(ctx, attemptStagePrepare)
+		return prepare(ctx, c, cfg)
+	}
+	fx.m.backend.preflight = func(ctx context.Context, c cloudInstallClients, p preparedInstall) (cloudinstall.PreflightResult, error) {
+		g.step(ctx, attemptStagePreflight)
+		return preflight(ctx, c, p)
+	}
+	return g
+}
+
+func startPrepareRun(fx *managerFixture, run string) chan error {
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := fx.m.prepare(context.WithValue(context.Background(), prepareRunKey{}, run))
+		done <- err
+	}()
+	return done
+}
+
+func TestCloudInstallPrepareReportsEachStep(t *testing.T) {
+	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	g := gatedPrepare(fx)
+	done := startPrepareRun(fx, "a")
+
+	for _, stage := range []string{attemptStageInspect, attemptStagePrepare, attemptStagePreflight} {
+		if got := <-g.entered; got != "a:"+stage {
+			t.Fatalf("backend entered %q, want a:%s", got, stage)
+		}
+		st := fx.m.status()
+		if st.State != cloudFlowPreparing || st.PrepareStep != stage {
+			t.Fatalf("during %s: status = %+v", stage, st)
+		}
+		g.gate("a") <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	raw, err := json.Marshal(fx.m.status())
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	if strings.Contains(string(raw), "prepareStep") {
+		t.Fatalf("a ready flow still reports a preparation step: %s", raw)
+	}
+}
+
+func TestCloudInstallCanceledPrepareDoesNotRelabelTheNextFlow(t *testing.T) {
+	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
+	g := gatedPrepare(fx)
+	oldDone := startPrepareRun(fx, "old")
+	if got := <-g.entered; got != "old:inspect" {
+		t.Fatalf("entered %q", got)
+	}
+	old := fx.m.status()
+	if err := fx.m.cancelFlow(old.FlowID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	newDone := startPrepareRun(fx, "new")
+	if got := <-g.entered; got != "new:inspect" {
+		t.Fatalf("entered %q", got)
+	}
+	next := fx.m.status()
+	if next.FlowID == old.FlowID || next.PrepareStep != attemptStageInspect {
+		t.Fatalf("new flow status = %+v", next)
+	}
+
+	// The old preparation advances into its prepare step; the new flow,
+	// still inspecting, must keep its own step.
+	g.gate("old") <- struct{}{}
+	if got := <-g.entered; got != "old:prepare" {
+		t.Fatalf("entered %q", got)
+	}
+	if st := fx.m.status(); st.FlowID != next.FlowID || st.PrepareStep != attemptStageInspect {
+		t.Fatalf("old preparation relabeled the new flow: %+v", st)
+	}
+
+	go func() {
+		for range g.entered {
+		}
+	}()
+	close(g.gate("old"))
+	close(g.gate("new"))
+	if err := <-oldDone; err == nil {
+		t.Fatalf("the canceled preparation should fail its final identity check")
+	}
+	if err := <-newDone; err != nil {
+		t.Fatalf("new prepare: %v", err)
+	}
+	if st := fx.m.status(); st.FlowID != next.FlowID || st.State != cloudFlowReady {
+		t.Fatalf("new flow after both finished = %+v", st)
 	}
 }

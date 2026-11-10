@@ -611,3 +611,47 @@ func TestNewDegradedMemoryStore_ReportsDegraded(t *testing.T) {
 		t.Fatalf("plain memory store must not report degraded, got %+v", hs)
 	}
 }
+
+// The ring evicts by arrival, not event time, so the boundary must be the
+// newest timestamp among evicted events: an event that arrived first but
+// carries a later timestamp keeps the boundary there after older-timestamped
+// events are evicted behind it.
+func TestMemoryStore_EvictedThroughIsNewestEvictedTimestamp(t *testing.T) {
+	store := NewMemoryStore(3)
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour)
+	appendAt := func(id string, offset time.Duration) {
+		t.Helper()
+		if err := store.Append(ctx, TimelineEvent{
+			ID: id, Timestamp: base.Add(offset), Source: SourceInformer,
+			Kind: "Deployment", Namespace: "default", Name: id, EventType: EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("Append %s: %v", id, err)
+		}
+	}
+
+	appendAt("late-stamp", 10*time.Second)
+	appendAt("a", 0)
+	appendAt("b", 5*time.Second)
+	if got := store.EvictedThrough(); !got.IsZero() {
+		t.Fatalf("EvictedThrough before any eviction = %v, want zero", got)
+	}
+
+	appendAt("c", time.Second) // evicts late-stamp
+	if got, want := store.EvictedThrough(), base.Add(10*time.Second); !got.Equal(want) {
+		t.Fatalf("EvictedThrough = %v, want the evicted event's time %v", got, want)
+	}
+	appendAt("d", 2*time.Second) // evicts a, an older timestamp
+	if got, want := store.EvictedThrough(), base.Add(10*time.Second); !got.Equal(want) {
+		t.Fatalf("EvictedThrough moved back to %v after evicting an older event, want %v", got, want)
+	}
+
+	// Every event newer than the boundary is still held.
+	events, err := store.Query(ctx, QueryOptions{Since: store.EvictedThrough(), Limit: 10})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("no held event is newer than the boundary here, got %+v", events)
+	}
+}

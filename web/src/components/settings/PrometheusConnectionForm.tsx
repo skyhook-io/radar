@@ -4,7 +4,7 @@ import { Collapse, Input } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { prometheusHeadersFromRows } from './settings-state'
 import { ConnectionHeadersEditor, type HeaderOperation } from './ConnectionHeadersEditor'
-import { ConnectionFormActions, type ConnectionFeedback } from './ConnectionFormActions'
+import { FormSaveActions, type FormFeedback } from './FormSaveActions'
 
 export interface PrometheusApplyResult { connected: boolean; address?: string; error?: string }
 
@@ -50,7 +50,7 @@ export function PrometheusConnectionForm({
   dirty?: boolean
   onDiscard?: () => void
   connectionAction?: ReactNode
-  feedback?: ConnectionFeedback
+  feedback?: FormFeedback
 }) {
   const mounted = useRef(true)
   const urlId = useId()
@@ -239,7 +239,7 @@ export function PrometheusConnectionForm({
             <p className="text-xs text-theme-text-tertiary">
               Saved when you click Apply now. Entered headers replace all stored
               ones — values are hidden, so re-enter any you want to keep. Leave
-              all rows blank to keep existing headers unchanged. To clear all saved
+              all rows blank to keep existing headers unchanged. To remove all saved
               headers, remove every row and click Apply now.
             </p>
           </div>
@@ -254,15 +254,15 @@ export function PrometheusConnectionForm({
             disabled={apply.status === 'applying'}
             className="mt-2 text-xs text-theme-text-secondary hover:underline"
           >
-            Clear saved headers
+            Remove saved headers
           </button>
         )}
         {headerRows?.length === 0 && (
-          <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
+          <p className="mt-1 text-xs text-warning-text">Headers will be removed when you click Apply now.</p>
         )}
       </section>}
       <div className="mt-4 space-y-1">
-        {onDiscard ? <ConnectionFormActions dirty={dirty} busy={apply.status === 'applying'} onSave={() => void handleApply()} onDiscard={onDiscard} feedback={feedback} error={apply.status === 'failed' ? apply.error : undefined} /> : <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching.">
+        {onDiscard ? <FormSaveActions dirty={dirty} busy={apply.status === 'applying'} onSave={() => void handleApply()} onDiscard={onDiscard} feedback={feedback} error={apply.status === 'failed' ? apply.error : undefined} /> : <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching.">
           <button
             type="button"
             onClick={handleApply}

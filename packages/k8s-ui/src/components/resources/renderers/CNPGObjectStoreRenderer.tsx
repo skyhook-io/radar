@@ -44,6 +44,8 @@ export function CNPGObjectStoreRenderer({
   const credentialSecret = getCNPGObjectStoreCredentialSecret(data)
   const cfg = data?.spec?.configuration ?? {}
   const failing = windows.filter((w) => w.failingSinceLastSuccess)
+  const archiveStopped = failing.filter((w) => archivingFailing?.has(w.server)).map((w) => w.server)
+  const neverSucceeded = failing.filter((w) => !w.lastSuccessfulBackupTime).map((w) => w.server)
 
   return (
     <>
@@ -51,7 +53,13 @@ export function CNPGObjectStoreRenderer({
         <AlertBanner
           variant="error"
           title={`Backups failing for ${failing.length === 1 ? failing[0].server : `${failing.length} servers`}`}
-          message="The most recent backup attempt failed after the last success, so the recoverable range has stopped moving forward."
+          message={
+            neverSucceeded.length > 0
+              ? `No successful base backup is recorded for ${neverSucceeded.join(', ')}, so recoverability is not established.`
+              : archiveStopped.length > 0
+                ? `A base backup failure is recorded after the last recorded success, and WAL archiving has stopped for ${archiveStopped.join(', ')}: nothing written since the last archived WAL can be recovered.`
+                : 'A base backup failure is recorded after the last recorded success. While WAL archiving works, recovery from that backup can still replay archived WAL written since.'
+          }
         />
       )}
 
@@ -60,7 +68,7 @@ export function CNPGObjectStoreRenderer({
           // Configured but empty is NOT the same as healthy. Saying nothing here
           // would read as "backups are fine" on a store holding nothing.
           <div className="text-sm text-theme-text-secondary">
-            No server has reported a backup yet, so there is nothing to restore from this store.
+            No server has recorded a backup in this store's status, so recoverability is not established.
           </div>
         ) : (
           <div className="space-y-2">
@@ -194,10 +202,10 @@ function RecoveryWindowRow({
               ? 'Not advancing'
               : w.lastSuccessfulBackupTime
                 ? 'Recoverable'
-                : 'No backups yet'}
+                : 'No backup recorded'}
         </span>
       </div>
-      {stalled && !w.failingSinceLastSuccess && (
+      {stalled && (
         <div className="text-xs text-warning-text mb-1">
           {/* The timestamps below are real and still describe the last backup that
               worked. What they no longer describe is a window still growing, and
@@ -217,7 +225,7 @@ function RecoveryWindowRow({
         {w.lastSuccessfulBackupTime ? (
           <Property label="Last Successful Backup" value={<RecoveryTime at={w.lastSuccessfulBackupTime} />} />
         ) : (
-          <Property label="Last Successful Backup" value="never" />
+          <Property label="Last Successful Backup" value="none recorded" />
         )}
         {w.lastFailedBackupTime && (
           <Property label="Last Failed Attempt" value={<RecoveryTime at={w.lastFailedBackupTime} />} />
@@ -226,8 +234,9 @@ function RecoveryWindowRow({
       </PropertyList>
       {w.failingSinceLastSuccess && (
         <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
-          Every backup since the last success has failed. The oldest restorable point will still age
-          out under the retention policy, so the window is shrinking from both ends.
+          {w.lastSuccessfulBackupTime
+            ? 'A backup failure is recorded after the last recorded success. Restoring from that success replays the WAL archived since, which takes longer the longer this lasts.'
+            : 'No successful backup is recorded for this server, so recoverability is not established.'}
         </div>
       )}
     </div>

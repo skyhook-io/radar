@@ -1781,3 +1781,97 @@ func TestSQLiteOptimizeIsUnbounded(t *testing.T) {
 		t.Errorf("%s: want ANALYZE (0x2) over every table (0x10000) without the analysis bound (0x10)", sqliteOptimize)
 	}
 }
+
+// EvictedThrough must never be earlier than a row the store has deleted:
+// with retention configured it is the retention cutoff even before a sweep
+// deletes anything, and size pruning raises it to the newest pruned row.
+func TestSQLiteStore_EvictedThrough(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	if got := store.EvictedThrough(); !got.IsZero() {
+		t.Fatalf("EvictedThrough with no retention or pruning = %v, want zero", got)
+	}
+
+	base := time.Now().Add(-30 * time.Minute)
+	for i := range 5 {
+		if err := store.Append(ctx, TimelineEvent{
+			ID: fmt.Sprintf("event-%d", i), Timestamp: base.Add(time.Duration(i) * time.Minute),
+			Source: SourceInformer, Kind: "Deployment", Namespace: "default", Name: "web",
+			EventType: EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	if _, err := store.deleteOldestEvents(ctx, 2); err != nil {
+		t.Fatalf("deleteOldestEvents: %v", err)
+	}
+	if got, want := store.EvictedThrough(), base.Add(time.Minute); !got.Equal(want) {
+		t.Fatalf("EvictedThrough after pruning two rows = %v, want the newer pruned row's time %v", got, want)
+	}
+
+	store.StartCleanupLoop(2*time.Hour, time.Hour, 0)
+	got := store.EvictedThrough()
+	if cutoff := time.Now().Add(-2 * time.Hour); got.Before(cutoff.Add(-time.Second)) {
+		t.Fatalf("EvictedThrough = %v, want at least the pruned row's time", got)
+	}
+	if !got.Equal(base.Add(time.Minute)) {
+		t.Fatalf("EvictedThrough = %v, want the later of the pruned row (%v) and the retention cutoff", got, base.Add(time.Minute))
+	}
+
+	store.cleanupMu.Lock()
+	store.retentionAge = 10 * time.Minute
+	store.cleanupMu.Unlock()
+	if got, cutoff := store.EvictedThrough(), time.Now().Add(-10*time.Minute); got.Before(cutoff.Add(-time.Second)) || got.After(cutoff.Add(time.Second)) {
+		t.Fatalf("EvictedThrough = %v, want the retention cutoff %v once it is later than any pruned row", got, cutoff)
+	}
+}
+
+// A K8s Event upsert moves its row forward in time, which changes which rows
+// are the oldest. The prune boundary must be the newest row actually deleted,
+// so no kept-history claim covers a deleted row.
+func TestSQLiteStore_PruneBoundaryFollowsUpsertedRows(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+
+	event := TimelineEvent{
+		ID: "k8s-event", Timestamp: base, Source: SourceK8sEvent,
+		Kind: "Pod", Namespace: "default", Name: "web-abc", EventType: EventTypeWarning, Reason: "BackOff", Count: 1,
+	}
+	if err := store.Append(ctx, event); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	for i, offset := range []time.Duration{5 * time.Minute, 10 * time.Minute, 15 * time.Minute} {
+		if err := store.Append(ctx, TimelineEvent{
+			ID: fmt.Sprintf("edit-%d", i), Timestamp: base.Add(offset), Source: SourceInformer,
+			Kind: "Deployment", Namespace: "default", Name: "web", EventType: EventTypeUpdate,
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	// The bump moves the oldest row past every edit.
+	event.Timestamp, event.Count = base.Add(20*time.Minute), 2
+	if err := store.Append(ctx, event); err != nil {
+		t.Fatalf("Append bump: %v", err)
+	}
+
+	deleted, err := store.deleteOldestEvents(ctx, 2)
+	if err != nil || deleted != 2 {
+		t.Fatalf("deleteOldestEvents = %d, %v; want 2 rows", deleted, err)
+	}
+	if got, want := store.EvictedThrough(), base.Add(10*time.Minute); !got.Equal(want) {
+		t.Fatalf("EvictedThrough = %v, want the newest deleted row's time %v", got, want)
+	}
+	kept, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	for _, e := range kept {
+		if !e.Timestamp.After(store.EvictedThrough()) {
+			t.Fatalf("kept row %s at %v is not after the boundary %v", e.ID, e.Timestamp, store.EvictedThrough())
+		}
+	}
+}

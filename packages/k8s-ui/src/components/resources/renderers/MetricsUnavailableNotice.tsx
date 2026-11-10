@@ -2,16 +2,17 @@ import { Info } from 'lucide-react'
 import { Tooltip } from '../../ui/Tooltip'
 
 interface MetricsUnavailableNoticeProps {
+  noUsageYet?: boolean
   rawError?: string
   diagnosis?: string
 }
 
-export function MetricsUnavailableNotice({ rawError, diagnosis }: MetricsUnavailableNoticeProps) {
+export function MetricsUnavailableNotice({ rawError, diagnosis, noUsageYet }: MetricsUnavailableNoticeProps) {
   return (
     <div className="card-inner-lg text-xs text-theme-text-tertiary">
       <div className="flex items-center gap-1.5">
         <span className="min-w-0 leading-5">
-          Metrics unavailable. Radar cannot read metrics.k8s.io.
+          {noUsageYet ? 'No usage yet: this Pod is not running' : 'Metrics unavailable. Radar cannot read metrics.k8s.io.'}
         </span>
         {rawError && (
           <Tooltip

@@ -61,6 +61,18 @@ Create the name of the service account to use
 {{- end }}
 {{- end }}
 
+{{/*
+The URL path prefix Radar serves under: "" for root, otherwise "/<prefix>"
+with no trailing slash. Shared by the Deployment (--base-path, probes) and
+NOTES.txt (the URL printed after install).
+*/}}
+{{- define "radar.basePath" -}}
+{{- $trimmed := trimAll "/" (default "" .Values.basePath) -}}
+{{- if $trimmed -}}
+{{- printf "/%s" $trimmed -}}
+{{- end -}}
+{{- end }}
+
 {{- define "radar.operatorSettings" -}}
 {{- $settings := dict "version" 1 -}}
 {{- if .Values.audit -}}
@@ -70,4 +82,115 @@ Create the name of the service account to use
 {{- $_ := set $settings "helmOciSources" .Values.helm.ociSources -}}
 {{- end -}}
 {{- $settings | toPrettyJson -}}
+{{- end -}}
+
+{{/*
+Whether the default read grant for Radar Cloud's background services
+(radar:system) renders. It includes cluster-wide Secret read, so an absent
+value means OFF: a `--reuse-values` upgrade from a release that predates the
+key renders with the previous release's tree and never gains Secret read
+without someone choosing it. Fresh installs, plain upgrades, GitOps and
+`--reset-then-reuse-values` get true from values.yaml.
+*/}}
+{{- define "radar.cloudSystemRbac" -}}
+{{- if and .Values.cloud.enabled (eq (toString .Values.cloud.systemRbac) "true") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether the default read grant for automatic Diagnose (radar:ai:reader) renders.
+An absent value means OFF, as with radar.cloudSystemRbac: a
+`--reuse-values` upgrade from a release that predates the key never gains a
+new reader without someone choosing it.
+*/}}
+{{- define "radar.cloudAiRbac" -}}
+{{- if and .Values.cloud.enabled (eq (toString .Values.cloud.aiRbac) "true") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
+Whether Radar calls Kubernetes with each person's own token instead of
+impersonating them (auth.kubernetesCredentials=user-token).
+*/}}
+{{- define "radar.userTokenMode" -}}
+{{- if eq (.Values.auth.kubernetesCredentials | default "impersonate") "user-token" -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{/*
+Enrollment mode: Radar joins cloud.hubURL with a shared enrollment key every
+time it starts and holds the token it gets in memory. A configured cloud.token or
+cloud.existingSecret wins, so a token install renders exactly as before.
+*/}}
+{{- define "radar.cloudEnrollmentMode" -}}
+{{- $c := .Values.cloud -}}
+{{- $e := $c.enrollment | default dict -}}
+{{- if and $c.enabled $c.hubURL (or $e.key $e.existingSecret) (not (or $c.token $c.existingSecret)) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
+{{- define "radar.cloudEnrollmentKeySecretName" -}}
+{{- $e := .Values.cloud.enrollment | default dict -}}
+{{- $e.existingSecret | default (printf "%s-cloud-enrollment-key" (include "radar.fullname" .)) -}}
+{{- end -}}
+
+{{/*
+A binding to a ClusterRole: one ClusterRoleBinding, or with rbac.namespaces
+one RoleBinding per listed namespace, which grants the role's namespaced rules
+only there. Takes root, name, roleRef, and groups and/or serviceAccount.
+*/}}
+{{- define "radar.binding" -}}
+{{- range $namespace := .root.Values.rbac.namespaces | default (list "") }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if $namespace }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
+metadata:
+  name: {{ $.name }}
+  {{- with $namespace }}
+  namespace: {{ . | quote }}
+  {{- end }}
+  labels:
+    {{- include "radar.labels" $.root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $.roleRef }}
+subjects:
+  {{- with $.serviceAccount }}
+  - kind: ServiceAccount
+    name: {{ .name }}
+    namespace: {{ .namespace }}
+  {{- end }}
+  {{- range $.groups }}
+  - kind: Group
+    name: {{ . }}
+    apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
+Cloud tier groups. Each tier also binds its pre-rename cloud:* group so
+rolling hub and chart upgrades stay compatible; remove those in v2.
+*/}}
+{{- define "radar.tierGroups" -}}
+{{- if has . (list "owner" "member" "viewer") -}}
+{{- list (printf "radar:%s" .) (printf "cloud:%s" .) | toJson -}}
+{{- else if eq . "ai" -}}
+{{- list "radar:ai:reader" | toJson -}}
+{{- else -}}
+{{- list (printf "radar:%s" .) | toJson -}}
+{{- end -}}
 {{- end -}}

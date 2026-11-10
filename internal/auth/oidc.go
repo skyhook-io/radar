@@ -566,17 +566,16 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract username (prefer email, fall back to sub)
-	username := ""
-	if email, ok := claims["email"].(string); ok && email != "" {
-		username = email
-	} else if sub, ok := claims["sub"].(string); ok {
-		username = sub
-	}
-
-	if username == "" {
-		log.Printf("[oidc] No username claim (email or sub) in ID token")
-		http.Error(w, "authentication failed: no username in token", http.StatusBadRequest)
+	username, usernameClaim, err := oidcUsername(claims, h.cfg.OIDCUsernameClaim)
+	if err != nil {
+		var unverified *unverifiedEmailError
+		if errors.As(err, &unverified) {
+			log.Printf("[oidc] Refusing login for %q: email_verified is false in the ID token", unverified.email)
+			http.Error(w, "Your email address is not verified at your identity provider, so Radar will not use it as your Kubernetes username. Verify the address with your identity provider, or set --auth-oidc-username-claim to a claim that does not depend on email (for example sub).", http.StatusForbidden)
+			return
+		}
+		log.Printf("[oidc] %v", err)
+		http.Error(w, "authentication failed: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -645,7 +644,7 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[oidc] User %s authenticated (groups: %v)", username, groups)
+	log.Printf("[oidc] User %s authenticated (username claim: %s, groups: %v)", username, usernameClaim, groups)
 
 	// Redirect to the app root under its base path. A bare "/" would leave the
 	// user outside Radar on a subpath deployment, where the ingress routes only
@@ -844,4 +843,46 @@ func (h *OIDCHandler) HandleBackchannelLogout(w http.ResponseWriter, r *http.Req
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+type unverifiedEmailError struct{ email string }
+
+func (e *unverifiedEmailError) Error() string {
+	return fmt.Sprintf("email %s is not verified", e.email)
+}
+
+// oidcUsername returns the username Radar impersonates and the claim it came
+// from. With no claim configured it prefers email and falls back to sub. A
+// configured claim must be present: falling back would impersonate a
+// different identity than the one the operator mapped in RBAC.
+//
+// An email-derived username follows kube-apiserver's rule: when the token
+// carries email_verified, it must be true. Otherwise anyone who can set an
+// unverified address at the IdP could sign in as the owner of that address.
+func oidcUsername(claims map[string]any, claim string) (string, string, error) {
+	if claim == "" {
+		if email, ok := claims["email"].(string); ok && email != "" {
+			claim = "email"
+		} else if sub, ok := claims["sub"].(string); ok && sub != "" {
+			return sub, "sub", nil
+		} else {
+			return "", "", errors.New("no username in token (no email or sub claim)")
+		}
+	}
+	username, ok := claims[claim].(string)
+	if !ok || username == "" {
+		return "", "", fmt.Errorf("no username in token: the %q claim set by --auth-oidc-username-claim is missing or not a string", claim)
+	}
+	if claim == "email" {
+		if v, present := claims["email_verified"]; present {
+			verified, ok := v.(bool)
+			if !ok {
+				return "", "", fmt.Errorf("the email_verified claim is %T, not a boolean", v)
+			}
+			if !verified {
+				return "", "", &unverifiedEmailError{email: username}
+			}
+		}
+	}
+	return username, claim, nil
 }

@@ -1,5 +1,6 @@
 import { NodeTerminalTab as SharedNodeTerminalTab, type NodeTerminalTabProps as SharedNodeTerminalTabProps } from '@skyhook-io/k8s-ui'
 import { apiUrl, getWsUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { readErrorBody } from '../../api/httpErrors'
 
 interface NodeTerminalTabProps {
   nodeName: string
@@ -15,7 +16,7 @@ export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
       body: JSON.stringify({}),
     })
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: 'Unknown error' }))
+      const err = await readErrorBody(response)
       throw new Error(err.error || `HTTP ${response.status}`)
     }
     return response.json()

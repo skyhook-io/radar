@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -206,7 +207,11 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		}, nil
 	}
 
-	cacheKey := packagesCacheKeyFor(p.Namespaces)
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return PackagesResponse{}, errResourceCacheUnavailable
+	}
+	cacheKey := packagesCacheKeyFor(cache.Generation(), p.Namespaces)
 	packagesCacheMu.Lock()
 	entry, hit := packagesCache[cacheKey]
 	packagesCacheMu.Unlock()
@@ -220,9 +225,16 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		generatedAt = entry.at
 	} else {
 		var err error
-		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces)
+		rows, sourceErrs, err = computePackagesInternal(ctx, cache, p.Namespaces)
 		if err != nil {
 			return PackagesResponse{}, err
+		}
+		// The entry is shared by every caller with this scope, so a read cut
+		// short by this caller leaving must not be stored as the inventory.
+		// A deadline is the server's own budget, and its partial result is
+		// what every caller would get, so that one is kept.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return PackagesResponse{}, ctx.Err()
 		}
 		generatedAt = time.Now()
 		if len(sourceErrs) > 0 {
@@ -282,14 +294,19 @@ func clearPackagesCache() {
 	packagesCacheMu.Unlock()
 }
 
-// packagesCacheKeyFor produces a stable cache key from the requested
-// namespace set. User identity is intentionally NOT part of the key:
+// packagesCacheKeyFor produces a stable cache key from the generation of
+// the resource cache the list is computed from and the requested namespace
+// set. The generation keeps a list computed from the previous cluster, which
+// can finish after a context switch cleared the cache, out of the new
+// cluster's entries. User identity is intentionally NOT part of the key:
 // inventory reads run via the ServiceAccount (see computePackagesInternal),
 // so the result is identical for any caller with the same namespace
 // scope. Sharing entries across users avoids N-way duplication and
 // premature LRU eviction in multi-user Cloud deployments.
-func packagesCacheKeyFor(namespaces []string) string {
+func packagesCacheKeyFor(generation uint64, namespaces []string) string {
 	var b strings.Builder
+	b.WriteString(strconv.FormatUint(generation, 10))
+	b.WriteByte('|')
 	if namespaces == nil {
 		b.WriteByte('*')
 	} else {
@@ -334,6 +351,9 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if errors.Is(r.Context().Err(), context.Canceled) {
+			return // the caller left; there is no one to answer
+		}
 		log.Printf("[packages] ListPackages failed: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -350,12 +370,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 // cloud-mode (see the helm comment below for the rationale). User
 // identity does still flow through ListPackagesParams for cache
 // scoping and for sensitive Helm endpoints invoked elsewhere.
-func computePackagesInternal(ctx context.Context, namespaces []string) ([]packages.PackageRow, []SourceError, error) {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, nil, errResourceCacheUnavailable
-	}
-
+func computePackagesInternal(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) ([]packages.PackageRow, []SourceError, error) {
 	src := packages.Sources{}
 	var errs []SourceError
 
@@ -365,7 +380,7 @@ func computePackagesInternal(ctx context.Context, namespaces []string) ([]packag
 	// secrets, so impersonating would 403 viewers on inventory metadata
 	// that isn't credential data). Sensitive Helm reads (GetValues,
 	// GetManifest) and all writes still impersonate.
-	helmReleases, helmErrs := collectHelmReleases(namespaces, "", nil)
+	helmReleases, helmErrs := collectHelmReleases(ctx, namespaces, nil)
 	src.Helm = helmReleases
 	errs = append(errs, helmErrs...)
 
@@ -445,7 +460,7 @@ func computePackagesInternal(ctx context.Context, namespaces []string) ([]packag
 // multi-namespace → one call per namespace; per-namespace forbidden
 // errors are coalesced into one SourceError so a user with access to
 // ns-a but not ns-b still sees ns-a's releases.
-func collectHelmReleases(namespaces []string, user string, groups []string) ([]packages.HelmRelease, []SourceError) {
+func collectHelmReleases(ctx context.Context, namespaces []string, user *auth.User) ([]packages.HelmRelease, []SourceError) {
 	// Defensive: empty (non-nil) slice means "no namespaces authorized";
 	// callers should short-circuit before reaching here, but guard
 	// against a future caller that forgets and would otherwise fall
@@ -473,7 +488,7 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 	var otherErrNamespaces []string
 	var otherErrs []error
 	for _, ns := range scopes {
-		releases, err := hClient.ListReleasesAsUser(ns, user, groups)
+		releases, err := hClient.ListReleasesAsUser(ctx, ns, user)
 		if err == nil {
 			for _, h := range releases {
 				out = append(out, packages.HelmRelease{

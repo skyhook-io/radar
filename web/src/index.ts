@@ -16,6 +16,7 @@ export {
   getCredentialsMode,
 } from './api/config';
 export type { NavCustomization, FleetTakeoverTarget } from './context/NavCustomization';
+export type { RadarUpgradeRequest } from './context/RadarUpgradeHost';
 // Timeline data-source selection — lets an embedder back the timeline with a
 // retained-history endpoint instead of Radar's local event store. Additive;
 // absent = local (standalone behavior).
@@ -29,12 +30,14 @@ export type {
 export type {
   RenderDiagnoseAction,
   RenderInvestigationRunActions,
+  RenderInvestigationRefusalAction,
   DiagnoseConsentCopy,
 } from './context/DiagnoseCustomization';
+export type { InvestigationRefusal } from './api/diagnose';
 
 // Standalone AI investigation surface — mount the investigation panel outside a
-// full <RadarApp>. It uses the nearest React Router for durable drawer/workspace
-// URLs, or supplies one when mounted standalone. The backend set via setApiBase()
+// full <RadarApp>. It uses the nearest React Router for durable drawer and
+// investigations-page URLs, or supplies one when mounted standalone. The backend set via setApiBase()
 // picks the cluster, so hosts remount <DiagnoseProvider key={cluster}> to switch.
 // Mount order: ThemeProvider > DiagnoseCustomizationProvider > DiagnoseProvider
 // > DiagnoseSurface, under a @tanstack/react-query QueryClientProvider.
@@ -93,7 +96,14 @@ export type {
   OmnibarHandle,
   OmnibarRecent,
   OmnibarSearchResult,
+  OmnibarNote,
+  OmnibarNotePart,
 } from './components/ui/Omnibar';
 export { bestScore } from './components/ui/command-items';
 export type { CommandItem } from './components/ui/command-items';
 export type { SearchHit, SearchMatchedField } from './api/client';
+
+export { fetchResourceList, type ResourceListOptions } from './api/client';
+export { normalizeResourceList, type ResourceListBody, type ResourceListResult } from './api/resourceLists';
+export type { ResourceCoverage, ResourceReadCoverage, ResourceListResponse } from '@skyhook-io/k8s-ui';
+export type { SearchCoverageEntry } from './components/ui/searchCoverageNote';

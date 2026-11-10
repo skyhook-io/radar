@@ -455,6 +455,60 @@ func TestDiffApplicationCleansFailedOperationMessage(t *testing.T) {
 	}
 }
 
+// The timeline's auto-sync label follows whether Argo actually auto-syncs.
+// Argo CD 3.x switches automation off in place with automated.enabled: false,
+// keeping the block, so its presence alone says nothing.
+func TestDiffApplicationAutoSyncLabelFollowsEnabled(t *testing.T) {
+	tests := []struct {
+		name      string
+		old, new  map[string]any
+		wantLabel string
+	}{
+		{name: "block added", old: nil, new: map[string]any{"prune": true}, wantLabel: "auto-sync enabled"},
+		{name: "block removed", old: map[string]any{"prune": true}, new: nil, wantLabel: "auto-sync disabled"},
+		{name: "switched off in place", old: map[string]any{"prune": true, "selfHeal": true}, new: map[string]any{"enabled": false, "prune": true, "selfHeal": true}, wantLabel: "auto-sync disabled"},
+		{name: "switched back on in place", old: map[string]any{"enabled": false}, new: map[string]any{"enabled": true}, wantLabel: "auto-sync enabled"},
+		{name: "disabled block added", old: nil, new: map[string]any{"enabled": false}},
+		{name: "disabled block removed", old: map[string]any{"enabled": false}, new: nil},
+		{name: "settings change while on", old: map[string]any{"prune": true}, new: map[string]any{"prune": false}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changes, summary := diffApplication(applicationWithAutomated(tt.old), applicationWithAutomated(tt.new))
+			var labels []string
+			for _, s := range summary {
+				if strings.HasPrefix(s, "auto-sync ") {
+					labels = append(labels, s)
+				}
+			}
+			change, hasChange := findChangePath(changes, "spec.syncPolicy.automated")
+			if tt.wantLabel == "" {
+				if len(labels) != 0 || hasChange {
+					t.Fatalf("expected no auto-sync change, got labels=%v change=%+v", labels, change)
+				}
+				return
+			}
+			if len(labels) != 1 || labels[0] != tt.wantLabel {
+				t.Fatalf("labels = %v, want [%q]", labels, tt.wantLabel)
+			}
+			if !hasChange {
+				t.Fatalf("missing spec.syncPolicy.automated change: %+v", changes)
+			}
+			if (tt.old == nil) != (change.OldValue == nil) || (tt.new == nil) != (change.NewValue == nil) {
+				t.Fatalf("change values = %#v → %#v, want an absent block recorded as nil", change.OldValue, change.NewValue)
+			}
+		})
+	}
+}
+
+func applicationWithAutomated(automated map[string]any) *unstructured.Unstructured {
+	syncPolicy := map[string]any{}
+	if automated != nil {
+		syncPolicy["automated"] = automated
+	}
+	return &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"syncPolicy": syncPolicy}}}
+}
+
 func applicationWithOperation(phase, message string) *unstructured.Unstructured {
 	status := map[string]any{}
 	if phase != "" {
@@ -585,7 +639,7 @@ func TestDiffAdmissionWebhookConfiguration(t *testing.T) {
 	if len(changes) != 1 || changes[0].Path != "webhooks[pod-policy.validation.k8s.io]" {
 		t.Fatalf("caBundle rotation: changes = %+v", changes)
 	}
-	if !strings.Contains(strings.Join(summary, "; "), "changed") {
+	if strings.Join(summary, "; ") != "webhook pod-policy.validation.k8s.io caBundle rotated" {
 		t.Fatalf("caBundle rotation: summary = %q", summary)
 	}
 	// SECURITY: the cert bytes must never appear — only a digest.
@@ -648,5 +702,29 @@ func TestDiffAdmissionWebhookConfiguration_SelectorRescope(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(summary, ";"), "changed") {
 		t.Fatalf("selector rescope summary = %v", summary)
+	}
+}
+
+func TestDiffGatewayRouteRecordsAConditionReasonChange(t *testing.T) {
+	if reg, ok := diffFunctions["UDPRoute"]; !ok || reg.group != "gateway.networking.k8s.io" {
+		t.Fatalf("UDPRoute has no Gateway API route differ: %+v", reg)
+	}
+	route := func(reason string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1alpha2",
+			"kind":       "UDPRoute",
+			"metadata":   map[string]any{"name": "dns", "namespace": "demo"},
+			"status": map[string]any{"parents": []any{map[string]any{
+				"parentRef":  map[string]any{"name": "edge"},
+				"conditions": []any{map[string]any{"type": "ResolvedRefs", "status": "False", "reason": reason}},
+			}}},
+		}}
+	}
+	changes, _ := diffGatewayRoute(route("BackendNotFound"), route("RefNotPermitted"))
+	if len(changes) != 1 || changes[0].OldValue != "False (BackendNotFound)" || changes[0].NewValue != "False (RefNotPermitted)" {
+		t.Errorf("reason change under an unchanged status = %+v", changes)
+	}
+	if changes, _ := diffGatewayRoute(route("BackendNotFound"), route("BackendNotFound")); len(changes) != 0 {
+		t.Errorf("identical routes produced changes: %+v", changes)
 	}
 }

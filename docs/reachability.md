@@ -112,7 +112,7 @@ Relayed and Job-based probes are bounded by Kubernetes RBAC, but they do not alw
 
 With [authentication](authentication.md) enabled, Radar uses the signed-in user's identity. Without authentication, Kubernetes-authorized probes use Radar's own client identity: your kubeconfig identity locally, or Radar's ServiceAccount when it runs in-cluster. The API server enforces relay permissions at request time; Radar preflights all three Job permissions before creating anything. If impersonation is unavailable, the relay is skipped rather than falling back to Radar's ServiceAccount. A proxy denial can mark that route *unreachable via the API server*, but the headline stays *unknown* because the real path was not confirmed.
 
-The UI asks before the first in-cluster run for a cluster and names the requests it will send (unless that consent was previously remembered). MCP has no dialog: callers must explicitly pass `in_cluster: true`, and the same RBAC preflight applies. Radar Cloud also requires org role Member or higher.
+The UI asks before the first in-cluster run for a cluster and names the requests it will send (unless that consent was previously remembered). MCP has no dialog: callers must explicitly pass `in_cluster: true`, and the same RBAC preflight applies.
 
 The active Kubernetes identity authorizes Job creation, but network and mesh policy see the probe pod, not that identity. The Job runs in the diagnosed resource's namespace; its pod uses that namespace's default ServiceAccount identity but mounts no ServiceAccount token. Each run creates at most five Jobs; their containers run non-root with a read-only filesystem, all capabilities dropped, a 25-second deadline, no retries, and a 60-second TTL backstop.
 

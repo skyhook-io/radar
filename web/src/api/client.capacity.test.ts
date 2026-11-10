@@ -5,6 +5,7 @@ import {
   isCapacityCursorInvalidError,
   shouldRetryCapacityQuery,
 } from "./client";
+import { RadarFeatureUnsupportedError } from "./radarFeatures";
 
 describe("isCapacityCursorInvalidError", () => {
   it("uses the structured capacity error code", () => {
@@ -42,6 +43,12 @@ describe("shouldRetryCapacityQuery", () => {
     );
   });
 
+  it("never retries a feature the connected Radar predates", () => {
+    expect(
+      shouldRetryCapacityQuery(0, new RadarFeatureUnsupportedError("capacity", {})),
+    ).toBe(false);
+  });
+
   it("bounds retries for transient failures", () => {
     expect(shouldRetryCapacityQuery(0, new ApiError("unavailable", 503))).toBe(
       true,
@@ -60,6 +67,14 @@ describe("capacityRefetchInterval", () => {
     // user back to page 1.
     expect(
       capacityRefetchInterval(undefined, true, "cursor-abc")(withData()),
+    ).toBe(false);
+  });
+
+  it("stops polling a Radar that predates Capacity", () => {
+    expect(
+      capacityRefetchInterval(undefined, true)({
+        state: { error: new RadarFeatureUnsupportedError("capacity", {}) },
+      }),
     ).toBe(false);
   });
 

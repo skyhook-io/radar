@@ -1,13 +1,19 @@
 package k8s
 
 import (
+	goruntime "runtime"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func TestIsMoreStableVersion(t *testing.T) {
@@ -307,5 +313,151 @@ func TestSingletonPublishedInTheResetSwapGapDiesWithTheSwap(t *testing.T) {
 	}
 	if got.ResourceDiscovery == stale {
 		t.Fatal("the served singleton is still the stale build")
+	}
+}
+
+// fluxDiscovery installs a discovery singleton over a fake whose OCIRepository
+// is served at version, with a short TTL so it expires quickly.
+func fluxDiscovery(t *testing.T, version string) (*fakediscovery.FakeDiscovery, *ResourceDiscovery) {
+	t.Helper()
+	withCleanDiscoveryGlobals(t)
+	fakeDisc := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDisc.Resources = servedOCIRepository(version)
+	core, err := k8score.NewResourceDiscovery(fakeDisc, k8score.WithDiscoveryCacheTTL(time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewResourceDiscovery: %v", err)
+	}
+	d := &ResourceDiscovery{ResourceDiscovery: core}
+	discoveryMu.Lock()
+	resourceDiscovery = d
+	discoveryMu.Unlock()
+	return fakeDisc, d
+}
+
+func servedOCIRepository(version string) []*metav1.APIResourceList {
+	return []*metav1.APIResourceList{{
+		GroupVersion: "source.toolkit.fluxcd.io/" + version,
+		APIResources: []metav1.APIResource{{Name: "ocirepositories", Kind: "OCIRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch", "patch"}}},
+	}}
+}
+
+func waitForServedVersion(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository")
+		if ok && gvr.Version == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("want %s, got %v %v", want, gvr, ok)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A CRD upgrade can retire the version discovery last saw. Write paths resolve
+// through ServedGVR, so it must refresh expired discovery itself rather than
+// wait for some read path to do it.
+func TestServedGVRRefreshesExpiredDiscovery(t *testing.T) {
+	fakeDisc, d := fluxDiscovery(t, "v1beta2")
+	if gvr, ok := d.GetGVRWithGroup("OCIRepository", "source.toolkit.fluxcd.io"); !ok || gvr.Version != "v1beta2" {
+		t.Fatalf("before upgrade: %v %v", gvr, ok)
+	}
+	// Changed before the first ServedGVR, so no background refresh reads the
+	// fake while it is written.
+	fakeDisc.Resources = servedOCIRepository("v1")
+	waitForServedVersion(t, "v1")
+}
+
+// A stalled discovery endpoint must not hold a write action hostage, and must
+// not pile up a goroutine per call: callers get the cached answer while one
+// refresh runs, and a later expiry can refresh again.
+func TestServedGVRDoesNotWaitForASlowRefresh(t *testing.T) {
+	fakeDisc, d := fluxDiscovery(t, "v1")
+	var stalled atomic.Bool
+	stalled.Store(true)
+	release := make(chan struct{})
+	fakeDisc.PrependReactor("get", "resource", func(clienttesting.Action) (bool, runtime.Object, error) {
+		if stalled.Load() {
+			<-release
+		}
+		return false, nil, nil
+	})
+	time.Sleep(5 * time.Millisecond)
+
+	before := goruntime.NumGoroutine()
+	done := make(chan string, 1)
+	go func() {
+		for range 200 {
+			if gvr, ok := ServedGVR("source.toolkit.fluxcd.io", "OCIRepository"); !ok || gvr.Version != "v1" {
+				done <- "want the cached v1"
+				return
+			}
+		}
+		done <- ""
+	}()
+	select {
+	case msg := <-done:
+		if msg != "" {
+			t.Fatal(msg)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("ServedGVR waited on a stalled discovery refresh")
+	}
+	if grew := goruntime.NumGoroutine() - before; grew > 3 {
+		t.Errorf("%d goroutines parked behind one stalled refresh", grew)
+	}
+
+	stalled.Store(false)
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for d.backgroundRefresh.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("the stalled refresh never released its slot")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	fakeDisc.Resources = servedOCIRepository("v2")
+	waitForServedVersion(t, "v2")
+}
+
+// A kind installed after discovery's last refresh resolves on the first
+// lookup that misses it, and further misses don't refresh again within the
+// interval.
+func TestLookupRefreshingOnMiss(t *testing.T) {
+	fakeDiscovery := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	core, err := k8score.NewResourceDiscovery(fakeDiscovery, k8score.WithDiscoveryCacheTTL(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &ResourceDiscovery{ResourceDiscovery: core}
+	widgets := func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) {
+		return d.GetGVRWithGroup("Widget", "example.test")
+	}
+	if _, ok := d.GetGVRWithGroup("Widget", "example.test"); ok {
+		t.Fatal("widget resolved before it was installed")
+	}
+	fakeDiscovery.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "example.test/v1",
+		APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}}},
+	}}
+	before := len(fakeDiscovery.Actions())
+	if gvr, ok := d.LookupRefreshingOnMiss(widgets); !ok || gvr.Resource != "widgets" {
+		t.Fatalf("installed kind = %v, %v", gvr, ok)
+	}
+	refreshed := len(fakeDiscovery.Actions())
+	if refreshed == before {
+		t.Fatal("a miss must refresh discovery")
+	}
+	if _, ok := d.LookupRefreshingOnMiss(widgets); !ok || len(fakeDiscovery.Actions()) != refreshed {
+		t.Fatal("a hit must not refresh discovery")
+	}
+	if _, ok := d.LookupRefreshingOnMiss(func(d *ResourceDiscovery) (schema.GroupVersionResource, bool) { return d.GetGVR("gadgets") }); ok || len(fakeDiscovery.Actions()) != refreshed {
+		t.Fatal("a miss within the interval must not refresh discovery again")
+	}
+	if _, ok := (*ResourceDiscovery)(nil).LookupRefreshingOnMiss(widgets); ok {
+		t.Fatal("nil discovery resolved a kind")
 	}
 }

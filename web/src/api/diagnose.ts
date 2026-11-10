@@ -19,16 +19,23 @@ export interface AgentInfo {
   apply?: boolean;
   /** The backend re-checks the resource after an Apply. Absent means it does not. */
   verification?: boolean;
+  /** The backend opens a run from a question, with or without a resource.
+   *  Absent means it accepts only a resource. */
+  questions?: boolean;
 }
 
 export interface AgentsResponse {
   agents: AgentInfo[];
   enabled: boolean;
   // eligible: this run mode supports local BYO-agent investigations (no proxy/OIDC
-  // auth, /mcp mounted) — true even when no agent is installed. Lets the UI tell
+  // auth, investigation MCP mounted) - true even when no agent is installed. Lets the UI tell
   // "install an agent to enable this" (eligible && !enabled) apart from "not
   // available here" (auth/cloud/--no-mcp). Absent on older servers / embed hosts.
   eligible?: boolean;
+  // cliOverride: RADAR_AI_CLI_BIN is set, pinning the engine to one CLI. With
+  // CLIs detected and investigations still off, that variable is what's broken.
+  // Absent on older servers and embed hosts.
+  cliOverride?: boolean;
   // Machine-scoped consent per disclosure surface, recorded server-side
   // (~/.radar) — one acknowledgment covers the web panel and the CLI.
   consented?: Record<string, boolean>;
@@ -235,15 +242,32 @@ export interface RunSummary {
   effort?: string;
   managedBy?: string; // GitOps/Helm owner of the target ("Argo CD"/"Flux"/"Helm"), for the Apply warning
   health?: ResourceHealthSignal;
+  /** The engineer's opening question, when the run started with one. A run
+   *  with a question and an empty name has no resource. */
+  question?: string;
+  /** Where the question said to start looking; empty means the whole cluster. */
+  namespaces?: string[];
+  /** How far before the question the problem started: 15m, 1h, 6h or 24h. */
+  lookBack?: string;
+  /** When the question was first asked, when that was before this run
+   *  started (a re-run or a narrowed run). */
+  askedAt?: string;
   status: "running" | "stopping" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;
+  /** When the turn behind preview finished. Set only when preview is an
+   *  assessment Findings shows; absent before any, or when the server
+   *  doesn't record it. */
+  assessedAt?: string;
   createdAt: string;
   updatedAt: string;
   visibility?: "private" | "organization";
   ownedByMe?: boolean;
   canManageVisibility?: boolean;
   canContinue?: boolean;
+  /** Why a run with canContinue false can't take a follow-up, in words for
+   *  the reader, when the host knows. Absent: a generic read-only notice. */
+  continueBlockedReason?: string;
   trigger?: "interactive" | "background";
   radarUrl?: string;
 }
@@ -257,26 +281,163 @@ export async function fetchAgents(
     signal,
   });
   if (!res.ok) throw new Error(`agents: ${res.status}`);
+  const body = (await res.json()) as AgentsResponse & {
+    agents: AgentInfo[] | null;
+  };
+  // Older Radar servers send "no agent found" as JSON null, not []. This client
+  // also runs against servers of other versions, and that is the single most
+  // common response on a machine with no CLI, so normalise here rather than in
+  // every caller that reaches for .filter.
+  return { ...body, agents: body.agents ?? [] };
+}
+
+/**
+ * What an agent CLI's own status command says about its sign-in. "unknown"
+ * covers agents Radar doesn't check, timeouts and unrecognized answers; only
+ * "signed-out" is acted on.
+ */
+export interface AgentSigninStatus {
+  agent: string;
+  state: "signed-in" | "signed-out" | "unknown";
+  /** The command that signs the agent in; set only when signed out. */
+  signinCmd?: string;
+}
+
+// fetchAgentSignin asks the server to run the agent's status command for runs
+// with this profile (cached briefly server-side). refresh discards that cache:
+// the user's "check again".
+export async function fetchAgentSignin(
+  agent: string,
+  profile: ExecutionProfile,
+  refresh: boolean,
+  signal?: AbortSignal,
+): Promise<AgentSigninStatus> {
+  const params = new URLSearchParams({ agent, profile });
+  if (refresh) params.set("refresh", "1");
+  const res = await fetch(`${getApiBase()}/agents/signin?${params}`, {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+    signal,
+  });
+  if (!res.ok) throw new Error(`agent sign-in: ${res.status}`);
   return res.json();
 }
 
-async function errorText(res: Response): Promise<string> {
+/**
+ * Why a host refused an investigation, and what would unblock it. Hosts that
+ * meter investigations send these beside the sentence to show, so an embedding
+ * app can offer the matching action. Radar's own backend sends only
+ * INVESTIGATIONS_AT_CAPACITY, with limit.
+ */
+export interface DiagnoseRefusal {
+  /** Machine-readable code, e.g. "ai_quota_exhausted". */
+  code?: string;
+  reason?: string;
+  action?: string;
+  limit?: number;
+  context?: string;
+}
+
+// The sentence to show is `detail` when a host sends one, else `error`. A
+// host's machine-readable code is `code`, or `error` when that is not the
+// sentence itself.
+async function diagnoseError(res: Response): Promise<DiagnoseError> {
+  let body: Record<string, unknown> | null = null;
   try {
-    const d = await res.json();
-    if (d && typeof d.error === "string") return d.error;
+    const d: unknown = await res.json();
+    if (d && typeof d === "object") body = d as Record<string, unknown>;
   } catch {
     /* ignore */
   }
-  return `request failed (${res.status})`;
+  const str = (v: unknown) =>
+    typeof v === "string" && v.trim() !== "" ? v : undefined;
+  const detail = str(body?.detail);
+  const error = str(body?.error);
+  const message = detail ?? error ?? `request failed (${res.status})`;
+  return new DiagnoseError(res.status, message, {
+    code: str(body?.code) ?? (detail && error !== detail ? error : undefined),
+    reason: str(body?.reason),
+    action: str(body?.action),
+    limit:
+      typeof body?.limit === "number" && body.limit > 0
+        ? body.limit
+        : undefined,
+    context: str(body?.context),
+  });
 }
 
 // DiagnoseError carries the HTTP status so callers can special-case (e.g. 409 cap).
 export class DiagnoseError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  reason?: string;
+  action?: string;
+  /** With INVESTIGATIONS_AT_CAPACITY: how many investigations run at once,
+   * and the cluster the start was refused in. */
+  limit?: number;
+  context?: string;
+  constructor(status: number, message: string, refusal?: DiagnoseRefusal) {
     super(message);
     this.status = status;
+    this.code = refusal?.code;
+    this.reason = refusal?.reason;
+    this.action = refusal?.action;
+    this.limit = refusal?.limit;
+    this.context = refusal?.context;
   }
+}
+
+/** Code Radar sends when every investigation slot is taken. */
+export const INVESTIGATIONS_AT_CAPACITY = "investigations_at_capacity";
+
+export interface InvestigationCapacity {
+  /** How many investigations run at once. */
+  limit: number;
+  /** The cluster the start was refused in. */
+  context?: string;
+}
+
+/** Set when error is Radar refusing a start because every investigation slot
+ * is taken; otherwise null. */
+export function investigationCapacity(
+  error: unknown,
+): InvestigationCapacity | null {
+  if (
+    !(error instanceof DiagnoseError) ||
+    error.code !== INVESTIGATIONS_AT_CAPACITY ||
+    !error.limit
+  ) {
+    return null;
+  }
+  return { limit: error.limit, context: error.context };
+}
+
+/** A host's refusal of an investigation request, with what would unblock it. */
+export interface InvestigationRefusal {
+  status: number;
+  /** The sentence shown to the user. */
+  message: string;
+  code?: string;
+  reason?: string;
+  action?: string;
+}
+
+/** The refusal a DiagnoseError carries, or null when the host sent none.
+ * Radar's own capacity code is not a host refusal: the UI recovers from it
+ * itself (see investigationCapacity). */
+export function investigationRefusal(
+  error: unknown,
+): InvestigationRefusal | null {
+  if (!(error instanceof DiagnoseError)) return null;
+  if (error.code === INVESTIGATIONS_AT_CAPACITY) return null;
+  if (!error.code && !error.reason && !error.action) return null;
+  return {
+    status: error.status,
+    message: error.message,
+    code: error.code,
+    reason: error.reason,
+    action: error.action,
+  };
 }
 
 const RUNS = () => `${getApiBase()}/diagnose/runs`;
@@ -299,6 +460,10 @@ export async function createRun(
     // otherwise hand back for this target. Inert for Radar's own backend, which
     // only ever continues an in-flight run — and that one is never bypassed.
     fresh?: boolean;
+    question?: string;
+    namespaces?: string[];
+    lookBack?: string;
+    askedAt?: string;
   },
   opts?: {
     agent?: string;
@@ -313,7 +478,7 @@ export async function createRun(
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ ...target, ...opts }),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
   return res.json();
 }
 
@@ -332,7 +497,7 @@ export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
     headers: getAuthHeaders(),
     signal,
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
   const d = await res.json();
   return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
 }
@@ -348,7 +513,7 @@ export async function getRun(
     headers: getAuthHeaders(),
     signal,
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
   return res.json();
 }
 
@@ -360,7 +525,7 @@ export async function recordConsent(surface: string): Promise<void> {
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ surface }),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
 }
 
 // clearHistory wipes the persisted investigation history (finished runs); live
@@ -371,7 +536,7 @@ export async function clearHistory(): Promise<void> {
     credentials: getCredentialsMode(),
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
 }
 
 // addTurn appends a follow-up (question) or an apply turn (apply + confirmed fix).
@@ -391,7 +556,7 @@ export async function addTurn(
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
 }
 
 // stopRun cancels a run's in-flight agent.

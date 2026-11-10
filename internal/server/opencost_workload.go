@@ -177,8 +177,8 @@ func (s *Server) parseOpenCostWorkloadRequest(w http.ResponseWriter, r *http.Req
 		return "", "", "", false
 	}
 
-	if status, msg, ok := s.preflightResourceGet(r, normalizeKind(kind), namespace, name, "apps"); !ok {
-		s.writeError(w, status, msg)
+	if failure := s.preflightResourceGet(r, normalizeKind(kind), namespace, name, "apps"); failure != nil {
+		s.writeReadFailure(w, kind, failure, nil)
 		return "", "", "", false
 	}
 	return kind, namespace, name, true

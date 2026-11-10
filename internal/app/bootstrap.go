@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
+	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -47,19 +48,24 @@ type AppConfig struct {
 	RestoreLastDesktopContext   bool
 	Namespace                   string
 	Namespaces                  []string
+	RBACNamespaces              []string
 	Port                        int
 	PortFallback                bool // Port is a preference, not a requirement (Desktop's remembered port)
 	ListenAddress               string
 	ShowRemoteAccessHint        bool
 	BasePath                    string
+	TrustedOrigins              []string
+	AllowedHosts                []string
 	NoBrowser                   bool
 	Browser                     string
 	DevMode                     bool
+	EnablePprof                 *bool
 	HistoryLimit                int
 	DebugEvents                 bool
 	FakeInCluster               bool
 	DisableHelmWrite            bool
 	DisableExec                 bool
+	DisableAutoPortForward      bool
 	DisableLocalTerminal        bool
 	PodShellDefault             string
 	DebugImage                  string
@@ -93,7 +99,10 @@ type AppConfig struct {
 	BeylaJobSelector            string
 	WorkloadMetricsScope        prom.WorkloadMetricsScope
 	Version                     string
+	MCPReadOnly                 bool
 	MCPEnabled                  bool
+	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
 	AIHistory                   bool   // persist AI investigations across restarts
 	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
 	AuthConfig                  auth.Config
@@ -104,18 +113,60 @@ type AppConfig struct {
 
 // SetGlobals applies debug/test flags to global state.
 func SetGlobals(cfg AppConfig) {
+	mcppkg.SetExecToolsEnabled(cfg.MCPEnabled && cfg.MCPExecTools && !cfg.DisableExec && !cfg.MCPReadOnly)
 	k8s.DebugEvents = cfg.DebugEvents
 	k8s.TimingLogs = cfg.DevMode
 	// Init-only write, before any goroutine reads it; later reads happen under
 	// clientMu and assume no concurrent mutation.
 	k8s.ForceInCluster = cfg.FakeInCluster
+	mcppkg.SetHTTPToolsEnabled(cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster())
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
+	portforward.SetAutoDisabled(cfg.DisableAutoPortForward)
+	if cfg.DisableAutoPortForward {
+		log.Printf("[portforward] Automatic port-forwarding is turned off: metrics, traffic, cost and Argo CD discovery will not open port-forwards")
+	}
 	k8s.ForceDisableLocalTerminal = cfg.DisableLocalTerminal
 	k8s.ListPageSize = cfg.ListPageSize
 	k8s.ForceNamespaceScope = cfg.NamespaceScope
 	server.DefaultPodShellCommand = cfg.PodShellDefault
 	versionpkg.SetCurrent(cfg.Version)
+}
+
+// NamespaceFanoutError reports a --namespaces list that, with the kubeconfig
+// context namespace, names more namespaces than the probe candidate cap. Each
+// entrypoint words the fix for its own settings: the CLI prints Error(),
+// Desktop points at config.json.
+type NamespaceFanoutError struct {
+	Listed int
+	// ContextNamespace is the kubeconfig context namespace when it is not in
+	// the list and so takes a cap slot of its own; empty otherwise.
+	ContextNamespace string
+	Cap              int
+}
+
+// Candidates is how many namespaces Radar would check: the cap value that fits.
+func (e *NamespaceFanoutError) Candidates() int {
+	if e.ContextNamespace != "" {
+		return e.Listed + 1
+	}
+	return e.Listed
+}
+
+func (e *NamespaceFanoutError) Error() string {
+	if e.ContextNamespace == "" {
+		return fmt.Sprintf("--namespaces lists %d namespaces but the RBAC probe fanout cap is %d; raise --max-scope-candidates (or RADAR_MAX_SCOPE_CANDIDATES) to cover all of them", e.Listed, e.Cap)
+	}
+	return fmt.Sprintf("--namespaces lists %d namespaces and the kubeconfig context namespace %q adds one more probe candidate, exceeding the fanout cap of %d; raise --max-scope-candidates or include the context namespace in the list", e.Listed, e.ContextNamespace, e.Cap)
+}
+
+// CheckNamespaceCount is the CLI's startup check of a --namespaces list
+// against the probe cap, before the kubeconfig is read.
+func CheckNamespaceCount(namespaces []string, maxCandidates int) error {
+	if len(namespaces) > maxCandidates {
+		return &NamespaceFanoutError{Listed: len(namespaces), Cap: maxCandidates}
+	}
+	return nil
 }
 
 // validateNamespaceFanout rejects a --namespaces list that cannot fully fit
@@ -125,11 +176,13 @@ func SetGlobals(cfg AppConfig) {
 // here beats silently dropping the last configured namespace from probing.
 func validateNamespaceFanout(namespaces []string, ctxNs string, maxCandidates int) error {
 	slots := len(namespaces)
+	distinctCtx := ""
 	if ctxNs != "" && !slices.Contains(namespaces, ctxNs) {
 		slots++
+		distinctCtx = ctxNs
 	}
 	if slots > maxCandidates {
-		return fmt.Errorf("--namespaces lists %d namespaces and the kubeconfig context namespace %q adds one more probe candidate, exceeding the fanout cap of %d; raise --max-scope-candidates or include the context namespace in the list", len(namespaces), ctxNs, maxCandidates)
+		return &NamespaceFanoutError{Listed: len(namespaces), ContextNamespace: distinctCtx, Cap: maxCandidates}
 	}
 	return nil
 }
@@ -151,6 +204,17 @@ func InitializeK8s(cfg AppConfig) error {
 		return fmt.Errorf("failed to initialize K8s client: %w", err)
 	}
 
+	if len(cfg.RBACNamespaces) > 0 {
+		k8s.SetRBACNamespaces(cfg.RBACNamespaces)
+		probed := slices.DeleteFunc(slices.Concat([]string{k8s.GetContextNamespace()}, cfg.Namespaces, cfg.RBACNamespaces), func(ns string) bool { return ns == "" })
+		slices.Sort(probed)
+		if probed = slices.Compact(probed); len(probed) > k8s.MaxScopeCandidates {
+			return fmt.Errorf("--rbac-namespaces with the context namespace and --namespaces gives %d namespaces to probe, over the fanout cap of %d; raise --max-scope-candidates", len(probed), k8s.MaxScopeCandidates)
+		}
+		if _, source := k8s.GetAccessibleNamespacesWithSource(context.Background()); source == k8s.NamespaceListCluster {
+			log.Printf("[k8s] --rbac-namespaces is set, but this ServiceAccount can list namespaces cluster-wide, so Radar is not limited to %v. Remove the cluster-wide grant to limit it.", cfg.RBACNamespaces)
+		}
+	}
 	if len(cfg.Namespaces) > 0 {
 		k8s.SetFallbackNamespaces(cfg.Namespaces)
 		if err := validateNamespaceFanout(cfg.Namespaces, k8s.GetContextNamespace(), k8s.MaxScopeCandidates); err != nil {
@@ -285,15 +349,6 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		timeline.ResetMetricsForContextSwitch()
 	}, func() error {
 		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
-			// PostgreSQL deliberately does not degrade to memory: an operator who
-			// pointed Radar at an external database must not silently get an
-			// in-memory timeline that vanishes on restart. Every other backend
-			// keeps the historical behaviour — warn and continue degraded rather
-			// than fail the whole subsystem bring-up, which would also take down
-			// cluster browsing.
-			if timelineStoreCfg.Type == timeline.StoreTypePostgres {
-				return err
-			}
 			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
 		}
 		return nil
@@ -301,6 +356,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
 	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+	prometheuspkg.RegisterRediscoverySignals()
 
 	if cfg.PrometheusURL != "" {
 		if err := validateStartupPrometheusURL(cfg.PrometheusURL); err != nil {
@@ -371,6 +427,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				prometheuspkg.Retire()
 				return err
 			}
+			if cfg.LocalConnections.HasLaunchOverride(config.IntegrationMetrics) && selection.View.State != "launch" {
+				log.Printf("[prometheus] --prometheus-url applies only to the context Radar was launched on; %q uses its own metrics settings", k8s.SanitizeForLog(k8s.GetContextName()))
+			}
 			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 			url, headers := prometheuspkg.CurrentConfig()
 			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
@@ -416,6 +475,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 				}
 			}
 			prometheuspkg.Prewarm()
+			argocd.Prewarm()
 		}
 	})
 	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
@@ -504,6 +564,9 @@ func CreateServer(cfg AppConfig) *server.Server {
 		DebugImage:                cfg.DebugImage,
 		ReachabilityImage:         cfg.ReachabilityImage,
 		MCP:                       &cfg.MCPEnabled,
+		MCPReadOnly:               &cfg.MCPReadOnly,
+		MCPExecTools:              &cfg.MCPExecTools,
+		MCPHTTPTools:              &cfg.MCPHTTPTools,
 		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
@@ -512,9 +575,12 @@ func CreateServer(cfg AppConfig) *server.Server {
 		PortFallback:          cfg.PortFallback,
 		ListenAddress:         cfg.ListenAddress,
 		BasePath:              cfg.BasePath,
+		TrustedOrigins:        cfg.TrustedOrigins,
+		AllowedHosts:          cfg.AllowedHosts,
 		StartupLog:            true,
 		RemoteAccessHint:      cfg.ShowRemoteAccessHint,
 		DevMode:               cfg.DevMode,
+		EnablePprof:           cfg.EnablePprof,
 		StaticFS:              static.FS,
 		StaticRoot:            "dist",
 		EffectiveConfig:       effectiveCfg,
@@ -532,6 +598,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HistoryLimit:         cfg.HistoryLimit,
 			DebugEvents:          cfg.DebugEvents,
 			MCPEnabled:           cfg.MCPEnabled,
+			MCPReadOnly:          cfg.MCPEnabled && cfg.MCPReadOnly,
 			OpenCostCurrency:     cfg.OpenCostCurrency,
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
@@ -557,18 +624,42 @@ func CreateServer(cfg AppConfig) *server.Server {
 		serverCfg.AIHistoryDB = dbPath
 	}
 
+	mcpExecTools := cfg.MCPEnabled && cfg.MCPExecTools && !cfg.DisableExec && !cfg.MCPReadOnly
+	effectiveCfg.MCPExecTools = &mcpExecTools
+	if cfg.MCPExecTools && !mcpExecTools {
+		log.Printf("[mcp] exec_pod opt-in suppressed (MCP enabled=%t, read-only=%t, disable-exec=%t)", cfg.MCPEnabled, cfg.MCPReadOnly, cfg.DisableExec)
+	}
+	mcppkg.SetExecToolsEnabled(mcpExecTools)
+	serverCfg.MCPExecTools = mcpExecTools
+	mcpHTTPTools := cfg.MCPEnabled && cfg.MCPHTTPTools && !cfg.MCPReadOnly && k8s.IsInCluster()
+	if cfg.MCPHTTPTools && !mcpHTTPTools {
+		log.Printf("[mcp] curl_service opt-in suppressed (MCP enabled=%t, read-only=%t, in-cluster=%t)", cfg.MCPEnabled, cfg.MCPReadOnly, k8s.IsInCluster())
+	}
+	effectiveCfg.MCPHTTPTools = &mcpHTTPTools
+	mcppkg.SetHTTPToolsEnabled(mcpHTTPTools)
+	serverCfg.MCPHTTPTools = mcpHTTPTools
 	if cfg.MCPEnabled {
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
 		// handler records exactly what Radar returned inside those scopes.
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
-		serverCfg.MCPHandler = mcppkg.NewHandler()
+		if !cfg.MCPReadOnly {
+			serverCfg.MCPHandler = mcppkg.NewHandlerWithoutApplicationEvidence()
+			if !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured {
+				serverCfg.MCPHandler = mcppkg.NewHandler()
+			}
+			serverCfg.MCPApplyHandler = mcppkg.NewApplyHandler()
+		}
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}
 
-	return server.New(serverCfg)
+	srv := server.New(serverCfg)
+	if cfg.MCPEnabled {
+		mcppkg.SetRelationshipTopologySource(srv.RelationshipTopology)
+	}
+	return srv
 }
 
 // InitializeCluster connects to the cluster and initializes all subsystems.

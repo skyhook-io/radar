@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -70,6 +71,7 @@ var staticBuiltinKinds = map[string]bool{
 	"Ingress": true, "NetworkPolicy": true, "IngressClass": true, "EndpointSlice": false,
 	"Lease": false, "PriorityClass": false, "RuntimeClass": false,
 	"MutatingWebhookConfiguration": false, "ValidatingWebhookConfiguration": false,
+	"ValidatingAdmissionPolicy": false, "ValidatingAdmissionPolicyBinding": false,
 	"VolumeAttachment": false, "PodDisruptionBudget": true, "StorageClass": true,
 	"Role": true, "ClusterRole": true, "RoleBinding": true, "ClusterRoleBinding": true,
 }
@@ -349,14 +351,14 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				if err != nil {
 					return nil, err
 				}
-				return ToRuntimeObjects(items), nil
+				return ToRuntimeObjects(ServableSecrets(items)), nil
 			},
 			func(ns string) ([]runtime.Object, error) {
 				items, err := cache.Secrets().Secrets(ns).List(labels.Everything())
 				if err != nil {
 					return nil, err
 				}
-				return ToRuntimeObjects(items), nil
+				return ToRuntimeObjects(ServableSecrets(items)), nil
 			},
 		)
 	case "events":
@@ -717,7 +719,11 @@ func FetchResource(cache *ResourceCache, kind, namespace, name string) (runtime.
 		if cache.Secrets() == nil {
 			return nil, fmt.Errorf("forbidden: secrets")
 		}
-		return cache.Secrets().Secrets(namespace).Get(name)
+		secret, err := cache.Secrets().Secrets(namespace).Get(name)
+		if err != nil {
+			return nil, err
+		}
+		return k8score.WithoutHelmReleaseValues(secret), nil
 	case "events":
 		if cache.Events() == nil {
 			return nil, fmt.Errorf("forbidden: events")
@@ -907,4 +913,14 @@ func SetTypeMeta(resource any) {
 		r.APIVersion = "rbac.authorization.k8s.io/v1"
 		r.Kind = "ClusterRoleBinding"
 	}
+}
+
+// ServableSecrets returns cached Secrets as they may be served: Helm release
+// Secrets without values (see k8score.WithoutHelmReleaseValues).
+func ServableSecrets(items []*corev1.Secret) []*corev1.Secret {
+	out := make([]*corev1.Secret, len(items))
+	for i, item := range items {
+		out[i] = k8score.WithoutHelmReleaseValues(item)
+	}
+	return out
 }

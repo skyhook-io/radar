@@ -1,22 +1,29 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/packages"
@@ -53,6 +60,107 @@ func (s *Server) startUsageData() {
 		InstalledAt: version.LocalInstalledAt,
 	}
 	usagedata.Start(ctx, opts)
+	connectionFailuresOnce.Do(func() {
+		t := &connectionFailureTracker{record: recordConnectionFailure}
+		k8s.OnConnectionChange(t.observe)
+		// The first connection attempt can fail before the server starts.
+		t.observe(k8s.GetConnectionStatus())
+	})
+}
+
+var connectionFailuresOnce sync.Once
+
+// connectionFailureTracker counts a failed connection once per episode: the
+// retries that follow, automatic or not, are the same failure, while a
+// switch to another context that fails too is a new one. The context name
+// is only compared here; it is never stored or sent.
+type connectionFailureTracker struct {
+	mu      sync.Mutex
+	settled k8s.ConnectionState
+	context string
+	record  func(errorType string)
+}
+
+func (t *connectionFailureTracker) observe(st k8s.ConnectionStatus) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch st.State {
+	case k8s.StateConnected:
+	case k8s.StateDisconnected:
+		if t.settled != k8s.StateDisconnected || t.context != st.Context {
+			t.record(st.ErrorType)
+		}
+	default:
+		return
+	}
+	t.settled, t.context = st.State, st.Context
+}
+
+// countRefusedSwitch counts a context switch refused because its target didn't
+// answer. The refusal leaves the connection status alone, so the tracker above
+// never sees it.
+func countRefusedSwitch(err error) {
+	var probeErr *k8s.ContextProbeError
+	if errors.As(err, &probeErr) {
+		recordConnectionFailure(probeErr.Classification())
+	}
+}
+
+const connectionRetryRoute = "/api/connection/retry"
+
+// requestOriginHeader marks a request the UI made on its own; see
+// usagedata.APIRequest.Automatic.
+const requestOriginHeader = "X-Radar-Request-Origin"
+
+// usageResponseWriter sits under chi's status-recording wrapper so a handler
+// can mark its response through markClusterNotConnected. It forwards the
+// optional interfaces chi probes for, so streaming, exec and HTTP/2 push keep
+// working.
+type usageResponseWriter struct {
+	http.ResponseWriter
+	notConnected bool
+}
+
+func (u *usageResponseWriter) Unwrap() http.ResponseWriter { return u.ResponseWriter }
+
+func (u *usageResponseWriter) markClusterNotConnected() { u.notConnected = true }
+
+func (u *usageResponseWriter) Flush() {
+	if f, ok := u.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (u *usageResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := u.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
+}
+
+func (u *usageResponseWriter) Push(target string, opts *http.PushOptions) error {
+	if p, ok := u.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+// markClusterNotConnected tells the usage middleware that w answered "no
+// cluster connected yet", which the report doesn't count as a failed request.
+// It finds the middleware's writer through the wrappers in between; without
+// one (usage data off) it does nothing.
+func markClusterNotConnected(w http.ResponseWriter) {
+	for w != nil {
+		if m, ok := w.(interface{ markClusterNotConnected() }); ok {
+			m.markClusterNotConnected()
+			return
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = u.Unwrap()
+	}
 }
 
 // usageShared reports whether several people use this Radar: in-cluster,
@@ -118,34 +226,105 @@ func (s *Server) usageSetup() usagedata.Setup {
 	if s.effectiveConfig != nil && s.effectiveConfig.TimelineStorage != "" {
 		timeline = s.effectiveConfig.TimelineStorage
 	}
-	prom := "none"
-	if url, _ := prometheuspkg.CurrentConfig(); url != "" {
-		prom = "connected"
-	}
 	return usagedata.Setup{
 		AuthMode:        authMode,
 		TimelineStorage: timeline,
-		MCPEnabled:      s.mcpHandler != nil,
-		Prometheus:      prom,
+		MCPEnabled:      s.mcpEnabled(),
+		Prometheus:      prometheuspkg.ConnectionSource(),
 		CostSource:      string(opencost.ConfigSnapshot().Source),
+		AIConfigured:    s.aiConfigured(),
+		TrafficSource:   usageTrafficSource(),
 	}
 }
+
+// aiConfigured reports whether someone set up Radar's AI investigations: an
+// agent Radar can drive is installed and its disclosure was accepted, in the
+// consent card or the CLI. Investigations can't run without that acceptance.
+// An installed Claude Code or Codex alone doesn't count; people install them
+// for other work.
+func (s *Server) aiConfigured() bool {
+	diagnoser, runs := s.aiEngine()
+	if diagnoser == nil || runs == nil {
+		return false
+	}
+	return anyAgentSetUp(diagnoser.AgentInfos(context.Background(), false), config.AIConsentGiven)
+}
+
+// anyAgentSetUp reports whether any drivable agent has an accepted disclosure.
+func anyAgentSetUp(agents []ai.AgentInfo, consentGiven func(surface string) bool) bool {
+	for _, agent := range agents {
+		if !agent.Present || !agent.Supported {
+			continue
+		}
+		for _, surface := range agent.ConsentSurfaces {
+			if consentGiven(surface) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lastUsageTrafficSource is the traffic source last read, reported while
+// detection holds the traffic manager.
+var lastUsageTrafficSource atomic.Value
+
+func usageTrafficSource() string {
+	m := traffic.GetManager()
+	if m == nil {
+		return "none"
+	}
+	name, ok := m.ActiveSourceNameIfIdle()
+	if ok {
+		lastUsageTrafficSource.Store(name)
+	} else {
+		name, _ = lastUsageTrafficSource.Load().(string)
+	}
+	return usagedata.TrafficSource(name)
+}
+
+// Replaced in tests, which can't turn the process-wide collector on.
+var (
+	usageRecording          = usagedata.Recording
+	recordUsageRequest      = usagedata.RecordRequest
+	recordConnectionFailure = usagedata.RecordConnectionFailure
+	clusterConnected        = k8s.IsConnected
+)
 
 // usageMiddleware counts API requests by their route pattern once the
 // router has matched them. It does nothing unless usage data is on.
 func (s *Server) usageMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !usagedata.Recording() {
+		if !usageRecording() {
 			next.ServeHTTP(w, r)
 			return
 		}
-		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		uw := &usageResponseWriter{ResponseWriter: w}
+		ww := middleware.NewWrapResponseWriter(uw, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
-		if rc := chi.RouteContext(r.Context()); rc != nil {
-			if pattern := rc.RoutePattern(); pattern != "" {
-				usagedata.RecordAPI(r.Method, strings.TrimPrefix(pattern, s.basePath), ww.Status())
-			}
+		rc := chi.RouteContext(r.Context())
+		if rc == nil {
+			return
 		}
+		pattern := rc.RoutePattern()
+		if pattern == "" {
+			return
+		}
+		route := strings.TrimPrefix(pattern, s.basePath)
+		recordUsageRequest(usagedata.APIRequest{
+			Method:    r.Method,
+			Pattern:   route,
+			Status:    ww.Status(),
+			Automatic: r.Header.Get(requestOriginHeader) == "auto",
+			// Handlers mark their own "not connected yet" answers, but many
+			// routes answer 503 on a missing client without marking it. While
+			// the cluster isn't connected, every 503 is that, except a retry's:
+			// it tried to connect and failed.
+			NotConnected: uw.notConnected ||
+				(ww.Status() == http.StatusServiceUnavailable && !clusterConnected() && route != connectionRetryRoute),
+			Kind:  rc.URLParam("kind"),
+			Group: r.URL.Query().Get("group"),
+		})
 	})
 }
 
@@ -175,12 +354,6 @@ func (s *Server) handleGetUsageData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutUsageData(w http.ResponseWriter, r *http.Request) {
-	// Consent must come from Radar's own page: a cross-site form post that
-	// could switch usage data on would defeat the opt-in.
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
-		return
-	}
 	var body struct {
 		Enabled *bool `json:"enabled"`
 	}
@@ -202,10 +375,6 @@ func (s *Server) handlePutUsageData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsagePromptShown(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
-		return
-	}
 	if err := usagedata.MarkPromptShown(); err != nil {
 		log.Printf("[usage] Failed to record prompt shown: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -217,12 +386,7 @@ func (s *Server) handleUsagePromptShown(w http.ResponseWriter, r *http.Request) 
 // handleUsageEvent takes UI-side usage: views, sessions, active time and
 // named UI moments. Unknown names are rejected rather than stored.
 func (s *Server) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
-	// Same-origin and JSON only: a cross-site form post (text/plain skips
-	// the CORS preflight) could otherwise inflate a shared install's counts.
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
-		return
-	}
+	// JSON only. Cross-site writes are already refused by requireSameOrigin.
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		s.writeError(w, http.StatusUnsupportedMediaType, "expected application/json")
 		return

@@ -1,8 +1,8 @@
 import { Server, Shield, Settings } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
-import { formatAge } from '../resource-utils'
 import { getKCPStatus, getKCPVersion, getKCPInitialized, getMachineClusterName } from '../resource-utils-capi'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface Props {
   data: any
@@ -50,7 +50,7 @@ export function CAPIKubeadmControlPlaneRenderer({ data, onNavigate }: Props) {
           <Property label="Initialized" value={initialized ? 'Yes' : 'No'} />
           {updateStrategy && <Property label="Update Strategy" value={updateStrategy} />}
           {readyCond?.lastTransitionTime && (
-            <Property label="Since" value={formatAge(readyCond.lastTransitionTime)} />
+            <Property label="Since" value={<TimeValue timestamp={readyCond.lastTransitionTime} />} />
           )}
         </PropertyList>
       </Section>

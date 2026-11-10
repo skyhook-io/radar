@@ -1,13 +1,17 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -189,5 +193,104 @@ func TestHandleTimelineEvents_Contract(t *testing.T) {
 		if rr = get(u); rr.Code != http.StatusBadRequest {
 			t.Fatalf("%s status = %d, want 400", u, rr.Code)
 		}
+	}
+}
+
+// With PostgreSQL configured and unreachable, the timeline page has to be able
+// to say why it is empty. A bare "not available" sends the operator hunting.
+func TestHandleTimelineEvents_ExplainsUnreachableDatabase(t *testing.T) {
+	prev := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+
+	timeline.ResetStore()
+	t.Cleanup(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
+			t.Fatalf("re-init global store: %v", err)
+		}
+	})
+	// Port 1 refuses at once, so the first attempt fails without a timeout.
+	const password = "s3cret-pw"
+	if err := timeline.InitStore(timeline.StoreConfig{
+		Type: timeline.StoreTypePostgres,
+		DSN:  "postgres://radar:" + password + "@127.0.0.1:1/radar?connect_timeout=2",
+	}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+
+	rr := httptest.NewRecorder()
+	(&Server{}).handleTimelineEvents(rr, httptest.NewRequest(http.MethodGet, "/api/timeline/events", nil))
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rr.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rr.Body.String())
+	}
+	if body["error_code"] != "timeline_database_unreachable" {
+		t.Fatalf("error_code = %q, want timeline_database_unreachable", body["error_code"])
+	}
+	if !strings.Contains(body["detail"], "127.0.0.1") {
+		t.Fatalf("detail %q does not carry the driver's error", body["detail"])
+	}
+	if strings.Contains(rr.Body.String(), password) {
+		t.Fatalf("response leaks the DSN password: %s", rr.Body.String())
+	}
+}
+
+// A database lost after a good start fails the query, not the store lookup. It
+// must get the same answer as one that never answered, or the page shows a
+// generic failure for the same outage.
+func TestWriteTimelineQueryError_ClassifiesTheOutage(t *testing.T) {
+	s := &Server{}
+
+	rr := httptest.NewRecorder()
+	s.writeTimelineQueryError(rr, fmt.Errorf("query events: %w", &pgconn.PgError{Code: "57P01", Message: "terminating connection due to administrator command"}))
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), `"error_code":"timeline_database_unreachable"`) {
+		t.Fatalf("lost connection answered %d %s, want 503 timeline_database_unreachable", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
+	s.writeTimelineQueryError(rr, fmt.Errorf("query events: %w", &pgconn.PgError{Code: "42601", Message: "syntax error"}))
+	if rr.Code != http.StatusInternalServerError || strings.Contains(rr.Body.String(), "error_code") {
+		t.Fatalf("rejected query answered %d %s, want a plain 500", rr.Code, rr.Body.String())
+	}
+}
+
+// A query that times out may be a database that stopped answering or just a
+// slow query. Only the first may be reported as the database being down.
+func TestWriteTimelineQueryError_TimeoutChecksTheDatabase(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(func() {
+		timeline.ResetStore()
+		if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {
+			t.Fatalf("re-init global store: %v", err)
+		}
+	})
+	timedOut := fmt.Errorf("query events: %w", context.DeadlineExceeded)
+	s := &Server{}
+
+	if err := timeline.InitStore(timeline.StoreConfig{
+		Type: timeline.StoreTypePostgres,
+		DSN:  "postgres://radar:pw@127.0.0.1:1/radar?connect_timeout=2",
+	}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	rr := httptest.NewRecorder()
+	s.writeTimelineQueryError(rr, timedOut)
+	if rr.Code != http.StatusServiceUnavailable || !strings.Contains(rr.Body.String(), "timeline_database_unreachable") {
+		t.Fatalf("timeout with the database down answered %d %s, want the database response", rr.Code, rr.Body.String())
+	}
+
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore memory: %v", err)
+	}
+	rr = httptest.NewRecorder()
+	s.writeTimelineQueryError(rr, timedOut)
+	if rr.Code != http.StatusInternalServerError || strings.Contains(rr.Body.String(), "error_code") {
+		t.Fatalf("slow query with a healthy store answered %d %s, want a plain 500", rr.Code, rr.Body.String())
 	}
 }

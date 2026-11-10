@@ -52,6 +52,7 @@ import {
   // GitOps
   GitBranch,
   Layers,
+  ListVideo,
   Anchor,
   FolderGit2,
 
@@ -91,6 +92,7 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   replicaset: Copy,
   job: Play,
   cronjob: Timer,
+  jobset: ListVideo,
   rollout: Rocket,
 
   // Networking
@@ -111,6 +113,7 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   httproute: Globe,
   grpcroute: Globe,
   tcproute: Globe,
+  udproute: Globe,
   tlsroute: Globe,
 
   // Config
@@ -219,6 +222,7 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   // pseudo-kinds (cnpgcluster/…) belong here only once pkg/topology's
   // KindForGVK emits them — it has no CNPG case today.
   pooler: Waypoints,
+  databaserole: UserCog,
 
   // Cluster API
   capicluster: Server,

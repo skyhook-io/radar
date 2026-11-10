@@ -320,6 +320,10 @@ type l4LabelPresence struct {
 	// long-lived connections keep a stable port and measure fine — so it is
 	// measured rather than assumed from the configuration.
 	replyLossFraction float64
+	// failed names the enrichment queries that errored. Their figures are absent
+	// from the edges, which without a warning reads as measured zero: no errors,
+	// no requests, nothing received.
+	failed []string
 }
 
 func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
@@ -346,6 +350,13 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		// Describes how Beyla is configured, not a hiccup. Marked so the client
 		// shows it beside the flows instead of retrying for a better answer that
 		// is never coming.
+		response.WarningKind = WarningPartial
+	}
+	if len(presence.failed) > 0 && len(flows) > 0 {
+		failed := fmt.Sprintf("Beyla metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(presence.failed, ", "))
+		response.Warning = strings.TrimSpace(failed + " " + response.Warning)
+		// About figures on the edges shown, like the attribute warning it may
+		// join: shown beside them, and gone when they are filtered away.
 		response.WarningKind = WarningPartial
 	}
 	return response, nil
@@ -434,6 +445,7 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions) ([
 	if err != nil {
 		log.Printf("[beyla] L7 query failed (continuing with L4 only): %v", err)
 		l7Flows = nil
+		presence.failed = append(presence.failed, "HTTP request rates")
 	}
 
 	// Fill in what came back before anything else reads BytesRecv: the L7 split
@@ -444,7 +456,11 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions) ([
 	// pair's edges. Where a pair has several edges the total is divided between
 	// them by their share of bytes sent — copying it onto each would count the same
 	// return traffic once per port.
-	received := s.queryReceivedBytes(ctx, opts)
+	received, err := s.queryReceivedBytes(ctx, opts)
+	if err != nil {
+		log.Printf("[beyla] Received-bytes query failed (continuing without them): %v", err)
+		presence.failed = append(presence.failed, "received bytes")
+	}
 	if len(received) > 0 {
 		sentPerPair := make(map[flowKey]int64)
 		edgesPerPair := make(map[flowKey][]*Flow)
@@ -507,7 +523,8 @@ func (s *BeylaSource) getFlowsInternal(ctx context.Context, opts FlowOptions) ([
 	// could not name, in which case no bucket carries that port at all.
 	portedDsts := presence.portedDsts
 
-	latency, errorRates := s.queryL7Detail(ctx, opts)
+	latency, errorRates, detailFailed := s.queryL7Detail(ctx, opts)
+	presence.failed = append(presence.failed, detailFailed...)
 	perPort, perDst := l7ByPortAndDestination(l7Flows)
 	for key, edges := range byDstPort {
 		l7, ok := perPort[key]
@@ -851,7 +868,7 @@ func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow) float
 	return val
 }
 
-func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions) map[flowKey]int64 {
+func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions) (map[flowKey]int64, error) {
 	// k8s_*_owner_type belongs in the group-by even though the key ignores it.
 	// Beyla reports a Service-routed conversation twice, once attributed to the
 	// workload and once to the Service, with identical values; without the label
@@ -861,9 +878,12 @@ func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions) 
 	w := beylaWindow(opts.Since)
 	query := beylaRateQuery(groupBy, s.flowMetricName(), opts.Namespace, `, direction="response"`, w)
 	result, err := s.query(ctx, query)
-	if err != nil || result == nil {
+	if err != nil {
 		// Received bytes are an enrichment; without them edges still draw.
-		return nil
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
 	}
 
 	received := make(map[flowKey]int64, len(result.Series))
@@ -896,7 +916,7 @@ func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions) 
 			received[key] = bytes
 		}
 	}
-	return received
+	return received, nil
 }
 
 // queryUnorientable reads the conversations Beyla reports as direction="unknown"
@@ -1061,12 +1081,18 @@ func serviceEnds(a attribution) int {
 }
 
 // queryL7Detail reads mean latency and 5xx rate per destination and port. Both are
-// enrichments: a failure leaves the fields unset rather than blocking the edges.
-func (s *BeylaSource) queryL7Detail(ctx context.Context, opts FlowOptions) (latency, errors l7Detail) {
-	read := func(query string, combine func(a, b float64) float64) l7Detail {
+// enrichments: a failure leaves the fields unset rather than blocking the edges,
+// and is named in failed so the gap is reported rather than read as zero.
+func (s *BeylaSource) queryL7Detail(ctx context.Context, opts FlowOptions) (latency, errors l7Detail, failed []string) {
+	read := func(query, what string, combine func(a, b float64) float64) l7Detail {
 		out := l7Detail{perPort: map[dstPortKey]float64{}, perDst: map[dstKey]float64{}}
 		result, err := s.query(ctx, query)
-		if err != nil || result == nil {
+		if err != nil {
+			log.Printf("[beyla] HTTP %s query failed (continuing without it): %v", what, err)
+			failed = append(failed, "HTTP "+what)
+			return out
+		}
+		if result == nil {
 			return out
 		}
 		for _, series := range result.Series {
@@ -1107,8 +1133,9 @@ func (s *BeylaSource) queryL7Detail(ctx context.Context, opts FlowOptions) (late
 	// averages would need per-series request counts to weight it, and overstating
 	// the worst port is safer than understating it.
 	w := beylaWindow(opts.Since)
-	return read(beylaL7LatencyQuery(opts.Namespace, w), math.Max),
-		read(beylaL7ErrorQuery(opts.Namespace, w), func(a, b float64) float64 { return a + b })
+	latency = read(beylaL7LatencyQuery(opts.Namespace, w), "latency", math.Max)
+	errors = read(beylaL7ErrorQuery(opts.Namespace, w), "5xx error rates", func(a, b float64) float64 { return a + b })
+	return latency, errors, failed
 }
 
 // l7Detail holds a per-port measurement and its destination-wide equivalent, for

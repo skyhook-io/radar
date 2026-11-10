@@ -57,8 +57,10 @@ type ScalingFact struct {
 	// Code is machine-readable, and is exactly one of: "limits" (Karpenter
 	// NodePool spec.limits, configured or not), "pool_not_observed" (a
 	// Karpenter-labeled group whose NodePool could not be read), "bounds" and
-	// "target" (published by the autoscaler), "bounds_not_published" (an
-	// autoscaler is running but says nothing about this group),
+	// "target" (published by the autoscaler), "at_min_size" (all observed
+	// children have targets at their published minima), "scale_down_candidates"
+	// (published candidate counts, lower bound when some are unknown),
+	// "bounds_not_published" (some bounds are missing),
 	// "no_manager_detected" (nothing manages this group's size), and
 	// "manager_detection_unavailable" (the detection source itself was denied
 	// or unreadable — never conflate with "no manager").
@@ -72,19 +74,29 @@ type ScalingFact struct {
 // (no joinable nodes, including scale-to-zero groups) stay orphans until
 // nodes appear.
 type AutoscalerChildObservation struct {
-	ID         string             `json:"id"`
-	Name       string             `json:"name"`
-	MinSize    *int               `json:"minSize,omitempty"`
-	MaxSize    *int               `json:"maxSize,omitempty"`
-	Target     *int               `json:"target,omitempty"`
-	Health     string             `json:"health,omitempty"`
-	ReadyNodes *int               `json:"readyNodes,omitempty"`
-	TotalNodes *int               `json:"totalNodes,omitempty"`
-	Backoff    *AutoscalerBackoff `json:"backoff,omitempty"`
+	ID         string               `json:"id"`
+	Name       string               `json:"name"`
+	MinSize    *int                 `json:"minSize,omitempty"`
+	MaxSize    *int                 `json:"maxSize,omitempty"`
+	Target     *int                 `json:"target,omitempty"`
+	Health     string               `json:"health,omitempty"`
+	ReadyNodes *int                 `json:"readyNodes,omitempty"`
+	TotalNodes *int                 `json:"totalNodes,omitempty"`
+	Backoff    *AutoscalerBackoff   `json:"backoff,omitempty"`
+	ScaleDown  *AutoscalerScaleDown `json:"scaleDown,omitempty"`
 	// AsOf is the autoscaler's own probe time for this child; nil when the
 	// payload published null (inactive groups do). Nil is "not probed", not
 	// zero and not now.
 	AsOf *time.Time `json:"asOf,omitempty"`
+}
+
+// AutoscalerScaleDown carries published observations, not removal eligibility
+// or a deadline. Missing candidates are unknown; a published zero is exact.
+type AutoscalerScaleDown struct {
+	Status             string     `json:"status,omitempty"`
+	Candidates         *int       `json:"candidates,omitempty"`
+	LastTransitionTime *time.Time `json:"lastTransitionTime,omitempty"`
+	AsOf               *time.Time `json:"asOf,omitempty"`
 }
 
 type AutoscalerBackoff struct {

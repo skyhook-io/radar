@@ -5,6 +5,8 @@ import (
 	"maps"
 	"net/http"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 type HeaderOperation struct {
@@ -64,8 +66,8 @@ func ApplyHeaderOperations(original Connection, targetURL string, operations []H
 		}
 	}
 	if len(preserved) > 0 {
-		before, ok := NormalizeOrigin(original.URL)
-		after, valid := NormalizeOrigin(targetURL)
+		before, ok := urlutil.NormalizeOrigin(original.URL)
+		after, valid := urlutil.NormalizeOrigin(targetURL)
 		if !ok || !valid || before != after {
 			message := "changing servers requires replacing or clearing every saved header"
 			if len(original.HeadersFromEnv) > 0 {

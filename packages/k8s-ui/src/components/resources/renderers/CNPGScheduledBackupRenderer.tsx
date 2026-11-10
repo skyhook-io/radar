@@ -1,17 +1,17 @@
 import { Clock, Database } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { CronValue } from '../../ui/ScheduleValue'
+import { TimeValue } from '../../ui/ScheduleValue'
 import {
   getCNPGScheduledBackupCluster,
   getCNPGScheduleCron,
   getCNPGScheduledBackupMethod,
-  getCNPGScheduledBackupLastSchedule,
   getCNPGScheduledBackupNextSchedule,
   getCNPGScheduledBackupIsSuspended,
   getCNPGScheduledBackupIsImmediate,
   getCNPGBackupPlugin,
   getCNPGScheduledBackupOwnerRef,
-  CNPG_BARMAN_OBJECTSTORE_GROUP,
+  CNPG_BARMAN_PLUGIN_NAME,
 } from '../resource-utils-cnpg'
 
 interface CNPGScheduledBackupRendererProps {
@@ -39,7 +39,7 @@ export function CNPGScheduledBackupRenderer({ data, onNavigate }: CNPGScheduledB
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Cron Expression" value={<CronValue cron={getCNPGScheduleCron(data)} dialect="seconds" />} />
-          <Property label="Last Schedule" value={getCNPGScheduledBackupLastSchedule(data)} />
+          <Property label="Last Schedule" value={<TimeValue timestamp={data.status?.lastScheduleTime} />} />
           <Property label="Next Schedule" value={getCNPGScheduledBackupNextSchedule(data)} />
           <Property label="Suspended" value={isSuspended ? 'Yes' : 'No'} />
           <Property label="Immediate" value={getCNPGScheduledBackupIsImmediate(data) ? 'Yes' : 'No'} />
@@ -64,23 +64,15 @@ export function CNPGScheduledBackupRenderer({ data, onNavigate }: CNPGScheduledB
             return clusterName
           })()} />
           <Property label="Method" value={getCNPGScheduledBackupMethod(data)} />
-          {/* Under the plugin method the destination lives on an ObjectStore in
-              another API group, so naming it is the only route from here to
-              where these backups will actually land. */}
           {schedulePlugin && <Property label="Plugin" value={schedulePlugin.name} />}
-          {schedulePlugin?.parameters?.barmanObjectName && (
+          {schedulePlugin && (
             <Property
-              label="Object Store"
-              value={
-                <ResourceLink
-                  name={schedulePlugin.parameters.barmanObjectName}
-                  kind="objectstores"
-                  group={CNPG_BARMAN_OBJECTSTORE_GROUP}
-                  namespace={data.metadata?.namespace || ''}
-                  onNavigate={onNavigate}
-                />
-              }
+              label="Destination"
+              value={schedulePlugin.name === CNPG_BARMAN_PLUGIN_NAME ? "From the Cluster's barman-cloud plugin" : 'Unknown: Radar does not model this plugin’s destination'}
             />
+          )}
+          {schedulePlugin?.name === CNPG_BARMAN_PLUGIN_NAME && schedulePlugin.parameters && Object.keys(schedulePlugin.parameters).length > 0 && (
+            <Property label="Plugin parameters" value="Ignored by the barman-cloud plugin; the destination comes from the Cluster" />
           )}
           <Property label="Owner Reference" value={getCNPGScheduledBackupOwnerRef(data)} />
         </PropertyList>

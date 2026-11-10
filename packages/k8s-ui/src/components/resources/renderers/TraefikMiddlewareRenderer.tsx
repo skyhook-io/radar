@@ -15,7 +15,7 @@ interface TraefikMiddlewareRendererProps {
 const SECRET_VALUE_KEYS = new Set([
   'password', 'passwd', 'passphrase', 'token', 'clientsecret', 'privatekey',
   'apikey', 'apitoken', 'accesstoken', 'sessiontoken', 'secretaccesskey',
-  'secretkey', 'authtoken', 'bearertoken', 'users',
+  'secretkey', 'authtoken', 'bearertoken', 'users', 'akeylessaccesskey',
 ])
 
 function isSecretKey(key: string): boolean {

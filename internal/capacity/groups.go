@@ -440,10 +440,25 @@ func scalingFacts(b *groupBuilder, detection AutoscalerDetection) []capacityapi.
 	if len(b.children) > 0 {
 		allBounds := true
 		allTarget := true
+		allMin := true
+		allCandidates := true
+		sumCandidates := 0
+		belowMin := false
 		var sumMin, sumMax, sumTarget int
 		for _, child := range b.children {
+			if child.ScaleDown == nil || child.ScaleDown.Candidates == nil {
+				allCandidates = false
+			} else {
+				sumCandidates += *child.ScaleDown.Candidates
+			}
 			if child.MinSize == nil || child.MaxSize == nil {
 				allBounds = false
+			}
+			if child.MinSize == nil {
+				allMin = false
+			}
+			if child.MinSize != nil && child.Target != nil && *child.Target < *child.MinSize {
+				belowMin = true
 			}
 			if child.Target == nil {
 				allTarget = false
@@ -458,12 +473,29 @@ func scalingFacts(b *groupBuilder, detection AutoscalerDetection) []capacityapi.
 				sumTarget += *child.Target
 			}
 		}
-		if !allBounds {
-			return []capacityapi.ScalingFact{{Code: "bounds_not_published", Summary: "bounds not published in-cluster"}}
+		facts := []capacityapi.ScalingFact{}
+		if allBounds {
+			facts = append(facts, capacityapi.ScalingFact{Code: "bounds", Summary: fmt.Sprintf("%d–%d nodes", sumMin, sumMax)})
+		} else if allMin {
+			facts = append(facts, capacityapi.ScalingFact{Code: "bounds_not_published", Summary: "maximum not published"})
+		} else {
+			facts = append(facts, capacityapi.ScalingFact{Code: "bounds_not_published", Summary: "bounds not published in-cluster"})
 		}
-		facts := []capacityapi.ScalingFact{{Code: "bounds", Summary: fmt.Sprintf("%d–%d nodes", sumMin, sumMax)}}
-		if allTarget {
+		if allMin && allTarget {
 			facts = append(facts, capacityapi.ScalingFact{Code: "target", Summary: fmt.Sprintf("target %d", sumTarget)})
+		}
+		if allMin && allTarget && !belowMin && sumTarget == sumMin {
+			facts = append(facts, capacityapi.ScalingFact{Code: "at_min_size", Summary: "at minimum size — can't scale down"})
+		}
+		if sumCandidates > 0 {
+			summary := fmt.Sprintf("%d scale-down candidates", sumCandidates)
+			if sumCandidates == 1 {
+				summary = "1 scale-down candidate"
+			}
+			if !allCandidates {
+				summary = "at least " + summary
+			}
+			facts = append(facts, capacityapi.ScalingFact{Code: "scale_down_candidates", Summary: summary})
 		}
 		return facts
 	}
@@ -498,6 +530,15 @@ func mapChild(group autoscalerstatus.NodeGroup) capacityapi.AutoscalerChildObser
 		ReadyNodes: intPtrCopy(group.Health.Ready),
 		TotalNodes: intPtrCopy(group.Health.Registered),
 		AsOf:       timePtrCopy(group.Health.LastProbeTime),
+	}
+	scaleDown := group.ScaleDown
+	if scaleDown.Status != "" || scaleDown.Candidates != nil || scaleDown.LastTransition != nil || scaleDown.LastProbeTime != nil {
+		child.ScaleDown = &capacityapi.AutoscalerScaleDown{
+			Status:             scaleDown.Status,
+			Candidates:         intPtrCopy(scaleDown.Candidates),
+			LastTransitionTime: timePtrCopy(scaleDown.LastTransition),
+			AsOf:               timePtrCopy(scaleDown.LastProbeTime),
+		}
 	}
 	if group.ScaleUp.Backoff != nil {
 		child.Backoff = &capacityapi.AutoscalerBackoff{

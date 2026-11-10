@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"maps"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -214,6 +215,7 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	}
 
 	allowedEdges := edgeTypesForProfile(opts.Profile, rootNode.Kind)
+	rootOnly := rootOnlyEdgeTypes(opts.Profile, rootNode.Kind)
 
 	// neighbors yields every edge touching id that passes the profile filter,
 	// preferring the precomputed index when supplied. The undirected walk
@@ -224,6 +226,9 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	// instead of O(degree), but the index-free path is reserved for tests
 	// and library callers without a Memoizer — hot REST/MCP traffic always
 	// supplies idx.
+	follows := func(e Edge, from string) bool {
+		return allowedEdges[e.Type] && (!rootOnly[e.Type] || from == rootID)
+	}
 	neighbors := func(id string) []Edge {
 		if idx != nil {
 			incoming, outgoing := idx.EdgesFor(id)
@@ -232,12 +237,12 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 			// index's internal storage.
 			out := make([]Edge, 0, len(incoming)+len(outgoing))
 			for _, e := range outgoing {
-				if allowedEdges[e.Type] {
+				if follows(e, id) {
 					out = append(out, e)
 				}
 			}
 			for _, e := range incoming {
-				if allowedEdges[e.Type] {
+				if follows(e, id) {
 					out = append(out, e)
 				}
 			}
@@ -245,7 +250,7 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 		}
 		var out []Edge
 		for _, e := range t.Edges {
-			if !allowedEdges[e.Type] {
+			if !follows(e, id) {
 				continue
 			}
 			if e.Source == id || e.Target == id {
@@ -318,10 +323,19 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	sub.Nodes = make([]Node, 0, len(order))
 	for _, id := range order {
 		if n, ok := nodeByID[id]; ok {
-			sub.Nodes = append(sub.Nodes, *n)
+			node := *n
+			_, hasPolicyStatus := node.Data["policyStatus"]
+			if opts.Allow != nil && (node.Data["policyCoverageWorkloads"] != nil || hasPolicyStatus) {
+				// These annotations were computed against the full graph. BFS
+				// authorization does not validate policy evidence outside its
+				// bounded neighborhood, so do not serialize them here.
+				node.Data = maps.Clone(node.Data)
+				delete(node.Data, "policyCoverageWorkloads")
+				delete(node.Data, "policyStatus")
+			}
+			sub.Nodes = append(sub.Nodes, node)
 		}
 	}
-
 	// Edges: include only edges whose type is allowed AND both endpoints
 	// are in the included set. Walking t.Edges once here keeps the output
 	// edge order stable regardless of whether we used the index or not —
@@ -383,6 +397,21 @@ func allEdgeTypes() map[EdgeType]bool {
 	}
 }
 
+// rootOnlyEdgeTypes are the profile's edge types followed only from the root.
+// A GitOps object's sources are context: walking on through a shared source
+// would fill the answer with the other objects reading from it, and from a
+// managed workload would pull in its ConfigMaps and Secrets.
+func rootOnlyEdgeTypes(profile Profile, rootKind NodeKind) map[EdgeType]bool {
+	if profile == ProfileAll {
+		return nil
+	}
+	switch rootKind {
+	case KindApplication, KindKustomization, KindHelmRelease, KindGitRepository:
+		return map[EdgeType]bool{EdgeConfigures: true}
+	}
+	return nil
+}
+
 // edgeTypesForAuto picks profile edge-types based on the root's kind. The
 // goal is "the agent asked about a workload — show the management chain
 // plus the network and policy attachments, not the whole graph."
@@ -390,7 +419,7 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 	switch rootKind {
 	// Workloads / pods: management chain + network exposure + protection.
 	case KindPod, KindPodGroup, KindDeployment, KindStatefulSet, KindDaemonSet,
-		KindReplicaSet, KindRollout, KindJob, KindCronJob, KindWorkflow, KindCronWorkflow,
+		KindReplicaSet, KindRollout, KindJob, KindCronJob, KindJobSet, KindWorkflow, KindCronWorkflow,
 		KindKnativeService, KindKnativeRevision, KindKnativeConfiguration:
 		return map[EdgeType]bool{
 			EdgeManages:    true,
@@ -401,12 +430,13 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 		}
 	case KindWorkflowTemplate, KindClusterWorkflowTemplate:
 		return map[EdgeType]bool{EdgeConfigures: true, EdgeManages: true}
-	// GitOps controllers: just the management chain (what they own).
+	// GitOps controllers: what they manage, and the sources they read from
+	// (see rootOnlyEdgeTypes).
 	case KindApplication, KindKustomization, KindHelmRelease, KindGitRepository:
-		return managementEdgeTypes()
+		return map[EdgeType]bool{EdgeManages: true, EdgeConfigures: true}
 	// Network-shaped resources: routing topology.
 	case KindService, KindIngress, KindGateway, KindGatewayClass,
-		KindHTTPRoute, KindGRPCRoute, KindTCPRoute, KindTLSRoute,
+		KindHTTPRoute, KindGRPCRoute, KindTCPRoute, KindTLSRoute, KindUDPRoute,
 		KindVirtualService, KindIstioGateway, KindHTTPProxy,
 		KindIngressRoute, KindIngressRouteTCP, KindIngressRouteUDP:
 		return networkingEdgeTypes()
@@ -599,10 +629,10 @@ func nodeMatchesAPIGroup(n *Node, group string) bool {
 	return false
 }
 
-// nodeReference is what a topology node records about the object it draws.
+// NodeReference is what a topology node records about the object it draws.
 // Nodes built from typed informers carry no apiVersion, so their group is
 // missing rather than known to be core.
-func nodeReference(n *Node) resourceid.Reference {
+func NodeReference(n *Node) resourceid.Reference {
 	apiVersion, _ := n.Data["apiVersion"].(string)
 	return resourceid.ReferenceFromAPIVersion(apiVersion, KubernetesKindForNode(n), nodeNamespaceFromData(n), n.Name)
 }
@@ -610,7 +640,7 @@ func nodeReference(n *Node) resourceid.Reference {
 // nodeGroup is a node's API group resolved against the current cluster; it is
 // "" for the core group and for groups that cannot be established.
 func nodeGroup(n *Node) string {
-	return resourceid.ResolveCurrent(nodeReference(n), nil).Ref.Group
+	return resourceid.ResolveCurrent(NodeReference(n), nil).Ref.Group
 }
 
 // nodeAPIGroupFromData extracts the API group from a Node's Data map.

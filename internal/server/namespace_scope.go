@@ -27,12 +27,22 @@ const (
 
 // NamespaceScopeResponse describes this user's namespace-pick state.
 //
-// The picker is a per-user view filter — it does NOT mutate the shared cache.
-// Picking namespaces narrows what THIS user sees on subsequent reads to the
-// intersection of (their picks) and (their RBAC-allowed namespaces).
+// The pick is view state: each browser tab owns its own and narrows its views
+// by sending it as namespaces on each read. The server remembers the user's
+// last pick only to seed a tab that has none yet for Context. Data reads never
+// inherit it, and it does NOT mutate the shared cache (except under
+// --namespace-scope, where it selects the cache scope and every tab follows
+// it).
 //
-//   - Actives is the user's current pick set (empty = "All namespaces", no
+//   - Actives is the user's last pick (empty = "All namespaces", no
 //     narrowing).
+//   - Context is the kubeconfig context the response was read under; the UI
+//     keys a tab's pick by it.
+//   - AccessChecked is true when the server drops its own pick to
+//     AccessibleNamespaces on this read, treating anything outside it as no
+//     longer readable; the UI drops a tab's pick under the same rule. False
+//     after a failed namespace LIST or access check, or with no list at all,
+//     when the list says nothing about a pick.
 //   - Mode is "cluster-wide" when no pick is set and the user can list
 //     namespaces, "namespace" when one or more picks are in effect, or
 //     "restricted" when the user has no cluster-wide list access and hasn't
@@ -42,6 +52,8 @@ const (
 //     user lacks list-namespace RBAC; other namespaces may exist).
 type NamespaceScopeResponse struct {
 	Actives              []string           `json:"actives"`
+	Context              string             `json:"context,omitempty"`
+	AccessChecked        bool               `json:"accessChecked"`
 	KubeconfigNamespace  string             `json:"kubeconfigNamespace"`
 	Mode                 NamespaceScopeMode `json:"mode"`
 	AccessibleNamespaces []string           `json:"accessibleNamespaces"`
@@ -191,16 +203,17 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	gitopstree.ResetUnknownKindLogDedup()
 }
 
-// loadSavedNamespacePreference seeds the per-user map on first reach.
+// loadSavedNamespacePreference seeds the per-user map on the first preference
+// read (GET /api/cluster/namespace-scope); data reads never seed it.
 // Sources, in priority order:
 //   - a settings.json pick (no-auth local single-user only) — a remembered
 //     narrower choice survives restarts, and a persisted empty entry is the
 //     user's explicit "All namespaces" choice, which suppresses every seed
 //     below;
-//   - the --namespaces startup list (any user, auth included) — each user's
-//     session starts on the configured view. Seeded at most once per
+//   - the --namespaces startup list (any user, auth included) — a user's
+//     first tab starts on the configured view. Seeded at most once per
 //     (user, context) key, so clearing back to "All namespaces" sticks for
-//     the rest of the session instead of being re-applied on the next read;
+//     later new tabs instead of being re-applied on the next read;
 //   - the singular --namespace flag, then the kubeconfig context's namespace
 //     (kubectl parity; no-auth only — the kubeconfig identity belongs to the
 //     server operator, not to authenticated users). In-memory only: until
@@ -309,9 +322,9 @@ func pruneToExistingNamespaces(picks, existing []string) []string {
 // commitPickMutation replaces the active pick with survivors, but only if the
 // stored pick is still exactly `expected` under the still-current context.
 //
-// Every read-path pick mutation (deleted-namespace prune, RBAC trim, empty-
-// fallback clear, first-request seed) computes its result from a snapshot read
-// earlier in the request. Between that read and the write, a concurrent POST
+// Every preference-read pick mutation (deleted-namespace prune, RBAC trim,
+// first-request seed) computes its result from a snapshot read earlier in the
+// request. Between that read and the write, a concurrent POST
 // can install a fresh pick or a context switch can swap the cluster. Writing
 // unconditionally would revert the fresh pick or persist old-context survivors
 // under the new context's key — the lost-update class the namespace-pick lock
@@ -321,8 +334,8 @@ func pruneToExistingNamespaces(picks, existing []string) []string {
 //
 // persist rewrites the no-auth settings.json so the mutation survives a restart
 // (and isn't re-seeded stale from disk). Only the deleted-namespace prune sets
-// it — an RBAC trim, empty-fallback clear, or seed is a per-user in-memory view
-// filter that must not touch the shared single-user settings file.
+// it — an RBAC trim or seed is per-user in-memory state that must not touch
+// the shared single-user settings file.
 func (s *Server) commitPickMutation(r *http.Request, ctxName string, expected, survivors []string, persist bool) {
 	if ctxName == "" {
 		return
@@ -367,9 +380,10 @@ func (s *Server) commitPickMutation(r *http.Request, ctxName string, expected, s
 }
 
 // pruneDeletedNamespacePicks drops saved picks whose namespaces were deleted
-// from the cluster. Without this, a stale pick silently empties every read —
-// in no-auth mode nothing downstream re-validates it (getUserNamespaces is a
-// pass-through), so the UI looks like an empty cluster forever.
+// from the cluster. Without this, the UI adopts the stale pick from `actives`
+// and sends it on every read — in no-auth mode nothing downstream re-validates
+// it (getUserNamespaces is a pass-through), so the UI looks like an empty
+// cluster forever.
 //
 // Survivors are written back to the in-memory pick and, for the no-auth
 // single-user case, to settings.json — otherwise loadSavedNamespacePreference
@@ -448,9 +462,18 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 
 	// What the SA / kubeconfig identity sees — used as the input set for
 	// per-user filtering below. authoritative=true means "we got a real
-	// list from the apiserver"; false means "best-effort short list".
+	// list from the apiserver", or the install's --rbac-namespaces list when
+	// that LIST is denied; false means "best-effort short list".
 	saAccessible, source := k8s.GetAccessibleNamespacesWithSource(r.Context())
-	authoritative := source == k8s.NamespaceListCluster
+	authoritative := source.Complete()
+	// The --rbac-namespaces list is configuration, not something the
+	// apiserver returned: it is complete only while Radar can actually read
+	// every listed namespace. Callers that resolve what they no longer see
+	// (Radar Cloud alerts) would otherwise close issues in a namespace whose
+	// grant was removed.
+	if source == k8s.NamespaceListRBAC && !k8s.GetCachedPermissionResult().ReadableInEvery(saAccessible) {
+		authoritative = false
+	}
 
 	// Intersect with the calling user's RBAC-allowed namespaces. For
 	// no-auth callers and cluster-admin users, this is a pass-through
@@ -476,7 +499,10 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// re-trim on every read — through the guarded mutation so a stale trim
 	// can't revert a concurrent POST or cross a context switch. A failed LIST
 	// or access check says nothing about the picks, so it must not erase them.
-	if len(actives) > 0 && !discoveryFailed && source != k8s.NamespaceListFailed {
+	// A nil list means no namespace could be enumerated at all (LIST denied
+	// with no fallback); like a failed lookup, it says nothing about a pick.
+	accessChecked := !discoveryFailed && source != k8s.NamespaceListFailed && namespaces != nil
+	if len(actives) > 0 && accessChecked {
 		survivors := intersectPicksWithAllowed(actives, namespaces)
 		if len(survivors) != len(actives) {
 			s.commitPickMutation(r, pickCtx, actives, survivors, false)
@@ -534,6 +560,8 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 
 	s.writeJSON(w, NamespaceScopeResponse{
 		Actives:              actives,
+		Context:              pickCtx,
+		AccessChecked:        accessChecked,
 		KubeconfigNamespace:  kubeNs,
 		Mode:                 mode,
 		AccessibleNamespaces: namespaces,
@@ -638,8 +666,8 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 		s.scopeMutationMu.Lock()
 		defer s.scopeMutationMu.Unlock()
 	}
-	// Pairs this handler's persist+set with the read-path stale-pick prune:
-	// the prune re-checks the live pick under the same lock before mutating,
+	// Pairs this handler's persist+set with the preference GET's stale-pick
+	// prune: the prune re-checks the live pick under the same lock before mutating,
 	// so it can't revert a pick set here from a stale snapshot. Lock order is
 	// scopeMutationMu → nsPickMu; the prune takes only nsPickMu.
 	//
@@ -671,8 +699,8 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 	// from this saved value, so a rescope must NOT proceed if we can't save the
 	// pick: the cache would rebuild for the new namespace but snap back to the
 	// stale saved one on the next reconnect, diverging from the live override.
-	// Outside scope mode the pick is just a view filter, so a save failure is
-	// non-fatal — log and continue.
+	// Outside scope mode the pick is just a remembered UI preference, so a save
+	// failure is non-fatal — log and continue.
 	if auth.UserFromContext(r.Context()) == nil {
 		if ctxName := k8s.GetContextName(); ctxName != "" {
 			if err := persistNamespacePick(ctxName, cleaned, true); err != nil {

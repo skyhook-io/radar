@@ -4,15 +4,8 @@ import type {
   CapacityActivityState,
   CapacityQuantityObservation,
 } from "@skyhook-io/k8s-ui";
-import {
-  DeniedCapacityState,
-  ActivityStateBadge,
-  CertaintyGlyph,
-  InventoryQuantityCell,
-  QuantityInline,
-  certaintyGlyph,
-  managerStatusRank,
-} from "./shared";
+import { DeniedCapacityState, ActivityStateBadge, InventoryQuantityCell, QuantityInline, managerStatusRank } from "./shared";
+import { CertaintyGlyph, certaintyGlyph } from "@skyhook-io/k8s-ui";
 
 function observation(
   certainty: CapacityQuantityObservation["certainty"],

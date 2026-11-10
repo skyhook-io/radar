@@ -71,7 +71,16 @@ export function PreviousIntegrationSettingsNotice({ profiles, onNavigate, onDism
   )
 }
 
-export function LocalConfigurationDetails() {
+export const integrationSettingsByClusterId = 'integration-settings-by-cluster'
+
+// Switching to auto-discovery keeps an empty record, so a record alone doesn't
+// mean anything is saved. An invalid record disables the integration instead.
+function integrationStatus(use: StoredConnection) {
+  if (use.error || use.mode !== 'auto' || use.url || use.secretSet || use.clusterId) return 'saved'
+  return use.integration === 'cost' ? 'Automatic' : 'auto-discovery'
+}
+
+export function LocalConfigurationDetails({ onNavigate }: { onNavigate: (section: SettingsSectionId) => void }) {
   return (
     <div className="mt-5 border-t border-theme-border pt-4">
       <Disclosure
@@ -94,7 +103,17 @@ export function LocalConfigurationDetails() {
             <dt className="font-mono text-theme-text-primary">clusters.json</dt>
             <dd>
               Metrics, Argo CD and Cost connections and credentials, saved per
-              kubeconfig entry.
+              kubeconfig entry.{' '}
+              <button
+                type="button"
+                className="text-accent-text hover:underline"
+                onClick={() => {
+                  onNavigate('connection')
+                  requestAnimationFrame(() => document.getElementById(integrationSettingsByClusterId)?.focus())
+                }}
+              >
+                Review integration settings by cluster
+              </button>
             </dd>
           </dl>
           <p className="text-theme-text-tertiary">
@@ -156,7 +175,7 @@ export function SavedClusterConnections({
       .then(async (response) => {
         const data = (await response.json().catch(() => ({}))) as ConnectionResponse
         if (!response.ok)
-          throw new Error(data.error || 'Could not load saved connections.')
+          throw new Error(data.error || 'Could not load integration settings.')
         if (controller.signal.aborted || getApiBase() !== base) return
         setUses(data.connections)
       })
@@ -203,10 +222,10 @@ export function SavedClusterConnections({
       const data = (await response.json().catch(() => ({}))) as ConnectionResponse
       if (controller.signal.aborted || getApiBase() !== base) return
       if (!response.ok)
-        throw new Error(data.error || 'Could not remove the saved connection.')
+        throw new Error(data.error || 'Could not remove the saved settings.')
       setUses(data.connections)
       setMessage(
-        `Removed the saved ${integrationNames[selected.integration]} connection for ${selected.context}.`,
+        `Removed the saved ${integrationNames[selected.integration]} settings for ${selected.context}.`,
       )
       focusSummary.current = true
       setSelected(null)
@@ -235,24 +254,26 @@ export function SavedClusterConnections({
     >
       <h4
         ref={summary}
+        id={integrationSettingsByClusterId}
         tabIndex={-1}
-        className="text-sm font-semibold text-theme-text-primary"
+        className="text-sm font-semibold text-theme-text-primary outline-none"
       >
-        Saved connections
+        Integration settings by cluster
       </h4>
       <div className="space-y-3 pt-2">
         <p className="text-xs text-theme-text-secondary">
-          Connections saved for each kubeconfig entry. Configure them in
-          Metrics, Argo CD or Cost.
+          Metrics, Argo CD and Cost settings saved for each kubeconfig entry.
+          Edit the current cluster’s in its own tab. Removing an entry applies
+          immediately and changes nothing in Kubernetes or the backend.
         </p>
         {loading && (
           <p role="status" className="text-xs text-theme-text-tertiary">
-            Loading saved connections…
+            Loading integration settings…
           </p>
         )}
         {!loading && !error && clusters.size === 0 && (
           <p className="text-xs text-theme-text-tertiary">
-            No saved connections yet.
+            No integration settings saved yet.
           </p>
         )}
         {!loading &&
@@ -269,7 +290,7 @@ export function SavedClusterConnections({
                   </span>
                   {current ? (
                     <Badge tone="note" size="sm">
-                      Current
+                      Current cluster
                     </Badge>
                   ) : entry.availability === 'removed' ? (
                     <Badge tone="note" size="sm">
@@ -277,7 +298,7 @@ export function SavedClusterConnections({
                     </Badge>
                   ) : entry.availability === 'unavailable' ? (
                     <Badge tone="note" size="sm">
-                      Not loaded in this session
+                      Kubeconfig not loaded
                     </Badge>
                   ) : null}
                 </div>
@@ -286,17 +307,16 @@ export function SavedClusterConnections({
                 </p>
                 {!current && entry.availability === 'removed' && (
                   <p className="text-theme-text-secondary">
-                    This kubeconfig entry is gone, but its connections are still
-                    saved. To reuse one, select the new context and choose “Copy
+                    This kubeconfig entry is gone, but its integration settings
+                    are still saved. To reuse one, select the new context and choose “Copy
                     settings from…” in that integration’s settings.
                   </p>
                 )}
                 {(current ||
                   entries.every((use) => use.availability === 'available')) && (
                   <p className="text-theme-text-secondary">
-                    Saved:{' '}
                     {entries
-                      .map((use) => integrationNames[use.integration])
+                      .map((use) => `${integrationNames[use.integration]}: ${integrationStatus(use)}`)
                       .join(' · ')}
                   </p>
                 )}
@@ -311,7 +331,7 @@ export function SavedClusterConnections({
                           type="button"
                           disabled={busy}
                           className="text-accent-text hover:underline disabled:opacity-50"
-                          aria-label={`Remove saved ${integrationNames[use.integration]} connection for ${use.context}`}
+                          aria-label={`Remove saved ${integrationNames[use.integration]} settings for ${use.context}`}
                           onClick={() => {
                             setSelected(use)
                             setError('')
@@ -339,7 +359,7 @@ export function SavedClusterConnections({
               className="underline"
               onClick={() => setVersion((value) => value + 1)}
             >
-              Reload saved connections
+              Reload integration settings
             </button>
           </p>
         )}
@@ -348,13 +368,13 @@ export function SavedClusterConnections({
         open={!!selected}
         onClose={() => setSelected(null)}
         onConfirm={() => void remove()}
-        title="Remove saved connection?"
+        title="Remove saved settings?"
         message={
           selected
-            ? `Remove the saved ${integrationNames[selected.integration]} connection and credentials for ${selected.context}? Other saved connections are unchanged. Nothing is deleted from Kubernetes or the backend.${selected.availability === 'unavailable' ? ' This entry may still exist in another kubeconfig; removal also affects any CLI or Desktop using that entry.' : ''}`
+            ? `Remove the saved ${integrationNames[selected.integration]} settings and credentials for ${selected.context}? Other saved settings are unchanged. Nothing is deleted from Kubernetes or the backend.${selected.availability === 'unavailable' ? ' This entry may still exist in another kubeconfig; removal also affects any CLI or Desktop using that entry.' : ''}`
             : ''
         }
-        confirmLabel="Remove connection"
+        confirmLabel="Remove settings"
         isLoading={busy}
         confirmDisabled={!!error}
         showWarning={false}
@@ -366,7 +386,7 @@ export function SavedClusterConnections({
             role="alert"
             className="text-sm text-warning-text"
           >
-            {error} Cancel and reload saved connections before trying again.
+            {error} Cancel and reload integration settings before trying again.
           </p>
         )}
       </ConfirmDialog>

@@ -1,6 +1,6 @@
 # GitOps (Argo CD & Flux)
 
-Radar's GitOps workspace gives Argo CD and Flux first-class treatment. Instead of treating Applications and Kustomizations as generic CRDs, you get a typed fleet view, a per-app detail page that diagnoses *why* something is misbehaving, and the controls you'd otherwise reach for `argocd` / `flux` CLI to run.
+Radar's GitOps view gives Argo CD and Flux first-class treatment. Instead of treating Applications and Kustomizations as generic CRDs, you get a typed fleet view, a per-app detail page that diagnoses *why* something is misbehaving, and the controls you'd otherwise reach for `argocd` / `flux` CLI to run.
 
 The hard part of GitOps tooling isn't sync — it's diagnosis. Radar surfaces drift, recent events, controller-failure attribution, and lifecycle state inline so you don't have to context-switch between `kubectl get`, `argocd app diff`, controller logs, and a YAML viewer to understand a stuck reconcile.
 
@@ -24,9 +24,19 @@ Open the **GitOps** tab in the sidebar. Argo + Flux rows mix in the same table o
 - **Modes**: Applications / Sources / Projects / Alerts
 - **Default sort**: smart-tiered by urgency — Failed > Terminating > Degraded > Missing > OutOfSync > Suspended > Progressing > Synced
 
+The **Activity** column and cards name the event beside its age: a Flux apply (**Applied** when it succeeded, **Apply attempt** when it did not), a Helm deployment, an Argo sync attempt or deployment, or a status change. When Flux apply or deployment timing is unavailable, they show the latest recorded condition transition as **Status changed**. If neither event date is available, they show the resource's creation date with a **Created** label. An old deployment date does not make a healthy application stale.
+
 ## Per-app detail page
 
 Click any row to open a detail page with three top-level tabs.
+
+The revision and its controller's activity time are separate facts. Flux Kustomizations show their latest recorded apply: **Last applied** when it succeeded, or **Last apply attempt** when it did not. Flux re-applies on every interval, so a successful re-apply with no changes also moves **Last applied**. A source, dependency or build failure before apply may not add a history entry, so the time can stay on the previous apply while the Kustomization reports a failure. Flux HelmReleases show **Last deployed** for the currently deployed chart, even if a newer upgrade failed. Argo Applications show **Last checked**, when Argo compared the application with Git. These dates are not Git commit ages. Missing dates are left out, including when an older Radar cannot supply the required history.
+
+Flux resource drawers show the configured reconciliation interval or **Paused**. They do not calculate a next-run countdown from the last reconciliation request: that request does not establish the controller's schedule. Argo's drawer also omits a countdown because its configured reconciliation interval is not available in the Application status.
+
+Helm **History** keeps the recorded start time of each attempt beside its release status, including failed installs and upgrades. **Current Release** still describes the deployed snapshot. The requested chart version constraint remains in the drawer's **Chart** section and the Resources **Version** cell tooltip. Flux revision and additional-info sections retain **Last handled manual request** as the raw acknowledgement token, which may be arbitrary text rather than a date.
+
+In the Resources table, **Last Updated** uses the recorded Flux apply or Helm deployment time when available. Otherwise it keeps the last Ready status change; the cell tooltip names that fallback. A status change is not an apply or deployment time.
 
 <p align="center">
   <img src="screenshots/gitops-detail-drift.png" alt="GitOps detail page with stuck-drift-loop diagnosis" width="800">
@@ -35,7 +45,11 @@ Click any row to open a detail page with three top-level tabs.
 
 ### Topology tab
 
-Graph or table sub-modes. The graph shows the application root and every managed resource, with ownership edges (Service → Deployment → ReplicaSet → Pod chains). Filter by kind, sync, health, role, namespace, or search. Group large pod sets to keep the graph scannable; click a group to expand.
+Graph or table sub-modes. The graph starts from the resources the controller recorded and follows owner references to what they create: Prometheus → StatefulSet → Pod, Certificate → CertificateRequest, and on into nested Applications and Kustomizations. A HelmRelease without a recorded inventory is found by Flux's origin labels (`helm.toolkit.fluxcd.io/name` and `/namespace`), leaving out Helm hooks and objects a controller generated, which show under that controller when the tree reaches it. Filter by kind, sync, health, role, namespace, or search. Large Pod sets appear as groups; click a group to expand.
+
+You see only the resources you can read. A readable resource under a hidden parent stays visible. Resources on another cluster, from a remote Application or a Flux object with `spec.kubeConfig`, are not expanded. When Radar can't read part of the tree, a **Limited resource view** notice says so.
+
+For Flux, the graph also shows where the root's content comes from. Its sources sit to the left of the root, with arrows pointing into it: the GitRepository, OCIRepository, Bucket or ExternalArtifact a Kustomization reads, the Kustomizations it `dependsOn`, and for a HelmRelease the chart chain. An inline `spec.chart` release draws release ← generated HelmChart (`status.helmChart`) ← the chart's source (HelmRepository, GitRepository or Bucket), so a chart that fails to pull shows as its own red node; `spec.chartRef` draws the referenced HelmChart, OCIRepository or ExternalArtifact. Source cards show what each kind has: the URL, the fetched revision, or for a HelmChart the requested chart and version. Sources are dependencies, not managed resources: they are counted separately and listed under the **Dependency** role. A source the root also manages, like a bootstrap Kustomization's own GitRepository, stays with the managed resources.
 
 GitOps CRs that are themselves managed (a child Application from an app-of-apps parent, a Kustomization referenced by another Kustomization, ApplicationSet children) render with a small `Argo` or `Flux` tool badge and a `→` chevron — click to open that CR's own GitOps detail page. The child page's breadcrumb shows the lineage `GitOps / parent-ns/parent / child-ns/child`; the parent segment is clickable to navigate back.
 
@@ -44,26 +58,37 @@ GitOps CRs that are themselves managed (a child Application from an app-of-apps 
 Per managed resource, in one row:
 
 - **Sync status** chip (`Synced`, `OutOfSync`, etc.) with the health chip beside it
-- **Field-level drift** computed inline from each resource's `kubectl.kubernetes.io/last-applied-configuration` annotation vs live cluster state. You see actual `spec.X removed / spec.Y added` entries — no `argocd app diff` round-trip needed. Live objects are pulled via a dedicated direct-GET path so the dynamic informer cache doesn't have to retain the annotation cluster-wide
+- **Field-level drift** computed inline from each resource's `kubectl.kubernetes.io/last-applied-configuration` annotation vs live cluster state. You see actual `spec.X removed / spec.Y added` entries — no `argocd app diff` round-trip needed. Live objects are pulled via a dedicated direct-GET path so the dynamic informer cache doesn't have to retain the annotation cluster-wide. When the [Argo CD API integration](#argo-cd-api-integration-deep-diff) is connected, an expanded row instead shows the field list from Argo's own diff above the YAML diff, which also covers Git changes that haven't synced yet. That list shows at most 50 fields and says so when it was cut. It is left out for a resource missing on one side (not yet created, or pending prune), where the YAML diff shows the whole object. Rows with Argo's diff don't show the collapsed row's "N diff" badge: it counts the last-applied list, which misses unsynced Git changes, so it would undercount. The OutOfSync badge still marks the row
 - **Recent events** (5 most recent, namespace-RBAC-filtered) so `ImagePullBackOff`, `FailedScheduling`, webhook denials, PVC pending, etc. show up next to the resource that caused them
 - **Open** button — drops into the standard resource drawer
+
+Resource guidance helpers accept named `{ hazard?, rolledBack? }` context. A supplied sync hazard takes precedence over rollback advice for non-Synced Missing rows and OutOfSync/Missing status explanations, deferring to the sync warning above. A Missing row still reported Synced asks for a refresh.
 
 OutOfSync alerts in the Issues band at the top of the page are clickable — they jump to the affected row and highlight it for ~4 seconds.
 
 ### Activity tab
 
-Operation history with deploy timestamps, the git revision deployed, who initiated the sync (human user or automation), an outcome chip per row, and per-revision **Rollback** buttons for Argo. In-progress operations pin to the top of the timeline.
+Operation history with deploy timestamps, the git revision deployed, who initiated the sync (human user or automation), an outcome chip per row, and per-revision **Rollback** buttons for Argo. In-progress operations pin to the top of the timeline. History `rollbackable` only reports whether an entry has an ID and recorded source(s); auto-sync, lifecycle, in-flight operations and RBAC are separate checks.
 
 ## Diagnosis pipeline
 
-The Issues band at the top of the detail page surfaces six classes of problems:
+The Issues band at the top of the detail page surfaces seven classes of problems:
 
-- **Operation failures** (Argo) — the parser recognizes 11 patterns (annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.) and rewrites each into a plain-English cause
-- **Stuck-drift loop** — when sync succeeded but the app is *still* OutOfSync with auto-sync on and a recent reconcile, something is mutating resources after each apply. The Issue calls out likely culprits (mutating webhook, sibling controller, schema migration)
-- **Manual drift without auto-sync** — drift exists but auto-sync is disabled. The Issue tells you "nothing will reconcile until you click Sync" so you stop waiting
+- **Operation failures** (Argo) — the parser recognizes known controller failures (annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.) and rewrites each into a plain-English cause
+- **Stuck-drift loop** — when sync succeeded at the current desired comparison’s sources and revisions but the app is *still* OutOfSync with auto-sync on and a recent reconcile, something is mutating resources after each apply. The Issue calls out likely culprits (mutating webhook, sibling controller, schema migration). An older successful apply or rollback against different desired sources/revisions remains ordinary pending drift, including after auto-sync is re-enabled behind a sync window. Missing apply/comparison evidence does not establish a loop
+- **Manual drift without auto-sync** — drift exists but auto-sync is disabled. The Issue tells you "nothing will reconcile until you click Sync" so you stop waiting, unless a sync would be hazardous (see below). A rollback marker in the latest operation, if successful, instead gives an informational note naming the applied revision(s) and recorded initiator; resource rows explain that Sync can undo the rollback (a current sync hazard replaces that advice, since the hazard is the more urgent consequence), including Missing rows while the current comparison is Unknown. Rows use `summary.rollbackRevision`, the revision(s) deployed by the latest successful marked rollback, only while effective auto-sync is off, independently of the OutOfSync-only informational note. Its absence does not mean no rollback happened. This records the last rollback, not the current live state: later changes can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback. A marked, completed rollback whose result sources or revisions differ from the requested ones instead gives a warning in both detail and cluster Issues, even if the app is Synced. A known requested target with no recorded applied revisions warns that the rollback target could not be verified. This operation-outcome warning uses the shared diagnosis and remains stable while that operation is latest, independently of the manual-drift timer. It belongs to the GitOps operation-failure category, with a distinct issue identity so current sync errors, operation failures or drift loops do not absorb its warning and recovery advice. Cluster Issues retains its delayed manual-drift warning after a successful rollback, with guidance to fix or revert Git before syncing again, or keep auto-sync off. Dry runs and failed or pending operations do not qualify. A later operation, including a dry-run, replaces the rollback evidence even if it does not move the app; Radar then returns to ordinary diagnosis. Argo's native rollback and a sync to an older revision have indistinguishable durable operation records, so Radar does not infer a rollback from old revisions or expiring audit events.
+- **Flux source and dependency failures** — when Flux reports that a Kustomization or HelmRelease is waiting on its source, chart or `dependsOn` target, the Issue links the object Flux names, so one click opens the failing GitRepository or HelmChart. A source that fails to fetch while the root is still Ready gets a warning: Flux can keep applying the last artifact it fetched, so new commits don't land while the fetch keeps failing
 - **Argo Application conditions** — `ComparisonError` (verify repo creds), `OrphanedResourceWarning`, `InvalidSpecError`, etc. extracted into typed-severity Issues
 - **Per-resource health** — Degraded / Missing children get a critical Issue each, deduped against any operation failure that already named the same resource (no triplicate rendering). See [Per-resource health](#per-resource-health) for where that health comes from
 - **Pending deletion** (lifecycle) — see [Lifecycle awareness](#lifecycle-awareness) below
+
+**Blocked empty auto-sync** — when an OutOfSync Application reports "auto-sync will wipe out all resources", the render includes none of the resources the Application manages, and Argo refuses the auto-sync. Radar explains the guard rather than suggesting a retry. The visible action warns that a pruning sync could delete all of them. `Prune=false` blocks direct Argo pruning; `Prune=confirm` requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options. The action points to the source path, targetRevision, Helm values, and Kustomize or directory include/exclude settings. A closed disclosure, "If removing all managed resources is intended", offers the two deliberate paths: remove a generated Application from its ApplicationSet generator (while the generator still emits it, the ApplicationSet recreates it), then check whether the generated Application survives. Its ApplicationSet sync policy may keep it. If it survives, delete it explicitly with the intended cascade choice. For a plain Application, delete the Application. Cleanup follows the cascade/resources finalizer choice and `Delete=false` / `Delete=confirm`, not Prune options; alternatively, set `syncPolicy.automated.allowEmpty: true` in the Application or its ApplicationSet template, which turns off the empty-render guard for all future syncs. API and MCP consumers still receive the complete `action` text; optional `action_primary`, `action_secondary_title`, and `action_secondary` fields let the Issues UI separate that guidance (camelCase on GitOps insights). Radar offers no automatic fix for this guard. The detail page and cluster Issues both name this diagnosis `AutoSyncBlockedEmpty`, with an "Auto-sync blocked: the render includes none of the managed resources" headline and the controller's own message (which leads with the revision SHA) kept as the raw error. Radar checks the current policy and last-compared resources before trusting the condition: auto-sync on with prune and without `allowEmpty`, OutOfSync, and a nonempty `status.resources[]` with every entry marked `requiresPruning: true`. A deny sync window can leave the condition behind after the render recovers or the policy changes, so the condition alone doesn't count. Argo does not re-evaluate the condition while a sync window blocks auto-sync, so it can outlive the empty render; a leftover condition on a Synced/Unknown Application, or on one that drifted for another reason, produces no critical issue, and the drift is reported as drift. When the latest comparison failed (sync status Unknown or a `ComparisonError` condition), `status.resources[]` does not establish the current render. The sync-hazard warning says the last reported resource list marks every listed resource for pruning and the latest comparison reported an error. It asks to fix the comparison error and refresh before syncing, keeps the conditional pruning danger, and withholds sync shortcuts.
+
+**Sync advice and its hazards** — the top row of the issue stack shows its next step, not only its cause, so its guidance is on screen without expanding the stack. A failed operation is shown above the stack as a failure card with its cause, its next step and any one-click fix. The drift rows (`ManualDrift`, `SelfHealDisabled`, cluster `OutOfSyncManual`) normally end in "review the diff, then sync". They change when a sync would do more than reconcile drift: while the empty-render guard holds, no drift row (nor `StuckDriftLoop`) is shown because the guard explains the OutOfSync; when every resource requires pruning without the guard (a manual Application), the advice warns that a pruning sync could remove all compared resources, subject to direct Argo prune exclusions and confirmations (these do not protect contents of a pruned Namespace); when the Application carries a `SharedResourceWarning`, the advice says to resolve ownership first and names the other Application, since a successful sync can take over tracking unless it uses `FailOnSharedResource=true`; while the other Application still declares them, its next successful sync can take tracking back; to leave them with that Application, it says to remove them from this Application's source rather than sync. The shared-resource row gives the move order: Argo names the Application that tracks the resource now, so removing it from that one's source first could let its pruning sync delete the resource. The move advice is a numbered sequence under "To move it to this Application". First check this Application's sync options for `FailOnSharedResource=true`: the sync will refuse the takeover if set, so stop unless taking it over is intended and allowed. Then note the resource's live UID. Note whether the current tracker has auto-sync on, and turn it off if so. Do not sync it manually during the move. For an ApplicationSet or parent-managed Application, disable auto-sync in the template or Git so it stays off. For a generated child, confirm its live auto-sync is off. Its ApplicationSet sync policy may prevent a template change from reaching it. Finish or terminate any running or retrying operation on the current tracker, and confirm none is left; turning off auto-sync does not stop it. Check that the current tracker and the resource are not being deleted. If deletion has started, stop the move and recover. Then sync this Application. Confirm the live resource's tracking metadata names this Application. Confirm its UID is unchanged and it is not being deleted. If it is deleting, was deleted, or was replaced, stop the move and recover. Remove the resource from the old tracker's source. Then restore the old tracker's previous auto-sync setting. Resource rows defer their generic sync/create advice to the warning above when a sync hazard is present. The shared missing-resource helper accepts named `hazard` and `rolledBack` context. Rollback context warns that sync can recreate the missing resource and undo the rollback; when both contexts are supplied, hazard advice takes precedence. The resource-status explanation also prioritizes hazards for Missing or OutOfSync rows. The same hazards remove a failed sync's one-click fix (create the namespace, then sync with pruning) on the detail page and in cluster Issues. Cluster Issues carries the warning separately in optional `hazard`, also retaining it in the complete `action` text. Absence means no warning was supplied, not that syncing is safe; older producers omit it. The Issues UI shows the warning independently of any host-supplied diagnosis or next step. The detail page's failure card shows it as a warning under the title, ahead of the cause: a cause can end in its own sync advice ("Create it, or enable CreateNamespace=true … so Argo creates it on sync"), and the card's next step (including a remote Application's "create the namespace on the destination cluster") stays below it.
+
+The cluster-wide **Issues** view reports Application error conditions even during Progressing health, and alongside Degraded health with Argo's health message preserved. Transient problems stay suppressed during Running operations and for non-failed suspended Applications; resource warnings remain visible in both states. A failed operation outranks Degraded health: its row is reported and the Degraded rollup is not, whether or not Argo wrote an operation message. A failed operation with a nonempty message suppresses only a SyncError whose message starts with "Failed sync attempt to" or "Failed last sync attempt to"; an unrelated condition (including an empty-render guard for a different revision) still surfaces. Independent operation and condition failures retain distinct issue IDs and guidance. With an empty operation message, the cluster view uses the actionable condition instead of a generic operation failure.
+
+`SharedResourceWarning` and `OrphanedResourceWarning` remain warning-level findings in the `gitops_resource_warning` category, one issue per Application and warning type. `RepeatedResourceWarning` is info-level because an override can be intentional: it remains on the Application detail page, while the critical/warning-only live Issues stream (including MCP `issues` and `diagnose.relatedIssues`) excludes it from rows and totals. Its category remains `gitops_resource_warning` at classification. The message aggregates resource/owner evidence with at most three examples and a remaining count. Fingerprints depend only on the condition type, so changing resources or counts does not start a new alert episode. Onset uses the earliest valid lastTransitionTime currently reported for that type. Argo preserves the timestamp only when the incoming message equals the existing first condition's message for that type; changing counts or resource messages can reset onset while the issue ID stays stable. Orphan warnings retain Argo's orphaned-resource count: resources in the destination namespace that Argo CD doesn't associate with any Application, including resources whose tracker Argo does not watch. Repeated-resource guidance explains that Argo keeps the last rendered occurrence, including for single-source Applications; an override can be intentional. Shared-resource guidance carries `action_primary`, `action_secondary_title`, and `action_secondary` (camelCase on GitOps insights), with the move steps in order and the full joined guidance in `action`. It names the other Application(s) parsed from Argo's "is part of applications A and B" message. Argo's orphan condition carries only a count, so its guidance points to `argocd app resources <namespace>/<name> --orphaned` or the Application's orphaned-resources view in the Argo CD UI to see which resources. Orphan exclusions are configured through the AppProject's `spec.orphanedResources.ignore`, while `spec.orphanedResources.warn` controls warning emission.
 
 **Structured remediation** — when the diagnosis pipeline recognizes a fixable failure (e.g. Argo operation error "namespace X not found"), the Issue carries a primary-blue action button that performs the fix in one click. Duplicate per-resource Missing issues + SyncError condition rows are then suppressed so the user sees one clear "create the namespace and retry" path instead of three.
 
@@ -90,7 +115,7 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 - **Detail header**: orange `[Terminating]` chip replaces Sync/Health badges. Source / Revision / Last reconcile / Sync mode metadata swaps to `Pending deletion · Finalizers`, with the original fields behind a "Show pre-deletion metadata" toggle
 - **Action buttons**: Sync, Reconcile, Suspend / Resume, Rollback, Sync-with-source disable with a tooltip explaining why. Refresh and Terminate stay enabled — they're read-only / cleanup-only verbs
 - **Lifecycle banner**: a dedicated orange banner above the Issues band; pre-deletion failures collapse behind a `Pre-deletion issues (N)` disclosure
-- **Severity ramp**: info <5min, warning 5-30min, alert >30min. Past 30min the Issue's Cause line names the controller responsible for the finalizer and reports its pod state ("helm-controller is not running in flux-system")
+- **Severity ramp**: info <5min, warning 5-30min, alert >30min. Past 30min the Issue's Cause line names the controller responsible for the finalizer and reports its pod state ("helm-controller is not running in flux-system"). No matching pods in Argo CD’s conventional namespace is inconclusive: its controller may run elsewhere or outside the cluster (Amazon EKS Capabilities)
 - **Fleet view**: `—` in Sync/Health columns, orange row stripe, `[TERMINATING]` chip in the leftmost slot, `Pending Nago` instead of "Last Sync"
 - **Topology**: orange left-stripe on the root + children; stale sync/health chips suppressed
 - **Cluster Audit**: `stuckTerminating` check across all typed K8s resources with the same 5-minute/30-minute thresholds, presented as Medium/High posture priority
@@ -102,20 +127,59 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 
 | Operation | What it does |
 |---|---|
-| **Sync…** | Opens a dialog with prune / dry-run / apply-only / force / replace / server-side apply / sync-options. Force-only routes via `syncStrategy.hook.force` so PreSync / PostSync hooks still run; ApplyOnly uses `syncStrategy.apply` |
+| **Sync…** | Opens a dialog with prune / dry-run / apply-only / force / replace / server-side apply. Prune starts off. Replace and Server-side apply start from the Application's `syncPolicy.syncOptions`; changing one keeps the Application's other options, listed read-only under **Also used for this sync**. A resource drawer's **Sync…** opens the same dialog when its host forwards the options (`argoSyncDialog`); otherwise it syncs at once with the Application's own options, without pruning. Force-only routes via `syncStrategy.hook.force` so PreSync / PostSync hooks still run; ApplyOnly uses `syncStrategy.apply` |
 | **Refresh** | Re-fetches the source repo |
 | **Hard refresh** | Sets `RefreshType=hard` to bypass repo-cache |
 | **Terminate** | Cancels an in-flight operation |
-| **Suspend / Enable auto-sync** | Toggles automated sync; remembers the prior `prune` / `selfHeal` settings on suspend so resume restores them |
-| **Rollback** | Pick a prior history entry by ID. Force / DryRun flags honored |
+| **Suspend / Enable auto-sync** | Suspend saves the whole `automated` block and removes it; Enable restores it. See [suspend and resume](#suspend-and-resume) |
+| **Rollback** | Pick a prior history entry by ID (Argo numbers history from 0). Written the way argocd-server writes it: a sync operation pinned to that entry's revision(s) and source(s), apply strategy (hooks don't run), the app's sync options and no retry strategy, Prune / DryRun off unless chosen. Refused with 409 while auto-sync is enabled, as Argo CD refuses it; `automated.enabled: false` counts as off only on Argo CD 3.x controllers (2.x treats any automated block as on), while Radar's suspend removes the block and works on both |
 | **Selective sync** | From the Topology tab, mark individual resources and sync only those |
+
+On Argo CD before 2.12, rolling back across a single-source/multi-source change or to a multi-source entry can deploy the wrong revisions or render nothing; with prune, it can delete resources. Radar cannot detect the controller version; the rollback confirmation warns when either the current Application uses `spec.sources` (even one source) or the history entry is multi-source. History exposes this as `rollbackMultiSourceWarning`; hosts pass it to `RollbackDialog.multiSourceWarning`. This remains a warning, not a refusal.
+
+Rollback and enabling auto-sync on an Application with `automated.enabled: false` require affirmative `argoRollbackSync` support from the connected Radar. While capabilities load, the controls say “Checking this cluster's Radar…”. If capabilities fail, they say support could not be checked and ask you to refresh. Only a known absent flag shows the upgrade note. Confirmation/execution rechecks support; other features keep their existing loading behavior.
+
+### How Radar performs Argo actions
+
+Radar writes Argo CD operations straight into the Application through the Kubernetes API, as the signed-in user (impersonated when auth is on, including Radar Cloud), the way Argo CD core and `kubectl` do. It doesn't go through argocd-server, so it needs no Argo CD account or token and works on core installs. Kubernetes RBAC decides who may act: `get` and `patch` on `applications.argoproj.io`, which also allows editing the Application's spec, its project included.
+
+**Still enforced**, by the Argo CD application controller when it runs the operation:
+
+- **Sync windows** (controller enforcement since 2.11). A sync a window denies isn't refused: it waits as Running, shown as a `SyncWindowBlocked` issue, and runs once allowed.
+- **AppProject limits** for the project the Application names: allowed destinations and the resource allow and deny lists. Source-repository restrictions apply to the spec, not to a source carried in the operation.
+- **Source integrity** rules for Git sources the project's policy covers.
+- **Controller events and `status.history`.**
+
+**Not enforced**, because they live in argocd-server:
+
+- **Argo CD RBAC**: local users, SSO groups and project roles.
+- **argocd-server's request checks**: refusing a sync a window blocks right now, refusing local manifests while auto-sync is on, the server-wide switch that disables `Replace`, and resolving revisions through repo-server when the request arrives.
+- **argocd-server's audit event** naming the user. The Kubernetes audit log records Radar's write under the impersonated user instead.
+
+How each operation is written:
+
+- **One conditional write, like argocd-server's `SetAppOperation`.** Radar refuses with 409 while another operation is queued or running. Otherwise one write installs the operation and clears the previous one's finished state, so a manual sync can't inherit an earlier automated sync's state. The write is conditional on `resourceVersion`; on a conflict Radar re-reads and repeats every check, up to three times.
+- **Prune is off** unless asked for, in the dialog, REST and MCP, as in Argo CD's UI and CLI.
+- **Sync options are inherited.** A sync that names none uses the Application's `syncPolicy.syncOptions`; a list replaces them for that sync (`[]` means none). Syncs also carry the Application's `syncPolicy.retry`.
+- **An omitted revision deploys the commit Argo last compared** (`status.sync.revision(s)`), when that comparison was for the Application's current source(s). Otherwise the controller resolves the target when the sync runs. Refresh first if you need a newer commit. Radar's resource dry-run pins the same way, so it checks what the selective sync deploys. A hydrated Application (`spec.sourceHydrator`) syncs the hydrator's sync source, which Radar names in the operation, and is never pinned.
+- **Revision overrides** are single-source only, and refused (409) while auto-sync is on unless it's a dry run, since auto-sync would revert them. The target compared against is the source's `targetRevision` (default `HEAD`), or `syncSource.targetBranch` for a hydrated Application.
+- **A queued sync** (behind a sync window, say) deploys the source(s) the Application had when you asked; later source edits don't update it. Terminating it shows Terminating until a window allows the controller to act; what was already applied stays.
+- **Attribution.** `operation.initiatedBy.username` is the user's email when Radar Cloud forwards one, otherwise the authenticated username, or `radar` without per-user auth; `operation.info` adds `Initiated via: Radar`. Anyone who may patch the Application can write any name there; the Kubernetes audit log is the authoritative record.
+
+**Argo CD before 2.12:** a multi-source controller doesn't reliably honor the sources and revisions an operation carries; it may sync the spec's current ones. Radar can't detect the controller version.
+
+#### Suspend and resume
+
+- **Suspend** saves the whole `automated` block (`prune`, `selfHeal`, `allowEmpty`, …) in the `radarhq.io/suspended-automated` annotation and removes it. Suspending an Application whose auto-sync is already off changes nothing, so the saved settings can't be overwritten.
+- **Enable** restores the newest settings it finds: a block switched off in place (`automated.enabled: false`, which it keeps minus `enabled`), else the saved block. An Application Radar never suspended gets `prune` and `selfHeal` off, as Argo CD's UI and CLI do: new commits sync automatically, but a live edit alone doesn't trigger a sync. The next sync, from a new commit, still overwrites any live edit to a resource it applies. Turn self-heal on in the Application's `syncPolicy` to have Argo revert live edits as soon as they happen.
+- An Application generated by an ApplicationSet, or managed from Git by a parent with self-heal, gets its `syncPolicy` reconciled back, so a suspend lasts only until then. Suspend those in the template or in Git. When Radar knows the ApplicationSet or parent Application, the **Disable auto-sync** tooltip names it.
 
 ### Flux
 
 | Operation | What it does |
 |---|---|
 | **Reconcile** | Annotates `reconcile.fluxcd.io/requestedAt` to trigger a single reconcile |
-| **Sync with source** (Kustomization / HelmRelease) | Reconciles the source first, then the resource itself |
+| **Sync with source** (Kustomization / HelmRelease) | Requests the reconciles `flux reconcile --with-source` makes, upstream first: the source, then the resource. For a HelmRelease the source is its chart (the generated HelmChart of an inline `spec.chart`, named from the current spec, or the HelmChart / OCIRepository named by `spec.chartRef`), and a HelmChart's own source is reconciled before it, so a new chart version in the repository is picked up. A suspended or Terminating object anywhere in that chain fails the request with 409 before anything is written. Unlike the CLI, Radar does not wait for each step to finish. An ExternalArtifact comes from another controller, so only the resource is reconciled. Objects are patched at the API version the cluster serves |
 | **Suspend / Resume** | Toggles `spec.suspend` |
 
 ### Keyboard shortcuts (per-app detail page)
@@ -161,8 +225,10 @@ Behavior and guarantees:
   on the target resource's kind) before Argo is consulted. Users can never
   see manifests through Radar's token that Radar's RBAC would deny.
 - **Secret manifests are structurally redacted** — `data`/`stringData` values
-  are masked with per-key changed/unchanged markers on both sides of the
-  diff. There is no un-redact option.
+  are masked per key. A value that is the same on both sides reads
+  `<redacted:unchanged>`; a value that differs reads `<redacted:desired>` and
+  `<redacted:live>`, so a rotated value still shows as a change. There is no
+  un-redact option.
 - Local CLI/Desktop tokens live in `~/.radar/clusters.json` (written `0600`)
   and are never returned by Settings APIs. Unchanged credentials are preserved;
   explicit removal deletes only this context's saved settings and credentials.
@@ -185,6 +251,37 @@ Behavior and guarantees:
 - Argo CD *core* installs have no argocd-server — Radar degrades to the
   annotation-based drift view. Same when the server is unreachable or the
   token expires; the Changes tab keeps working, only the deep diff goes away.
+
+### When Radar connects, and what pages do while it can't
+
+With an Argo CD URL or token configured, Radar connects to argocd-server in
+the background as soon as Kubernetes is connected: at startup, after every
+context switch, and after a settings save. With an empty URL and Radar
+running outside the cluster, that includes opening a port-forward to the
+`argocd-server` Service. Page loads never wait for this connection.
+
+What an Application page does meanwhile:
+
+- **Connecting** (no connection yet, nothing has failed): the page says Radar
+  is still connecting and asks again every 2 seconds.
+- **Retrying** (argocd-server didn't answer, refused the connection, or a
+  proxy in front of it answered 502, 503 or 504): the page shows why Argo's
+  answer is missing and asks again every 30 seconds. Radar re-checks the
+  server at most every 30 seconds, and only while a page has asked in that
+  time, so a closed page stops the retries. Only the page whose own read
+  failed keeps asking; pages for other Applications that loaded fine don't.
+- **Settled**: once Argo's answer is in, or the failure needs you (a rejected
+  token, a certificate Radar can't verify), the page stops asking.
+- **Radar didn't answer** (the page's own request to Radar failed while it was
+  waiting): the page asks again every 30 seconds until Radar answers. It
+  stops if Radar answers that the Application is gone or that you can't read
+  it.
+
+A timed-out per-resource health read is reused for up to 15 seconds, so
+requests that arrive after it, from the same page or other viewers, don't each
+wait out their own attempt. Requests that arrive at the same moment still read
+separately. Settings shows the last failed read until a read succeeds, or
+for two minutes after the last page stopped asking.
 
 The gitops-demo cluster mints a ready-to-use token into
 `scripts/gitops-demo/.radar-argocd-token` (see the demo section below).
@@ -252,18 +349,57 @@ Scoping and lifecycle:
 
 The GitOps tab isn't the only place Argo/Flux ownership matters. Surfaces across Radar know about GitOps and route into the right detail page when they should:
 
-- **K8s resource drawer** — every resource that carries Argo's tracking-id annotation or Flux's owner labels gets a `Managed by <app>` chip in the drawer header. Click → owning Application/Kustomization/HelmRelease detail page. The generic `app.kubernetes.io/instance` label is intentionally *not* used as a signal — it's stamped by virtually every Helm chart and would false-positive plain Helm installs
+- **K8s resource drawer** — the header chip reads `relationships.ownership.manager` ([states](ownership.md#what-manages-an-object)): **Managed by** for `agree`, **Listed by** for `listed` and `shared`, **Tracked by** for `claimed` and `disagree` (with a warning for `disagree`), and **via <Kind>** when a controller ancestor answers. `unknown`/`none` show no chip; native Helm keeps its Helm chip. The tooltip says what names each manager; the manager's sync status shows only for `agree`. Several candidates open a menu naming each; only managers Radar found are linked, and an Application's namespace is never guessed. Older Radars without the answer keep the metadata-based chip.
+- **Related Resources in the resource drawer**:
+  - **Owner** and **Children** come from owner references, the links Kubernetes' garbage collector follows. A Deployment's or Rollout's old ReplicaSets (no Pods, not the current revision) sit behind *Show N older ReplicaSets*.
+  - **Managed By** names the managers whose recorded lists (`status.resources`, `status.inventory`) name the object, plus other controllers that manage it without an owner reference (a cert-manager Certificate for its Secret). **Manages** on a manager lists its members, capped at 500 (`500+`). A recorded list is what the controller compared or applied, so it can include objects it doesn't sync ([ownership](ownership.md#the-model)).
+  - The group is titled **Listed By** when every entry is a manager whose list names the object while its metadata doesn't confirm it (`listed`, `shared`, `disagree`, no via), as the chip words it.
+  - Managed By is hidden only when the chip already says the same: a direct `agree`/`listed` answer whose single manager equals the group's single entry, with no manager coverage note.
+  - When Radar couldn't check everything a group needs (a kind it doesn't collect, a namespace outside its scope, a manager kind loading or refused, a list for a cluster it can't confirm is this one), the group says so rather than showing a short list as complete. An unreadable list and a manager kind discovery missed appear only in the hint, since either could name any object; a manager whose list can't be read still appears where the graph links it.
+  - Flux records no destination with its inventory, so after a `spec.kubeConfig` change the list names the previous destination's objects until the next reconcile.
 - **Topology** — clicking an Argo / Flux CR node opens its GitOps detail page directly, not the generic drawer
 - **Timeline** — lane labels for Argo / Flux CRs route to detail
 - **Helm view** — releases installed by Flux's helm-controller (detected via a HelmRelease CR lookup keyed by `<storageNamespace>/<releaseName>`, since Flux's labels live on the *managed* resources, not the release Secret) carry a `Flux` badge in the list and an amber `Managed by Flux · ns/name` link in the drawer, warning that `helm upgrade` would be reverted at the next reconcile
-- **Flux source CR drawers** — `GitRepository`, `HelmRepository`, `OCIRepository`, `Bucket` drawers carry a `Consumed by` panel listing every Kustomization + HelmRelease whose `spec.sourceRef` points at the source. Answers "if I edit this, what gets affected on the next reconcile?" without guessing
+- **Flux source CR drawers** — Related Resources › **Required by** lists the Kustomizations, HelmReleases and HelmCharts that read the source, within Radar's namespace scope. Answers "if I edit this, what gets affected on the next reconcile?"
+
+## Revert warnings before a write
+
+Before Radar writes to an object a GitOps controller or a Helm release owns, the dialog says what will happen to the change: **will revert**, **may revert**, an informational note, or nothing, with the reasons and a link to the owner. Set image and the Diagnose **Apply** dialog use it. A possible revert asks for an acknowledgment, which clears whenever the verdict changes.
+
+Radar's caches strip `managedFields` and the last-applied annotation, so the browser asks the server: `POST /api/gitops/write-evidence` with `{kind, group, namespace, name, paths[], owner?}`. The server reads the target, and its Argo CD Application or Flux Kustomization/HelmRelease owner, **as the caller**, and returns per field path:
+
+- whether the path is in the last client-side apply (`present` / `absent` / `no-annotation`);
+- which field managers own it, and whether one is the owner's own controller (`approximate` when a manager owns only an ancestor or part of the path, e.g. one container's image under `containers[*]`);
+- whether an ignore rule covers it: `effective` (Argo `ignoreDifferences` with `RespectIgnoreDifferences`, Flux `driftDetection.ignore`, or a reconcile opt-out annotation; Flux's `ssa: IfNotPresent` is read from the live object, which doesn't prove the source declares it, so it stays **may revert**), `comparison-only` (Argo without `RespectIgnoreDifferences`: self-heal won't react, the next sync overwrites), or `unevaluated` (a jq rule, a rule that covers only some of the entries a wildcard matches, or a Flux Kustomization's `spec.ignore`, which Flux documents as keeping a live edit but which hasn't been checked against a live controller). Argo's instance-wide ignore rules in `argocd-cm` aren't read, so a field only they cover still reads as the source setting it. `RespectIgnoreDifferences` counts only from the Application's own sync options: Argo reads it from the sync operation, never from a resource's `sync-options` annotation. Argo matches a `managedFieldsManagers` rule against the field's live owner, and the write makes Radar the owner, so a rule naming another manager doesn't count and one naming Radar's own (`radar`) is `unevaluated`. Argo rules match `group`/`kind` `"*"`; Flux targets are anchored regular expressions, as in Kustomize;
+- a wildcard path (`containers[*].image`) is judged per entry of the live object: the source must declare every container, or a rule cover every container, before the verdict is certain. When the source declares only some, the field is `partial` and the verdict is **may revert**; a wildcard that matches nothing (no init containers) is `empty` and adds no verdict. Set image uses the wildcard only until the dialog lists the containers; then it asks about each container by name (so the evidence can't predate the list) and judges the ones you change;
+- and the owner's sync policy (auto, self-heal, prune, suspended).
+
+The response also includes `manager`, the server's answer from the live target ([states](ownership.md#what-manages-an-object)); it replaces whatever the browser cached or sent as a hint, and its lead picks the policy read. `ownerTracksTarget` says whether that Application's status lists the target. The dialog asks every time it opens. If the server couldn't finish (`managerUnavailable`), or the request fails while the cached answer names a manager, the dialog asks for an acknowledgment instead of trusting the old answer, says why in words, and, when the cause is passing (still loading, a read that failed), to reopen it. A failed request while the cached answer names no manager stays quiet: an object adopted since the cache last saw it goes unwarned, accepted so a flaky request doesn't warn on every edit.
+
+| Answer | Field write | Delete |
+|---|---|---|
+| `agree` | from the field evidence and policy; can be **will revert** | **will revert** with self-heal, else **may revert** |
+| `listed` | **may revert**: Radar can't confirm the manager applies the object | same |
+| `claimed` | **may revert** | same |
+| `disagree`, `shared`, several claims | **may revert**, naming every candidate and linking each one Radar found; no one candidate's exemption applies | same |
+| via an ancestor, no claim on the object | note: generated from the parent | note: its controller recreates it (a CronJob's Job isn't recreated) |
+| chain Radar couldn't read | **may revert** | same |
+| `unknown` from coverage gaps, `none` | nothing | nothing |
+
+Helm annotations beside an Argo CD or Kustomization manager (an adopted install) keep **may revert** even when that manager ignores the field. The answer is the caller's: with `narrowed` it may be incomplete, and a manager they can't read may still revert a change the visible one exempts. Status writes, new child objects, operator-owned deletes and empty wildcard paths keep their own rules. Values from a newer Radar this UI doesn't know count as unconfirmed; older Radars without `manager` keep the previous classifier.
+
+It never returns managedFields or last-applied content, only these facts. Bodies are capped at 16 KiB (413) and at 64 paths; unknown fields are rejected (400). Wildcards in one request expand to at most 256 live entries; a path past that carries an `error` (read as **may revert**) instead of a verdict. Kubernetes 403/404 pass through.
+
+The classification is `evaluateGitOpsWriteGuard` in k8s-ui (`utils/gitops-write-guard.ts`), shown by `GitOpsWriteWarning`; the hook is `web/src/hooks/useGitOpsWriteGuard.ts`. Ownership comes from the manager answer when present, with browser-side parent lookup retained only for older Radars. When the server hasn't built either yet, the parent can't be read, or the server reports a manager the browser can't resolve (the Diagnose run's `managedBy`), ownership is treated as unknown: **may revert**, with an acknowledgment. A Radar without the endpoint (no `gitopsWriteEvidence` capability) gets the same conservative warning, whose reason says it needs a newer Radar; the write itself still works. The copy never promises a change won't be reverted.
 
 ## MCP integration
 
 `manage_gitops` MCP tool exposes the same actions to AI agents with per-action input validation:
 
-- Argo: `sync`, `suspend`, `resume`
-- Flux: `reconcile`, `suspend`, `resume`
+- Argo: `sync`, `refresh`, `terminate`, `rollback`, `suspend`, `resume`
+- Flux: `reconcile`, `sync-with-source`, `suspend`, `resume`
+
+Argo `sync` doesn't prune unless `prune: true`, and uses the Application's own sync options unless `sync_options` names others. See [How Radar performs Argo actions](#how-radar-performs-argo-actions).
 
 `get_resource` Summary carries lifecycle signal (`terminating`, `finalizers`) so AI agents can distinguish a zombie from a live resource and won't suggest `Sync` on something pending deletion.
 
@@ -286,7 +422,7 @@ Fixtures cover healthy + drifted + broken-sync + broken-path + manual-sync + sus
 
 Reading status only needs the default ClusterRole's read access on `argoproj.io` / `*.toolkit.fluxcd.io` (enabled by default in the Helm chart's `rbac.crdGroups.argo` / `.flux`).
 
-Triggering Sync / Reconcile / Suspend / Rollback needs `patch` on the parent CRDs. The chart enables the right verbs when `rbac.helm: true` is set, or you can scope it more tightly via `rbac.additionalRules`.
+Triggering Sync / Reconcile / Suspend / Rollback needs `get` and `patch` on the parent CRDs. The chart enables the right verbs when `rbac.helm: true` is set, or you can scope it more tightly via `rbac.additionalRules`. Argo CD's own RBAC is not consulted; see [How Radar performs Argo actions](#how-radar-performs-argo-actions).
 
 The lifecycle controller-health probe (Home dashboard `GitOps Controllers` card, finalizer-owner attribution in lifecycle Issues) reads pods in `argocd` and `flux-system`. Operators with no access there still get the chip and the basic Issue; the controller-status enrichment is omitted gracefully.
 

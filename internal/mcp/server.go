@@ -14,14 +14,20 @@ import (
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
-func newServer(includeWrites bool) *mcpsdk.Server {
+// newServer builds a Radar MCP server. instructions is the server-instructions
+// text sent in the initialize result and, on protocol 2026-07-28, the
+// server/discover result; empty sends none.
+func newServer(includeWrites, includeExec bool, instructions string) *mcpsdk.Server {
 	paramRegistry := newToolParamRegistry()
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
 			Name:    "radar",
 			Version: version.Current,
 		},
-		nil,
+		&mcpsdk.ServerOptions{
+			Instructions: instructions,
+			SetCacheable: privateCacheScope,
+		},
 	)
 
 	// Repair recognisable argument-name mistakes before schema validation, and
@@ -30,30 +36,93 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	// name is an unrecoverable dead end for an agent. See toolparams.go.
 	server.AddReceivingMiddleware(paramRepairMiddlewareFor(paramRegistry))
 
-	registerTools(server, includeWrites, paramRegistry)
+	registerTools(server, includeWrites, includeExec, paramRegistry)
 	registerResources(server)
 
 	return server
 }
 
+// privateCacheScope marks every cacheable result (server/discover, the list
+// methods, resources/read) as cacheable only by the requesting user's client.
+// Radar answers with one caller's RBAC-filtered view of one cluster, so a
+// shared intermediary must not serve it to anyone else; the SDK's default
+// scope is "public".
+func privateCacheScope(_ context.Context, _ mcpsdk.Request, c *mcpsdk.Cacheable) {
+	c.CacheScope = "private"
+}
+
+// newFullServer is the public server with read and write tools, served over
+// stdio and on /mcp.
+func newFullServer() *mcpsdk.Server { return newServer(true, true, serverInstructions(true)) }
+
 // RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
-	return newServer(true).Run(ctx, &mcpsdk.StdioTransport{})
+	return RunStdioMode(ctx, false, true)
+}
+
+// RunStdioMode uses the same read-only catalog and enforcement as HTTP.
+func RunStdioMode(ctx context.Context, readOnly, allowApplicationEvidence bool) error {
+	ctx = context.WithValue(ctx, runtimeLocalCallerKey{}, true)
+	server := newServer(!readOnly, !readOnly, serverInstructions(!readOnly))
+	if readOnly || !allowApplicationEvidence || !runtimeEvidenceAllowed(ctx) {
+		server.RemoveTools("collect_application_evidence")
+		ctx = context.WithValue(ctx, applicationActionsDisabledKey{}, true)
+	}
+	return server.Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+func NewHandler() http.Handler {
+	localServer, remoteServer := newFullServer(), newFullServer()
+	remoteServer.RemoveTools("collect_application_evidence")
+	return handlerForServerSelector(func(r *http.Request) *mcpsdk.Server {
+		if runtimeEvidenceAllowed(r.Context()) {
+			return localServer
+		}
+		return remoteServer
+	})
+}
+
+func NewHandlerWithoutApplicationEvidence() http.Handler {
+	server := newFullServer()
+	excludeApplicationEvidence(server)
+	return handlerForServer(server)
+}
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
-func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
+func NewReadOnlyHandler() http.Handler {
+	return handlerForServer(newServer(false, false, serverInstructions(false)))
+}
+
+// newApplyServer omits deletion until the built-in approval flow presents its
+// preview. Removing it here enforces the boundary for every agent client.
+func newApplyServer() *mcpsdk.Server {
+	server := newServer(true, false, investigation.GeneralGuidance(true))
+	server.RemoveTools("delete_resource", "manage_helm")
+	excludeApplicationEvidence(server)
+	return server
+}
+
+func excludeApplicationEvidence(server *mcpsdk.Server) {
+	server.RemoveTools("collect_application_evidence")
+	server.AddReceivingMiddleware(func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			return next(context.WithValue(ctx, applicationActionsDisabledKey{}, true), method, req)
+		}
+	})
+}
+
+// NewApplyHandler is the built-in remediation transport for built-in agents.
+func NewApplyHandler() http.Handler { return handlerForServer(newApplyServer()) }
 
 // NewInvestigationHandler creates the private read-only MCP transport used by
 // Radar's built-in investigation runner. It deliberately has a separate mount
 // from the public /mcp-readonly surface: the evidence marker is an internal
 // correlation protocol between Radar and its agent adapters, not part of the
-// normal tool result contract.
+// normal tool result contract. It sends no server instructions: the agent
+// already runs under investigation.SystemPrompt.
 func NewInvestigationHandler(refs *investigationrefs.Registry) http.Handler {
-	return investigationHandlerForServer(newServer(false), refs)
+	return investigationHandlerForServer(newServer(false, false, ""), refs)
 }
 
 func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationrefs.Registry) http.Handler {
@@ -83,7 +152,8 @@ func investigationEvidenceReferenceMiddleware(refs *investigationrefs.Registry) 
 			if err != nil {
 				return result, err
 			}
-			if method == "initialize" || method == "tools/list" {
+			// server/discover replaces initialize on protocol 2026-07-28.
+			if method == "initialize" || method == "server/discover" || method == "tools/list" {
 				if scope, _ := ctx.Value(investigationEvidenceScopeKey{}).(string); scope != "" {
 					refs.MarkConnected(scope)
 				}
@@ -136,21 +206,37 @@ func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref s
 	result.Content = append([]mcpsdk.Content{marker}, result.Content...)
 }
 
+// maxRequestBodyBytes bounds one MCP request over HTTP. The SDK's default is
+// 4 MiB, below what apply_resource accepts: a multi-document manifest of
+// objects that are each under the API server's limit can be larger, and the
+// JSON-escaped YAML grows in transit. This matches the SDK's cap on one stdio
+// frame, so both transports accept the same calls.
+const maxRequestBodyBytes = mcpsdk.DefaultMaxLineLength
+
 func handlerForServer(server *mcpsdk.Server) http.Handler {
-	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
+	return handlerForServerSelector(func(*http.Request) *mcpsdk.Server { return server })
+}
+
+func handlerForServerSelector(selectServer func(*http.Request) *mcpsdk.Server) http.Handler {
+	streamOpts := &mcpsdk.StreamableHTTPOptions{
+		Stateless:           true,
+		MaxRequestBodyBytes: maxRequestBodyBytes,
+	}
 	// The MCP SDK auto-enables DNS-rebinding protection (Host header must be
-	// loopback) when the server binds to a loopback address. That blocks
+	// loopback) when the connection arrives on a loopback address. That blocks
 	// Docker-isolated callers reaching us via host.docker.internal. Allow
-	// opt-out via env for bench setups.
+	// opt-out via env for bench setups. Radar's own Host check still applies
+	// in front of /mcp: such callers also need --listen-address=0.0.0.0 and
+	// --allowed-hosts=host.docker.internal.
 	if os.Getenv("RADAR_MCP_DISABLE_LOCALHOST_PROTECTION") == "1" {
 		streamOpts.DisableLocalhostProtection = true
 		log.Printf("[mcp] WARNING: DNS-rebinding Host check DISABLED via env (bench mode)")
 	}
 
-	handler := mcpsdk.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcpsdk.Server { return server },
+	handler := runtimeLocalCaller(withHTTPRequestContext(mcpsdk.NewStreamableHTTPHandler(
+		selectServer,
 		streamOpts,
-	)
+	)))
 
 	// go-sdk v1.6 removed the implicit cross-origin protection default;
 	// wrap the handler so a malicious page can't drive the local MCP server.
@@ -167,9 +253,9 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 	prot := http.NewCrossOriginProtection()
 
 	// Allow additional origins for browser-style callers. Does NOT affect
-	// Host header validation — for Docker/external-host access use the
-	// DISABLE env above. RADAR_MCP_TRUSTED_ORIGINS is a comma-separated
-	// list of scheme://host[:port] entries.
+	// Host header validation, which is --allowed-hosts plus the SDK check
+	// above. RADAR_MCP_TRUSTED_ORIGINS is a comma-separated list of
+	// scheme://host[:port] entries.
 	if env := strings.TrimSpace(os.Getenv("RADAR_MCP_TRUSTED_ORIGINS")); env != "" {
 		for _, origin := range strings.Split(env, ",") {
 			origin = strings.TrimSpace(origin)

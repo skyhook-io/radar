@@ -2,26 +2,7 @@ package k8s
 
 import (
 	"testing"
-	"time"
 )
-
-func TestFormatAge(t *testing.T) {
-	tests := []struct {
-		d    time.Duration
-		want string
-	}{
-		{30 * time.Second, "30s"},
-		{5 * time.Minute, "5m"},
-		{3 * time.Hour, "3h"},
-		{48 * time.Hour, "2d"},
-	}
-	for _, tt := range tests {
-		got := FormatAge(tt.d)
-		if got != tt.want {
-			t.Errorf("FormatAge(%v) = %q, want %q", tt.d, got, tt.want)
-		}
-	}
-}
 
 func TestTruncate(t *testing.T) {
 	tests := []struct {
@@ -54,6 +35,12 @@ func TestParseCPUToMillis(t *testing.T) {
 		{"1000m", 1000},
 		{"500000000n", 500},
 		{"100000000n", 100},
+		{"98753u", 99},
+		{"1n", 1},
+		{"98753000n", 99},
+		{"1.5", 1500},
+		{"2k", 2000000},
+		{"garbage", 0},
 	}
 	for _, tt := range tests {
 		got := ParseCPUToMillis(tt.input)
@@ -75,6 +62,12 @@ func TestParseMemoryToBytes(t *testing.T) {
 		{"256Mi", 256 * 1024 * 1024},
 		{"1Gi", 1024 * 1024 * 1024},
 		{"2Gi", 2 * 1024 * 1024 * 1024},
+		{"1G", 1000 * 1000 * 1000},
+		{"1500k", 1500 * 1000},
+		{"1.5Gi", 3 * 512 * 1024 * 1024},
+		{"1Ti", 1024 * 1024 * 1024 * 1024},
+		{"400m", 1},
+		{"garbage", 0},
 	}
 	for _, tt := range tests {
 		got := ParseMemoryToBytes(tt.input)

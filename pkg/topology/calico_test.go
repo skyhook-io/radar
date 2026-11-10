@@ -155,6 +155,19 @@ func TestCalicoPolicyTopology(t *testing.T) {
 		t.Fatalf("Build() error: %v", err)
 	}
 
+	frontend := GetRelationships("Deployment", "demo", "frontend", topo, provider, nil)
+	if frontend == nil || len(frontend.NetworkPolicies) != 1 || len(frontend.StagedPolicies) != 2 {
+		t.Fatalf("Calico enforced/staged projections = %+v", frontend)
+	}
+	for _, id := range []string{"caliconetworkpolicy/demo/frontend-policy", "calicostagednetworkpolicy/demo/frontend-staged", "calicostagedkubernetesnetworkpolicy/demo/frontend-kubernetes-staged"} {
+		ref := resourceRefForNode(nodeByID(topo.Nodes, id), nil)
+		obj := calicoTestObject(ref.Group, "v3", ref.Kind, ref.Namespace, ref.Name, nil)
+		rel := GetRelationshipsWithObject(ref.Kind, ref.Namespace, ref.Name, obj, topo, provider, nil, IndexByResource(topo))
+		if rel == nil || len(rel.Protects) != 1 || rel.Protects[0].Name != "frontend" {
+			t.Fatalf("Calico policy targets = %+v", rel)
+		}
+	}
+
 	nodes := map[NodeKind]Node{}
 	for _, node := range topo.Nodes {
 		if node.Kind == KindCalicoNetworkPolicy || node.Kind == KindCalicoGlobalNetworkPolicy || node.Kind == KindCalicoStagedNetworkPolicy || node.Kind == KindCalicoStagedGlobalNetworkPolicy || node.Kind == KindCalicoStagedKubernetesNetworkPolicy {
@@ -299,6 +312,9 @@ func TestCalicoEndpointSelectorsUseAutomaticLabels(t *testing.T) {
 		{name: "orchestrator", selector: "projectcalico.org/orchestrator == 'k8s'", wantMatch: true},
 		{name: "wrong namespace", selector: "projectcalico.org/namespace == 'other'", wantMatch: false},
 		{name: "wrong orchestrator", selector: "projectcalico.org/orchestrator == 'calico'", wantMatch: false},
+		{name: "service account", selector: "projectcalico.org/serviceaccount == 'default'", wantMatch: true},
+		{name: "has service account", selector: "has(projectcalico.org/serviceaccount)", wantMatch: true},
+		{name: "wrong service account", selector: "projectcalico.org/serviceaccount == 'payments-api'", wantMatch: false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			policy := calicoTestObject("projectcalico.org", "v3", "NetworkPolicy", "demo", test.name, map[string]any{"selector": test.selector})
@@ -307,6 +323,26 @@ func TestCalicoEndpointSelectorsUseAutomaticLabels(t *testing.T) {
 				t.Fatalf("selector %q matched=%v valid=%v, want matched=%v valid=true", test.selector, matched, valid, test.wantMatch)
 			}
 		})
+	}
+}
+
+// Calico labels every pod endpoint with its service account, defaulting an
+// unset one, and only when the name fits in a label value.
+func TestCalicoEndpointLabelsServiceAccount(t *testing.T) {
+	long := strings.Repeat("a", 63)
+	for _, test := range []struct {
+		serviceAccount string
+		want           string
+		present        bool
+	}{
+		{"payments-api", "payments-api", true},
+		{"", "default", true},
+		{long, "", false},
+	} {
+		got, ok := CalicoEndpointLabels("demo", nil, test.serviceAccount)["projectcalico.org/serviceaccount"]
+		if ok != test.present || got != test.want {
+			t.Errorf("CalicoEndpointLabels(sa=%q) serviceaccount label = %q (present %v), want %q (present %v)", test.serviceAccount, got, ok, test.want, test.present)
+		}
 	}
 }
 

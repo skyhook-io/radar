@@ -6,6 +6,7 @@ export interface DockTab {
   id: string
   type: DockTabType
   title: string
+  titleTooltip?: string
   // Common app context (optional — app-specific, used by tab content components)
   orgId?: string
   clusterId?: string
@@ -15,6 +16,10 @@ export interface DockTab {
   podName?: string
   containerName?: string
   containers?: string[]
+  /** Terminal: run this command instead of a shell (one argv element, e.g. "psql"). */
+  shell?: string
+  /** Terminal: a short line shown in the toolbar, e.g. what the session is connected to. */
+  sessionNote?: string
   // Workload logs props
   workloadKind?: string
   workloadName?: string
@@ -22,6 +27,7 @@ export interface DockTab {
   nodeName?: string
   // Local terminal props
   initialCommand?: string
+  localTerminalContext?: string
 }
 
 export interface DockContextValue {
@@ -33,6 +39,7 @@ export interface DockContextValue {
   isMaximized: boolean
   isResizing: boolean
   addTab: (tab: Omit<DockTab, 'id'>) => string
+  setTabTitle: (id: string, title: string, titleTooltip?: string) => void
   removeTab: (id: string) => void
   setActiveTab: (id: string) => void
   toggleExpanded: () => void
@@ -84,10 +91,14 @@ export function DockProvider({ children }: { children: ReactNode }) {
       }
       return t.namespace === tabData.namespace &&
              t.podName === tabData.podName &&
-             t.containerName === tabData.containerName
+             t.containerName === tabData.containerName &&
+             t.shell === tabData.shell
     })
 
     if (existingTab) {
+      if (tabData.type === 'terminal' && tabData.sessionNote !== undefined) {
+        setTabs(prev => prev.map(tab => tab.id === existingTab.id ? { ...tab, sessionNote: tabData.sessionNote } : tab))
+      }
       setActiveTabId(existingTab.id)
       setIsExpanded(true)
       return existingTab.id
@@ -118,6 +129,10 @@ export function DockProvider({ children }: { children: ReactNode }) {
     })
   }, [activeTabId])
 
+  const setTabTitle = useCallback((id: string, title: string, titleTooltip?: string) => {
+    setTabs(prev => prev.map(tab => tab.id === id ? { ...tab, title, titleTooltip } : tab))
+  }, [])
+
   const setActiveTab = useCallback((id: string) => {
     setActiveTabId(id)
   }, [])
@@ -142,6 +157,7 @@ export function DockProvider({ children }: { children: ReactNode }) {
       isMaximized,
       isResizing,
       addTab,
+      setTabTitle,
       removeTab,
       setActiveTab,
       toggleExpanded,
@@ -163,6 +179,15 @@ export function useDock() {
     throw new Error('useDock must be used within a DockProvider')
   }
   return context
+}
+
+/**
+ * Whether the dock's content is on screen. A collapsed dock keeps its tabs
+ * mounted and the selected one still reports itself active. Safe without a
+ * DockProvider ancestor (treated as shown).
+ */
+export function useDockContentVisible(): boolean {
+  return useContext(DockContext)?.isExpanded ?? true
 }
 
 /**
@@ -189,7 +214,7 @@ export function useDockReservedHeight(): number {
 // Convenience hooks for adding specific tab types
 
 export function useOpenTerminal() {
-  const { addTab } = useDock()
+  const { addTab, setTabTitle } = useDock()
 
   return (opts: {
     namespace: string
@@ -199,18 +224,24 @@ export function useOpenTerminal() {
     orgId?: string
     clusterId?: string
     clusterName?: string
+    shell?: string
+    sessionNote?: string
+    title?: string
   }) => {
-    addTab({
+    const id = addTab({
       type: 'terminal',
-      title: `${opts.podName}/${opts.containerName}`,
+      title: opts.title ?? `${opts.podName}/${opts.containerName}`,
       namespace: opts.namespace,
       podName: opts.podName,
       containerName: opts.containerName,
       containers: opts.containers,
+      shell: opts.shell,
+      sessionNote: opts.sessionNote,
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,
     })
+    if (opts.title !== undefined) setTabTitle(id, opts.title)
   }
 }
 

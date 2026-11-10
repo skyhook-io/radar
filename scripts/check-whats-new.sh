@@ -50,15 +50,16 @@ cat >&2 <<EOF
 What's New: no notes for $version${ref:+ at $ref}.
 
 $version is a minor or major release, and those must tell users what's new.
+Read .agents/skills/whats-new/SKILL.md for the authoring and preview workflow.
 Add an entry to $catalog before tagging:
 
   {
     version: '$version',
-    releaseUrl: 'https://github.com/skyhook-io/radar/releases/tag/$version',
-    highlights: [/* lead highlight first; path + cta open the feature */],
+    highlights: [/* each with importance 1-10; path + cta open the feature */],
     improvements: [/* short lines for "Also in this release" */],
   }
 
 Preview it with a local build at http://localhost:9280/?whats-new=$version
+(add &whats-new-from=<older version> to see it composed for a skipped upgrade).
 EOF
 exit 1

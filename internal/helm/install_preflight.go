@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"slices"
 	"time"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -13,6 +14,8 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/storage/driver"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // ReleasePendingError is returned when a prior install/upgrade left the release
@@ -197,12 +200,20 @@ func freshInstallCheck(actionConfig *action.Configuration, name, namespace strin
 // the action; see upgrade.go:49-58).
 func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest, ch *chart.Chart, mode installMode) (*release.Release, error) {
 	if mode == installUpgrade {
+		if err := useReleaseTargetNamespace(actionConfig, req.ReleaseName); err != nil {
+			return nil, err
+		}
 		upgrade := action.NewUpgrade(actionConfig)
 		upgrade.Install = true
 		upgrade.Namespace = req.Namespace
 		upgrade.Timeout = 120 * time.Second
 		upgrade.MaxHistory = 10
 		upgrade.Version = req.Version
+		if previous, err := actionConfig.Releases.Last(req.ReleaseName); err == nil {
+			upgrade.Labels = boundChartSourceLabels(previous.Labels, req.resolvedSource, ch)
+		} else {
+			return nil, fmt.Errorf("load previous release labels: %w", err)
+		}
 		// action.Upgrade has no CreateNamespace; reaching this branch implies a
 		// prior release record exists, so the namespace was created earlier. If
 		// it has been deleted manually since, the user must recreate it.
@@ -211,11 +222,23 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 	install := action.NewInstall(actionConfig)
 	install.ReleaseName = req.ReleaseName
 	install.Namespace = req.Namespace
-	install.CreateNamespace = req.CreateNamespace
+	install.CreateNamespace = createsNamespace(req)
 	install.Timeout = 120 * time.Second
 	install.Version = req.Version
 	install.Replace = mode == installReplace
+	install.Labels = chartSourceLabels(req.resolvedSource)
+	if req.resolvedSource != nil {
+		install.Labels[chartSourceBindingLabel] = chartSourceBinding(ch)
+	}
 	return install.Run(ch, req.Values)
+}
+
+// createsNamespace reports whether the install asks Helm to create its
+// namespace. Not for a namespace in --rbac-namespaces: it exists, since the
+// install's RoleBindings live there, and those bindings cannot grant namespace
+// create, so Helm's create would be refused before the apiserver found it.
+func createsNamespace(req *InstallRequest) bool {
+	return req.CreateNamespace && !slices.Contains(k8s.RBACNamespaces(), req.Namespace)
 }
 
 // rbacPreflightRe matches Helm's wrapped pre-flight RBAC error. Helm formats
@@ -264,6 +287,9 @@ type InstallErrorClass struct {
 func classifyInstallError(err error) InstallErrorClass {
 	if err == nil {
 		return InstallErrorClass{}
+	}
+	if errors.Is(err, errChartDigest) {
+		return InstallErrorClass{Status: http.StatusBadGateway, Code: "chart_digest_failed", Message: err.Error()}
 	}
 	var pending *ReleasePendingError
 	if errors.As(err, &pending) {

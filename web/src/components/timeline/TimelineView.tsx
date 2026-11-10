@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { ReactNode } from 'react'
-import { Network, AlertTriangle, RefreshCw, Boxes, X } from 'lucide-react'
+import { Network, AlertTriangle, Boxes, X } from 'lucide-react'
 import {
   clampLensToSelection,
   deriveLiveSelection,
@@ -21,10 +21,14 @@ import {
   useDebouncedValue,
 } from '@skyhook-io/k8s-ui'
 import { TimelineList } from './TimelineList'
+import { TimelineLoadError, TimelineStaleNote } from './TimelineLoadError'
+import { ViewModeToggle } from './ViewModeToggle'
+import { useStickyError } from './useStickyError'
 import type { ActivityFilterKey } from './TimelineList'
 import { TimelineSwimlanes } from './TimelineSwimlanes'
 import { RetainedTimelineScrubber, extendSelection, type ScrubberDomainInfo } from './RetainedTimelineScrubber'
 import { LocalTimelineScrubber } from './LocalTimelineScrubber'
+import { TimelineRetentionBanner } from './TimelineRetentionNote'
 import { useTopology, useApplications } from '../../api/client'
 import { useTimelineSource } from '../../context/TimelineSource'
 import type { Topology } from '../../types'
@@ -125,6 +129,7 @@ export interface PersistedTimelineState {
   viewMode: TimelineViewMode
   mode: TimelineMode
   showDeleted: boolean
+  showRoutine: boolean
   pinnedOnly: boolean
   search: string
   activityFilter: ActivityFilterKey[]
@@ -237,6 +242,7 @@ export function writeTimelineParams(
   set('activity', s.activityFilter.length ? s.activityFilter.join(',') : null)
   set('kinds', s.kindFilter.length ? s.kindFilter.join(',') : null)
   set('deleted', s.showDeleted ? null : '0')
+  set('routine', s.showRoutine ? '1' : null)
   set('pinnedOnly', s.pinnedOnly ? '1' : null)
   set('q', s.search.length ? s.search : null)
   set('grouping', s.grouping !== DEFAULT_GROUPING ? s.grouping : null)
@@ -272,6 +278,7 @@ interface TimelineViewProps {
   requiresNamespaceFilter?: boolean
   availableNamespaces?: { name: string }[]
   onNamespaceSelect?: (ns: string) => void
+  onOpenDiagnostics?: () => void
 }
 
 export function resolveApplicationTimelineScope(searchParams: URLSearchParams, namespaces: string[]) {
@@ -290,7 +297,7 @@ export function resolveApplicationTimelineScope(searchParams: URLSearchParams, n
   }
 }
 
-export function TimelineView({ namespaces, onResourceClick, initialViewMode, initialFilter, initialTimeRange, requiresNamespaceFilter, availableNamespaces, onNamespaceSelect }: TimelineViewProps) {
+export function TimelineView({ namespaces, onResourceClick, initialViewMode, initialFilter, initialTimeRange, requiresNamespaceFilter, availableNamespaces, onNamespaceSelect, onOpenDiagnostics }: TimelineViewProps) {
   // URL is the source of truth for every control below (deep-linkable +
   // back/forward-restorable). Read on mount, written on user change.
   const [searchParams, setSearchParams] = useSearchParams()
@@ -309,6 +316,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // and so the fetch can exclude deletes at the source rather than only hiding
   // them client-side.
   const [showDeleted, setShowDeleted] = useState(() => searchParams.get('deleted') !== '0')
+  const [showRoutine, setShowRoutine] = useState(() => searchParams.get('routine') === '1')
   // ?pinnedOnly=1 is inert without pins: honoring it with no stored pins would
   // arm a filter that hides everything. Gate the read on stored pins so the param
   // can never arm on its own — ordering-proof, independent of when the empty-pins
@@ -634,6 +642,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     setMode((prev) => (timeModeEqual(prev, nextMode) ? prev : nextMode))
     const nextDeleted = sp.get('deleted') !== '0'
     setShowDeleted((prev) => (prev === nextDeleted ? prev : nextDeleted))
+    const nextRoutine = sp.get('routine') === '1'
+    setShowRoutine((prev) => (prev === nextRoutine ? prev : nextRoutine))
     // Same guard as the lazy init: the param can only arm the filter when pins
     // exist, so a mount that runs this after the empty-pins reset can't re-arm it.
     const nextPinnedOnly = sp.get('pinnedOnly') === '1' && pinnedLanes.length > 0
@@ -658,7 +668,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const current = searchParamsRef.current
     const target = writeTimelineParams(
       current,
-      { viewMode, mode, showDeleted, pinnedOnly, search: debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId },
+      { viewMode, mode, showDeleted, showRoutine, pinnedOnly, search: debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId },
       { isRetained: isRetained || isLocal, requiresNamespaceFilter: scopeRequiresNamespaceFilter },
     )
     const targetStr = target.toString()
@@ -672,12 +682,12 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const replace = !didMountUrlSyncRef.current || onlyHighFreqDiffer(currentStr, targetStr)
     didMountUrlSyncRef.current = true
     setSearchParamsRef.current(target, { replace })
-  }, [viewMode, mode, showDeleted, pinnedOnly, debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, scopeRequiresNamespaceFilter])
+  }, [viewMode, mode, showDeleted, showRoutine, pinnedOnly, debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, scopeRequiresNamespaceFilter])
 
   // Fetch all activity - zoom controls what's visible in the UI. This ring feeds
   // the swimlanes and the local strip's histogram, so it also runs in list mode
   // when that strip is shown; the list itself fetches its own 2000.
-  const { data: activity, isLoading, isError, error, refetch, truncated: ringTruncated } = timelineSource.useEvents({
+  const { data: activity, isLoading, isFetching, isError, error, refetch, truncated: ringTruncated } = timelineSource.useEvents({
     namespaces: timelineNamespaces,
     timeRange: 'all',
     includeK8sEvents: true,
@@ -695,6 +705,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     fromMs: isRetained ? selection.fromMs : undefined,
     toMs: isRetained ? selection.toMs : undefined,
   })
+  const loadError = useStickyError(error, activity != null)
 
   // Topology powers both swimlane hierarchy and application-scoped attribution.
   const { data: rawTopology } = useTopology(timelineNamespaces, 'resources', {
@@ -824,11 +835,16 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // The scrubber sits above whichever view is active, sharing one selection
   // across list + swimlane. Retained draws its server-overview strip; local
   // derives the strip client-side from the loaded ring and omits the gap band.
+  // The host's note about how far back history goes: without it the stretch
+  // before the limit reads as "nothing happened". Without a scrubber the list
+  // view shows it itself, above its own range selector.
+  const retentionBanner = showScrubber || viewMode === 'swimlane' ? <TimelineRetentionBanner /> : null
   const wrap = (node: ReactNode): ReactNode => {
     if (!showScrubber) {
       return (
         <div className="flex-1 flex flex-col min-h-0">
           {appScopeBar}
+          {retentionBanner}
           <div className="flex-1 flex flex-col min-h-0">{node}</div>
         </div>
       )
@@ -845,6 +861,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     return (
       <div className="flex-1 flex flex-col min-h-0">
         {appScopeBar}
+        {retentionBanner}
         {/* A row-capped ring load means the OLDEST part of the retention
             window is not loaded — say so, or an old selection reads as
             "nothing happened back then". */}
@@ -857,13 +874,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
         {/* Failing background polls with a loaded ring: keep the data, say
             it's going stale. The full-screen error is reserved for no-data. */}
         {isError && activity && (
-          <div className="flex items-center gap-1.5 border-b border-theme-border px-4 py-1.5 text-xs text-theme-text-tertiary">
-            <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${SEVERITY_TEXT.warning}`} />
-            Live updates are failing — the timeline may be stale.
-            <button type="button" onClick={() => refetch()} className="underline hover:text-theme-text-primary">
-              Retry now
-            </button>
-          </div>
+          <TimelineStaleNote error={error} subject="timeline" onRetry={() => refetch()} />
         )}
         {isRetained ? (
           <RetainedTimelineScrubber
@@ -955,29 +966,23 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     // a load failure. With a loaded ring on screen, a failing background poll
     // must NOT blank it (gate on data before error); the stale-data banner
     // below carries the warning instead.
-    if (isError && !activity) {
+    if (loadError && !activity) {
       // Surface the server's own message — a generic "failed to load" would
       // swallow whatever the hub said. "Try again" is a full resync: the
       // retained source drops its delta cursor and reloads the whole ring.
-      const detail = error?.message?.trim()
       return wrap(
         <div className="flex-1 flex flex-col">
           <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border">
             <div />
             <ViewModeToggle viewMode={viewMode} onViewModeChange={setViewMode} />
           </div>
-          <div className="flex-1 flex flex-col items-center justify-center text-theme-text-tertiary gap-3 px-6">
-            <AlertTriangle className="w-10 h-10 text-amber-400/70" />
-            <p className="text-base">Failed to load timeline data</p>
-            {detail && <p className="max-w-md text-center text-sm text-theme-text-tertiary">{detail}</p>}
-            <button
-              onClick={() => refetch()}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg hover:bg-theme-hover transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Try again
-            </button>
-          </div>
+          <TimelineLoadError
+            className="flex-1"
+            error={loadError}
+            retrying={isFetching}
+            onRetry={() => refetch()}
+            onOpenDiagnostics={onOpenDiagnostics}
+          />
         </div>
       )
     }
@@ -1032,6 +1037,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       initialTimeRange={initialTimeRange}
       showDeleted={showDeleted}
       onShowDeletedChange={setShowDeleted}
+      showRoutine={showRoutine}
+      onShowRoutineChange={setShowRoutine}
       search={search}
       onSearchChange={setSearch}
       activityFilter={activityFilter}
@@ -1050,27 +1057,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       appScoped={Boolean(focusedAppKey)}
       topology={stableTopology}
       appScopeLoading={focusedAppLoading}
+      onOpenDiagnostics={onOpenDiagnostics}
     />
-  )
-}
-
-function ViewModeToggle({ viewMode, onViewModeChange }: { viewMode: TimelineViewMode, onViewModeChange: (mode: TimelineViewMode) => void }) {
-  return (
-    <div className="flex items-center gap-1 bg-theme-base rounded-lg p-0.5 border border-theme-border">
-      <button
-        type="button"
-        onClick={() => onViewModeChange('list')}
-        className={`px-2 py-1 text-xs rounded-md transition-colors ${viewMode === 'list' ? 'bg-theme-surface text-theme-text-primary shadow-sm' : 'text-theme-text-secondary hover:text-theme-text-primary'}`}
-      >
-        List
-      </button>
-      <button
-        type="button"
-        onClick={() => onViewModeChange('swimlane')}
-        className={`px-2 py-1 text-xs rounded-md transition-colors ${viewMode === 'swimlane' ? 'bg-theme-surface text-theme-text-primary shadow-sm' : 'text-theme-text-secondary hover:text-theme-text-primary'}`}
-      >
-        Swimlane
-      </button>
-    </div>
   )
 }

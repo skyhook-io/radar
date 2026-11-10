@@ -157,3 +157,47 @@ func TestSummarizeArgoAnalysisRun_AbsentDryRunStillCounts(t *testing.T) {
 		t.Fatalf("issue = %q, want the failing metric named", summary.Issue)
 	}
 }
+
+func TestSummarizeArgoAnalysisRun_MessageIsOnlyAnIssueOnABadVerdict(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    map[string]any
+		wantIssue string
+	}{
+		{
+			name:      "failed run with no scored metric falls back to the message",
+			status:    map[string]any{"phase": "Failed", "message": "Run Failed"},
+			wantIssue: "Run Failed",
+		},
+		{
+			name:      "errored run falls back to the message",
+			status:    map[string]any{"phase": "Error", "message": `Unable to resolve metric arguments: secrets "db-creds" not found`},
+			wantIssue: "Unable to resolve metric arguments",
+		},
+		{
+			name:      "inconclusive run falls back to the message",
+			status:    map[string]any{"phase": "Inconclusive", "message": "Metric assessed Inconclusive"},
+			wantIssue: "Metric assessed Inconclusive",
+		},
+		{
+			name:      "run stopped by the controller is not an issue",
+			status:    map[string]any{"phase": "Successful", "message": "Run Terminated"},
+			wantIssue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summary := summarizeUnstructured(argoObj("AnalysisRun", nil, nil, tt.status))
+			if tt.wantIssue == "" {
+				if summary.Issue != "" {
+					t.Fatalf("issue = %q, want empty", summary.Issue)
+				}
+				return
+			}
+			if !strings.Contains(summary.Issue, tt.wantIssue) {
+				t.Fatalf("issue = %q, want it to contain %q", summary.Issue, tt.wantIssue)
+			}
+		})
+	}
+}

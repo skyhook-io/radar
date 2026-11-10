@@ -35,6 +35,11 @@ func cond(typ, status string) map[string]any {
 	return map[string]any{"type": typ, "status": status}
 }
 
+func condGen(c map[string]any, generation int64) map[string]any {
+	c["observedGeneration"] = generation
+	return c
+}
+
 func condReason(typ, status, reason string) map[string]any {
 	return map[string]any{"type": typ, "status": status, "reason": reason}
 }
@@ -68,9 +73,10 @@ func TestFluxStatusTruthTable(t *testing.T) {
 		},
 		{
 			// Flux writes -1 on an object it has never reconciled. Present and
-			// different, so it counts.
+			// different, so it counts. (A first reconcile reports Ready=Unknown; a
+			// reported failure is covered below and outranks drift.)
 			name:     "the -1 sentinel counts as drift",
-			obj:      fluxObj(false, int64(1), int64(-1), cond("Ready", "False"), cond("Reconciling", "True")),
+			obj:      fluxObj(false, int64(1), int64(-1), cond("Ready", "Unknown"), cond("Reconciling", "True")),
 			wantSync: "Reconciling", wantHealth: "Progressing",
 		},
 		{
@@ -133,6 +139,39 @@ func TestFluxStatusTruthTable(t *testing.T) {
 			name:     "a settled Ready=False is degraded",
 			obj:      fluxObj(false, int64(1), int64(1), condReason("Ready", "False", "BuildFailed")),
 			wantSync: "OutOfSync", wantHealth: "Degraded",
+		},
+		{
+			// Live shape of a GitRepository whose repository doesn't exist:
+			// never reconciled (-1) and retrying, but the clone failure is settled.
+			name: "a failure while retrying and never reconciled is degraded",
+			obj: fluxObj(false, int64(1), int64(-1),
+				condReason("Reconciling", "True", "ProgressingWithRetry"),
+				condGen(condReason("Ready", "False", "GitOperationFailed"), 1)),
+			wantSync: "OutOfSync", wantHealth: "Degraded",
+		},
+		{
+			// A source edited to a ref that doesn't exist: the new generation is
+			// never recorded while the fetch fails.
+			name:     "a failure after a spec change is degraded",
+			obj:      fluxObj(false, int64(2), int64(1), condGen(condReason("Ready", "False", "ArtifactFailed"), 2)),
+			wantSync: "OutOfSync", wantHealth: "Degraded",
+		},
+		{
+			// The spec was fixed (generation 3); the failure still describes
+			// generation 2, so it says nothing about the new spec yet.
+			name:     "a failure about an older generation does not outrank a new spec",
+			obj:      fluxObj(false, int64(3), int64(1), condGen(condReason("Ready", "False", "BuildFailed"), 2)),
+			wantSync: "Reconciling", wantHealth: "Progressing",
+		},
+		{
+			name:     "a failure without a condition generation does not outrank drift",
+			obj:      fluxObj(false, int64(2), int64(1), condReason("Ready", "False", "BuildFailed")),
+			wantSync: "Reconciling", wantHealth: "Progressing",
+		},
+		{
+			name:     "a retry while reconciling stays progressing",
+			obj:      fluxObj(false, int64(2), int64(1), condReason("Reconciling", "True", "Progressing"), condReason("Ready", "False", "ProgressingWithRetry")),
+			wantSync: "Reconciling", wantHealth: "Progressing",
 		},
 		{
 			name:     "no conditions at all",

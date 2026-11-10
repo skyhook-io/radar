@@ -1,7 +1,7 @@
 import { isDeploymentLikeWorkloadKind } from '../../types';
 import type { Issue } from './types';
 
-export type IssueTimingDisplayKind = 'creation' | 'regression';
+export type IssueTimingDisplayKind = 'creation' | 'regression' | 'deletion';
 
 export interface IssueTimingDisplay {
   kind: IssueTimingDisplayKind;
@@ -77,6 +77,17 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
   const grouped = (coverage?.known ?? 0) + (coverage?.unknown ?? 0) > 1;
   const uncertaintyMeta = onsetUncertaintyMeta(issue);
   const uncertaintyTooltip = onsetUncertaintyTooltip(issue);
+  // A stuck deletion is timed from its deletionTimestamp. The creation-vs-healthy
+  // classification only says whether the object was deleted soon after it was
+  // created, which is not what the age beside this chip measures.
+  if (issue.issue_timing_basis === 'deletion' && issue.issue_timing) {
+    return {
+      kind: 'deletion',
+      chip: 'since deletion',
+      meta: 'pending since deletion was requested',
+      tooltip: 'Timed from when deletion was requested; the object is still present.',
+    };
+  }
   switch (issue.issue_timing) {
     case 'started_after_resource_was_healthy': {
       if (issue.issue_timing_basis === 'owner_condition') {
@@ -113,9 +124,9 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
       }
       return {
         kind: 'regression',
-        chip: 'after healthy',
+        chip: issue.kind === 'Node' && issue.reason === 'NotReady' ? 'NotReady' : 'after healthy',
         meta: 'failing evidence followed a healthy period',
-        tooltip: 'A healthy period preceded this failing evidence.',
+        tooltip: issue.kind === 'Node' && issue.reason === 'NotReady' ? 'The Ready condition stopped reporting healthy at this time.' : 'A healthy period preceded this failing evidence.',
       };
     }
     case 'started_at_resource_creation': {

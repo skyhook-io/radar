@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/traffic"
 )
@@ -19,7 +20,7 @@ func TestTrafficFlowsPayloadKeepsWarningKind(t *testing.T) {
 		WarningKind: traffic.WarningPartial,
 	}
 
-	encoded, err := json.Marshal(trafficFlowsPayload(response, response.Flows))
+	encoded, err := json.Marshal(trafficFlowsPayload(response, response.Flows, false))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -39,7 +40,7 @@ func TestTrafficFlowsPayloadKeepsWarningKind(t *testing.T) {
 	// A source that sets no kind must not gain one: absent means transient, and
 	// inventing a value here would change how existing sources are retried.
 	plain := &traffic.FlowsResponse{Source: "caretta", Flows: []traffic.Flow{}, Warning: "port-forward not ready"}
-	if _, ok := trafficFlowsPayload(plain, plain.Flows)["warningKind"]; ok {
+	if _, ok := trafficFlowsPayload(plain, plain.Flows, false)["warningKind"]; ok {
 		t.Error("warningKind should be absent when the source did not set one")
 	}
 }
@@ -55,7 +56,7 @@ func TestTrafficFlowsPayloadDropsPartialWarningWhenFilteringRemovedEverything(t 
 	}
 
 	// Everything the source returned was filtered out.
-	payload := trafficFlowsPayload(response, []traffic.Flow{})
+	payload := trafficFlowsPayload(response, []traffic.Flow{}, false)
 	if _, ok := payload["warning"]; ok {
 		t.Errorf("warning should be dropped: it qualifies flows the user cannot see, got %q", payload["warning"])
 	}
@@ -68,19 +69,54 @@ func TestTrafficFlowsPayloadDropsPartialWarningWhenFilteringRemovedEverything(t 
 		Warning:     "Some traffic is not shown: Beyla reports it as direction=unknown on both sides.",
 		WarningKind: traffic.WarningPartial,
 	}
-	if _, ok := trafficFlowsPayload(empty, []traffic.Flow{})["warning"]; !ok {
+	if _, ok := trafficFlowsPayload(empty, []traffic.Flow{}, false)["warning"]; !ok {
 		t.Error("an empty result needs its explanation kept")
 	}
 
-	// A transient warning is about the fetch, not about the flows, so filtering
-	// does not affect it.
+	// An incomplete warning means flows may be missing — a node the relay could
+	// not reach — which may be exactly why this user sees none, so filtering
+	// does not remove it.
 	transient := &traffic.FlowsResponse{
-		Source:      "beyla",
+		Source:      "hubble",
 		Flows:       []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}},
+		Warning:     "Traffic data is incomplete: Hubble Relay could not read flows from 1 node(s), so their traffic is missing.",
+		WarningKind: traffic.WarningIncomplete,
+	}
+	if _, ok := trafficFlowsPayload(transient, []traffic.Flow{}, false)["warning"]; !ok {
+		t.Error("a warning that flows may be missing must survive filtering")
+	}
+
+	// A failed fetch returns no flows at all, so nothing was filtered and the
+	// warning is the whole answer.
+	failed := &traffic.FlowsResponse{
+		Source:      "beyla",
+		Flows:       []traffic.Flow{},
 		Warning:     "Failed to query Beyla metrics: connection refused",
 		WarningKind: traffic.WarningTransient,
 	}
-	if _, ok := trafficFlowsPayload(transient, []traffic.Flow{})["warning"]; !ok {
-		t.Error("a transient warning is about the fetch and must survive filtering")
+	if _, ok := trafficFlowsPayload(failed, []traffic.Flow{}, false)["warning"]; !ok {
+		t.Error("a failed fetch must keep its warning")
+	}
+}
+
+// The flow list pairs a response with its request by orientation. It has to be
+// told which orientation this server uses: inferring it from whichever records
+// the window happens to hold lets a response hide an unanswered call.
+func TestTrafficFlowsPayloadDeclaresResponseOrientation(t *testing.T) {
+	payload := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble"}, []traffic.Flow{}, false)
+	if payload["l7ResponsesCallerOriented"] != true {
+		t.Errorf("l7ResponsesCallerOriented = %v, want true", payload["l7ResponsesCallerOriented"])
+	}
+}
+
+func TestTrafficFlowsPayloadCarriesCoverage(t *testing.T) {
+	since := time.Now().Add(-90 * time.Second)
+	payload := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble", CoveredSince: &since, NodeFlowLimit: 1000,
+		Flows: []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}}}, []traffic.Flow{}, false)
+	if payload["coveredSince"] != &since || payload["nodeFlowLimit"] != 1000 {
+		t.Errorf("coverage = %v / %v, want it kept even when filtering removed every flow", payload["coveredSince"], payload["nodeFlowLimit"])
+	}
+	if _, ok := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble"}, nil, false)["coveredSince"]; ok {
+		t.Error("coveredSince set for a window that was fully covered")
 	}
 }

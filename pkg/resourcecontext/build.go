@@ -2,8 +2,14 @@ package resourcecontext
 
 import (
 	"context"
+	"slices"
 	"sort"
+	"time"
 
+	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,41 +25,57 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // Options carries everything Build needs to compute a ResourceContext.
 //
-// Per the v1 contract, this package depends only on pkg/topology — callers
-// in internal/* pre-compute IssueSummary / AuditSummary / PolicyReports and
-// pass them in, so we don't reach into internal/issues or internal/audit.
+// Hosts pre-compute issue, audit and policy summaries; Build never calls
+// internal services.
 type Options struct {
-	Reflections ReflectionLookup
-	Tier        ContextTier
+	// RelatedFindings is access-checked by the host and discarded on connection change.
+	RelatedFindings []issuesapi.RelatedFindingsGroup
+	// OpenTelemetryAutoInstrumentation was computed from access-checked cache reads by the
+	// host. A connection change discards the whole observation.
+	OpenTelemetryAutoInstrumentation *OpenTelemetryAutoInstrumentationContext
+	// OpenTelemetryAutoInstrumentationUnavailable requires nil OpenTelemetryAutoInstrumentation: the
+	// host discarded the observation. Nil/false means none was supplied.
+	OpenTelemetryAutoInstrumentationUnavailable bool
+	// Children is an access-aware direct-child preview, precomputed by hosts.
+	// Apply Get checks before capping so unreadable refs cannot displace readable ones.
+	Children *ChildrenContext
+	// ChildrenUnavailable requires nil Children: the whole host observation was
+	// discarded. With both nil/false, this host supplied no child observation.
+	ChildrenUnavailable bool
+	Reflections         ReflectionLookup
+	Tier                ContextTier
 
-	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
-	// as fully authorized — local-kubeconfig / tests).
+	// AccessChecker gates Build-projected references, including Children when
+	// supplied. Hosts authorize other precomputed blocks, including
+	// OpenTelemetryAutoInstrumentation and any declared but
+	// unresolved coordinates within it. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
-	// Topology data sources. When Topology is nil, the topology-derived
-	// fields (Exposes, SelectedBy, ScaledBy, ManagedBy, RunsOn,
-	// Uses.ServiceAccount) are skipped.
+	// Topology supplies relationships when Relationships is nil. Without
+	// either source, graph-derived fields are skipped.
 	Topology    *topology.Topology
 	Provider    topology.ResourceProvider
 	DynamicProv topology.DynamicProvider
 
-	// Relationships is the pre-computed per-resource projection. When non-nil,
-	// Build consumes it directly instead of calling
-	// topology.GetRelationshipsWithObject — single-resource handlers should
-	// leave this nil and let Build compute; bulk/list callers that already
-	// loop over relationships per row SHOULD pass it to avoid double work.
-	//
-	// Topology MUST still be set when Relationships is set — synthesis
-	// helpers (e.g. ManagedBy owner walk) read Topology and RelIndex through
-	// it.
+	// Relationships bypasses graph projection when already computed. It need
+	// not have a Topology; Ownership may mutate it, so do not share it across
+	// concurrent calls.
 	Relationships *topology.Relationships
+
+	// Ownership is required for ManagedBy and Manager enrichment. It must use
+	// topology.ApplyOwner semantics for fetched: Owner and ControllerChain from
+	// owner references, Managers containing only residual spec controllers,
+	// and GitOps/Helm evidence in rel.Ownership.Manager. rel is never nil.
+	Ownership func(rel *topology.Relationships, fetched ownership.Observation)
 
 	// RelIndex is the topology inverted-edge index. Pass a shared instance
 	// (topology.IndexByResource(topo)) for high-fanout callers; nil is fine
@@ -70,6 +92,9 @@ type Options struct {
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
 	ContainerCompletionSplit *ContainerCompletionSplit
+	// TemplateDivergence passes through unchanged; the caller authorizes the
+	// Pods and templates it compared.
+	TemplateDivergence *TemplateDivergence
 
 	// Optional kind-specific lookups. ServiceBackends is used only for
 	// Service resources to attach realized pod-selection state. The raw
@@ -125,6 +150,20 @@ type ServiceBackendLookup interface {
 	PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error)
 }
 
+// ServiceBackendGrouper is optional on a ServiceBackendLookup, so existing
+// implementers keep compiling: it groups a Service's selected Pods by the
+// workload that runs them. Without it a Service gets no workload breakdown.
+type ServiceBackendGrouper interface {
+	GroupServiceBackends(svc *corev1.Service, pods []*corev1.Pod) ServiceBackendGrouping
+}
+
+type ServiceBackendGrouping struct {
+	Workloads []ServiceBackendWorkload
+	// MixedBackends is set when the workloads don't all serve the Service,
+	// and explains why.
+	MixedBackends string
+}
+
 // RefAccessChecker abstracts the RBAC check so this package doesn't import
 // any internal/* package. REST and MCP handlers each implement this with a
 // request-scoped batch cache (see internal/server/rc_rbac.go).
@@ -150,24 +189,42 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		return &ResourceContext{Tier: opts.Tier}
 	}
 
-	rc := &ResourceContext{Tier: opts.Tier}
+	rc := &ResourceContext{Tier: opts.Tier, CrossplanePause: CrossplanePauseFor(obj), Children: opts.Children}
+	if opts.OpenTelemetryAutoInstrumentation != nil {
+		rc.AutoInstrumentation = &AutoInstrumentationContext{OpenTelemetry: opts.OpenTelemetryAutoInstrumentation}
+	}
 	omitted := newOmittedTracker()
+	// Canonical context references still require Get access, even when a
+	// host's relationship view intentionally exposes namespace-readable names.
+	if opts.Children != nil {
+		children := *opts.Children
+		children.Items = filterRefs(ctx, opts.AccessChecker, opts.Children.Items, "children", nil)
+		if len(children.Items) != len(opts.Children.Items) {
+			children.Narrowed = true
+		}
+		if children.Items == nil {
+			children.Items = []ContextRef{}
+		}
+		rc.Children = &children
+	}
+	if opts.ChildrenUnavailable {
+		omitted.add("children", OmittedUnavailable)
+	}
+	if opts.OpenTelemetryAutoInstrumentationUnavailable {
+		omitted.add("autoInstrumentation.openTelemetry", OmittedUnavailable)
+	}
 
-	// Topology-derived relationships drive ManagedBy / Exposes / SelectedBy /
-	// ScaledBy / RunsOn / Uses.ServiceAccount. T23 made
-	// topology.Relationships the canonical projection: server-side
-	// SynthesizeManagedBy walks the owner chain + GitOps signals, and the Pod
-	// hygiene fields (.ServiceAccount, .Node) are populated from pod.Spec.
-	// ManagedBy stays delegated to topology to avoid duplicating its owner-chain
-	// and GitOps logic. The direct Owner field below may still fall back to the
-	// object's controller OwnerReference when topology is absent or cold.
-	//
-	// Single-resource callers (REST GET, MCP get_resource) leave
-	// opts.Relationships nil and let us compute via GetRelationshipsWithObject
-	// — passing obj keeps kind/group disambiguation correct for CRDs whose
-	// plural collides with a core resource. Bulk callers that already loop
-	// over relationships per row pass them in directly.
+	// Topology supplies networking, scaling and spec-declared relations;
+	// the caller's ownership answer supplies controllers and GitOps evidence.
 	rel := opts.Relationships
+	// A StorageClass's volumes and claims come from cache-wide reads, so say
+	// when those inventories were incomplete, even if nothing was found.
+	// Relationships a host supplies carry no inventory state to assess.
+	if rel == nil && opts.Topology != nil && ident.Group == "storage.k8s.io" && ident.Kind == "StorageClass" {
+		if gap := storageClassInventoryGap(opts.Provider); gap != "" {
+			omitted.add("dependents", gap)
+		}
+	}
 	if rel == nil && opts.Topology != nil {
 		// Resolve the topology-pseudo-kind so cross-group CRDs (Knative
 		// serving.knative.dev/Service, CAPI cluster.x-k8s.io/Cluster, …)
@@ -181,24 +238,44 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			opts.Topology, opts.Provider, opts.DynamicProv, opts.RelIndex,
 		)
 	}
-
-	// 1. ManagedBy — prefer Relationships.ManagedBy (server-synthesized when
-	// a topology is available; covers GitOps signals + owner-chain walk).
-	// Fall back to topology.SynthesizeManagedBy with the obj alone when no
-	// topology is provided — that path still detects Argo/Flux/Helm signals
-	// from labels and annotations without needing a graph.
-	var managedBy []topology.ResourceRef
-	if rel != nil && len(rel.ManagedBy) > 0 {
-		managedBy = rel.ManagedBy
-	} else if rel == nil {
-		if m, ok := obj.(metav1.Object); ok {
-			managedBy = topology.SynthesizeManagedBy(m, ident.Kind, ident.Namespace, ident.Name, nil, nil, nil)
+	// answered: the host's ownership answer stands, even one with nothing to
+	// say, as for an Event, whose owner references ownership doesn't follow.
+	relationshipsAvailable := opts.Topology != nil || opts.Relationships != nil
+	answered := false
+	if m, ok := obj.(metav1.Object); ok && opts.Ownership != nil {
+		if rel == nil {
+			rel = &topology.Relationships{}
 		}
+		ref := resourceid.Ref{Group: ident.Group, Kind: ident.Kind, Namespace: ident.Namespace, Name: ident.Name}
+		opts.Ownership(rel, ownership.Observe(ref, m))
+		answered = true
 	}
-	if len(managedBy) > 0 {
-		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(managedBy),
-			"managedBy", omitted)
+
+	if answered && rel.Ownership != nil && rel.Ownership.Manager != nil {
+		rc.Manager = managerContext(rel.Ownership.Manager)
+	}
+	if answered && rel.Ownership != nil {
+		chain := rel.ControllerChain.Readable(func(r topology.ResourceRef) bool {
+			ref := toContextRef(r)
+			return checkRef(ctx, opts.AccessChecker, &ref)
+		})
+		var managedBy []topology.ResourceRef
+		if top := chain.Top(); top != nil {
+			managedBy = append(managedBy, *top)
+		}
+		for _, r := range rel.Managers {
+			managedBy = append(managedBy, r)
+		}
+		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(managedBy), "managedBy", nil)
+		reason := ControllerOmission(chain)
+		if chain == nil && rel.Ownership.UnavailableReason == string(readreason.UserForbidden) {
+			reason = OmittedRBACDenied
+		}
+		if reason != "" {
+			omitted.add("managedBy", reason)
+		} else if rel.OtherManagersIncomplete || !relationshipsAvailable {
+			omitted.add("managedBy", OmittedUnavailable)
+		}
 	}
 
 	if rel != nil && rel.Owner != nil {
@@ -213,7 +290,18 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		} else {
 			omitted.add("owner", OmittedRBACDenied)
 		}
-	} else if owner := ownerFromObject(obj, ident.Namespace); owner != nil {
+	} else if rel != nil && rel.Ownership != nil {
+		// An ownership answer without an owner: say why, unless there is no
+		// owner to name (none referenced, or one that is gone).
+		switch {
+		case rel.Ownership.PrimaryOwnerState == "withheld":
+			omitted.add("owner", OmittedRBACDenied)
+		case rel.Ownership.PrimaryOwnerState == "unknown",
+			rel.Ownership.UnavailableReason != "" && ownerFromObject(obj, ident.Namespace) != nil:
+			omitted.add("owner", OmittedUnavailable)
+		}
+	} else if owner := ownerFromObject(obj, ident.Namespace); owner != nil && !answered {
+		// Without an ownership answer, the object's own controller reference.
 		if checkRef(ctx, opts.AccessChecker, owner) {
 			rc.Owner = owner
 		} else {
@@ -223,14 +311,21 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 
 	// 2. Topology-derived: Exposes, SelectedBy, ScaledBy
 	if rel != nil {
-		exposes := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes))
-		exposes = append(exposes, rel.Services...)
-		exposes = append(exposes, rel.Ingresses...)
-		exposes = append(exposes, rel.Gateways...)
-		exposes = append(exposes, rel.Routes...)
-		rc.Exposes = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(exposes),
-			"exposes", omitted)
+		exposedBy := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes)+len(rel.RoutedFrom))
+		exposedBy = append(exposedBy, rel.Services...)
+		exposedBy = append(exposedBy, rel.Ingresses...)
+		exposedBy = append(exposedBy, rel.Gateways...)
+		exposedBy = append(exposedBy, rel.Routes...)
+		exposedBy = append(exposedBy, rel.RoutedFrom...)
+		backends := append([]topology.ResourceRef(nil), rel.Backends...)
+		// Deployment and Node Pods are containment shortcuts, not routing targets.
+		if !(ident.Kind == "Deployment" && ident.Group == "apps") && !(ident.Kind == "Node" && ident.Group == "") {
+			backends = append(backends, rel.Pods...)
+		}
+		rc.ExposedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposedBy), "exposedBy", omitted)
+		rc.Backends = filterRefs(ctx, opts.AccessChecker, toContextRefs(backends), "backends", omitted)
+		exposes := append(exposedBy, backends...)
+		rc.Exposes = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposes), "exposes", omitted)
 
 		selected := make([]topology.ResourceRef, 0, len(rel.PDBs)+len(rel.NetworkPolicies))
 		selected = append(selected, rel.PDBs...)
@@ -238,6 +333,22 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.SelectedBy = filterRefs(ctx, opts.AccessChecker,
 			toContextRefs(selected),
 			"selectedBy", omitted)
+
+		rc.Protects = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Protects), "protects", omitted)
+		rc.HealthChecks = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.HealthChecks), "healthChecks", omitted)
+		rc.StagedPolicies = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.StagedPolicies), "stagedPolicies", omitted)
+		rc.Monitors = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.Monitors), "monitors", omitted)
+		rc.MonitorTargets = filterRefs(ctx, opts.AccessChecker, toContextRefs(rel.MonitorTargets), "monitorTargets", omitted)
+
+		if dependencies, dependents, ok := storageChain(ident.Group, ident.Kind, rel); ok {
+			rc.Dependencies = filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted)
+			rc.Dependents = filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
+		} else {
+			rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
+				toContextRefs(rel.Dependencies), "dependencies", omitted)
+			rc.Dependents = filterRefs(ctx, opts.AccessChecker,
+				toContextRefs(rel.Dependents), "dependents", omitted)
+		}
 
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
@@ -302,12 +413,13 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.ServiceSummary = buildServiceSummary(ctx, svc, opts.ServiceBackends, opts.AccessChecker, omitted)
 	}
 	rc.Reflection = buildReflection(ctx, obj, opts.Reflections, opts.AccessChecker, omitted)
-	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, opts.AccessChecker, omitted)
+	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, rel, opts.AccessChecker, omitted)
 	if uses := buildUsesFromWorkload(ctx, obj, opts.AccessChecker, omitted); uses != nil {
 		rc.Uses = uses
 	}
 	rc.WorkloadSummary = buildWorkloadSummary(obj)
 	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.ServiceAccountSummary = buildServiceAccountSummary(ctx, obj, opts.AccessChecker, omitted)
 	rc.NodeSummary = buildNodeSummary(obj)
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
@@ -326,9 +438,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.Serving = opts.Serving
 
 	// 4. Pre-computed summaries — pass-through.
+	rc.RelatedFindings = opts.RelatedFindings
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
 	rc.AppReferences = filterAppReferences(ctx, opts.AppReferences, opts.AccessChecker, omitted)
+	rc.TemplateDivergence = opts.TemplateDivergence
 
 	// 5. PolicyReports — Kyverno findings rolled up. Basic tier emits
 	// counts only (fail/warn/pass); diagnostic tier adds the top[]
@@ -352,6 +466,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		}
 	}
 
+	addWebhookContext(ctx, obj, opts, rc, omitted)
 	rc.Omitted = omitted.collect()
 	return rc
 }
@@ -482,10 +597,10 @@ func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
 // buildUsesFromPod extracts ConfigMap/Secret/PVC/ServiceAccount references
 // from pod.Spec. Returns nil when the pod uses no configuration.
 //
-// Sources scanned:
-//   - Volumes: ConfigMap / Secret / PVC / Projected (configMap + secret entries)
-//   - Containers (init + regular): EnvFrom configMapRef/secretRef, Env valueFrom.{configMap,secret}KeyRef
-//   - Spec.ServiceAccountName
+// Reference extraction is shared with audit and reverse context, including
+// init/debug containers, image pull credentials and volume-driver credentials.
+// Only the PodSpec's declared references are used; current ServiceAccount pull
+// secrets are not inferred into an already-admitted Pod.
 func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker, omitted *omittedTracker) *UsesBlock {
 	if pod == nil {
 		return nil
@@ -498,9 +613,16 @@ func buildUsesFromPodSpec(ctx context.Context, namespace string, spec corev1.Pod
 	secretSet := newRefSet()
 	pvcSet := newRefSet()
 
-	scanVolumes(spec.Volumes, namespace, cmSet, secretSet, pvcSet)
-	scanContainers(spec.InitContainers, namespace, cmSet, secretSet)
-	scanContainers(spec.Containers, namespace, cmSet, secretSet)
+	for _, reference := range configrefs.PodSpecReferences(namespace, spec) {
+		switch reference.Kind {
+		case "ConfigMap":
+			cmSet.add(reference.Name, reference.Namespace)
+		case "Secret":
+			secretSet.add(reference.Name, reference.Namespace)
+		case "PersistentVolumeClaim":
+			pvcSet.add(reference.Name, reference.Namespace)
+		}
+	}
 
 	uses := &UsesBlock{
 		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", ""), "uses.configMaps", omitted),
@@ -551,13 +673,45 @@ const (
 	maxReferencedByPathsPerRef = 8
 )
 
-func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
+func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, rel *topology.Relationships, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
+	if node, ok := obj.(*corev1.Node); ok {
+		if rel != nil && rel.PodPlacementObserved {
+			if rel.PodPlacementUnavailable {
+				omitted.add("referencedBy", OmittedUnavailable)
+				return nil
+			}
+			var refs []ReferenceUse
+			for _, pod := range rel.Pods {
+				if pod.Kind == "Pod" && pod.Group == "" {
+					refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
+				}
+			}
+			return filterReferenceUses(ctx, refs, ac, omitted)
+		}
+		if provider == nil {
+			omitted.add("referencedBy", OmittedUnavailable)
+			return nil
+		}
+		pods, err := provider.Pods()
+		if err != nil {
+			omitted.add("referencedBy", OmittedUnavailable)
+			return nil
+		}
+		var refs []ReferenceUse
+		for _, pod := range pods {
+			if pod == nil || pod.Spec.NodeName != node.Name || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
+		}
+		return filterReferenceUses(ctx, refs, ac, omitted)
+	}
 	if provider == nil {
 		return nil
 	}
 
 	ident, ok := identityOf(obj)
-	if !ok || ident.Namespace == "" {
+	if !ok || ident.Group != "" || ident.Namespace == "" {
 		return nil
 	}
 
@@ -565,8 +719,8 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	switch ident.Kind {
 	case "ConfigMap":
 		target = refTarget{kind: "ConfigMap", namespace: ident.Namespace, name: ident.Name}
-	case "Secret":
-		target = refTarget{kind: "Secret", namespace: ident.Namespace, name: ident.Name}
+	case "Secret", "PersistentVolumeClaim", "ServiceAccount":
+		target = refTarget{kind: ident.Kind, namespace: ident.Namespace, name: ident.Name}
 	default:
 		return nil
 	}
@@ -579,7 +733,51 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		refs = append(refs, ref)
 	}
 
-	if deployments, _ := provider.Deployments(); deployments != nil {
+	if target.kind == "Secret" {
+		if ingresses, err := provider.Ingresses(); err != nil {
+			omitted.add("referencedBy", OmittedUnavailable)
+		} else {
+			for _, ing := range ingresses {
+				if ing == nil || ing.Namespace != target.namespace {
+					continue
+				}
+				for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+					if ref.Name == target.name {
+						appendRef(ReferenceUse{Kind: "Ingress", Group: "networking.k8s.io", Namespace: ing.Namespace, Name: ing.Name, Paths: []string{"spec.tls[].secretName"}})
+					}
+				}
+			}
+		}
+		if accounts, ok := provider.(topology.ServiceAccountProvider); ok {
+			// Assess before reading: a sync that completes between the two
+			// must not make a partial snapshot look complete.
+			gap := inventoryGap(provider, string(k8score.ServiceAccounts), []string{target.namespace})
+			sas, err := accounts.ServiceAccounts()
+			if err != nil {
+				sas = nil
+				gap = OmittedUnavailable
+			}
+			if gap != "" {
+				omitted.add("referencedBy", gap)
+			}
+			for _, sa := range sas {
+				if sa == nil || sa.Namespace != target.namespace {
+					continue
+				}
+				var paths []string
+				for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+					if ref.Name == target.name {
+						paths = append(paths, ref.Path)
+					}
+				}
+				appendRef(ReferenceUse{Kind: "ServiceAccount", Namespace: sa.Namespace, Name: sa.Name, Paths: paths})
+			}
+		}
+	}
+
+	if deployments, err := provider.Deployments(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, d := range deployments {
 			if d == nil || d.Namespace != target.namespace {
 				continue
@@ -587,7 +785,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("Deployment", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if statefulSets, _ := provider.StatefulSets(); statefulSets != nil {
+	if statefulSets, err := provider.StatefulSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, s := range statefulSets {
 			if s == nil || s.Namespace != target.namespace {
 				continue
@@ -595,7 +795,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("StatefulSet", "apps", s.Namespace, s.Name, s.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if daemonSets, _ := provider.DaemonSets(); daemonSets != nil {
+	if daemonSets, err := provider.DaemonSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, d := range daemonSets {
 			if d == nil || d.Namespace != target.namespace {
 				continue
@@ -603,7 +805,19 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("DaemonSet", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if jobs, _ := provider.Jobs(); jobs != nil {
+	if replicaSets, err := provider.ReplicaSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
+		for _, replicaSet := range replicaSets {
+			if replicaSet == nil || replicaSet.Namespace != target.namespace {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("ReplicaSet", "apps", replicaSet.Namespace, replicaSet.Name, replicaSet.Spec.Template.Spec, "spec.template.spec", target))
+		}
+	}
+	if jobs, err := provider.Jobs(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, j := range jobs {
 			if j == nil || j.Namespace != target.namespace {
 				continue
@@ -611,7 +825,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("Job", "batch", j.Namespace, j.Name, j.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if cronJobs, _ := provider.CronJobs(); cronJobs != nil {
+	if cronJobs, err := provider.CronJobs(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, c := range cronJobs {
 			if c == nil || c.Namespace != target.namespace {
 				continue
@@ -619,15 +835,21 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("CronJob", "batch", c.Namespace, c.Name, c.Spec.JobTemplate.Spec.Template.Spec, "spec.jobTemplate.spec.template.spec", target))
 		}
 	}
-	if pods, _ := provider.Pods(); pods != nil {
+	if pods, err := provider.Pods(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, p := range pods {
-			if p == nil || p.Namespace != target.namespace || hasControllerOwner(p.OwnerReferences) {
+			if p == nil || p.Namespace != target.namespace {
 				continue
 			}
 			appendRef(referenceUseForPodSpec("Pod", "", p.Namespace, p.Name, p.Spec, "spec", target))
 		}
 	}
 
+	return filterReferenceUses(ctx, refs, ac, omitted)
+}
+
+func filterReferenceUses(ctx context.Context, refs []ReferenceUse, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -648,7 +870,8 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	// emitted above signals that some refs were filtered without
 	// disclosing how many.
 	visible := 0
-	filtered := make([]ReferenceUse, 0, minInt(len(refs), maxReferencedByItems))
+	groups := make(map[[2]string][]ReferenceUse)
+	var order [][2]string
 	for i := range refs {
 		ref := refs[i]
 		if len(ref.Paths) > maxReferencedByPathsPerRef {
@@ -660,8 +883,29 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			continue
 		}
 		visible++
-		if len(filtered) < maxReferencedByItems {
-			filtered = append(filtered, ref)
+		key := [2]string{ref.Kind, ref.Group}
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], ref)
+	}
+	// Round-robin readable kinds so a large replica population cannot hide
+	// the workload and revision templates that explain those Pods' references.
+	filtered := make([]ReferenceUse, 0, minInt(visible, maxReferencedByItems))
+	for row := 0; len(filtered) < maxReferencedByItems; row++ {
+		added := false
+		for _, key := range order {
+			if row >= len(groups[key]) {
+				continue
+			}
+			filtered = append(filtered, groups[key][row])
+			added = true
+			if len(filtered) == maxReferencedByItems {
+				break
+			}
+		}
+		if !added {
+			break
 		}
 	}
 	if len(filtered) == 0 {
@@ -693,39 +937,11 @@ func referenceUseForPodSpec(kind, group, namespace, name string, spec corev1.Pod
 
 func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTarget) []string {
 	pathSet := map[string]struct{}{}
-	add := func(path string) {
-		pathSet[path] = struct{}{}
-	}
-
-	for _, v := range spec.Volumes {
-		if target.kind == "ConfigMap" && v.ConfigMap != nil && v.ConfigMap.Name == target.name {
-			add(pathPrefix + ".volumes[].configMap.name")
-		}
-		if target.kind == "Secret" && v.Secret != nil && v.Secret.SecretName == target.name {
-			add(pathPrefix + ".volumes[].secret.secretName")
-		}
-		if v.Projected != nil {
-			for _, src := range v.Projected.Sources {
-				if target.kind == "ConfigMap" && src.ConfigMap != nil && src.ConfigMap.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].configMap.name")
-				}
-				if target.kind == "Secret" && src.Secret != nil && src.Secret.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].secret.name")
-				}
-			}
+	for _, ref := range configrefs.PodSpecReferences(target.namespace, spec) {
+		if ref.Kind == target.kind && ref.Name == target.name {
+			pathSet[pathPrefix+"."+ref.Path] = struct{}{}
 		}
 	}
-	if target.kind == "Secret" {
-		for _, pullSecret := range spec.ImagePullSecrets {
-			if pullSecret.Name == target.name {
-				add(pathPrefix + ".imagePullSecrets[].name")
-			}
-		}
-	}
-
-	scanContainerReferencePaths(spec.InitContainers, pathPrefix, target, add)
-	scanContainerReferencePaths(spec.Containers, pathPrefix, target, add)
-
 	paths := make([]string, 0, len(pathSet))
 	for path := range pathSet {
 		paths = append(paths, path)
@@ -734,92 +950,11 @@ func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTar
 	return paths
 }
 
-func scanContainerReferencePaths(containers []corev1.Container, pathPrefix string, target refTarget, add func(string)) {
-	for _, c := range containers {
-		for _, ef := range c.EnvFrom {
-			if target.kind == "ConfigMap" && ef.ConfigMapRef != nil && ef.ConfigMapRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].configMapRef.name")
-			}
-			if target.kind == "Secret" && ef.SecretRef != nil && ef.SecretRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].secretRef.name")
-			}
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom == nil {
-				continue
-			}
-			if target.kind == "ConfigMap" && e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.configMapKeyRef.name")
-			}
-			if target.kind == "Secret" && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.secretKeyRef.name")
-			}
-		}
-	}
-}
-
-func hasControllerOwner(refs []metav1.OwnerReference) bool {
-	for _, ref := range refs {
-		if ref.Controller != nil && *ref.Controller {
-			return true
-		}
-	}
-	return false
-}
-
 func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
-}
-
-func scanVolumes(vols []corev1.Volume, ns string, cm, secret, pvc *refSet) {
-	for _, v := range vols {
-		if v.ConfigMap != nil {
-			cm.add(v.ConfigMap.Name, ns)
-		}
-		if v.Secret != nil {
-			secret.add(v.Secret.SecretName, ns)
-		}
-		if v.PersistentVolumeClaim != nil {
-			pvc.add(v.PersistentVolumeClaim.ClaimName, ns)
-		}
-		if v.Projected != nil {
-			for _, src := range v.Projected.Sources {
-				if src.ConfigMap != nil {
-					cm.add(src.ConfigMap.Name, ns)
-				}
-				if src.Secret != nil {
-					secret.add(src.Secret.Name, ns)
-				}
-			}
-		}
-	}
-}
-
-func scanContainers(containers []corev1.Container, ns string, cm, secret *refSet) {
-	for _, c := range containers {
-		for _, ef := range c.EnvFrom {
-			if ef.ConfigMapRef != nil {
-				cm.add(ef.ConfigMapRef.Name, ns)
-			}
-			if ef.SecretRef != nil {
-				secret.add(ef.SecretRef.Name, ns)
-			}
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom == nil {
-				continue
-			}
-			if e.ValueFrom.ConfigMapKeyRef != nil {
-				cm.add(e.ValueFrom.ConfigMapKeyRef.Name, ns)
-			}
-			if e.ValueFrom.SecretKeyRef != nil {
-				secret.add(e.ValueFrom.SecretKeyRef.Name, ns)
-			}
-		}
-	}
 }
 
 const maxServicePodRefs = 10
@@ -850,12 +985,14 @@ func buildServiceSummary(ctx context.Context, svc *corev1.Service, lookup Servic
 	// caller with Service access infer the pod count even when RBAC
 	// hides the individual Pods. Mirrors ReferencedBy.Total semantics.
 	sel := &PodSelectionSummary{}
+	visible := make([]*corev1.Pod, 0, len(pods))
 	for _, pod := range pods {
 		ref := ContextRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		if !checkRef(ctx, ac, &ref) {
 			omitted.add("serviceSummary.selectedPods", OmittedRBACDenied)
 			continue
 		}
+		visible = append(visible, pod)
 		sel.Total++
 		if isPodReady(pod) {
 			sel.Ready++
@@ -872,7 +1009,34 @@ func buildServiceSummary(ctx context.Context, svc *corev1.Service, lookup Servic
 		out.Warnings = append(out.Warnings, ServiceWarningNoReadyPods)
 	}
 	out.SelectedPods = sel
+	if grouper, ok := lookup.(ServiceBackendGrouper); ok && len(visible) > 1 {
+		addServiceBackendWorkloads(ctx, out, grouper.GroupServiceBackends(svc, visible), ac, omitted)
+	}
 	return out
+}
+
+// addServiceBackendWorkloads attaches the workload breakdown only when the
+// caller may read every workload it names: a Pod's visibility doesn't extend
+// to the Deployment or Rollout behind its ReplicaSet.
+func addServiceBackendWorkloads(ctx context.Context, out *ServiceSummary, g ServiceBackendGrouping, ac RefAccessChecker, omitted *omittedTracker) {
+	if len(g.Workloads) < 2 {
+		return
+	}
+	for i := range g.Workloads {
+		if !checkRef(ctx, ac, &g.Workloads[i].ContextRef) {
+			omitted.add("serviceSummary.workloads", OmittedRBACDenied)
+			return
+		}
+	}
+	out.Workloads = g.Workloads
+	if len(out.Workloads) > maxServicePodRefs {
+		out.Workloads = out.Workloads[:maxServicePodRefs]
+		out.WorkloadsTruncated = true
+	}
+	if g.MixedBackends != "" {
+		out.MixedBackends = g.MixedBackends
+		out.Warnings = append(out.Warnings, ServiceWarningMixedBackends)
+	}
 }
 
 func appendBoundedPodRef(dst *[]ContextRef, ref ContextRef, sel *PodSelectionSummary) {
@@ -1019,20 +1183,14 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	}
 
 	svcSet := newRefSet()
-	addIngressBackendService(svcSet, ing.Namespace, ing.Spec.DefaultBackend)
-	for _, rule := range ing.Spec.Rules {
-		if rule.HTTP == nil {
-			continue
-		}
-		for _, path := range rule.HTTP.Paths {
-			addIngressBackendService(svcSet, ing.Namespace, &path.Backend)
-		}
+	for _, name := range configrefs.IngressBackendServices(ing) {
+		svcSet.add(name, ing.Namespace)
 	}
 	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
 	secretSet := newRefSet()
-	for _, tls := range ing.Spec.TLS {
-		secretSet.add(tls.SecretName, ing.Namespace)
+	for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+		secretSet.add(ref.Name, ref.Namespace)
 	}
 	out.TLSSecrets = filterRefs(ctx, ac, secretSet.refs("Secret", ""), "ingressSummary.tlsSecrets", omitted)
 
@@ -1042,11 +1200,73 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	return out
 }
 
-func addIngressBackendService(dst *refSet, namespace string, backend *networkingv1.IngressBackend) {
-	if backend == nil || backend.Service == nil {
-		return
+// inventoryCoverage is implemented by providers that can say whether a
+// namespace's inventory of a kind is complete. Without it an empty list can't
+// be told apart from a namespace Radar is still loading, failed to load or
+// doesn't collect.
+type inventoryCoverage interface {
+	AssessKindRead(resource string, namespaces []string) k8score.KindReadAssessment
+}
+
+// inventoryGap says why an empty read of resource in namespaces (nil for every
+// namespace) can't be taken as "none": still loading, or failed, uncollected
+// or unwatched. Call it before reading, so a sync that completes in between
+// can't make a partial read look complete.
+func inventoryGap(provider topology.ResourceProvider, resource string, namespaces []string) OmittedReason {
+	coverage, ok := provider.(inventoryCoverage)
+	if !ok {
+		return ""
 	}
-	dst.add(backend.Service.Name, namespace)
+	assessment := coverage.AssessKindRead(resource, namespaces)
+	switch {
+	case assessment.Complete:
+		return ""
+	case assessment.TargetReadiness() == k8score.KindPending:
+		return OmittedCacheCold
+	default:
+		return OmittedUnavailable
+	}
+}
+
+// storageClassInventoryGap covers a StorageClass's volumes and its claims,
+// which can be in any namespace.
+func storageClassInventoryGap(provider topology.ResourceProvider) OmittedReason {
+	gaps := []OmittedReason{
+		inventoryGap(provider, string(k8score.PersistentVolumes), nil),
+		inventoryGap(provider, string(k8score.PersistentVolumeClaims), nil),
+	}
+	switch {
+	case slices.Contains(gaps, OmittedUnavailable):
+		return OmittedUnavailable
+	case slices.Contains(gaps, OmittedCacheCold):
+		return OmittedCacheCold
+	default:
+		return ""
+	}
+}
+
+func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *ServiceAccountSummary {
+	sa, ok := obj.(*corev1.ServiceAccount)
+	if !ok {
+		return nil
+	}
+	var secrets, pulls []ContextRef
+	for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
+		target := ContextRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
+		if ref.ImagePull {
+			pulls = append(pulls, target)
+		} else {
+			secrets = append(secrets, target)
+		}
+	}
+	summary := &ServiceAccountSummary{
+		SecretRefs:       filterBoundedRefs(ctx, ac, secrets, "serviceAccountSummary.secretRefs", omitted),
+		ImagePullSecrets: filterBoundedRefs(ctx, ac, pulls, "serviceAccountSummary.imagePullSecrets", omitted),
+	}
+	if len(summary.SecretRefs) == 0 && len(summary.ImagePullSecrets) == 0 {
+		return nil
+	}
+	return summary
 }
 
 func buildNodeSummary(obj runtime.Object) *NodeSummary {
@@ -1059,14 +1279,16 @@ func buildNodeSummary(obj runtime.Object) *NodeSummary {
 		Capacity:      compactResourceList(node.Status.Capacity),
 		Allocatable:   compactResourceList(node.Status.Allocatable),
 	}
-	if out.Unschedulable {
+	lifecycle := health.NodeLifecycle(node, time.Now())
+	out.Lifecycle = &lifecycle
+	if out.Unschedulable && !lifecycle.Removing {
 		out.Warnings = append(out.Warnings, NodeWarningUnschedulable)
 	}
 	for _, cond := range node.Status.Conditions {
 		switch cond.Type {
 		case corev1.NodeReady:
 			out.ReadyStatus = string(cond.Status)
-			if cond.Status != corev1.ConditionTrue {
+			if lifecycle.ReadinessFailed {
 				out.Warnings = append(out.Warnings, NodeWarningNotReady)
 			}
 		case corev1.NodeDiskPressure:
@@ -1082,7 +1304,7 @@ func buildNodeSummary(obj runtime.Object) *NodeSummary {
 				out.Warnings = append(out.Warnings, NodeWarningPIDPressure)
 			}
 		case corev1.NodeNetworkUnavailable:
-			if cond.Status == corev1.ConditionTrue {
+			if slices.Contains(lifecycle.Problems, "NetworkUnavailable") {
 				out.Warnings = append(out.Warnings, NodeWarningNetworkUnavailable)
 			}
 		}
@@ -1116,6 +1338,38 @@ func compactResourceList(resources corev1.ResourceList) map[string]string {
 		return nil
 	}
 	return out
+}
+
+// storageChain maps a claim, volume or class's storage relationships into
+// dependencies and dependents: a claim depends on its volume and class, a
+// volume on its class and is used by its claim, and a class is used by its
+// volumes and claims. A class can back thousands of volumes, so the caller
+// bounds both lists.
+func storageChain(group, kind string, rel *topology.Relationships) (dependencies, dependents []ContextRef, ok bool) {
+	pick := func(dst []ContextRef, refs []topology.ResourceRef, group, kind string) []ContextRef {
+		for _, ref := range refs {
+			if ref.Group == group && ref.Kind == kind {
+				dst = append(dst, ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name})
+			}
+		}
+		return dst
+	}
+	dependencies = toContextRefs(rel.Dependencies)
+	dependents = toContextRefs(rel.Dependents)
+	switch resourceid.ResourceKey(group, kind, "", "") {
+	case resourceid.ResourceKey("", "PersistentVolumeClaim", "", ""):
+		dependencies = pick(dependencies, rel.StorageRefs, "", "PersistentVolume")
+		dependencies = pick(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+	case resourceid.ResourceKey("", "PersistentVolume", "", ""):
+		dependencies = pick(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+	case resourceid.ResourceKey("storage.k8s.io", "StorageClass", "", ""):
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolume")
+		dependents = pick(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+	default:
+		return nil, nil, false
+	}
+	return dependencies, dependents, true
 }
 
 func buildPVCSummary(obj runtime.Object) *PVCSummary {
@@ -1508,6 +1762,55 @@ func (s *refSet) refs(kind, group string) []ContextRef {
 // Topology ref → ContextRef
 // ---------------------------------------------------------------------------
 
+// managerContext compacts a manager answer: the evidence that answers, the
+// resource's or its controller's, and in AlsoClaimed the claims that didn't
+// settle it, each on its object. Copied claims are dropped. Every reference
+// in it is one the caller may read, or metadata on one.
+func managerContext(m *topology.ManagerAnswer) *ManagerContext {
+	out := &ManagerContext{State: m.State, Narrowed: m.Narrowed}
+	if m.Lead != nil {
+		lead := toContextRef(*m.Lead)
+		out.Lead = &lead
+	}
+	evidence := m.Direct
+	if m.Via != nil {
+		evidence = *m.Via
+		via := toContextRef(m.Via.Object)
+		out.Via = &via
+	}
+	out.ListedBy = toContextRefs(evidence.Recorders)
+	out.Claims = claimContexts(evidence, false)
+	if m.Via != nil {
+		out.AlsoClaimed = claimContexts(m.Direct, true)
+	}
+	for _, e := range m.Between {
+		out.AlsoClaimed = append(out.AlsoClaimed, claimContexts(e, true)...)
+	}
+	return out
+}
+
+// claimContexts are e's claims but the copied ones, which name another object;
+// with on, each says which object makes it.
+func claimContexts(e topology.ManagerEvidence, on bool) []ManagerClaimContext {
+	var out []ManagerClaimContext
+	for _, c := range e.Claims {
+		if c.Copied {
+			continue
+		}
+		cc := ManagerClaimContext{Manager: toContextRef(c.Manager), Check: c.Check}
+		if on {
+			object := toContextRef(e.Object)
+			cc.On = &object
+		}
+		out = append(out, cc)
+	}
+	return out
+}
+
+func toContextRef(r topology.ResourceRef) ContextRef {
+	return ContextRef{Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name}
+}
+
 // toContextRefs translates a slice of topology.ResourceRef into ContextRefs.
 // Sorted by (kind, namespace, name) for determinism — golden tests rely on
 // this ordering.
@@ -1543,6 +1846,8 @@ func toContextRefs(refs []topology.ResourceRef) []ContextRef {
 // filterRefs applies the access check to each ref. Denied refs are dropped
 // and one omitted entry is recorded per field (deduped by the tracker).
 // When ac is nil (local-kubeconfig / no auth), every ref passes.
+// filterRefs keeps the refs the caller may read. With omitted, a dropped ref
+// records an rbac_denied note for fieldPath; nil drops silently.
 func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fieldPath string, omitted *omittedTracker) []ContextRef {
 	if len(refs) == 0 {
 		return nil
@@ -1556,12 +1861,88 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 		}
 		out = append(out, r)
 	}
-	if deniedAny {
+	if deniedAny && omitted != nil {
 		omitted.add(fieldPath, OmittedRBACDenied)
 	}
 	if len(out) == 0 {
 		return nil
 	}
+	return out
+}
+
+// Denied namespaces must not make reference authorization unbounded.
+const maxReferenceAccessChecks = 4 * maxReferencedByItems
+
+// filterBoundedRefs dedupes refs and keeps the readable ones, taking one ref
+// per kind in turn so a kind with many matches cannot crowd out the others.
+// Access checks are cached per (group, kind, namespace) and capped, and the
+// result is capped at maxReferencedByItems; either cap records budget_exceeded.
+func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+	sorted := append([]ContextRef(nil), refs...)
+	less := func(a, b ContextRef) bool {
+		return resourceid.ResourceKey(a.Group, a.Kind, a.Namespace, a.Name) < resourceid.ResourceKey(b.Group, b.Kind, b.Namespace, b.Name)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return less(sorted[i], sorted[j]) })
+	type bucket struct {
+		refs []ContextRef
+		next int
+	}
+	var buckets []bucket
+	var last, kindKey string
+	for _, ref := range sorted {
+		key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if key == last {
+			continue
+		}
+		last = key
+		kind := resourceid.ResourceKey(ref.Group, ref.Kind, "", "")
+		if len(buckets) == 0 || kind != kindKey {
+			buckets = append(buckets, bucket{})
+			kindKey = kind
+		}
+		buckets[len(buckets)-1].refs = append(buckets[len(buckets)-1].refs, ref)
+	}
+	decisions := make(map[string]bool)
+	var out []ContextRef
+	for {
+		advanced := false
+		for i := range buckets {
+			b := &buckets[i]
+			if b.next == len(b.refs) {
+				continue
+			}
+			ref := b.refs[b.next]
+			b.next++
+			advanced = true
+			allowed := true
+			if ac != nil {
+				key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, "")
+				var known bool
+				allowed, known = decisions[key]
+				if !known {
+					if len(decisions) == maxReferenceAccessChecks {
+						omitted.add(field, OmittedBudgetExceeded)
+						continue
+					}
+					allowed = checkRef(ctx, ac, &ref)
+					decisions[key] = allowed
+				}
+			}
+			if !allowed {
+				omitted.add(field, OmittedRBACDenied)
+				continue
+			}
+			out = append(out, ref)
+			if len(out) > maxReferencedByItems {
+				omitted.add(field, OmittedBudgetExceeded)
+				return out[:maxReferencedByItems]
+			}
+		}
+		if !advanced {
+			break
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return less(out[i], out[j]) })
 	return out
 }
 
@@ -1677,6 +2058,10 @@ func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac 
 		}
 		out.ConcurrentAdmission = &concurrent
 	}
+	if scheduling.Admission != nil {
+		admission := scheduling.Admission.Clone()
+		out.Admission = &admission
+	}
 
 	out.PodSetAssignments = nil
 	for _, assignment := range scheduling.PodSetAssignments {
@@ -1701,6 +2086,7 @@ func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac 
 		}
 		out.PodSetAssignments = append(out.PodSetAssignments, filteredAssignment)
 	}
+	out.PendingPosition = scheduling.PendingPosition.Clone()
 	return &out
 }
 

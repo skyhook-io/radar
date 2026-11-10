@@ -1,7 +1,12 @@
+import { getCRDColumnValue } from './resource-utils-crd'
+import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
+import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getFlaggerColumnValue } from './resource-utils-flagger'
 // Utility functions for resource display in tables
 
+import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { effectivePolicyTypeNames } from '../../utils/network-policy'
-import { formatCPUString, formatMemoryString, formatBytes } from '../../utils/format'
+import { formatCPUString, formatMemoryString, formatBytes, formatCompactAge } from '../../utils/format'
 import { pluralize } from '../../utils/pluralize'
 import type { WorkloadPodInfo } from '../../types/core'
 import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActivity, isArgoRolloutResource, isRolloutActivityVisible, rolloutActivityBadge, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
@@ -32,6 +37,7 @@ import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternal
 import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
 import { getGenericResourceStatus } from './generic-status'
+import { getCrossplaneStatus, getProviderStatus, getProviderConfigStatus, isManagedResource, isComposite } from './resource-utils-crossplane'
 import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString, getAuthorizationPolicySelectorString as _getAuthorizationPolicySelectorString, getDestinationRuleTlsMode as _getDestinationRuleTlsMode } from './resource-utils-istio'
 import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
 
@@ -85,12 +91,57 @@ export interface PodProblem {
  * misses. Presentation-only; the backend `scheduling` issue source does the
  * structured decomposition + node-label resolution (e.g. naming arm64).
  */
-export function summarizeSchedulerMessage(message?: string): string {
+export function summarizeSchedulerMessage(message?: string, options: { plain?: boolean } = {}): string {
   if (!message) return ''
   let m = message.split('. preemption:')[0].split(' preemption:')[0].trim()
-  const colon = m.indexOf(':')
-  if (colon >= 0) m = m.slice(colon + 1).trim()
-  return m.replace(/\.\s*$/, '').trim()
+  if (options.plain) {
+    m = m.replace(/^(?:Pod cannot be scheduled:\s*)?(?:Unschedulable:\s*)?(?:0\/\d+ nodes are available:\s*)?/i, '')
+    // Schedulers with dynamic resource allocation append this after the node reasons.
+    m = m.replace(/no new claims to deallocate,?/i, '').trim()
+  } else {
+    const colon = m.indexOf(':')
+    if (colon >= 0) m = m.slice(colon + 1).trim()
+  }
+  m = m.replace(/\.\s*$/, '').trim()
+  if (!options.plain) return m
+  const total = /0\/(\d+) nodes (?:are )?available/.exec(message)?.[1]
+  const causes: [RegExp, string][] = [
+    [/^(\d+) (?:Too many pods|(?:node\(s\) )?insufficient pods)(?: \(0\/\d+ nodes available\))?$/i, 'have reached their Pod limit'],
+    [/^(\d+) (?:node\(s\) )?Insufficient cpu(?: \(0\/\d+ nodes available\))?$/i, 'do not have enough CPU'],
+    [/^(\d+) (?:node\(s\) )?Insufficient memory(?: \(0\/\d+ nodes available\))?$/i, 'do not have enough memory'],
+    [/^(\d+) node\(s\) (?:didn.t match Pod.s node affinity\/selector|node affinity\/selector mismatch)(?: \(0\/\d+ nodes available\))?$/i, 'do not match the Pod’s node affinity or selector'],
+    [/^(\d+) node\(s\) (?:had )?untolerated taint(?:\(s\))?(?: \{[^}]*\}| [^\s]+)?(?: \(0\/\d+ nodes available\))?$/i, 'have taints the Pod does not tolerate'],
+    [/^(\d+) node\(s\) (?:(?:had )?volume node[- ]affinity conflict|didn.t match PersistentVolume.s node affinity)(?: \(0\/\d+ nodes available\))?$/i, 'do not match the volume’s node affinity'],
+  ]
+  return splitSchedulerClauses(m).filter((part) => part.trim()).map((part) => {
+    const clause = part.trim()
+    for (const [pattern, cause] of causes) {
+      const count = pattern.exec(clause)?.[1]
+      if (count) return `${count === '1' ? '1 node' : count === total && count === '2' ? 'both nodes' : count === total ? 'all nodes' : `${count} nodes`} ${count === '1' ? cause.replace(/^have /, 'has ').replace(/^do /, 'does ') : cause}`
+    }
+    if (/^(?:pod has )?unbound (?:immediate )?PersistentVolumeClaims?(?:\s*\(0\/\d+ nodes available\))?$/i.test(clause)) return 'a required volume claim is not bound'
+    return clause
+  }).join('; ')
+}
+
+// Splits on commas and semicolons, except where the next bracket ahead closes:
+// scheduler taints and resolved node labels can contain comma-separated values.
+// One pass from the end keeps long messages linear.
+function splitSchedulerClauses(m: string): string[] {
+  const parts: string[] = []
+  let end = m.length
+  let insideBrackets = false
+  for (let i = m.length - 1; i >= 0; i--) {
+    const c = m[i]
+    if (c === ']' || c === '}') insideBrackets = true
+    else if (c === '[' || c === '{') insideBrackets = false
+    else if ((c === ',' || c === ';') && !insideBrackets) {
+      parts.push(m.slice(i + 1, end))
+      end = i
+    }
+  }
+  parts.push(m.slice(0, end))
+  return parts.reverse()
 }
 
 /** Tailwind classes for severity dot indicators (used in tooltips and alert banners) */
@@ -113,7 +164,7 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
     case 'Unschedulable':
       return msgs.includes('Unschedulable')
     case 'Not Ready':
-      return msgs.includes('Not Ready') || msgs.some(m => m.includes('Probe'))
+      return msgs.includes('Not Ready') || msgs.some(m => m.includes('Probe') || m.includes('Readiness Gate'))
     case 'High Restarts':
       return restarts > 5
     case 'Init Failed':
@@ -123,7 +174,7 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
     case 'Failed':
       return msgs.includes('Failed') || msgs.includes('Unknown')
     case 'Other': {
-      const knownPatterns = ['CrashLoopBackOff', 'ImagePull', 'ErrImagePull', 'OOMKilled', 'Unschedulable', 'Not Ready', 'Probe', 'Init:', 'Exit Code', 'Failed', 'Unknown']
+      const knownPatterns = ['CrashLoopBackOff', 'ImagePull', 'ErrImagePull', 'OOMKilled', 'Unschedulable', 'Not Ready', 'Probe', 'Readiness Gate', 'Init:', 'Exit Code', 'Failed', 'Unknown']
       return problems.some(p => !knownPatterns.some(pat => p.message.includes(pat)) && p.message !== `${restarts} restarts`)
     }
     default:
@@ -156,6 +207,22 @@ function podUnschedulable(pod: any): boolean {
   return conds.some(
     (c: any) => c.type === 'PodScheduled' && c.status === 'False' && c.reason === 'Unschedulable'
   )
+}
+
+// A non-empty spec.schedulingGates means a controller is deliberately holding the
+// pod in Pending (Kueue admission, topology assignment, a custom gate). Mirrors the
+// backend health.PodHasSchedulingGates — keep the two in lockstep (the cross-language
+// golden fixture pins it). The spec field is authoritative and is kept in the summary
+// list payload, so this reads it directly rather than racing the scheduler's
+// PodScheduled=SchedulingGated condition (which lags gate changes in both directions).
+function podSchedulingGated(pod: any): boolean {
+  return (pod?.spec?.schedulingGates || []).length > 0
+}
+
+function schedulingGateNames(pod: any): string[] {
+  return (pod?.spec?.schedulingGates || [])
+    .map((g: any) => g?.name)
+    .filter((n: any): n is string => typeof n === 'string' && n.length > 0)
 }
 
 // A container that has terminated successfully (exit 0) is done, not "not ready".
@@ -247,6 +314,52 @@ function podCrashRestartTotal(pod: any): number {
     .reduce((sum, cs) => sum + (cs?.restartCount || 0), 0)
 }
 
+function podReadinessGateBlocked(pod: any): boolean {
+  const gates: { conditionType: string }[] = pod.spec?.readinessGates || []
+  if (pod.metadata?.deletionTimestamp || pod.status?.phase !== 'Running' || gates.length === 0) return false
+  const conditions: any[] = pod.status?.conditions || []
+  const ready = conditions.find(c => c.type === 'Ready')
+  const containersReady = conditions.find(c => c.type === 'ContainersReady')
+  if (ready?.status !== 'False' || ready.reason !== 'ReadinessGatesNotReady' || containersReady?.status !== 'True') return false
+  const now = Date.now()
+  let recent = false
+  for (const c of [ready, containersReady]) {
+    const since = Date.parse(c.lastTransitionTime || pod.metadata?.creationTimestamp)
+    if (!Number.isFinite(since)) continue
+    recent ||= since <= now + PENDING_STUCK_MINUTES * 60000 && now - since < PENDING_STUCK_MINUTES * 60000
+  }
+  if (recent) return false
+  return gates.some(g => {
+    const condition = conditions.find(c => c.type === g.conditionType)
+    return !condition || condition.status !== 'True'
+  })
+}
+
+// Match the health classifier's OOM recovery precedence before showing a gate failure.
+function readinessGateOOMRecovery(pod: any): string | null {
+  const now = Date.now()
+  for (const cs of pod.status?.containerStatuses || []) {
+    if (cs.lastState?.terminated?.reason !== 'OOMKilled') continue
+    const probe = pod.spec?.containers?.find((c: any) => c.name === cs.name)?.readinessProbe
+    if (cs.ready && probe) continue
+    const startedAt = Date.parse(cs.state?.running?.startedAt)
+    if (Number.isFinite(startedAt)) {
+      if (now - startedAt <= CRASH_SETTLE_MS) return cs.name
+      continue
+    }
+    const finishedAt = Date.parse(cs.lastState.terminated.finishedAt)
+    if (cs.state?.waiting || (Number.isFinite(finishedAt) && now - finishedAt <= CRASH_SETTLE_MS)) return cs.name
+  }
+  for (const cs of pod.status?.initContainerStatuses || []) {
+    if (cs.lastState?.terminated?.reason !== 'OOMKilled') continue
+    if (cs.state?.terminated?.exitCode === 0) continue
+    const startedAt = Date.parse(cs.state?.running?.startedAt)
+    if (Number.isFinite(startedAt) && now - startedAt > CRASH_SETTLE_MS) continue
+    return cs.name
+  }
+  return null
+}
+
 export function getPodStatus(pod: any): StatusBadge {
   const phase = pod.status?.phase || 'Unknown'
   const containerStatuses = pod.status?.containerStatuses || []
@@ -268,6 +381,12 @@ export function getPodStatus(pod: any): StatusBadge {
   // dashboard report it as an error regardless).
   if (phase === 'Failed') {
     return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  const gateBlocked = podReadinessGateBlocked(pod)
+  const gateOOM = gateBlocked ? readinessGateOOMRecovery(pod) : null
+  if (gateOOM) {
+    return { text: 'OOMKilled', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
   const crashHistoryLevel = phase !== 'Succeeded' && phase !== 'Unknown'
@@ -302,6 +421,9 @@ export function getPodStatus(pod: any): StatusBadge {
 
   switch (phase) {
     case 'Running': {
+      if (gateBlocked) {
+        return { text: 'Readiness gate blocked', color: healthColors.degraded, level: 'degraded' }
+      }
       // Degrade only on containers that are neither ready nor successfully done —
       // a completed container (exit 0) on a Running pod is finishing, not a fault.
       const ready = containerStatuses.filter((c: any) => c.ready).length
@@ -323,6 +445,12 @@ export function getPodStatus(pod: any): StatusBadge {
     case 'Succeeded':
       return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
     case 'Pending':
+      // A scheduling gate deliberately holds the pod in Pending; it's an
+      // intentional state, not an age-based problem, so it reads neutral and never
+      // ages into a warning. Checked before the unschedulable/age branches.
+      if (podSchedulingGated(pod)) {
+        return { text: 'Scheduling gated', color: healthColors.neutral, level: 'neutral' }
+      }
       // Unschedulable = the scheduler tried and failed to place this pod; the
       // backend flags it immediately (severity ramps with duration), so the badge
       // does too. Plain Pending (not yet placed) keeps the young-grace window.
@@ -393,6 +521,12 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     return { phase, text: 'Failed', level: 'unhealthy' }
   }
 
+  const gateBlocked = podReadinessGateBlocked(pod)
+  const gateOOM = gateBlocked ? readinessGateOOMRecovery(pod) : null
+  if (gateOOM) {
+    return { phase, text: `${phase} — OOMKilled`, level: 'unhealthy', hint: `Container "${gateOOM}" is recovering from an OOM kill.` }
+  }
+
   const crashHistoryLevel = phase !== 'Succeeded' && phase !== 'Unknown'
     ? podCrashHistoryLevel(pod)
     : null
@@ -431,6 +565,9 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
 
   switch (phase) {
     case 'Running': {
+      if (gateBlocked) {
+        return { phase, text: 'Running — Readiness gate blocked', level: 'degraded', hint: pod.status?.conditions?.find((c: any) => c.type === 'Ready')?.message }
+      }
       // A successfully-completed container (exit 0) is settled, not "not ready" —
       // don't degrade a completing pod over it (matches getPodStatus / timeline).
       const unsettled = containerStatuses.filter((c) => !containerSettledOk(c)).length
@@ -464,7 +601,22 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     }
     case 'Succeeded':
       return { phase, text: 'Completed', level: 'neutral' }
-    case 'Pending':
+    case 'Pending': {
+      // A scheduling gate deliberately holds the pod in Pending; surface it as a
+      // calm, explained state (with the gate name) rather than a bare Pending or an
+      // age-based warning. Checked before the unschedulable/age branches.
+      if (podSchedulingGated(pod)) {
+        const gates = schedulingGateNames(pod)
+        return {
+          phase,
+          text: `${phase} — Scheduling gated`,
+          level: 'neutral',
+          hint:
+            gates.length > 0
+              ? `Held by scheduling gate(s): ${gates.join(', ')}. A controller is intentionally blocking scheduling until a condition is met.`
+              : 'A controller is intentionally blocking scheduling until a condition is met.',
+        }
+      }
       // Unschedulable = the scheduler tried and failed; surface it immediately
       // (the backend does, with severity ramping by duration). Plain Pending
       // (not yet placed) keeps the young-grace window.
@@ -485,6 +637,7 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
         }
       }
       return { phase, text: 'Pending', level: 'neutral' }
+    }
     case 'Failed':
       return { phase, text: 'Failed', level: 'unhealthy' }
     default:
@@ -565,6 +718,10 @@ export function getPodProblems(pod: any): PodProblem[] {
     if (lastMsg.includes('failed to mount') || lastMsg.includes('failedattachvolume')) {
       problems.push({ severity: 'high', message: 'Volume Mount Failed', detail: lastMsgRaw || undefined })
     }
+  }
+
+  if (podReadinessGateBlocked(pod)) {
+    problems.push({ severity: 'medium', message: 'Readiness Gate Blocked', detail: conditions.find((c: any) => c.type === 'Ready')?.message })
   }
 
   // Check conditions
@@ -690,6 +847,19 @@ export function getDefaultContainerName(pod: any): string | undefined {
     return annotated
   }
   return containers[0]?.name
+}
+
+/**
+ * The containers a terminal can target: the regular containers, then native
+ * sidecars (init containers with restartPolicy: Always, Kubernetes 1.29+),
+ * which keep running for the pod's lifetime like regular containers.
+ */
+export function getExecContainerNames(pod: any): string[] {
+  const regular = (pod?.spec?.containers || []).map((c: any) => c.name)
+  const sidecars = (pod?.spec?.initContainers || [])
+    .filter((c: any) => c.restartPolicy === 'Always')
+    .map((c: any) => c.name)
+  return [...regular, ...sidecars].filter(Boolean)
 }
 
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
@@ -1213,6 +1383,15 @@ export function getSecretKeyCount(secret: any): number {
 // JOB / CRONJOB UTILITIES
 // ============================================================================
 
+// Kueue owns spec.suspend for a Job submitted to a LocalQueue: it suspends the
+// Job until admission and again on preemption, so resuming it is not the user's
+// next step. Callers that also read the Workload pass that evidence separately.
+export function isKueueQueuedJob(job: any): boolean {
+  if (job?.apiVersion && job.apiVersion !== 'batch/v1') return false
+  if (job?.kind && job.kind !== 'Job') return false
+  return Boolean(job?.metadata?.labels?.['kueue.x-k8s.io/queue-name'])
+}
+
 export function getJobStatus(job: any): StatusBadge {
   const status = job.status || {}
   const conditions = status.conditions || []
@@ -1231,6 +1410,7 @@ export function getJobStatus(job: any): StatusBadge {
   }
 
   if (job.spec?.suspend) {
+    if (isKueueQueuedJob(job)) return { text: 'Held by Kueue', color: healthColors.neutral, level: 'neutral' }
     return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
@@ -1268,7 +1448,7 @@ export function getCronJobStatus(cj: any): StatusBadge {
   if (activeJobs > 0) {
     return { text: `Active (${activeJobs})`, color: healthColors.neutral, level: 'neutral' }
   }
-  return { text: 'Scheduled', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Enabled', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getCronJobSchedule(cj: any): { cron: string; readable: string } {
@@ -1329,25 +1509,8 @@ export function getHPAMetrics(hpa: any): { cpu?: number; memory?: number; custom
 // ============================================================================
 
 export function getNodeStatus(node: any): StatusBadge {
-  const conditions = node.status?.conditions || []
-  const readyCondition = conditions.find((c: any) => c.type === 'Ready')
-
-  const isReady = readyCondition?.status === 'True'
-  const isUnschedulable = node.spec?.unschedulable === true
-
-  if (isReady && isUnschedulable) {
-    // Cordon is intentional but consequential — it's lost scheduling capacity, and
-    // a forgotten cordon strands nodes — so it stays on the warning axis (matching
-    // the backend Cordoned issue), unlike no-op intentional states (suspended/idle).
-    return { text: 'Ready,SchedulingDisabled', color: healthColors.degraded, level: 'degraded' }
-  }
-  if (isReady) {
-    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (readyCondition?.status === 'False') {
-    return { text: 'NotReady', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  const lifecycle = getNodeLifecycle(node)
+  return { text: lifecycle.label, color: healthColors[lifecycle.level], level: lifecycle.level }
 }
 
 export function getNodeRoles(node: any): string {
@@ -1375,27 +1538,32 @@ export interface NodeCondition {
   message?: string
 }
 
-// Problem conditions that indicate node issues
-const NODE_PROBLEM_CONDITIONS = ['DiskPressure', 'MemoryPressure', 'PIDPressure', 'NetworkUnavailable']
-
-export function getNodeConditions(node: any): { problems: string[]; healthy: boolean } {
+export function getNodeConditions(node: any): { problems: string[]; healthy: boolean; readinessLabel: string } {
   const conditions = node.status?.conditions || []
   const problems: string[] = []
+  const lifecycle = getNodeLifecycle(node)
 
   for (const cond of conditions) {
     // Ready=False is a problem
-    if (cond.type === 'Ready' && cond.status !== 'True') {
+    if (cond.type === 'Ready' && lifecycle.readinessFailed) {
       problems.push('NotReady')
     }
     // Other conditions are problems when True
-    if (NODE_PROBLEM_CONDITIONS.includes(cond.type) && cond.status === 'True') {
+    if (lifecycle.problems.includes(cond.type) && cond.status === 'True') {
       // Format: "DiskPressure" -> "Disk Pressure"
       const formatted = cond.type.replace(/([A-Z])/g, ' $1').trim()
       problems.push(formatted)
     }
   }
 
-  return { problems, healthy: problems.length === 0 }
+  if (lifecycle.delayed) problems.push('Removal delayed')
+  const ready = conditions.find((cond: any) => cond.type === 'Ready')
+  const readinessLabel = lifecycle.removing && !lifecycle.readinessFailed && ready?.status === 'False'
+    ? 'Not ready (expected during removal)'
+    : lifecycle.removing && !lifecycle.readinessFailed && ready?.status === 'Unknown'
+      ? 'Readiness unknown during removal'
+      : 'Readiness unknown'
+  return { problems, healthy: problems.length === 0 && ready?.status === 'True', readinessLabel }
 }
 
 export function getNodeTaints(node: any): { count: number; text: string } {
@@ -1414,11 +1582,7 @@ export function getNodeVersion(node: any): string {
 // ============================================================================
 
 export function formatAge(timestamp: string): string {
-  if (!timestamp) return '-'
-  const created = new Date(timestamp)
-  const now = new Date()
-  const diffMs = now.getTime() - created.getTime()
-  return formatDuration(diffMs)
+  return formatCompactAge(timestamp) || '-'
 }
 
 export function formatDuration(ms: number, detailed: boolean = false): string {
@@ -1869,7 +2033,7 @@ export function getGatewayClassDescription(gc: any): string {
 }
 
 // ============================================================================
-// GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+// GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
 // ============================================================================
 
 const GATEWAY_API_GROUP = 'gateway.networking.k8s.io'
@@ -2279,6 +2443,37 @@ export function parseColumnFilterExcludes(filtersParam: string | null): Record<s
   return excludes
 }
 
+/** The Resources list's own filter params in the URL (the kind is in the path, `apiGroup` beside it). */
+export const RESOURCE_LIST_FILTER_PARAMS = ['search', 'regex', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive'] as const
+
+/** The per-kind filters in a query string: what a kind switch resets or restores. */
+export function kindFiltersFromSearch(search: string | undefined) {
+  const params = new URLSearchParams(search ?? '')
+  const filtersParam = params.get('filters')
+  return {
+    columnFilters: parseColumnFilters(filtersParam),
+    columnFilterExcludes: parseColumnFilterExcludes(filtersParam),
+    problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
+  }
+}
+
+/** The `filters` param value. Drops an exclude flag on a column with no active values. */
+export function columnFiltersParam(colFilters: Record<string, string[]>, colExcludes: Record<string, boolean>): string {
+  const activeExcludes = Object.fromEntries(
+    Object.entries(colExcludes).filter(([k, on]) => on && (colFilters[k]?.length ?? 0) > 0)
+  )
+  return serializeColumnFilters(colFilters, activeExcludes)
+}
+
+/** Inverse of kindFiltersFromSearch: the `filters` + `problems` query, '' when none. */
+export function kindFiltersToSearch(f: ReturnType<typeof kindFiltersFromSearch>): string {
+  const params = new URLSearchParams()
+  const filters = columnFiltersParam(f.columnFilters, f.columnFilterExcludes)
+  if (filters) params.set('filters', filters)
+  if (f.problemFilters.length > 0) params.set('problems', f.problemFilters.join(','))
+  return params.toString()
+}
+
 // Split a single "col[:operator]:values" pair into its decoded key, values, and
 // whether the explicit exclude operator was present. The first literal colon
 // delimits key from the rest (keys are encoded, so their own colons don't
@@ -2319,6 +2514,14 @@ function parseColumnFilterPair(
 
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
   try {
+  const connectorValue = getStrimziConnectorColumnValue(resource, column)
+  if (connectorValue !== undefined) return connectorValue
+  const otelValue = getOpenTelemetryColumnValue(resource, column)
+  if (otelValue !== undefined) return otelValue
+  const flaggerValue = getFlaggerColumnValue(resource, column)
+  if (flaggerValue !== undefined) return flaggerValue
+  const crdValue = getCRDColumnValue(resource, column)
+  if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()
 
   switch (column) {
@@ -2357,7 +2560,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'hpas' || kindLower === 'horizontalpodautoscalers') return getHPAStatus(resource).text
       if (kindLower === 'gateways') return getGatewayStatus(resource).text
       if (kindLower === 'gatewayclasses') return getGatewayClassStatus(resource).text
-      if (['httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes'].includes(kindLower)) return getRouteStatus(resource).text
+      if (['httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'udproutes'].includes(kindLower)) return getRouteStatus(resource).text
       if (kindLower === 'sealedsecrets') return getSealedSecretStatus(resource).text
       if (kindLower === 'poddisruptionbudgets') return getPDBStatus(resource).text
       if (kindLower === 'applications') return getArgoApplicationStatus(resource).text
@@ -2456,6 +2659,9 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'scheduledbackups' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGScheduledBackupStatus(resource).text
       if (kindLower === 'poolers' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGPoolerStatus(resource).text
       if (kindLower === 'istiogateways') return _getIstioGatewayStatus(resource).text
+      if (kindLower === 'providers' && _isApiGroup(resource.apiVersion, 'pkg.crossplane.io')) return getProviderStatus(resource).text
+      if (kindLower === 'providerconfigs') return getProviderConfigStatus(resource).text
+      if (isManagedResource(resource) || isComposite(resource)) return getCrossplaneStatus(resource).text
       // Generic CRDs. Must read the same text the cell renders or the dropdown
       // offers strings that appear on no row — hence the shared derivation.
       return getGenericResourceStatus(resource)?.text ?? ''
@@ -2691,7 +2897,6 @@ export {
   getScaledObjectTriggers,
   getScaledObjectTriggerCount,
   getScaledObjectHpaName,
-  getScaledObjectLastActiveTime,
   getScaledObjectPollingInterval,
   getScaledObjectCooldownPeriod,
   getScaledJobStatus,

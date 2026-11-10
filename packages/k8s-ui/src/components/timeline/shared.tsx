@@ -57,28 +57,23 @@ export interface HealthSpanResult {
 }
 
 /**
- * Check if an event indicates a rollout is in progress (expected degradation).
- * Rollout signals include:
- * - Diff summary contains "updated:" (indicating replica count or image changes)
- * - Diff summary mentions image changes
- * - Event is for a deployment-like workload with degraded health
+ * Check if an event shows a rollout in progress (expected degradation): a
+ * deployment-like workload whose updated-replica count moved while its ready
+ * count held. Decided from the diff's field paths, not from summary wording.
+ *
+ * The rule errs toward keeping degraded health visible. A pod-template edit
+ * alone does not count (OnDelete and paused workloads take it without
+ * rolling), and an update that also moves the ready count does not count
+ * either: a lost pod and a scale-up under failing readiness look the same as
+ * a pod swap from the counts alone.
  */
-function isRolloutEvent(event: TimelineEvent): boolean {
+export function isRolloutEvent(event: TimelineEvent): boolean {
   // Only deployment-like workload controllers can have rollout transitions.
   if (!isDeploymentLikeWorkloadKind(event.kind)) return false
-
-  // Check diff summary for rollout signals
-  if (event.diff?.summary) {
-    const summary = event.diff.summary.toLowerCase()
-    // "updated:" typically indicates replica count changes during rollout
-    if (summary.includes('updated:')) return true
-    // Image changes trigger rollouts
-    if (summary.includes('image(') || summary.includes('image:')) return true
-    // Spec template changes often indicate rollout
-    if (summary.includes('template')) return true
-  }
-
-  return false
+  const paths = new Set((event.diff?.fields ?? []).map((field) => field.path))
+  const updatedMoved = paths.has('status.updatedReplicas') || paths.has('status.updatedNumberScheduled')
+  const readyMoved = paths.has('status.readyReplicas') || paths.has('status.numberReady')
+  return updatedMoved && !readyMoved
 }
 
 /**

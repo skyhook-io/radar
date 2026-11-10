@@ -26,7 +26,7 @@ import {
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
 import { veleroPhaseLabel } from '../resource-utils-velero'
-import { formatAge } from '../resource-utils'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroBackupRendererProps {
   data: any
@@ -140,10 +140,10 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
             <Property label="Queue Position" value={String(queuePosition)} />
           )}
           {status.startTimestamp && (
-            <Property label="Started" value={formatAge(status.startTimestamp) + ' ago'} />
+            <Property label="Started" value={<TimeValue timestamp={status.startTimestamp} />} />
           )}
           {status.completionTimestamp && (
-            <Property label="Completed" value={formatAge(status.completionTimestamp) + ' ago'} />
+            <Property label="Completed" value={<TimeValue timestamp={status.completionTimestamp} />} />
           )}
           <Property label="Duration" value={getBackupDuration(data)} />
           <Property label="Expiration" value={getBackupExpiry(data)} />

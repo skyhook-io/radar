@@ -18,12 +18,12 @@ import '@xyflow/react/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
-import { X, ArrowRight, Globe, Server, Activity, Puzzle } from 'lucide-react'
+import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind } from './trafficFilters'
+import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, type TrafficFocus } from './trafficFilters'
 
 const elk = new ELK()
 
@@ -48,6 +48,8 @@ export interface TrafficGraphSelection {
   sourceId?: string
   destId?: string
   port?: number
+  // The graph draws traffic of unknown direction as its own edge.
+  directionUnknown?: boolean
 }
 
 interface TrafficGraphProps {
@@ -57,7 +59,13 @@ interface TrafficGraphProps {
   serviceCategories?: Map<string, string>
   addonMode?: AddonMode
   trafficSource?: string
+  /** The selection, owned by the view: the graph shows it and reports clicks. */
+  selection?: TrafficGraphSelection | null
   onSelectionChange?: (selection: TrafficGraphSelection | null) => void
+  /** Narrows the view to a node and its neighbors. */
+  onFocus?: (focus: TrafficFocus) => void
+  /** The focused node, which is not offered as a focus again. */
+  focusedId?: string
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
@@ -72,6 +80,12 @@ function formatConnections(count: number): string {
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
   if (count >= 1_000) return `${(count / 1_000).toFixed(0)}K`
   return count.toString()
+}
+
+// A volume in the source's own unit: a rate to two significant places for a
+// rate-based source, a whole count otherwise.
+function formatVolume(volume: number, isRateBased: boolean): string {
+  return isRateBased ? formatRate(volume) : formatConnections(volume)
 }
 
 function formatLatency(ms: number): string {
@@ -140,10 +154,12 @@ interface TrafficNodeData extends Record<string, unknown> {
   namespace?: string
   kind: string
   workload?: string
+  workloadKind?: string
   connections?: number
   totalConnections?: number // Total connections for this node
   namespaceColor?: string // Background color for namespace grouping
   isHotPath?: boolean // Whether this node is on a hot path
+  isFocused?: boolean // The endpoint the view is focused on
   isAddonNode?: boolean // Whether this is a cluster addon node
   serviceCategory?: string // For external nodes: database, cloud, etc.
   ports?: PortInfo[] // All inbound ports sorted by connection count
@@ -199,7 +215,7 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
                   : hasNamespaceColor
                     ? 'border-white/20'
                     : 'bg-theme-surface border-theme-border',
-        data.isHotPath && 'ring-2 ring-orange-500/50'
+        data.isFocused ? 'ring-2 ring-skyhook-500' : data.isHotPath && 'ring-2 ring-orange-500/50'
       )}
       style={{
         width: NODE_WIDTH,
@@ -293,7 +309,7 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
                       ? 'text-white/60'
                       : 'text-theme-text-tertiary'
                 )}>
-                  {formatConnections(portInfo.connections)}{data.connLabel === 'req/s' ? '/s' : ''}
+                  {formatVolume(portInfo.connections, data.connLabel === 'req/s')}{data.connLabel === 'req/s' ? '/s' : ''}
                 </span>
               )}
             </div>
@@ -319,7 +335,7 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
                 ? 'text-white/70'
                 : 'text-theme-text-tertiary'
           )}>
-            {formatConnections(data.totalConnections)} {data.connLabel || 'conn'}
+            {formatVolume(data.totalConnections, data.connLabel === 'req/s')} {data.connLabel || 'conn'}
           </span>
         </div>
       )}
@@ -420,11 +436,13 @@ function formatBytes(bytes: number): string {
 function DetailsPanel({
   selection,
   onClose,
+  onFocus,
   flows,
   isRateBased,
 }: {
   selection: Selection
   onClose: () => void
+  onFocus?: () => void
   flows: AggregatedFlow[]
   // True for sources that measure a rate rather than counting connections —
   // Istio and Beyla both do. Changes the wording and the /s suffix.
@@ -460,7 +478,7 @@ function DetailsPanel({
     totalBytes: relatedFlows.reduce((sum, f) => sum + f.bytesSent + f.bytesRecv, 0),
     protocols: relatedFlows.reduce((acc, f) => {
       const proto = f.protocol?.toUpperCase() || 'TCP'
-      acc[proto] = (acc[proto] || 0) + f.connections
+      acc[proto] = (acc[proto] || 0) + displayVolume(f, isRateBased)
       return acc
     }, {} as Record<string, number>),
     lastSeen: relatedFlows.reduce((latest, f) => {
@@ -468,22 +486,28 @@ function DetailsPanel({
       return !latest || f.lastSeen > latest ? f.lastSeen : latest
     }, null as string | null),
     flowCount: relatedFlows.reduce((sum, f) => sum + (f.flowCount || 1), 0),
-    totalRequests: relatedFlows.reduce((sum, f) => sum + (f.requestCount ?? 0), 0),
-    totalErrors: relatedFlows.reduce((sum, f) => sum + (f.errorCount ?? 0), 0),
+    totalRequests: relatedFlows.reduce((sum, f) => sum + requestRateOf(f), 0),
+    totalErrors: relatedFlows.reduce((sum, f) => sum + errorRateOf(f), 0),
     l7Protocols: relatedFlows.reduce((acc, f) => {
       if (f.l7Protocol) acc.add(f.l7Protocol)
       return acc
     }, new Set<string>()),
-    // Aggregate latency across edges (median of P50s, max of P95s)
-    latencyP50Ms: (() => {
-      const p50s = relatedFlows.map(f => f.latencyP50Ms).filter((v): v is number => v != null && v > 0)
-      if (p50s.length === 0) return undefined
-      p50s.sort((a, b) => a - b)
-      return p50s[Math.floor(p50s.length / 2)]
+    // Percentiles of separate edges do not combine into a node percentile, so
+    // the node shows the slowest edge's P95 as that edge's, named.
+    slowestP95: (() => {
+      let slowest: AggregatedFlow | undefined
+      for (const f of relatedFlows) {
+        if (f.latencyP95Ms && (!slowest || f.latencyP95Ms > slowest.latencyP95Ms!)) slowest = f
+      }
+      return slowest && { ms: slowest.latencyP95Ms!, edge: `${slowest.source.workload || slowest.source.name} → ${slowest.destination.workload || slowest.destination.name}` }
     })(),
-    latencyP95Ms: (() => {
-      const p95s = relatedFlows.map(f => f.latencyP95Ms).filter((v): v is number => v != null && v > 0)
-      return p95s.length > 0 ? Math.max(...p95s) : undefined
+    // A metric-based source reports only an average per edge. The node's is
+    // those averages weighted by the traffic each stands for, so a slow trickle
+    // does not stand for a node that answers almost everything quickly.
+    avgLatencyMs: (() => {
+      const total = relatedFlows.reduce((sum, f) => sum + latencyWeightOf(f), 0)
+      if (total === 0) return undefined
+      return relatedFlows.reduce((sum, f) => sum + (f.avgLatencyMs ?? 0) * latencyWeightOf(f), 0) / total
     })(),
     // Aggregate HTTP status distribution
     httpStatusCounts: relatedFlows.reduce((acc, f) => {
@@ -527,12 +551,26 @@ function DetailsPanel({
             {isNode ? (nodeData?.kind === 'Internet' ? 'Internet Traffic' : nodeData?.kind === 'Addon' ? 'Cluster Addons' : 'Service Details') : 'Connection Details'}
           </span>
         </div>
-        <button
-          onClick={onClose}
-          className="p-1 rounded hover:bg-theme-hover text-theme-text-secondary"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {onFocus && (
+            <Tooltip content="Show only this and what it talks to">
+              <button
+                type="button"
+                onClick={onFocus}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
+              >
+                <Crosshair className="h-3.5 w-3.5" /> Focus
+              </button>
+            </Tooltip>
+          )}
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded hover:bg-theme-hover text-theme-text-secondary"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -557,7 +595,7 @@ function DetailsPanel({
                       : isExternalKind(nodeData.kind)
                         ? 'bg-yellow-500/20 text-yellow-400'
                         : 'bg-blue-500/20 text-blue-400'
-                )}>{nodeData.kind === 'Addon' ? 'Cluster Addons' : nodeData.kind}</span>
+                )}>{nodeData.kind === 'Addon' ? 'Cluster Addons' : nodeData.workloadKind || nodeData.kind}</span>
               </div>
               {nodeData.workload && nodeData.workload !== nodeData.label && (
                 <div className="text-xs text-theme-text-secondary">
@@ -572,7 +610,7 @@ function DetailsPanel({
               {nodeData.totalConnections != null && nodeData.totalConnections > 0 && (
                 <div className="text-xs text-theme-text-secondary">
                   {isRateBased ? 'Total request rate' : 'Total connections'}: <span className="text-theme-text-primary font-medium">
-                    {formatConnections(nodeData.totalConnections)}{isRateBased ? '/s' : ''}
+                    {formatVolume(nodeData.totalConnections, isRateBased)}{isRateBased ? '/s' : ''}
                   </span>
                 </div>
               )}
@@ -596,14 +634,14 @@ function DetailsPanel({
                 {nodeStats.totalRequests > 0 && (
                   <div className="p-2 rounded bg-theme-elevated text-xs">
                     <div className="text-theme-text-tertiary">Requests</div>
-                    <div className="text-theme-text-primary font-medium">{formatConnections(nodeStats.totalRequests)}/s</div>
+                    <div className="text-theme-text-primary font-medium">{formatRate(nodeStats.totalRequests)}/s</div>
                   </div>
                 )}
                 {nodeStats.totalErrors > 0 && (
                   <div className="p-2 rounded bg-red-500/10 border border-red-500/30 text-xs">
                     <div className="text-red-400">Errors (5xx)</div>
                     <div className="text-red-400 font-medium">
-                      {formatConnections(nodeStats.totalErrors)}/s
+                      {formatRate(nodeStats.totalErrors)}/s
                       {nodeStats.totalRequests > 0 && (
                         <span className="text-red-300 ml-1">
                           ({((nodeStats.totalErrors / nodeStats.totalRequests) * 100).toFixed(1)}%)
@@ -626,7 +664,7 @@ function DetailsPanel({
                         .map(([proto, count]) => (
                           <span key={proto} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-theme-bg text-theme-text-secondary">
                             <span className="font-medium">{proto}</span>
-                            <span className="text-theme-text-tertiary">{formatConnections(count)}{isRateBased ? '/s' : ''}</span>
+                            <span className="text-theme-text-tertiary">{formatVolume(count, isRateBased)}{isRateBased ? '/s' : ''}</span>
                           </span>
                         ))}
                     </div>
@@ -636,16 +674,17 @@ function DetailsPanel({
             )}
 
             {/* Node latency */}
-            {nodeStats?.latencyP50Ms && (
+            {nodeStats?.avgLatencyMs && (
               <div className="pt-1">
-                <div className="text-[10px] text-theme-text-tertiary mb-1">Latency</div>
-                <div className="flex gap-2 text-xs">
-                  <span className={clsx('font-medium', latencyColor(nodeStats.latencyP50Ms))}>
-                    P50: {formatLatency(nodeStats.latencyP50Ms)}
+                <div className="text-[10px] text-theme-text-tertiary mb-1">Latency across its edges</div>
+                <div className="flex flex-col gap-0.5 text-xs">
+                  <span className={clsx('font-medium', latencyColor(nodeStats.avgLatencyMs))}>
+                    Avg: {formatLatency(nodeStats.avgLatencyMs)}
                   </span>
-                  {nodeStats.latencyP95Ms && (
-                    <span className={clsx('font-medium', latencyColor(nodeStats.latencyP95Ms))}>
-                      P95: {formatLatency(nodeStats.latencyP95Ms)}
+                  {nodeStats.slowestP95 && (
+                    <span className="text-theme-text-secondary min-w-0 truncate">
+                      Slowest edge P95: <span className={clsx('font-medium', latencyColor(nodeStats.slowestP95.ms))}>{formatLatency(nodeStats.slowestP95.ms)}</span>
+                      <span className="text-theme-text-tertiary"> ({nodeStats.slowestP95.edge})</span>
                     </span>
                   )}
                 </div>
@@ -712,7 +751,7 @@ function DetailsPanel({
                         </span>
                         {flow.connections > 0 && (
                           <span className="text-theme-text-secondary">
-                            {formatConnections(flow.connections)} {isRateBased ? 'req/s' : 'conn'}
+                            {formatVolume(displayVolume(flow, isRateBased), isRateBased)} {isRateBased ? 'req/s' : 'conn'}
                           </span>
                         )}
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
@@ -722,7 +761,7 @@ function DetailsPanel({
                         )}
                         {flow.errorCount != null && flow.errorCount > 0 && (
                           <span className="text-red-400">
-                            {formatConnections(flow.errorCount)} err{isRateBased ? '/s' : ''}
+                            {isRateBased ? `${formatRate(errorRateOf(flow))} err/s` : `${formatConnections(flow.errorCount)} err`}
                           </span>
                         )}
                       </div>
@@ -764,7 +803,7 @@ function DetailsPanel({
                         </span>
                         {flow.connections > 0 && (
                           <span className="text-theme-text-secondary">
-                            {formatConnections(flow.connections)} {isRateBased ? 'req/s' : 'conn'}
+                            {formatVolume(displayVolume(flow, isRateBased), isRateBased)} {isRateBased ? 'req/s' : 'conn'}
                           </span>
                         )}
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
@@ -774,7 +813,7 @@ function DetailsPanel({
                         )}
                         {flow.errorCount != null && flow.errorCount > 0 && (
                           <span className="text-red-400">
-                            {formatConnections(flow.errorCount)} err{isRateBased ? '/s' : ''}
+                            {isRateBased ? `${formatRate(errorRateOf(flow))} err/s` : `${formatConnections(flow.errorCount)} err`}
                           </span>
                         )}
                       </div>
@@ -827,7 +866,7 @@ function DetailsPanel({
                   <div className="p-2 rounded bg-theme-elevated">
                     <div className="text-theme-text-tertiary">{isRateBased ? 'Request Rate' : 'Connections'}</div>
                     <div className="text-theme-text-primary font-medium">
-                      {formatConnections(edgeData.connections)}{isRateBased ? '/s' : ''}
+                      {formatVolume(edgeData.flow ? displayVolume(edgeData.flow, isRateBased) : edgeData.connections, isRateBased)}{isRateBased ? '/s' : ''}
                     </div>
                   </div>
                 )}
@@ -839,22 +878,22 @@ function DetailsPanel({
                     </div>
                   </div>
                 )}
-                {edgeData.flow?.requestCount != null && edgeData.flow.requestCount > 0 && (
+                {edgeData.flow && requestRateOf(edgeData.flow) > 0 && (
                   <div className="p-2 rounded bg-theme-elevated">
                     <div className="text-theme-text-tertiary">Requests</div>
                     <div className="text-theme-text-primary font-medium">
-                      {formatConnections(edgeData.flow.requestCount)}/s
+                      {formatRate(requestRateOf(edgeData.flow))}/s
                     </div>
                   </div>
                 )}
-                {edgeData.flow?.errorCount != null && edgeData.flow.errorCount > 0 && (
+                {edgeData.flow && errorRateOf(edgeData.flow) > 0 && (
                   <div className="p-2 rounded bg-red-500/10 border border-red-500/30">
                     <div className="text-red-400">Errors (5xx)</div>
                     <div className="text-red-400 font-medium">
-                      {formatConnections(edgeData.flow.errorCount)}/s
-                      {edgeData.flow.requestCount != null && edgeData.flow.requestCount > 0 && (
+                      {formatRate(errorRateOf(edgeData.flow))}/s
+                      {requestRateOf(edgeData.flow) > 0 && (
                         <span className="text-red-300 ml-1">
-                          ({((edgeData.flow.errorCount / edgeData.flow.requestCount) * 100).toFixed(1)}%)
+                          ({((errorRateOf(edgeData.flow) / requestRateOf(edgeData.flow)) * 100).toFixed(1)}%)
                         </span>
                       )}
                     </div>
@@ -879,6 +918,21 @@ function DetailsPanel({
                         </div>
                       </div>
                     ))}
+                  </div>
+                </div>
+              ) : edgeData.flow?.avgLatencyMs ? (
+                // The source measured an average, not a distribution: there is
+                // no P95 to show, and repeating the average under that label
+                // would present it as one.
+                <div className="pt-2 border-t border-theme-border">
+                  <div className="text-[10px] text-theme-text-tertiary mb-1.5">Latency</div>
+                  <div className="grid grid-cols-3 gap-1.5 text-xs">
+                    <div className="p-1.5 rounded bg-theme-elevated text-center">
+                      <div className="text-theme-text-tertiary text-[9px]">Avg</div>
+                      <div className={clsx('font-medium', latencyColor(edgeData.flow.avgLatencyMs))}>
+                        {formatLatency(edgeData.flow.avgLatencyMs)}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -1057,6 +1111,26 @@ function FitViewOnChange({
   return null
 }
 
+function edgeSelection(edge: Edge, flow: AggregatedFlow | undefined): Selection {
+  return {
+    type: 'edge',
+    id: edge.id,
+    data: {
+      source: edge.source,
+      target: edge.target,
+      port: flow?.port || 0,
+      connections: flow?.connections || 0,
+      protocol: flow?.protocol || 'tcp',
+      flow,
+    },
+  }
+}
+
+// The Internet node and the addon group stand for many endpoints at once.
+function isFocusable(id: string, data: TrafficNodeData | undefined): boolean {
+  return id !== 'addon-group' && !!data?.kind && data.kind !== 'Internet' && data.kind !== 'Addon' && data.kind !== 'AddonInternet'
+}
+
 // A pair can carry both oriented and unoriented traffic at the same port, and the
 // backend keeps those as separate aggregates because no single answer about the
 // direction is right for both. Without the suffix they would share an edge id and
@@ -1066,7 +1140,7 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', onSelectionChange }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
   const isRateBased = isRateBasedSource(trafficSource)
@@ -1115,13 +1189,15 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       connectionCounts.set(destId, (connectionCounts.get(destId) || 0) + 1)
 
       // Sum total connections
-      totalConnections.set(sourceId, (totalConnections.get(sourceId) || 0) + flow.connections)
-      totalConnections.set(destId, (totalConnections.get(destId) || 0) + flow.connections)
+      // Display-only sums: the unrounded rate for a rate-based source.
+      const volume = displayVolume(flow, isRateBased)
+      totalConnections.set(sourceId, (totalConnections.get(sourceId) || 0) + volume)
+      totalConnections.set(destId, (totalConnections.get(destId) || 0) + volume)
 
       // Track ports for destination nodes
       if (!nodePorts.has(destId)) nodePorts.set(destId, new Map())
       const portCounts = nodePorts.get(destId)!
-      portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + flow.connections)
+      portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + volume)
 
       // Track hot path nodes (Phase 2.3)
       if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) {
@@ -1187,6 +1263,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             namespace: flow.source.namespace,
             kind: isAddonInternet ? 'AddonInternet' : flow.source.kind, // Keep AddonInternet kind for styling
             workload: flow.source.workload,
+            workloadKind: flow.source.workloadKind,
             connections: connectionCounts.get(sourceId),
             totalConnections: totalConnections.get(sourceId),
             namespaceColor: showNamespaceGroups && !sourceIsAddon ? getNamespaceColor(flow.source.namespace) : undefined,
@@ -1219,6 +1296,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
               namespace: flow.destination.namespace,
               kind: flow.destination.kind,
               workload: flow.destination.workload,
+              workloadKind: flow.destination.workloadKind,
               connections: connectionCounts.get(destId),
               totalConnections: totalConnections.get(destId),
               namespaceColor: showNamespaceGroups ? getNamespaceColor(flow.destination.namespace) : undefined,
@@ -1249,6 +1327,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             namespace: flow.destination.namespace,
             kind: flow.destination.kind,
             workload: flow.destination.workload,
+            workloadKind: flow.destination.workloadKind,
             connections: connectionCounts.get(destId),
             totalConnections: totalConnections.get(destId),
             namespaceColor: showNamespaceGroups && !destIsAddon ? getNamespaceColor(flow.destination.namespace) : undefined,
@@ -1289,14 +1368,15 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
       // Phase 2.2: Edge label - connection count with unit suffix + L7 details
       const connStr = isRateBased
-        ? `${formatConnections(flow.connections)}/s`
+        ? `${formatRate(displayVolume(flow, isRateBased))}/s`
         : formatConnections(flow.connections)
       const l7Label = flow.l7Protocol ? `${flow.l7Protocol} · ` : ''
-      const latencyLabel = flow.latencyP50Ms ? ` · ${formatLatency(flow.latencyP50Ms)}` : ''
+      const edgeLatency = flow.latencyP50Ms || flow.avgLatencyMs
+      const latencyLabel = edgeLatency ? ` · ${formatLatency(edgeLatency)}` : ''
       // errorCount is a rate for a rate-based source, exactly like connections above.
       // Without the suffix a destination failing once a second reads as one error.
       const errorLabel = hasErrors
-        ? ` · ${formatConnections(flow.errorCount ?? 0)} err${isRateBased ? '/s' : ''}`
+        ? ` · ${isRateBased ? `${formatRate(errorRateOf(flow))} err/s` : `${formatConnections(flow.errorCount ?? 0)} err`}`
         : ''
       // A source that measures rates has no count for an edge with no requests on
       // it — a plain TCP conversation, or one whose direction is unknown. Printing
@@ -1471,7 +1551,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
       // Add edge from addon-internet to addon-group if we have one
       if (addonMode === 'group' && groupEdgeInfo) {
-        const { connections } = groupEdgeInfo
+        const { connections, flow: groupFlow } = groupEdgeInfo
         const sourceId = 'addon-internet'
         const isHotEdge = connections >= hotPathThreshold && hotPathThreshold > 0
 
@@ -1481,7 +1561,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: 'addon-group',
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatConnections(connections)}/s` : formatConnections(connections),
+          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1506,7 +1586,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
       // Add edge from addon-group to kubernetes if we have one
       if (addonMode === 'group' && groupOutEdgeInfo) {
-        const { connections, targetId } = groupOutEdgeInfo
+        const { connections, targetId, flow: groupFlow } = groupOutEdgeInfo
         const isHotEdge = connections >= hotPathThreshold && hotPathThreshold > 0
 
         finalEdges.push({
@@ -1515,7 +1595,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: targetId,
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatConnections(connections)}/s` : formatConnections(connections),
+          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1568,6 +1648,43 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   const shouldFitViewRef = useRef(false)
   const prevFlowCountRef = useRef(flows.length)
 
+  // Drawn per pod, a focused workload is each of its pods.
+  const displayNodes = useMemo(() => {
+    if (!focusedId) return nodes
+    const isFocus = (n: Node<TrafficNodeData>) => n.id === focusedId ||
+      (n.data.kind === 'Pod' && !!n.data.workload && `${n.data.namespace ?? ''}/${n.data.workload}` === focusedId)
+    return nodes.map(n => (isFocus(n) ? { ...n, data: { ...n.data, isFocused: true } } : n))
+  }, [nodes, focusedId])
+
+  // A new focus is a different graph even when it has as many edges.
+  const prevFocusRef = useRef(focusedId)
+  if (prevFocusRef.current !== focusedId) {
+    prevFocusRef.current = focusedId
+    shouldFitViewRef.current = true
+  }
+
+  // The view owns the selection: it is set from outside the graph too (the
+  // connections table selects an edge). The details are read
+  // from the current layout, so a refresh updates them and a node that is no
+  // longer drawn closes them.
+  useEffect(() => {
+    if (viewSelection === undefined) return
+    if (!viewSelection) {
+      setSelection(null)
+      return
+    }
+    if (viewSelection.type === 'node' && viewSelection.nodeId) {
+      const node = layoutedNodes.find(n => n.id === viewSelection.nodeId)
+      setSelection(node ? { type: 'node', id: node.id, data: node.data } : null)
+      return
+    }
+    const between = layoutedEdges.filter(e =>
+      e.source === viewSelection.sourceId && e.target === viewSelection.destId &&
+      !!flowByEdgeId.get(e.id)?.directionUnknown === !!viewSelection.directionUnknown)
+    const [edge] = edgesOnPort(between, e => flowByEdgeId.get(e.id), viewSelection.port)
+    setSelection(edge ? edgeSelection(edge, flowByEdgeId.get(edge.id)) : null)
+  }, [viewSelection, layoutedNodes, layoutedEdges, flowByEdgeId])
+
   // Update nodes and edges when layout changes
   useEffect(() => {
     // Check if flow count changed (filter/namespace change)
@@ -1591,19 +1708,8 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
   const onEdgeClick: EdgeMouseHandler<Edge> = useCallback((_event, edge) => {
     const flow = flowByEdgeId.get(edge.id)
-    setSelection({
-      type: 'edge',
-      id: edge.id,
-      data: {
-        source: edge.source,
-        target: edge.target,
-        port: flow?.port || 0,
-        connections: flow?.connections || 0,
-        protocol: flow?.protocol || 'tcp',
-        flow,
-      },
-    })
-    onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port })
+    setSelection(edgeSelection(edge, flow))
+    onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port, directionUnknown: !!flow?.directionUnknown })
   }, [flowByEdgeId, onSelectionChange])
 
   const onPaneClick = useCallback(() => {
@@ -1614,7 +1720,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   return (
     <div className="w-full h-full relative">
       <ReactFlow
-        nodes={nodes}
+        nodes={displayNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -1646,7 +1752,15 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       {selection && (
         <DetailsPanel
           selection={selection}
-          onClose={() => setSelection(null)}
+          onClose={onPaneClick}
+          onFocus={onFocus && selection.type === 'node' && selection.id !== focusedId && isFocusable(selection.id, selection.data as TrafficNodeData)
+            ? () => {
+                // The id is "ns/name"; an endpoint with no namespace is its
+                // name alone, which may hold a slash of its own.
+                const ns = (selection.data as TrafficNodeData).namespace || undefined
+                onFocus({ namespace: ns, name: ns ? selection.id.slice(ns.length + 1) : selection.id })
+              }
+            : undefined}
           flows={flows}
           isRateBased={isRateBased}
         />

@@ -1,13 +1,14 @@
 import { Cpu, Settings } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
-import { kindToPlural } from '../../../utils/navigation'
+import { objectReferenceToResourceRef } from '../../../utils/navigation'
+import type { ResourceRef } from '../../../types'
+import { TimeValue } from '../../ui/ScheduleValue'
 import {
   getScaledObjectStatus,
   getScaledObjectTarget,
   getScaledObjectReplicas,
   getScaledObjectTriggers,
   getScaledObjectHpaName,
-  getScaledObjectLastActiveTime,
   getScaledObjectPollingInterval,
   getScaledObjectCooldownPeriod,
 } from '../resource-utils-keda'
@@ -24,7 +25,7 @@ function summarizeScalingPolicies(policies: any[] | undefined, periodSeconds?: n
 
 interface KedaScaledObjectRendererProps {
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: (ref: ResourceRef) => void
 }
 
 export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectRendererProps) {
@@ -75,18 +76,19 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
           <Property label="Target" value={(() => {
             const target = data.spec?.scaleTargetRef
             if (target?.name) {
-              return (
-                <ResourceLink
-                  name={target.name}
-                  kind={kindToPlural(target.kind || 'Deployment')}
-                  namespace={data.metadata?.namespace || ''}
-                  label={getScaledObjectTarget(data)}
-                  onNavigate={onNavigate}
-                />
-              )
+              // KEDA documents these defaults for omitted fields; an explicit
+              // target API group still belongs to the declared custom resource.
+              const ref = objectReferenceToResourceRef({
+                ...target,
+                apiVersion: target.apiVersion || 'apps/v1',
+                kind: target.kind || 'Deployment',
+                namespace: data.metadata?.namespace,
+              })
+              return ref ? <ResourceLink {...ref} label={getScaledObjectTarget(data)} onNavigate={onNavigate} /> : getScaledObjectTarget(data)
             }
             return getScaledObjectTarget(data)
           })()} />
+          <Property label="Target API" value={data.spec?.scaleTargetRef?.apiVersion || 'apps/v1'} />
           <Property label="Replicas" value={getScaledObjectReplicas(data)} />
           <Property label="Polling Interval" value={`${getScaledObjectPollingInterval(data)}s`} />
           <Property label="Cooldown Period" value={`${getScaledObjectCooldownPeriod(data)}s`} />
@@ -97,7 +99,7 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
             }
             return hpaName
           })()} />
-          <Property label="Last Active" value={getScaledObjectLastActiveTime(data)} />
+          <Property label="Last Active" value={<TimeValue timestamp={data.status?.lastActiveTime} />} />
         </PropertyList>
         {fallback && (
           <div className="mt-2 pt-2 border-t border-theme-border">

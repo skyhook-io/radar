@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -43,23 +46,53 @@ type DynamicGetter interface {
 	GetDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error)
 }
 
-// Builder constructs GitOps ownership trees from GitOps inventory and live topology ownership edges.
+// VerifiedDynamicGetter opts a host into confirmed-absence enrichment.
+// NotFound must come from an authoritative API read, never an incomplete cache.
+// Other errors and nil objects do not establish absence. Root reads still use
+// DynamicGetter, preserving the host's existing root lookup behavior.
+type VerifiedDynamicGetter interface {
+	GetDynamicWithGroupVerified(ctx context.Context, kind, namespace, name, group string) (*unstructured.Unstructured, error)
+}
+
+// Builder constructs GitOps ownership trees from recorded inventory and cached ownership.
 type Builder struct {
 	dynamic           DynamicGetter
+	ownership         ownership.ReadSession
 	topo              *topology.Topology
 	allowedNamespaces []string
 	isUnknownKind     ErrUnknownKindMatcher
+	canRead           func(ResourceRef) bool
 }
 
 func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
 	return &Builder{dynamic: dynamic, topo: topo}
 }
 
-// WithAllowedNamespaces limits live object enrichment to namespaces the caller
-// is allowed to inspect. nil means all namespaces; an empty slice means none.
+// WithOwnership supplies the required session for private descendant traversal.
+// Build scopes it to WithAllowedNamespaces and applies WithReadCheck before
+// emitting nodes. This keeps readable descendants of hidden intermediate owners.
+// The session must belong to the same connection as dynamic and topo.
+func (b *Builder) WithOwnership(session ownership.ReadSession) *Builder {
+	b.ownership = session
+	return b
+}
+
+// WithAllowedNamespaces limits enrichment and private descendant traversal.
+// nil means all namespaces; an empty slice means none.
 func (b *Builder) WithAllowedNamespaces(namespaces []string) *Builder {
 	b.allowedNamespaces = namespaces
 	return b
+}
+
+// WithReadCheck gates enrichment and emitted nodes by the host's resource-kind
+// policy. The callback runs serially, before prefetch workers read the cache.
+func (b *Builder) WithReadCheck(check func(ResourceRef) bool) *Builder {
+	b.canRead = check
+	return b
+}
+
+func (b *Builder) canEmit(ref ResourceRef) bool {
+	return b.canRead == nil || b.canRead(ref)
 }
 
 // WithUnknownKindMatcher wires the host's unknown-kind sentinel classifier
@@ -76,6 +109,12 @@ func (b *Builder) WithUnknownKindMatcher(m ErrUnknownKindMatcher) *Builder {
 // live root object alongside the tree so callers (e.g. the insights handler)
 // can derive additional views without re-fetching from the cache.
 func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string) (*ResourceTree, *unstructured.Unstructured, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if b.ownership == nil {
+		return nil, nil, fmt.Errorf("ownership session not available")
+	}
 	if b.dynamic == nil {
 		return nil, nil, fmt.Errorf("dynamic resource cache not available")
 	}
@@ -87,7 +126,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		root.SetKind(kind)
 	}
 
-	tool := detectTool(root, group, kind)
+	tool, err := detectTool(root, group)
+	if err != nil {
+		return nil, nil, err
+	}
 	managed := managedResources(root, tool)
 	// An Argo Application deploying to another cluster, or a Flux object with
 	// spec.kubeConfig, declares resources that live THERE. Matching them
@@ -96,13 +138,21 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	// a remote destination the declared nodes carry only what the CR says
 	// (sync, persisted health) and nothing local is read for them. Hub-side
 	// hosts merge the destination cluster's own tree on top (mergeGitOpsTrees).
-	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && !gitops.IsInClusterDestination(root)) ||
+	remote := (tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && (!gitops.IsInClusterDestination(root) || gitops.ArgoAppliesElsewhere(root))) ||
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
-	// HelmRelease has no status.inventory; recover its managed set from live
-	// topology by Helm's recommended labels so the resource tree isn't empty.
+	// The local catalog doesn't describe a remote cluster; built-in scope
+	// holds everywhere.
+	if tool == ToolFluxCD && remote {
+		alignManagedScope(managed, nil)
+	} else if tool == ToolFluxCD {
+		alignManagedScope(managed, b.ownership.Catalog())
+	}
+	// Without recorded Helm inventory, recover roots from topology labels.
 	// A remote release's objects aren't in local topology, so a local match is
 	// someone else's.
-	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 && !remote {
+	recordedInventory := gitops.FluxMembersReadable(root)
+	helmProjection := !recordedInventory && tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 && !remote
+	if helmProjection {
 		managed = fluxHelmReleaseManaged(root, b.topoNodes())
 	}
 	status := rootStatus(root, tool)
@@ -128,26 +178,51 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	nodes := map[string]Node{rootNode.ID: rootNode}
 	edges := map[string]Edge{}
 	declaredIDs := map[string]bool{}
+	var traversalRoots []ResourceRef
+	omittedByReadCheck := false
+	omittedDependencies := false
 
 	topoByRef := map[string]topology.Node{}
 	topoByID := map[string]topology.Node{}
+	// A display PodGroup stands in for Pods that ownership finds one by one:
+	// a generated Pod shows as its group, as in topology. The group's own edge
+	// is not a resource relation, and a declared Pod keeps its own identity.
+	podGroups := map[string]topology.Node{}
 	for _, n := range b.topoNodes() {
+		if pods, ok := n.Data["pods"].([]map[string]any); ok && n.Kind == topology.KindPodGroup {
+			for _, pod := range pods {
+				name, _ := pod["name"].(string)
+				namespace, _ := pod["namespace"].(string)
+				podGroups[refKey(ResourceRef{Kind: "Pod", Namespace: namespace, Name: name})] = n
+			}
+			continue
+		}
 		ref := refFromTopologyNode(n)
 		topoByRef[refKey(ref)] = n
-		topoByRef[refKey(ResourceRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name})] = n
+		if tuples, ok := topology.CalicoPolicyRBACTuples(&n); ok {
+			for _, tuple := range tuples {
+				served := ref
+				served.Group = tuple.Group
+				topoByRef[refKey(served)] = n
+			}
+		}
 		topoByID[n.ID] = n
 	}
-	topoIDByTreeID := map[string]string{}
-	treeIDByTopoID := map[string]string{}
 	if liveRoot, ok := findTopoNode(topoByRef, rootRef); ok {
-		topoIDByTreeID[rootNode.ID] = liveRoot.ID
-		treeIDByTopoID[liveRoot.ID] = rootNode.ID
-		nodes[rootNode.ID] = mergeData(rootNode, liveRoot.Data)
+		// The root's own object outranks topology's summary of it (topology
+		// records a HelmRelease revision of 0 when the v2 API omits it).
+		nodes[rootNode.ID] = enrichNodeFromObject(mergeData(rootNode, liveRoot.Data), root)
 	}
 
 	var fluxRelated []relatedResource
 	if tool == ToolFluxCD {
-		fluxRelated = fluxRelatedResources(root)
+		for _, related := range fluxRelatedResources(root) {
+			if b.canEmit(related.Ref) {
+				fluxRelated = append(fluxRelated, related)
+			} else {
+				omittedDependencies = true
+			}
+		}
 	}
 	enrichRefs := make([]ResourceRef, 0, len(managed)+len(fluxRelated))
 	if !remote {
@@ -158,10 +233,72 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	for _, res := range fluxRelated {
 		enrichRefs = append(enrichRefs, res.Ref)
 	}
-	objects, unknownKinds := b.prefetchObjects(ctx, enrichRefs)
+	objects, unknownKinds, missing := b.prefetchObjects(ctx, enrichRefs)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if helmProjection {
+		// Topology carries labels, not annotations or owner references. The
+		// live object rules out a label match that is a Helm hook or that a
+		// controller generated: the latter shows under its controller, if the
+		// tree reaches it, rather than as a member beside it.
+		managed = slices.DeleteFunc(managed, func(res managedResource) bool {
+			obj := objects[refKey(res.Ref)]
+			if obj == nil {
+				return false
+			}
+			release, member := gitops.FluxHelmLabelledRelease(obj)
+			return !member || release != identity(rootRef)
+		})
+	}
+	// A referenced chart's source is local to that observed chart. Follow only
+	// the already-prefetched chart, never every chart in the cluster.
+	var chartSources []relatedResource
+	var chartRefs []ResourceRef
+	for _, related := range fluxRelated {
+		if related.Ref.Group != "source.toolkit.fluxcd.io" || related.Ref.Kind != "HelmChart" {
+			continue
+		}
+		chart := objects[refKey(related.Ref)]
+		if chart == nil {
+			continue
+		}
+		for _, source := range gitops.FluxSourceReferences(chart) {
+			ref := ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}
+			if !b.canEmit(ref) {
+				omittedDependencies = true
+				continue
+			}
+			chartSources = append(chartSources, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: map[string]any{"relationship": source.Role}})
+			chartRefs = append(chartRefs, ref)
+		}
+	}
+	if len(chartRefs) > 0 {
+		chartObjects, unavailable, _ := b.prefetchObjects(ctx, chartRefs)
+		for key, object := range chartObjects {
+			objects[key] = object
+		}
+		unknownKinds = append(unknownKinds, unavailable...)
+		fluxRelated = append(fluxRelated, chartSources...)
+	}
 
+	view := ownership.NewView(b.ownership, traversalScope{namespaces: b.allowedNamespaces})
+	view.Seed(ownership.Observe(identity(rootRef), root))
+	for _, obj := range objects {
+		if obj == nil {
+			continue
+		}
+		view.Seed(ownership.Observe(resourceid.NewRef(apiGroup(obj), obj.GetKind(), obj.GetNamespace(), obj.GetName()), obj))
+	}
 	for _, res := range managed {
 		id := nodeID(res.Ref)
+		if !remote {
+			traversalRoots = append(traversalRoots, res.Ref)
+		}
+		if !remote && !b.canEmit(res.Ref) {
+			omittedByReadCheck = true
+			continue
+		}
 		declaredIDs[id] = true
 		if remote {
 			node := mergeData(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), res.Data)
@@ -172,10 +309,13 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		obj := objects[refKey(res.Ref)]
 		if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
-			topoIDByTreeID[id] = live.ID
-			treeIDByTopoID[live.ID] = id
 		} else {
 			nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
+		}
+		if tool == ToolArgoCD && missing[refKey(res.Ref)] {
+			node := nodes[id]
+			node.Missing = true
+			nodes[id] = node
 		}
 	}
 
@@ -183,6 +323,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		for _, res := range fluxRelated {
 			id := nodeID(res.Ref)
 			if id == rootNode.ID {
+				continue
+			}
+			if node, exists := nodes[id]; exists && node.Remote {
+				nodes[id] = mergeData(node, res.Data)
 				continue
 			}
 			obj := objects[refKey(res.Ref)]
@@ -200,63 +344,39 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			}
 			if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 				nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, sync, health, HealthSourceController), obj), res.Data)
-				topoIDByTreeID[id] = live.ID
-				treeIDByTopoID[live.ID] = id
 			} else if _, exists := nodes[id]; !exists {
 				nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, sync, health, HealthSourceController), obj), res.Data)
 			} else {
-				nodes[id] = mergeData(nodes[id], res.Data)
+				node := nodes[id]
+				if obj != nil {
+					node.Sync, node.Health = sync, health
+					node.HealthSource = healthSourceFor(health, HealthSourceController)
+					node.TopologyStatus = healthToTopology(health)
+				}
+				nodes[id] = mergeData(enrichNodeFromObject(node, obj), res.Data)
 			}
-			edges[edgeKey(rootNode.ID, id)] = Edge{Source: rootNode.ID, Target: id, Type: res.Type}
-		}
-	}
-
-	adj := map[string][]topology.Edge{}
-	for _, e := range b.topoEdges() {
-		if e.Type != topology.EdgeManages {
-			continue
-		}
-		adj[e.Source] = append(adj[e.Source], e)
-	}
-
-	queue := make([]string, 0, len(declaredIDs)+1)
-	for id := range declaredIDs {
-		queue = append(queue, id)
-	}
-	if len(declaredIDs) == 0 {
-		queue = append(queue, rootNode.ID)
-	}
-	seen := map[string]bool{}
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-
-		sourceTopoID := topoIDByTreeID[id]
-		if sourceTopoID == "" {
-			continue
-		}
-		for _, e := range adj[sourceTopoID] {
-			targetTopo, ok := topoByID[e.Target]
-			if !ok {
+			node := nodes[id]
+			node.Dependency = !declaredIDs[id]
+			nodes[id] = node
+			parentID := rootNode.ID
+			if res.Parent.Name != "" {
+				parentID = nodeID(res.Parent)
+			}
+			// Inventory ownership and source declarations may overlap (bootstrap).
+			// Preserve the authoritative ownership edge instead of overwriting it.
+			if !remote && declaredIDs[id] {
 				continue
 			}
-			targetRef := refFromTopologyNode(targetTopo)
-			targetID := treeIDByTopoID[targetTopo.ID]
-			if targetID == "" {
-				targetID = nodeID(targetRef)
-				treeIDByTopoID[targetTopo.ID] = targetID
-				topoIDByTreeID[targetID] = targetTopo.ID
-			}
-			if _, exists := nodes[targetID]; !exists {
-				nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
-			}
-			edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
-			queue = append(queue, targetID)
+			edges[edgeKey(parentID, id)] = Edge{Source: parentID, Target: id, Type: res.Type}
 		}
+	}
+
+	var generatedWarnings []string
+	if !remote {
+		if len(traversalRoots) == 0 {
+			traversalRoots = append(traversalRoots, rootRef)
+		}
+		generatedWarnings, omittedByReadCheck = b.addGenerated(ctx, view, traversalRoots, nodes, edges, tool, topoByRef, topoByID, podGroups, omittedByReadCheck)
 	}
 
 	hasParent := map[string]bool{}
@@ -283,7 +403,16 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if r, ok := nodes[rootNode.ID]; ok {
 		mergedRoot = r
 	}
-	warnings := b.topoWarnings()
+	warnings := generatedWarnings
+	if tool == ToolArgoCD && gitops.IsInClusterDestination(root) && gitops.ArgoAppliesElsewhere(root) {
+		warnings = append(warnings, "The Application targets this cluster, but its recorded resource list does not yet confirm that destination. Radar will check local resources after Argo CD compares it here.")
+	}
+	if helmProjection && b.limitedHelmProjection() && !slices.Contains(warnings, limitedHelmProjectionWarning) {
+		warnings = append(warnings, limitedHelmProjectionWarning)
+	}
+	if omittedDependencies || omittedByReadCheck {
+		warnings = append(warnings, "Some managed resources are hidden by RBAC.")
+	}
 	if w := unknownKindsWarning(unknownKinds); w != "" {
 		warnings = append(append([]string{}, warnings...), w)
 	}
@@ -297,6 +426,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	out.RemoteDestination = remote
 	if tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") {
 		out.HealthMode = argoHealthMode(root)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	if err := b.ownership.ValidateCaches(); err != nil {
+		return nil, nil, err
 	}
 	return out, root, nil
 }
@@ -342,11 +477,12 @@ func ResetUnknownKindLogDedup() {
 // Enrichment stays best-effort: per-ref failures nil out that ref's entry
 // exactly like the serial loop did. Determinism of the final tree is owned
 // by materialize's sort, so fetch-completion order is irrelevant.
-func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[string]*unstructured.Unstructured, []string) {
+// The final map contains only confirmed NotFound results, not failed or skipped reads.
+func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[string]*unstructured.Unstructured, []string, map[string]bool) {
 	targets := make([]ResourceRef, 0, len(refs))
 	seen := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
-		if ref.Name == "" || !b.canEnrich(ref) {
+		if ref.Name == "" || !b.canEmit(ref) || !b.canEnrich(ref) {
 			continue
 		}
 		key := refKey(ref)
@@ -357,13 +493,14 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 		targets = append(targets, ref)
 	}
 	if len(targets) == 0 {
-		return map[string]*unstructured.Unstructured{}, nil
+		return map[string]*unstructured.Unstructured{}, nil, nil
 	}
 
 	var (
 		mu           sync.Mutex
 		objects      = make(map[string]*unstructured.Unstructured, len(targets))
 		unknownKinds = map[string]struct{}{}
+		missing      = map[string]bool{}
 	)
 	kindKey := func(ref ResourceRef) string { return ref.Kind + "|" + ref.Group }
 
@@ -387,7 +524,12 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 					continue
 				}
 
-				obj, err := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+				getter := b.dynamic.GetDynamicWithGroup
+				verified, confirmsAbsence := b.dynamic.(VerifiedDynamicGetter)
+				if confirmsAbsence {
+					getter = verified.GetDynamicWithGroupVerified
+				}
+				obj, err := getter(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
 				if err != nil {
 					if b.isUnknownKind != nil && b.isUnknownKind(err) {
 						// Best-effort collapse: in-flight workers on the same
@@ -400,7 +542,14 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 						unknownKinds[kindKey(ref)] = struct{}{}
 						mu.Unlock()
 						logUnknownKindOnce(ref.Kind, ref.Group)
-					} else if !isEnrichNotFound(err) {
+					} else if isEnrichNotFound(err) {
+						if !confirmsAbsence {
+							continue
+						}
+						mu.Lock()
+						missing[refKey(ref)] = true
+						mu.Unlock()
+					} else {
 						log.Printf("[gitops/tree] enrich %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
 					}
 					continue
@@ -418,7 +567,7 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 	wg.Wait()
 
 	if len(unknownKinds) == 0 {
-		return objects, nil
+		return objects, nil, missing
 	}
 	labels := make([]string, 0, len(unknownKinds))
 	for k := range unknownKinds {
@@ -430,7 +579,7 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 		labels = append(labels, label)
 	}
 	sort.Strings(labels)
-	return objects, labels
+	return objects, labels, missing
 }
 
 // unknownKindsWarning renders the response warning for kinds that are absent
@@ -463,11 +612,22 @@ func (b *Builder) canEnrich(ref ResourceRef) bool {
 	return false
 }
 
-func detectTool(root *unstructured.Unstructured, group, kind string) Tool {
-	if group == "argoproj.io" || strings.EqualFold(root.GetKind(), "Application") || strings.Contains(strings.ToLower(kind), "application") {
-		return ToolArgoCD
+// ErrNotGitOpsResource is returned by Build for a root that is not an Argo CD
+// or Flux object, such as a SIG Apps Application (app.k8s.io).
+var ErrNotGitOpsResource = errors.New("not a supported Argo CD or Flux resource")
+
+// detectTool decides the controller family from the root's own API group. The
+// requested group stands in only when the object carries no apiVersion.
+func detectTool(root *unstructured.Unstructured, requestedGroup string) (Tool, error) {
+	group := requestedGroup
+	if root.GetAPIVersion() != "" {
+		group = apiGroup(root)
 	}
-	return ToolFluxCD
+	if tool := gitops.ToolFor(group, root.GetKind()); tool != "" {
+		return Tool(tool), nil
+	}
+	ref := resourceid.NewRef(group, root.GetKind(), root.GetNamespace(), root.GetName())
+	return "", fmt.Errorf("%s is %w, so it has no GitOps view", ref, ErrNotGitOpsResource)
 }
 
 func managedResources(root *unstructured.Unstructured, tool Tool) []managedResource {
@@ -484,25 +644,8 @@ func (b *Builder) topoNodes() []topology.Node {
 	return b.topo.Nodes
 }
 
-func (b *Builder) topoEdges() []topology.Edge {
-	if b.topo == nil {
-		return nil
-	}
-	return b.topo.Edges
-}
-
-func (b *Builder) topoWarnings() []string {
-	if b.topo == nil {
-		return nil
-	}
-	return b.topo.Warnings
-}
-
 func findTopoNode(nodes map[string]topology.Node, ref ResourceRef) (topology.Node, bool) {
-	if n, ok := nodes[refKey(ref)]; ok {
-		return n, true
-	}
-	n, ok := nodes[refKey(ResourceRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name})]
+	n, ok := nodes[refKey(ref)]
 	return n, ok
 }
 

@@ -45,13 +45,47 @@ don't assume every discoverable resource has a CRD object.
 ## 2. Choose relevant surfaces
 
 **These sections are optional:** use only those needed for your contribution.
-Check existing generic behavior before adding custom handling. Status fixes must
-cover the surfaces they affect, but every integration need not customize all four.
+Check existing generic behavior before adding custom handling. For each affected
+surface, decide whether the generic behavior is enough, needs enrichment, or is
+deliberately deferred. State meaningful omissions in the PR; this is a scope
+decision, not a requirement to customize every surface.
 
 Paths below are relative to the repository root. Shared presentation lives in
 `packages/k8s-ui`; host data fetching lives in `web`. Read [DESIGN.md](../DESIGN.md)
 for UI work and follow the existing wrapper pattern rather than fetching inside
 shared renderers.
+
+### Package boundaries
+
+The Go `pkg/` module and `packages/k8s-ui` are also consumed outside the standalone
+app. Keep reusable interpretation there; Radar's HTTP, caller and connection
+adapters belong in `internal/` and `web/`.
+
+| Responsibility | Start here | Boundary |
+|---|---|---|
+| Native API interpretation | `pkg/configrefs`, `pkg/conditions`, `pkg/health`, or an existing integration package | Pure parsing and domain rules; no HTTP, global cache or caller authorization. Extract a new package only when the rule needs one. |
+| Inventory and ownership | `pkg/k8score`, `pkg/ownership`, `pkg/ownership/cachesource`; Radar adapters in `internal/k8s` | Reuse informer stores, indexes and caller-scoped ownership views. Do not build a second owner/manager model from display edges or name guesses. |
+| Display relationships | `pkg/topology` | Spec references, selectors and semantic edges for topology and Related Resources. A displayed relationship is not proof of controller ownership or observed traffic. |
+| Issues | `internal/issues`, reusing shared domain rules | One canonical finding and its required evidence reads, reused by resource views and agent context. Do not create a separate detector in a drawer or MCP handler. |
+| Findings on related resources | `pkg/issuesapi.RelatedFindingsGroup`; [wire semantics](mcp.md#related-findings-in-resource-context) | Keep each association anchor and assessed kind set separate. Count authorized snapshots; report unread inventory as gaps and omitted findings as truncated. Reuse canonical Issue identities; absence never establishes recovery. |
+| Agent contracts | `pkg/ai/context` for resource summaries/minification; `pkg/resourcecontext` for structured related evidence | Importable contracts and builders. Hosts supply authorized observations and lookups; these packages do not call `internal` services. |
+| Runtime orchestration | `internal/server`, `internal/mcp`, existing integration services | Request scope, authorization, connection lifetime and bounded live reads. Share selection and interpretation below the transport adapters; list/search enrichment already uses `internal/summarycontext`. |
+| UI | `packages/k8s-ui` presentation; `web/src/integrations` and integration-owned host components | Shared renderers receive facts and callbacks. Hosts fetch, gate capabilities, refresh and compose screens. Use the existing host seams. |
+
+### Follow the operator question
+
+| User question | Surfaces to consider | What the answer establishes |
+|---|---|---|
+| What is configured or reported? | Resource table/drawer, AI list/search summary and resource detail | Native declarations and controller-reported status, with their freshness limits. |
+| What is wrong? | Issues, drawer problem banners, AI issue summary and diagnosis | Reuse canonical findings; intentional pause, historical records and unknown status need not be failures. |
+| What does it reference, own or manage? | Related Resources, topology, AI ownership/context | Keep spec dependencies, owner references and GitOps management evidence distinct. |
+| Why is its runtime failing? | Workload `diagnose`, related workload/log links, host detail sections | Link to supported workloads first. A custom-resource diagnosis entry is an additional surface to implement explicitly; a declared target is a separate relationship. |
+| What should I do across several objects? | Workspace, reports or reviewed actions | Add a workflow only for a concrete cross-object question; follow the workspace and action contracts below. |
+
+A useful first slice can stop at native status and references. Generic MCP access
+does not imply integration-specific diagnosis, and a renderer does not imply a
+workspace or actions. Document the surfaces actually supported in
+[integrations.md](integrations.md).
 
 ### Resource views
 
@@ -78,6 +112,26 @@ shared renderers.
   never both; don't inadvertently remove useful vendor fields. Reuse printer-column
   evaluation rather than writing another JSONPath parser.
 
+### Workspace and resource hosts
+
+`web/src/integrations/resourceHosts.tsx` registers host renderer wrappers and
+resource-specific summary, log and destination callbacks. Keep each adapter beside
+its integration. Match exact group + resource identity; use the loaded object's
+`apiVersion` for detail facts. Renderer overrides are composed once, with duplicate
+ownership rejected. Generic detail pages and drawers call these seams rather than
+importing integration screens.
+
+`workspaceRoutes.ts` owns route metadata (title, navigation placement, namespace
+view scope and context-switch query policy); `workspaceScreens.tsx` mounts the
+integration screen. Capacity remains cluster-wide. Shared workspace notices, empty
+states and table styles live in `web/src/components/workspace/`; certainty glyphs
+live in k8s-ui's `components/facts/certainty.tsx`.
+
+A host can supply k8s-ui `ResourcesView.renderKindView` to replace one kind's table
+while retaining the sidebar and drawer. Return `null` or `false` for the ordinary table. A
+replacement disables row/search/bulk shortcuts and column-preference loading/saving;
+sidebar kind navigation stays available. The caller owns fetching and capability decisions.
+
 ### Issues
 
 - [ ] Inspect generic detection in `internal/issues/source_conditions.go`, nearby
@@ -88,8 +142,54 @@ shared renderers.
   or the generic pass reintroducing warnings for intentional states. Don't suppress
   a whole API group when only some kinds are covered.
 
+### Finalizer controller recognition
+
+Stuck-deletion detection covers already-watched, synchronized CRDs. Adding an
+owner enriches those findings; it needs no per-kind detector or renderer.
+
+- [ ] Add documented keys and controller names, labels and image paths in
+  [`pkg/finalizers/catalog.go`](../pkg/finalizers/catalog.go). Disambiguate shared
+  keys by API group/kind, and shared images or identities by role/image checks.
+  Name guesses for uncataloged finalizers remain candidates, never owners.
+- [ ] Review cleanup semantics before setting `AllowConditionalCleanup` (false
+  by default). Leave it disabled for unreviewed cleanup, off-cluster controllers
+  or infrastructure cleanup; record those limits on the entry.
+- [ ] Add identity fixtures in
+  [`pkg/finalizers/catalog_test.go`](../pkg/finalizers/catalog_test.go) and
+  guidance/eligibility cases in
+  [`internal/issues/finalizers_test.go`](../internal/issues/finalizers_test.go),
+  including unrelated workloads and incomplete visibility.
+- [ ] Keep reads and policy in `internal/issues/finalizers.go`, pod health in
+  `pkg/health`. Catalog additions should not change the shared API/UI machinery.
+- [ ] Verify a real stuck deletion, including intentional uninstall if enabling
+  removal. Update the [MCP contract](mcp.md#read-tools) when supported behavior
+  changes; distinguish controller evidence from synthetic fixtures.
+
 ### MCP / AI context
 
+Keep shared identity, ownership and coverage contracts reusable. Put provider-native
+counters, lookup outcomes and absence rules in typed, provider-qualified blocks;
+do not make the next integration inherit another controller's semantics.
+
+- [ ] Separate compact list/search facts from resource-detail evidence and live
+  diagnosis. For example, Flagger's reported traffic weight is not a measured
+  traffic split; an OTel Instrumentation lookup is not proof of injection or
+  telemetry delivery. Argo Rollouts and other providers need their own native
+  interpretation, not aliases for these facts.
+- [ ] Before adding a shared field, check its meaning for another plausible
+  integration. Share identity, coverage or bounded-preview machinery when the
+  semantics match; keep native counters and resolution rules qualified. This
+  does not require implementing the next provider or a provider registry.
+- [ ] Authorize host-precomputed blocks before passing them to a shared builder.
+  A builder's reference filter does not automatically authorize nested bodies,
+  counts or pass-through observations. Follow the
+  [existing read granularity](authentication.md#read-granularity-namespace-level):
+  ordinary cached namespaced reads use namespace visibility. REST AI and MCP
+  derived reference links use exact-kind `get` through `RefAccessChecker`
+  (both hosts' `rc_rbac.go`); preserve that gate when moving such links into a
+  pass-through block. Coordinates copied from a readable declaration are a
+  different fact, not evidence the referenced object exists or was read.
+  Live logs and protected resources have their own checks.
 - [ ] Check existing resource-tool output in `pkg/ai/context/summary_crd.go`,
   `detail.go` and `redact.go`. Preserve reasons and useful references, not raw
   configuration dumps; enrich summaries before considering a new tool.
@@ -99,9 +199,45 @@ shared renderers.
 - [ ] If a new tool is justified, follow [MCP docs](mcp.md) and the catalog/test
   requirements in [the repository instructions](../CLAUDE.md).
 
+### Adding operator runtime diagnosis
+
+First link to the workloads that `diagnose` already supports. Accepting the
+operator CR itself is a separate feature: check the tool's kind dispatch,
+schema and help before assuming support. Keep root selection and declared-target
+rules integration-owned; reuse the ordinary workload bundle beneath them.
+
+The OpenTelemetry Collector root is the worked example: kind dispatch and
+owned-workload selection in `internal/mcp/tools_diagnose_operator.go`, the
+shared children inventory in `internal/k8s/operator_children.go`, and the
+drawer section in
+`web/src/components/resources/renderers/OpenTelemetryCollectorRenderer.tsx`.
+
+- [ ] Select observed controller-owned workloads through the ownership view,
+  checking current UID, API group and controller identity. Keep a configured
+  target separate: Flagger's declared target can differ from its generated
+  primary workload. Reuse ordinary workload diagnosis rather than copying it.
+- [ ] Select relevant workloads before capping a generic child preview, so
+  unrelated ConfigMaps or Services cannot consume the runtime slots. Keep
+  inventory coverage, permission narrowing and output truncation distinct.
+  An output cap alone does not bound enumeration, sorting or live-read time.
+- [ ] Reuse bounded log/metric collection and propagate cancellation. For added
+  fan-out, measure the whole response's latency and size, including slow or
+  unavailable dependencies. Add another budget only when existing bounds are
+  insufficient; preserve useful completed evidence and explicit partial errors.
+- [ ] Compare UI and agent selection/coverage intentionally. Hosts can have
+  different read policies or preview limits; neither a missing preview nor an
+  incomplete inventory proves there are no workloads. Use actionable reasons:
+  retrying a cold cache and obtaining permission are different next steps.
+
 ### Topology and relationships
 
-- [ ] Start in `pkg/topology/`: `builder.go`, `relationships.go`, `pseudokinds.go`
+- [ ] For owner references, dependents and GitOps/Helm management, start with
+  [ownership.md](ownership.md), `pkg/ownership` and the existing caller adapters.
+  The topology graph is a display/projection consumer of that evidence, not its
+  replacement. Do not require a kind to have a visual node before agents can
+  follow its controller chain.
+- [ ] For spec/selector edges and display nodes, start in `pkg/topology/`:
+  `builder.go`, `relationships.go`, `pseudokinds.go`
   and `types.go`. Use actual references, documented labels/selectors or controller
   links—not matching names, historical references treated as live usage, or
   configuration treated as observed traffic. Preserve group/namespace identity
@@ -110,8 +246,9 @@ shared renderers.
   `EdgeConfigures` (configuration), `EdgeUses` (scaling/usage), `EdgeProtects`
   (protection). These affect Related Resources grouping, not just appearance.
 - [ ] Reuse lists between node/edge construction and handle cache errors. Check
-  the generic CRD pass and `kindsHandledOutsideGenericCRDPass` for duplicates and
-  collisions. Keep pseudo-kind `KindForGVK`, node IDs and `buildNodeID` /
+  the generic CRD pass for duplicates and collisions: it skips an object a typed
+  pass already drew (matched by resource key, `nodeResourceKeys`) and only adds
+  its owner edges. Keep pseudo-kind `KindForGVK`, node IDs and `buildNodeID` /
   `normalizeKind` in `relationships.go` consistent; use unique node-ID prefixes
   for colliding kinds and test navigation in both directions.
 - [ ] For cluster-scoped kinds, check `ClusterScopedKinds` in
@@ -126,7 +263,159 @@ shared renderers.
   - `packages/k8s-ui/src/components/topology/`: `TopologyFilterSidebar.tsx`,
     `K8sResourceNode.tsx`, `layout.ts`, `topology.css`.
 
-## 3. Before submitting
+## 3. Workspace integrations
+
+A workspace is a set of screens for several related kinds (CloudNativePG at
+`/cnpg`, Karpenter at `/capacity`). Build one only when the operator question
+spans objects: fleet health, a chain such as Backup → ObjectStore → Cluster, or
+actions that need facts from more than one object. With fewer kinds, or no
+cross-object question, a renderer plus Issues plus the detail slots is enough.
+The batch kinds, for example, use only the detail seams.
+
+The pieces below are shared and should be imported, not copied. Read
+[DESIGN.md](../DESIGN.md#unknown-partial-and-denied-values) for the rules on
+unknown, partial and denied values first: every piece here exists to keep them.
+
+- [ ] **Placement.** Under Resources as a category workspace
+  (`ResourcesSidebar` `categoryWorkspaces`, keyed by the category name from
+  `api-resources.ts`), or a top-level page when the subject is cluster-wide.
+  Say whether the namespace filter applies, and why.
+- [ ] **Routes and navigation.** Use `/x`, `/x/<screen>` and
+  `/x/<plural>/<ns|_>/<name>?ctx=`.
+  - The in-drawer trail is `?drawer=`, encoded by `web/src/utils/drawer-trail.ts`.
+  - Back labels come from `currentPageLabel` and subject-filtered Issues links
+    from `issuesPathForSubject` (both in `web/src/utils/page-links.ts`).
+  - Declare the context-switch policy in workspace metadata. CNPG pins `ctx` on
+    details to avoid opening a same-named object in another cluster; Capacity
+    follows the active cluster.
+- [ ] **One aggregate endpoint.**
+  - List dynamic kinds with `readWorkspaceKind` in `internal/server/kind_access.go`.
+    Its `Coverage()` returns `internal/integration.KindCoverage`:
+    `full|partial|denied|notInstalled|syncing|uncached|error`, with denied and
+    uncached namespaces named only when the caller supplied the namespace list.
+  - Assess a typed kind's scope with the cache's `AssessKindRead`
+    (`pkg/k8score/read_scope.go`), which MCP, Capacity and Vitals use too. It splits
+    the namespaces asked for into read, loading, failed and not collected, so a
+    namespace whose own informer has synced is readable while another still
+    loads. `Complete` means every requested namespace is readable now, and
+    `TargetReadiness()` is the state of the requested namespaces alone.
+    CNPG's caller adapter is `internal/server/cnpg_read_scope.go`. Namespace
+    selection utilities live in `internal/readscope`; scope alone does not
+    establish initial readiness.
+  - After a per-namespace check, read through something that serves exactly
+    those namespaces. The listers of ConfigMaps, Secrets, Events, PVCs,
+    PersistentVolumes, StorageClasses, PodDisruptionBudgets and
+    NetworkPolicies are nil until every namespace of the kind has loaded, so
+    read them with `ReadableObjects`/`ReadableObject`. Every other kind's
+    lister exists while the kind loads and serves a loaded namespace's objects
+    from that namespace's own store: a lookup inside a namespace the
+    assessment reports read is complete, a list across namespaces is not.
+  - A per-object read with several sources reports a `ReadSource`
+    `{state, grant, reason}` per source (`internal/integration/reads.go`), with the missing
+    permission as a `Grant` (`internal/auth/grant.go`), never a sentence.
+  - Fan out over namespaces with `integration.FanOut` (`internal/integration/fanout.go`), behind a cap.
+  - Prometheus series matched to an object by name rather than identity carry a
+    `SeriesIsolation` (`internal/prometheus/series_scope.go`).
+  - A GitOps or Helm manager comes from `topology.ManagedByFromMeta`, never from
+    labels read on the client.
+- [ ] **Version skew.** Give the workspace's endpoints one `FeatureCapabilities`
+  flag and a `radarFeatures.ts` entry with `flagShippedWithEndpoint: true`.
+  - Gate every hook with `useRadarFeature`, including mutations, streams and
+    downloads. Never add `retry` to a mutation.
+  - Gate new contracts while retaining already-shipped reads whose producer
+    contract is unchanged. Hide unsupported new destinations or fall back to
+    standard detail views.
+  - Once a flag has shipped, its responses only grow. A new route or action,
+    a newly required parameter, or a newly bound fact on an existing action
+    needs a new flag: an older Radar answers those with 404 or 400, not with
+    "needs a newer Radar".
+  - A record Radar writes onto a cluster object (CNPG's restore-validation
+    note) carries a format version, and readers skip a version they do not
+    know: Radars of other versions read the same object.
+  - An action error `code` tells the client the write was refused before it
+    took effect. Never put a code on a failure that may follow a write; use
+    `outcome_unknown`, or `partial` with what completed.
+- [ ] **Guided multi-resource setup.** Keep integration-specific target models and workflow state in the app, and reuse the shared strict-create/YAML review. Put preflight and reviewed conditional writes in the integration service, with thin HTTP adapters and a new feature flag when the endpoint/verb is new. Each independent write needs its own review and observed follow-through; saving declarations is not end-to-end success. Do not grow a universal provisioning registry around one integration. A future second concrete setup flow should extract only the seam it actually shares.
+- [ ] **Domain rules.** Put interpretation reused by checks, findings and actions in a pure integration package (CNPG uses `pkg/cnpg`), independent of HTTP and caller permissions. Keep matching frontend derivations together; share fixture cases for rules represented in both languages. Put request-independent orchestration in an integration service (`internal/cnpg` is the current example), with caller-scoped observations/clients supplied by server adapters. Share typed service reads between endpoints and reports rather than invoking handlers through a response recorder. Keep HTTP requests, routing and process-wide client resolution outside the service.
+- [ ] **Findings.** The Issues engine owns findings from cached Kubernetes objects. Cross-resource findings retain their inventory operations in `Issue.RequiredReads`; hosts supply `CanReadEvidence` for both composition and cached related-issue projections. A live proxy or Prometheus measurement stays in the workspace with `source: 'measurement'` and `measuredBy`; identity limitations such as CNPG's `unverifiedMatch` stay in its domain model. Map domain severity to a non-healthy `HealthLevel` when presenting a `WorkspaceProblem`. Title reasons the Issues page already titles with `issueReasonTitle`. Carry semantic reasons/states through presentation; never branch on generated IDs or display text.
+- [ ] **Screens.**
+  - k8s-ui `components/facts`: `Fact`, `FactGrid`, `FactRow`, `FactValue`,
+    `FactSource`, `CertaintyGlyph` and `ManagedByText`. These are for any
+    surface that shows observed values, single-kind renderers included.
+  - k8s-ui `components/problems`: `WorkspaceProblem`, and
+    `WorkspaceProblemCallout`/`ProblemList`/`ProblemMeta` with the workspace's
+    `rootKind`, plus `OpenIssueContext`.
+  - Also from k8s-ui: `SectionHeading`, `FoldSection` and `FoldSummary`
+    (`ui/FoldSection`), `ui/RefLink`, `toneTextClass`/`worseTone` in
+    `ui/status-tone`, and `formatGrant`.
+  - App: `web/src/components/workspace`:
+    - layout: `ScreenBody`, `ScreenEmptyState`, `Notice`
+    - controls: `Segments`, `FilterChips`
+    - tables: `SectionTable` and its table classes
+    - text: `RefreshFailedNotice` and `GrantText`
+  - Buttons are `.btn-brand` and `.btn-secondary`.
+- [ ] **Detail page.** Through `WorkloadView`:
+  - `renderSummary`: a composed Overview; the resource's renderer moves to
+    "Spec & status".
+  - `extraTabs`
+  - `renderHeaderActions`
+  - Keep an integration's composition in its own host adapter (`web/src/components/cnpg/host.tsx`) and register it in `web/src/integrations/resourceHosts.tsx`, so generic views use one interface for routing, summary, header actions and logs. Fetching stays in the app; shared presentation receives facts and callbacks.
+- [ ] **Actions.**
+  - Shared contracts/guards (`internal/integration/actions.go`); caller adaptation and HTTP decoding (`internal/server/actions.go`):
+    - A capabilities endpoint answers each action as an `ActionCapability`
+      `{allowed, reason, reasonCode?, permission, grant}`, built with `grantPermission` and
+      `integration.CapabilityVerdict`.
+    - The POST body is an `ActionRequest` `{reviewedContext, uid, facts, params}`
+      read with `decodeActionRequest`.
+    - Bind the facts the user reviewed. Refuse with 409 `changed`
+      (`integration.ChangedAction`) or `context_changed`, and use `integration.PartialAction` when a
+      multi-step write stops part-way.
+    - Writes are impersonated, version-bound (`integration.MergePatchAtVersion`) and never
+      retried.
+  - Client:
+    - `web/src/api/actions.ts`: `actionErrorCode`, widened with the integration's
+      own codes; `actionOutcomeLocked`, `actionCompleted` and `capabilityReason`.
+    - `useReviewedActionMutation` (`web/src/api/reviewedActionMutation.ts`) keeps
+      in-flight and uncertain results through dialog remounts and connection
+      resets; pass its retained error to the dialog with `actionDialogResult`.
+      Writes that invalidate each other's review share a target key. The host
+      still owns follow-through and notification.
+    - `ActionConfirmDialog` and the GitOps write guard (`useGitOpsWriteGuard`).
+      Multi-step setup can supply `onBack`/`backLabel` without giving Cancel a
+      second meaning. For YAML creation, `CreateResourceDialog.onBack(yaml)`
+      returns the edited draft to the parent; the parent retains unrepresented
+      fields and owns any explicit replacement. `onCreated(result, submittedYaml)`
+      reports the actual write so follow-through never assumes the earlier form
+      still describes edited YAML. Keep domain forms and step state in the
+      integration host; these presentation contracts contain no integration logic.
+  - An accepted POST is not a completed action: follow the outcome in status.
+- [ ] **Docs and fixtures.** Add a `docs/<x>.md` listing which source each value
+  comes from and how it reads when unknown, a `scripts/<x>-demo.sh` with its
+  README, and a CLAUDE.md row.
+
+### Future extension points
+
+Use the [resource and workspace hosts](#workspace-and-resource-hosts) for
+integration contributions. A kind-list replacement uses one `table / wait / view`
+decision for both fetching and rendering, keyed by exact API group and plural.
+Keep data hooks in mounted integration components and gate new contracts with
+capabilities.
+
+Two host seams need another concrete consumer before choosing a common shape:
+
+| Seam | Location | Constraint |
+|---|---|---|
+| Category-workspace counts and coverage | `ResourcesView.tsx`'s `useCNPGSidebarWorkspace` and `sidebarCategoryWorkspaces` | Reuse the sidebar props and preserve partial/denied coverage; mount data hooks in integration-owned components. |
+| Event-driven workspace invalidation | `App.tsx`'s CNPG pending flag and batched invalidation | Contribute query keys to the existing batches and connection lifetime. |
+
+Operation tracking, fixed-path proxy reads, integration-specific log streaming,
+report bundles and operator diagnosis remain integration-owned. Read CNPG's
+implementations in `web/src/components/cnpg/` and `internal/cnpg/` when a second
+integration needs the same behavior. Reuse `internal/podlogs` for bounded log
+collection and replay; source selection and browser stream framing retain their
+own owners.
+
+## 4. Before submitting
 
 - [ ] Verify status against the controller's documented API: desired versus
   observed, unknown versus false, intentional pause/stop versus failure. Consider
@@ -136,15 +425,20 @@ shared renderers.
 - [ ] Add fixtures for supported API shapes and meaningful states: healthy, failing,
   intentionally inactive, stale/missing status, collisions and unavailable related
   resources. Test only relevant combinations, not a speculative matrix.
-- [ ] Run `make tsc`, `make test` and `make build` for integration code changes, plus
-  `npm test --prefix packages/k8s-ui` and `npm test --prefix web` for frontend tests.
-  The full build includes frontend embedding. Existing guards include
+- [ ] For code changes, run `make test-changed` while iterating, then the full
+  suite once via CI; run it locally if CI will not test the branch. Use `make build`
+  when running the embedded app for live or visual testing; it is not an extra verification
+  round. Existing guards include
   `internal/k8s/{dynamic_cache_fallback,chart_rbac_coverage,capabilities_alignment}_test.go`
   and resource `curated-column-ownership.test.ts` / `ResourceRendererDispatch.test.tsx`.
 - [ ] Validate changed views against a real controller, including restricted access
   where relevant. Record versions, screenshots and what was actually exercised;
   distinguish real status from synthetic fixtures. Don't induce destructive
   failures in a shared or production cluster for a test.
+- [ ] For cross-resource context or diagnosis, exercise a reader who can inspect
+  the root but not all referenced kinds/namespaces. Check retained useful evidence
+  as well as withheld data across REST AI and MCP; compare the changed UI where
+  applicable. Test freshness without reopening the drawer if the view refreshes.
 - [ ] For the surfaces changed, confirm intended table columns/cells, drawer,
   topology icons and edges. For collisions, verify both core and custom resources'
   renderers, status and available actions; check existing resource types for regressions.
@@ -160,3 +454,5 @@ headings. A new heading needs matching `INTEGRATION_META` and `docs.json` naviga
 in that internal repository before sync. On rename, retain the published slug;
 unmatched headings fail sync and the orphan sweep removes old generated pages.
 External contributors only need to flag the new/renamed section for maintainers.
+
+Workspace presentation is shared in k8s-ui: `FactValue`/`FactSource` retain unknown values and their provenance; `WorkspaceProblemCallout` presents host-classified findings; `ActionConfirmDialog` presents the writes and acknowledgement a host asks the user to review. Hosts own fetching, authorization and action-result classification. These components do not establish that evidence is complete or that a write is safe to retry.

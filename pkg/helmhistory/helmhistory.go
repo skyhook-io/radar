@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 const (
@@ -50,6 +52,7 @@ type Revision struct {
 	AppVersion  string
 	Description string
 	Updated     time.Time
+	Deleted     time.Time
 }
 
 type Operation struct {
@@ -132,12 +135,17 @@ func Analyze(releaseName string, currentRevision int, revisions []Revision, opts
 	}
 	var live *Operation
 	if hasCurrent {
-		switch status := normalizeStatus(current.Status); {
+		status := normalizeStatus(current.Status)
+		started := current.Updated
+		if status == "uninstalling" {
+			started = current.Deleted
+		}
+		switch {
 		case status == "failed":
 			op := failedOperation(releaseName, current, SourceStatus)
 			live = &op
-		case isPending(status) && !current.Updated.IsZero() && now.Sub(current.Updated) >= pendingStuckAfter:
-			op := pendingOperation(current, now.Sub(current.Updated))
+		case isPending(status) && !started.IsZero() && now.Sub(started) >= pendingStuckAfter:
+			op := pendingOperation(current, now.Sub(started))
 			live = &op
 		}
 	}
@@ -247,16 +255,22 @@ func rollbackOperation(rev Revision, target int) Operation {
 }
 
 func pendingOperation(rev Revision, age time.Duration) Operation {
+	evidence := "latest Helm revision is still pending"
+	updated := rev.Updated
+	if normalizeStatus(rev.Status) == "uninstalling" {
+		evidence = "latest Helm revision is still uninstalling, timed from Helm Info.Deleted"
+		updated = rev.Deleted
+	}
 	return Operation{
 		Kind:          KindPending,
 		Status:        StatusStuck,
 		Source:        SourceStatus,
 		Confidence:    ConfidenceHigh,
-		Message:       fmt.Sprintf("Release has been %s for %s.", rev.Status, formatDuration(age)),
-		Evidence:      "latest Helm revision is still pending",
+		Message:       fmt.Sprintf("Release has been %s for %s.", rev.Status, timeutil.FormatAgeShort(age)),
+		Evidence:      evidence,
 		Revision:      rev.Revision,
-		PendingStatus: rev.Status,
-		Updated:       rev.Updated,
+		PendingStatus: normalizeStatus(rev.Status),
+		Updated:       updated,
 	}
 }
 
@@ -291,7 +305,7 @@ func findCurrent(ordered []Revision, currentRevision int) (Revision, bool) {
 
 func isPending(status string) bool {
 	status = normalizeStatus(status)
-	return status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback"
+	return status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback" || status == "uninstalling"
 }
 
 func isCompletedRevisionStatus(status string) bool {
@@ -322,19 +336,4 @@ func operationRevision(op Operation) int {
 		return op.Revision
 	}
 	return op.FailedRevision
-}
-
-func formatDuration(d time.Duration) string {
-	if d < time.Hour {
-		mins := int(d.Round(time.Minute) / time.Minute)
-		if mins < 1 {
-			mins = 1
-		}
-		return fmt.Sprintf("%dm", mins)
-	}
-	hours := int(d.Round(time.Hour) / time.Hour)
-	if hours < 1 {
-		hours = 1
-	}
-	return fmt.Sprintf("%dh", hours)
 }

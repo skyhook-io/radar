@@ -2,7 +2,6 @@ package cloud
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,9 +10,17 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
-const selfUpgradeAvailableHeader = "X-Radar-Self-Upgrade-Available"
+const (
+	selfUpgradeAvailableHeader = "X-Radar-Self-Upgrade-Available"
+	// kubernetesCredentialsHeader tells Radar Cloud how this agent
+	// authenticates user calls, so a control plane that relays user tokens
+	// never sends them to an agent that would ignore them and impersonate.
+	kubernetesCredentialsHeader = "X-Radar-Kubernetes-Credentials"
+)
 
 // dial establishes a WebSocket to Radar Cloud, authenticates with the
 // cluster bearer token, and returns a yamux session with this side as the
@@ -32,13 +39,14 @@ func dial(ctx context.Context, cfg Config, selfUpgrade bool) (*yamux.Session, er
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
-	if cfg.InsecureSkipVerify {
-		dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // user-requested via --cloud-insecure-skip-verify for a self-signed hub
-	}
+	dialer.TLSClientConfig = hubTLSConfig(cfg.CA, cfg.InsecureSkipVerify)
 	ws, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {
 		if resp != nil {
 			defer resp.Body.Close()
+			if cfg.Enrolled && resp.StatusCode == http.StatusUnauthorized {
+				return nil, &handshakeStatusError{err: errEnrolledTokenRejected}
+			}
 			return nil, handshakeRejectionError(resp.StatusCode, err)
 		}
 		return nil, fmt.Errorf("ws dial: %w", err)
@@ -63,6 +71,7 @@ func cloudHandshakeHeaders(cfg Config, selfUpgrade bool) http.Header {
 	headers.Set("Authorization", "Bearer "+cfg.Token)
 	headers.Set("X-Radar-Version", Version)
 	headers.Set(selfUpgradeAvailableHeader, strconv.FormatBool(selfUpgrade))
+	headers.Set(kubernetesCredentialsHeader, string(pkgauth.CurrentCredentialMode()))
 	if cfg.Namespace != "" {
 		headers.Set("X-Radar-Namespace", cfg.Namespace)
 	}

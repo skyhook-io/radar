@@ -18,6 +18,7 @@ import (
 	"github.com/Masterminds/semver/v3"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/launchday"
 )
 
 var (
@@ -30,11 +31,15 @@ var (
 	// isDesktop is set to true when running as a desktop app (Wails).
 	// Controls install method detection and enables in-app update flow.
 	isDesktop bool
+	// manualUpdate is set when the desktop app cannot update itself.
+	manualUpdate string
 
-	mu          sync.Mutex
-	updateCache = map[string]updateCacheEntry{}
-	cacheTTL    = 1 * time.Hour
-	errorTTL    = 5 * time.Minute
+	mu               sync.Mutex
+	updateCache      = map[string]updateCacheEntry{}
+	cacheTTL         = 1 * time.Hour
+	errorTTL         = 5 * time.Minute
+	disabledByFlag   bool
+	lastManualResult *UpdateInfo
 )
 
 type updateCacheEntry struct {
@@ -57,13 +62,22 @@ const (
 // UpdateInfo contains version update information
 type UpdateInfo struct {
 	CurrentVersion string        `json:"currentVersion"`
+	BuildChannel   string        `json:"buildChannel"`
 	LatestVersion  string        `json:"latestVersion,omitempty"`
 	UpdateAvail    bool          `json:"updateAvailable"`
 	ReleaseURL     string        `json:"releaseUrl,omitempty"`
 	ReleaseNotes   string        `json:"releaseNotes,omitempty"`
 	InstallMethod  InstallMethod `json:"installMethod"`
 	UpdateCommand  string        `json:"updateCommand,omitempty"`
-	Error          string        `json:"error,omitempty"`
+	// ManualUpdate is set for a desktop install that cannot update itself, and
+	// says how the user gets the new version instead: "appimage" (download the
+	// new AppImage), "package" (install the new .deb/.rpm with the package
+	// manager) or "download" (Radar can't write to its folder). Empty: the
+	// in-app updater works.
+	ManualUpdate string `json:"manualUpdate,omitempty"`
+	Error        string `json:"error,omitempty"`
+	// Added by WithProductHuntLaunch, not by the lookup.
+	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
 
 // githubRelease represents a GitHub release response
@@ -71,10 +85,23 @@ type githubRelease struct {
 	TagName string `json:"tag_name"`
 	HTMLURL string `json:"html_url"`
 	Body    string `json:"body"`
+	// Added by releases.skyhook.io; absent from GitHub's own response.
+	ProductHuntLaunch *launchday.Launch `json:"productHuntLaunch,omitempty"`
 }
 
 type checkOptions struct {
 	source string
+	manual bool
+}
+
+// WithProductHuntLaunch returns a copy of info carrying the effective Product
+// Hunt launch, for any update result the UI reads. A copy, because a lookup can
+// hand back the cached result itself.
+func WithProductHuntLaunch(info *UpdateInfo) *UpdateInfo {
+	out := *info
+	launch := launchday.Current()
+	out.ProductHuntLaunch = &launch
+	return &out
 }
 
 // SetCurrent sets the current version (called from main)
@@ -87,6 +114,13 @@ func SetCurrent(v string) {
 // which triggers the in-app update flow instead of showing CLI commands.
 func SetDesktop(v bool) {
 	isDesktop = v
+}
+
+// SetManualUpdate marks this desktop install as unable to update itself, with
+// how the user updates instead (see UpdateInfo.ManualUpdate). Must be called
+// before any version checks.
+func SetManualUpdate(how string) {
+	manualUpdate = how
 }
 
 // IsDesktop returns whether the current instance is running as a desktop app.
@@ -117,8 +151,54 @@ func IsDevelopmentBuild() bool {
 	return buildChannel(Current) == buildChannelDevelopment
 }
 
+// SetDisabled sets whether automatic version checks are disabled via CLI flag.
+func SetDisabled(disabled bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	disabledByFlag = disabled
+}
+
+// IsDisabled reports whether automatic version checks are disabled via CLI flag
+// or RADAR_DISABLE_VERSION_CHECK.
+func IsDisabled() bool {
+	mu.Lock()
+	flagDisabled := disabledByFlag
+	mu.Unlock()
+	if flagDisabled {
+		return true
+	}
+	if v := os.Getenv("RADAR_DISABLE_VERSION_CHECK"); v == "1" || strings.EqualFold(v, "true") {
+		return true
+	}
+	return false
+}
+
+const defaultReleasesURL = "https://github.com/skyhook-io/radar/releases"
+
+func disabledUpdateInfo() *UpdateInfo {
+	mu.Lock()
+	if lastManualResult != nil && lastManualResult.CurrentVersion == Current {
+		result := *lastManualResult
+		mu.Unlock()
+		return &result
+	}
+	mu.Unlock()
+	method := detectInstallMethod()
+	return &UpdateInfo{
+		CurrentVersion: Current,
+		BuildChannel:   BuildChannelName(),
+		InstallMethod:  method,
+		UpdateCommand:  getUpdateCommand(method),
+		ManualUpdate:   manualUpdate,
+		ReleaseURL:     defaultReleasesURL,
+	}
+}
+
 // CheckForUpdate checks GitHub for the latest release
 func CheckForUpdate(_ context.Context) *UpdateInfo {
+	if IsDisabled() {
+		return disabledUpdateInfo()
+	}
 	if buildChannel(Current) == buildChannelDevelopment {
 		return checkForUpdateCached(checkOptions{source: "release-only"})
 	}
@@ -127,11 +207,33 @@ func CheckForUpdate(_ context.Context) *UpdateInfo {
 
 // CheckForUpdateRelease returns release information using the release-only source.
 func CheckForUpdateRelease(_ context.Context) *UpdateInfo {
+	if IsDisabled() {
+		return disabledUpdateInfo()
+	}
 	return checkForUpdateCached(checkOptions{source: "release-only"})
 }
 
+// CheckForUpdateManual performs one fresh, user-requested lookup without changing
+// the automatic-check policy. Its last successful result stays visible while
+// automatic checks are disabled.
+func CheckForUpdateManual(ctx context.Context) *UpdateInfo {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	result := fetchLatestRelease(ctx, checkOptions{source: "release-only", manual: true})
+	if result.Error == "" {
+		mu.Lock()
+		copy := *result
+		lastManualResult = &copy
+		for _, source := range []string{"", "release-only"} {
+			updateCache[source] = updateCacheEntry{result: &copy, checkedAt: time.Now()}
+		}
+		mu.Unlock()
+	}
+	return result
+}
+
 func RelayUpdateCheck(ctx context.Context) error {
-	if buildChannel(Current) == buildChannelDevelopment {
+	if IsDisabled() || buildChannel(Current) == buildChannelDevelopment {
 		return nil
 	}
 
@@ -201,7 +303,13 @@ func checkForUpdateCached(options checkOptions) *UpdateInfo {
 		cancel()
 
 		mu.Lock()
-		updateCache[options.source] = updateCacheEntry{result: result, checkedAt: time.Now()}
+		// A completed manual lookup supersedes an automatic request still in flight.
+		if latest := updateCache[options.source]; latest.loading == loading {
+			updateCache[options.source] = updateCacheEntry{result: result, checkedAt: time.Now()}
+		} else {
+			copy := *latest.result
+			result = &copy
+		}
 		close(loading)
 		mu.Unlock()
 
@@ -213,11 +321,13 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 	method := detectInstallMethod()
 	result := &UpdateInfo{
 		CurrentVersion: Current,
+		BuildChannel:   BuildChannelName(),
 		InstallMethod:  method,
 		UpdateCommand:  getUpdateCommand(method),
+		ManualUpdate:   manualUpdate,
 	}
 
-	if Current == "dev" {
+	if !options.manual && (IsDisabled() || Current == "dev") {
 		return result
 	}
 
@@ -287,9 +397,24 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		return result
 	}
 
+	if release.ProductHuntLaunch != nil {
+		if err := launchday.Set(*release.ProductHuntLaunch); err != nil {
+			log.Printf("[version] Ignoring Product Hunt launch: %v", err)
+		}
+	}
+
 	result.LatestVersion = strings.TrimPrefix(release.TagName, "v")
 	result.ReleaseURL = release.HTMLURL
 	result.ReleaseNotes = truncateNotes(release.Body, 500)
+	// An unreleased build (git describe of a commit past a tag, a dirty tree)
+	// parses as a prerelease of its tag, so the tag would always read as newer.
+	if IsDevelopmentBuild() {
+		if _, err := semver.NewVersion(result.LatestVersion); err != nil {
+			result.Error = fmt.Sprintf("invalid latest release version: %v", err)
+			log.Printf("[version] %s", result.Error)
+		}
+		return result
+	}
 
 	newer, err := isNewerVersion(result.LatestVersion, Current)
 	if err != nil {
@@ -437,13 +562,33 @@ func detectInstallMethod() InstallMethod {
 		return InstallDesktop
 	}
 
-	exe, err := os.Executable()
+	exe, err := executablePath()
 	if err != nil {
 		log.Printf("[version] Could not determine executable path: %v", err)
 		return InstallDirect
 	}
 
 	return detectInstallMethodFromPath(exe)
+}
+
+// executablePath returns this binary's path with symlinks resolved. Package
+// managers expose a stable link (e.g. /opt/homebrew/bin/radar) into a versioned
+// install directory, and only the resolved path shows which one installed it.
+func executablePath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return resolveSymlinks(exe), nil
+}
+
+// resolveSymlinks returns path with symlinks resolved, or path unchanged when
+// it cannot be resolved.
+func resolveSymlinks(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }
 
 // detectInstallMethodFromPath determines install method from a binary path.
@@ -473,18 +618,21 @@ func detectInstallMethodFromPath(exe string) InstallMethod {
 // getUpdateCommand returns the command to update based on install method.
 // Desktop returns empty since updates are handled in-app.
 func getUpdateCommand(method InstallMethod) string {
-	return getUpdateCommandForOS(method, runtime.GOOS)
+	// With no path, Homebrew installs get the tap command.
+	exe, _ := executablePath()
+	return getUpdateCommandForOS(method, runtime.GOOS, exe)
 }
 
 // getUpdateCommandForOS returns the update command for a given install method
 // and OS. For InstallDirect, the install one-liner is idempotent — re-running
 // it upgrades an existing binary in place. Returns "" for any GOOS that the
 // public install script doesn't support, so the frontend falls through to the
-// GitHub release-download link.
-func getUpdateCommandForOS(method InstallMethod, goos string) string {
+// GitHub release-download link. exe is the resolved binary path, used to pick
+// the Homebrew formula.
+func getUpdateCommandForOS(method InstallMethod, goos, exe string) string {
 	switch method {
 	case InstallHomebrew:
-		return "brew upgrade skyhook-io/tap/radar"
+		return homebrewUpgradeCommand(exe)
 	case InstallKrew:
 		return "kubectl krew upgrade radar"
 	case InstallScoop:
@@ -503,4 +651,16 @@ func getUpdateCommandForOS(method InstallMethod, goos string) string {
 	default:
 		return ""
 	}
+}
+
+// homebrewUpgradeCommand names the formula that installed exe. Radar ships in
+// homebrew-core as kubectl-radar and in the skyhook-io tap as radar; the Cellar
+// directory in the resolved path tells them apart. Paths without a Cellar
+// directory fall back to the tap formula.
+func homebrewUpgradeCommand(exe string) string {
+	path := strings.ToLower(filepath.ToSlash(exe))
+	if strings.Contains(path, "/cellar/kubectl-radar/") {
+		return "brew upgrade kubectl-radar"
+	}
+	return "brew upgrade skyhook-io/tap/radar"
 }

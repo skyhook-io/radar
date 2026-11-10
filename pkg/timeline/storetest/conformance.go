@@ -560,6 +560,48 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 			"match", "other-ns", "other-kind", "other-name", "other-source")
 	})
 
+	t.Run("reason filter runs before pagination", func(t *testing.T) {
+		store := newStore(t)
+		appendReason := func(id string, offset time.Duration, reason string) {
+			e := informer(id, offset)
+			e.Reason = reason
+			mustAppend(t, store, e)
+		}
+		appendReason("warning", 0, "CertificateExpirationWarning")
+		for i := 1; i <= 5; i++ {
+			appendReason(fmt.Sprintf("noise-%d", i), time.Duration(i)*time.Minute, "NodeReady")
+		}
+		appendReason("ok", 6*time.Minute, "CertificateExpirationOK")
+		appendReason("empty", 7*time.Minute, "")
+		appendReason("quoted", 8*time.Minute, "x' OR 1=1 --")
+		for _, tc := range []struct {
+			name    string
+			reasons []string
+			offset  int
+			want    string
+		}{
+			{"latest", []string{"CertificateExpirationWarning", "CertificateExpirationOK"}, 0, "ok"},
+			{"offset", []string{"CertificateExpirationWarning", "CertificateExpirationOK"}, 1, "warning"},
+			{"empty", []string{""}, 0, "empty"},
+			{"quoted", []string{"x' OR 1=1 --"}, 0, "quoted"},
+			{"missing", []string{"UnknownReason"}, 0, ""},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rows, err := store.Query(ctx, timeline.QueryOptions{Reasons: tc.reasons, Limit: 1, Offset: tc.offset, IncludeManaged: true, IncludeK8sEvents: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.want == "" {
+					if len(rows) != 0 {
+						t.Fatalf("unexpected reason matches: %v", idsOfEvents(rows))
+					}
+				} else if len(rows) != 1 || rows[0].ID != tc.want {
+					t.Fatalf("reason pagination returned %v, want %s", idsOfEvents(rows), tc.want)
+				}
+			})
+		}
+	})
+
 	// APIGroups narrows on the group parsed from APIVersion before the limit
 	// applies, so same-kind rows from another group cannot crowd out the
 	// requested resource's history. Rows with no recorded APIVersion are
@@ -604,6 +646,47 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 			t.Fatalf("exact identity filter must run before limit: got %v, error %v", idsOfEvents(exact), err)
 		}
 
+	})
+
+	// Excluding managed rows or K8s Events after the limit would let newer
+	// excluded rows fill it, returning a short page with an older visible row
+	// missing and nothing to say so.
+	t.Run("managed rows and k8s events are excluded before the limit", func(t *testing.T) {
+		store := newStore(t)
+		mustAppend(t, store, informer("unowned-edit", 0))
+		// Appended in event-time order, so arrival and time order agree.
+		for i := 0; i < 3; i++ {
+			owned := informer(fmt.Sprintf("owned-%d", i), time.Minute+time.Duration(i)*time.Second)
+			owned.Owner = &timeline.OwnerInfo{Kind: "ScaledObject", Name: "web", UID: "uid-so"}
+			mustAppend(t, store, owned)
+		}
+		for i := 0; i < 3; i++ {
+			pod := informer(fmt.Sprintf("pod-%d", i), 2*time.Minute+time.Duration(i)*time.Second)
+			pod.Kind = "Pod"
+			mustAppend(t, store, pod)
+		}
+		for i := 0; i < 3; i++ {
+			event := informer(fmt.Sprintf("event-%d", i), 3*time.Minute+time.Duration(i)*time.Second)
+			event.Source, event.EventType, event.Reason = timeline.SourceK8sEvent, timeline.EventTypeWarning, "BackOff"
+			mustAppend(t, store, event)
+		}
+		query := func(opts timeline.QueryOptions) []string {
+			t.Helper()
+			got, err := store.Query(ctx, opts)
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			return idsOfEvents(got)
+		}
+		if got := query(timeline.QueryOptions{Limit: 1}); fmt.Sprint(got) != "[unowned-edit]" {
+			t.Fatalf("limit 1 without managed rows or k8s events: got %v, want [unowned-edit]", got)
+		}
+		if got := query(timeline.QueryOptions{Limit: 3, IncludeManaged: true}); fmt.Sprint(got) != "[pod-2 pod-1 pod-0]" {
+			t.Fatalf("limit 3 with managed rows: got %v, want the newest pods", got)
+		}
+		if got := query(timeline.QueryOptions{Limit: 1, IncludeK8sEvents: true, IncludeManaged: true}); fmt.Sprint(got) != "[event-2]" {
+			t.Fatalf("limit 1 with everything: got %v, want [event-2]", got)
+		}
 	})
 
 	// A workload's history: the workload, what it owns (by owner UID), K8s

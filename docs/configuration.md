@@ -1,6 +1,123 @@
 # Configuration
 
-This document covers Radar's cluster connection behavior. For commands and flags, see the [CLI reference](https://radarhq.io/docs/configuration/cli).
+This document covers Radar's command-line flags and cluster connection behavior. The [CLI reference](https://radarhq.io/docs/configuration/cli) on the docs site covers subcommands.
+
+## CLI flags
+
+Common startup flags for `radar` and `kubectl radar`. `radar --help` lists every flag for the
+installed version. Several flags also take a persistent default from `~/.radar/config.json`; see
+[Persistent Configuration](#persistent-configuration).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--kubeconfig` | `~/.kube/config` | Path to primary kubeconfig file |
+| `--kubeconfig-dir` | | Comma-separated directories containing additional kubeconfig files |
+| `--namespace` | (context namespace) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users). Unset, Radar uses your saved pick, then the kubeconfig context's namespace, then all namespaces ([Namespace Picker](#namespace-picker)) |
+| `--namespaces` | (context namespace) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |
+| `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
+| `--port` | `9280` | Server port |
+| `--listen-address` | `127.0.0.1` | HTTP listen IP address (IPv4 or IPv6), or `localhost`. Bind a specific local IP or use `0.0.0.0` for all interfaces. Non-loopback access needs authentication and network controls. |
+| `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
+| `--allowed-hosts` | | Comma-separated hostnames, besides `localhost`, IP addresses and Kubernetes Service names, that an unauthenticated non-loopback listener answers, e.g. `radar.internal`. Other hostnames are refused so DNS rebinding cannot reach Radar. Exact names, or `*.example.com` for names under a domain (not the domain itself); `*` turns the check off. Env: `RADAR_ALLOWED_HOSTS`. See [HTTP Listener](#http-listener) |
+| `--trusted-origins` | | Comma-separated origins, besides the address Radar is opened at, that may use Radar's API, including changes and terminals, e.g. `http://radar.internal`. Set this when a proxy in front of Radar rewrites the `Host` header and changes fail with "Radar refused this request". Exact origins, no wildcards. Does not apply to `/mcp` (see `RADAR_MCP_TRUSTED_ORIGINS`). Env: `RADAR_TRUSTED_ORIGINS` |
+| `--no-browser` | `false` | Don't auto-open browser |
+| `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
+| `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
+| `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
+| `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
+| `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
+| `--disable-exec` | `false` | Disable pod terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP `exec_pod` |
+| `--disable-helm-write` | `false` | Disable release writes, per-release source updates, values previews and `manage_helm`; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue |
+| `--disable-local-terminal` | `false` | Disable the host local terminal |
+| `--disable-auto-port-forward` | `false` | Never open a port-forward on Radar's own initiative (metrics, traffic, cost and Argo CD discovery). Port-forwards you start still work. See [Automatic port-forwarding](#automatic-port-forwarding) |
+| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
+| `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
+| `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
+| `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
+| `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
+| `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
+| `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery). In local CLI/Desktop mode, applies only to the launch's initial context and never inherits saved headers. |
+| `--prometheus-single-cluster` | `false` | Declare the backend dedicated to this cluster for workload metrics and PVC usage, replacing automatic identity matching. Other metrics do not use this override. [Scope and lifetime](workload-metrics.md#optional-operator-override). |
+| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
+| `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
+| `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
+| `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](workload-metrics.md#request-sources). |
+| `--opencost-currency` | (auto-detect, then USD) | Override the ISO 4217 currency label for OpenCost values. Radar labels values but does not convert them. |
+| `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](authentication.md)) |
+| `--no-mcp` | `false` | Disable all MCP endpoints |
+| `--mcp-read-only` | `false` | Expose only read-only MCP tools; disable `/mcp` (env: `RADAR_MCP_READ_ONLY`) |
+| `--mcp-catalog-stdio` | `false` | Start only the MCP catalog over stdio for registry introspection |
+| `--version` | | Show version and exit |
+
+### Tuning for slow or high-latency clusters
+
+The default deadlines (30 s context switch, 5 m first-paint backstop, 5 s
+namespace LIST, 20 scope candidates) are tuned for healthy clusters reached
+over fast, low-latency connections. They are too tight for clusters reached
+over SSH tunnels, geographically distant control planes, or accounts subject
+to API-server throttling, where they surface as one of three symptoms:
+
+- "Context switch timed out" toasts when the cache eventually does sync
+- "Limited list — RBAC doesn't allow listing all namespaces" even though the
+  account has cluster-wide list permission (the LIST timed out, not RBAC)
+- Kinds silently marked denied because the namespace they live in fell past
+  the 20-entry candidate cap
+
+Widen the four flags via CLI or via the matching environment variables
+(`RADAR_CONTEXT_SWITCH_TIMEOUT`, `RADAR_FIRST_PAINT_BACKSTOP`,
+`RADAR_NAMESPACE_LIST_TIMEOUT`, `RADAR_MAX_SCOPE_CANDIDATES`) — env vars
+keep secrets out of `ps` and let in-cluster deployments source the values
+from a ConfigMap:
+
+```bash
+# CLI
+kubectl radar \
+  --context-switch-timeout=120s \
+  --first-paint-backstop=10m \
+  --namespace-list-timeout=30s \
+  --max-scope-candidates=200
+
+# Environment (e.g. in a Deployment manifest)
+RADAR_CONTEXT_SWITCH_TIMEOUT=120s \
+RADAR_FIRST_PAINT_BACKSTOP=10m \
+RADAR_NAMESPACE_LIST_TIMEOUT=30s \
+RADAR_MAX_SCOPE_CANDIDATES=200 \
+  kubectl radar
+```
+
+Defaults are preserved when neither the flag nor the env var is set, so
+existing deployments are unaffected.
+
+## MCP exposure
+
+`--mcp-exec-tools` (CLI and Desktop), or `"mcpExecTools": true` in
+`~/.radar/config.json`, opts in to `exec_pod`. It defaults to false and is
+ignored with `--disable-exec`, `--mcp-read-only`, or disabled MCP. The CLI
+flag overrides the config key, including `--mcp-exec-tools=false`. Helm
+operators use `mcp.execTools: true`. See [exec_pod](mcp.md#exec_pod).
+
+`--mcp-http-tools`, `"mcpHttpTools": true`, or Helm `mcp.httpTools: true` opts in
+to [curl_service](mcp.md#curl_service), independently of `exec_pod`. It defaults
+to false, needs in-cluster Radar with writable MCP, and is not affected by
+`--disable-exec`. Each call needs `get services/proxy` on the target Service, as the caller or, without auth, as Radar's ServiceAccount. The
+CLI flag overrides the config key, including `--mcp-http-tools=false`.
+Catalog-only modes omit the tool unless `--fake-in-cluster` is set.
+`/api/capabilities.mcpHttpTools` and `/api/config.effective.mcpHttpTools` report
+the effective state (older Radar versions omit them: treat absent as off), and startup logs explain a suppressed opt-in.
+
+MCP is enabled with read and write tools by default. `--no-mcp` disables all
+MCP endpoints. `--mcp-read-only` keeps `/mcp-readonly` and the internal
+`/mcp-investigation` endpoint, while `/mcp` returns 404. Both CLI and Desktop
+support these flags. This controls MCP exposure only; UI and REST writes are
+unchanged.
+
+Use `RADAR_MCP_READ_ONLY=1` or `"mcpReadOnly": true` in
+`~/.radar/config.json` for persistent deployments. CLI overrides environment,
+which overrides file settings. Explicitly selecting disabled or read-only mode
+overrides a competing mode from a lower-priority source. Explicit false clears
+only its own setting. Contradictory flags, or contradictory settings within the
+config file, are errors. See [MCP configuration](mcp.md#enabling--disabling) for
+examples, boolean parsing and alternate entrypoints.
 
 ## HTTP Listener
 
@@ -38,10 +155,35 @@ This flag affects Radar's HTTP server; port-forward address options remain
 
 A non-loopback listener can be reached by non-browser clients; CORS is not an
 authentication boundary. Enable Radar authentication and restrict network
-access whenever binding a non-loopback address. The loopback `Host` protection above does not
-apply to a shared listener, and Origin checks alone do not stop DNS rebinding
-there. Treat an unauthenticated shared listener as accessible to any browser
-that can reach the network and do not expose it outside a fully trusted network.
+access whenever binding a non-loopback address. Treat an unauthenticated shared
+listener as accessible to anything that can reach the network and do not expose
+it outside a fully trusted network.
+
+Without authentication, a shared listener still checks the request `Host`, so a
+web page cannot reach Radar by rebinding its own hostname to Radar's address
+(Origin checks alone do not stop that). It answers:
+
+- `localhost`, `*.localhost` and IP addresses, such as `http://192.168.1.5:9280`
+  or a published Docker port at `http://localhost:9280`;
+- single-label names (`http://radar:9280`) and Kubernetes Service names ending
+  in `.svc` or `.svc.cluster.local`. The two-label `<service>.<namespace>` form
+  can't be told apart from a public domain, so list it (the Helm chart adds its
+  own);
+- the hosts of `--trusted-origins`;
+- hostnames listed in `--allowed-hosts` (env `RADAR_ALLOWED_HOSTS`), e.g.
+  `--allowed-hosts=radar.internal,radar.example.com`. Names have no scheme or
+  port; `*.example.com` covers every name under `example.com` but not
+  `example.com` itself. A custom cluster domain (`radar.radar.svc.example`)
+  must be listed.
+
+Any other hostname gets `403` naming the host to add. `--allowed-hosts='*'` turns
+the check off and logs a warning. The list does not apply to a loopback-only
+listener, which keeps the stricter rule above, or with authentication enabled.
+
+The check sees the `Host` Radar receives. A proxy without authentication in
+front of Radar must pass the browser's original `Host` through, or itself accept
+only the hostnames you serve Radar at: a catch-all proxy that rewrites every
+request to `Host: radar` or an IP address hides a rebound hostname from Radar.
 The host local terminal is unavailable on a shared listener even if a client
 sends a loopback `Host` value.
 
@@ -49,6 +191,30 @@ The Docker image and Helm chart set `0.0.0.0` explicitly because their HTTP
 listener must be reachable through a published container port or Kubernetes
 Service. Desktop Radar and temporary `radar diagnose` servers remain
 loopback-only.
+
+## Profiling
+
+Radar keeps `/debug/pprof/*` available by default on loopback-only listeners
+and when Radar authentication is enabled, so memory, goroutine, and CPU profiles
+can be collected from a troubled process without restarting it. Authenticated
+installations require sign-in to access these process-wide diagnostics and
+refuse `/debug/pprof/cmdline`, because command-line arguments can contain
+credentials shared users must not see.
+
+Profiling defaults off on unauthenticated shared listeners, including the
+default Docker and non-authenticated Helm deployments. This applies in `--dev`
+mode too. Both CLI and Desktop accept `RADAR_PPROF=true` / `false` (or `1` / `0`)
+to override the default for troubleshooting. An unset or empty environment value
+preserves the automatic default. The automatic policy covers normal use; the
+environment override keeps occasional profiling adjustments out of the CLI flag
+surface.
+
+Cloud mode continues to omit these routes even with an explicit opt-in.
+Profiling exposes process information, including command-line arguments and
+goroutine stacks, and active collection has overhead. Heap profiles describe
+allocation sites and sizes; they are not raw dumps of cached resource contents.
+The diagnostics overlay and generated bug reports use `/api/diagnostics`,
+which remains available independently of profiling.
 
 ## Desktop Window Behavior
 
@@ -70,6 +236,56 @@ release its cluster access, quit explicitly.
 On Linux and Windows, closing the window always quits. Neither gives Radar
 anything to reopen from — no Dock, and Wails v2 ships no tray icon — so hiding
 there would leave a running process with no way to reach it.
+
+## AI Investigations Agent CLI
+
+Built-in AI investigations run an agent CLI installed on the machine Radar runs
+on: Claude Code (`claude`), Codex (`codex`), Cursor (`cursor-agent`), or
+OpenCode (`opencode`). Radar looks for them on the `PATH` it was started with,
+then in these install directories:
+
+| OS | Directories |
+|----|-------------|
+| macOS, Linux | `~/.local/bin`, `~/.claude/local`, `~/.opencode/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`, `/usr/bin` |
+| Windows | `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%LOCALAPPDATA%\cursor-agent`, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`, `%USERPROFILE%\.local\bin` |
+
+Radar picks up a newly installed CLI automatically, or when you click **Check
+again** in AI investigations. The startup output has an `AI investigations`
+line that says which agent Radar will use, or why investigations are off.
+
+Before the first investigation, while it asks for your consent, Radar runs the
+agent's own sign-in status command for Claude Code (`claude auth status`) and
+Codex (`codex login status`). If the agent says it isn't signed in, the consent
+card shows the command that signs it in and a **Check again** button; you can
+still continue, since a status command can miss credentials it doesn't know
+about. Radar waits at most 2 seconds for the answer and remembers it for a
+minute; with no clear answer, the card shows nothing. If you approve before the
+answer arrives, Radar waits for it first. With **Your agent setup**, Radar
+doesn't check Codex when `CODEX_API_KEY` or `OPENAI_API_KEY` is set or its
+`config.toml` names a `model_provider`, because `codex login status` doesn't
+see those; Radar safeguards use neither, so there only the Codex login counts.
+Cursor and OpenCode aren't checked:
+`cursor-agent status` contacts Cursor's servers, and OpenCode signs in per
+model provider.
+
+If the CLI is somewhere else, for example an npm global install under nvm, start
+Radar from a terminal where the CLI works, or set `RADAR_AI_CLI_BIN` to its full
+path:
+
+```bash
+RADAR_AI_CLI_BIN="$(command -v claude)" radar
+```
+
+```powershell
+$env:RADAR_AI_CLI_BIN = "C:\path\to\claude.exe"; radar
+```
+
+With the variable set, Radar uses only that CLI and stops looking for others.
+It picks the driver from the file name: a name containing `cursor` runs as
+Cursor, `codex` as Codex, `opencode` as OpenCode, and anything else as Claude
+Code. If the path is not an executable Radar can run, investigations stay off
+until a working CLI is at that path, or the variable is changed and Radar
+restarted. The startup line names the path.
 
 ## Persistent Configuration
 
@@ -108,6 +324,8 @@ below describe that installation-scoped behavior.
   "namespaces": [],
   "port": 9280,
   "noBrowser": false,
+  "noVersionCheck": false,
+  "disableAutoPortForward": false,
   "browser": "",
   "timelineStorage": "memory",
   "timelineDbPath": "~/.radar/timeline.db",
@@ -134,8 +352,11 @@ All fields are optional — omitted fields use built-in defaults.
 | `restoreLastDesktopContext` | Desktop app only: reopen on the cluster last used (default: enabled). `false` always opens on the kubeconfig's `current-context` — see [Startup Context](#startup-context) |
 | `namespace` | Initial namespace filter |
 | `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
+| `maxScopeCandidates` | Desktop app only: the Desktop equivalent of `--max-scope-candidates` (default 20). How many namespaces Radar checks its access in, the kubeconfig context namespace included; raise it when `namespaces` lists more. Takes effect on the next start. The CLI reads `--max-scope-candidates` and `RADAR_MAX_SCOPE_CANDIDATES` only |
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
+| `noVersionCheck` | Disable automatic version checks; Desktop's manual Check for Updates remains available |
+| `disableAutoPortForward` | Never open a port-forward on Radar's own initiative (same as `--disable-auto-port-forward`) |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
 | `timelineStorage` | `memory`, `sqlite`, or `postgres` |
 | `timelineDbPath` | Path to SQLite database (sqlite only) |
@@ -143,7 +364,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `historyLimit` | Max timeline events to retain (memory only) |
 | `prometheusUrl` | Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, Mimir, and similar backends. Skips auto-discovery; useful when the backend is not in the same cluster or uses a non-standard service name. Leave it empty and Radar looks for a Prometheus-like Service on startup and after each context switch. While it looks, the Metrics status says "discovering". If it finds a backend it cannot reach, and it can see a NetworkPolicy that blocks the connection, the status names that policy. |
 | `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In local Settings → Cost, this preference saves automatically for all local clusters, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
-| `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Local Settings saves this preference per context; connection-check behavior is described below. |
+| `costSource` | `auto` (default), `prometheus`, or `kubecost`, shown in Settings as **Automatic**, **OpenCost metrics** and **Kubecost**. Automatic prefers usable OpenCost metrics, then tries Kubecost 3. Local Settings saves the choice per context. See [fallback and retry behavior](integrations.md#opencost-and-kubecost) and the connection checks below. |
 | `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service and tries its named `tcp-api` port (9004). When that port requires SAML/OIDC and no API key is configured, Radar can fall back to the same Service's exact `tcp-api-rbac` port (9008). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
 | `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. Local Settings stores the override with this context's Cost settings; copying another cluster's backend never copies its cluster ID. |
 | `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Values are redacted from settings responses. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. Local CLI/Desktop stores new keys in `clusters.json`, with explicit reuse and origin-change protection described below; this `config.json` field is only an import source locally. In Helm, provision a Kubernetes Secret with `cost.kubecost.existingSecret`; Settings is read-only. |
@@ -152,6 +373,8 @@ All fields are optional — omitted fields use built-in defaults.
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
 | `argoCdInsecureTls` | Skip TLS verification for argocd-server (self-signed default installs). Scoped to the Argo CD client only. |
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. Same rule as `prometheusHeaders`: requires `prometheusUrl`. |
+| `mcpExecTools` | Opt in to `exec_pod` (`--mcp-exec-tools`, default false) |
+| `mcpHttpTools` | Opt in to in-cluster `curl_service` (`--mcp-http-tools`, default false) |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
 
@@ -287,6 +510,8 @@ In shared OSS installations (in-cluster or authentication-enabled), context swit
 
 Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps pointing wherever it pointed before.
 
+While you're connected, Radar first checks that the new cluster answers and accepts your credentials. If it doesn't, Radar shows why and how to fix it, and your current cluster stays connected: **Back to** returns to it at once. If a switch fails after Radar has already left the previous cluster, the same button switches back to it.
+
 ### Expired credentials
 
 If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
@@ -297,7 +522,7 @@ If an active context's credentials expire or are rejected, Radar disconnects clu
 |---|---|
 | Metrics URL, authentication and tenant headers | Stored directly for this kubeconfig context |
 | Argo CD URL, token and TLS verification | Stored directly for this context, including discovery credentials |
-| Cost source (Auto / Prometheus / Kubecost) | Context-specific |
+| Cost source (Automatic / OpenCost metrics / Kubecost) | Context-specific |
 | Kubecost URL and API key | Stored directly for this context, including discovery credentials |
 | Kubecost cluster ID | Context-specific, **never** inherited from another cluster's settings |
 | Prometheus-based costs | Use this context's metrics connection |
@@ -312,11 +537,17 @@ choose **Save changes**. **Discard** resets the form without changing saved sett
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
-**Use auto-discovery**, below the backend URL (or Cost source), stages an empty
-connection and names what saving will remove from this context: the endpoint,
-credentials and, for Cost, the Kubecost cluster mapping. **Save changes** applies
-it; **Discard** restores the saved settings. The action is disabled when already
-using auto-discovery without overrides.
+Local Prometheus discovery can fall back to port-forwarding. If access is denied,
+the error names the missing permission when available, such as `list pods` or
+`create pods/portforward`. Grant it in the Prometheus Service’s namespace, or
+configure a reachable URL. In-cluster Radar uses Service addresses instead.
+
+**Use auto-discovery**, below the backend URL, stages an empty connection and
+names what saving will remove from this context: the endpoint and credentials.
+On Cost the same action is **Reset to Automatic**: it also returns the cost
+source to Automatic and removes the Kubecost cluster mapping. **Save changes**
+applies it; **Discard** restores the saved settings. The action is disabled when
+already automatic without overrides.
 
 **Copy:** on another context, choose **Copy settings from…** and select the
 source from the searchable picker: another context, or **Previous global
@@ -353,10 +584,10 @@ does not encrypt credentials in transit; use HTTPS outside trusted local paths.
 
 **Connection checks:** Metrics saves first and then tests reachability; an
 unreachable backend remains saved with a warning. Saving an Argo CD endpoint or
-token, Kubecost mode, or Auto-detect with any Kubecost override (URL, API key or
+token, Kubecost mode, or Automatic with any Kubecost override (URL, API key or
 cluster ID) tests an isolated candidate first; a failed test blocks the save and
 leaves the previous connection active. Switching to auto-discovery and confirming
-a changed cluster save without a test. Auto-detect with no Kubecost overrides, or
+a changed cluster save without a test. Automatic with no Kubecost overrides, or
 Prometheus-based cost mode, saves that preference without claiming a
 successful backend test. Explicit Kubecost connections check this cluster's
 mapping and data readiness; cost queries require a narrow cluster filter. Central Argo connectivity does not add cross-cluster resource
@@ -365,10 +596,11 @@ discovery.
 **Cleanup:** switching to discovery or replacing saved settings explicitly removes
 this context's previous credentials.
 Other contexts are unchanged. Missing kubeconfigs never trigger automatic deletion.
-**Settings → Connection → Saved connections** lets you explicitly remove an
+**Settings → Connection → Integration settings by cluster** lets you explicitly remove an
 integration for a kubeconfig entry no longer loaded, including discovery
 credentials and mappings. For the current context, use its integration tab.
-A context not loaded in this session may still be in use by another Radar process.
+An entry marked **Kubeconfig not loaded** comes from a kubeconfig file this Radar
+run didn't load; it may still be in use by another Radar process.
 
 Unsaved edits stay in the dialog when switching Settings tabs. Closing it asks
 before discarding them. If another client changes the active cluster while you
@@ -433,11 +665,13 @@ instruction to repair or delete the file.
 The context key includes the kubeconfig source path and in-file context name.
 Same-named contexts in different files do not share credentials. If a context is
 renamed or its file moved, copy its saved connection to the new context, then
-remove the old connection from **Settings → Connection → Saved connections**.
+remove the old connection from **Settings → Connection → Integration settings by cluster**.
 Tools that write a new temporary kubeconfig for each shell produce a new key
 each time; launch Radar with `--kubeconfig` pointing at the stable file instead.
 That section groups saved integrations by kubeconfig entry; removal is offered
 for entries no longer loaded, with a confirmation for the selected integration.
+Each integration reads as saved, or as auto-discovery (Cost: Automatic) when
+it was switched back and no endpoint, credential or cluster mapping is left.
 Overview's collapsed **Configuration files** section explains the three local files and
 credential storage; the info button beside the cluster name in each integration
 tab identifies its kubeconfig entry. In-cluster installations show operator
@@ -449,7 +683,10 @@ CAPI profiles use management-source/namespace/name identity, not temporary
 kubeconfig paths. Changes to the Kubernetes server, CA trust, TLS settings, proxy
 or user reference pause each affected integration, because a saved endpoint may
 now serve a different cluster's data. **Review changes** asks whether the
-settings still apply and lets you keep selected integrations together. Anonymous discovery without a saved
+settings still apply and lets you keep selected integrations together. To
+decline instead, **Use auto-discovery instead** (Cost: **Reset to Automatic**)
+removes that integration's saved endpoint and credentials after a confirmation,
+including a saved token or key with no URL. Anonymous discovery without a saved
 mapping needs no confirmation. Token rotation alone does not prompt. Replacing
 a cluster behind identical endpoint, trust and user reference is not detectable
 by this fingerprint.
@@ -465,7 +702,7 @@ disables the override; returning to that target restores it. Restart without
 the override to edit its saved settings.
 
 Workload-metrics scope assertions remain process-local and clear on a context
-switch attempt, even an unsuccessful one. Saved connections never restore them.
+switch attempt, even an unsuccessful one. Saved settings never restore them.
 Repairing a connection that was unusable at startup resumes automatic matching,
 not its startup assertion.
 
@@ -528,20 +765,45 @@ not read local profiles.
 
 Cross-origin HTTP redirects are refused, including for custom auth
 and tenant headers. Headers require an explicit URL and are not sent during auto-discovery.
-The new workload charts recheck identity, but older name-based metrics are not
-protected by that attribution contract. See [Workload metrics](workload-metrics.md).
+[Workload matching](workload-metrics.md#automatic-attribution) and
+[PVC scope](workload-metrics.md#pvc-usage-scope) describe the cluster-identity
+checks and their limits. Other name-based metrics do not have those checks.
 
 In-cluster Radar has no context switcher. Configure the integration for that
 installation, using Secret-backed environment variables for credentials where
 supported; local config persistence is not a replacement for deployment configuration.
 
+#### Automatic port-forwarding
+
+Running locally, Radar reaches the services it discovers in a cluster (Prometheus,
+Hubble Relay, Caretta's metrics store, Kubecost, Argo CD) through a port-forward when
+it can't reach them directly. Each port-forward is a `pods/portforward` request, which
+some clusters audit or alert on.
+
+To stop this, start Radar with `--disable-auto-port-forward`, or set
+`"disableAutoPortForward": true` in the config file. It applies to every context for
+the whole run. Prometheus, Hubble and Argo CD discovery still try a direct
+connection to the Service. Caretta and Kubecost discovery have no direct path from
+your machine. An integration Radar can't reach shows as unavailable and says why.
+For metrics (which Caretta traffic also reads), Kubecost and Argo CD, save the URL
+for that cluster in Settings to use it. Hubble has no URL setting, so it needs a
+direct route to the `hubble-relay` Service.
+
+Port-forwards you start from the UI, and evidence collection you trigger from the UI
+or an AI agent, still open port-forwards.
+
+A placeholder `--prometheus-url` does not do the same job: it applies only to the
+launch context, so switching to another context goes back to discovery.
+
 ## Workload metrics overrides by run mode
 
-Workload metrics normally use automatic identity matching. The optional
-`--prometheus-single-cluster` and repeatable `--prometheus-cluster-label` flags
-replace that matching for workload request/resource charts, history and Pod
-comparison only. They do not scope rightsizing, node/HPA/PVC or legacy
-network/storage queries. Leave both unset for automatic matching.
+Workload metrics and PVC usage normally use automatic identity matching.
+`--prometheus-single-cluster` and repeatable `--prometheus-cluster-label` replace
+it for workload request/resource charts, history, Pod comparison and PVC usage.
+They do not scope rightsizing, node/HPA or the workload network/filesystem charts.
+Leave both unset for automatic matching. Configured labels must exist on each
+affected metric source, including kubelet volume stats. See
+[scope and remedies](workload-metrics.md#pvc-usage-scope).
 
 | Run mode | How to configure an explicit override |
 |---|---|
@@ -581,15 +843,58 @@ Details worth knowing:
 - Clusters connected through CAPI are never remembered: their kubeconfig is a temporary file that no longer exists on the next run.
 - Turning the memory off takes effect on the next Desktop start: it clears the remembered cluster as well as stopping new recording, so turning it back on later starts fresh rather than reopening a cluster you stopped using months ago.
 
+## Local terminal context
+
+Each local terminal tab shows the context Radar put in its temporary kubeconfig,
+with **Opened for** in the terminal toolbar. Hover over the label to see the full
+context name. This records the terminal's startup configuration; shell settings,
+`KUBECONFIG` changes, and explicit command flags can override it.
+
+Switching clusters in Radar leaves existing local shells running. A terminal
+opened for another context shows **Different context** and a **New terminal**
+action in the existing toolbar. Hover over the notice to see both full context
+names. The action opens a shell for the context Radar is now showing.
+Each tab retains the full context selected when it was opened. Reconnecting
+starts a new shell only while Radar has that context selected; otherwise it
+asks you to switch back or open a new terminal for the current context. The
+tab keeps its previous context label during reconnect attempts.
+Reconnect and Retry are disabled while Radar is showing a different context.
+When a context is selected, the toolbar says **Requested** before the first shell starts. The server checks
+the requested context against the same snapshot it exports, so switching
+contexts while a tab is opening cannot start that shell for a different context.
+Commands supplied by actions such as **Authenticate in terminal** are sent once
+per tab. Reconnecting does not repeat a command that was already sent. If the
+connection closes before it is sent, the command remains pending for the next
+connection.
+
+If Radar cannot create a temporary kubeconfig, the existing original/inherited
+kubeconfig fallback remains available and the tab says **Context not confirmed**.
+That shell's Kubernetes target has not been established by Radar. If the selected
+context differs from the tab's requested context, its notice says **Requested
+context differs**, and the tooltip keeps that request distinct from a confirmed
+kubeconfig.
+The Desktop app can also open an unconfirmed recovery shell when no kubeconfig
+is available. Its explicit empty-context intent must match the server's empty
+active context; once a context is selected, open a new terminal for it.
+These checks preserve context selection across opens and reconnects; they do
+not enforce a shell's live command target or detect a kubeconfig context being
+repointed to a different physical cluster under the same name.
+If a context switch fails before Radar changes its active client, a terminal
+requested for the new context is refused. Finish recovering that connection,
+switch back to the previous context, or copy the recovery command into an
+external terminal. Radar will not substitute a shell for the previous context.
+
 ## Namespace Picker
 
 The header has a namespace picker on the right. Pick a single namespace to focus the view, or **All namespaces** to see everything you have access to. Cluster-scoped resources (Nodes, Namespaces, PVs, StorageClasses) appear regardless of the pick if your RBAC permits them — they have no namespace to filter on. Namespace-restricted users without their own cluster-scoped RBAC won't see cluster-scoped sections at all.
 
-The pick is a per-user view filter — it doesn't change anything for other users sharing the same Radar instance. Locally, your pick is remembered per kubeconfig context across restarts. In shared (auth-enabled) deployments the pick lives for the session.
+The pick belongs to the browser tab. Picking in one tab doesn't change your other tabs, or what anyone else sees, and a tab keeps its pick when you reload it, including **All namespaces**. A new tab starts from the last pick made on this Radar for the kubeconfig context, in any tab. Locally that last pick is remembered across restarts. In shared (auth-enabled) deployments it lives until Radar restarts or reconnects to the cluster, and it is shared by everyone Radar maps to the same Kubernetes user, so with a shared identity a new tab can start on someone else's last pick.
 
-Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice sticks for the context and the kubeconfig value is no longer consulted.
+The pick narrows Radar's own views only, and only because the UI sends it with each request. An API read that names no namespace (`?namespace=` / `?namespaces=`) never inherits a remembered pick: it returns everything you're allowed to see, within the `--namespace-scope` pin when one is set. So the same user reading through another client — AI tools over MCP, Radar Cloud's fleet-wide views and background pollers, or `curl` — is never quietly narrowed to a namespace picked while browsing. A few UI surfaces deliberately cover all your namespaces regardless of the pick: the namespace list in the ⌘K palette, the **My permissions** dialog, and the standalone Cost view (which disables the picker). Home's Cost Insights card follows the pick.
 
-When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
+Until you make a pick, local sessions default to the namespace set on the kubeconfig context (kubectl parity — the same namespace `kubectl` would use, including one set via `kubectl config set-context` or `kubens`). An explicit `--namespace` / `--namespaces` flag outranks the kubeconfig value, and contexts without either default to **All namespaces**. Once you pick namespaces or explicitly choose **All namespaces**, that choice is what new tabs start from for the context and the kubeconfig value is no longer consulted.
+
+When Radar starts with `--namespace-scope`, the picker controls the process-wide cache scope instead of just a view filter, so it is one setting for every tab and every user. Namespaced informer caches are pinned to one namespace while cluster-scoped resources remain cluster-wide. Local/no-auth sessions can switch the scoped namespace, which rebuilds the cache in place. Auth-enabled and Radar Cloud sessions lock the picker to the startup namespace so one user cannot reshape the shared backend cache for everyone.
 
 **Single namespace only.** `--namespace-scope` pins the cache to exactly one namespace; scoping to several namespaces at once is not supported yet. Passing more than one (e.g. `--namespace=a,b`) fails at startup with a clear error rather than silently caching nothing. When scoped, the namespace picker becomes single-select, and a switch re-points the whole cache to the new namespace rather than adding to it.
 
@@ -607,9 +912,9 @@ Radar Desktop doesn't take command-line flags, so set the same list in `~/.radar
 { "namespaces": ["ns1", "ns2", "ns3"] }
 ```
 
-Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as a per-session default seeded on first read. Clearing the picker back to **All namespaces** sticks for the rest of the session. The picker can switch between those namespaces or keep several selected at once.
+Radar probes each listed namespace for access and watches every namespace where access is granted — resource views then cover all of them, not just the first. The list is also each user's initial picker selection: locally via the launch URL, and in shared (auth-enabled) deployments as the default a user's first tab starts from. Like any pick, it narrows only the UI's views, not API reads that name no namespace. Clearing the picker back to **All namespaces** is then what new tabs start from. The picker can switch between those namespaces or keep several selected at once.
 
-This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. The list is capped by `--max-scope-candidates` (default 20) — startup fails with a clear error rather than silently probing a subset.
+This covers built-in resource types and custom resources alike: CRDs (GitOps, Gateway API, etc.) are probed per-kind across the same list and watched in every granted namespace. A custom resource kind refused everywhere Radar checked stays refused for a minute before Radar checks again, so access granted to it while Radar runs can take that long to appear. The list is capped by `--max-scope-candidates` (default 20), counting the kubeconfig context namespace when it isn't in the list. Rather than silently probing a subset, the CLI exits with an error, and Radar Desktop opens with the error in its window and doesn't connect; raise the cap with `maxScopeCandidates` in `~/.radar/config.json` and reopen Desktop.
 
 ## Audit evidence under partial access
 
@@ -635,6 +940,92 @@ freshness; the existing scan memo can lag evidence changes by up to five seconds
 The per-resource audit endpoint remains a findings array and has no completeness
 metadata. Use the scan response or AI resource context when that distinction matters.
 
+### Resource budget checks
+
+Missing CPU/memory request and limit checks recognize both container resources
+and shared Pod budgets in `spec.resources` (or the workload's Pod template).
+Regular containers and restartable init sidecars are checked; one-shot init
+containers are excluded from these efficiency checks.
+
+For standalone Pods with no owner references, Radar reads the stored, admitted
+specification. Owned Pods are not checked directly by these efficiency checks.
+For workload
+templates, it considers request-from-limit defaulting, namespace LimitRanges,
+and possible shared-budget admission behavior. When those possibilities disagree,
+Radar leaves the affected evaluation unknown rather than reporting a certain
+pass or failure. Scan-level `missingInputs` includes `pod-resource-defaulting`
+when this uncertainty prevents an evaluation. These are configuration checks,
+not measurements of actual consumption. If LimitRanges cannot be listed,
+workload-template efficiency checks are skipped and `missingInputs` includes
+`limitranges`.
+
+### Per-resource check suppression
+
+Add `radarhq.io/ignore-checks` with comma-separated check IDs to the resource
+named in a finding, for example `singleReplica,hostNetwork`. For workload
+Pod-spec findings, put the annotation on the Deployment or other owning workload,
+not only on its generated Pods. Unknown check IDs have no effect. The annotation
+travels with the manifest and suppresses the matching findings for every Radar
+reading it; it does not disable those checks for other resources.
+
+### Storage review checks
+
+Three snapshot checks in **Efficiency**, at **Medium** posture priority
+(`warning` in the raw scan):
+
+| Check ID | Flags | Threshold |
+|---|---|---|
+| `pvcNoConsumer` | Bound PVC with no consumer observed | More than 24 h since `Unused=True` when its transition time is known; otherwise PVC older than 24 h |
+| `pvcLongPending` | Pending PVC with no consumer observed, including WaitForFirstConsumer claims | PVC older than 24 h |
+| `releasedPV` | Released PV kept with Retain, or not yet deleted with Delete; Failed PV (reclaim failed after its claim was deleted) | Retain: 24 h after release, or release time unknown. Delete: 1 h grace when release time is known, or immediately on a `VolumeFailedDelete` warning from the last 24 h. Failed: immediately |
+
+A consumer is any Pod (completed ones included) or a Deployment, ReplicaSet,
+StatefulSet, DaemonSet, Job or CronJob template. Templates count at zero
+replicas, and every StatefulSet claim-template ordinal counts, including those
+left after a scale-down. Generic ephemeral Pod volumes also count. A Pending
+PVC clone counts as a consumer of its source claim when `dataSource` or
+`dataSourceRef` names a core PersistentVolumeClaim. `dataSource` uses the
+destination's namespace; `dataSourceRef` uses its explicit namespace when set,
+otherwise the destination's namespace. A Bound clone does not count.
+Clone destinations count even if owned, young or deleting.
+Claims with a controller owner reference are excluded from audit subjects.
+CRD consumers (such as virtual machines), snapshot operations and external consumers
+may not be seen:
+**no consumer observed is not a statement that storage is safe to delete**.
+
+On Kubernetes 1.37+, the PVC protection controller sets an `Unused` condition on
+Bound claims (feature gate `PersistentVolumeClaimUnusedSinceTime`, beta, on by
+default). Radar uses it when present:
+
+- `Unused=False` (a running Pod uses the claim) counts as a consumer, even if
+  Radar did not observe the Pod.
+- With `Unused=True`, the 24 h floor counts from when the claim became unused
+  rather than from its creation, and the finding reports the condition's time.
+  That time is approximate: Kubernetes notes it can be off in either direction
+  because of controller delays. Right after the feature is
+  enabled (for example, after an upgrade to 1.37), every unused claim's
+  timestamp is the enable time, so long-unused claims are held back for 24 h
+  and then reported with that shorter age.
+- Observed Pods and templates still count as consumers, including a
+  zero-replica StatefulSet.
+- No condition, or status `Unknown`, keeps the creation-age behavior. Absence
+  never means a claim is unused. `pvcLongPending` doesn't use the condition.
+
+The namespace picker selects PVC subjects. PVs and StorageClasses need the
+caller's cluster-scoped list grant; without the PV grant, PVs are not subjects
+of that caller's scan. `pvc-consumers`, `persistentvolumeclaims`,
+`persistentvolumes`, `pv-deletion-events` and `pv-release-time` appear in `missingInputs` only
+when that input's absence left a subject unevaluated. A gap that still lets a
+finding fire is stated in the finding instead, such as **reclaim policy not
+visible**, **StorageClass binding mode not visible** or **Deletion warning
+events not fully visible**.
+
+- Bound PVs count as passing `releasedPV` subjects; Available and Pending PVs are not counted.
+- Deleting claims and volumes (`metadata.deletionTimestamp` set) are `stuckTerminating` subjects, not storage-check subjects: that check flags them after 5 minutes. When the blocking finalizer is `kubernetes.io/pvc-protection` or `kubernetes.io/pv-protection`, the finding explains what holds the deletion and what happens when it is released, and warns against removing the finalizer by hand. A deletion can't be cancelled, so it doesn't tell you to complete it either.
+- In a namespace whose consumer inventories are unreadable or unsynced, an eligible claim with an observed consumer or a Bound claim with `Unused=False` still passes; any other eligible claim is neither a finding nor a pass (`pvc-consumers`).
+- A Released Delete PV within its 1 h grace, with incomplete event coverage (complete only when the caller can see all namespaces) and no observed current warning, is unknown: neither evaluated nor passed (`pv-deletion-events`).
+- PV thresholds use time since `status.lastPhaseTransitionTime`, which also excludes warnings from before the current phase. Without a nonzero transition time, release duration is unknown: a Released Delete PV without a recent deletion warning is neither evaluated nor passed (`pv-release-time`); a recent warning still establishes failure. A Released Retain PV is flagged with **release time unknown** and **PV age**, without implying the 24 h grace elapsed.
+
 ## Radar Cloud
 
 Radar is free and fully functional without an account. A Cloud button in the
@@ -655,6 +1046,22 @@ ignore. With no configured source, they use the normal `KUBECONFIG` / default
 kubeconfig loading rules. Directory-only configuration must add a primary
 kubeconfig before these commands can run.
 
+To inspect an in-cluster Radar Cloud installation without changing it:
+
+```bash
+radar cloud status
+radar cloud status --context my-cluster
+radar cloud status --context my-cluster --namespace radar --release radar
+```
+
+The command reports installation ownership, chart and image, agent readiness,
+and Cloud configuration without printing the connection token. Passing both
+`--namespace` and `--release` selects an exact installation. Live tunnel status
+is reported by Radar Cloud using the token in the referenced Kubernetes Secret.
+If the Secret or Hub is unavailable, local installation diagnostics still run.
+Interactive terminals use restrained status colors; set `NO_COLOR` (or pipe the
+output) for plain text. URLs, tokens, and suggested commands remain unstyled.
+
 ### What Radar sends
 
 Until you connect a cluster to Cloud, Radar makes three kinds of outbound
@@ -663,11 +1070,31 @@ request, all to Skyhook, none containing your resources, logs or events:
 - **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
   install method, whether it is running locally or in-cluster, and the
   installation timestamp when Radar can determine it. Radar caches the release
-  result for one hour. Development builds are excluded.
+  result for one hour. Development builds skip the browser relay and use
+  release-only lookups when fetching release metadata.
 - **[Anonymous usage stats](usage-stats.md)**: once a day, strictly opt-in.
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
+
+Disable automatic version checks with `--no-version-check`,
+`RADAR_DISABLE_VERSION_CHECK=1` (or `true`), or `"noVersionCheck": true` in
+`~/.radar/config.json`. The config setting works for both CLI and Desktop,
+including Desktop launched from Finder or the Dock. These controls stop both
+automatic release lookups and the in-cluster browser relay. Desktop's Help >
+Check for Updates remains available and makes one fresh lookup when clicked,
+including when automatic checks are disabled. It reports an available update,
+an up-to-date installation or a lookup failure, and leaves the automatic-check
+setting unchanged. `DO_NOT_TRACK` does not
+change version checks; [usage stats](usage-stats.md) are controlled separately.
+
+For Helm deployments, use the chart's existing environment-variable support:
+
+```yaml
+env:
+  - name: RADAR_DISABLE_VERSION_CHECK
+    value: "1"
+```
 
 A standalone Radar sends your cluster's data nowhere: it talks to your
 Kubernetes API directly and keeps everything it reads on your machine.

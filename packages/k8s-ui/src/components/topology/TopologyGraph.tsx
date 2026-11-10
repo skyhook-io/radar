@@ -32,6 +32,7 @@ import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
+import { splitInternetByGroup } from './internet-groups'
 import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, isGroupEffectivelyCollapsed, type GroupDisplayLevel } from './layout'
@@ -46,7 +47,8 @@ const EDGE_COLORS = {
   'exposes': '#3b82f6',    // Blue for service exposure
   'manages': '#64748b',    // Gray for management relationships
   'configures': '#f59e0b', // Amber for config
-  'uses': '#ec4899',       // Pink for HPA
+  'uses': '#ec4899',       // Pink: autoscalers, mounted claims, dependencies
+  'protects': '#8b5cf6',   // Violet for policies and disruption budgets
 } as const
 
 function getEdgeColor(type: string, isTrafficView: boolean): string {
@@ -59,10 +61,11 @@ function getEdgeColor(type: string, isTrafficView: boolean): string {
 
 // Human-readable edge legend for the resources view (traffic view is all-green).
 const EDGE_LEGEND: { label: string; color: string }[] = [
-  { label: 'owns', color: EDGE_COLORS['manages'] },
+  { label: 'manages', color: EDGE_COLORS['manages'] },
   { label: 'exposes', color: EDGE_COLORS['exposes'] },
   { label: 'configures', color: EDGE_COLORS['configures'] },
-  { label: 'scales', color: EDGE_COLORS['uses'] },
+  { label: 'uses', color: EDGE_COLORS['uses'] },
+  { label: 'protects', color: EDGE_COLORS['protects'] },
   { label: 'routes to', color: EDGE_COLORS['routes-to'] },
 ]
 
@@ -304,6 +307,101 @@ export function phaseOnlyHealth(phase: string | undefined): HealthStatus {
   }
 }
 
+/** Replaces a PodGroup with its pods. A pod connects to its own owners
+ *  (`ownerIds`) or, when the server sent none, to every owner of the group;
+ *  an empty `ownerIds` connects it to none. */
+export function expandPodGroup(
+  topoNodes: TopologyNode[],
+  topoEdges: TopologyEdge[],
+  podGroupId: string,
+): { nodes: TopologyNode[]; edges: TopologyEdge[] } {
+  const podGroupNode = topoNodes.find(n => n.id === podGroupId && n.kind === 'PodGroup')
+  if (!podGroupNode || !podGroupNode.data.pods) {
+    return { nodes: topoNodes, edges: topoEdges }
+  }
+
+  const pods = podGroupNode.data.pods as Array<{
+    name: string
+    namespace: string
+    phase: string
+    restarts: number
+    containers: number
+    status?: HealthStatus
+    terminating?: boolean
+    // Present only when the group spans more than one owner (e.g. a
+    // Rollout's canary + stable ReplicaSets) — the specific edge
+    // source(s) that actually own this pod, from the backend's own
+    // per-pod owner resolution. See pkg/topology/builder.go's
+    // ownerKeyToSourceIDs.
+    ownerIds?: string[]
+    // The group's own trafficRole (podGroupNode.data.trafficRole) is only
+    // set when every pod agrees — this is each pod's OWN role, so a mixed
+    // canary/stable group still badges correctly once expanded.
+    trafficRole?: string
+  }>
+
+  const edgesToGroup = topoEdges.filter(e => e.target === podGroupId)
+  const sourceIds = edgesToGroup.map(e => e.source)
+  // Homogeneous per build — resources-view feeds `manages` ownership
+  // edges, traffic-view feeds `routes-to` Service edges — so any surviving
+  // edge's type applies to the whole group.
+  const edgeType = edgesToGroup[0]?.type ?? 'routes-to'
+
+  const newNodes = topoNodes.filter(n => n.id !== podGroupId)
+  const newEdges = topoEdges.filter(e => e.target !== podGroupId)
+
+  for (const pod of pods) {
+    const podId = `pod/${pod.namespace}/${pod.name}`
+    newNodes.push({
+      id: podId,
+      kind: 'Pod',
+      name: pod.name,
+      // The server computes pod health; pkg/health tracks a crash loop across
+      // the kubelet's Waiting->Running oscillation, which the phase alone
+      // hides — a crash-looping pod sits at Phase=Running. Deriving it here
+      // again would rebuild that logic in a second place and get it wrong.
+      status: pod.status ?? phaseOnlyHealth(pod.phase),
+      data: {
+        ...podGroupNode.data,
+        namespace: pod.namespace,
+        phase: pod.phase,
+        restarts: pod.restarts,
+        containers: pod.containers,
+        trafficRole: pod.trafficRole,
+        terminating: pod.terminating ? 1 : 0,
+        expandedFromGroup: podGroupId, // Track which group this came from
+      },
+    })
+
+    // A group with a single owner has every source apply to every pod —
+    // the common case. A mixed-owner group (pod.ownerIds present) instead
+    // connects each pod only to the source(s) that are actually its own
+    // owner, so e.g. a canary pod doesn't end up drawn as owned by the
+    // stable ReplicaSet too.
+    const podSourceIds = pod.ownerIds?.filter(id => sourceIds.includes(id)) ?? sourceIds
+    // A mixed-owner group's shared sources (e.g. a Rollout, reached via
+    // both a canary and a stable edge) can't be told apart by source id
+    // alone once collapsed — both edges point at the same node id, just
+    // with different labels. The pod's own trafficRole is unambiguous, so
+    // an ownership edge derives its label from that directly rather than
+    // trying to match back to one specific original edge.
+    const label = podGroupNode.data.earlierJobRun ? edgesToGroup[0]?.label : edgeType === 'manages' && pod.trafficRole
+      ? pod.trafficRole[0].toUpperCase() + pod.trafficRole.slice(1)
+      : undefined
+    for (const sourceId of podSourceIds) {
+      newEdges.push({
+        id: `${sourceId}-to-${podId}`,
+        source: sourceId,
+        target: podId,
+        type: edgeType,
+        ...(label ? { label } : {}),
+      })
+    }
+  }
+
+  return { nodes: newNodes, edges: newEdges }
+}
+
 export function TopologyGraph({
   topology,
   viewMode,
@@ -452,169 +550,7 @@ export function TopologyGraph({
     fitAllAfterLayoutRef.current = true
   }, [])
 
-  // Expand PodGroup to individual pods
-  const expandPodGroup = useCallback((
-    topoNodes: TopologyNode[],
-    topoEdges: TopologyEdge[],
-    podGroupId: string
-  ): { nodes: TopologyNode[]; edges: TopologyEdge[] } => {
-    const podGroupNode = topoNodes.find(n => n.id === podGroupId && n.kind === 'PodGroup')
-    if (!podGroupNode || !podGroupNode.data.pods) {
-      return { nodes: topoNodes, edges: topoEdges }
-    }
 
-    const pods = podGroupNode.data.pods as Array<{
-      name: string
-      namespace: string
-      phase: string
-      restarts: number
-      containers: number
-      status?: HealthStatus
-      // Present only when the group spans more than one owner (e.g. a
-      // Rollout's canary + stable ReplicaSets) — the specific edge
-      // source(s) that actually own this pod, from the backend's own
-      // per-pod owner resolution. See pkg/topology/builder.go's
-      // ownerKeyToSourceIDs.
-      ownerIds?: string[]
-      // The group's own trafficRole (podGroupNode.data.trafficRole) is only
-      // set when every pod agrees — this is each pod's OWN role, so a mixed
-      // canary/stable group still badges correctly once expanded.
-      trafficRole?: string
-    }>
-
-    // Find edges pointing to this pod group
-    const edgesToGroup = topoEdges.filter(e => e.target === podGroupId)
-    const sourceIds = edgesToGroup.map(e => e.source)
-    // Homogeneous per build — resources-view feeds `manages` ownership
-    // edges, traffic-view feeds `routes-to` Service edges — so any surviving
-    // edge's type applies to the whole group.
-    const edgeType = edgesToGroup[0]?.type ?? 'routes-to'
-
-    // Remove the PodGroup node and its edges
-    const newNodes = topoNodes.filter(n => n.id !== podGroupId)
-    const newEdges = topoEdges.filter(e => e.target !== podGroupId)
-
-    // Add individual pod nodes
-    for (const pod of pods) {
-      const podId = `pod/${pod.namespace}/${pod.name}`
-      newNodes.push({
-        id: podId,
-        kind: 'Pod',
-        name: pod.name,
-        // The server computes pod health; pkg/health tracks a crash loop across
-        // the kubelet's Waiting->Running oscillation, which the phase alone
-        // hides — a crash-looping pod sits at Phase=Running. Deriving it here
-        // again would rebuild that logic in a second place and get it wrong.
-        status: pod.status ?? phaseOnlyHealth(pod.phase),
-        data: {
-          ...podGroupNode.data,
-          namespace: pod.namespace,
-          phase: pod.phase,
-          restarts: pod.restarts,
-          containers: pod.containers,
-          trafficRole: pod.trafficRole,
-          expandedFromGroup: podGroupId, // Track which group this came from
-        },
-      })
-
-      // A group with a single owner has every source apply to every pod —
-      // the common case. A mixed-owner group (pod.ownerIds present) instead
-      // connects each pod only to the source(s) that are actually its own
-      // owner, so e.g. a canary pod doesn't end up drawn as owned by the
-      // stable ReplicaSet too.
-      const podSourceIds = pod.ownerIds?.filter(id => sourceIds.includes(id)) ?? sourceIds
-      // A mixed-owner group's shared sources (e.g. a Rollout, reached via
-      // both a canary and a stable edge) can't be told apart by source id
-      // alone once collapsed — both edges point at the same node id, just
-      // with different labels. The pod's own trafficRole is unambiguous, so
-      // an ownership edge derives its label from that directly rather than
-      // trying to match back to one specific original edge.
-      const label = edgeType === 'manages' && pod.trafficRole
-        ? pod.trafficRole[0].toUpperCase() + pod.trafficRole.slice(1)
-        : undefined
-      for (const sourceId of podSourceIds) {
-        newEdges.push({
-          id: `${sourceId}-to-${podId}`,
-          source: sourceId,
-          target: podId,
-          type: edgeType,
-          ...(label ? { label } : {}),
-        })
-      }
-    }
-
-    return { nodes: newNodes, edges: newEdges }
-  }, [])
-
-  // Transform to per-group Internet nodes in traffic view with grouping
-  const createPerGroupInternetNodes = useCallback((
-    nodes: TopologyNode[],
-    edges: TopologyEdge[],
-    groupMode: GroupingMode
-  ): { nodes: TopologyNode[]; edges: TopologyEdge[] } => {
-    if (groupMode === 'none') {
-      return { nodes, edges }
-    }
-
-    // Find the single Internet node
-    const internetNode = nodes.find(n => n.kind === 'Internet')
-    if (!internetNode) {
-      return { nodes, edges }
-    }
-
-    // Find all ingresses/gateways and group them
-    const ingresses = nodes.filter(n => n.kind === 'Ingress' || n.kind === 'Gateway')
-    const groupsWithIngresses = new Map<string, TopologyNode[]>()
-
-    for (const ingress of ingresses) {
-      const groupKey = getGroupKey(ingress, groupMode)
-      if (groupKey) {
-        if (!groupsWithIngresses.has(groupKey)) {
-          groupsWithIngresses.set(groupKey, [])
-        }
-        groupsWithIngresses.get(groupKey)!.push(ingress)
-      }
-    }
-
-    // If no groups with ingresses, keep original
-    if (groupsWithIngresses.size === 0) {
-      return { nodes, edges }
-    }
-
-    // Remove original Internet node and its edges
-    const newNodes = nodes.filter(n => n.id !== internetNode.id)
-    const newEdges = edges.filter(e => e.source !== internetNode.id)
-
-    // Create per-group Internet nodes
-    for (const [groupKey, groupIngresses] of groupsWithIngresses) {
-      const internetId = `internet-${groupMode}-${groupKey}`
-
-      // Add Internet node for this group with group metadata
-      newNodes.push({
-        id: internetId,
-        kind: 'Internet',
-        name: 'Internet',
-        status: 'healthy',
-        data: {
-          // Add group metadata so it gets grouped with its ingresses
-          namespace: groupMode === 'namespace' ? groupKey : groupIngresses[0]?.data?.namespace,
-          labels: groupMode === 'app' ? { 'app.kubernetes.io/name': groupKey } : {},
-        },
-      })
-
-      // Add edges from this Internet node to its ingresses
-      for (const ingress of groupIngresses) {
-        newEdges.push({
-          id: `${internetId}-to-${ingress.id}`,
-          source: internetId,
-          target: ingress.id,
-          type: 'routes-to',
-        })
-      }
-    }
-
-    return { nodes: newNodes, edges: newEdges }
-  }, [])
 
   // Prepare topology data with expanded pod groups
   const { workingNodes, workingEdges } = useMemo(() => {
@@ -634,13 +570,13 @@ export function TopologyGraph({
 
     // In traffic view with grouping, create per-group Internet nodes
     if (isTrafficView && groupingMode !== 'none') {
-      const result = createPerGroupInternetNodes(nodes, edges, groupingMode)
+      const result = splitInternetByGroup(nodes, edges, groupingMode)
       nodes = result.nodes
       edges = result.edges
     }
 
     return { workingNodes: nodes, workingEdges: edges }
-  }, [topology, expandedPodGroups, expandPodGroup, isTrafficView, groupingMode, createPerGroupInternetNodes])
+  }, [topology, expandedPodGroups, isTrafficView, groupingMode])
 
   // Handle card click in card-grid view — find the topology node and open drawer
   const handleCardClick = useCallback((nodeId: string) => {

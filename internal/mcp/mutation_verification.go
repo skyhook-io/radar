@@ -94,6 +94,9 @@ func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface,
 		return out
 	}
 	if rollout := summarizeWorkloadRollout(post); len(rollout) > 0 {
+		if rollout["complete"] == false {
+			rollout["next"] = fmt.Sprintf("wait_for %s %s in %s to see it finish", post.GetKind(), post.GetName(), post.GetNamespace())
+		}
 		out["rollout"] = rollout
 	}
 	cacheSnapshot := false
@@ -766,6 +769,8 @@ func relatedIssuesForObject(ctx context.Context, obj *unstructured.Unstructured)
 		Namespaces:             namespaces,
 		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
 		CanReadRelated:         issueRelatedResourceAccess(ctx),
+		CanReadSubject:         issueSubjectAccess(ctx),
+		CanReadEvidence:        issueEvidenceAccess(ctx),
 	}, gvk.Group, kind, obj.GetNamespace(), obj.GetName())
 	if len(matched) == 0 {
 		return nil

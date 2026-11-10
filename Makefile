@@ -1,4 +1,4 @@
-.PHONY: build install clean dev frontend backend test test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
+.PHONY: build install clean dev frontend backend test test-changed test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
 .PHONY: calico-demo calico-demo-down calico-demo-status
 .PHONY: kueue-demo kueue-demo-down kueue-demo-status kueue-demo-verify
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
@@ -156,6 +156,12 @@ clean:
 # Run tests
 test:
 	go test -v ./...
+	cd pkg && go test -v ./...
+
+# Fast dev loop: vet/test only the changed Go packages, tsc, and `vitest related`
+# for changed frontend files. BASE defaults to origin/main. Not a completion check.
+test-changed:
+	./scripts/test-changed.sh $(BASE)
 
 # Run e2e tests against the current kubeconfig cluster (on-demand, not in CI)
 test-e2e:
@@ -277,6 +283,16 @@ cnpg-demo-status:
 # phases and Backup rows are omitted because the controller owns them.
 cnpg-demo-live:
 	./scripts/cnpg-demo.sh live
+
+# Runtime fixtures on the EXISTING CNPG demo cluster (operator thawed if frozen):
+# MinIO + real plugin WAL archiving and backups, a restored cluster, a Pooler,
+# pgbench load, a blocked lock chain and a Prometheus Radar auto-discovers.
+# `./scripts/cnpg-demo.sh runtime-lag on|off` induces replica lag.
+cnpg-demo-runtime:
+	./scripts/cnpg-demo.sh runtime
+
+cnpg-demo-runtime-down:
+	./scripts/cnpg-demo.sh runtime-down
 
 # Grafana Beyla on kind: eBPF loaded, a minimal Prometheus scraping it, and two
 # conversations to observe. Which labels Beyla exports depends on configuration —
@@ -405,6 +421,7 @@ calico-demo-status:
 # Run linter
 lint:
 	go vet ./...
+	cd pkg && go vet ./...
 
 # Type check frontend
 tsc:
@@ -515,6 +532,7 @@ help:
 	@echo "  make watch-backend   - Go with air hot reload (port 9280)"
 	@echo "  make run             - Run built binary"
 	@echo "  make test            - Run tests"
+	@echo "  make test-changed    - Fast loop: only what the change touches (BASE=origin/main)"
 	@echo ""
 	@echo "Demo clusters:"
 	@echo "  make gitops-demo      - GitOps fixtures (Argo CD + Flux)"
@@ -523,6 +541,7 @@ help:
 	@echo "  make rollouts-demo    - Argo Rollouts progression fixtures"
 	@echo "  make cnpg-demo        - Frozen CNPG rendering fixtures"
 	@echo "  make cnpg-demo-live   - CNPG fixtures with the operator running"
+	@echo "  make cnpg-demo-runtime - CNPG runtime: backups/restore, load, locks, Prometheus"
 	@echo "  make velero-demo      - Velero fixtures, all 13 backup phases at once"
 	@echo "  make velero-demo-live - Velero with real object storage; states produced by the controller"
 	@echo "  make beyla-demo       - Grafana Beyla eBPF traffic fixtures"

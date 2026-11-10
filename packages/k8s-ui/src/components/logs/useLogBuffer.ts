@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback } from 'react'
 import { isLogfmt } from '../../utils/log-format'
+import { detectLevel, type LevelSource, type LogLevel } from '../../utils/log-level'
 
-export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'unknown'
+export type { LevelSource, LogLevel }
+export { detectLogLevel } from '../../utils/log-level'
 
 export interface LogEntry {
   sourceLabel?: string
@@ -16,58 +18,31 @@ export interface LogEntry {
    * viewer's isDark state toggles at runtime.
    */
   podColorIndex?: number
+  /** The line's container was an init container or native sidecar of its Pod when it arrived. */
+  containerRole?: 'init' | 'sidecar'
   level: LogLevel
+  levelSource: LevelSource
   isJson: boolean
   isLogfmt: boolean
 }
 
 const MAX_BUFFER_SIZE = 10_000
 
-/**
- * Detect log level from content using word-boundary matching.
- * For JSON logs, prefer the `level`, `severity`, or `lvl` field.
- */
-export function detectLogLevel(content: string): LogLevel {
-  // Fast path for JSON: check level/severity field
-  const trimmed = content.trimStart()
-  if (trimmed[0] === '{') {
-    try {
-      const obj = JSON.parse(trimmed)
-      const rawLevel = obj.level ?? obj.severity ?? obj.lvl ?? ''
-      // Numeric levels (pino/bunyan): 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
-      if (typeof rawLevel === 'number') {
-        if (rawLevel >= 50) return 'error'
-        if (rawLevel >= 40) return 'warn'
-        if (rawLevel >= 30) return 'info'
-        return 'debug'
-      }
-      const lvl = String(rawLevel).toLowerCase()
-      if (/^(error|err|fatal|panic|critical|crit)$/.test(lvl)) return 'error'
-      if (/^(warn|warning)$/.test(lvl)) return 'warn'
-      if (/^(info|information|notice)$/.test(lvl)) return 'info'
-      if (/^(debug|trace|verbose)$/.test(lvl)) return 'debug'
-    } catch {
-      // Not valid JSON, fall through to text matching
-    }
-  }
-
-  const lower = content.toLowerCase()
-  if (/\b(error|fatal|panic|critical|crit|exception)\b/.test(lower)) return 'error'
-  if (/\b(warn|warning)\b/.test(lower)) return 'warn'
-  if (/\b(debug|trace)\b/.test(lower)) return 'debug'
-  if (/\b(info)\b/.test(lower)) return 'info'
-  return 'unknown'
-}
-
 function isJsonContent(content: string): boolean {
   const trimmed = content.trimStart()
   return trimmed[0] === '{' && trimmed[trimmed.length - 1] === '}'
 }
 
-type RawLogEntry = Omit<LogEntry, 'id' | 'level' | 'isJson' | 'isLogfmt'>
+type RawLogEntry = Omit<LogEntry, 'id' | 'level' | 'levelSource' | 'isJson' | 'isLogfmt'>
 
 interface UseLogBufferReturn {
   entries: LogEntry[]
+  isFollowing: boolean
+  retainedLineCount: number
+  missingLineCount: number
+  getRetainedEntries: () => LogEntry[]
+  pendingLineCount: number
+  setFollowing: (following: boolean) => void
   append: (entry: RawLogEntry) => void
   appendBatch: (entries: RawLogEntry[]) => void
   set: (entries: RawLogEntry[]) => void
@@ -75,17 +50,19 @@ interface UseLogBufferReturn {
 }
 
 export function useLogBuffer(): UseLogBufferReturn {
-  const [entries, setEntries] = useState<LogEntry[]>([])
+  const [buffer, setBuffer] = useState<{ latest: LogEntry[]; reading: LogEntry[] | null }>({ latest: [], reading: null })
   const idCounter = useRef(0)
   const pendingRef = useRef<RawLogEntry[]>([])
   const rafRef = useRef<number | null>(null)
 
   const enrichEntry = useCallback((raw: RawLogEntry): LogEntry => {
     const isJ = isJsonContent(raw.content)
+    const detected = detectLevel(raw.content)
     return {
       ...raw,
       id: idCounter.current++,
-      level: detectLogLevel(raw.content),
+      level: detected.level,
+      levelSource: detected.source,
       isJson: isJ,
       isLogfmt: !isJ && isLogfmt(raw.content),
     }
@@ -96,30 +73,35 @@ export function useLogBuffer(): UseLogBufferReturn {
     const batch = pendingRef.current
     if (batch.length === 0) return
     pendingRef.current = []
+    const enriched = batch.map(enrichEntry)
 
-    setEntries(prev => {
-      const enriched = batch.map(enrichEntry)
-      const combined = [...prev, ...enriched]
-      if (combined.length > MAX_BUFFER_SIZE) {
-        return combined.slice(combined.length - MAX_BUFFER_SIZE)
-      }
-      return combined
+    setBuffer(prev => {
+      const combined = [...prev.latest, ...enriched]
+      const latest = combined.length > MAX_BUFFER_SIZE ? combined.slice(-MAX_BUFFER_SIZE) : combined
+      // Keep appending while the reader's window fits. Once eviction begins,
+      // retain that window rather than replacing the lines being read.
+      const reading = prev.reading === null ? null
+        : prev.reading === prev.latest && combined.length <= MAX_BUFFER_SIZE ? latest : prev.reading
+      return { latest, reading }
     })
   }, [enrichEntry])
 
   const append = useCallback((entry: RawLogEntry) => {
     pendingRef.current.push(entry)
+    // Hidden tabs can stop delivering animation frames while logs still arrive.
+    if (pendingRef.current.length >= MAX_BUFFER_SIZE) {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      flushPending()
+      return
+    }
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(flushPending)
     }
   }, [flushPending])
 
   const appendBatch = useCallback((batch: RawLogEntry[]) => {
-    pendingRef.current.push(...batch)
-    if (rafRef.current === null) {
-      rafRef.current = requestAnimationFrame(flushPending)
-    }
-  }, [flushPending])
+    for (const entry of batch) append(entry)
+  }, [append])
 
   const set = useCallback((rawEntries: RawLogEntry[]) => {
     // Cancel any pending RAF
@@ -131,9 +113,9 @@ export function useLogBuffer(): UseLogBufferReturn {
 
     const enriched = rawEntries.map(enrichEntry)
     if (enriched.length > MAX_BUFFER_SIZE) {
-      setEntries(enriched.slice(enriched.length - MAX_BUFFER_SIZE))
+      setBuffer({ latest: enriched.slice(enriched.length - MAX_BUFFER_SIZE), reading: null })
     } else {
-      setEntries(enriched)
+      setBuffer({ latest: enriched, reading: null })
     }
   }, [enrichEntry])
 
@@ -143,8 +125,27 @@ export function useLogBuffer(): UseLogBufferReturn {
       rafRef.current = null
     }
     pendingRef.current = []
-    setEntries([])
+    setBuffer({ latest: [], reading: null })
   }, [])
 
-  return { entries, append, appendBatch, set, clear }
+  const setFollowing = useCallback((following: boolean) => {
+    setBuffer(prev => {
+      if (following) return prev.reading === null ? prev : { ...prev, reading: null }
+      return prev.reading === null ? { ...prev, reading: prev.latest } : prev
+    })
+  }, [])
+
+  const entries = buffer.reading ?? buffer.latest
+  const pendingLineCount = (buffer.latest.at(-1)?.id ?? -1) - (entries.at(-1)?.id ?? -1)
+  const readingLastId = entries.at(-1)?.id ?? -1
+  const latestFirstId = buffer.latest[0]?.id ?? 0
+  const overlap = Math.max(0, readingLastId - latestFirstId + 1)
+  const retainedLineCount = buffer.reading === null ? buffer.latest.length : entries.length + buffer.latest.length - overlap
+  const missingLineCount = buffer.reading === null ? 0 : Math.max(0, latestFirstId - readingLastId - 1)
+  const getRetainedEntries = useCallback(() => {
+    if (buffer.reading === null || buffer.reading === buffer.latest) return buffer.latest
+    const lastId = buffer.reading.at(-1)?.id ?? -1
+    return [...buffer.reading, ...buffer.latest.filter(entry => entry.id > lastId)]
+  }, [buffer])
+  return { entries, retainedLineCount, missingLineCount, getRetainedEntries, isFollowing: buffer.reading === null, pendingLineCount, setFollowing, append, appendBatch, set, clear }
 }

@@ -46,6 +46,7 @@ func TestParseSchedulerMessage_Classes(t *testing.T) {
 		{"existing anti-affinity", "3 node(s) didn't satisfy existing pods anti-affinity rules", SchedPodAntiAffinity, "", "", ""},
 		{"topology spread", "3 node(s) didn't match pod topology spread constraints", SchedTopologySpread, "", "", ""},
 		{"volume node affinity", "3 node(s) had volume node affinity conflict", SchedVolumeNodeAffinity, "", "", ""},
+		{"PersistentVolume node affinity", "3 node(s) didn't match PersistentVolume's node affinity", SchedVolumeNodeAffinity, "", "", ""},
 		{"volume count", "3 node(s) exceed max volume count", SchedVolumeCount, "", "", ""},
 		{"no free ports", "3 node(s) didn't have free ports for the requested pod ports", SchedNoPorts, "", "", ""},
 		{"cordoned", "3 node(s) were unschedulable", SchedNodeUnschedulable, "", "", ""},
@@ -270,19 +271,44 @@ func TestDescribeUnschedulable_ResourcesAndTaint(t *testing.T) {
 
 // TestDescribeUnschedulable_OrdersByBlastRadius pins that the dominant
 // constraint (the one that rejected the most nodes) leads the summary, even
-// when the scheduler listed a narrower predicate first. Bare pod + nil nodes so
-// node-affinity stays unresolved and both clauses flow through summarizeReasons.
+// when the scheduler listed a narrower predicate first.
 func TestDescribeUnschedulable_OrdersByBlastRadius(t *testing.T) {
 	msg := describeUnschedulable(&corev1.Pod{},
-		"0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, "+
-			"2 node(s) didn't match Pod's node affinity/selector.", nil)
-	affinity := strings.Index(msg, "node affinity/selector mismatch")
-	antiAffinity := strings.Index(msg, "pod anti-affinity conflict")
-	if affinity < 0 || antiAffinity < 0 {
+		"0/3 nodes are available: 1 Insufficient cpu, 2 node(s) had untolerated taint {dedicated: gpu}.", nil)
+	taint := strings.Index(msg, "untolerated taint")
+	cpu := strings.Index(msg, "insufficient cpu")
+	if taint < 0 || cpu < 0 {
 		t.Fatalf("message %q missing an expected clause", msg)
 	}
-	if affinity > antiAffinity {
-		t.Errorf("expected wider node affinity/selector clause (2 nodes) before anti-affinity (1 node): %q", msg)
+	if taint > cpu {
+		t.Errorf("expected the wider taint clause (2 nodes) before insufficient cpu (1 node): %q", msg)
+	}
+}
+
+// When the selector excluded most nodes, the clauses about the nodes it
+// targets lead, whatever their counts. Bare pod + nil nodes so node-affinity
+// stays unresolved and every clause flows through summarizeReasons.
+func TestDescribeUnschedulable_TargetNodesLeadWhenSelectorExcludesOthers(t *testing.T) {
+	msg := describeUnschedulable(&corev1.Pod{},
+		"0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 2 Insufficient nvidia.com/gpu, "+
+			"4 node(s) had untolerated taint(s), 1 node(s) didn't satisfy existing pods anti-affinity rules.", nil)
+	want := []string{"2 node(s) insufficient nvidia.com/gpu", "1 node(s) pod anti-affinity", "15 node(s) node affinity/selector mismatch", "4 node(s) untolerated taint"}
+	last := -1
+	for _, w := range want {
+		i := strings.Index(msg, w)
+		if i < 0 {
+			t.Fatalf("message %q missing %q", msg, w)
+		}
+		if i < last {
+			t.Errorf("%q is out of order in %q", w, msg)
+		}
+		last = i
+	}
+
+	selectorOnly := describeUnschedulable(&corev1.Pod{},
+		"0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 6 node(s) had untolerated taint(s).", nil)
+	if strings.Index(selectorOnly, "node affinity/selector") > strings.Index(selectorOnly, "untolerated taint") {
+		t.Errorf("without a later-filter clause, count order should hold: %q", selectorOnly)
 	}
 }
 
@@ -361,6 +387,17 @@ func TestClassifyAdmissionFailure(t *testing.T) {
 		{`Error creating job: admission webhook "jobs.example.com" denied the request: nope`, "WebhookDenied", true},
 		{`Error creating job: Internal error occurred: failed calling webhook "jobs.example.com": context deadline exceeded`, "WebhookUnavailable", true},
 		{`some unrelated message`, "", false},
+		{`Error creating: Timeout: request did not complete within requested timeout - context deadline exceeded`, "CreateTimeout", true},
+		{`Timeout: request did not complete within requested timeout 34s`, "CreateTimeout", true},
+		{`Error creating job: Timeout: request did not complete within requested timeout - context deadline exceeded`, "CreateTimeout", true},
+		{`(combined from similar events): Error creating: Timeout: request did not complete within requested timeout - context deadline exceeded`, "CreateTimeout", true},
+		{`Error creating: pods "x" is forbidden: Timeout waiting for quota evaluation`, "", false},
+		{`application log: Timeout: request did not complete within requested timeout`, "", false},
+		// client-go's event aggregation prefixes a burst of similar events.
+		{`(combined from similar events): Error creating: admission webhook "vpod.example.com" denied the request: nope`, "WebhookDenied", true},
+		{`(combined from similar events): Error creating: admission webhook "policy.example.com" denied the request: exceeded quota`, "WebhookDenied", true},
+		{`(combined from similar events): Error creating: Internal error occurred: failed calling webhook "validate.example.com": failed to call webhook: Post "https://policy-webhook.hooks.svc:443/validate?timeout=10s": no endpoints available for service "policy-webhook"`, "WebhookUnavailable", true},
+		{`(combined from similar events): Error creating: pods "x" is forbidden: failed quota: memory-limit-quota: must specify memory for: app`, "QuotaExceeded", true},
 	}
 	for _, c := range cases {
 		reason, ok := classifyAdmissionFailure(c.msg)
@@ -430,6 +467,7 @@ func TestClassifyPostBindFailure(t *testing.T) {
 		{"FailedCreatePodSandBox", `failed to create pod sandbox: ... failed to assign an IP address to container; InsufficientFreeAddresses`, "IPExhaustion", true},
 		{"FailedCreatePodSandBox", `failed to create pod sandbox: rpc error: code = Unknown`, "SandboxCreationFailed", true},
 		{"FailedAttachVolume", `Multi-Attach error for volume "pvc-123" Volume is already used by pod(s) other-pod`, "VolumeMultiAttach", true},
+		{"FailedAttachVolume", `Waiting for detach for volume "pvc-123" Volume is already used by pod(s) other-pod`, "VolumeMultiAttach", true},
 		{"FailedAttachVolume", `AttachVolume.Attach failed for volume "pvc-123": timed out`, "VolumeAttach", true},
 		{"FailedMount", `Unable to attach or mount volumes: timed out waiting for the condition`, "VolumeMount", true},
 		{"BackOff", `Back-off restarting failed container`, "", false},
@@ -482,9 +520,25 @@ func TestUnschedulableAction(t *testing.T) {
 			{Class: SchedOther, NodeCount: 9},
 			{Class: SchedVolumeBinding, NodeCount: 1},
 		}, "StorageClass/provisioner"},
+		{"selector-only still says relax it", []SchedulingReason{
+			{Class: SchedNodeAffinitySelector, NodeCount: 30},
+		}, "relax it"},
+		{"a taint rejected the nodes before the selector check", []SchedulingReason{
+			{Class: SchedNodeAffinitySelector, NodeCount: 30},
+			{Class: SchedUntoleratedTaint, TaintKey: "nvidia.com/gpu", NodeCount: 3},
+		}, `If they're the pod's target nodes, add a toleration for taint "nvidia.com/gpu"`},
+		{"a later class without a candidate-nodes action keeps its own sentence", []SchedulingReason{
+			{Class: SchedNodeAffinitySelector, NodeCount: 30},
+			{Class: SchedPodAntiAffinity, NodeCount: 2},
+		}, "nodeSelector/affinity can't take it. The pod-anti-affinity rule"},
+		{"two shortages are two constraints", []SchedulingReason{
+			{Class: SchedInsufficientResource, Resource: "cpu", NodeCount: 1},
+			{Class: SchedInsufficientResource, Resource: "memory", NodeCount: 1},
+			{Class: SchedNodeAffinitySelector, NodeCount: 32},
+		}, "More than one constraint"},
 	}
 	for _, c := range cases {
-		got := unschedulableAction(c.reasons)
+		got := unschedulableAction(c.reasons, schedulingContext{defaultOrder: true})
 		if c.want == "" {
 			if got != "" {
 				t.Errorf("%s: want empty, got %q", c.name, got)
@@ -493,6 +547,123 @@ func TestUnschedulableAction(t *testing.T) {
 		}
 		if !hasSubstr(got, c.want) {
 			t.Errorf("%s: action %q missing %q", c.name, got, c.want)
+		}
+	}
+}
+
+// Nodes the selector excluded aren't the pod's targets: when the ones it does
+// target are full, the advice is about their capacity, not the selector.
+func TestUnschedulableActionSelectorScopesLaterFilters(t *testing.T) {
+	msg := "0/34 nodes are available: 2 Insufficient nvidia.com/gpu, 32 node(s) didn't match Pod's node affinity/selector. preemption: 0/34 nodes are available: 2 No preemption victims found for incoming pod, 32 Preemption is not helpful for scheduling."
+	_, reasons := parseSchedulerMessage(msg)
+	got := unschedulableAction(reasons, schedulingContext{defaultOrder: true})
+	for _, want := range []string{"The nodes that match the pod's nodeSelector/affinity don't have enough nvidia.com/gpu"} {
+		if !hasSubstr(got, want) {
+			t.Errorf("action %q missing %q", got, want)
+		}
+	}
+	for _, unwanted := range []string{"relax it", "More than one constraint"} {
+		if hasSubstr(got, unwanted) {
+			t.Errorf("action %q should not say %q", got, unwanted)
+		}
+	}
+
+	reversed := make([]SchedulingReason, len(reasons))
+	for i, r := range reasons {
+		reversed[len(reasons)-1-i] = r
+	}
+	if again := unschedulableAction(reversed, schedulingContext{defaultOrder: true}); again != got {
+		t.Errorf("reason order changed the advice:\n%q\n%q", got, again)
+	}
+
+	mixed := append(reversed, SchedulingReason{Class: SchedPodAntiAffinity, NodeCount: 1})
+	if got := unschedulableAction(mixed, schedulingContext{defaultOrder: true}); !hasSubstr(got, "enough nvidia.com/gpu") || !hasSubstr(got, "More than one constraint") {
+		t.Errorf("two blockers on the matching nodes should both be acknowledged: %q", got)
+	}
+}
+
+// Messages captured from live clusters. Volcano checks resources before the
+// selector, so its counts say nothing about which nodes matched it.
+func TestDiagnoseUnschedulableOnlyScopesTheDefaultScheduler(t *testing.T) {
+	volcanoMsg := "Node: 0/21 nodes are unavailable: 1 Insufficient cpu, 16 node(s) didn't match Pod's node affinity/selector, 4 Insufficient pods."
+	volcano := &corev1.Pod{Spec: corev1.PodSpec{SchedulerName: "volcano"}}
+	msg, action := diagnoseUnschedulable(volcano, volcanoMsg, nil)
+	if hasSubstr(action, "match the pod's nodeSelector/affinity can't") || hasSubstr(action, "match the pod's nodeSelector/affinity have") {
+		t.Errorf("Volcano advice claims the matching nodes are known: %q", action)
+	}
+	if strings.Index(msg, "16 node(s) node affinity/selector mismatch") > strings.Index(msg, "4 node(s) insufficient pods") {
+		t.Errorf("Volcano headline should keep count order: %q", msg)
+	}
+
+	gpuMsg := "0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 2 Insufficient nvidia.com/gpu, 4 node(s) had untolerated taint(s)."
+	for _, name := range []string{"", corev1.DefaultSchedulerName} {
+		_, action := diagnoseUnschedulable(&corev1.Pod{Spec: corev1.PodSpec{SchedulerName: name}}, gpuMsg, nil)
+		if !hasSubstr(action, "don't have enough nvidia.com/gpu") {
+			t.Errorf("schedulerName %q: want selector-scoped advice, got %q", name, action)
+		}
+	}
+}
+
+// A selector no node can satisfy gets selector advice, even when tainted nodes
+// make the message look like the taint might be the blocker.
+func TestDiagnoseUnschedulableUnsatisfiableSelectorLeads(t *testing.T) {
+	msg := "0/21 nodes are available: 13 node(s) didn't match Pod's node affinity/selector, 8 node(s) had untolerated taint(s)."
+	pod := &corev1.Pod{Spec: corev1.PodSpec{NodeSelector: map[string]string{"radar.skyhook.io/probe": "no-such-node"}}}
+	nodes := []NodeFacts{{Name: "n1", Labels: map[string]string{"radar.skyhook.io/simulated": "true"}}}
+	_, action := diagnoseUnschedulable(pod, msg, nodes)
+	if !strings.HasPrefix(action, "No node matches the pod's nodeSelector/affinity") || hasSubstr(action, "toleration") {
+		t.Errorf("unsatisfiable selector should lead the advice: %q", action)
+	}
+	// Without node facts, Radar can't tell, so both branches stay.
+	pod.Spec.NodeSelector = map[string]string{"radar.skyhook.io/probe": "no-such-node"}
+	if msg, action := diagnoseUnschedulable(pod, msg, nil); !hasSubstr(action, "If they're the pod's target nodes") || hasSubstr(msg, "no node carries label") {
+		t.Errorf("without node facts the selector must stay unresolved: %q / %q", msg, action)
+	}
+	// A later-filter count proves some node matched, whatever Radar's node view says.
+	gpuMsg := "0/3 nodes are available: 2 Insufficient nvidia.com/gpu, 1 node(s) didn't match Pod's node affinity/selector."
+	pod.Spec.NodeSelector = map[string]string{"pool": "gpu"}
+	if msg, action := diagnoseUnschedulable(pod, gpuMsg, nodes); !hasSubstr(action, "don't have enough nvidia.com/gpu") || hasSubstr(msg, "no node carries label") {
+		t.Errorf("scheduler evidence of matching nodes should win: %q / %q", msg, action)
+	}
+	// The same message with a selector some node satisfies keeps both branches.
+	pod.Spec.NodeSelector = map[string]string{"radar.skyhook.io/simulated": "true"}
+	if _, action := diagnoseUnschedulable(pod, msg, nodes); !hasSubstr(action, "If they're the pod's target nodes") {
+		t.Errorf("satisfiable selector with taints should give both branches: %q", action)
+	}
+}
+
+func TestUnschedulableActionEdgeCases(t *testing.T) {
+	sc := schedulingContext{defaultOrder: true}
+	// A taint was checked before the selector, so it isn't a second constraint
+	// on the matching nodes.
+	_, live := parseSchedulerMessage("0/21 nodes are available: 15 node(s) didn't match Pod's node affinity/selector, 2 Insufficient nvidia.com/gpu, 4 node(s) had untolerated taint(s).")
+	if got := unschedulableAction(live, sc); hasSubstr(got, "More than one constraint") {
+		t.Errorf("taint shouldn't count against the matching nodes: %q", got)
+	}
+	cordoned := []SchedulingReason{{Class: SchedNodeAffinitySelector, NodeCount: 10}, {Class: SchedNodeUnschedulable, NodeCount: 2}}
+	if got := unschedulableAction(cordoned, sc); !hasSubstr(got, "If they're the pod's target nodes, they're cordoned, not ready") {
+		t.Errorf("cordoned branch should read as a sentence: %q", got)
+	}
+	// An unclassified clause (a DRA claim failure) may be the matching nodes'
+	// blocker, so the taint branch must not claim the answer.
+	dra := []SchedulingReason{{Class: SchedNodeAffinitySelector, NodeCount: 10}, {Class: SchedOther, NodeCount: 2}, {Class: SchedUntoleratedTaint, NodeCount: 3}}
+	if got := unschedulableAction(dra, sc); got != "" {
+		t.Errorf("unclassified count should fall back to general advice: %q", got)
+	}
+	if _, action := diagnoseUnschedulable(&corev1.Pod{}, "0/15 nodes are available: 10 node(s) didn't match Pod's node affinity/selector, 2 cannot allocate all claims, 3 node(s) had untolerated taint(s).", nil); action != genericUnschedulableAction {
+		t.Errorf("want the general next step, got %q", action)
+	}
+	gke := &corev1.Pod{Spec: corev1.PodSpec{SchedulerName: "gke.io/optimize-utilization-scheduler"}}
+	if !usesDefaultScheduler(gke) {
+		t.Error("GKE's optimize-utilization profile keeps kube-scheduler's filter order")
+	}
+}
+
+func TestInsufficientResourceIgnoresSentenceBreak(t *testing.T) {
+	_, reasons := parseSchedulerMessage("0/4 nodes are available: 2 Too many pods, 4 Insufficient memory. no new claims to deallocate, preemption: 0/4 nodes are available: 4 Preemption is not helpful for scheduling.")
+	for _, r := range reasons {
+		if r.Class == SchedInsufficientResource && r.Resource != "pods" && r.Resource != "memory" {
+			t.Errorf("resource %q, want memory", r.Resource)
 		}
 	}
 }
@@ -515,5 +686,45 @@ func TestDiagnoseUnschedulableSharesOneParse(t *testing.T) {
 	_, fallback := diagnoseUnschedulable(&corev1.Pod{}, "something the parser doesn't recognize", nil)
 	if fallback != genericUnschedulableAction {
 		t.Errorf("unrecognized verdict should fall back to generic action, got %q", fallback)
+	}
+}
+
+func TestParseAdmissionBlocker(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  string
+		want AdmissionBlocker
+		ok   bool
+	}{
+		{"failed quota", `pod creation blocked: pods "search-x" is forbidden: failed quota: memory-limit-quota: must specify memory for: hotel-reserv-search`, AdmissionBlocker{Kind: "ResourceQuota", Name: "memory-limit-quota"}, true},
+		{"exceeded quota", `Error creating: pods "web-x" is forbidden: exceeded quota: compute.team-a, requested: pods=1, used: pods=3, limited: pods=3`, AdmissionBlocker{Kind: "ResourceQuota", Name: "compute.team-a"}, true},
+		{"limit range", `pods "api-x" is forbidden: maximum memory usage per Container is 512Mi, but limit is 1Gi`, AdmissionBlocker{Kind: "LimitRange"}, true},
+		{"webhook denial", `pod creation blocked: Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`, AdmissionBlocker{WebhookName: "deny-root.policy.example.com"}, true},
+		{"webhook call failure", `Internal error occurred: failed calling webhook "inject.mesh.example.com": Post "https://mesh.mesh-system.svc:443/inject": no endpoints available for service "mesh"`, AdmissionBlocker{WebhookName: "inject.mesh.example.com"}, true},
+		{"aggregated webhook denial", `pod creation blocked: (combined from similar events): Error creating: admission webhook "deny-root.policy.example.com" denied the request: runAsNonRoot is required`, AdmissionBlocker{WebhookName: "deny-root.policy.example.com"}, true},
+		{"aggregated failed quota", `pod creation blocked: (combined from similar events): Error creating: pods "search-x" is forbidden: failed quota: memory-limit-quota: must specify memory for: hotel-reserv-search`, AdmissionBlocker{Kind: "ResourceQuota", Name: "memory-limit-quota"}, true},
+		{"pod security names no object", `pods "x" is forbidden: violates PodSecurity "restricted:latest": allowPrivilegeEscalation != false`, AdmissionBlocker{}, false},
+		{"not an admission failure", `object is being deleted: replicasets.apps "x" already exists`, AdmissionBlocker{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseAdmissionBlocker(tc.msg)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("ParseAdmissionBlocker(%q) = %+v, %v; want %+v, %v", tc.msg, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+// A PersistentVolume's zone pin is not the Pod's nodeSelector: the advice must
+// point at the volume, never at relabelling nodes.
+func TestDiagnoseUnschedulable_PersistentVolumeNodeAffinity(t *testing.T) {
+	msg := "0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, 2 node(s) didn't match PersistentVolume's node affinity."
+	message, action := diagnoseUnschedulable(&corev1.Pod{}, msg, nil)
+	if strings.Contains(message, "node affinity/selector mismatch") || strings.Contains(action, "nodeSelector") || strings.Contains(action, "label (or add) a matching node") {
+		t.Fatalf("PV node affinity read as a Pod selector mismatch: message=%q action=%q", message, action)
+	}
+	if !strings.Contains(message, "2 node(s) volume node-affinity conflict") || !strings.Contains(action, "PersistentVolume") {
+		t.Fatalf("message=%q action=%q, want the volume conflict named", message, action)
 	}
 }

@@ -1,6 +1,7 @@
 package insights
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -544,22 +545,21 @@ func isNilish(v any) bool {
 // jsonString returns a stable single-line JSON encoding of v, suitable for
 // scalar comparison and UI display. Strings are intentionally quoted (so
 // the UI can tell `"true"` from `true`) and maps are sorted by key
-// (json.Marshal on map[string]any does this since Go 1.12).
+// (json.Marshal on map[string]any does this since Go 1.12). HTML escaping is
+// off: the result is shown as text, and escaped `<`, `>` and `&` would read as
+// \u003c, \u003e and \u0026.
 func jsonString(v any) string {
 	if v == nil {
 		return "null"
 	}
-	if s, ok := v.(string); ok {
-		// Quote strings via Marshal so embedded characters escape correctly.
-		b, err := json.Marshal(s)
-		if err != nil {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		if s, ok := v.(string); ok {
 			return s
 		}
-		return string(b)
-	}
-	b, err := json.Marshal(v)
-	if err != nil {
 		return fmt.Sprintf("%v", v)
 	}
-	return string(b)
+	return strings.TrimSuffix(buf.String(), "\n")
 }

@@ -21,16 +21,16 @@ func TestCapacityVisibleIssuesKeepsClusterAndAuthorizedNamespaces(t *testing.T) 
 	}
 
 	allowCluster := func(string, string) bool { return true }
-	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, allowCluster, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed", "hidden") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, allowCluster, nil, nil, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed", "hidden") {
 		t.Fatalf("unrestricted issue IDs = %v", got)
 	}
-	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{"team-a"}, allowCluster, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{"team-a"}, allowCluster, nil, nil, nil)); !sameCapacityIssueIDs(got, "cluster", "allowed") {
 		t.Fatalf("team-a issue IDs = %v", got)
 	}
-	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{}, allowCluster, nil)); !sameCapacityIssueIDs(got, "cluster") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, []string{}, allowCluster, nil, nil, nil)); !sameCapacityIssueIDs(got, "cluster") {
 		t.Fatalf("no-namespace-access issue IDs = %v", got)
 	}
-	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, func(string, string) bool { return false }, nil)); !sameCapacityIssueIDs(got, "allowed", "hidden") {
+	if got := capacityIssueIDs(capacityVisibleIssues(in, nil, func(string, string) bool { return false }, nil, nil, nil)); !sameCapacityIssueIDs(got, "allowed", "hidden") {
 		t.Fatalf("cluster-denied issue IDs = %v", got)
 	}
 }
@@ -44,10 +44,10 @@ func TestCapacityVisibleIssuesRequiresReferencedNodeClassAccess(t *testing.T) {
 		}}},
 	}
 	allowCluster := func(string, string) bool { return true }
-	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, func(issues.Ref) bool { return false }); len(got) != 0 {
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, func(issues.Ref) bool { return false }, nil); len(got) != 0 {
 		t.Fatalf("denied NodeClass leaked through NodePool issue: %+v", got)
 	}
-	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, func(issues.Ref) bool { return true }); len(got) != 1 {
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, func(issues.Ref) bool { return true }, nil); len(got) != 1 {
 		t.Fatalf("authorized NodeClass issue omitted: %+v", got)
 	}
 }
@@ -204,4 +204,55 @@ func sameCapacityIssueIDs(got []string, want ...string) bool {
 		}
 	}
 	return true
+}
+
+func TestCapacityVisibleIssuesAuthorizesEvidence(t *testing.T) {
+	allowCluster := func(string, string) bool { return true }
+	issue := issues.Issue{ID: "derived", Kind: "NodePool", Group: "karpenter.sh", Name: "default", RequiredReads: []issues.EvidenceRead{
+		{Resource: "pods", Namespace: "team-a", Verb: "list"},
+	}}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, nil, nil); len(got) != 0 {
+		t.Fatalf("a finding with inventory dependencies passed without an authorizer: %+v", got)
+	}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, nil, func(issues.EvidenceRead) bool { return false }); len(got) != 0 {
+		t.Fatalf("denied evidence passed: %+v", got)
+	}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, nil, func(issues.EvidenceRead) bool { return true }); len(got) != 1 {
+		t.Fatalf("authorized evidence withheld: %+v", got)
+	}
+	issue.Message = "pods team-a/a and team-a/b are pending"
+	issue.Degraded = &issues.DegradedFinding{Message: "pods are pending"}
+	if got := capacityVisibleIssues([]issues.Issue{issue}, nil, allowCluster, nil, nil, func(issues.EvidenceRead) bool { return false }); len(got) != 1 || got[0].Message != "pods are pending" {
+		t.Fatalf("a finding with a degraded form = %+v, want it degraded", got)
+	}
+}
+
+// The memo is composed for every user, so an owner the caller can't read is
+// cleared at read time, as Compose does, rather than becoming the grouped issue.
+func TestCapacityVisibleIssuesClearsUnreadableOwners(t *testing.T) {
+	mirror := issues.Issue{ID: "mirror", Kind: "Pod", Namespace: "kube-system", Name: "kube-proxy-node-1", Owner: issues.Ref{Kind: "Node", Name: "node-1"}}
+	denyNodes := func(kind, _ string) bool { return kind != "Node" }
+	got := capacityVisibleIssues([]issues.Issue{mirror}, nil, denyNodes, nil, nil, nil)
+	if len(got) != 1 || got[0].Owner.Kind != "" {
+		t.Fatalf("unreadable Node owner kept: %+v", got)
+	}
+	if grouped := issues.GroupIssues(got); len(grouped) != 1 || grouped[0].Kind != "Pod" {
+		t.Fatalf("grouped subject = %+v, want the Pod", grouped)
+	}
+	if got := capacityVisibleIssues([]issues.Issue{mirror}, nil, func(string, string) bool { return true }, nil, nil, nil); got[0].Owner.Kind != "Node" {
+		t.Fatalf("readable Node owner cleared: %+v", got)
+	}
+}
+
+func TestCapacityVisibleIssuesChecksOwnersLikeCompose(t *testing.T) {
+	pending := issues.Issue{ID: "pending", Kind: "Pod", Namespace: "team-a", Name: "worker", Owner: issues.Ref{Kind: "Secret", Namespace: "team-a", Name: "parent"}, CapacityRelevant: true}
+	allowCluster := func(string, string) bool { return true }
+	denySecrets := func(ref issues.Ref) bool { return ref.Kind != "Secret" }
+	got := capacityVisibleIssues([]issues.Issue{pending}, []string{"team-a"}, allowCluster, denySecrets, nil, nil)
+	if len(got) != 1 || got[0].Owner.Kind != "" {
+		t.Fatalf("an owner of a kind the caller can't get was kept: %+v", got)
+	}
+	if grouped := issues.GroupIssues(got); len(grouped) != 1 || grouped[0].Kind != "Pod" {
+		t.Fatalf("grouped subject = %+v, want the Pod", grouped)
+	}
 }

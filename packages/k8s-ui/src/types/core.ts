@@ -1,4 +1,6 @@
+import type { Issue, IssueResourceRef } from '../components/issues/types'
 import type { CapacityIntegrationState } from './capacity'
+import type { ReadGap, ReadGapSet, ReadKindRef, SearchCoverage } from './read-coverage'
 
 // Topology types matching the Go backend
 
@@ -119,6 +121,8 @@ export interface Capabilities {
   configManagement?: 'local' | 'operator' | 'cloud'
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
+  /** Shell family where a hand-off command runs; absent from older Radars. */
+  localShell?: 'powershell' | 'posix'
   logs: boolean           // Log viewer (pods/log)
   portForward: boolean    // Port forwarding (pods/portforward)
   secrets: boolean        // List secrets
@@ -126,7 +130,12 @@ export interface Capabilities {
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   workloadWrites?: WorkloadWritePermissions // Workload patch permissions (restart/scale controls)
+  mcpExecTools?: boolean // Full MCP registration; does not grant the caller exec permission
+  mcpHelmTools?: boolean // Native Helm MCP tool registered; target Kubernetes permissions still required
+  mcpHttpTools?: boolean // Effective in-cluster HTTP registration; services/proxy permission is still required
+  mcpReadOnly?: boolean  // Full MCP endpoint is disabled; read-only endpoints remain available
   mcpEnabled: boolean     // MCP server is running
+  mcpApplicationEvidence?: boolean
   // Karpenter discovery and NodePool read state. Optional on the wire for the
   // same newer-frontend/older-backend reason as `deployment` below — consumers
   // must treat absence as "unknown" and fall back to discovery signals.
@@ -160,9 +169,37 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+ helmSourceIdentity?: boolean
+  helmInventory?: boolean
+  resourceReadCoverage?: boolean
+  searchCoverage?: boolean
+ applicationEvidence?: boolean
+  searchEventContent?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
+  resourceIssues?: boolean
+  resourceIssueCoverage?: boolean
+  podEnvironment?: boolean
+  policyResource?: boolean
+  workloadHistory?: boolean
+  cnpgWorkspace?: boolean
+  cnpgProtectionSetup?: boolean
+  gitopsWriteEvidence?: boolean
+  agentSigninCheck?: boolean
+  serviceEndpointSlices?: boolean
+  trafficRecords?: boolean
+  argoRollbackSync?: boolean
+  argoSyncInheritance?: boolean
+  argoEnableSelfHealOff?: boolean
+  clusterScopedPlaceholder?: boolean
+  kueuePendingPosition?: boolean
+  // GET /api/workloads/rayclusters/{namespace}/{name}/pods. Older Radars that
+  // serve the route omit the flag; radarFeatures falls back to v1.15.0.
+  rayClusterPods?: boolean
+  // Workload Pod info marks native sidecars (containerStatuses[].sidecar).
+  podSidecarMarks?: boolean
+  kueueQueueWorkloads?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -194,6 +231,7 @@ export type CoreNodeKind =
   | 'HTTPRoute'
   | 'GRPCRoute'
   | 'TCPRoute'
+  | 'UDPRoute'
   | 'TLSRoute'
   | 'Service'
   | 'Deployment'
@@ -216,6 +254,7 @@ export type CoreNodeKind =
   | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
+  | 'JobSet' // jobset.x-k8s.io JobSet
   | 'Workflow'
   | 'CronWorkflow'
   | 'WorkflowTemplate'
@@ -632,15 +671,30 @@ export interface ResourceRef {
 
 // Computed relationships for a resource
 export interface Relationships {
+  /** Istio registry domain supplied by the producer; omitted when unknown. */
+  istioServiceDomain?: string
   reflection?: {
     source?: ResourceRef
     sourceResourceVersion?: string
     mirrors?: ResourceRef[]
   }
-  owner?: ResourceRef
+  owner?: ResourceRef        // The owner Kubernetes acts through: the controller reference, else the only reference
+  owners?: ResourceRef[]     // Every owner reference that resolves to an existing owner
   deployment?: ResourceRef   // Grandparent Deployment (for Pods owned by ReplicaSets)
   managedBy?: ResourceRef[]  // Topmost meaningful manager(s): GitOps controller (ArgoCD Application / Flux Kustomization / Flux HelmRelease), Helm release, or the topmost K8s owner. Synthesized server-side; replaces client-side detectGitOpsOwner.
-  children?: ResourceRef[]
+  children?: ResourceRef[]   // Objects whose owner references name this one, less olderRevisions
+  // Children kept apart because they only keep history: ReplicaSets that run
+  // no Pods and aren't their owner's current revision. ownership.children
+  // covers both lists together.
+  olderRevisions?: ResourceRef[]
+  // Management without an owner reference: GitOps member lists, class
+  // bindings, spec and status references. Never ownership or garbage collection.
+  managers?: ResourceRef[]
+  manages?: ResourceRef[]
+  /** How complete the owner-reference and recorded-membership answers are.
+   * Absent: no completeness is claimed, whether because the server answers
+   * Owner and Children from graph edges or because the resource is an Event. */
+  ownership?: OwnershipCoverage
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
   gateways?: ResourceRef[]
@@ -649,6 +703,15 @@ export interface Relationships {
   consumers?: ResourceRef[]
   scalers?: ResourceRef[]
   storageRefs?: ResourceRef[]
+  dependencies?: ResourceRef[]
+  dependents?: ResourceRef[]
+  monitors?: ResourceRef[]
+  monitorTargets?: ResourceRef[]
+  backends?: ResourceRef[]
+  routedFrom?: ResourceRef[]
+  protects?: ResourceRef[]
+  healthChecks?: ResourceRef[]
+  stagedPolicies?: ResourceRef[]
   scaleTarget?: ResourceRef
   pdbs?: ResourceRef[]              // PodDisruptionBudgets protecting this workload
   networkPolicies?: ResourceRef[]   // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy variants selecting this workload
@@ -656,6 +719,101 @@ export interface Relationships {
   serviceAccount?: ResourceRef      // For Pods: derived from pod.spec.serviceAccountName
   node?: ResourceRef                // For scheduled Pods: derived from pod.spec.nodeName
   resourceClaims?: ResourceRef[]    // For Pods: DRA ResourceClaims (direct + template-generated)
+}
+
+/** A kind Radar couldn't read, in namespace or (without one) in several or all of them, or the cluster for a cluster-scoped kind; reason is a readreason code. No kind stands for kinds discovery didn't list; no group is the core group. */
+export interface OwnershipGap {
+  group?: string
+  kind?: string
+  namespace?: string
+  reason: string
+}
+
+export interface OwnershipCoverage {
+  /** The owner reference's state when no owner is named: gone, replaced, withheld, unknown, unresolvable, excluded (it names an Event) or several. */
+  primaryOwnerState?: string
+  /** The owner the reference names when it is gone, replaced or unknown. */
+  ownerRef?: ResourceRef
+  /** A readreason code saying why an unknown owner couldn't be checked. */
+  ownerReason?: string
+  children: {
+    /** Children are every child the viewer may read. */
+    complete: boolean
+    notChecked?: OwnershipGap[]
+    truncated?: boolean
+    /** The viewer may read only some of the places children could be. */
+    narrowed?: boolean
+  }
+  /** For a GitOps manager whose status lists its members. */
+  manages?: {
+    membership: 'recorded' | 'remote' | 'unreadable'
+    /** A readreason code when the member list couldn't be read, as opposed to the status recording none. */
+    unavailableReason?: string
+    missing?: number
+    withheld?: number
+    unknown?: number
+    truncated?: boolean
+  }
+  /** Set when the search for the GitOps managers whose status lists this resource, for `managers`, couldn't settle every one the viewer may read. */
+  managers?: {
+    /** Managers with a member list Radar can't read, any of which may list this resource. */
+    unreadable?: number
+    /** Managers listing this resource's coordinates for a cluster Radar can't confirm is this one. */
+    remote?: number
+    notChecked?: OwnershipGap[]
+  }
+  /** What manages this resource, from its own evidence or its nearest controller ancestor's. Absent means no answer (a Radar that predates it, or unavailableReason), never "none". */
+  manager?: ManagerAnswer
+  /** A readreason code when Radar couldn't answer at all. */
+  unavailableReason?: string
+}
+
+/** What manages a resource: the managers whose status lists name it and what its metadata claims. It names no winner the evidence doesn't support. */
+export interface ManagerAnswer {
+  /** none: no evidence in what Radar collects and the viewer may read, never "unmanaged". */
+  state: 'shared' | 'disagree' | 'agree' | 'listed' | 'claimed' | 'unknown' | 'none'
+  /** The manager to show first, never a verdict: the recorder for agree/listed; for shared, the one recorder a claim names, if exactly one; for claimed, the manager every claim names, if they agree. Its namespace is "" when it comes from a claim that names none. */
+  lead?: ResourceRef
+  /** The evidence on the resource itself. */
+  direct: ManagerEvidence
+  /** The nearest controller ancestor's evidence that settles it when the resource's own doesn't, or, when nothing does and the resource makes no claim that isn't copied, the nearest ancestor that makes one; state and lead then come from it. */
+  via?: ManagerEvidence
+  /** Other objects the walk passed that make claims, in chain order. When via is a fallback to the nearest claim, claims farther up stay here. */
+  between?: ManagerEvidence[]
+  /** Why a walk that found no settling evidence stopped short. Absent when evidence settled it first, or the walk reached the chain's top. */
+  chainEnd?: 'unfollowed' | 'cycle' | 'truncated'
+  /** The controller reference the walk couldn't follow, when chainEnd is unfollowed. */
+  stop?: {
+    at: ResourceRef
+    /** As primaryOwnerState: gone, replaced, withheld, unknown, unresolvable or excluded. */
+    state: string
+    /** The owner the reference names when it is gone, replaced or unknown. */
+    owner?: ResourceRef
+    /** A readreason code when the owner is unknown. */
+    reason?: string
+  }
+  /** The viewer's access is restricted, so the evidence is the part it may read. */
+  narrowed?: boolean
+}
+
+export interface ManagerEvidence {
+  object: ResourceRef
+  /** Local managers whose status lists name it. */
+  recorders?: ResourceRef[]
+  /** Managers its own metadata names. */
+  claims?: ManagerClaim[]
+}
+
+/** source, check, and the answer's state and chainEnd may gain values in newer Radars: show an unfamiliar one generically and never treat it as confirming. */
+export interface ManagerClaim {
+  /** Its namespace is "" when the metadata doesn't say. */
+  manager: ResourceRef
+  source: 'flux-helm-labels' | 'flux-kustomize-labels' | 'argo-tracking-id' | 'argo-instance-label' | 'helm-release'
+  check: 'recorded' | 'omitted' | 'unreadable' | 'remote' | 'missing' | 'not-recording' | 'unresolved' | 'withheld' | 'unchecked'
+  /** An Argo CD tracking ID naming another object. */
+  copied?: boolean
+  /** Copied, or an instance label or Helm release annotation on an object a controller owns: it doesn't stop the walk. One that isn't copied can still answer when nothing on the chain settles it. */
+  weak?: boolean
 }
 
 // Parsed X.509 certificate metadata (from backend cert parsing)
@@ -719,6 +877,7 @@ export interface HPADiagnosis extends HPADiagnosisView {
     name?: string
   }
   bounds: HPABounds
+  /** Spec order keeps source references paired with values; unmatched status entries follow. */
   metrics?: HPAMetricSummary[]
 }
 
@@ -738,8 +897,29 @@ export interface HPAMetricSummary {
   status: string
 }
 
+/** Current findings from one bounded local inventory, independent of parent health.
+ * No groups or no findings never establishes absence of associations or recovery. */
+export interface RelatedFindingsGroup {
+  /** Association anchor; each finding identifies its own subject. */
+  associatedVia: IssueResourceRef
+  /** Nonempty finite set of resource kinds selected for assessment; names, when present, lists all. */
+  kinds: { count: number; names?: ReadKindRef[] }
+  /** Authorized candidate resource snapshots, not findings or API calls. */
+  checked: number
+  /** Checked snapshots the producer could not assess, not known inactive states.
+   * checked - unknown is not a healthy count. */
+  unknown: number
+  findings?: Issue[]
+  /** Inventory-read limitations; always an array, including when empty. */
+  gaps: ReadGap[]
+  /** Findings were omitted from output; inventory read failures use gaps. */
+  truncated?: boolean
+}
+
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
+  /** Optional association bundle; absence is not an all-clear. */
+  relatedFindings?: RelatedFindingsGroup[]
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
@@ -776,6 +956,8 @@ export interface APIResource {
   name: string // Plural name (e.g., "deployments")
   namespaced: boolean
   isCrd: boolean
+  /** Confirmed, readable cached CRD identity; never inferred from isCrd. */
+  definitionName?: string
   featured?: boolean
   verbs: string[]
   observation?: DynamicResourceObservation
@@ -813,6 +995,7 @@ export interface HelmRevision {
   appVersion: string
   description: string
   updated: string // ISO date string
+  deleted?: string
 }
 
 export type HelmOperationKind = 'release_failed' | 'upgrade_failed' | 'upgrade_rolled_back' | 'rollback' | 'pending'
@@ -1042,11 +1225,74 @@ export interface ResourceDiff {
   parseErrorCount?: number
 }
 
+// A release as its deployed objects describe it, built without Helm's release
+// Secrets. It has no status, revision or update time because only those Secrets
+// record them. An absent chart, chartVersion or appVersion is unknown.
+export interface ObservedHelmRelease {
+  name: string
+  namespace: string
+  // Set when a readable Flux HelmRelease records another storage namespace.
+  // Absent doesn't say where it's stored.
+  storageNamespace?: string
+  chart?: string
+  chartVersion?: string
+  appVersion?: string
+  // Other helm.sh/chart labels on its objects. With no chart, these are the
+  // candidates Radar wouldn't choose between.
+  otherCharts?: string[]
+  // The distinct versions, sorted, found when the chart's objects disagree, as
+  // after an interrupted upgrade; chartVersion or appVersion is then absent.
+  // From object labels only: when a readable Flux HelmRelease names the chart
+  // in its history, its versions replace them. Absent doesn't prove the
+  // objects agree.
+  chartVersions?: string[]
+  appVersions?: string[]
+  // Objects the caller can read, which can be fewer than the release has.
+  resourceCount: number
+  // 'unknown' when the object read had gaps, even beside a summary of what was read.
+  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
+  healthIssue?: string
+  healthSummary?: string
+  // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
+  managedByFluxHelmRelease?: string
+}
+
+// One entry of a Flux HelmRelease's status.history.
+export interface FluxHelmRevision {
+  revision: number
+  status?: string
+  chartName?: string
+  chartVersion?: string
+  appVersion?: string
+  // Flux's checksum of the stored Helm release, not an image digest.
+  digest?: string
+  lastDeployed?: string
+}
+
+export interface ObservedHelmReleaseDetail extends ObservedHelmRelease {
+  resources?: HelmOwnedResource[]
+  // Newest first. Absent means no Flux record was read, not that there are no revisions.
+  fluxHistory?: FluxHelmRevision[]
+  objectCoverage: SearchCoverage
+}
+
+// The Helm list as far as the caller's access reaches. storageDenied is absent
+// when nothing was denied; objectCoverage is present when objects were read.
+export interface HelmInventory {
+  releases: HelmRelease[]
+  observed: ObservedHelmRelease[]
+  storageDenied?: ReadGapSet<string>
+  objectCoverage?: SearchCoverage
+}
+
 // Selected Helm release (for drawer state)
 export interface SelectedHelmRelease {
   namespace: string
   name: string
   storageNamespace?: string
+  // Opened from a row built without Helm's release Secrets, so the full release
+  // read would only be refused. A shared link has no such hint.
+  observed?: boolean
 }
 
 // Upgrade availability info
@@ -1063,10 +1309,40 @@ export interface UpgradeInfo {
   error?: string
   // Machine-readable source-resolution failure, used to make the Helm drawer
   // explain whether tracking an OCI source can help.
-  sourceIssue?: 'untracked' | 'repo_index_error' | 'ambiguous_repository'
+  sourceIssue?: 'source_confirmation_required' | 'source_change_required' | 'release_changing' | 'untracked' | 'repo_index_error' | 'ambiguous_repository' | 'ambiguous_source' | 'source_unavailable'
   // True only when the error is a genuinely untracked source (registering a
   // chart source could fix it). Kept for compatibility; prefer sourceIssue.
   untracked?: boolean
+}
+
+export type ChartSourceCandidate =
+  | { type: 'repository'; reference: string; url: string }
+  | { type: 'oci'; reference: string; url?: never }
+
+export interface SourceUpgradeSelection {
+ source: ChartSourceCandidate
+ expectedRevision: number
+ expectedSource: ChartSourceCandidate | null
+ previewDigest?: string
+}
+
+export interface ChartSourceSuggestion {
+ source: ChartSourceCandidate
+ current: boolean
+ hasInstalledVersion: boolean
+ state: 'available' | 'index_unavailable' | 'unchecked'
+}
+
+export interface ChartSourceStatus {
+ changing?: boolean
+ revision?: number
+ confirmed?: boolean
+ sourceChangeRequired?: boolean
+ suggestions?: ChartSourceSuggestion[]
+  recorded?: ChartSourceCandidate
+  configured: boolean
+  available: boolean
+  candidates?: ChartSourceCandidate[]
 }
 
 // Batch upgrade info keyed by "storageNamespace/name".
@@ -1083,6 +1359,9 @@ export interface ApplyValuesRequest {
 
 // Response for previewing values changes
 export interface ValuesPreviewResponse {
+	baselineSource?: ChartSourceCandidate
+ previewDigest?: string
+ baselineRevision?: number
   currentValues: Record<string, unknown>
   newValues: Record<string, unknown>
   manifestDiff: string
@@ -1151,6 +1430,7 @@ export interface InstallChartRequest {
 
 // ArtifactHub chart with rich metadata
 export interface ArtifactHubChart {
+  official?: boolean
   packageId: string
   name: string
   version: string
@@ -1173,6 +1453,9 @@ export interface ArtifactHubChart {
 
 // ArtifactHub repository info
 export interface ArtifactHubRepository {
+  organizationDisplayName?: string
+  userAlias?: string
+  displayName?: string
   name: string
   url: string
   official?: boolean
@@ -1280,10 +1563,12 @@ export interface MetricsDataPoint {
 export interface TrafficEndpoint {
   name: string
   namespace: string
-  kind: string // Pod, Service, External, Host, Unknown
+  kind: string // Pod, Workload, Service, External, Host, Unknown
   ip?: string
   labels?: Record<string, string>
   workload?: string
+  /** Deployment, StatefulSet, CronJob, … when resolved from the pod's owners. */
+  workloadKind?: string
   port?: number
 }
 
@@ -1367,7 +1652,15 @@ export interface AggregatedFlow {
   l7Protocol?: string // HTTP, gRPC, DNS
   requestCount?: number
   errorCount?: number
+  /** Per-second rates from a metric-based source, unrounded. requestCount and
+   *  errorCount carry the same figures rounded with a floor of one, so their
+   *  ratio is meaningless at low rates. */
+  requestRate?: number
+  errorRate?: number
   avgLatencyMs?: number
+  /** How many measured responses the latency figures come from (sources that
+   *  report individual responses). Weights averages when edges are combined. */
+  latencySamples?: number
   latencyP50Ms?: number
   latencyP95Ms?: number
   latencyP99Ms?: number
@@ -1380,7 +1673,7 @@ export interface AggregatedFlow {
 
 // Cluster info for traffic detection
 export interface TrafficClusterInfo {
-  platform: string // rke2, gke, eks, aks, minikube, kind, docker-desktop, openshift, rancher, generic
+  platform: string // nkp, rke2, gke, eks, aks, nutanix, minikube, kind, docker-desktop, openshift, rancher, generic
   cni: string // cilium, canal, calico, flannel, vpc-cni, azure-cni, gke-native, unknown
   dataplaneV2: boolean
   clusterName?: string
@@ -1434,12 +1727,44 @@ export interface TrafficFlowsResponse {
   timestamp: string
   flows: TrafficFlow[]
   aggregated: AggregatedFlow[]
+  /** L7 responses run caller → callee on the server's port, like their request.
+   *  Absent from a Radar that sent them server → client. */
+  l7ResponsesCallerOriented?: boolean
+  /** When the flows start being complete: some node returned its full
+   *  nodeFlowLimit, so older traffic in the window did not fit. */
+  coveredSince?: string
+  nodeFlowLimit?: number
+  /** Set when the source kept only its newest flowLimit flows in total; the
+   *  window is then complete only from coveredSince. */
+  flowLimit?: number
+  /** How many records the aggregation covers. `flows` holds only the newest of
+   *  them; a Radar that predates the cap omits this and sends every record. */
+  flowsTotal?: number
   warning?: string  // Non-fatal warning (e.g., query errors)
   /** 'transient' (or absent) means the condition may clear on its own and a
-   *  retry is worthwhile. 'partial' means the flows are correct but incomplete
-   *  for a reason retrying cannot change, so show the warning next to them and
-   *  do not refetch. */
-  warningKind?: 'transient' | 'partial'
+   *  retry is worthwhile. 'partial' means the flows are correct but some of
+   *  their values are missing or wrong, so show the warning next to them and do
+   *  not refetch. 'incomplete' means the fetch worked but could not see
+   *  everything — events lost, nodes unreachable — so flows may be missing; show
+   *  it, with or without flows, and do not retry at once. */
+  warningKind?: 'transient' | 'partial' | 'incomplete'
+}
+
+// Response from GET /api/traffic/flows/records — the newest records behind
+// one graph selection.
+export interface TrafficRecordsResponse {
+  source: string
+  timestamp: string
+  /** Newest first, at most the server's records limit. */
+  flows: TrafficFlow[]
+  /** How many records matched; more than flows.length when capped. */
+  matched: number
+  l7ResponsesCallerOriented?: boolean
+  coveredSince?: string
+  nodeFlowLimit?: number
+  flowLimit?: number
+  warning?: string
+  warningKind?: 'transient' | 'partial' | 'incomplete'
 }
 
 // Wizard state for traffic setup
@@ -1518,8 +1843,16 @@ export interface ImageMetadata {
 export interface WorkloadPodContainerInfo {
   name: string
   init?: boolean
+  /** An init container with restartPolicy Always. Absent from older Radars. */
+  sidecar?: boolean
   ready: boolean
   restartCount: number
+  /** Current run's state. Absent from older Radars. */
+  state?: 'waiting' | 'running' | 'terminated'
+  /** Waiting or terminated reason, e.g. PodInitializing, CrashLoopBackOff, Completed. */
+  reason?: string
+  /** Past its startup probe; a started native sidecar no longer holds up initialization. */
+  started?: boolean
 }
 
 export interface WorkloadPodInfo {
@@ -1548,6 +1881,7 @@ export type WorkloadLogEventType =
   | 'log'
   | 'pod_added'
   | 'pod_removed'
+  | 'pod_updated'
   | 'end'
   | 'error'
 

@@ -7,11 +7,15 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/policyreports"
-	batchv1 "k8s.io/api/batch/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	clienttesting "k8s.io/client-go/testing"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
@@ -39,12 +43,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
-			secretWriteTimes.reconcile(change, obj)
-			if cj, ok := obj.(*batchv1.CronJob); ok {
-				cronJobScheduleObservations.observe(change.Operation, cj)
-			}
-		},
+		OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
 	}
 
 	core, err := k8score.NewResourceCache(cfg)
@@ -59,6 +58,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
+		generation:                  cacheGeneration,
 	})
 
 	cacheOnce = new(sync.Once)
@@ -72,7 +72,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 // (delay their informer start via syncDelays), promoting them at runtime — the
 // state a SyncTimeout produces in production. syncTimeout bounds Phase 1 and
 // deferredSyncTimeout bounds the promoted kinds' background sync, so a test
-// can walk the full progressive contract: kind_sync_pending -> kind_sync_failed
+// can walk the full progressive contract: kind_sync_pending -> kind_sync_timed_out
 // -> served after a late sync. Call ResetResourceCache to clean up.
 //
 // This is intended for integration tests only.
@@ -90,9 +90,8 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 		MinimalSet:          map[string]bool{"services": true},
 		SyncTimeout:         syncTimeout,
 		DeferredSyncTimeout: deferredSyncTimeout,
-		// Delaying the informer START is the only safe way to hold a kind
-		// unsynced against a fake clientset: a blocking list reactor wedges
-		// every other kind too (reactors run under the fake's lock).
+		// Blocking a list reactor wedges other kinds under the fake's lock.
+		// Delay informer start or return errors immediately to hold it unsynced.
 		DebugSyncDelays: syncDelays,
 	}
 
@@ -107,6 +106,7 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
+		generation:                  cacheGeneration,
 	})
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
@@ -119,7 +119,7 @@ func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, defe
 //
 // This is intended for integration tests only.
 func InitTestResourceCache(client kubernetes.Interface) error {
-	return initTestResourceCache(client, nil)
+	return initTestResourceCache(client, nil, nil)
 }
 
 // InitScopedTestResourceCache is InitTestResourceCache with per-kind scopes,
@@ -127,10 +127,16 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 // cluster-wide. It is what lets a test reach the paths that must refuse to
 // read an informer covering other namespaces.
 func InitScopedTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope) error {
-	return initTestResourceCache(client, scopes)
+	return initTestResourceCache(client, scopes, nil)
 }
 
-func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope) error {
+// InitScopedTestResourceCacheNamespaces is InitScopedTestResourceCache for
+// kinds the probe found listable in several namespaces.
+func InitScopedTestResourceCacheNamespaces(client kubernetes.Interface, scopes map[string]k8score.ResourceScope, namespaces map[string][]string) error {
+	return initTestResourceCache(client, scopes, namespaces)
+}
+
+func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope, scopeNamespaces map[string][]string) error {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 
@@ -150,17 +156,13 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		Client:        client,
 		ResourceTypes: enabled,
 		// No deferred types for tests — all sync immediately
-		DeferredTypes:  map[string]bool{},
-		ResourceScopes: scopes,
+		DeferredTypes:           map[string]bool{},
+		ResourceScopes:          scopes,
+		ResourceScopeNamespaces: scopeNamespaces,
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
-		OnObservedChange: func(change k8score.ResourceChange, obj, _ any) {
-			secretWriteTimes.reconcile(change, obj)
-			if cj, ok := obj.(*batchv1.CronJob); ok {
-				cronJobScheduleObservations.observe(change.Operation, cj)
-			}
-		},
+		OnObservedChange: observedChangeHandler(client, secretWriteTimes.observeChange, cronJobScheduleObservations.observeChange),
 	}
 
 	core, err := k8score.NewResourceCache(cfg)
@@ -175,6 +177,7 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
+		generation:                  cacheGeneration,
 	})
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.
@@ -183,6 +186,23 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 
 	waitForInformerStatuses(resourceCache.Load())
 
+	return nil
+}
+
+// InitTestResourceCacheFromConfig installs a cache built from cfg as given and
+// does not wait for it to sync, for tests whose informers must stay loading
+// (a namespace that never answers, a deadline that has to fire).
+func InitTestResourceCacheFromConfig(cfg k8score.CacheConfig) error {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	core, err := k8score.NewResourceCache(cfg)
+	if err != nil {
+		return err
+	}
+	initialSyncComplete.Store(true)
+	resourceCache.Store(&ResourceCache{ResourceCache: core, generation: cacheGeneration})
+	cacheOnce = new(sync.Once)
+	cacheOnce.Do(func() {})
 	return nil
 }
 
@@ -260,6 +280,16 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 	return InitDynamicResourceCache(nil)
 }
 
+// SetTestDynamicSyncStallAfter sets how long a dynamic informer may stay
+// unsynced before it reads as stalled, for dynamic caches initialized after
+// the call. The production threshold, 30 seconds, is longer than a test should
+// wait. Returns a restore func.
+func SetTestDynamicSyncStallAfter(d time.Duration) func() {
+	previous := dynamicSyncStallAfter
+	dynamicSyncStallAfter = d
+	return func() { dynamicSyncStallAfter = previous }
+}
+
 // ResetTestDynamicState tears down the dynamic cache + discovery singletons
 // and clears the dynamic client. Pairs with InitTestDynamicResourceCache.
 func ResetTestDynamicState() {
@@ -280,6 +310,20 @@ func SetTestContextName(name string) string {
 	contextName = name
 	clientMu.Unlock()
 	return prev
+}
+
+// SetTestResourceDiscovery installs discovery backed by client and returns a
+// restore func.
+func SetTestResourceDiscovery(client discovery.DiscoveryInterface) (func(), error) {
+	core, err := k8score.NewResourceDiscovery(client)
+	if err != nil {
+		return nil, err
+	}
+	ResetResourceDiscovery()
+	discoveryMu.Lock()
+	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	discoveryMu.Unlock()
+	return ResetResourceDiscovery, nil
 }
 
 // SetTestLocalMode makes IsInCluster report local mode and returns a restore func.
@@ -503,7 +547,7 @@ func ResetTestState() {
 
 	// Reset resource permissions cache
 	resourcePermsMu.Lock()
-	cachedPermResult = nil
+	invalidateResourcePermissionsCacheLocked()
 	resourcePermsMu.Unlock()
 	ForceNamespaceScope = false
 	SetFallbackNamespace("")
@@ -546,4 +590,105 @@ func allTestResourceTypes() map[string]bool {
 		"networkpolicies":          true,
 		"limitranges":              true,
 	}
+}
+
+// SetTestPermissionProbeClient installs a dynamic client that grants every
+// list a permission probe makes, calling onList before each one answers.
+// Returns a restore func.
+//
+// Permission probes list resources this package chooses, so a test in another
+// package cannot build a fake that knows them all.
+func SetTestPermissionProbeClient(onList func()) func() {
+	gvrToListKind := map[schema.GroupVersionResource]string{}
+	for _, p := range resourceProbeTargets(&ResourcePermissions{}) {
+		for _, gvr := range resolveProbeGVRs(p) {
+			gvrToListKind[gvr] = gvr.Resource + "List"
+		}
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrToListKind)
+	client.PrependReactor("list", "*", func(clienttesting.Action) (bool, runtime.Object, error) {
+		onList()
+		return false, nil, nil // fall through to the default reactor (empty list)
+	})
+
+	clientMu.Lock()
+	prev := dynamicClient
+	dynamicClient = client
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		dynamicClient = prev
+		clientMu.Unlock()
+	}
+}
+
+// SetTestPermissionResult publishes a permission probe result as if a probe had
+// just produced it. Returns a restore func.
+//
+// The cache is otherwise only writable by a real probe, so without this seam a
+// test in another package cannot reach any of the code that reads it - the
+// handlers fall through to their "no probe data yet" path and assert nothing
+// while appearing to cover the endpoint.
+func SetTestPermissionResult(result *PermissionCheckResult) func() {
+	resourcePermsMu.Lock()
+	prevResult, prevExpiry := cachedPermResult, resourcePermsExpiry
+	cachedPermResult = result
+	resourcePermsExpiry = time.Now().Add(time.Minute)
+	resourcePermsMu.Unlock()
+	cache := GetResourceCache()
+	var previousBound *PermissionCheckResult
+	if cache != nil {
+		previousBound = cache.permissionResult
+		cache.permissionResult = clonePermissionCheckResult(result)
+	}
+
+	return func() {
+		resourcePermsMu.Lock()
+		cachedPermResult, resourcePermsExpiry = prevResult, prevExpiry
+		if cache != nil {
+			cache.permissionResult = previousBound
+		}
+		resourcePermsMu.Unlock()
+	}
+}
+
+// SetTestConnectionStatus sets the connection status without notifying
+// callbacks or starting auth recovery, and returns a func that restores the
+// previous status.
+func SetTestConnectionStatus(status ConnectionStatus) func() {
+	connectionStatusMu.Lock()
+	prev := connectionStatus
+	connectionStatus = status
+	connectionStatusMu.Unlock()
+	return func() {
+		connectionStatusMu.Lock()
+		connectionStatus = prev
+		connectionStatusMu.Unlock()
+	}
+}
+
+// InitTestDynamicResourceCacheWithFallbacks is InitTestDynamicResourceCache
+// for an identity that may not list CRDs cluster-wide: the dynamic cache then
+// probes fallbacks and watches each kind namespace by namespace.
+func InitTestDynamicResourceCacheWithFallbacks(dynClient dynamic.Interface, resources []APIResource, fallbacks []string) error {
+	resourcePermsMu.Lock()
+	prev, prevExpiry := cachedPermResult, resourcePermsExpiry
+	cachedPermResult = &PermissionCheckResult{Perms: &ResourcePermissions{}, ScopeCandidates: fallbacks}
+	resourcePermsExpiry = time.Now().Add(time.Hour)
+	resourcePermsMu.Unlock()
+	defer func() {
+		resourcePermsMu.Lock()
+		cachedPermResult, resourcePermsExpiry = prev, prevExpiry
+		resourcePermsMu.Unlock()
+	}()
+	return InitTestDynamicResourceCache(dynClient, resources)
+}
+
+func SetTestContextOperationInProgress(active bool) func() {
+	var value int32
+	if active {
+		value = 1
+	}
+	previous := activeContextOperations.Swap(value)
+	return func() { activeContextOperations.Store(previous) }
 }

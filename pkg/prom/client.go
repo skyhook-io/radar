@@ -124,7 +124,12 @@ func (c *Client) issueQuery(ctx context.Context, path string, params url.Values)
 	if pr.Status != "success" {
 		return nil, fmt.Errorf("prom: query error from %s: %s (%s)", c.t.Address(), pr.Error, pr.ErrorType)
 	}
-	return parseQueryResult(pr.Data)
+	result, err := parseQueryResult(pr.Data)
+	if err != nil {
+		return nil, err
+	}
+	result.Annotations = QueryAnnotations{Warnings: pr.Warnings, Infos: pr.Infos, Partial: pr.IsPartial}
+	return result, nil
 }
 
 // LabelValues returns values for a label via /api/v1/label/{label}/values.

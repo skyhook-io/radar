@@ -1,6 +1,8 @@
 suite: Service
 templates:
   - service.yaml
+values:
+  - ci/values.yaml
 tests:
   - it: base service annotations (ci/values.yaml)
     asserts:

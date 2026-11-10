@@ -32,6 +32,21 @@ func TestClusterShortName(t *testing.T) {
 		{"aks substring false-positive guarded: my-aks-experiment", "my-aks-experiment", "my-aks-experiment"},
 		{"aks substring false-positive guarded: aks", "aks", "aks"},
 
+		// OpenShift oc login: the server host names the cluster
+		{"openshift oc login", "myproject/api-prod-example-com:6443/alice", "api-prod-example-com"},
+		{"openshift user with colon", "default/api-crc-testing:6443/kube:admin", "api-crc-testing"},
+		{"openshift user with slash", "team-a/api-x-example-com:6443/idp/alice", "api-x-example-com"},
+		{"openshift ipv6 host", "default/[2001:db8::1]:6443/alice", "[2001:db8::1]"},
+		{"gitlab agent is not openshift", "gitlab-org/infra/platform/k8s-agents:production-eu-west-agent", "gitlab-org/infra/platform/k8s-agents:production-eu-west-agent"},
+		{"gitlab agent short path is not openshift", "group/project:agent", "group/project:agent"},
+		{"no user is not openshift", "group/project:6443/", "group/project:6443/"},
+		{"dotted host is not openshift", "ns/api.prod.example.com:6443/alice", "ns/api.prod.example.com:6443/alice"},
+		{"project ending in dash is not openshift", "ns-/api-prod:6443/alice", "ns-/api-prod:6443/alice"},
+		{"host ending in dash is not openshift", "ns/api-prod-:6443/alice", "ns/api-prod-:6443/alice"},
+		{"port out of range is not openshift", "ns/api-prod:99999/alice", "ns/api-prod:99999/alice"},
+		{"port zero is not openshift", "ns/api-prod:0/alice", "ns/api-prod:0/alice"},
+		{"eks arn with slash stays eks", "arn:aws:eks:us-east-1:123456789012:cluster/team/prod", "team/prod"},
+
 		// Fallthrough — user-named contexts and the in-cluster sentinel pass through.
 		{"unknown shape passes through", "my-staging-cluster", "my-staging-cluster"},
 		{"in-cluster sentinel", "in-cluster", "in-cluster"},

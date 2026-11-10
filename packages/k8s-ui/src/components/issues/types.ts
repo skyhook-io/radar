@@ -118,6 +118,23 @@ export interface IssueRecentChangeField {
   newValue?: unknown;
 }
 
+/** Names the caller's access kept out of a list, counted but never named. */
+export interface IssueWithheld {
+  count: number;
+  /** A readreason code; always "user_forbidden" today. */
+  reason: string;
+}
+
+export interface IssueRunningPreviousValue {
+  /** Owners the caller may read, capped at 5. */
+  workloads: string[] | null;
+  /** Owners left out because the caller may not read them. */
+  withheld?: IssueWithheld;
+  pods: number;
+  keys: string[];
+  note: string;
+}
+
 export interface IssueRecentChange {
   source?: string;
   kind: string;
@@ -130,15 +147,39 @@ export interface IssueRecentChange {
   timestamp: string;
   change_category?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
   rank_reason?: string;
-  /** Ranking hint for workload runtime configuration (including the image) or directly consumed ConfigMap data; not a causal claim. */
+  /** Ranking hint for workload runtime configuration (including the image), directly referenced ConfigMap data, or Secret writes with likely-stale env readers; not a causal claim. */
   application_configuration_change?: boolean;
   /** Set only on top-level recent_changes in an eligible, unfiltered issues response with complete linkage evidence. */
   not_linked_to_returned_issues?: boolean;
   fields?: IssueRecentChangeField[];
-  /** Workloads that mount/reference this ConfigMap directly ("Deployment/flagd").
-   *  Direct spec references only — runtime consumers via an intermediary
-   *  service are not captured. */
+  /** Workloads or Pods this ConfigMap or Secret is referenced by ("Deployment/flagd"), capped at 5.
+   *  Direct spec references only; references do not establish runtime use. */
   consumed_by?: string[];
+  /** Referencing workloads or Pods left out of consumed_by because the caller may not read them. */
+  consumed_by_withheld?: IssueWithheld;
+  running_previous_value?: IssueRunningPreviousValue;
+  updates_in_window?: number;
+  first_update_at?: string;
+}
+
+/** One finalizer removal: a JSON Patch that tests the object UID and the
+ *  finalizer at its index before removing it, previewed as dry runs. */
+export interface IssueFinalizerRemoval {
+  finalizer: string;
+  /** patch_resource tool input, with dry_run=true. */
+  patch_resource: Record<string, unknown>;
+  /** The same patch as a kubectl server-side dry run. */
+  kubectl: string;
+}
+
+export interface IssueConditionalCleanup {
+  /** Lead-in the reader must confirm, e.g. "If victoria-metrics-operator was
+   *  uninstalled on purpose (…), remove the finalizer". */
+  condition: string;
+  /** For agents: when the cleanup may be proposed. */
+  agent_guidance: string;
+  caution: string;
+  removals: IssueFinalizerRemoval[];
 }
 
 /** "No tracked non-status changes in the window" — the claim is scoped by
@@ -181,13 +222,30 @@ export interface Issue {
   reason: string;
   message?: string;
   raw_message?: string;
+  /** 'radar' when `message` is Radar's own summary rather than text from
+   *  Kubernetes or a controller. Such a message is never shown as raw output;
+   *  the server writes a `cause` that stands without it. */
+  message_source?: 'radar';
   /** Parsed domain diagnosis: plain-English cause, suggested next step, and
    *  an optional structured one-click fix.
    *  Server-emitted (omitempty); empty for issues without a parser. */
   cause?: string;
   action?: string;
+  /** What the suggested or most obvious action could destroy or take over,
+   *  such as a GitOps sync that would prune every managed resource. Show it
+   *  even when replacing cause or action with other guidance; action also
+   *  contains it. Absence means no warning was supplied, not that the action
+   *  is safe; older producers omit it. */
+  hazard?: string;
+  /** Optional presentation split; action always retains the complete guidance. */
+  action_primary?: string;
+  action_secondary_title?: string;
+  action_secondary?: string[];
   remediation_kind?: string;
   remediation_target?: string;
+  /** A cleanup that is right only when its condition holds — never part of
+   *  `action`. Shown collapsed, labeled with the condition. */
+  conditional_cleanup?: IssueConditionalCleanup;
   /** Controller-operation retry count (e.g. Argo's "(retried N times)") —
    *  distinct from restart_count (pod restarts). stuck = not expected to
    *  self-recover. */
@@ -230,6 +288,9 @@ export interface Issue {
   // Pod crash context carried from the representative member.
   restart_count?: number;
   last_terminated_reason?: string;
+  /** Evidence for a container in an active restart loop (crashloop issues).
+   *  Probe failures are observations alongside the restarts, not a cause. */
+  restart_loop?: IssueRestartLoop;
 
   /**
    * Best-effort timing evidence from K8s-native signals. Absent when Radar has
@@ -257,6 +318,9 @@ export interface Issue {
    *  NEITHER correlation field was not checked — absence must not be read as
    *  "no changes". MCP-only, like correlated_changes. */
   no_recent_changes?: IssueNoRecentChanges;
+  /** The subject's change history in the window was larger than Radar reads,
+   *  so correlated_changes are leads, not its full history. MCP-only. */
+  correlated_changes_incomplete?: boolean;
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's
@@ -359,4 +423,25 @@ export function issueMessageParts(issue: Issue): { headline: string; detail: str
   const normalized = isImagePull ? normalizeImagePullMessage(raw) : null;
   if (normalized && normalized !== raw) return { headline: normalized, detail: raw };
   return { headline: raw, detail: '' };
+}
+
+export interface IssueProbeFailure {
+  last_seen: string;
+  message?: string;
+}
+
+export interface IssueRestartLoop {
+  container: string;
+  sidecar?: boolean;
+  restart_count: number;
+  last_exit_code: number;
+  last_reason?: string;
+  last_finished_at?: string;
+  last_started_at?: string;
+  looping_pods?: number;
+  workload_pods?: number;
+  severity_reason?: string;
+  liveness_probe_failure?: IssueProbeFailure;
+  readiness_probe_failure?: IssueProbeFailure;
+  startup_probe_failure?: IssueProbeFailure;
 }

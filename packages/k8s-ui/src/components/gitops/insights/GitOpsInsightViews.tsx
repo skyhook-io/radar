@@ -1,13 +1,16 @@
 import { AlertTriangle, ArrowUpDown, ChevronDown, ChevronRight, ChevronUp, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { IssueGuidance } from '../../issues/IssueGuidance'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
+import type { GitOpsChange, GitOpsDrift, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { radarHealthNote } from '../health-provenance'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
+import { RadarUpgradeNote, radarUpgradeNoteText } from '../../ui/RadarUpgradeNote'
+import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
 import { SearchBox } from '../../ui/SearchBox'
 import { FilterPill, type FilterPillTone } from '../../ui/FilterPill'
 import { Collapse, CollapseChevron } from '../../ui/Collapse'
@@ -21,15 +24,17 @@ import {
   entryTone,
   gitopsToSeverity,
   healthStatusRank,
+  historyRollbackBlockedReason,
   isArgoResourceSyncEligible,
   messageToPhase,
-  normalizeHealthStatus,
+  missingResourceMessage,
   normalizeSyncStatus,
   resourceStatusCounts,
   syncStatusRank,
   type ResourceSortKey,
   type ResourceStatusFacet,
 } from './insights-helpers'
+import { DriftPanel } from './DriftPanel'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -72,7 +77,6 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
   const revision = summary.lastRevision || summary.targetRevision || ''
   const shortRev = shortRevisionForCommit(revision)
   const commitUrl = revision ? commitURLForRepo(summary.source, revision) : null
-  const reconcileAge = formatRelative(summary.lastReconcile)
   const healthSummary = buildHealthSummary(insight.changes ?? [])
   // STUCK belongs with the operation chip — it's a property of the same
   // state ("failed AND won't self-recover"). Co-locating FAILED + STUCK ·
@@ -123,7 +127,7 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
           {shortRev && (
             <span className="inline-flex items-baseline gap-1">
-              <span className="shrink-0">Latest revision:</span>
+              <span className="shrink-0">Revision:</span>
               {commitUrl ? (
                 <Tooltip content={`Open commit ${revision} on the remote`} delay={400}>
                   <a
@@ -140,11 +144,10 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
                   <span className="font-mono font-medium text-theme-text-primary">{shortRev}</span>
                 </Tooltip>
               )}
-              {reconcileAge && <span className="text-theme-text-tertiary">· {reconcileAge}</span>}
               {revision && renderRevisionMeta?.(revision)}
             </span>
           )}
-          {!shortRev && reconcileAge && <MetaFact label="Last reconcile" value={reconcileAge} />}
+          <SummaryTiming summary={summary} />
           {healthSummary && (
             <span className={clsx('inline-flex items-baseline gap-1 font-medium', healthSummary.tone)}>
               {healthSummary.text}
@@ -222,7 +225,10 @@ function commitURLForRepo(source: string | undefined, revision: string): string 
 // "did everything come up?" summary. All-healthy reads green and explicit
 // ("4/4 resources healthy"); mixed states list the unhealthy buckets so
 // the user sees at a glance what didn't make it.
-function buildHealthSummary(changes: GitOpsChange[]): { text: string; tone: string } | null {
+function buildHealthSummary(allChanges: GitOpsChange[]): { text: string; tone: string } | null {
+  // Dependencies are consumed, not deployed, so they don't count toward
+  // "did everything come up"; a failing one has its own Issue.
+  const changes = allChanges.filter((c) => !c.dependency)
   if (changes.length === 0) return null
   let healthy = 0
   let degraded = 0
@@ -233,7 +239,8 @@ function buildHealthSummary(changes: GitOpsChange[]): { text: string; tone: stri
     // Count HEALTH, not sync — a Synced resource can still be Degraded, so check
     // degraded/missing FIRST and never let a Synced sync-state mask it. A Synced
     // resource with no assessed health (ConfigMaps etc.) still reads as fine.
-    if (c.health === 'Degraded' || c.category === 'Degraded') degraded++
+    if (c.missing) missing++
+    else if (c.health === 'Degraded' || c.category === 'Degraded') degraded++
     else if (c.health === 'Missing' || c.category === 'Missing') missing++
     else if (c.health === 'Healthy' || c.category === 'Synced') healthy++
     else if (c.category === 'OutOfSync') outOfSync++
@@ -257,7 +264,7 @@ function buildHealthSummary(changes: GitOpsChange[]): { text: string; tone: stri
 // disclosure — still available for forensics but not noise during deletion.
 function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsight['summary']> }) {
   const [showHistorical, setShowHistorical] = useState(false)
-  const pending = formatRelative(summary.terminationStartedAt) || 'recently'
+  const pending = formatRelativeAgeTime(summary.terminationStartedAt) || 'recently'
   const finalizers = summary.finalizers ?? []
   return (
     <div className="border-b border-orange-500/20 bg-orange-500/[0.04] px-4 py-2">
@@ -282,12 +289,39 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
           {(summary.lastRevision || summary.targetRevision) && (
             <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
           )}
-          {summary.lastReconcile && <MetaFact label="Last reconcile" value={formatRelative(summary.lastReconcile)} />}
+          <SummaryTiming summary={summary} />
           {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
         </div>
       </Collapse>
     </div>
   )
+}
+
+function SummaryTiming({ summary }: { summary: NonNullable<GitOpsInsight['summary']> }) {
+  let label: string
+  let timestamp: string | undefined
+  let description: string
+  if (summary.tool === 'fluxcd' && summary.kind === 'Kustomization' && summary.lastApplied) {
+    label = 'Last applied'
+    timestamp = summary.lastApplied
+    description = 'Latest successful apply recorded by Flux, including routine re-applies with no changes.'
+  } else if (summary.tool === 'fluxcd' && summary.kind === 'Kustomization') {
+    label = 'Last apply attempt'
+    timestamp = summary.lastApplyAttempt
+    description = 'Latest apply attempt recorded by Flux. It did not succeed. Failures before apply may not add a history entry.'
+  } else if (summary.tool === 'fluxcd' && summary.kind === 'HelmRelease') {
+    label = 'Last deployed'
+    timestamp = summary.lastRevision ? summary.lastDeployed : undefined
+    description = 'Deployment time of the currently deployed Helm release.'
+  } else if (summary.tool === 'argocd' && summary.kind === 'Application') {
+    label = 'Last checked'
+    timestamp = summary.lastReconcile
+    description = 'When Argo CD last compared the application with Git. This is not its deployment or commit date.'
+  } else {
+    return null
+  }
+  if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return null
+  return <MetaFact label={label} value={formatRelativeAgeTime(timestamp)} tooltip={`${description} ${new Date(timestamp).toLocaleString()}`} />
 }
 
 function isInFlightPhase(phase: string): boolean {
@@ -307,14 +341,14 @@ function liveOperationPhase(phase?: string): string | null {
   return phase
 }
 
-function MetaFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function MetaFact({ label, value, mono = false, tooltip }: { label: string; value: string; mono?: boolean; tooltip?: string }) {
   // inline-flex so each fact sizes to content; flex-wrap on the parent
   // handles row breaks. max-w-full guards the pathological "value wider
   // than viewport" case where truncate + tooltip take over.
   return (
     <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
       <span className="shrink-0">{label}:</span>
-      <Tooltip content={value} delay={400} wrapperClassName="min-w-0">
+      <Tooltip content={tooltip ?? value} delay={400} wrapperClassName="min-w-0">
         <span className={clsx('block truncate font-medium text-theme-text-primary', mono && 'font-mono')}>{value}</span>
       </Tooltip>
     </span>
@@ -354,7 +388,7 @@ export function GitOpsIssuesBand({
         <GitOpsHistoricalIssuesDisclosure operationFailure={operationFailure} others={others} onSelectIssue={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />
       ) : (
         <>
-          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />}
+          {operationFailure && <GitOpsFailureCard issue={operationFailure} emptyRenderGuardShown={others[0]?.reason === 'AutoSyncBlockedEmpty'} onSelect={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />}
           {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
         </>
       )}
@@ -378,7 +412,7 @@ function GitOpsLifecycleBanner({ issue }: { issue: GitOpsIssue }) {
           </div>
           <p className="mt-1 text-[13px] text-theme-text-secondary">{issue.message}</p>
           {issue.cause && <p className="mt-1 text-[12px] text-orange-300/90">{issue.cause}</p>}
-          {issue.action && <p className="mt-1 text-[11px] text-theme-text-tertiary">{issue.action}</p>}
+          <IssueNextStep issue={issue} className="mt-1" />
         </div>
       </div>
     </div>
@@ -426,7 +460,7 @@ function GitOpsHistoricalIssuesDisclosure({
       </button>
       <Collapse open={expanded}>
         <div className="border-t border-theme-border">
-          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />}
+          {operationFailure && <GitOpsFailureCard issue={operationFailure} emptyRenderGuardShown={others[0]?.reason === 'AutoSyncBlockedEmpty'} onSelect={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />}
           {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
         </div>
       </Collapse>
@@ -435,15 +469,18 @@ function GitOpsHistoricalIssuesDisclosure({
 }
 
 // Structured failure card. One unit, owns the failure narrative end-to-end:
-// title (parsed cause when recognized, falls back to raw reason), affected
-// resource, retry posture, raw controller error in a collapsed details.
+// title (parsed cause when recognized, falls back to raw reason), sync
+// hazard, cause, next step, affected resource, retry posture, raw controller
+// error in a collapsed details.
 function GitOpsFailureCard({
   issue,
+  emptyRenderGuardShown,
   onSelect,
   onRemediate,
   remediationPending,
 }: {
   issue: GitOpsIssue
+  emptyRenderGuardShown: boolean
   onSelect?: (issue: GitOpsIssue) => void
   // onRemediate fires when the contextual fix button is clicked. The host
   // app (web/) dispatches on issue.remediation.kind to run the right
@@ -487,7 +524,16 @@ function GitOpsFailureCard({
               <span className="text-[11px] text-theme-text-tertiary">retried {issue.retryCount}×</span>
             )}
           </div>
+          {/* Ahead of the body: a cause can end in its own sync advice
+              ("so Argo creates it on sync"), which the hazard overrides. */}
+          {issue.hazard && (
+            <div className={clsx('mt-2 flex items-start gap-1.5 rounded border px-2 py-1.5 text-[12px] font-medium', SEVERITY_BADGE.warning)}>
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <p className="min-w-0">{emptyRenderGuardShown ? 'See the empty-render guard below before syncing.' : issue.hazard}</p>
+            </div>
+          )}
           {body && <p className="mt-1 text-[13px] text-theme-text-secondary">{body}</p>}
+          <IssueNextStep issue={issue} className="mt-1" />
           {ref && (
             <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[12px]">
               <div className="flex gap-1.5">
@@ -586,6 +632,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
   const [expanded, setExpanded] = useState(false)
   if (issues.length === 0) return null
   const headline = issues[0]!
+  const wrapHeadline = headline.reason === 'RolledBack' || headline.reason === 'RollbackRevisionMismatch' || headline.reason === 'SyncWindowBlocked'
   const remaining = issues.length - 1
   const tone = severityTone(headline.severity)
   const headlineRef = headline.refs?.[0]
@@ -613,7 +660,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
         <div className="flex w-full items-center gap-2">
           {tone.icon}
           <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
-          <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
+          <span className={clsx('min-w-0 flex-1 text-theme-text-secondary', wrapHeadline ? 'whitespace-normal break-words' : 'truncate')}>{headline.message}</span>
           {/* Inline count when there are more issues behind the headline.
               Lightweight text — pairs with the chevron as a single disclosure
               unit instead of a separator-bordered count button. */}
@@ -632,10 +679,13 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
           )}
           {canExpand && <CollapseChevron open={expanded} className="h-3.5 w-3.5" />}
         </div>
-        {headline.cause && (
-          <p className="truncate pl-[22px] text-[11px] text-theme-text-tertiary">{headline.cause}</p>
-        )}
       </button>
+      {(headline.cause || headline.action) && (
+        <div className="px-4 pb-2 pl-[38px]">
+          {headline.cause && <p className="text-[11px] text-theme-text-tertiary">{headline.cause}</p>}
+          <IssueNextStep issue={headline} />
+        </div>
+      )}
       {canExpand && (
         <Collapse open={expanded}>
         <div className="divide-y divide-theme-border border-t border-theme-border bg-theme-base/40">
@@ -645,33 +695,34 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
             const actionable = !!(onSelectIssue && ref)
             const rawMessage = issue.rawMessage && issue.rawMessage !== issue.message ? issue.rawMessage : ''
             return (
-              <button
-                key={`${issue.reason}-${index}`}
-                type="button"
-                onClick={() => actionable && onSelectIssue?.(issue)}
-                disabled={!actionable}
-                className={clsx(
-                  'group flex w-full items-start gap-2 px-4 py-2 text-left text-xs transition-colors',
-                  actionable ? 'hover:bg-theme-hover/50' : 'cursor-default',
-                )}
-              >
-                {t.icon}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className={clsx('font-semibold', t.text)}>{issue.reason}</span>
-                    <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{issue.scope}</span>
+              <div key={`${issue.reason}-${index}`}>
+                <button
+                  type="button"
+                  onClick={() => actionable && onSelectIssue?.(issue)}
+                  disabled={!actionable}
+                  className={clsx(
+                    'group flex w-full items-start gap-2 px-4 py-2 text-left text-xs transition-colors',
+                    actionable ? 'hover:bg-theme-hover/50' : 'cursor-default',
+                  )}
+                >
+                  {t.icon}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={clsx('font-semibold', t.text)}>{issue.reason}</span>
+                      <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{issue.scope}</span>
+                    </div>
+                    <p className="mt-0.5 text-theme-text-secondary">{issue.message}</p>
+                    {issue.cause && <p className="mt-0.5 text-[11px] text-theme-text-tertiary">{issue.cause}</p>}
+                    {rawMessage && <p className="mt-0.5 break-words font-mono text-[11px] text-theme-text-tertiary">{rawMessage}</p>}
                   </div>
-                  <p className="mt-0.5 text-theme-text-secondary">{issue.message}</p>
-                  {issue.cause && <p className="mt-0.5 text-[11px] text-theme-text-tertiary">{issue.cause}</p>}
-                  {rawMessage && <p className="mt-0.5 break-words font-mono text-[11px] text-theme-text-tertiary">{rawMessage}</p>}
-                  {issue.action && <p className="mt-0.5 text-[11px] text-theme-text-tertiary">{issue.action}</p>}
-                </div>
-                {actionable && ref && (
-                  <span className="shrink-0 self-center text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
-                    Open {refText(ref)} →
-                  </span>
-                )}
-              </button>
+                  {actionable && ref && (
+                    <span className="shrink-0 self-center text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
+                      Open {refText(ref)} →
+                    </span>
+                  )}
+                </button>
+                <IssueNextStep issue={issue} className="px-4 pb-2 pl-[38px]" />
+              </div>
             )
           })}
         </div>
@@ -679,6 +730,13 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
       )}
     </div>
   )
+}
+
+// IssueNextStep is an issue's next step, styled alike on every surface of the
+// band. Wrapped, never truncated: a next step often ends in the caveat that
+// makes it safe (what not to sync), which truncation would cut.
+function IssueNextStep({ issue, className }: { issue: GitOpsIssue; className?: string }) {
+  return <IssueGuidance action={issue.action} primary={issue.actionPrimary} secondaryTitle={issue.actionSecondaryTitle} secondary={issue.actionSecondary} ordered={issue.reason === 'SharedResourceWarning'} className={clsx('text-[11px] text-theme-text-tertiary', className)} />
 }
 
 // firstSentence/remainderAfterFirstSentence split a string at the first
@@ -735,7 +793,10 @@ interface GitOpsChangesViewProps {
   // returns the loaded <ArgoResourceDiff/>. When present AND
   // insight.capabilities.argoDiffAvailable, resolvable rows expose a "Full
   // diff" toggle. Library consumers that don't wire it get no such affordance.
-  renderResourceDiff?: (ref: GitOpsInsightRef) => ReactNode
+  // fallbackDrift is the row's last-applied field list. The loaded diff shows
+  // Argo's own field list instead, and falls back to this one when the diff
+  // can't be loaded.
+  renderResourceDiff?: (ref: GitOpsInsightRef, fallbackDrift?: GitOpsDrift) => ReactNode
   // Opens the global Settings dialog. Backs the "Connect Argo CD" hint shown
   // when the root is an Argo Application without the diff integration.
   onOpenSettings?: () => void
@@ -857,6 +918,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
   // honest about what it's NOT checking. Neutral note, not an alarm.
   const ignoredDiffs = insight.summary.ignoredDifferences
   const isArgoRoot = insight.summary.tool === 'argocd' && insight.summary.kind === 'Application'
+  const syncHazard = insight.issues?.find((issue) => issue.hazard)?.hazard
   // Full-diff affordance is offered only when the backend reports the Argo CD
   // integration is connected for this app AND the host wired the loader.
   const argoDiffAvailable = isArgoRoot && !!insight.capabilities?.argoDiffAvailable && !!renderResourceDiff
@@ -869,6 +931,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
   // to a muted placeholder and explain the cause once. Health stays — it's a
   // live signal that's still knowable and still worth reading.
   const syncUnavailable = isArgoRoot && (insight.summary.sync ?? '').toLowerCase() === 'unknown'
+  const rolledBack = !!insight.summary.rollbackRevision
   const toggleFacet = (facet: ResourceStatusFacet) => {
     setStatusFilters((prev) => {
       const next = new Set(prev)
@@ -1005,7 +1068,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
             )}
           </div>
         )}
-        {totalCount > 0 && isArgoRoot && !insight.capabilities?.argoDiffAvailable && onOpenSettings && (
+        {totalCount > 0 && isArgoRoot && !insight.capabilities?.argoDiffAvailable && !insight.capabilities?.argoConnecting && onOpenSettings && (
           <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
             {insight.capabilities?.argoConfigured ? (
               <>
@@ -1089,9 +1152,11 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
                 const waveSet = !!planItem?.waveSet
                 const rowKey = refKey(change.ref)
                 const focused = focusKey === rowKey
-                const explanation = !change.syncError && !change.message
-                  ? explainChangeStatus(change.sync, change.health, insight.summary)
-                  : ''
+                const explanation = change.missing
+                  ? missingResourceMessage(change.sync, { hazard: syncHazard, rolledBack })
+                  : !change.syncError && !change.message
+                    ? explainChangeStatus(change.sync, change.health, insight.summary, { hazard: syncHazard, rolledBack })
+                    : ''
                 const hasInlineDetail = !!(
                   (change.drift && change.drift.entries.length > 0) ||
                   (change.recentEvents && change.recentEvents.length > 0)
@@ -1238,7 +1303,8 @@ function buildTreeExtras(nodes: GitOpsTreeNode[], declared: GitOpsChange[]): Git
       // had a controller verdict to be distinguished from.
       message: n.healthMessage,
       hasDesired: false,
-      hasLive: true,
+      hasLive: !n.missing,
+      missing: n.missing,
       partial: true,
       partialNote: 'Generated resource — not directly tracked by the GitOps controller (no drift / event diagnostics).',
     })
@@ -1264,7 +1330,12 @@ function explainChangeStatus(
   sync: string | undefined,
   health: string | undefined,
   summary: GitOpsInsight['summary'],
+  context?: { hazard?: string; rolledBack?: boolean },
 ): string {
+  if (context?.hazard && (sync === 'OutOfSync' || health === 'Missing')) {
+    return 'See the sync warning above before syncing this Application.'
+  }
+  if (context?.rolledBack && health === 'Missing') return missingResourceMessage(sync, context)
   const isAuto = (summary.autoSyncMode ?? '').toLowerCase().startsWith('auto')
   const phase = (summary.operationPhase ?? '').toLowerCase()
   const inFlight = phase === 'running'
@@ -1276,6 +1347,7 @@ function explainChangeStatus(
   if (sync === 'OutOfSync') {
     if (parentFailed) return 'Sync failed for this resource — see the operation error above for the cause.'
     if (inFlight) return 'Live state differs from Git. A sync is in progress — wait for it to finish.'
+    if (context?.rolledBack) return 'Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.'
     if (isAuto) return 'Live state differs from Git. Auto-sync should reconcile this within a few minutes; click Sync to force it.'
     return 'Live state differs from Git. Click Sync to apply the desired state.'
   }
@@ -1330,7 +1402,7 @@ function ChangeRow({
   // When true, the expanded panel offers a "Full diff" toggle that mounts the
   // host-wired Argo CD diff loader for this resource.
   canFullDiff: boolean
-  renderResourceDiff?: (ref: GitOpsInsightRef) => ReactNode
+  renderResourceDiff?: (ref: GitOpsInsightRef, fallbackDrift?: GitOpsDrift) => ReactNode
   onOpenResource?: (ref: GitOpsChange['ref']) => void
   onSyncResource?: (ref: GitOpsChange['ref']) => void
   syncResourceDisabledReason?: string
@@ -1358,8 +1430,10 @@ function ChangeRow({
   // differently: hide the Open pill, suppress the drawer-open click path,
   // and offer "View in Git →" instead so the operator can read the
   // declared source instead of a non-existent live object.
-  const isAbsent = change.health === 'Missing' && !change.hasLive
-  const radarNote = radarHealthNote({ health: change.health, healthSource: change.healthSource, healthMessage: change.message })
+  const isAbsent = change.missing || (change.health === 'Missing' && !change.hasLive)
+  const radarNote = change.missing
+    ? 'Radar confirmed that this resource is not present in the cluster.'
+    : radarHealthNote({ health: change.health, healthSource: change.healthSource, healthMessage: change.message })
   const handleRowClick = () => {
     if (expandable) {
       setExpanded((v) => !v)
@@ -1422,8 +1496,11 @@ function ChangeRow({
             )}
             {/* Detail badges: surface that there's something to see in
                 the expanded panel. Without these the user has no signal
-                that clicking will reveal anything useful. */}
-            {driftEntries.length > 0 && (
+                that clicking will reveal anything useful. The field count
+                comes from the last-applied list, which can undercount on an
+                Argo row (Argo's own list loads only on expand), so it is
+                left off there. The OutOfSync badge already marks the row. */}
+            {!canFullDiff && driftEntries.length > 0 && (
               <Tooltip content={`${driftEntries.length} field${driftEntries.length === 1 ? '' : 's'} differ from Git`} delay={200} wrapperClassName="shrink-0">
                 <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
                   {driftEntries.length} diff
@@ -1453,7 +1530,7 @@ function ChangeRow({
             </Tooltip>
           )}
           {change.message && !change.syncError && <div className="ml-[18px] mt-1 line-clamp-2 text-xs text-theme-text-secondary">{change.message}</div>}
-          {!change.syncError && !change.message && explanation && (
+          {!change.syncError && (change.missing || !change.message) && explanation && (
             <div className="ml-[18px] mt-1 text-xs text-theme-text-tertiary">{explanation}</div>
           )}
         </button>
@@ -1467,7 +1544,7 @@ function ChangeRow({
           )}
         </div>
         <div className="flex flex-col items-start gap-1 self-start">
-          <HealthStatusBadge health={normalizeHealthStatus(change.health)} />
+          <HealthStatusBadge health={changeHealth(change)} />
           {radarNote && (
             <Tooltip content={radarNote} delay={200} wrapperClassName="inline-flex">
               <span className="cursor-help select-none rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
@@ -1523,81 +1600,24 @@ function ChangeRow({
       {expandable && (
         <Collapse open={expanded} mountLazily>
           <div className="border-t border-theme-border bg-theme-base/40 px-4 py-3">
-            {driftEntries.length > 0 && <DriftPanel drift={change.drift!} />}
+            {/* The last-applied list only knows what was applied at the last
+                sync, so it misses a Git change that hasn't synced yet. When
+                Argo's diff can load, it owns the field list and shows this
+                one only if that load fails. */}
+            {!canFullDiff && driftEntries.length > 0 && <DriftPanel drift={change.drift!} />}
             {events.length > 0 && <RecentEventsPanel events={events} />}
             {/* Expanding a row IS the request to see its diff — render it inline
                 rather than behind a second "Full diff" click. The capability is
                 already gated on a live Argo connection, so this only mounts (and
                 fetches) when the diff can actually be served. */}
             {canFullDiff && (
-              <div className={clsx((driftEntries.length > 0 || events.length > 0) && 'mt-3')}>
-                {renderResourceDiff?.(change.ref)}
+              <div className={clsx(events.length > 0 && 'mt-3')}>
+                {renderResourceDiff?.(change.ref, change.drift)}
               </div>
             )}
           </div>
         </Collapse>
       )}
-    </div>
-  )
-}
-
-// DriftPanel renders the structured per-field diff. Format mimics a
-// `diff -u` summary: removed paths in red, added in green, changed shown
-// inline as "old → new". Path is monospace; values are JSON-encoded and
-// pre-wrapped so structured values (objects, arrays) render readably.
-function DriftPanel({ drift }: { drift: NonNullable<GitOpsChange['drift']> }) {
-  const sourceLabel = driftSourceLabel(drift.source)
-  return (
-    <div>
-      <div className="mb-2 flex items-baseline justify-between gap-2">
-        <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Field diff</h4>
-        <span className="text-[10px] text-theme-text-tertiary">
-          desired (Git) → live ·
-          {drift.truncated ? ' showing first 50 entries' : ` ${drift.entries.length} field${drift.entries.length === 1 ? '' : 's'}`}
-          {sourceLabel && ` · ${sourceLabel}`}
-        </span>
-      </div>
-      <div className="space-y-1 font-mono text-[11px]">
-        {drift.entries.map((entry, i) => (
-          <DriftEntryRow key={`${entry.path}-${i}`} entry={entry} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// Provenance label for a Drift's field entries. Only Argo-sourced drift gets an
-// explicit label; the built-in last-applied path renders without one (the
-// "desired (Git) → live" copy already implies it). Unknown sources (a library
-// consumer lagging the backend) fall through to no label rather than surfacing
-// a raw enum string.
-function driftSourceLabel(source: NonNullable<GitOpsChange['drift']>['source']): string {
-  return source === 'argocd-api' ? 'via Argo CD API' : ''
-}
-
-function DriftEntryRow({ entry }: { entry: NonNullable<GitOpsChange['drift']>['entries'][number] }) {
-  if (entry.op === 'removed') {
-    return (
-      <div>
-        <span className="text-red-600 dark:text-red-400">- {entry.path}</span>
-        {entry.desired && <span className="ml-2 text-theme-text-secondary">{entry.desired}</span>}
-      </div>
-    )
-  }
-  if (entry.op === 'added') {
-    return (
-      <div>
-        <span className="text-emerald-700 dark:text-emerald-400">+ {entry.path}</span>
-        {entry.live && <span className="ml-2 text-theme-text-secondary">{entry.live}</span>}
-      </div>
-    )
-  }
-  return (
-    <div>
-      <span className="text-amber-700 dark:text-amber-400">~ {entry.path}</span>
-      <span className="ml-2 text-theme-text-tertiary">{entry.desired}</span>
-      <span className="mx-1 text-theme-text-tertiary">→</span>
-      <span className="text-theme-text-primary">{entry.live}</span>
     </div>
   )
 }
@@ -1628,7 +1648,7 @@ function RecentEventsPanel({ events }: { events: NonNullable<GitOpsChange['recen
                 {e.count && e.count > 1 && (
                   <span className="text-[10px] text-theme-text-tertiary">×{e.count}</span>
                 )}
-                <span className="ml-auto text-[10px] text-theme-text-tertiary">{formatRelativeTime(e.lastTimestamp)}</span>
+                <span className="ml-auto text-[10px] text-theme-text-tertiary">{formatRelativeAgeTime(e.lastTimestamp, '')}</span>
               </div>
               <p className="mt-0.5 text-theme-text-secondary">{e.message}</p>
             </div>
@@ -1639,10 +1659,6 @@ function RecentEventsPanel({ events }: { events: NonNullable<GitOpsChange['recen
   )
 }
 
-function formatRelativeTime(value: string): string {
-  return formatRelativeAgeTime(value, '')
-}
-
 interface GitOpsActivityInsightViewProps {
   insight?: GitOpsInsight | null
   error?: Error | null
@@ -1651,12 +1667,17 @@ interface GitOpsActivityInsightViewProps {
   // with the target entry. The consumer is responsible for the confirmation
   // dialog + the actual mutation.
   onRollback?: (item: GitOpsHistoryItem) => void
+  // Set when the connected Radar is too old to roll back: every Rollback
+  // renders disabled, with the upgrade note above the history.
+  rollbackUpgrade?: RadarUpgradeRequirement | null
+  rollbackBlockedReason?: string
 }
 
-export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOpsActivityInsightViewProps) {
+export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackUpgrade, rollbackBlockedReason }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <PaneLoader label="Loading GitOps activity…" className="h-full" />
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
+  const upgrade = canRollback ? rollbackUpgrade ?? null : null
   // Auto-sync makes rollback futile — the controller would re-sync to HEAD
   // immediately. Argo's own Web UI disables the button in this state. Detect
   // by autoSyncMode prefix so "Auto · prune", "Auto · self-heal", etc. all match.
@@ -1670,12 +1691,18 @@ export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOps
         <SectionHeader
           icon={Clock3}
           title="History"
-          hint={canRollback ? 'Each revision can be rolled back to.' : undefined}
+          hint={canRollback && !upgrade && !rollbackBlockedReason ? 'Each revision can be rolled back to.' : undefined}
         />
+        {upgrade && <RadarUpgradeNote requirement={upgrade} className="border-b border-theme-border px-4 py-2.5" />}
+        {canRollback && rollbackBlockedReason && <p className="border-b border-theme-border px-4 py-2.5 text-xs text-theme-text-secondary">{rollbackBlockedReason}</p>}
         <HistoryRows
           items={insight.history ?? []}
           canRollback={canRollback}
-          rollbackBlockedReason={autoSyncBlocksRollback ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.' : undefined}
+          rollbackBlockedReason={rollbackBlockedReason || (upgrade
+            ? radarUpgradeNoteText(upgrade)
+            : autoSyncBlocksRollback
+              ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.'
+              : undefined)}
           onRollback={onRollback}
         />
       </section>
@@ -1715,6 +1742,7 @@ function HistoryRows({
         // the in-flight current operation row has no ID and rolling "back"
         // to it is meaningless.
         const showRollback = canRollback && !!item.id && !!onRollback
+        const blockedReason = historyRollbackBlockedReason(item, rollbackBlockedReason)
         return (
           // `group` enables the Rollback button's hover-reveal; baseline
           // opacity-40 keeps it touch-discoverable.
@@ -1729,28 +1757,28 @@ function HistoryRows({
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span className="font-mono text-xs text-theme-text-primary">{item.revision || item.phase || '-'}</span>
                 <PhaseChip phase={item.phase} message={item.message} />
-                <span className="text-[11px] text-theme-text-tertiary">{formatRelative(item.deployedAt)}</span>
+                <span className="text-[11px] text-theme-text-tertiary">{formatRelativeAgeTime(item.deployedAt)}</span>
                 {item.initiatedBy && (
                   <span className="text-[11px] text-theme-text-tertiary">by {item.initiatedBy}</span>
                 )}
                 {showRollback && (
                   <Tooltip
-                    content={rollbackBlockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
+                    content={blockedReason || `Roll back to revision ${item.revision || `#${item.id}`}`}
                     delay={200}
                     wrapperClassName="ml-auto"
                   >
                     {/* Two visually distinct states:
                         - Enabled: low-emphasis baseline (opacity-40), brightens on row hover
-                        - Disabled (auto-sync on): full opacity but desaturated, cursor-not-allowed,
+                        - Disabled (auto-sync on, or an entry with no source): full opacity but desaturated, cursor-not-allowed,
                           no hover affordance — reads unambiguously as "not actionable, here's why" */}
                     <button
                       type="button"
-                      onClick={() => !rollbackBlockedReason && onRollback?.(item)}
-                      disabled={!!rollbackBlockedReason}
-                      aria-disabled={!!rollbackBlockedReason}
+                      onClick={() => !blockedReason && onRollback?.(item)}
+                      disabled={!!blockedReason}
+                      aria-disabled={!!blockedReason}
                       className={clsx(
                         'rounded border px-1.5 py-0.5 text-[10px] transition-opacity',
-                        rollbackBlockedReason
+                        blockedReason
                           ? 'cursor-not-allowed border-theme-border bg-theme-base text-theme-text-tertiary'
                           : 'border-theme-border bg-theme-elevated text-theme-text-secondary opacity-40 hover:bg-theme-hover hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100'
                       )}
@@ -1831,6 +1859,3 @@ function InsightErrorState({ error }: { error: Error }) {
   )
 }
 
-function formatRelative(value?: string) {
-  return formatRelativeAgeTime(value)
-}

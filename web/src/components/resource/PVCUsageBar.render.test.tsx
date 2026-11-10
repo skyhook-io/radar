@@ -182,3 +182,35 @@ describe('PVC metrics next step', () => {
     expect(render()).not.toContain('Ask your operator')
   })
 })
+
+describe('PVC scope remedies', () => {
+  it.each(['ambiguous_scope', 'scope_mismatch'] as const)('shows operator scope controls for %s to owners and viewers', scope => {
+    statusResult = { data: { connected: true } }
+    usageResult = { data: { ...measured, hasData: false, status: scope } }
+    roleLoading = false
+    for (const owner of [true, false]) {
+      canConfigure = owner
+      const html = render()
+      expect(html).toContain('--prometheus-cluster-label')
+      expect(html).toContain('traffic.prometheusClusterLabels')
+      expect(html).toContain('not available in Settings or Desktop')
+      expect(html).not.toContain('Configure metrics')
+      expect(html).not.toContain('verified labels')
+      if (scope === 'scope_mismatch') {
+        expect(html).toContain('align cluster labels')
+        expect(html).toContain('affects all these charts')
+        expect(html).toContain('dedicated to this cluster')
+      }
+    }
+  })
+
+  it('keeps connection settings when a cached scope failure outlives the connection', () => {
+    canConfigure = true
+    roleLoading = false
+    statusResult = { data: { connected: false } }
+    usageResult = { data: { ...measured, hasData: false, status: 'ambiguous_scope' } }
+    const html = render()
+    expect(html).toContain('Configure metrics')
+    expect(html).not.toContain('--prometheus-cluster-label')
+  })
+})

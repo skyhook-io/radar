@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { LIVE_TICK_MS } from '@skyhook-io/k8s-ui'
 import { apiFetch, mergeDeltaEvents, ApiError, type UseChangesOptions } from './client'
 import { apiUrl, getApiBase } from './config'
+import { readErrorBody } from './httpErrors'
 import type { TimelineEvent, TimeRange } from '../types'
 
 // The query the wrappers pass. Superset of the local store's params so most
@@ -321,7 +322,7 @@ function dedupeById(events: TimelineEvent[]): TimelineEvent[] {
 async function fetchRetainedStream(path: string, signal?: AbortSignal): Promise<RetainedWindowResult> {
   const res = await apiFetch(apiUrl(path), signal ? { signal } : undefined)
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    const errorData = await readErrorBody(res)
     throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status, errorData)
   }
   if (!res.body) {
@@ -422,7 +423,7 @@ export async function fetchRetainedDelta(
 // Mirrors the Go store's TimelineEvent.IsManaged (pkg/timeline/types.go):
 // a resource managed by another — owned, or one of the churn kinds. Keep the
 // two predicates in lockstep.
-function isManagedTimelineEvent(e: TimelineEvent): boolean {
+export function isManagedTimelineEvent(e: TimelineEvent): boolean {
   return e.owner != null || e.kind === 'ReplicaSet' || e.kind === 'Pod' || e.kind === 'Event'
 }
 
@@ -542,6 +543,13 @@ export function needsWindowFetch(
 // event CAN land inside an old window, so an aged cache entry may still
 // refresh.
 const FROZEN_WINDOW_STALE_MS = 10 * 60 * 1000
+
+// A frozen window that failed to load does poll, at the ring's cadence, until
+// it loads: the error page tells the user it recovers on its own once the
+// timeline's database is back, and without a poll only "Try again" would.
+export function frozenWindowRefetchInterval(status: 'pending' | 'error' | 'success'): number | false {
+  return status === 'error' ? RETAINED_POLL_MS : false
+}
 
 // Ring keys whose next fetch must be a full reload (manual refresh). A side
 // flag, not a side cursor: consuming it only switches the PATH of the next
@@ -749,6 +757,7 @@ function createRingEventsHook(opts: {
       },
       enabled: windowNeeded,
       staleTime: FROZEN_WINDOW_STALE_MS,
+      refetchInterval: (q) => frozenWindowRefetchInterval(q.state.status),
     })
 
     const kindsKey = query.kinds?.join(',')
@@ -871,7 +880,7 @@ function normalizeCoverage(
 async function fetchRetainedOverview(range: TimelineRange): Promise<TimelineOverviewResult> {
   const res = await apiFetch(apiUrl(`/timeline/overview?from=${Math.round(range.from)}&to=${Math.round(range.to)}`))
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    const errorData = await readErrorBody(res)
     throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status, errorData)
   }
   const body: unknown = await res.json()

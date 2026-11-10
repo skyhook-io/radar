@@ -15,11 +15,15 @@ func TestForwardedIdentityAllowed(t *testing.T) {
 		{"non-cloud: unprefixed groups allowed", "alice", []string{"platform", "sre"}, false, true},
 		{"non-cloud: prefixed system group allowed", "alice", []string{"oidc:system:masters"}, false, true},
 		{"non-cloud: system:masters group rejected", "admin", []string{"sre-team", "system:masters"}, false, false},
+		{"non-cloud: system:authenticated group allowed", "alice", []string{"system:authenticated", "oidc:sre"}, false, true},
+		{"non-cloud: system:authenticated username rejected", "system:authenticated", nil, false, false},
+		{"non-cloud: system:masters beside system:authenticated rejected", "alice", []string{"system:authenticated", "system:masters"}, false, false},
 		{"non-cloud: system username rejected", "system:kube-controller-manager", nil, false, false},
 		{"non-cloud: serviceaccount username rejected", "system:serviceaccount:kube-system:default", nil, false, false},
 
 		// Cloud: reserved-principal rejection.
 		{"cloud: system:masters group rejected", "user_01ABC", []string{"radar:owner", "system:masters"}, true, false},
+		{"cloud: system:authenticated group rejected", "user_01ABC", []string{"radar:owner", "system:authenticated"}, true, false},
 		{"cloud: system username rejected", "system:node:x", []string{"radar:owner"}, true, false},
 		{"cloud: serviceaccount group rejected", "user_01ABC", []string{"system:serviceaccounts:kube-system"}, true, false},
 
@@ -31,6 +35,7 @@ func TestForwardedIdentityAllowed(t *testing.T) {
 		{"cloud: non-vocabulary group rejected", "user_01ABC", []string{"radar:owner", "sre-team"}, true, false},
 		{"cloud: empty username rejected", "", []string{"radar:owner"}, true, false},
 		{"cloud mode internal synthetic username allowed", "radar:system:alerts:o1", []string{"radar:owner"}, true, true},
+		{"cloud: AI reader identity allowed", "radar:ai:o1", []string{"radar:ai:reader"}, true, true},
 		{"cloud: no groups, valid user, allowed", "user_01ABC", nil, true, true},
 	}
 	for _, tc := range cases {

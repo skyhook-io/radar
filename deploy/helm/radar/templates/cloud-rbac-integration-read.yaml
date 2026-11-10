@@ -1,16 +1,25 @@
 {{- $rbac := .Values.cloud.defaultRbac -}}
 {{- $integration := $rbac.integrationRead | default dict -}}
 {{- $cluster := $rbac.clusterScopedRead | default dict -}}
-{{- if and .Values.cloud.enabled .Values.rbac.create $rbac.create -}}
+{{- $systemOn := include "radar.cloudSystemRbac" . | eq "true" -}}
+{{- $aiOn := include "radar.cloudAiRbac" . | eq "true" -}}
+{{- if and .Values.cloud.enabled .Values.rbac.create (or $rbac.create $systemOn $aiOn) -}}
 {{- $root := . -}}
 {{- $baseline := .Files.Get "files/integration-read-baseline.yaml" | fromYaml -}}
-{{- range $scope := list "Namespaced" "Cluster" -}}
+{{- /* Cluster-scoped rules grant nothing through the RoleBindings rbac.namespaces renders */ -}}
+{{- range $scope := ternary (list "Namespaced") (list "Namespaced" "Cluster") (not (empty .Values.rbac.namespaces)) -}}
 {{- $tiers := list -}}
 {{- range $tier := list "viewer" "member" "owner" -}}
 {{- /* Missing keys in --reuse-values upgrades follow default-on; explicit false survives. */ -}}
-{{- if and (index $rbac $tier) (ne (toString (index $integration $tier)) "false") (or (eq $scope "Namespaced") (ne (toString (index $cluster $tier)) "false")) -}}
+{{- if and $rbac.create (index $rbac $tier) (ne (toString (index $integration $tier)) "false") (or (eq $scope "Namespaced") (ne (toString (index $cluster $tier)) "false")) -}}
 {{- $tiers = append $tiers $tier -}}
 {{- end -}}
+{{- end -}}
+{{- if $systemOn -}}
+{{- $tiers = append $tiers "system" -}}
+{{- end -}}
+{{- if $aiOn -}}
+{{- $tiers = append $tiers "ai" -}}
 {{- end -}}
 {{- $rules := list -}}
 {{- range $entry := $baseline.entries -}}
@@ -30,24 +39,12 @@ metadata:
 rules:
   {{- toYaml $rules | nindent 2 }}
 {{- range $tier := $tiers }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "radar.fullname" $root }}-cloud-{{ $tier }}-integration-read-{{ lower $scope }}
-  labels:
-    {{- include "radar.labels" $root | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ $name }}
-subjects:
-  - kind: Group
-    name: radar:{{ $tier }}
-    apiGroup: rbac.authorization.k8s.io
-  - kind: Group
-    name: cloud:{{ $tier }}
-    apiGroup: rbac.authorization.k8s.io
+{{ include "radar.binding" (dict
+  "root" $root
+  "name" (printf "%s-cloud-%s-integration-read-%s" (include "radar.fullname" $root) $tier (lower $scope))
+  "roleRef" $name
+  "groups" (include "radar.tierGroups" $tier | fromJsonArray)
+) }}
 {{- end }}
 {{- end }}
 {{- end }}

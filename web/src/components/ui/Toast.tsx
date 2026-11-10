@@ -1,1 +1,1 @@
-export { ToastProvider, useToast, showApiError, showApiSuccess } from '@skyhook-io/k8s-ui'
+export { ToastProvider, useToast, showApiError, showApiSuccess, showApiNotice } from '@skyhook-io/k8s-ui'

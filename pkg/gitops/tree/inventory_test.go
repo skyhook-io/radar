@@ -36,6 +36,12 @@ func TestParseFluxInventoryID(t *testing.T) {
 			ok:   true,
 		},
 		{
+			name: "colon in an RBAC name, written as a double underscore",
+			id:   "_system__metrics-server_rbac.authorization.k8s.io_ClusterRole",
+			want: ResourceRef{Group: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "system:metrics-server"},
+			ok:   true,
+		},
+		{
 			name: "fewer than 4 parts → invalid",
 			id:   "only_three_parts",
 			ok:   false,

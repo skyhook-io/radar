@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   costSourceApplyLabel,
   prometheusHeadersFromRows,
-  pendingIntegrationSections,
+  pendingSections,
   shouldShowSettingsFooter,
 } from "./settings-state";
 
@@ -25,29 +25,38 @@ describe("Prometheus header edits", () => {
 
 describe("Integration settings state", () => {
   it.each(['prometheus', 'cost', 'argocd'] as const)("offers discard for a %s draft", (section) => {
-    expect(pendingIntegrationSections({ prometheus: false, cost: false, argocd: false, [section]: true })).toEqual([section]);
+    expect(pendingSections({ prometheus: false, cost: false, argocd: false, ai: false, [section]: true })).toEqual([section]);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
         confirmingClose: false,
         configDirty: false,
         integrationDirty: true,
+        aiDirtyElsewhere: false,
         hasSaveMessage: false,
       }),
     ).toBe(true);
   });
 
   it("offers review from other sections and retains the close guard", () => {
-    expect(pendingIntegrationSections({ prometheus: true, cost: true, argocd: true })).toEqual(['prometheus', 'cost', 'argocd']);
+    expect(pendingSections({ prometheus: true, cost: true, argocd: true, ai: true })).toEqual(['prometheus', 'cost', 'argocd', 'ai']);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
         confirmingClose: true,
         configDirty: false,
         integrationDirty: true,
+        aiDirtyElsewhere: false,
         hasSaveMessage: false,
       }),
     ).toBe(true);
+  });
+
+  it("shows an AI draft to users without owner access, but not their startup or integration drafts", () => {
+    const base = { canEditConfig: false, confirmingClose: false, configDirty: true, integrationDirty: true, aiDirtyElsewhere: false, hasSaveMessage: true };
+    expect(shouldShowSettingsFooter(base)).toBe(false);
+    expect(shouldShowSettingsFooter({ ...base, aiDirtyElsewhere: true })).toBe(true);
+    expect(shouldShowSettingsFooter({ ...base, confirmingClose: true })).toBe(true);
   });
 
   it("only claims to test sources that the backend probes", () => {

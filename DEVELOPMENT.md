@@ -5,7 +5,7 @@ Guide for developers contributing to Radar or building custom versions.
 ## Prerequisites
 
 - **Go 1.26+**
-- **Node.js 20+**
+- **Node.js 24+**
 - **npm**
 - **kubectl** with cluster access
 

@@ -2,6 +2,7 @@ import { Network } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, ResourceLink, KeyValueBadgeList } from '../../ui/drawer-components'
 import {
   getDestinationRuleHost,
+  resolveIstioServiceHost,
   getDestinationRuleSubsets,
   getDestinationRuleTrafficPolicy,
   getDestinationRuleLoadBalancer,
@@ -9,20 +10,18 @@ import {
 
 interface IstioDestinationRuleRendererProps {
   data: any
+  serviceDomain?: string
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function IstioDestinationRuleRenderer({ data, onNavigate }: IstioDestinationRuleRendererProps) {
+export function IstioDestinationRuleRenderer({ data, onNavigate, serviceDomain }: IstioDestinationRuleRendererProps) {
   const host = getDestinationRuleHost(data)
   const subsets = getDestinationRuleSubsets(data)
   const trafficPolicy = getDestinationRuleTrafficPolicy(data)
   const loadBalancer = getDestinationRuleLoadBalancer(data)
   const ns = data.metadata?.namespace || ''
 
-  // Parse host to create service link
-  const hostParts = host.split('.')
-  const svcName = hostParts[0]
-  const svcNs = hostParts.length >= 2 ? hostParts[1] : ns
+  const service = resolveIstioServiceHost(host, ns, serviceDomain)
 
   return (
     <>
@@ -30,15 +29,16 @@ export function IstioDestinationRuleRenderer({ data, onNavigate }: IstioDestinat
       <Section title="Destination" icon={Network} defaultExpanded>
         <PropertyList>
           <Property label="Host" value={
-            host !== '-' ? (
+            service ? (
               <ResourceLink
-                name={svcName}
+                name={service.name}
                 kind="services"
-                namespace={svcNs}
+                group=""
+                namespace={service.namespace}
                 label={host}
                 onNavigate={onNavigate}
               />
-            ) : '-'
+            ) : host
           } />
           <Property label="Load Balancer" value={loadBalancer} />
         </PropertyList>

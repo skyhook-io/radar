@@ -43,7 +43,7 @@ func Abort(ctx context.Context, client dynamic.Interface, namespace, name string
 	if _, err := get(ctx, client, namespace, name); err != nil {
 		return OperationResult{}, err
 	}
-	if err := patchStatusThenSpec(ctx, client, namespace, name, []byte(abortPatch), nil); err != nil {
+	if _, err := patchStatusThenSpec(ctx, client, namespace, name, []byte(abortPatch), nil); err != nil {
 		return OperationResult{}, err
 	}
 	return result("abort", namespace, name,
@@ -55,7 +55,7 @@ func Retry(ctx context.Context, client dynamic.Interface, namespace, name string
 	if _, err := get(ctx, client, namespace, name); err != nil {
 		return OperationResult{}, err
 	}
-	if err := patchStatusThenSpec(ctx, client, namespace, name, []byte(retryPatch), nil); err != nil {
+	if _, err := patchStatusThenSpec(ctx, client, namespace, name, []byte(retryPatch), nil); err != nil {
 		return OperationResult{}, err
 	}
 	return result("retry", namespace, name,
@@ -88,7 +88,7 @@ func Promote(ctx context.Context, client dynamic.Interface, namespace, name stri
 	}
 
 	specPatch := unpauseSpecPatch(ro)
-	if err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, specPatch); err != nil {
+	if _, err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, specPatch); err != nil {
 		return OperationResult{}, err
 	}
 	if statusPatch == nil && specPatch == nil {
@@ -127,7 +127,8 @@ func PromoteFull(ctx context.Context, client dynamic.Interface, namespace, name 
 	}
 	specPatch := unpauseSpecPatch(ro)
 
-	if err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, specPatch); err != nil {
+	afterStatus, err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, specPatch)
+	if err != nil {
 		return OperationResult{}, err
 	}
 
@@ -138,13 +139,17 @@ func PromoteFull(ctx context.Context, client dynamic.Interface, namespace, name 
 		return res, nil
 	}
 
-	if !repatchUntilPromoted(ctx, client, namespace, name, deadline) {
+	switch repatchUntilPromoted(ctx, client, namespace, name, afterStatus, deadline) {
+	case promoteFullLanded:
+		return result("promote-full", namespace, name,
+			fmt.Sprintf("Rollout %s/%s promoted to full — remaining steps, pauses, and analysis skipped", namespace, name)), nil
+	case promoteFullAccepted:
+		return result("promote-full", namespace, name,
+			fmt.Sprintf("Rollout %s/%s: promote full is under way. The new revision takes over as its pods become ready; check the Rollout if they don't", namespace, name)), nil
+	default:
 		return result("promote-full", namespace, name,
 			fmt.Sprintf("Rollout %s/%s: promotion sent, but the controller has not confirmed it — check the Rollout before relying on it", namespace, name)), nil
 	}
-
-	return result("promote-full", namespace, name,
-		fmt.Sprintf("Rollout %s/%s promoted to full — remaining steps, pauses, and analysis skipped", namespace, name)), nil
 }
 
 var (
@@ -152,33 +157,138 @@ var (
 	promoteFullSettleInterval = 500 * time.Millisecond
 )
 
+type promoteFullOutcome int
+
+const (
+	promoteFullUnconfirmed promoteFullOutcome = iota
+	// The controller has acted on the flag and kept it.
+	promoteFullAccepted
+	// The Rollout reached its final revision.
+	promoteFullLanded
+)
+
 // Reconciling a new template, the controller writes status from a copy read before the
-// promoteFull patch and silently drops it, so the patch is reapplied until the Rollout
-// reaches its final revision. Reports whether it got there: a caller that claims the
-// steps were skipped without this confirmation is guessing.
-func repatchUntilPromoted(ctx context.Context, client dynamic.Interface, namespace, name string, deadline time.Time) bool {
+// promoteFull patch and silently drops it, so the patch is reapplied until it sticks.
+//
+// It has stuck once the controller has acted on it and kept it, as promoteFullTaken
+// checks. From then on only a change to the template or steps, or reaching the final
+// revision, clears the flag. Waiting for the final revision instead holds the caller
+// for as long as the new pods take to become ready, which on a real app is the whole
+// deadline.
+//
+// Unconfirmed means the controller was never seen acting on it: a caller that claims
+// the steps were skipped without that is guessing.
+func repatchUntilPromoted(ctx context.Context, client dynamic.Interface, namespace, name string, afterStatus *unstructured.Unstructured, deadline time.Time) promoteFullOutcome {
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return false
+			return promoteFullUnconfirmed
 		case <-time.After(promoteFullSettleInterval):
 		}
 
 		ro, err := get(ctx, client, namespace, name)
 		if err != nil {
-			return false
+			return promoteFullUnconfirmed
 		}
 		if currentIsStable(ro) {
-			return true
+			return promoteFullLanded
 		}
 		if promoteFullPending(ro) {
+			if promoteFullTaken(ctx, client, afterStatus, ro) {
+				return promoteFullAccepted
+			}
 			continue
 		}
-		if err := patchStatusThenSpec(ctx, client, namespace, name, []byte(promoteFullPatch), unpauseSpecPatch(ro)); err != nil {
-			return false
+		if afterStatus, err = patchStatusThenSpec(ctx, client, namespace, name, []byte(promoteFullPatch), unpauseSpecPatch(ro)); err != nil {
+			return promoteFullUnconfirmed
 		}
 	}
-	return false
+	return promoteFullUnconfirmed
+}
+
+// promoteFullTaken reports that the controller has acted on the flag since our status
+// write and kept it. The evidence is a canary with steps moved to its last step, or a
+// pause the controller held (pauseConditions) released, which shows as the Paused
+// condition going from True to False. A Rollout paused only through spec.paused does
+// not count on the Paused condition, because the controller flips that as soon as our
+// unpause lands. A Rollout with neither, such as a blue-green that has not reached its
+// pause yet, keeps the old wait.
+//
+// The Rollout must not be aborted, paused again or InvalidSpec, and its spec must be the
+// one we promoted. Past that, only reaching the final revision clears the flag: the
+// controller sends a merge patch of the fields it changed, so even a write from a copy
+// that predates the flag leaves it in place. Without the evidence the wait runs to the
+// final revision or the deadline as before.
+func promoteFullTaken(ctx context.Context, client dynamic.Interface, afterStatus, ro *unstructured.Unstructured) bool {
+	if afterStatus == nil || conditionStatus(ro, "InvalidSpec") == "True" {
+		return false
+	}
+	aborted, _, _ := unstructured.NestedBool(ro.Object, "status", "abort")
+	if aborted || isPaused(ro) || pauseConditionCount(ro) > 0 {
+		return false
+	}
+	resumed := pauseConditionCount(afterStatus) > 0 &&
+		conditionStatus(afterStatus, "Paused") == "True" && conditionStatus(ro, "Paused") == "False"
+	if !resumed && !sentToLastStep(afterStatus, ro) {
+		return false
+	}
+	return specUnchangedSince(ctx, client, afterStatus, ro)
+}
+
+// specUnchangedSince reports that the spec is still the one we promoted and that the
+// controller has reconciled it: the Rollout's generation is where our writes left it,
+// and for a workloadRef Rollout the referenced workload's generation is the one the
+// controller had observed when we wrote. A newer template or steps would drop the flag,
+// and the controller can publish the new observedGeneration on a condition write before
+// it gets to that, so the generations themselves are compared. A counter that is missing
+// or not a number proves nothing. Any other spec write, an HPA resize included, also
+// moves the generation and keeps the old wait.
+func specUnchangedSince(ctx context.Context, client dynamic.Interface, afterStatus, ro *unstructured.Unstructured) bool {
+	promoted := afterStatus.GetGeneration()
+	if isPaused(afterStatus) {
+		promoted++ // our own unpause, written after the status
+	}
+	if ro.GetGeneration() != promoted {
+		return false
+	}
+	if observed, ok := generationCounter(ro, "observedGeneration"); !ok || observed < promoted {
+		return false
+	}
+	if _, _, ok := WorkloadRef(ro); !ok {
+		return true
+	}
+	target, err := ResolveTemplateTarget(ro)
+	if err != nil {
+		return false
+	}
+	ref, err := client.Resource(target.GVR).Namespace(ro.GetNamespace()).Get(ctx, target.Name, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	workload, ok := generationCounter(afterStatus, "workloadObservedGeneration")
+	return ok && ref.GetGeneration() == workload
+}
+
+func sentToLastStep(afterStatus, ro *unstructured.Unstructured) bool {
+	last := int64(len(canarySteps(ro)))
+	if last == 0 {
+		return false
+	}
+	before, _ := currentStepIndex(afterStatus)
+	now, ok := currentStepIndex(ro)
+	return before < last && ok && now == last
+}
+
+func conditionStatus(ro *unstructured.Unstructured, conditionType string) string {
+	conds, _, _ := unstructured.NestedSlice(ro.Object, "status", "conditions")
+	for _, c := range conds {
+		cond, ok := c.(map[string]any)
+		if ok && cond["type"] == conditionType {
+			status, _ := cond["status"].(string)
+			return status
+		}
+	}
+	return ""
 }
 
 // awaitObservedSpec blocks until the controller has reconciled the template as it stands,
@@ -234,7 +344,7 @@ func SkipCurrentStep(ctx context.Context, client dynamic.Interface, namespace, n
 	next := nextStepIndex(ro)
 	statusPatch := []byte(fmt.Sprintf(clearPauseConditionsPatchWithStep, next))
 
-	if err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, unpauseSpecPatch(ro)); err != nil {
+	if _, err := patchStatusThenSpec(ctx, client, namespace, name, statusPatch, unpauseSpecPatch(ro)); err != nil {
 		return OperationResult{}, err
 	}
 	res := result("skip-step", namespace, name,

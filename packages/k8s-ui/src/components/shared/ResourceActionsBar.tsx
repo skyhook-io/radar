@@ -1,3 +1,5 @@
+import { getNodeLifecycle } from '../../utils/node-lifecycle'
+import { resourceRefKey } from '../../utils/resource-refs'
 import { useEffect, useState, useRef, useId } from 'react'
 import {
   RefreshCw,
@@ -20,25 +22,36 @@ import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
 import { classifyDiffLine } from './UnifiedDiff'
 import { Tooltip } from '../ui/Tooltip'
-import { ForceDeleteConfirmDialog, type CascadeDependent } from '../ui/ForceDeleteConfirmDialog'
+import { ForceDeleteConfirmDialog, type CascadeDependent, type CascadeDetail } from '../ui/ForceDeleteConfirmDialog'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { AlertBanner } from '../ui/drawer-components'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
-import { getDefaultContainerName } from '../resources/resource-utils'
-import { SetImageDialog, type ManagedImageSource } from './SetImageDialog'
+import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
+import { argoApplicationSyncOptions, argoComparedRevisionCurrent, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoMultiSource, isArgoOperationInProgress } from '../resources/resource-utils-argo'
+import { SyncOptionsDialog, type ArgoSyncOpts } from '../gitops/SyncOptionsDialog'
+import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
+import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
+import { getGitOpsTool } from '../gitops/detail-helpers'
+import { apiVersionToGroup } from '../../utils/navigation'
+import { isApiGroup } from '../resources/resource-utils-cnpg'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
 import { isCoreBatchJob } from '../../utils/api-resources'
+import { formatRelativeAgeTime } from '../../utils/format'
 
 // ============================================================================
 // ACTIONS BAR - Interactive buttons that change based on resource kind
 // ============================================================================
 
+const FLUX_ACTION_KINDS = new Set(['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'])
+
 interface ResourceActionsBarProps {
   resource: SelectedResource
+  leadingActions?: React.ReactNode
   data: any
   onClose?: () => void
   hideLogs?: boolean
@@ -76,7 +89,10 @@ interface ResourceActionsBarProps {
   isDeleting?: boolean
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
+  onDeletePreviewOpenChange?: (open: boolean) => void
+  cascadeDetail?: CascadeDetail
   cascadeRootResolved?: boolean
+  cascadePreviewFailed?: boolean
 
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
@@ -85,7 +101,7 @@ interface ResourceActionsBarProps {
   onLoadImages?: (params: { kind: string; namespace: string; name: string }) => Promise<WorkloadImageInventory>
   onSetImages?: (params: { kind: string; namespace: string; name: string; updates: WorkloadImageUpdate[] }) => Promise<unknown>
   isSettingImages?: boolean
-  managedImageSources?: ManagedImageSource[]
+  imageOwnership?: SetImageOwnership
 
   // Rollback
   revisions?: WorkloadRevision[]
@@ -116,14 +132,25 @@ interface ResourceActionsBarProps {
   isFluxResuming?: boolean
 
   // Argo actions
-  onArgoSync?: (params: { namespace: string; name: string }) => void
+  // May return a promise that settles with the request: the options dialog
+  // then stays open, with its choices, when it rejects.
+  onArgoSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>
   isArgoSyncing?: boolean
+  // Set when onArgoSync forwards the options in its params: Sync then opens
+  // the options dialog. Without it Sync syncs at once with the Application's
+  // own options. pinsComparedRevision: the Radar pins an omitted revision
+  // (argoSyncInheritance).
+  argoSyncDialog?: { pinsComparedRevision: boolean }
   onArgoRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void
   isArgoRefreshing?: boolean
   onArgoSuspend?: (params: { namespace: string; name: string }) => void
   isArgoSuspending?: boolean
   onArgoResume?: (params: { namespace: string; name: string }) => void
   isArgoResuming?: boolean
+  // Set when the connected Radar is too old to turn auto-sync back on for an
+  // Application with automated.enabled: false; Enable Auto-Sync renders disabled.
+  argoResumeUpgrade?: RadarUpgradeRequirement | null
+  argoResumeBlockedReason?: string
 
   // Node debug shell
   onOpenNodeTerminal?: (params: { nodeName: string }) => void
@@ -143,22 +170,24 @@ interface ResourceActionsBarProps {
   drainPlan?: DrainPlan | null
   isPlanningDrain?: boolean
   drainPlanError?: string | null
-  // The connected backend has no drain-plan endpoint (version skew, e.g. a newer
-  // frontend against an older radar). The dialog falls back to the plan-less
-  // acknowledgement-only mode instead of keeping Drain disabled on a dead request.
-  drainPlanUnsupported?: boolean
+  // The connected Radar predates the drain-plan endpoint (a newer frontend
+  // against an older Radar). The dialog falls back to the plan-less
+  // acknowledgement-only mode instead of keeping Drain disabled on a dead
+  // request, and names the Radar version that serves plans so the user knows a
+  // preview exists.
+  drainPlanUpgrade?: RadarUpgradeRequirement | null
 }
 
 export function ResourceActionsBar({
-  resource, data, onClose, hideLogs, showYaml, onToggleYaml,
+  resource, data, leadingActions, onClose, hideLogs, showYaml, onToggleYaml,
   onCompareTo,
   onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved,
+  onDelete, isDeleting, onDeletePreviewOpenChange, cascadeDetail, cascadeDependents, cascadeLoading, cascadeRootResolved, cascadePreviewFailed,
   onRestart, isRestarting,
-  onLoadImages, onSetImages, isSettingImages, managedImageSources,
+  onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onRolloutPromoteFull,
   onTriggerCronJob, isTriggeringCronJob,
@@ -168,18 +197,19 @@ export function ResourceActionsBar({
   onFluxSyncWithSource, isFluxSyncing,
   onFluxSuspend, isFluxSuspending,
   onFluxResume, isFluxResuming,
-  onArgoSync, isArgoSyncing,
+  onArgoSync, isArgoSyncing, argoSyncDialog,
   onArgoRefresh, isArgoRefreshing,
   onArgoSuspend, isArgoSuspending,
-  onArgoResume, isArgoResuming,
+  onArgoResume, isArgoResuming, argoResumeUpgrade, argoResumeBlockedReason,
   onOpenNodeTerminal,
   canNodeWrite,
   onCordonNode, isCordoningNode,
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
-  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUnsupported,
+  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
+  const isFluxAction = FLUX_ACTION_KINDS.has(kind) && getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
   const supportsWorkloadActions = ['deployments', 'statefulsets', 'daemonsets'].includes(kind) ||
     (kind === 'rollouts' && isArgoRolloutResource(data))
@@ -192,6 +222,14 @@ export function ResourceActionsBar({
 
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const deleteMounted = useRef(true)
+  useEffect(() => {
+    deleteMounted.current = true
+    return () => { deleteMounted.current = false }
+  }, [])
+  const currentDeleteTarget = useRef({ key: resourceRefKey(resource), uid: data?.metadata?.uid })
+  currentDeleteTarget.current = { key: resourceRefKey(resource), uid: data?.metadata?.uid }
+  useEffect(() => { onDeletePreviewOpenChange?.(showDeleteConfirm) }, [showDeleteConfirm, onDeletePreviewOpenChange])
 
   // Node operation confirmation state
   const [showCordonConfirm, setShowCordonConfirm] = useState(false)
@@ -202,13 +240,14 @@ export function ResourceActionsBar({
   // open: the host reports it through a mutation error, which the next request clears,
   // so without latching every option change would refire a request known to 404 and
   // bounce the dialog out of its fallback mode.
-  const [planUnsupported, setPlanUnsupported] = useState(false)
+  const [planUpgrade, setPlanUpgrade] = useState<RadarUpgradeRequirement | null>(null)
   useEffect(() => {
-    if (drainPlanUnsupported) setPlanUnsupported(true)
-  }, [drainPlanUnsupported])
+    if (drainPlanUpgrade) setPlanUpgrade(drainPlanUpgrade)
+  }, [drainPlanUpgrade])
   useEffect(() => {
-    if (!showDrainConfirm) setPlanUnsupported(false)
+    if (!showDrainConfirm) setPlanUpgrade(null)
   }, [showDrainConfirm])
+  const planUnsupported = planUpgrade !== null
   const planSupported = Boolean(onPlanDrain) && !planUnsupported
 
   // Fetch (and refetch on option changes) the read-only plan while the drain dialog is open.
@@ -226,12 +265,13 @@ export function ResourceActionsBar({
   const hasMultipleRevisions = (revisionsList?.length ?? 0) > 1
 
   function handleDeleteConfirm(force: boolean) {
+    const target = currentDeleteTarget.current
+    setShowDeleteConfirm(false)
     onDelete?.(
       { kind: resource.kind, group: resource.group, namespace: resource.namespace, name: resource.name, force },
       {
         onSuccess: () => {
-          setShowDeleteConfirm(false)
-          onClose?.()
+          if (deleteMounted.current && currentDeleteTarget.current.key === target.key && currentDeleteTarget.current.uid === target.uid) onClose?.()
         },
       }
     )
@@ -246,7 +286,7 @@ export function ResourceActionsBar({
         namespace: resource.namespace,
         podName: resource.name,
         containerName: getDefaultContainerName(data) || containers[0],
-        containers,
+        containers: getExecContainerNames(data),
       })
     }
   }
@@ -285,6 +325,8 @@ export function ResourceActionsBar({
 
   return (
     <div className="flex items-center gap-1.5 px-4 py-2 flex-wrap">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden" data-action-group="object">
+      {leadingActions}
       {/* Kind-specific actions (left) */}
       {kind === 'pods' && (
         <>
@@ -354,13 +396,13 @@ export function ResourceActionsBar({
             </button>
           )}
 
-          {canNodeWrite && (
+          {canNodeWrite && !getNodeLifecycle(data).removing && (
             <>
               {data?.spec?.unschedulable ? (
                 onUncordonNode && (
                   <button
                     onClick={() => onUncordonNode({ name: resource.name })}
-                    disabled={isUncordoningNode}
+                    disabled={isUncordoningNode || isDrainingNode}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50"
                   >
                     <Play className={`w-3.5 h-3.5 ${isUncordoningNode ? 'animate-pulse' : ''}`} />
@@ -396,7 +438,7 @@ export function ResourceActionsBar({
       )}
 
       {/* Service actions */}
-      {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && canPortForward && resource.namespace && resource.name && renderPortForward && (
+      {kind === 'services' && data?.apiVersion === 'v1' && canPortForward && resource.namespace && resource.name && renderPortForward && (
         renderPortForward({
           type: 'service',
           namespace: resource.namespace,
@@ -506,7 +548,7 @@ export function ResourceActionsBar({
       )}
 
       {/* FluxCD actions */}
-      {['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind) && (
+      {isFluxAction && (
         <FluxActions
           resource={resource}
           data={data}
@@ -522,18 +564,21 @@ export function ResourceActionsBar({
       )}
 
       {/* ArgoCD actions */}
-      {kind === 'applications' && (
+      {kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io') && (
         <ArgoActions
           resource={resource}
           data={data}
           onSync={onArgoSync}
           isSyncing={isArgoSyncing}
+          syncDialog={argoSyncDialog}
           onRefresh={onArgoRefresh}
           isRefreshing={isArgoRefreshing}
           onSuspend={onArgoSuspend}
           isSuspending={isArgoSuspending}
           onResume={onArgoResume}
           isResuming={isArgoResuming}
+          resumeUpgrade={argoResumeUpgrade}
+          resumeBlockedReason={argoResumeBlockedReason}
         />
       )}
 
@@ -580,8 +625,8 @@ export function ResourceActionsBar({
         </button>
       )}
 
-      {/* Spacer pushes universal actions to the right */}
-      <div className="flex-1" />
+      </div>
+      <div className="ml-auto flex flex-wrap items-center gap-1.5" data-action-group="utility">
 
       {/* Universal actions (right-aligned). The AI/Diagnose action is NOT here — it
           lives in the detail header chrome (see WorkloadView), set apart from these
@@ -656,28 +701,35 @@ export function ResourceActionsBar({
         </div>
       )}
 
-      {onDelete && (
-        <Tooltip content="Delete resource">
+      {onDelete && !((kind === 'node' || kind === 'nodes') && data?.metadata?.deletionTimestamp) && (
+        <Tooltip content={isDeleting ? 'Deleting resource' : 'Delete resource'}>
           <button
+            aria-label={isDeleting ? 'Deleting resource' : 'Delete resource'}
+            disabled={isDeleting}
             onClick={() => setShowDeleteConfirm(true)}
             className="p-1.5 text-theme-text-secondary border border-theme-border-light rounded-lg hover:text-red-400 hover:border-red-400/50 hover:bg-red-500/10 transition-colors"
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            {isDeleting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
           </button>
         </Tooltip>
       )}
+
+      </div>
 
       <ForceDeleteConfirmDialog
         open={showDeleteConfirm}
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDeleteConfirm}
         resourceName={resource.name}
+        resourceData={data}
         resourceKind={displayKindName(resource.kind, data?.kind)}
         namespaceName={resource.namespace}
         isLoading={isDeleting ?? false}
+        cascadeDetail={cascadeDetail}
         cascadeDependents={cascadeDependents}
         cascadeLoading={cascadeLoading}
         cascadeRootResolved={cascadeRootResolved}
+        cascadePreviewFailed={cascadePreviewFailed}
       />
 
       {onLoadImages && onSetImages && (
@@ -686,7 +738,7 @@ export function ResourceActionsBar({
           workloadLabel={`${displayKindName(resource.kind, data?.kind)} ${resource.namespace}/${resource.name}`}
           workloadName={resource.name}
           workloadResource={resource.kind}
-          managedSources={managedImageSources}
+          ownership={imageOwnership}
           pending={isSettingImages}
           onClose={() => setShowSetImage(false)}
           onLoad={() => onLoadImages({ kind: resource.kind, namespace: resource.namespace, name: resource.name })}
@@ -719,6 +771,7 @@ export function ResourceActionsBar({
         options={drainOptions}
         onOptionsChange={setDrainOptions}
         planSupported={planSupported}
+        planUpgrade={planUpgrade}
         onRefreshPlan={planSupported ? () => onPlanDrain?.({ name: resource.name, options: drainOptions }) : undefined}
         isDraining={Boolean(isDrainingNode)}
         onClose={() => {
@@ -845,31 +898,70 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 // ARGO ACTIONS
 // ============================================================================
 
-function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming }: {
+function ArgoActions({ resource, data, onSync, isSyncing, syncDialog, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming, resumeUpgrade, resumeBlockedReason }: {
   resource: SelectedResource; data: any
-  onSync?: (params: { namespace: string; name: string }) => void; isSyncing?: boolean
+  onSync?: (params: { namespace: string; name: string; applicationSyncOptions?: string[] } & Partial<ArgoSyncOpts>) => void | Promise<unknown>; isSyncing?: boolean
+  syncDialog?: { pinsComparedRevision: boolean }
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
   onSuspend?: (params: { namespace: string; name: string }) => void; isSuspending?: boolean
   onResume?: (params: { namespace: string; name: string }) => void; isResuming?: boolean
+  resumeUpgrade?: RadarUpgradeRequirement | null
+  resumeBlockedReason?: string
 }) {
-  const hasAutomatedSync = !!data?.spec?.syncPolicy?.automated
+  const autoSyncEnabled = isArgoAutoSyncEnabled(data)
+  const resumeBlocked = isArgoAutoSyncSwitchedOff(data)
+    ? resumeBlockedReason || (resumeUpgrade ? radarUpgradeNoteText(resumeUpgrade) : undefined)
+    : undefined
+
+  // The drawer can switch Applications under an open dialog; its choices
+  // belong to the one it was opened for, so it closes on any other.
+  const appKey = `${resource.namespace}/${resource.name}`
+  const [syncDialogFor, setSyncDialogFor] = useState<string | null>(null)
+  if (syncDialogFor !== null && syncDialogFor !== appKey) setSyncDialogFor(null)
+  const syncDialogOpen = syncDialogFor === appKey
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const operationRunning = isArgoOperationInProgress(data)
+  const applicationSyncOptions = argoApplicationSyncOptions(data)
+  // A failed request is reported by the host; it only keeps the dialog open.
+  const sync = (opts?: ArgoSyncOpts) => Promise.resolve(onSync?.({ namespace: resource.namespace, name: resource.name, applicationSyncOptions, ...opts }))
 
   return (
     <>
       {onSync && (
-        <Tooltip content="Sync application" delay={150}>
+        <Tooltip content={operationRunning ? 'Wait for the current Argo operation to finish.' : syncDialog ? 'Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision).' : "Syncs with the Application's own sync options, without pruning. For prune, dry run or a revision, use Sync… on its GitOps page."} delay={150}>
           <button
-            onClick={() => onSync({
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isSyncing}
+            onClick={() => {
+              if (!syncDialog) return void sync().catch(() => {})
+              setSyncError(null)
+              setSyncDialogFor(appKey)
+            }}
+            disabled={isSyncing || operationRunning}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-            {isSyncing ? 'Syncing...' : 'Sync'}
+            {isSyncing ? 'Syncing...' : syncDialog ? 'Sync…' : 'Sync'}
           </button>
         </Tooltip>
+      )}
+      {onSync && syncDialog && (
+        <SyncOptionsDialog
+          key={appKey}
+          open={syncDialogOpen}
+          appLabel={`${resource.namespace}/${resource.name}`}
+          multiSource={isArgoMultiSource(data)}
+          comparedRevision={data?.status?.sync?.revision}
+          pinsComparedRevision={syncDialog.pinsComparedRevision && argoComparedRevisionCurrent(data)}
+          applicationSyncOptions={applicationSyncOptions}
+          pending={isSyncing}
+          autoSyncEnabled={isArgoAutoSyncEnabled(data)}
+          operationInProgress={operationRunning}
+          syncError={syncError}
+          onCancel={() => setSyncDialogFor(null)}
+          onConfirm={(opts) => {
+            setSyncError(null)
+            sync(opts).then(() => setSyncDialogFor(null), (error: unknown) => setSyncError(error instanceof Error ? error.message : 'the request was refused'))
+          }}
+        />
       )}
 
       {onRefresh && (
@@ -889,7 +981,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
         </Tooltip>
       )}
 
-      {hasAutomatedSync ? (
+      {autoSyncEnabled ? (
         onSuspend && (
           <button
             onClick={() => onSuspend({
@@ -905,17 +997,19 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
         )
       ) : (
         onResume && (
-          <button
-            onClick={() => onResume({
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isResuming}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Play className="w-3.5 h-3.5" />
-            {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
-          </button>
+          <Tooltip content={resumeBlocked} disabled={!resumeBlocked} delay={150}>
+            <button
+              onClick={() => !resumeBlocked && onResume({
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={isResuming || !!resumeBlocked}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Play className="w-3.5 h-3.5" />
+              {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
+            </button>
+          </Tooltip>
         )
       )}
     </>
@@ -1122,19 +1216,6 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
     setPromoteError(outcome.error ?? { message: 'The promotion did not go through.', controllerLagging: false })
   }
 
-  function formatTimeAgo(dateStr: string): string {
-    const date = new Date(dateStr)
-    const now = new Date()
-    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-    if (seconds < 60) return `${seconds}s ago`
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    const days = Math.floor(hours / 24)
-    return `${days}d ago`
-  }
-
   function getImageTag(image: string): string {
     if (!image) return '-'
     const parts = image.split(':')
@@ -1226,7 +1307,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                       <RevisionImage image={rev.image} displayImage={getImageTag(rev.image)} />
                     </td>
                     <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
-                      {formatTimeAgo(rev.createdAt)}
+                      {formatRelativeAgeTime(rev.createdAt)}
                     </td>
                     <td className="py-2 text-right">
                       <div className="flex items-center gap-1 justify-end">

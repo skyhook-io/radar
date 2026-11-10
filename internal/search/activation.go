@@ -9,23 +9,8 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// objectActivation builds the top-level CEL binding map for a typed
-// K8s object. Keys mirror the variable declarations in
-// internal/filter/filter.go's envObject.
-//
-// We marshal the object once via JSON to convert typed structs into
-// generic map[string]any — which is what CEL's dyn binding expects
-// for nested fields (spec, status, metadata extras). Labels and
-// annotations are extracted via meta.Accessor for typed access; the
-// nested metadata blob is the JSON-marshaled form so deeper fields
-// like metadata.creationTimestamp / ownerReferences remain reachable.
-//
-// JSON unmarshal turns every number into float64. We walk the result
-// and convert whole-number floats back to int64 so CEL arithmetic
-// expressions like `spec.replicas + 1` work — CEL doesn't promote
-// double↔int across operators (`no such overload`), and the eval
-// error is silently treated as a non-match upstream.
 func objectActivation(obj runtime.Object, kind string) (map[string]any, error) {
+	obj = obj.DeepCopyObject()
 	k8s.SetTypeMeta(obj)
 	raw, err := json.Marshal(obj)
 	if err != nil {
@@ -35,20 +20,44 @@ func objectActivation(obj runtime.Object, kind string) (map[string]any, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, err
 	}
-	normalizeNumbers(m)
-	return assembleActivation(m, kind), nil
+	return sanitizedActivation(m, kind), nil
 }
 
 // unstructuredActivation builds the activation map for a CRD object.
 // We use a deep copy of u.Object so the in-place number normalization
 // doesn't mutate the cache-held unstructured.
-func unstructuredActivation(u *unstructured.Unstructured, kind string) map[string]any {
+//
+// A Trivy report binds `report` to trivyReportProjection, and its raw report
+// is left out of the deep copy: it can hold thousands of entries the
+// projection drops anyway, and the projection is already a fresh copy.
+// complete is false when the findings limit kept the report from being
+// projected: the object can't be evaluated, and an empty report must not
+// stand in for it.
+func unstructuredActivation(u *unstructured.Unstructured, kind, group string, findings *findingsScan) (act map[string]any, complete bool) {
 	if u == nil || u.Object == nil {
-		return nil
+		return nil, true
 	}
-	m := u.DeepCopy().Object
+	if group != trivyGroup {
+		return sanitizedActivation(u.DeepCopy().Object, kind), true
+	}
+	if !findings.allow() {
+		return nil, false
+	}
+	rest := make(map[string]any, len(u.Object))
+	for k, v := range u.Object {
+		if k != "report" {
+			rest[k] = v
+		}
+	}
+	m := runtime.DeepCopyJSON(rest)
 	normalizeNumbers(m)
-	return assembleActivation(m, kind)
+	out := assembleActivation(m, kind)
+	projection, ok := trivyReportProjection(asMap(u.Object["report"]), findings)
+	if !ok {
+		return nil, false
+	}
+	out["report"] = normalizeNumbers(projection)
+	return out, true
 }
 
 // normalizeNumbers walks v and converts every whole-number float64 to
@@ -78,11 +87,25 @@ func normalizeNumbers(v any) any {
 	}
 }
 
-// assembleActivation projects the JSON-shaped object into the bound
-// variable names. Keys missing from the object resolve to empty
-// values so `has()` guards work as expected.
+func sanitizedActivation(obj map[string]any, kind string) map[string]any {
+	if kind == "Secret" {
+		delete(obj, "data")
+		delete(obj, "stringData")
+	}
+	normalizeNumbers(obj)
+	return assembleActivation(obj, kind)
+}
+
+// assembleActivation projects the copied cached object into the CEL bindings.
 func assembleActivation(obj map[string]any, kind string) map[string]any {
+	obj["kind"] = firstString(obj["kind"], kind)
+	metadata := asMap(obj["metadata"])
+	if _, ok := metadata["namespace"]; !ok {
+		metadata["namespace"] = ""
+	}
+	obj["metadata"] = metadata
 	out := map[string]any{
+		"object":      obj,
 		"kind":        firstString(obj["kind"], kind),
 		"apiVersion":  asString(obj["apiVersion"]),
 		"metadata":    asMap(obj["metadata"]),
@@ -90,6 +113,7 @@ func assembleActivation(obj map[string]any, kind string) map[string]any {
 		"status":      asMap(obj["status"]),
 		"labels":      asStringMap(getNested(obj, "metadata", "labels")),
 		"annotations": asStringMap(getNested(obj, "metadata", "annotations")),
+		"report":      map[string]any{},
 	}
 	return out
 }

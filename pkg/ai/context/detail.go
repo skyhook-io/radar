@@ -50,6 +50,26 @@ func redactUnstructuredSecrets(obj map[string]any) {
 	if status, ok := obj["status"]; ok {
 		RedactInlineSecrets(status)
 	}
+	redactSecretFindings(obj)
+}
+
+// redactSecretFindings blanks the matched text of secret-scan findings (Trivy
+// Operator's ExposedSecretReport: report.secrets[].match, plus the code lines
+// around it). The finding's rule, target and severity stay: they say what was
+// found where without repeating the secret.
+func redactSecretFindings(obj map[string]any) {
+	report, _ := obj["report"].(map[string]any)
+	secrets, _ := report["secrets"].([]any)
+	for _, item := range secrets {
+		finding, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := finding["match"]; ok {
+			finding["match"] = "[REDACTED]"
+		}
+		delete(finding, "code")
+	}
 }
 
 func pruneMapDetail(m map[string]any) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/cronsched"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 )
 
 // HPAProblem describes a detected issue with an HPA.
@@ -198,7 +199,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 					Name:      cj.Name,
 					Namespace: cj.Namespace,
 					Problem:   "stale",
-					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
+					Reason:    fmt.Sprintf("last scheduled %dh ago", int(sinceLast.Hours())),
 					OnsetAt:   cj.Status.LastScheduleTime.Add(threshold),
 				})
 				continue
@@ -220,7 +221,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob, jobs []*batchv1.Job, tra
 				Name:      cj.Name,
 				Namespace: cj.Namespace,
 				Problem:   "never-scheduled",
-				Reason:    "created but never ran",
+				Reason:    "no scheduled run recorded",
 				OnsetAt:   cj.CreationTimestamp.Add(threshold),
 			})
 		}
@@ -249,12 +250,7 @@ func jobHasDetectedProblem(job *batchv1.Job, now time.Time) bool {
 	if _, ok := terminatingProblem("Job", "batch", job, now); ok {
 		return true
 	}
-	return failedJobCondition(job) != nil || stuckActiveJob(job, now)
-}
-
-func stuckActiveJob(job *batchv1.Job, now time.Time) bool {
-	return job != nil && job.Status.Active > 0 && job.Status.Succeeded == 0 && job.Status.Failed == 0 &&
-		now.Sub(job.CreationTimestamp.Time) > time.Hour
+	return failedJobCondition(job) != nil
 }
 
 func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJobScheduleObservationTracker, now time.Time) (string, time.Time, bool) {
@@ -276,5 +272,5 @@ func repeatedCronJobSchedulesWithoutSuccess(cj *batchv1.CronJob, tracker *cronJo
 		return "", time.Time{}, false
 	}
 	return fmt.Sprintf("%d consecutive schedules observed without a recorded success; last scheduled %s ago",
-		schedules, FormatAge(now.Sub(cj.Status.LastScheduleTime.Time))), sequenceSince, true
+		schedules, timeutil.FormatAgeShort(now.Sub(cj.Status.LastScheduleTime.Time))), sequenceSince, true
 }

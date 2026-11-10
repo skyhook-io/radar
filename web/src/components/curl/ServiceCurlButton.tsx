@@ -5,6 +5,7 @@ import { Activity, Loader2, X, Maximize2, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { apiFetch } from '../../api/client'
 import { apiUrl } from '../../api/config'
+import { readErrorBody } from '../../api/httpErrors'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '@skyhook-io/k8s-ui'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
@@ -35,8 +36,8 @@ export function defaultPathForPort(port: number, name?: string, appProtocol?: st
 }
 
 export function isHttpishPort(port: number, name?: string, appProtocol?: string, protocol?: string): boolean {
-  // HTTP rides TCP — a UDP port is never a GET target (e.g. statsd "metrics-udp").
-  if ((protocol || '').toUpperCase() === 'UDP') return false
+  // HTTP rides TCP — UDP and SCTP ports are never GET targets (e.g. statsd "metrics-udp").
+  if (protocol && protocol.toUpperCase() !== 'TCP') return false
   const proto = (appProtocol || '').toLowerCase()
   if (proto === 'http' || proto === 'https' || proto === 'http2') return true
   if (proto && proto !== 'tcp') {
@@ -296,9 +297,12 @@ export function CurlPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ namespace, name: serviceName, port: String(port), scheme: vars.scheme, path: vars.path }),
       })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`)
-      return data as CurlResult
+      if (!res.ok) {
+        const error = await readErrorBody(res)
+        throw new Error(error.error || `Request failed (${res.status})`)
+      }
+      // A failing target service still comes back as a 200 carrying its result.
+      return (await res.json().catch(() => ({}))) as CurlResult
     },
   })
 

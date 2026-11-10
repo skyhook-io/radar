@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -34,17 +35,17 @@ func setupFakeCacheForDiagnoseTests(t *testing.T) {
 	// Pods belong to a workload by controller ownership, so the fixture
 	// carries the Deployment → ReplicaSet → Pod chain a real cluster has.
 	isController := true
-	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: deployName, Controller: &isController}
-	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "cart-abc", Controller: &isController}
+	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: deployName, UID: "current-cart", Controller: &isController}
+	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "cart-abc", UID: "current-cart-rs", Controller: &isController}
 
 	fakeClient := fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
 		&appsv1.ReplicaSet{
-			ObjectMeta: metav1.ObjectMeta{Name: "cart-abc", Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
+			ObjectMeta: metav1.ObjectMeta{Name: "cart-abc", Namespace: ns, UID: "current-cart-rs", Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
 			Spec:       appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: selector}},
 		},
 		&appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: deployName, Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: deployName, Namespace: ns, UID: "current-cart"},
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: selector},
 				Template: corev1.PodTemplateSpec{
@@ -189,6 +190,7 @@ func testDiagnoseInput(kind, namespace, name string) diagnoseInput {
 func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 	// The GitOps read is gated on a per-kind get SAR; grant it so the test
 	// exercises the dispatch fork (not the RBAC gate, covered separately).
 	getPermCache().Get("admin", nil).SetCanI("get", "argoproj.io", "applications", "alpha", true)
@@ -216,11 +218,9 @@ func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
 		t.Fatalf("expected forbidden without get on applications.argoproj.io, got %v", err)
 	}
 
-	// Granting the per-kind get lets the read through (then fails for not-found,
-	// not forbidden) — proving the gate is the only thing blocking it.
 	getPermCache().Get("limited", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
 	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook")); err == nil || strings.Contains(err.Error(), "forbidden") {
-		t.Errorf("with get granted, expected a non-forbidden (not-found) error, got %v", err)
+		t.Errorf("with get granted, expected a non-forbidden error, got %v", err)
 	}
 }
 
@@ -242,6 +242,7 @@ func TestHandleGitOpsDiagnose_NamespaceGate(t *testing.T) {
 func TestHandleDiagnose_InvalidKind(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	// configmap is not a workload, not a GitOps reconciler, and not a
 	// network entry kind - diagnose should reject it.
@@ -257,6 +258,7 @@ func TestHandleDiagnose_InvalidKind(t *testing.T) {
 func TestHandleDiagnose_MissingFields(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "", "alpha-pod")); err == nil {
 		t.Errorf("expected error for empty namespace, got nil")
@@ -283,6 +285,7 @@ func TestHandleDiagnose_ForbiddenNamespace(t *testing.T) {
 func TestHandleDiagnose_PodHappyPath(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "alpha-pod"))
 	if err != nil {
@@ -327,6 +330,7 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 	t.Cleanup(func() { getPermCache().Invalidate() })
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "frontend"))
 	if err != nil {
@@ -344,21 +348,22 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 func TestHandleDiagnose_PodNotFound(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "ghost-pod"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent pod, got nil")
 	}
-	if !strings.Contains(err.Error(), "not found") {
+	if !strings.HasPrefix(err.Error(), "object_not_found:") {
 		t.Errorf("expected 'not found' error, got %v", err)
 	}
 }
 
 // TestHandleDiagnose_DeploymentResolvesPods exercises the workload-rooted
-// path (kind=deployment → workload selector → fan-out to matching pods),
+// path (kind=deployment → cached UID-qualified controller chain → fan-out to owned pods),
 // which is the diagnose tool's headline use case. The pod-only tests above
 // never traverse this branch — without this test, a regression in
-// GetWorkloadSelector / GetPodsForWorkload / selector matching would ship
+// controller-chain matching would ship
 // undetected on the most common debug journey ("CrashLoopBackOff on a
 // Deployment"). The fake test environment has no kube client on ctx, so
 // logs surface as LogsError rather than empty arrays — that's the
@@ -366,6 +371,7 @@ func TestHandleDiagnose_PodNotFound(t *testing.T) {
 func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 	// The stale-Secret FYI is attached only when the caller can read the
 	// ConfigMap and Secret the Pod references; builtin kinds resolve without
 	// discovery, so the grant has to be explicit rather than fall open.
@@ -381,9 +387,9 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	if !strings.Contains(body, `"name":"cart"`) {
 		t.Errorf("expected deployment name in response: %s", body)
 	}
-	// Selector resolution should find the matching pod.
+	// Current controller ownership should find exactly one Pod.
 	if !strings.Contains(body, `"pods":1`) {
-		t.Errorf("expected pods:1 (selector matched 1 pod): %s", body)
+		t.Errorf("expected pods:1 (current controller owns 1 pod): %s", body)
 	}
 	// No kube client on ctx in tests — diagnose surfaces this distinctly.
 	if !strings.Contains(body, "logsError") {
@@ -395,11 +401,40 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	if strings.Contains(body, "diagnose-secret-sentinel") || strings.Contains(body, `"key":"password"`) {
 		t.Errorf("managedFields fallback leaked Secret data or claimed a specific stale key: %s", body)
 	}
+	if !strings.Contains(body, "by secret-controller, a field manager that owns its data") {
+		t.Errorf("expected the fallback to name the last data writer for a caller who can read the Secret: %s", body)
+	}
+}
+
+// TestHandleDiagnose_StaleSecretWriterNeedsSecretAccess pins that the
+// managedFields writer, which is Secret metadata, reaches only callers who
+// can read the Secret: without that grant the whole stale-Secret row is
+// omitted with an RBAC marker, and the writer's name appears nowhere.
+func TestHandleDiagnose_StaleSecretWriterNeedsSecretAccess(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
+	perms := getPermCache().Get("admin", nil)
+	perms.SetCanI("get", "", "configmaps", "alpha", true)
+	perms.SetCanI("get", "", "secrets", "alpha", false)
+
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "cart"))
+	if err != nil {
+		t.Fatalf("handleDiagnose: %v", err)
+	}
+	body := extractText(t, result)
+	if strings.Contains(body, "secret-controller") || strings.Contains(body, "managed_fields_mtime") {
+		t.Fatalf("stale-Secret fallback reached a caller who cannot read the Secret: %s", body)
+	}
+	if !strings.Contains(body, `"appReferences.staleSecretEnv"`) {
+		t.Fatalf("expected an RBAC omission marker for the stale-Secret row: %s", body)
+	}
 }
 
 func TestHandleDiagnose_DeploymentGroupIsCanonicalAndExact(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	mixedCase := testDiagnoseInput("deployment", "alpha", "cart")
 	mixedCase.Group = "ApPs"
@@ -439,6 +474,7 @@ func TestHandleDiagnose_RolloutGroupDefaultsAndCanonicalizes(t *testing.T) {
 		Name: "rollouts", Namespaced: true, Verbs: []string{"get", "list", "watch"},
 	}, rollout)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	for _, tc := range []struct {
 		name  string
@@ -471,12 +507,13 @@ func TestHandleDiagnose_RolloutGroupDefaultsAndCanonicalizes(t *testing.T) {
 func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "ghost"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent deployment, got nil")
 	}
-	if !strings.Contains(err.Error(), "not found") {
+	if !strings.HasPrefix(err.Error(), "object_not_found:") {
 		t.Errorf("expected 'not found' error, got %v", err)
 	}
 }
@@ -640,5 +677,13 @@ func TestIssueNamespacesForResourcePreservesClusterScope(t *testing.T) {
 	got := issueNamespacesForResource("team-a")
 	if len(got) != 1 || got[0] != "team-a" {
 		t.Fatalf("namespaced namespaces = %#v, want [team-a]", got)
+	}
+}
+
+func TestResolveDiagnosePodsKeepsMembershipErrorCause(t *testing.T) {
+	root := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "shop", UID: "current-root"}}
+	_, err := resolveDiagnosePods(nil, "deployments", "shop", "fleet", root)
+	if !errors.Is(err, errPodsNotListable) || !strings.Contains(err.Error(), "list pods") {
+		t.Fatalf("membership error cause lost: %v", err)
 	}
 }

@@ -323,3 +323,114 @@ func TestDropManagedFields_TypedStripsLastAppliedFromPod(t *testing.T) {
 		t.Errorf("Pod should also have last-applied stripped")
 	}
 }
+
+func TestDropManagedFields_EventKeepsEventsAPITimes(t *testing.T) {
+	first := metav1.NewMicroTime(metav1.Now().Add(-3600e9))
+	last := metav1.NewMicroTime(metav1.Now().Time)
+	out, err := DropManagedFields(&corev1.Event{
+		EventTime: first,
+		Series:    &corev1.EventSeries{Count: 4, LastObservedTime: last},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := out.(*corev1.Event)
+	if !ev.EventTime.Equal(&first) || ev.Series == nil || !ev.Series.LastObservedTime.Equal(&last) {
+		t.Fatalf("event times stripped: eventTime=%v series=%+v", ev.EventTime, ev.Series)
+	}
+}
+
+func TestDropManagedFields_EventKeepsRelatedSubject(t *testing.T) {
+	related := &corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Namespace: "apps", Name: "worker", UID: "related-uid"}
+	out, err := DropManagedFields(&corev1.Event{Related: related})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.(*corev1.Event).Related
+	if got == nil || *got != *related {
+		t.Fatalf("related Event subject stripped: %+v", got)
+	}
+}
+
+func helmReleaseSecretForTest(payload []byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "sh.helm.release.v1.web.v3",
+			Namespace: "apps",
+			Labels:    map[string]string{"owner": "helm", "name": "web", "status": "deployed", "version": "3"},
+		},
+		Type: HelmReleaseSecretType,
+		Data: map[string][]byte{"release": payload},
+	}
+}
+
+func TestDropManagedFields_HelmReleaseSecretKeepsDigestNotPayload(t *testing.T) {
+	payload := make([]byte, 300_000)
+	secret := helmReleaseSecretForTest(payload)
+
+	// Watch-list informers run the transform twice on objects present at
+	// startup, so a second pass must leave the same result.
+	var digest []byte
+	for pass := 1; pass <= 2; pass++ {
+		out, err := DropManagedFields(secret)
+		if err != nil {
+			t.Fatalf("pass %d: unexpected err: %v", pass, err)
+		}
+		got := out.(*corev1.Secret)
+		value, ok := got.Data["release"]
+		if !ok {
+			t.Fatalf("pass %d: release key dropped; key counts would change", pass)
+		}
+		if len(value) > 100 {
+			t.Fatalf("pass %d: release payload kept in cache (%d bytes)", pass, len(value))
+		}
+		if pass == 1 {
+			digest = append([]byte(nil), value...)
+		} else if string(value) != string(digest) {
+			t.Fatalf("second pass changed the digest: %q -> %q", digest, value)
+		}
+		if got.Labels["status"] != "deployed" {
+			t.Fatalf("pass %d: labels changed: %v", pass, got.Labels)
+		}
+	}
+
+	// A rewrite with a different payload must still compare as changed.
+	other, _ := DropManagedFields(helmReleaseSecretForTest(append(payload[:len(payload):len(payload)], 1)))
+	if string(other.(*corev1.Secret).Data["release"]) == string(digest) {
+		t.Fatal("different payloads produced the same cached value")
+	}
+}
+
+func TestWithoutHelmReleaseValues(t *testing.T) {
+	out, _ := DropManagedFields(helmReleaseSecretForTest([]byte("payload")))
+	cached := out.(*corev1.Secret)
+	served := WithoutHelmReleaseValues(cached)
+	if value, ok := served.Data["release"]; !ok || value != nil {
+		t.Fatalf("served release = %q (present %v), want key with no value", value, ok)
+	}
+	if len(cached.Data["release"]) == 0 {
+		t.Fatal("WithoutHelmReleaseValues modified the cached object")
+	}
+
+	opaque := &corev1.Secret{Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"k": []byte("v")}}
+	if WithoutHelmReleaseValues(opaque) != opaque {
+		t.Fatal("an ordinary Secret was copied or changed")
+	}
+}
+
+func TestDropManagedFields_OtherSecretsKeepValues(t *testing.T) {
+	for _, secretType := range []corev1.SecretType{corev1.SecretTypeOpaque, corev1.SecretTypeTLS, corev1.SecretTypeDockerConfigJson, "helm.sh/release.v2"} {
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "apps"},
+			Type:       secretType,
+			Data:       map[string][]byte{"key": []byte("value")},
+		}
+		out, err := DropManagedFields(secret)
+		if err != nil {
+			t.Fatalf("%s: unexpected err: %v", secretType, err)
+		}
+		if got := string(out.(*corev1.Secret).Data["key"]); got != "value" {
+			t.Fatalf("%s: value = %q, want it kept", secretType, got)
+		}
+	}
+}

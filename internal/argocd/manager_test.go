@@ -269,6 +269,7 @@ func TestManagedResourcesCachedTTL(t *testing.T) {
 
 	m := newTestManager(config.Config{})
 	m.SetConfig(srv.URL, "", false, true)
+	mustConnect(t, m)
 
 	q := argoapi.ManagedResourcesQuery{AppName: "guestbook", AppNamespace: "argocd"}
 	first, err := m.ManagedResourcesCached(context.Background(), q)
@@ -815,6 +816,7 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 
 	m := newTestManager(config.Config{})
 	m.SetConfig(srv.URL, "", false, false) // explicit URL, no token: the anonymous shape
+	mustConnect(t, m)
 	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
 
 	// 1. Inline mode: the GET's own health is the answer, no tree call.
@@ -831,6 +833,7 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	// GET-side inference is mis-scoped on 3.0), even when the GET carried
 	// some health of its own.
 	m.Reset()
+	mustConnect(t, m)
 	appBody = `{"metadata":{"uid":"u1"},"status":{"resourceHealthSource":"appTree","resources":[{"kind":"Deployment","name":"web","health":{"status":"Degraded"}}]}}`
 	treeBody = `{"nodes":[{"kind":"Deployment","name":"web","health":{"status":"Progressing"}}]}`
 	h, err = m.ApplicationHealthCached(context.Background(), q)
@@ -841,6 +844,7 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	// 2b. A healthless tree is still the answer: Argo has no check for any
 	// of these kinds, and the GET's inline verdicts must not sneak back in.
 	m.Reset()
+	mustConnect(t, m)
 	treeBody = `{"nodes":[{"kind":"Namespace","name":"prod"}]}`
 	h, err = m.ApplicationHealthCached(context.Background(), q)
 	if err != nil || h.HasHealth() {
@@ -850,6 +854,7 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	// 2c. A tree error is no answer: the GET's inline health must not be
 	// used in its place.
 	m.Reset()
+	mustConnect(t, m)
 	treeBody = ""
 	treeStatus = http.StatusInternalServerError
 	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil {
@@ -861,6 +866,7 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	// first so the cancellation hits the app fetch, then bypass the per-app
 	// cache for the cancelled attempt.
 	m.Reset()
+	mustConnect(t, m)
 	treeBody = `{"nodes":[{"kind":"Deployment","name":"web","health":{"status":"Healthy"}}]}`
 	if _, err := m.ApplicationHealthCached(context.Background(), q); err != nil {
 		t.Fatalf("connect: %v", err)
@@ -874,12 +880,13 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	if h, err := m.ApplicationHealthCached(context.Background(), q); err != nil || !h.HasHealth() {
 		t.Fatalf("a cancelled attempt must not poison the cache, got h=%+v err=%v", h, err)
 	}
-	if !m.readRetryAfter.IsZero() {
-		t.Fatal("a cancelled attempt must not arm the anonymous-read throttle")
+	if m.LastReadError() != nil {
+		t.Fatalf("a cancelled attempt must not be recorded as a failed read, got %v", m.LastReadError())
 	}
 
 	// 3. Refusal (anonymous read disabled) is cached for the TTL.
 	m.Reset()
+	mustConnect(t, m)
 	appBody = ""
 	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil {
 		t.Fatal("401 must surface as an error")
@@ -910,29 +917,27 @@ func TestTokenlessClientSkipsTLSVerification(t *testing.T) {
 }
 
 // TestApplicationHealthCached_UnconfiguredDiscoveryIsThrottled: with neither
-// URL nor token the read path runs discovery itself; when that fails (here:
-// no Kubernetes client) the next attempts within probeRetryInterval return
-// immediately instead of re-running discovery on every poll.
+// URL nor token the health read starts discovery in the background and
+// answers at once; when discovery fails (here: no Kubernetes client) the
+// reads within probeRetryInterval repeat that failure instead of
+// re-running discovery on every poll.
 func TestApplicationHealthCached_UnconfiguredDiscoveryIsThrottled(t *testing.T) {
 	m := newTestManager(config.Config{})
 	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
-	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, ErrUnreachable) {
-		t.Fatalf("first unconfigured read = %v, want ErrUnreachable from discovery", err)
+	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, ErrConnecting) {
+		t.Fatalf("first unconfigured read = %v, want ErrConnecting", err)
 	}
-	if m.readRetryAfter.IsZero() {
-		t.Fatal("a failed unconfigured read must arm the retry throttle")
-	}
-	// Bypass the per-app cache to prove the throttle itself answers.
-	m.appHealthCache = nil
-	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil || !strings.Contains(err.Error(), "throttled") {
-		t.Fatalf("second read = %v, want the throttle", err)
+	waitForBackgroundProbe(t, m)
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil || !strings.Contains(err.Error(), "throttled") || !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("second read = %v, want the throttle carrying ErrUnreachable from discovery", err)
 	}
 	// A context switch (Reset) must not carry one cluster's refusal to the
 	// next: the throttle is dropped with the rest of the connection state.
 	m.Reset()
-	if !m.readRetryAfter.IsZero() {
-		t.Fatal("Reset must clear the anonymous-read throttle")
+	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, ErrConnecting) {
+		t.Fatalf("read after Reset = %v, want a new connect (ErrConnecting)", err)
 	}
+	waitForBackgroundProbe(t, m)
 }
 
 // A tokenless client is a connection only once argocd-server has answered a
@@ -954,6 +959,7 @@ func TestTokenlessClientCountsAsConnectedOnlyAfterAnonymousReadSucceeds(t *testi
 
 	m := newTestManager(config.Config{})
 	m.SetConfig(srv.URL, "", false, false)
+	mustConnect(t, m)
 	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
 
 	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, argoapi.ErrUnauthorized) {
@@ -965,7 +971,10 @@ func TestTokenlessClientCountsAsConnectedOnlyAfterAnonymousReadSucceeds(t *testi
 	if m.AnonymousReadAllowed() {
 		t.Fatal("a refused read must not report anonymous reads as allowed")
 	}
-	if m.liveClient() == nil {
+	m.mu.Lock()
+	client := m.client
+	m.mu.Unlock()
+	if client == nil {
 		t.Fatal("the health path still needs the tokenless client to retry through")
 	}
 
@@ -990,10 +999,10 @@ func TestApplicationHealthCached_ConfiguredConnectFailureIsThrottled(t *testing.
 	m := newTestManager(config.Config{})
 	m.SetConfig("http://127.0.0.1:1", "tok", false, true)
 	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
-	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, ErrUnreachable) {
-		t.Fatalf("first read = %v, want ErrUnreachable", err)
+	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, ErrConnecting) {
+		t.Fatalf("first read = %v, want ErrConnecting", err)
 	}
-	m.appHealthCache = nil
+	waitForBackgroundProbe(t, m)
 	_, err := m.ApplicationHealthCached(context.Background(), q)
 	if err == nil || !strings.Contains(err.Error(), "throttled") || !errors.Is(err, ErrUnreachable) {
 		t.Fatalf("second read = %v, want the throttle carrying ErrUnreachable", err)

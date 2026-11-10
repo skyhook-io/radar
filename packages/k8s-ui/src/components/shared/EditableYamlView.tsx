@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import {
   Copy,
   CopyPlus,
@@ -12,6 +12,8 @@ import {
 } from 'lucide-react'
 import { Download } from 'lucide-react'
 import { stringify as yamlStringify } from 'yaml'
+import { useDebouncedValue } from '../../hooks/useDebouncedValue'
+import { CrossplaneYamlApplyNotice } from '../ui/CrossplaneOperationNotice'
 import { CodeViewer } from '../ui/CodeViewer'
 import { YamlEditor } from '../ui/YamlEditor'
 import type { YamlSchemaLoader } from '../ui/YamlEditor'
@@ -21,6 +23,7 @@ import type { SelectedResource } from '../../types'
 import { resourceToYaml } from '../../utils/yaml'
 import { triggerDownload } from '../../utils/download'
 import { isCoreBatchJob } from '../../utils/api-resources'
+import { usePhoneLayout } from '../../hooks/usePhoneLayout'
 
 // ============================================================================
 // SUCCESS ANIMATION
@@ -197,13 +200,22 @@ export function EditableYamlView({
   onDownload,
 }: EditableYamlViewProps) {
   const draftKey = `radar_yaml_draft:${resource.kind}/${resource.namespace}/${resource.name}`
+  // Phones read YAML but don't start an edit or a duplicate: authoring YAML by
+  // touch is error-prone. Not folded into readOnly, which would discard an edit
+  // already open when a phone rotates from landscape to portrait.
+  const isPhone = usePhoneLayout()
 
   // Restore draft from sessionStorage (e.g., after session-expiry redirect).
   // All sessionStorage calls are wrapped in try-catch — storage can throw
   // QuotaExceededError or be blocked by browser security policies.
   const savedDraft = useRef(readOnly ? null : safeSessionGet(draftKey))
+  // Bumped by every apply and every change of review, so a refresh that lands
+  // late never replaces the review that is on screen now.
+  const reviewGeneration = useRef(0)
   const [isEditing, setIsEditing] = useState(savedDraft.current !== null)
   const [editedYaml, setEditedYaml] = useState(savedDraft.current ?? '')
+  const pauseContextYaml = useDebouncedValue(!onPreview && isEditing ? editedYaml : '', 200)
+  const pauseBaselineYaml = useMemo(() => !onPreview && isEditing ? resourceToYaml(data) : '', [data, onPreview, isEditing])
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
   const [showErrorDetails, setShowErrorDetails] = useState(false)
   // Default on: the editor resubmits the full live manifest, so an unforced
@@ -213,9 +225,12 @@ export function EditableYamlView({
     yaml: string
     force: boolean
     originalYaml: string
+    resourceData: unknown
     documents: YamlPreviewResult[]
     nonAtomic: boolean
     context?: string
+    // An apply failed and the refreshed review found a newer resource version.
+    changedSinceReview?: boolean
   } | null>(null)
 
   // Clean up restored draft flag
@@ -253,6 +268,7 @@ export function EditableYamlView({
 
   const handleStartEdit = useCallback(() => {
     if (readOnly) return
+    reviewGeneration.current++
     setEditedYaml(resourceToYaml(data))
     setYamlErrors([])
     setPreview(null)
@@ -260,6 +276,7 @@ export function EditableYamlView({
   }, [data, readOnly])
 
   const handleCancelEdit = useCallback(() => {
+    reviewGeneration.current++
     setIsEditing(false)
     setEditedYaml('')
     setYamlErrors([])
@@ -268,6 +285,7 @@ export function EditableYamlView({
 
   const handleSaveEdit = useCallback(async () => {
     if (yamlErrors.length > 0 || !onSave) return
+    reviewGeneration.current++
 
     try {
       if (onPreview) {
@@ -285,6 +303,7 @@ export function EditableYamlView({
           yaml: editedYaml,
           force,
           originalYaml: resourceToYaml(data),
+          resourceData: data,
           documents: result.documents,
           nonAtomic: result.nonAtomic,
           context: result.context,
@@ -308,6 +327,10 @@ export function EditableYamlView({
 
   const handleApplyReviewed = useCallback(async () => {
     if (!preview || !onSave) return
+    // The notice belongs to one attempt: a retry that fails for another reason
+    // (and can't refresh) must show its own error, not the last notice.
+    const attempt = ++reviewGeneration.current
+    if (preview.changedSinceReview) setPreview({ ...preview, changedSinceReview: false })
     try {
       await onSave({
         kind: resource.kind,
@@ -335,11 +358,19 @@ export function EditableYamlView({
               name: resource.name,
             },
           })
+          if (attempt !== reviewGeneration.current) return
+          // Changed means the same resource, on the same cluster, at a newer
+          // version. A deleted resource has no version, and a cluster switch
+          // is its own error.
+          const before = preview.documents[0]?.reviewedResourceVersion
+          const after = refreshed.documents[0]?.reviewedResourceVersion
           setPreview({
             ...preview,
             documents: refreshed.documents,
             nonAtomic: refreshed.nonAtomic,
             context: refreshed.context,
+            changedSinceReview:
+              !!after && after !== before && refreshed.context === preview.context,
           })
         } catch {
           // Keep the last review visible when refresh is unavailable.
@@ -362,13 +393,19 @@ export function EditableYamlView({
       return (
         <YamlReview
           submittedYaml={preview.yaml}
+          mode="update"
           originalYaml={preview.originalYaml}
+          resourceData={preview.resourceData}
           documents={preview.documents}
           nonAtomic={preview.nonAtomic}
           force={preview.force}
           isApplying={isSaving}
           applyError={saveError}
-          onBack={() => setPreview(null)}
+          changedSinceReview={preview.changedSinceReview}
+          onBack={() => {
+            reviewGeneration.current++
+            setPreview(null)
+          }}
           onApply={handleApplyReviewed}
         />
       )
@@ -440,6 +477,8 @@ export function EditableYamlView({
             </button>
           </div>
         </div>
+
+        {!onPreview && <div className="px-4 pt-2"><CrossplaneYamlApplyNotice yaml={pauseContextYaml} baselineYaml={pauseBaselineYaml} resourceData={data} /></div>}
 
         {editWarning && (
           <div className="px-4 py-2.5 bg-amber-500/10 dark:bg-yellow-500/10 border-b border-amber-300 dark:border-yellow-500/30">
@@ -525,10 +564,10 @@ export function EditableYamlView({
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-theme-text-secondary">YAML</span>
         <div className="flex items-center gap-2">
-          {!readOnly && (
+          {!readOnly && !isPhone && (
             <button
               onClick={handleStartEdit}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-theme-elevated rounded"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-accent-text hover:text-accent-light hover:bg-theme-elevated rounded"
             >
               <Pencil className="w-3.5 h-3.5" />
               Edit
@@ -554,7 +593,7 @@ export function EditableYamlView({
               Download
             </button>
           </Tooltip>
-          {onDuplicate && (
+          {onDuplicate && !isPhone && (
             <Tooltip content="Duplicate as new resource">
               <button
                 onClick={() =>

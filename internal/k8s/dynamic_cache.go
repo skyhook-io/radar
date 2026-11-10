@@ -26,6 +26,9 @@ var (
 	dynamicResourceCache *DynamicResourceCache
 	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
+	// dynamicSyncStallAfter overrides k8score's stall threshold in tests;
+	// zero keeps the default.
+	dynamicSyncStallAfter time.Duration
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache.
@@ -87,6 +90,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceFallbacksTruncated: nsFallbacksTruncated,
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
+			SyncStallAfter:              dynamicSyncStallAfter,
 			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
@@ -178,6 +182,14 @@ type supportedCRDResource struct {
 // drift checks. Only installed catalog entries are warmed, so watch identities
 // stay bounded even when discovery exposes an unbounded CRD set.
 var supportedCRDFallbacks = []supportedCRDResource{
+	{Group: "opentelemetry.io", Versions: []string{"v1beta1", "v1alpha1"}, Resource: "opentelemetrycollectors", Kind: "OpenTelemetryCollector", Namespaced: true},
+	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},
+	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "metrictemplates", Kind: "MetricTemplate", Namespaced: true},
+	{Group: "secrets-store.csi.x-k8s.io", Versions: []string{"v1", "v1alpha1"}, Resource: "secretproviderclasses", Kind: "SecretProviderClass", Namespaced: true},
+	{Group: "secrets-store.csi.x-k8s.io", Versions: []string{"v1", "v1alpha1"}, Resource: "secretproviderclasspodstatuses", Kind: "SecretProviderClassPodStatus", Namespaced: true},
+	{Group: "core.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "strimzipodsets", Kind: "StrimziPodSet", Namespaced: true},
+	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnects", Kind: "KafkaConnect", Namespaced: true},
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnectors", Kind: "KafkaConnector", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applications", Kind: "Application", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applicationsets", Kind: "ApplicationSet", Namespaced: true},
@@ -198,8 +210,11 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "acme.cert-manager.io", Versions: []string{"v1"}, Resource: "orders", Kind: "Order", Namespaced: true},
 	{Group: "acme.cert-manager.io", Versions: []string{"v1"}, Resource: "challenges", Kind: "Challenge", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "gitrepositories", Kind: "GitRepository", Namespaced: true},
-	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1beta2"}, Resource: "ocirepositories", Kind: "OCIRepository", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "ocirepositories", Kind: "OCIRepository", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmrepositories", Kind: "HelmRepository", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmcharts", Kind: "HelmChart", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "buckets", Kind: "Bucket", Namespaced: true},
+	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1"}, Resource: "externalartifacts", Kind: "ExternalArtifact", Namespaced: true},
 	{Group: "kustomize.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "kustomizations", Kind: "Kustomization", Namespaced: true},
 	{Group: "helm.toolkit.fluxcd.io", Versions: []string{"v2", "v2beta2", "v2beta1"}, Resource: "helmreleases", Kind: "HelmRelease", Namespaced: true},
 	{Group: "notification.toolkit.fluxcd.io", Versions: []string{"v1beta3", "v1beta2"}, Resource: "alerts", Kind: "Alert", Namespaced: true},
@@ -213,11 +228,14 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "mutatingwebhookconfigurations", Kind: "MutatingWebhookConfiguration", Namespaced: false},
 	{Group: "scheduling.k8s.io", Versions: []string{"v1"}, Resource: "priorityclasses", Kind: "PriorityClass", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicies", Kind: "ValidatingAdmissionPolicy", Namespaced: false},
+	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingadmissionpolicybindings", Kind: "ValidatingAdmissionPolicyBinding", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gatewayclasses", Kind: "GatewayClass", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gateways", Kind: "Gateway", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "httproutes", Kind: "HTTPRoute", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "grpcroutes", Kind: "GRPCRoute", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1alpha2"}, Resource: "tcproutes", Kind: "TCPRoute", Namespaced: true},
+	{Group: "gateway.networking.k8s.io", Versions: []string{"v1alpha2"}, Resource: "udproutes", Kind: "UDPRoute", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1alpha2"}, Resource: "tlsroutes", Kind: "TLSRoute", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1beta1", "v1alpha2"}, Resource: "referencegrants", Kind: "ReferenceGrant", Namespaced: true},
 	{Group: "external-secrets.io", Versions: []string{"v1", "v1beta1"}, Resource: "externalsecrets", Kind: "ExternalSecret", Namespaced: true},
@@ -306,6 +324,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "databases", Kind: "Database", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "publications", Kind: "Publication", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "subscriptions", Kind: "Subscription", Namespaced: true},
+	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "databaseroles", Kind: "DatabaseRole", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "imagecatalogs", Kind: "ImageCatalog", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "clusterimagecatalogs", Kind: "ClusterImageCatalog", Namespaced: false},
 	// The barman-cloud plugin ships its own group; the in-tree backup settings it
@@ -450,6 +469,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// disambiguates everywhere downstream.
 	{Group: "nvidia.com", Versions: []string{"v1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
 	{Group: "nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nvidiadrivers", Kind: "NVIDIADriver", Namespaced: false},
+	{Group: "k8s.cni.cncf.io", Versions: []string{"v1"}, Resource: "network-attachment-definitions", Kind: "NetworkAttachmentDefinition", Namespaced: true},
 	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
 	// this list. They are warmed up conditionally — only when Kyverno is
 	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding

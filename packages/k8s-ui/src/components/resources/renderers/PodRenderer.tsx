@@ -3,9 +3,9 @@ import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, Circle
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
-import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName } from '../resource-utils'
-import { getResourceStatusColor, SEVERITY_BADGE_BORDERED } from '../../../utils/badge-colors'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames } from '../resource-utils'
+import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
   rbacResourceBadgeClass,
@@ -15,6 +15,8 @@ import { resolvedEnvFromKey } from '../../../utils/env-from'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import { NamespaceLimitRangeLink } from './LimitRangeRenderer'
+import { SecondaryNetworksSection } from './SecondaryNetworksSection'
+import type { NetworkAttachmentLookups } from '../../../utils/multus'
 import type {
   PodEnvironmentResponse,
   PodEnvironmentRevealResponse,
@@ -23,9 +25,14 @@ import type {
   RBACPolicyRule,
 } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
+import { RadarUpgradeNote } from '../../ui/RadarUpgradeNote'
+import { getRadarUpgradeRequirement, type RadarUpgradeRequirement } from '../../../types/fetch-error'
 import { MetricsChart } from '../../ui/MetricsChart'
+import { Badge } from '../../ui/Badge'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
+import { SecretsStoreMountsSection, type SecretsStoreMountsSectionProps } from './SecretsStoreRenderers'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 function parseValidDate(dateStr: string): Date | null {
   const d = new Date(dateStr)
@@ -33,13 +40,7 @@ function parseValidDate(dateStr: string): Date | null {
 }
 
 function formatMsAgo(dateStr: string): string | null {
-  const d = parseValidDate(dateStr)
-  if (!d) return null
-  const ms = Date.now() - d.getTime()
-  if (ms < 60000) return 'just now'
-  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`
-  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`
-  return `${Math.floor(ms / 86400000)}d ago`
+  return parseValidDate(dateStr) ? formatRelativeAgeTime(dateStr) : null
 }
 
 function getRestartRecency(finishedAt: string | undefined, restarts: number): { color: string; label: string | null } {
@@ -88,12 +89,14 @@ interface PodRendererProps {
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
   // Metrics data injection
   metrics?: { containers?: any[]; timestamp?: string }
-  metricsHistory?: { containers?: any[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
+  metricsHistory?: { metricsAPIReachable?: boolean; containers?: any[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
+  metricsHistoryLoading?: boolean
+  metricsHistoryError?: Error | null
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
   // Filesystem browser render props
   renderImageBrowser?: (props: { image: string; namespace: string; podName: string; pullSecrets: string[]; onClose: () => void; onSwitchToPodFiles?: () => void }) => ReactNode
-  renderPodBrowser?: (props: { namespace: string; podName: string; containers: string[]; initialContainer: string; onClose: () => void; onSwitchToImageFiles: () => void }) => ReactNode
+  renderPodBrowser?: (props: { namespace: string; podName: string; containers: string[]; initialContainer: string; onClose: () => void; onSwitchToImageFiles: (containerName?: string) => void }) => ReactNode
   /**
    * Resolved content for envFrom references.
    * When provided, expands ConfigMap/Secret keys inline instead of showing "(all keys)".
@@ -118,6 +121,14 @@ interface PodRendererProps {
   /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
    *  is pending or unreadable, which leaves the contextual link unrendered. */
   namespaceLimitRangeNames?: string[] | null
+  /** Lookup results for the NetworkAttachmentDefinitions this Pod names, by
+   *  `networkAttachmentKey`. Absent when the host didn't wire the lookup, which
+   *  leaves the names unlinked. */
+  networkAttachmentLookups?: NetworkAttachmentLookups
+  /** Host-read Secrets Store CSI facts for this Pod's namespace. Undefined
+   *  omits the section; the section also renders nothing for a Pod with no
+   *  Secrets Store CSI volumes. */
+  secretsStore?: Omit<SecretsStoreMountsSectionProps, 'pod' | 'onNavigate'>
 }
 
 // ── Env vars section — extracted to use hooks (useState for reveal) ──────────
@@ -191,10 +202,12 @@ function EnvVarsSection({
   initContainers,
   containers,
   resolvedEnvFrom,
+  upgrade,
 }: {
   initContainers: any[]
   containers: any[]
   resolvedEnvFrom?: ResolvedEnvFrom
+  upgrade?: RadarUpgradeRequirement | null
 }) {
   const allContainers = [...initContainers, ...containers]
   const containersWithEnv = allContainers.filter((c: any) => c.env?.length > 0 || c.envFrom?.length > 0)
@@ -205,6 +218,7 @@ function EnvVarsSection({
   return (
     <Section title={`Environment Variables  ·  ${subtitle}`} icon={List} defaultExpanded={false}>
       <div className="space-y-4">
+        {upgrade && <RadarUpgradeNote requirement={upgrade} />}
         {allContainers.map((container: any) => {
           const envVars: any[] = container.env || []
           const envFrom: any[] = container.envFrom || []
@@ -285,6 +299,8 @@ export function PodRenderer({
   renderPortAction,
   metrics,
   metricsHistory,
+  metricsHistoryLoading,
+  metricsHistoryError,
   metricsUnavailable,
   hideMetricsServer,
   renderImageBrowser,
@@ -301,10 +317,13 @@ export function PodRenderer({
   policyLoading,
   policyError,
   namespaceLimitRangeNames,
+  networkAttachmentLookups,
+  secretsStore,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
   const initContainers = data.spec?.initContainers || []
+  const podResources = data.spec?.resources
   const initContainerStatuses = data.status?.initContainerStatuses || []
   const hasEnvironmentDeclarations = [...initContainers, ...containers].some(
     (container: any) => container.env?.length > 0 || container.envFrom?.length > 0,
@@ -312,10 +331,13 @@ export function PodRenderer({
   const hasResolvedEnvironmentRows = environment?.containers.some(
     container => container.rows.length > 0 || container.truncated,
   ) ?? false
+  // An older Radar can't resolve variable sources; fall back to the spec view.
+  const environmentUpgrade = getRadarUpgradeRequirement(environmentError)
 
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
   const isRunning = data.status?.phase === 'Running'
+  const isTerminal = data.status?.phase === 'Succeeded' || data.status?.phase === 'Failed'
 
   // Check for problems. Suppressed when the detail already shows the dedicated
   // Operational Issues section (the Issues pipeline covers the same pod failures,
@@ -323,9 +345,12 @@ export function PodRenderer({
   const operationalIssuesShown = useOperationalIssuesShown()
   const podProblems = getPodProblems(data)
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
-  const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError
+  const notRunning = data.status?.phase === 'Pending' && ![...containerStatuses, ...initContainerStatuses].some((s: any) => s.state?.running)
+  const noUsageYet = notRunning && metricsHistory?.metricsAPIReachable === true && !metricsHistory.collectionError && !metricsHistory.containers?.length && !metrics?.containers?.length
+  const showMetricsUnavailable = !isTerminal && !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
   const hasMetricsHistory = !!metricsHistory?.containers?.length
-  const currentMetrics = metricsUnavailable ? undefined : metrics
+  const showTerminalUsage = isTerminal && (metricsHistory !== undefined || metricsHistoryLoading || !!metricsHistoryError || !!metrics || metricsUnavailable)
+  const currentMetrics = isTerminal || metricsUnavailable ? undefined : metrics
 
   // Image filesystem modal state
   const [selectedImage, setSelectedImage] = useState<string | null>(null)
@@ -334,6 +359,16 @@ export function PodRenderer({
   // Pod filesystem modal state
   const [podFilesContainer, setPodFilesContainer] = useState<string | null>(null)
 
+  // A sidecar can be running while the pod is still Pending, and a stopped
+  // container has no live files, so match the image against running containers.
+  const runningImageContainer = selectedImage
+    ? getExecContainerNames(data).find((name) => {
+        const spec = [...containers, ...initContainers].find((c: any) => c.name === name)
+        const status = [...containerStatuses, ...initContainerStatuses].find((st: any) => st.name === name)
+        return spec?.image === selectedImage && !!status?.state?.running
+      })
+    : undefined
+
   const handleOpenTerminal = (containerName?: string) => {
     const container = containerName || getDefaultContainerName(data)
     if (namespace && podName && container) {
@@ -341,7 +376,7 @@ export function PodRenderer({
         namespace,
         podName,
         containerName: container,
-        containers: containers.map((c: { name: string }) => c.name),
+        containers: getExecContainerNames(data),
       })
     }
   }
@@ -446,6 +481,25 @@ export function PodRenderer({
           <Property label="Node" value={
             data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
           } copyable onCopy={onCopy} copied={copied} />
+          {/* A nomination outlives its meaning: the API server clears it on binding by
+              default only from Kubernetes 1.35, and pod GC fails a terminating unbound
+              Pod without clearing it. Only a Pending, unbound, live Pod can still use it. */}
+          {data.status?.nominatedNodeName && !data.spec?.nodeName && data.status?.phase === 'Pending' && !data.metadata?.deletionTimestamp && (
+            <Property
+              label={
+                <Tooltip content="The node this Pod is expected to run on, set by the scheduler or another component. It can change before the Pod is bound." position="right">
+                  <span className="border-b border-dotted border-theme-text-tertiary cursor-help">Nominated Node</span>
+                </Tooltip>
+              }
+              value={<ResourceLink name={data.status.nominatedNodeName} kind="nodes" onNavigate={onNavigate} />}
+            />
+          )}
+          {data.spec?.priorityClassName && <Property label="Priority Class" value={
+            <ResourceLink name={data.spec.priorityClassName} kind="priorityclasses" group="scheduling.k8s.io" onNavigate={onNavigate} />
+          } />}
+          {data.spec?.runtimeClassName && <Property label="Runtime Class" value={
+            <ResourceLink name={data.spec.runtimeClassName} kind="runtimeclasses" group="node.k8s.io" onNavigate={onNavigate} />
+          } />}
           <Property label="Pod IP" value={data.status?.podIP} copyable onCopy={onCopy} copied={copied} />
           <Property label="Host IP" value={data.status?.hostIP} />
           <Property
@@ -471,6 +525,8 @@ export function PodRenderer({
         </PropertyList>
       </Section>
 
+      <SecondaryNetworksSection pod={data} attachmentLookups={networkAttachmentLookups} onNavigate={onNavigate} />
+
       {/* Init Containers - shown only when present */}
       {initContainers.length > 0 && (
         <Section title={`Init Containers (${initContainers.length})`} icon={CirclePlay} defaultExpanded>
@@ -487,6 +543,7 @@ export function PodRenderer({
               const isFailed = stateKey === 'terminated' && exitCode != null && exitCode !== 0
               const isWaiting = stateKey === 'waiting'
               const isInitRunning = stateKey === 'running'
+              const isSidecar = container.restartPolicy === 'Always'
 
               // Status label and color
               let statusLabel: string
@@ -499,10 +556,11 @@ export function PodRenderer({
               } else if (isWaiting) {
                 statusLabel = state?.waiting?.reason || 'Waiting'
               } else {
-                statusLabel = 'Pending'
+                statusLabel = 'Not started'
               }
+              const reportedFailure = isFailed || !!(isWaiting && state?.waiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(state.waiting.reason))
               const statusColor = getResourceStatusColor(
-                isCompleted ? 'succeeded' : isFailed ? 'failed' : isInitRunning ? 'running' : isWaiting ? 'waiting' : 'pending'
+                isCompleted ? 'succeeded' : reportedFailure ? 'failed' : isInitRunning ? 'running' : 'unknown'
               )
 
               // Build command string
@@ -513,10 +571,11 @@ export function PodRenderer({
               return (
                 <div key={container.name} className={clsx(
                   'rounded-lg p-3 border-l-2',
-                  isCompleted ? 'bg-theme-elevated/20 border-green-500/40' :
-                  isFailed ? 'bg-theme-elevated/30 border-red-500/50' :
-                  isInitRunning ? 'bg-theme-elevated/30 border-blue-500/50' :
-                  'bg-theme-elevated/30 border-yellow-500/40'
+                  isCompleted ? 'bg-theme-elevated/20' : 'bg-theme-elevated/30',
+                  isCompleted ? SEVERITY_BORDER.success :
+                  reportedFailure ? 'border-l-semantic-error' :
+                  isInitRunning ? SEVERITY_BORDER.info :
+                  SEVERITY_BORDER.neutral
                 )}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
@@ -526,6 +585,26 @@ export function PodRenderer({
                       <span className="text-sm font-medium text-theme-text-primary">{container.name}</span>
                     </div>
                     <div className="flex items-center gap-2">
+                      {isSidecar && isInitRunning && canExec && onOpenTerminal && (
+                        <Tooltip content="Terminal" delay={150}>
+                          <button
+                            onClick={() => handleOpenTerminal(container.name)}
+                            className="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-600/50 rounded transition-colors"
+                          >
+                            <TerminalIcon className="w-4 h-4" />
+                          </button>
+                        </Tooltip>
+                      )}
+                      {isSidecar && isInitRunning && canExec && renderPodBrowser && (
+                        <Tooltip content="Browse files" delay={150}>
+                          <button
+                            onClick={() => setPodFilesContainer(container.name)}
+                            className="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-600/50 rounded transition-colors"
+                          >
+                            <FolderOpen className="w-4 h-4" />
+                          </button>
+                        </Tooltip>
+                      )}
                       {canViewLogs && (
                         <Tooltip content="Logs" delay={150}>
                           <button
@@ -554,7 +633,7 @@ export function PodRenderer({
                       </div>
                     )}
                     {/* Waiting reason detail */}
-                    {isWaiting && state?.waiting?.reason && state.waiting.reason !== 'PodInitializing' && (
+                    {isWaiting && state?.waiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(state.waiting.reason) && (
                       <div className="text-red-400 flex items-center gap-1">
                         <span className="font-medium">{state.waiting.reason}</span>
                         {state.waiting.message && (
@@ -602,6 +681,7 @@ export function PodRenderer({
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>
         <div className="space-y-3">
+          <PodAggregateResources resources={podResources} />
           {containers.map((container: any) => {
             const status = containerStatuses.find((s: any) => s.name === container.name)
             const state = status?.state
@@ -617,6 +697,7 @@ export function PodRenderer({
             // failure — tone its badges/text sky, not red, so the drawer agrees
             // with the calm "Completed" table badge instead of screaming red.
             const terminatedOk = currentTerminated?.exitCode === 0
+            const reportedFailure = !!((currentTerminated?.exitCode != null && currentTerminated.exitCode !== 0) || (currentWaiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(currentWaiting.reason)))
 
             return (
               <div key={container.name} className="card-inner-lg">
@@ -653,23 +734,12 @@ export function PodRenderer({
                         </button>
                       </Tooltip>
                     )}
-                    <span className={clsx(
-                      'badge',
-                      isReady ? SEVERITY_BADGE_BORDERED.success :
-                      terminatedOk ? SEVERITY_BADGE_BORDERED.info :
-                      SEVERITY_BADGE_BORDERED.error
-                    )}>
-                      {isReady ? 'Ready' : terminatedOk ? 'Completed' : 'Not Ready'}
-                    </span>
-                    <span className={clsx(
-                      'badge',
-                      stateKey === 'running' ? SEVERITY_BADGE_BORDERED.success :
-                      stateKey === 'waiting' ? SEVERITY_BADGE_BORDERED.warning :
-                      terminatedOk ? SEVERITY_BADGE_BORDERED.info :
-                      SEVERITY_BADGE_BORDERED.error
-                    )}>
+                    <Badge severity={isReady ? 'success' : terminatedOk ? 'info' : reportedFailure ? 'error' : stateKey === 'running' && isReady === false ? 'warning' : 'neutral'}>
+                      {isReady ? 'Ready' : terminatedOk ? 'Completed' : !stateKey || stateKey === 'unknown' ? 'Not started' : 'Not Ready'}
+                    </Badge>
+                    {stateKey !== 'unknown' && <Badge severity={stateKey === 'running' ? 'success' : terminatedOk ? 'info' : reportedFailure ? 'error' : 'neutral'}>
                       {stateKey}
-                    </span>
+                    </Badge>}
                   </div>
                 </div>
                 <div className="text-xs text-theme-text-secondary space-y-1">
@@ -683,7 +753,7 @@ export function PodRenderer({
                     )
                   })()}
                   {/* Show current waiting reason (e.g., CrashLoopBackOff) */}
-                  {currentWaiting?.reason && currentWaiting.reason !== 'ContainerCreating' && (
+                  {currentWaiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(currentWaiting.reason) && (
                     <div className="text-red-400 flex items-center gap-1">
                       <span className="font-medium">{currentWaiting.reason}</span>
                       {currentWaiting.message && (
@@ -792,7 +862,7 @@ export function PodRenderer({
           <div className="text-xs text-theme-text-tertiary">Loading variable sources…</div>
         </Section>
       )}
-      {hasEnvironmentDeclarations && environmentError && !environment && (
+      {hasEnvironmentDeclarations && environmentError && !environment && !environmentUpgrade && (
         <Section title="Environment Variables" icon={List} defaultExpanded={false}>
           <div className="space-y-2 text-xs">
             <p className="text-theme-text-secondary">Variable sources could not be loaded.</p>
@@ -800,23 +870,44 @@ export function PodRenderer({
           </div>
         </Section>
       )}
-      {(!environment || !hasResolvedEnvironmentRows) && !environmentLoading && !environmentError && hasEnvironmentDeclarations && (
+      {(!environment || !hasResolvedEnvironmentRows) && !environmentLoading && (!environmentError || environmentUpgrade) && hasEnvironmentDeclarations && (
         <EnvVarsSection
           initContainers={initContainers}
           containers={containers}
           resolvedEnvFrom={resolvedEnvFrom}
+          upgrade={environmentUpgrade}
         />
       )}
 
+      {secretsStore && (
+        <SecretsStoreMountsSection pod={data} {...secretsStore} onNavigate={onNavigate} />
+      )}
+
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
+      {!hideMetricsServer && !!(showTerminalUsage || currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
+          {isTerminal && (
+            <div className="mb-3 text-sm text-theme-text-tertiary">
+              Live resource usage has ended for this Pod.{metricsHistory && !hasMetricsHistory && !metricsHistoryLoading && !metricsHistoryError && ' No recorded usage is available.'}
+            </div>
+          )}
+          {isTerminal && metricsHistoryLoading && (
+            <p className="mb-3 text-sm text-theme-text-tertiary">Loading recorded usage...</p>
+          )}
+          {isTerminal && metricsHistoryError && (
+            <AlertBanner
+              variant="warning"
+              title={metricsHistory ? 'Recorded usage could not be refreshed' : 'Recorded usage could not be loaded'}
+              message={metricsHistoryError.message}
+            />
+          )}
+          {noUsageYet && <MetricsUnavailableNotice noUsageYet />}
           {showMetricsUnavailable && (
             <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} diagnosis={metricsHistory?.metricsUnavailableDiagnosis} />
           )}
           {metricsHistory?.collectionError && (
             <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
-              <span className="font-medium">Metrics collection error:</span>{' '}
+              <span className="font-medium">{isTerminal ? 'Current cluster metrics collection error:' : 'Metrics collection error:'}</span>{' '}
               <span className="break-all">{metricsHistory.collectionError}</span>
             </div>
           )}
@@ -830,7 +921,8 @@ export function PodRenderer({
                 // fall through to them or their chart shows no limit line.
                 const containerSpec = containers.find((c: any) => c.name === historyContainer.name)
                   || initContainers.find((c: any) => c.name === historyContainer.name && c.restartPolicy === 'Always')
-                const limits = containerSpec?.resources?.limits
+                // A container without its own limit is still bounded by the pod-level one.
+                const limits = { ...podResources?.limits, ...containerSpec?.resources?.limits }
                 const requests = containerSpec?.resources?.requests
 
                 // Get historical data points (from history or empty)
@@ -905,14 +997,16 @@ export function PodRenderer({
         </Section>
       )}
 
-      {/* Conditions. A completed pod's Ready/ContainersReady flip to False with
-          reason "PodCompleted" — that's expected for a finished pod, not a failure,
-          so tone it neutral (gray) instead of red. Gated on the PodCompleted reason
-          so a genuinely not-ready pod (any other reason) still reads red. */}
+      {/* Sandbox teardown and lost serving readiness are expected after success;
+          custom conditions retain their own meaning. */}
       <ConditionsSection
         conditions={data.status?.conditions}
         getConditionTone={(cond) =>
-          cond?.status === 'False' && cond?.reason === 'PodCompleted' ? 'unknown' : undefined
+          data.status?.phase === 'Succeeded'
+            && cond?.status === 'False'
+            && ['Ready', 'ContainersReady', 'PodReadyToStartContainers'].includes(cond?.type)
+            ? 'unknown'
+            : undefined
         }
       />
 
@@ -939,10 +1033,8 @@ export function PodRenderer({
         podName: podName || '',
         pullSecrets: imagePullSecrets,
         onClose: () => setSelectedImage(null),
-        onSwitchToPodFiles: isRunning && canExec && renderPodBrowser ? () => {
-          // Find which container uses this image and open pod files for it
-          const match = containers.find((c: any) => c.image === selectedImage)
-          setPodFilesContainer(match?.name || containers[0]?.name)
+        onSwitchToPodFiles: canExec && renderPodBrowser && (isRunning || runningImageContainer) ? () => {
+          setPodFilesContainer(runningImageContainer || containers[0]?.name)
         } : undefined,
       })}
 
@@ -950,12 +1042,12 @@ export function PodRenderer({
       {podFilesContainer && renderPodBrowser && renderPodBrowser({
         namespace: namespace || '',
         podName: podName || '',
-        containers: containers.map((c: { name: string }) => c.name),
+        containers: getExecContainerNames(data),
         initialContainer: podFilesContainer,
         onClose: () => setPodFilesContainer(null),
-        onSwitchToImageFiles: () => {
-          // Find which image this container uses and open image filesystem
-          const match = containers.find((c: any) => c.name === podFilesContainer)
+        onSwitchToImageFiles: (containerName?: string) => {
+          const selected = containerName || podFilesContainer
+          const match = [...containers, ...initContainers].find((c: any) => c.name === selected)
           if (match?.image) setSelectedImage(match.image)
         },
       })}

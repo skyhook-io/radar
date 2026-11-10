@@ -3,9 +3,9 @@ import { ShieldCheck, CheckCircle2, XCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../../ui/Collapse'
-import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, SEVERITY_ORDER, TrivyAlertBanner } from './trivy-shared'
 import { BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface ConfigAuditReportRendererProps {
   data: any
@@ -115,7 +115,7 @@ export function ConfigAuditReportRenderer({ data }: ConfigAuditReportRendererPro
       <Section title="Report Overview" icon={ShieldCheck}>
         <PropertyList>
           <Property label="Scanner" value={scanner.name ? `${scanner.name} ${scanner.version || ''}`.trim() : '-'} />
-          <Property label="Scanned" value={report.updateTimestamp ? formatAge(report.updateTimestamp) + ' ago' : '-'} />
+          <Property label="Scanned" value={<TimeValue timestamp={report.updateTimestamp} />} />
         </PropertyList>
       </Section>
 

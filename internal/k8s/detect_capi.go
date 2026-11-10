@@ -3,10 +3,12 @@ package k8s
 import (
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -64,7 +66,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 				Severity: "critical", Reason: "Cluster in Failed phase",
 				// CAPI records the decisive detail in status.failureMessage/Reason.
 				Message: capiFailureDetail(cl),
-				Age:     FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age:     timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: cl.GetCreationTimestamp().Time, OnsetUnknown: true,
 			})
 			continue // don't double-report conditions
@@ -87,7 +89,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			detection := Detection{
 				Kind: "Cluster", Namespace: cl.GetNamespace(), Name: cl.GetName(), Group: capiGroup,
 				Severity: severity, Reason: displayReason, Message: msg,
-				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: cl.GetCreationTimestamp().Time,
 				IssueTiming:       timing, IssueTimingBasis: timingBasis,
 			}
@@ -109,12 +111,13 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			// failing condition message for richer context.
 			msg := capiFailureDetail(m)
 			if msg == "" {
-				_, _, msg, _, _ = conditions.FindFalseCondition(m, "Ready", "InfrastructureReady", "BootstrapReady")
+				condition, _ := capiMachineFalseCondition(m, "Ready", "InfrastructureReady", "BootstrapReady")
+				msg = condition.Message
 			}
 			problems = append(problems, Detection{
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: "critical", Reason: "Machine in Failed phase", Message: msg,
-				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: m.GetCreationTimestamp().Time, OnsetUnknown: true,
 			})
 			continue
@@ -122,16 +125,16 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 
 		// Phase-based: stuck Provisioning > 10m
 		if strings.EqualFold(phase, "provisioning") && ageDur > 10*time.Minute {
-			condition, _ := conditions.FindFalseConditionWithTime(m, "InfrastructureReady", "BootstrapReady")
+			condition, _ := capiMachineFalseCondition(m, "InfrastructureReady", "BootstrapReady")
 			reason, msg := condition.Reason, condition.Message
-			displayReason := fmt.Sprintf("Stuck provisioning for %s", FormatAge(ageDur))
+			displayReason := fmt.Sprintf("Stuck provisioning for %s", timeutil.FormatAgeShort(ageDur))
 			if reason != "" {
 				displayReason += " (" + reason + ")"
 			}
 			detection := Detection{
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: "high", Reason: displayReason, Message: msg,
-				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: m.GetCreationTimestamp().Time,
 			}
 			setDetectionOnset(&detection, now, m.GetCreationTimestamp().Time)
@@ -142,11 +145,11 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		// Condition-based: BootstrapReady=False, NodeHealthy=False, InfrastructureReady=False,
 		// with Ready=False as a fallback. Catches problems that phase alone misses,
 		// e.g. Running phase but NodeHealthy=False.
-		condition, ok := conditions.FindFalseConditionWithTime(m,
+		condition, ok := capiMachineFalseCondition(m,
 			"BootstrapReady", "NodeHealthy", "InfrastructureReady",
 		)
 		if !ok {
-			condition, ok = conditions.FindFalseConditionWithTime(m, "Ready")
+			condition, ok = capiMachineFalseCondition(m, "Ready")
 		}
 		ct, reason, msg := condition.Type, condition.Reason, condition.Message
 		if ok && capiConditionCurrent(m, reason) {
@@ -162,7 +165,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			detection := Detection{
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: severity, Reason: displayReason, Message: msg,
-				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: m.GetCreationTimestamp().Time,
 				IssueTiming:       timing, IssueTimingBasis: timingBasis,
 			}
@@ -190,7 +193,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 				detection := Detection{
 					Kind: "MachineDeployment", Namespace: md.GetNamespace(), Name: md.GetName(), Group: capiGroup,
 					Severity: "high", Reason: displayReason, Message: msg,
-					Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+					Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 					ResourceCreatedAt: md.GetCreationTimestamp().Time,
 				}
 				setDetectionOnset(&detection, now, condition.LastTransitionTime)
@@ -207,7 +210,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			detection := Detection{
 				Kind: "MachineDeployment", Namespace: md.GetNamespace(), Name: md.GetName(), Group: capiGroup,
 				Severity: "high", Reason: capiDisplayReason(condition.Type, condition.Reason), Message: condition.Message,
-				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: md.GetCreationTimestamp().Time,
 				IssueTiming:       timing, IssueTimingBasis: timingBasis,
 			}
@@ -240,7 +243,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			detection := Detection{
 				Kind: "KubeadmControlPlane", Namespace: kcp.GetNamespace(), Name: kcp.GetName(), Group: capiCPGroup,
 				Severity: severity, Reason: displayReason, Message: msg,
-				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: kcp.GetCreationTimestamp().Time,
 				IssueTiming:       timing, IssueTimingBasis: timingBasis,
 			}
@@ -262,7 +265,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 				Kind: "MachineHealthCheck", Namespace: mhc.GetNamespace(), Name: mhc.GetName(), Group: capiGroup,
 				Severity:          "high",
 				Reason:            fmt.Sprintf("Remediating: %d/%d healthy", healthy, expected),
-				Age:               FormatAge(ageDur),
+				Age:               timeutil.FormatAgeShort(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: mhc.GetCreationTimestamp().Time,
 				OnsetUnknown:      true,
@@ -278,7 +281,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			detection := Detection{
 				Kind: "MachineHealthCheck", Namespace: mhc.GetNamespace(), Name: mhc.GetName(), Group: capiGroup,
 				Severity: "high", Reason: capiDisplayReason(condition.Type, condition.Reason), Message: condition.Message,
-				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Age: timeutil.FormatAgeShort(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 				ResourceCreatedAt: mhc.GetCreationTimestamp().Time,
 				IssueTiming:       timing, IssueTimingBasis: timingBasis,
 			}
@@ -305,6 +308,23 @@ func capiIssueTiming(transitionAt time.Time, transitionKnown bool, createdAt tim
 	}
 	r := IssueTimingFromConditionLTT(transitionAt, createdAt, "condition")
 	return r.IssueTiming, r.Basis
+}
+
+// A modern True can resolve a deprecated failure; Unknown does not establish recovery.
+func capiMachineFalseCondition(u *unstructured.Unstructured, condTypes ...string) (conditions.FalseCondition, bool) {
+	for len(condTypes) > 0 {
+		condition, found := conditions.FindFalseConditionWithTime(u, condTypes...)
+		if !found {
+			break
+		}
+		current, _ := conditions.Find(u, condition.Type)
+		// Preserve an in-progress selection so source cleanup cannot reveal a new warning behind it.
+		if current.Status != "True" || conditions.IsInProgressForIssues(condition.Reason) {
+			return condition, true
+		}
+		condTypes = slices.DeleteFunc(slices.Clone(condTypes), func(typ string) bool { return typ == condition.Type })
+	}
+	return conditions.FalseCondition{}, false
 }
 
 func capiConditionCurrent(u *unstructured.Unstructured, reason string) bool {

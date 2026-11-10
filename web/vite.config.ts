@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -10,6 +11,9 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
       '@skyhook-io/k8s-ui': path.resolve(__dirname, '../packages/k8s-ui/src'),
+      // monaco-yaml's worker (via monaco-worker-manager) imports Monaco's worker entry
+      // at esm/vs/editor/editor.worker.js, a path monaco-editor's exports map does not serve.
+      'monaco-editor/esm/vs/editor/editor.worker.js': 'monaco-editor/editor/editor.worker.js',
     },
   },
   server: {
@@ -49,4 +53,10 @@ export default defineConfig({
   },
   // Handle client-side routing - serve index.html for all routes
   appType: 'spa',
+  test: {
+    fsModuleCache: true,
+    // Worktrees symlink node_modules to one checkout, so the default cache
+    // location would be shared by every worktree.
+    fsModuleCachePath: path.resolve(__dirname, '.vitest-cache'),
+  },
 })

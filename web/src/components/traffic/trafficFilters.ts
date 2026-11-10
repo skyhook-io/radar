@@ -1,3 +1,7 @@
+import type { AggregatedFlow, TrafficFlow } from '../../types'
+import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
+import type { TrafficGraphSelection } from './TrafficGraph'
+
 /**
  * Does a flow fall into one of the selected HTTP status ranges?
  *
@@ -49,6 +53,128 @@ export function bucketsFromStatus(httpStatus: number | undefined): string[] {
  */
 export function isRateBasedSource(source: string | undefined): boolean {
   return source === 'istio' || source === 'beyla'
+}
+
+/**
+ * The request and 5xx rates of an edge from a rate-based source, unrounded.
+ *
+ * requestCount / errorCount carry the same figures rounded with a floor of one,
+ * which keeps a trickle visible but makes their ratio meaningless at low rates:
+ * 0.3 req/s with 0.01 err/s rounds to one of each, a 100% error rate. The counts
+ * are only read when the rates are absent — Radar Hub renders clusters whose
+ * Radar predates requestRate / errorRate, and for those they are all there is.
+ */
+export function requestRateOf(flow: Pick<AggregatedFlow, 'requestRate' | 'requestCount'>): number {
+  return flow.requestRate ?? flow.requestCount ?? 0
+}
+export function errorRateOf(flow: Pick<AggregatedFlow, 'errorRate' | 'errorCount'>): number {
+  return flow.errorRate ?? flow.errorCount ?? 0
+}
+
+/**
+ * The volume shown for an edge. For a rate-based source `connections` is its
+ * request rate rounded with a floor of one — the graph sizes, sorts and filters
+ * on that integer — so what is printed is the unrounded rate where the edge has
+ * one. An edge with no HTTP rate (plain TCP) keeps its connection figure.
+ */
+export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connections'>, isRateBased: boolean): number {
+  return isRateBased && flow.requestRate ? flow.requestRate : flow.connections
+}
+
+/**
+ * A merged edge records the weight behind its average latency on itself, so a
+ * later `{...flow}` copy — the Internet collapse, addon grouping — carries it.
+ * Client-only: the server never sends it.
+ */
+type LatencyWeighted = AggregatedFlow & { latencyWeight?: number }
+
+/**
+ * How much traffic an edge's average latency stands for: its request rate, or
+ * one for an edge with no rate, summed through merges. Zero when it has none.
+ * Used to average latencies so a slow trickle does not stand for a busy path.
+ */
+export function latencyWeightOf(flow: AggregatedFlow): number {
+  const merged = (flow as LatencyWeighted).latencyWeight
+  if (merged !== undefined) return merged
+  return flow.avgLatencyMs ? (flow.requestRate || flow.latencySamples || 1) : 0
+}
+
+/**
+ * Fold one aggregated flow's volume into another's, for the client-side merges
+ * that collapse several edges into one. Every figure displayVolume or the error
+ * rate reads has to be summed here: a field left out keeps only the first
+ * merged edge's value.
+ */
+export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): void {
+  // A metric-based source reports only an average latency per edge, so the
+  // merged edge's is theirs weighted by request rate. The weight behind a merged
+  // average is carried apart from the edge's request rate, which also counts
+  // traffic that had no latency measured: weighting by that would make the
+  // result depend on the order the edges arrived in.
+  const wInto = latencyWeightOf(into)
+  const wFlow = latencyWeightOf(flow)
+  if (wFlow > 0) {
+    if (wInto > 0) {
+      into.avgLatencyMs = (into.avgLatencyMs! * wInto + flow.avgLatencyMs! * wFlow) / (wInto + wFlow)
+      // Percentiles of two edges cannot be combined into a percentile of both,
+      // so a merged edge that had latency on both sides keeps only the average.
+      delete into.latencyP50Ms
+      delete into.latencyP95Ms
+      delete into.latencyP99Ms
+    } else {
+      into.avgLatencyMs = flow.avgLatencyMs
+      into.latencyP50Ms = flow.latencyP50Ms
+      into.latencyP95Ms = flow.latencyP95Ms
+      into.latencyP99Ms = flow.latencyP99Ms
+    }
+  }
+  const weighted: LatencyWeighted = into
+  weighted.latencyWeight = wInto + wFlow
+  into.connections += flow.connections
+  into.bytesSent += flow.bytesSent
+  into.bytesRecv += flow.bytesRecv
+  into.flowCount += flow.flowCount
+  if (flow.requestCount) into.requestCount = (into.requestCount || 0) + flow.requestCount
+  if (flow.errorCount) into.errorCount = (into.errorCount || 0) + flow.errorCount
+  if (flow.requestRate) into.requestRate = (into.requestRate || 0) + flow.requestRate
+  if (flow.errorRate) into.errorRate = (into.errorRate || 0) + flow.errorRate
+  // New objects rather than in-place sums: a merged edge starts as a shallow
+  // copy of the server's, so its maps are still the server's.
+  into.httpStatusCounts = sumCounts(into.httpStatusCounts, flow.httpStatusCounts)
+  into.verdictCounts = sumCounts(into.verdictCounts, flow.verdictCounts)
+  into.dropReasons = sumCounts(into.dropReasons, flow.dropReasons)
+}
+
+function sumCounts(a: Record<string, number> | undefined, b: Record<string, number> | undefined): Record<string, number> | undefined {
+  if (!b) return a
+  if (!a) return { ...b }
+  const sum = { ...a }
+  for (const [k, v] of Object.entries(b)) sum[k] = (sum[k] ?? 0) + v
+  return sum
+}
+
+/**
+ * How much of the requested window the flows cover, as a short label: "last
+ * 1m 40s". Null when the whole window is covered. Measured back from when the
+ * data was collected, not from now.
+ */
+export function coverageLabel(coveredSince: string | undefined, collectedAt: string | undefined): string | null {
+  if (!coveredSince || !collectedAt) return null
+  const seconds = Math.max(0, Math.round((Date.parse(collectedAt) - Date.parse(coveredSince)) / 1000))
+  if (!Number.isFinite(seconds)) return null
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `last ${m > 0 ? `${m}m ${s}s` : `${s}s`}`
+}
+
+/** A per-second rate, precise enough to tell a trickle from nothing: 0.30, 12, 1.2K. */
+export function formatRate(rate: number): string {
+  if (rate >= 1000) return `${(rate / 1000).toFixed(1)}K`
+  if (rate >= 10) return rate.toFixed(0)
+  if (rate >= 1) return rate.toFixed(1)
+  if (rate >= 0.01) return rate.toFixed(2)
+  if (rate > 0) return '<0.01'
+  return '0'
 }
 
 /**
@@ -145,4 +271,440 @@ export function isPolicyDropReason(dropReasonDesc: string | undefined, deniedByC
   if (deniedByCount > 0) return true
   const code = (dropReasonDesc ?? '').toUpperCase()
   return code === 'POLICY_DENIED' || code === 'POLICY_DENY'
+}
+
+/**
+ * Drop each HTTP REQUEST record that has a matching RESPONSE: the response
+ * carries the status and latency, so it stands for the call. A request with no
+ * response stays, because a missing response is worth seeing.
+ *
+ * `callerOriented` is the server saying its responses run caller → callee on
+ * the server's port, like their requests, so they match on endpoints, route and
+ * port exactly. Without it the server is a Radar that predates that — Radar Hub
+ * renders clusters running such builds — whose responses run server → client on
+ * the client's ephemeral port, so they match reversed and without the port.
+ * The orientation is taken from the server, never inferred from which records
+ * happen to be in the window.
+ */
+export function dedupeHTTPPairs(flows: TrafficFlow[], callerOriented: boolean): TrafficFlow[] {
+  const isHTTP = (f: TrafficFlow, type: string) => f.l7Protocol === 'HTTP' && f.l7Type === type
+  const call = (from: string, to: string, f: TrafficFlow) =>
+    callerOriented
+      ? `${from}|${to}|${f.httpMethod}|${f.httpPath}|${f.port}`
+      : `${from}|${to}|${f.httpMethod}|${f.httpPath}`
+
+  const answered = new Set<string>()
+  for (const f of flows) {
+    if (!isHTTP(f, 'RESPONSE')) continue
+    answered.add(callerOriented
+      ? call(f.source.name, f.destination.name, f)
+      : call(f.destination.name, f.source.name, f))
+  }
+  return flows.filter(f => !(isHTTP(f, 'REQUEST') && answered.has(call(f.source.name, f.destination.name, f))))
+}
+
+/**
+ * A graph edge, carrying the server edges merged into it. The graph renames and
+ * merges endpoints (external services, the Internet node, the addon group), so
+ * these are what a selection is traced back through to ask the server for its
+ * records.
+ */
+export type GraphFlow = AggregatedFlow & { rawPairs?: TrafficEndpointPair[] }
+
+/**
+ * The port an edge merged from several shows: its lowest real one, whatever
+ * order the parts arrived in (0 means none was reported, so it shows only
+ * when no part has a port). The Internet node groups by it and selections
+ * find the edge by it, so it must not change from one refresh to the next.
+ */
+export function mergedEdgePort(a: number, b: number): number {
+  if (a === 0) return b
+  if (b === 0) return a
+  return Math.min(a, b)
+}
+
+/**
+ * Whether an edge carries a port: its own, or one of the edges merged into it.
+ * A merged edge shows one of its ports, so a selection made on another must
+ * still find it.
+ */
+export function edgeCarriesPort(flow: GraphFlow, port: number | undefined): boolean {
+  return port === undefined || flow.port === port || !!flow.rawPairs?.some(p => p.port === port)
+}
+
+/**
+ * Of the edges between a selection's endpoints, the ones it means: those on
+ * its exact port when any are, else those with the port merged in. Two edges
+ * can join the same endpoints (the Internet node keeps ports apart), and the
+ * one shown on a port must win over one that merely carries it.
+ */
+export function edgesOnPort<T>(candidates: T[], flowOf: (c: T) => GraphFlow | undefined, port: number | undefined): T[] {
+  if (port === undefined) return candidates
+  const exact = candidates.filter(c => flowOf(c)?.port === port)
+  if (exact.length > 0) return exact
+  return candidates.filter(c => {
+    const flow = flowOf(c)
+    return !!flow && edgeCarriesPort(flow, port)
+  })
+}
+
+export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
+  const ref = (e: AggregatedFlow['source']) => ({
+    namespace: e.namespace || undefined,
+    name: e.name,
+    kind: e.kind,
+    ...(e.workloadKind && { workloadKind: e.workloadKind }),
+  })
+  return {
+    source: ref(flow.source),
+    destination: ref(flow.destination),
+    port: flow.port,
+    ...(flow.directionUnknown && { directionUnknown: true }),
+  }
+}
+
+/** Adds a merged edge's pairs to the edge it was merged into. The target owns
+ *  its array, so merging appends in place: copying it on every merge is
+ *  quadratic, and an ingress with tens of thousands of distinct clients
+ *  collapses into a single Internet edge. */
+export function mergeRawPairs(into: GraphFlow, from: GraphFlow): void {
+  const target = into.rawPairs ?? (into.rawPairs = [])
+  for (const pair of from.rawPairs ?? []) target.push(pair)
+}
+
+// The renderer draws the addon group's virtual endpoints as one group node.
+function selectableId(e: { namespace?: string; name: string; kind?: string }): string {
+  if (e.kind === 'AddonGroupTarget' || e.kind === 'AddonGroupSource') return 'addon-group'
+  return graphEndpointId(e)
+}
+
+/**
+ * A record's endpoint as the graph names it: a pod with a known workload is
+ * drawn as that workload. Mirrors the server's graphEndpoint (pkg/traffic),
+ * which builds the aggregation the graph is drawn from — the two have to agree
+ * for a record to be found under its node.
+ */
+export function graphEndpoint(e: TrafficFlow['source']): { namespace?: string; name: string } {
+  if (e.kind === 'Pod' && e.workload && e.namespace && e.workload !== e.name) return { namespace: e.namespace, name: e.workload }
+  return e
+}
+
+export function graphEndpointId(e: { namespace?: string; name: string }): string {
+  return e.namespace ? `${e.namespace}/${e.name}` : e.name
+}
+
+export function pairKey(source: { namespace?: string; name: string }, destination: { namespace?: string; name: string }, port: number, directionUnknown?: boolean): string {
+  return `${graphEndpointId(source)}->${graphEndpointId(destination)}:${port}${directionUnknown ? ':u' : ''}`
+}
+
+/**
+ * Whether a record belongs to the selected edges, in the grouping the graph
+ * draws (`drawn`). Without `responsesCallerOriented` the server sends an HTTP
+ * response as it was observed, server to client on the client's port, so a
+ * response is then also matched to an edge running the other way. Its port says nothing about which of the
+ * caller's edges it answers, so it is matched to each of them; other traffic
+ * between the same endpoints is not, being on edges of its own.
+ */
+export function selectedEdgeMatcher(
+  pairs: TrafficEndpointPair[] | null,
+  responsesCallerOriented: boolean,
+  drawn: (e: TrafficFlow['source']) => { namespace?: string; name: string },
+): (f: TrafficFlow) => boolean {
+  if (!pairs) return () => true
+  const keys = new Set(pairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
+  const callers = responsesCallerOriented ? null : new Set(pairs.map(p => `${graphEndpointId(p.source)}->${graphEndpointId(p.destination)}`))
+  return f => {
+    const src = drawn(f.source)
+    const dst = drawn(f.destination)
+    if (keys.has(pairKey(src, dst, f.port, f.directionUnknown))) return true
+    // The response travels callee to caller: reversed, it is the edge's.
+    return !!callers && f.l7Protocol === 'HTTP' && f.l7Type === 'RESPONSE' &&
+      callers.has(`${graphEndpointId(dst)}->${graphEndpointId(src)}`)
+  }
+}
+
+/**
+ * The server edges behind the selected node or edge, deduplicated and in a
+ * stable order — the server returns its aggregation in no particular order,
+ * and the result keys the records query. Null when the selection traces back
+ * to none. `inAddonGroup` says which endpoints the addon group node holds
+ * while addons are grouped, so selecting the group selects their traffic too.
+ */
+export function selectionRawPairs(
+  flows: GraphFlow[],
+  selection: TrafficGraphSelection | null,
+  inAddonGroup?: (e: { namespace?: string; name: string }) => boolean,
+): TrafficEndpointPair[] | null {
+  if (!selection) return null
+  const pairs = new Map<string, TrafficEndpointPair>()
+  const groupId = (e: GraphFlow['source']) =>
+    inAddonGroup && selection.nodeId === 'addon-group' && inAddonGroup(e) ? 'addon-group' : selectableId(e)
+  const touching = flows.filter(flow => {
+    const sourceId = groupId(flow.source)
+    const destId = groupId(flow.destination)
+    return selection.type === 'node'
+      ? sourceId === selection.nodeId || destId === selection.nodeId
+      : sourceId === selection.sourceId && destId === selection.destId &&
+        !!flow.directionUnknown === !!selection.directionUnknown
+  })
+  // An edge stands for its port; an edge merged from several ports shows one
+  // of them and carries the rest (edgesOnPort).
+  const selected = selection.type === 'node' ? touching : edgesOnPort(touching, f => f, selection.port)
+  for (const flow of selected) {
+    for (const pair of flow.rawPairs ?? []) {
+      pairs.set(pairKey(pair.source, pair.destination, pair.port, pair.directionUnknown), pair)
+    }
+  }
+  if (pairs.size === 0) return null
+  return Array.from(pairs.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, pair]) => pair)
+}
+
+/**
+ * What to ask the server for, for the records behind a selection traced to
+ * `pairs` (selectionRawPairs). A node that is one server endpoint is sent as
+ * that endpoint: a busy node has too many edges to name each within a URL.
+ * The answer then holds its hidden edges too, so the caller keeps the pairs
+ * to narrow it. Anything else — an edge, a node merged from several
+ * endpoints — is sent as its edges.
+ */
+export function selectionMatch(
+  pairs: TrafficEndpointPair[] | null,
+  selection: TrafficGraphSelection | null,
+): TrafficMatch | null {
+  if (!pairs) return null
+  if (selection?.type !== 'node') return { pairs }
+  const refKey = (r: TrafficEndpointRef) => `${graphEndpointId(r)}|${r.kind ?? ''}`
+  // Only pods can be named to the source; any other endpoint sent alone would
+  // fetch everything, while its edges still name the pods at their far ends.
+  const nameable = (r: TrafficEndpointRef) => r.kind === 'Pod' || r.kind === 'Workload'
+  let only: TrafficEndpointRef | undefined
+  for (const p of pairs) {
+    const side = graphEndpointId(p.source) === selection.nodeId ? p.source
+      : graphEndpointId(p.destination) === selection.nodeId ? p.destination
+        : undefined
+    if (!side || !nameable(side) || (only && refKey(side) !== refKey(only))) return { pairs }
+    only = side
+  }
+  return only ? { endpoints: [only] } : { pairs }
+}
+
+/**
+ * How costly the graph is to draw. The layout runs on the main thread and its
+ * cost grows faster than linearly, edges more than nodes, so edges count
+ * double, as Weave Scope weighs them. Laying out whole namespaces of a dense
+ * service graph took 0.55s at a score of 493, 2s at 728, 4.5s at 1,433, 13s
+ * at 1,883 and 32s at 2,329; larger graphs overflowed ELK's stack.
+ */
+export function graphSize(flows: AggregatedFlow[]): { nodes: number; edges: number; score: number } {
+  const nodes = new Set<string>()
+  for (const flow of flows) {
+    nodes.add(graphEndpointId(flow.source))
+    nodes.add(graphEndpointId(flow.destination))
+  }
+  return { nodes: nodes.size, edges: flows.length, score: nodes.size + 2 * flows.length }
+}
+
+/** Above this the graph is not drawn until the view is narrowed (about 1.5s of layout). */
+export const GRAPH_DRAW_BUDGET = 600
+/** Above this it is not drawn at all (about 5s of layout, freezing the tab). */
+export const GRAPH_DRAW_CEILING = 1500
+
+/** 5xx responses on an edge: counted where the source observes responses,
+ *  a per-second rate where it measures one. */
+export function flowErrors(flow: AggregatedFlow): number {
+  return flow.httpStatusCounts?.['5xx'] || errorRateOf(flow)
+}
+
+export function flowDrops(flow: AggregatedFlow): number {
+  return flow.verdictCounts?.dropped ?? 0
+}
+
+/** Whether this edge carries HTTP responses, so its 5xx count is a measured
+ *  zero rather than unknown; plain TCP has none. Zero rates and counts are left
+ *  out of the response, so a healthy HTTP edge shows only by its requests or
+ *  protocol. */
+export function hasStatusData(flow: AggregatedFlow): boolean {
+  return (!!flow.httpStatusCounts && Object.keys(flow.httpStatusCounts).length > 0) ||
+    !!flow.requestRate || !!flow.requestCount || !!flow.errorRate || !!flow.errorCount ||
+    flow.l7Protocol === 'HTTP' || flow.l7Protocol === 'gRPC'
+}
+
+/**
+ * A workload (or any endpoint) the view is narrowed to: it and everything it
+ * talks to. Identified by namespace and name, the way the graph names nodes,
+ * so it means the same thing whether pods are grouped or not — ungrouped, it
+ * is the pods the workload owns.
+ */
+export interface TrafficFocus {
+  namespace?: string
+  name: string
+}
+
+/** The focus as the URL carries it: "ns/name", or "/name" for an endpoint
+ *  with no namespace, whose name can itself hold a slash (a CIDR). */
+export function focusParam(focus: TrafficFocus): string {
+  return `${focus.namespace ?? ''}/${focus.name}`
+}
+
+export function parseFocus(value: string | null): TrafficFocus | null {
+  if (!value) return null
+  const slash = value.indexOf('/')
+  if (slash < 0) return null
+  const namespace = value.slice(0, slash)
+  const name = value.slice(slash + 1)
+  if (!name) return null
+  return namespace ? { namespace, name } : { name }
+}
+
+/** The graph's id for the focused node. */
+export function focusId(focus: TrafficFocus): string {
+  return graphEndpointId(focus)
+}
+
+export function touchesFocus(e: AggregatedFlow['source'], focus: TrafficFocus): boolean {
+  if ((e.namespace || undefined) !== focus.namespace) return false
+  return e.name === focus.name || (e.kind === 'Pod' && e.workload === focus.name)
+}
+
+/** The edges with the focus at either end. */
+export function focusNeighborhood<T extends AggregatedFlow>(flows: T[], focus: TrafficFocus): T[] {
+  return flows.filter(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))
+}
+
+export interface EndpointSummary {
+  id: string
+  name: string
+  namespace?: string
+  kind: string
+  workloadKind?: string
+  volume: number
+  errors: number
+  drops: number
+}
+
+/** Every endpoint drawn from these flows, with the traffic on its edges. The
+ *  options a focus can be chosen from, so each one has something to show.
+ *  Pods drawn ungrouped also offer their workload, which a focus covers whole. */
+export function endpointSummaries(flows: AggregatedFlow[]): EndpointSummary[] {
+  const byId = new Map<string, EndpointSummary>()
+  const add = (e: { namespace?: string; name: string; kind: string; workloadKind?: string }, flow: AggregatedFlow, seen: Set<string>) => {
+    const id = graphEndpointId(e)
+    if (seen.has(id)) return
+    seen.add(id)
+    let s = byId.get(id)
+    if (!s) {
+      s = { id, name: e.name, namespace: e.namespace || undefined, kind: e.kind, workloadKind: e.workloadKind, volume: 0, errors: 0, drops: 0 }
+      byId.set(id, s)
+    }
+    s.volume += flow.connections
+    s.errors += flowErrors(flow)
+    s.drops += flowDrops(flow)
+  }
+  for (const flow of flows) {
+    const seen = new Set<string>()
+    for (const e of [flow.source, flow.destination]) {
+      add(e, flow, seen)
+      if (e.kind === 'Pod' && e.namespace && e.workload && e.workload !== e.name) {
+        add({ namespace: e.namespace, name: e.workload, kind: 'Workload', workloadKind: e.workloadKind }, flow, seen)
+      }
+    }
+  }
+  return Array.from(byId.values())
+}
+
+/** Where the problems are first, then the busiest. */
+export function byProblemsThenVolume(a: { errors: number; drops: number; volume: number }, b: { errors: number; drops: number; volume: number }): number {
+  const pa = a.errors > 0 || a.drops > 0 ? 1 : 0
+  const pb = b.errors > 0 || b.drops > 0 ? 1 : 0
+  if (pa !== pb) return pb - pa
+  if (a.drops + a.errors !== b.drops + b.errors) return b.drops + b.errors - (a.drops + a.errors)
+  return b.volume - a.volume
+}
+
+/**
+ * Search results for a query: a name that starts with the query before one
+ * that only contains it, and within each, problems first, then volume.
+ */
+export function searchEndpoints(summaries: EndpointSummary[], query: string, limit = 50): EndpointSummary[] {
+  const q = query.trim().toLowerCase()
+  const rank = (s: EndpointSummary) => {
+    if (!q) return 1
+    const name = s.name.toLowerCase()
+    if (name === q) return 0
+    if (name.startsWith(q)) return 1
+    if (name.includes(q)) return 2
+    if (s.id.toLowerCase().includes(q)) return 3
+    return -1
+  }
+  return summaries
+    .map(s => ({ s, r: rank(s) }))
+    .filter(x => x.r >= 0)
+    .sort((a, b) => a.r - b.r || byProblemsThenVolume(a.s, b.s))
+    .slice(0, limit)
+    .map(x => x.s)
+}
+
+export interface NamespaceSummary {
+  name: string
+  endpoints: number
+  connections: number
+  volume: number
+  errors: number
+  drops: number
+}
+
+/**
+ * Per namespace, what narrowing to it would show. Narrowing keeps an edge
+ * when either end is in the namespace, as the server does, so a cross-namespace
+ * edge counts toward both of its namespaces, and its far end toward the
+ * namespace's endpoints.
+ */
+/** Whether the namespace's own view — its edges, with either end in it — would
+ *  be over the draw budget, judged from the traffic already fetched. Picking it
+ *  fetches that namespace on its own, which can bring in more. */
+export function namespaceOverBudget(ns: NamespaceSummary): boolean {
+  return ns.endpoints + 2 * ns.connections > GRAPH_DRAW_BUDGET
+}
+
+export function namespaceSummaries(flows: AggregatedFlow[]): NamespaceSummary[] {
+  const byNs = new Map<string, { endpoints: Set<string>; connections: number; volume: number; errors: number; drops: number }>()
+  for (const flow of flows) {
+    const namespaces = new Set([flow.source.namespace, flow.destination.namespace].filter(Boolean))
+    for (const ns of namespaces) {
+      let s = byNs.get(ns)
+      if (!s) {
+        s = { endpoints: new Set(), connections: 0, volume: 0, errors: 0, drops: 0 }
+        byNs.set(ns, s)
+      }
+      s.endpoints.add(graphEndpointId(flow.source))
+      s.endpoints.add(graphEndpointId(flow.destination))
+      s.connections += 1
+      s.volume += flow.connections
+      s.errors += flowErrors(flow)
+      s.drops += flowDrops(flow)
+    }
+  }
+  return Array.from(byNs.entries())
+    .map(([name, s]) => ({ name, endpoints: s.endpoints.size, connections: s.connections, volume: s.volume, errors: s.errors, drops: s.drops }))
+    .sort((a, b) => byProblemsThenVolume(a, b) || a.name.localeCompare(b.name))
+}
+
+/** The edges as table rows, problems first, then volume. */
+export function connectionRows<T extends AggregatedFlow>(flows: T[]): T[] {
+  const keyed = flows.map(flow => ({ flow, errors: flowErrors(flow), drops: flowDrops(flow), volume: flow.connections }))
+  keyed.sort(byProblemsThenVolume)
+  return keyed.map(k => k.flow)
+}
+
+/**
+ * The verdict filter's choices, from the verdicts the flows contain. Caretta,
+ * Beyla and Istio report every flow forwarded unless they saw an error, so when
+ * forwarded is the only verdict present the filter would match everything and
+ * none is offered. Any other verdict, even one without a chip of its own (Hubble
+ * also reports redirected, audit and more), makes Forwarded a real choice.
+ */
+export function verdictChoices(seen: Iterable<string>): string[] {
+  const present = new Set(seen)
+  if (present.size === 1 && present.has('forwarded')) return []
+  return ['forwarded', 'dropped', 'error'].filter(v => present.has(v))
 }

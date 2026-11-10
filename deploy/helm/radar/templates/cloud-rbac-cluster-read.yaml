@@ -12,6 +12,12 @@ bindings to the radar:* groups — deliberately NOT via `aggregate-to-view` labe
 which would widen the shared built-in `view`/`edit` roles cluster-wide for every
 other subject bound to them (mirrors the radar-helm add-on pattern).
 
+Leases are namespaced but read here like infrastructure: a Lease's spec is
+only a holder identity and renew times (controller leader election, node
+heartbeats, CloudNativePG primary election). `edit` and `admin` already include them, so
+only the grants built on `view` gain anything: viewers, radar:system and
+radar:ai:reader.
+
 No Secrets and no RBAC objects here — those stay gated behind the tier roles
 (view excludes Secrets; RBAC visibility is rbac.viewRBAC) so this is a pure
 infrastructure-read widening.
@@ -47,8 +53,10 @@ from being truthy.
 {{- $_ := set $csrOn $tier (ne (toString (index $csr $tier)) "false") }}
 {{- end }}
 {{- $rbacDefaults := .Values.cloud.defaultRbac }}
-{{- $anyTier := or (and $rbacDefaults.viewer (get $csrOn "viewer")) (and $rbacDefaults.member (get $csrOn "member")) (and $rbacDefaults.owner (get $csrOn "owner")) }}
-{{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create $anyTier -}}
+{{- $anyTier := and $rbacDefaults.create (or (and $rbacDefaults.viewer (get $csrOn "viewer")) (and $rbacDefaults.member (get $csrOn "member")) (and $rbacDefaults.owner (get $csrOn "owner"))) }}
+{{- $systemOn := include "radar.cloudSystemRbac" . | eq "true" }}
+{{- $aiOn := include "radar.cloudAiRbac" . | eq "true" }}
+{{- if and .Values.cloud.enabled .Values.rbac.create (or $anyTier $systemOn $aiOn) -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -69,6 +77,9 @@ rules:
   - apiGroups: ["scheduling.k8s.io"]
     resources: ["priorityclasses"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["certificates.k8s.io"]
     resources: ["clustertrustbundles"]
     verbs: ["get", "list", "watch"]
@@ -88,6 +99,11 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["admissionregistration.k8s.io"]
     resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch"]
+  # Native admission policies reveal the same admission posture as the webhook
+  # configurations above, so the tiers read both or neither.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
     verbs: ["get", "list", "watch"]
   # Upgrade impact evidence. These kinds are not cached or browsable.
   - apiGroups: ["storage.k8s.io"]
@@ -148,29 +164,25 @@ rules:
     verbs: ["get", "list"]
   {{- end }}
 {{- $fullname := include "radar.fullname" . }}
-{{- $labels := include "radar.labels" . }}
 {{- $rbac := .Values.cloud.defaultRbac }}
+{{- $groups := list }}
 {{- range $tier := list "viewer" "member" "owner" }}
-{{- if and (index $rbac $tier) (get $csrOn $tier) }}
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ $fullname }}-cloud-{{ $tier }}-cluster-read
-  labels:
-    {{- $labels | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ $fullname }}-cluster-read
-subjects:
-  - kind: Group
-    name: radar:{{ $tier }}
-    apiGroup: rbac.authorization.k8s.io
-  # Legacy pre-rename vocabulary; kept for older hubs. Removed in v2.
-  - kind: Group
-    name: cloud:{{ $tier }}
-    apiGroup: rbac.authorization.k8s.io
+{{- if and $rbac.create (index $rbac $tier) (get $csrOn $tier) }}
+{{- $groups = append $groups $tier }}
 {{- end }}
+{{- end }}
+{{- if $systemOn }}
+{{- $groups = append $groups "system" }}
+{{- end }}
+{{- if $aiOn }}
+{{- $groups = append $groups "ai" }}
+{{- end }}
+{{- range $tier := $groups }}
+{{ include "radar.binding" (dict
+  "root" $
+  "name" (printf "%s-cloud-%s-cluster-read" $fullname $tier)
+  "roleRef" (printf "%s-cluster-read" $fullname)
+  "groups" (include "radar.tierGroups" $tier | fromJsonArray)
+) }}
 {{- end }}
 {{- end -}}

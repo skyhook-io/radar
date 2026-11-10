@@ -466,7 +466,7 @@ function sortEventsForRendering(events: TimelineEvent[]): TimelineEvent[] {
 // then workloads, then their generated children (ReplicaSet/Pod), config last.
 // Applied at EVERY depth so a Job's Pods sort the same way a root's children do.
 const CHILD_SORT_KIND_PRIORITY: Record<string, number> = {
-  Service: 1, Gateway: 1, HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2,
+  Service: 1, Gateway: 1, HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2, UDPRoute: 2,
   Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
   Job: 3, CronJob: 3,
   ReplicaSet: 3, Pod: 4, ConfigMap: 5, Secret: 5,
@@ -699,6 +699,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
 
   // Source 2: Topology edges (for Service→Deployment, Ingress→Service, ConfigMap→Deployment).
   if (topology?.edges) {
+    const topologyNodeById = new Map(topology.nodes?.map(node => [node.id, node]) ?? [])
     for (const edge of topology.edges) {
       const sourceId = topologyLaneIdByNodeId.get(edge.source)
       const targetId = topologyLaneIdByNodeId.get(edge.target)
@@ -760,11 +761,11 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         const targetKind = parseLaneId(targetId)!.kind
 
         // Gateway→Route: Gateway is parent of Route
-        if (sourceKind === 'Gateway' && (targetKind === 'HTTPRoute' || targetKind === 'GRPCRoute' || targetKind === 'TCPRoute' || targetKind === 'TLSRoute')) {
+        if (sourceKind === 'Gateway' && (targetKind === 'HTTPRoute' || targetKind === 'GRPCRoute' || targetKind === 'TCPRoute' || targetKind === 'TLSRoute' || targetKind === 'UDPRoute')) {
           link(targetId, sourceId, targetExists)
         }
         // Route→Service: reverse (Service is representative, like Ingress)
-        else if ((sourceKind === 'HTTPRoute' || sourceKind === 'GRPCRoute' || sourceKind === 'TCPRoute' || sourceKind === 'TLSRoute') && targetKind === 'Service') {
+        else if ((sourceKind === 'HTTPRoute' || sourceKind === 'GRPCRoute' || sourceKind === 'TCPRoute' || sourceKind === 'TLSRoute' || sourceKind === 'UDPRoute') && targetKind === 'Service') {
           link(sourceId, targetId, sourceExists)
         }
         // Ingress→Service: reverse relationship (Service is representative)
@@ -777,8 +778,17 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         }
       }
 
-      // configures/uses/protects: ConfigMap→Deployment, HPA→Deployment, PDB→Deployment (target is parent)
-      if (edge.type === 'configures' || edge.type === 'uses' || edge.type === 'protects') {
+      // configures/protects: ConfigMap→Deployment, PDB→Deployment (target is parent).
+      // A Flux source feeds many reconcilers and its timeline is its own, so it
+      // never nests under one of them.
+      if ((edge.type === 'configures' && !isFluxSource(topologyNodeById.get(edge.source))) || edge.type === 'protects') {
+        link(sourceId, targetId, sourceExists)
+      }
+      // uses: only an autoscaler or a mounted claim belongs under the workload it
+      // serves. Other uses edges point from a dependent to what it depends on
+      // (Certificate→Issuer, Gateway→GatewayClass); nesting there would file
+      // every dependent under one shared dependency.
+      if (edge.type === 'uses' && attachesToTarget(topologyNodeById.get(edge.source))) {
         link(sourceId, targetId, sourceExists)
       }
     }
@@ -805,7 +815,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     const appLabelEligibleKinds = new Set([
       'Service', 'Deployment', 'Rollout', 'StatefulSet', 'DaemonSet',
       'Job', 'CronJob', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute',
-      'TCPRoute', 'TLSRoute', 'ConfigMap', 'Secret',
+      'TCPRoute', 'TLSRoute', 'UDPRoute', 'ConfigMap', 'Secret',
       'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
       'Workflow', 'CronWorkflow',
       'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
@@ -836,7 +846,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
 
       const kindPriority: Record<string, number> = {
         Service: 1, Ingress: 2, Gateway: 2,
-        HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2,
+        HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2, UDPRoute: 2,
         Deployment: 3, Rollout: 3, StatefulSet: 3, DaemonSet: 3,
         Job: 4, CronJob: 4, Workflow: 4, CronWorkflow: 4,
         ConfigMap: 5, Secret: 5,
@@ -1467,4 +1477,28 @@ export function countEventsInHierarchy(lanes: ResourceLane[]): number {
   }
   lanes.forEach(walk)
   return count
+}
+
+// The uses-edge sources that attach to their target workload: autoscalers and
+// PersistentVolumeClaims, matched on exact API group.
+const ATTACHED_USES_SOURCES = new Set([
+  'autoscaling/HorizontalPodAutoscaler',
+  'autoscaling.k8s.io/VerticalPodAutoscaler',
+  'keda.sh/ScaledObject',
+  'keda.sh/ScaledJob',
+  '/PersistentVolumeClaim',
+])
+
+function isFluxSource(node: Topology['nodes'][number] | undefined): boolean {
+  if (!node) return false
+  const apiVersion = typeof node.data?.apiVersion === 'string' ? node.data.apiVersion : ''
+  return apiVersionToGroup(apiVersion) === 'source.toolkit.fluxcd.io'
+}
+
+function attachesToTarget(node: Topology['nodes'][number] | undefined): boolean {
+  if (!node) return false
+  const kind = topologyNodeResourceKind(node)
+  const apiVersion = typeof node.data?.apiVersion === 'string' ? node.data.apiVersion : ''
+  const group = canonicalResourceGroup(kind, apiVersionToGroup(apiVersion)) ?? ''
+  return ATTACHED_USES_SOURCES.has(`${group}/${kind}`)
 }

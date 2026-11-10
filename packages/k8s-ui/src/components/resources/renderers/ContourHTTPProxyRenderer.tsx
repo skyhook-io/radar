@@ -1,6 +1,7 @@
 import { Globe, Route, Layers, Lock } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ConditionsSection, ResourceLink } from '../../ui/drawer-components'
 import {
+  getContourSecretReference,
   getHTTPProxyFQDN,
   getHTTPProxyRouteCount,
   getHTTPProxyServiceCount,
@@ -174,16 +175,16 @@ export function ContourHTTPProxyRenderer({ data, onNavigate }: ContourHTTPProxyR
       {tls && (
         <Section title="TLS" icon={Lock} defaultExpanded>
           <PropertyList>
-            {tls.secretName && (
-              <Property label="Secret" value={
-                <ResourceLink
-                  name={tls.secretName}
-                  kind="secrets"
-                  namespace={ns}
-                  onNavigate={onNavigate}
-                />
-              } />
-            )}
+            {[
+              { label: 'Secret', name: tls.secretName },
+              { label: 'Client CA Secret', name: tls.clientValidation?.caSecret },
+              { label: 'Client CRL Secret', name: tls.clientValidation?.crlSecret },
+            ].filter(item => item.name).map(item => {
+              const ref = getContourSecretReference(item.name, ns)
+              return <Property key={item.label} label={item.label} value={ref
+                ? <ResourceLink {...ref} kind="secrets" group="" label={item.name} onNavigate={onNavigate} />
+                : item.name} />
+            })}
             {tls.minimumProtocolVersion && (
               <Property label="Min Protocol" value={tls.minimumProtocolVersion} />
             )}

@@ -27,7 +27,7 @@ func TestIssuesFilterSchemaDocumentsOnsetProvenanceBindings(t *testing.T) {
 			description = field.Tag.Get("jsonschema")
 		}
 	}
-	for _, text := range []string{"first_seen is the earliest evidence-backed active-time anchor", "may be Radar's first observation", "Require first_seen != 0 for any age filter", "also require onset_coverage_unknown == 0", "onset_unknown alone does not exclude partially dated groups", "onset_coverage is emitted only when at least one contributing signal has unknown timing", "need not share first_seen's anchor", "resource_created_at is resource-age context", "never onset"} {
+	for _, text := range []string{"'active at least since'", "may be Radar's first observation", "Require first_seen != 0 for any age filter", "also require onset_coverage_unknown == 0", "onset_unknown alone does not exclude partially dated groups", "need not share first_seen's anchor", "never subtract resource_created_at from first_seen", "resource_created_at is resource age", "never onset", "int(timestamp(", "earliest evidence-backed", "onset_coverage appears in results only when at least one contributing signal has unknown timing", "last_seen is not an age signal", "a taxonomy, not issue_timing", "besides the subject; 0 if only the subject"} {
 		if !strings.Contains(description, text) {
 			t.Fatalf("issues filter schema must explain %q; got %q", text, description)
 		}
@@ -138,22 +138,22 @@ func TestGetChangesDistinguishesOutputCappingFromFetchSaturation(t *testing.T) {
 	t.Run("output capped after complete fetch", func(t *testing.T) {
 		appendChanges(t, 6)
 		hint := getHint(t)
-		if !strings.Contains(hint, "full requested window") ||
+		if !strings.Contains(hint, "fetched every recorded change in this window") ||
 			!strings.Contains(hint, "lower-ranked changes were omitted") {
 			t.Fatalf("output-cap hint = %q, want complete-window semantics", hint)
 		}
-		if strings.Contains(hint, "candidate cap") || strings.Contains(hint, "query never saw") {
+		if strings.Contains(hint, "fetch bound") || strings.Contains(hint, "may be missing") {
 			t.Fatalf("output-cap hint falsely claims fetch saturation: %q", hint)
 		}
 	})
 
 	t.Run("candidate fetch saturated", func(t *testing.T) {
-		appendChanges(t, 100)
+		appendChanges(t, meaningfulchanges.FetchBound+1)
 		hint := getHint(t)
 		if !strings.Contains(hint, meaningfulchanges.FetchSaturatedGuidance) {
 			t.Fatalf("fetch-saturation hint = %q, want %q", hint, meaningfulchanges.FetchSaturatedGuidance)
 		}
-		if strings.Contains(hint, "full requested window") {
+		if strings.Contains(hint, "fetched every recorded change") {
 			t.Fatalf("fetch-saturation hint falsely claims complete observation: %q", hint)
 		}
 	})
@@ -261,7 +261,7 @@ func TestIssuesResponseUnlinkedChangesNeverOverlapCorrelatedChanges(t *testing.T
 	if !response.RecentChangesTruncated {
 		t.Fatal("six observed changes recapped to five must set recent_changes_truncated")
 	}
-	if strings.Contains(response.RecentChangesGuidance, "candidate cap") {
+	if strings.Contains(response.RecentChangesGuidance, "fetch bound") {
 		t.Fatalf("recap-only response must not claim the candidate query saturated: %q", response.RecentChangesGuidance)
 	}
 

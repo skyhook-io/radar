@@ -17,37 +17,9 @@ import {
   useCapacityActivity,
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
-import {
-  ActivityStateBadge,
-  CapacityFreshness,
-  InlineEmpty,
-  LinkButton,
-  Notice,
-  PageControls,
-  PoolSelector,
-  ROW_HOVER,
-  ScopeBadges,
-  ScrollableContent,
-  TABLE_HEAD,
-  TABLE_WRAP,
-  TBODY,
-  TD,
-  TH,
-  activityTypeLabel,
-  activityWindowPreset,
-  coverageHasObservations,
-  coverageIsLowerBound,
-  coverageMessage,
-  errorMessage,
-  formatTimestamp,
-  identityKey,
-  identityToSelectedResource,
-  integrationBlock,
-  relativeTime,
-  retentionLabel,
-  useCapacityCursorRecovery,
-  useCapacityPagination,
-} from "./shared";
+import { ActivityStateBadge, CapacityFreshness, InlineEmpty, LinkButton, PageControls, PoolSelector, ScopeBadges, ScrollableContent, activityTypeLabel, activityWindowPreset, coverageHasObservations, coverageIsLowerBound, coverageMessage, errorMessage, formatTimestamp, identityKey, identityToSelectedResource, integrationBlock, relativeTime, retentionLabel, useCapacityCursorRecovery, useCapacityPagination } from "./shared";
+import { Notice } from "../workspace/layout";
+import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from "../workspace/table";
 
 const WINDOW_PILLS: [number | undefined, string][] = [
   [undefined, "Retained"],

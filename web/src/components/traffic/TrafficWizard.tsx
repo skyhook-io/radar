@@ -288,8 +288,10 @@ export function TrafficWizard({
               </div>
             )}
 
-            {/* No recommendation */}
-            {!recommendation && (
+            {/* No recommendation. Not when a source is installed but unusable:
+                its banner above is the answer, and "install Cilium with Hubble"
+                would tell the user to install what they already have. */}
+            {!recommendation && !sourcesData?.detected.some(s => s.status === 'not_found') && (
               <div className="border border-theme-border rounded-lg p-4 space-y-3">
                 <p className="text-sm text-theme-text-secondary">
                   No traffic source detected. Install Cilium with Hubble for traffic visibility.

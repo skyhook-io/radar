@@ -24,9 +24,19 @@ type PodEnvChange struct {
 	Evidence  envresolve.ChangeEvidence
 }
 
+// podEnvSourceChange is the latest change Radar observed to a key: its kind
+// and time, plus the latest change that did more than reorder the value's
+// comma-separated entries.
 type podEnvSourceChange struct {
-	kind      string
-	changedAt time.Time
+	kind string
+	secretKeyChange
+}
+
+func (c *podEnvSourceChange) observe(kind string, at time.Time, orderOnly bool) {
+	if c.kind == "" || at.After(c.changedAt) {
+		c.kind = kind
+	}
+	c.secretKeyChange.observe(at, orderOnly)
 }
 
 type podEnvSourceKey struct {
@@ -38,8 +48,18 @@ type podEnvSourceKey struct {
 
 func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Pod, sources map[envresolve.SourceID]envresolve.SourceData) ([]PodEnvChange, envresolve.Coverage) {
 	var coverage envresolve.Coverage
+	if pod == nil {
+		return nil, coverage
+	}
 	store := timeline.GetStore()
-	if store == nil || pod == nil {
+	if store == nil {
+		// Same as a failed query when there is something to check: without
+		// it the section would show no changes and no warning while the
+		// timeline is down.
+		if len(podEnvSourceNames(pod)) > 0 {
+			coverage.Degraded = true
+			coverage.DegradedReason = "Recent changes could not be checked."
+		}
 		return nil, coverage
 	}
 	stats := store.Stats()
@@ -76,6 +96,13 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 	coverage.Saturated = len(events) >= maxPodEnvSourceHistoryEvents
 	changes := latestPodEnvSourceChanges(events, sources)
 
+	// A truncated history can't rule out an earlier change Radar dropped, so
+	// nothing reads as order-only then.
+	completeSince := envHistoryCompleteSince(time.Now())
+	if coverage.Saturated {
+		completeSince = time.Now()
+	}
+
 	var out []PodEnvChange
 	for _, check := range FindStaleSecretEnvChecksForObject(ctx, cache, pod) {
 		identity := podEnvSourceKey{kind: "Secret", namespace: pod.Namespace, name: check.SecretName, key: check.Key}
@@ -84,7 +111,7 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 			changeKind = change.kind
 		}
 		out = append(out, newPodEnvChange(
-			check.Container, check.EnvName, "Secret", check.SecretName, check.Key, changeKind, check.SecretChangedAt,
+			check.Container, check.EnvName, "Secret", check.SecretName, check.Key, changeKind, check.SecretChangedAt, check.OrderOnly,
 		))
 	}
 
@@ -100,19 +127,19 @@ func FindPodEnvChanges(ctx context.Context, cache *ResourceCache, pod *corev1.Po
 				continue
 			}
 			if ref := env.ValueFrom.ConfigMapKeyRef; ref != nil {
-				appendCurrentSourceChange(&out, changes, pod.Namespace, container.Name, env.Name, "ConfigMap", ref.Name, ref.Key, startedAt, false)
+				appendCurrentSourceChange(&out, changes, pod.Namespace, container.Name, env.Name, "ConfigMap", ref.Name, ref.Key, startedAt, completeSince, false)
 			}
 			if ref := env.ValueFrom.SecretKeyRef; ref != nil {
-				appendCurrentSourceChange(&out, changes, pod.Namespace, container.Name, env.Name, "Secret", ref.Name, ref.Key, startedAt, true)
+				appendCurrentSourceChange(&out, changes, pod.Namespace, container.Name, env.Name, "Secret", ref.Name, ref.Key, startedAt, completeSince, true)
 			}
 		}
 	}
-	appendEnvFromChanges(&out, pod, changes)
+	appendEnvFromChanges(&out, pod, changes, completeSince)
 	sortPodEnvChanges(out)
 	return deduplicatePodEnvChanges(out), coverage
 }
 
-func appendEnvFromChanges(out *[]PodEnvChange, pod *corev1.Pod, changes map[podEnvSourceKey]podEnvSourceChange) {
+func appendEnvFromChanges(out *[]PodEnvChange, pod *corev1.Pod, changes map[podEnvSourceKey]podEnvSourceChange, completeSince time.Time) {
 	statuses := podEnvEvidenceContainerStatuses(pod)
 	for _, container := range podEnvEvidenceContainers(pod) {
 		status, ok := statuses[container.Name]
@@ -126,25 +153,43 @@ func appendEnvFromChanges(out *[]PodEnvChange, pod *corev1.Pod, changes map[podE
 				continue
 			}
 			for identity, change := range changes {
-				if identity.kind != kind || identity.namespace != pod.Namespace || identity.name != name || (kind == "Secret" && change.kind != "added") || !startedAt.Before(change.changedAt) {
+				if identity.kind != kind || identity.namespace != pod.Namespace || identity.name != name || (kind == "Secret" && change.kind != "added") {
+					continue
+				}
+				changedAt, orderOnly, stale := change.classify(startedAt, completeSince)
+				if !stale {
 					continue
 				}
 				variable := from.Prefix + identity.key
 				if len(validation.IsEnvVarName(variable)) != 0 {
 					continue
 				}
-				*out = append(*out, newPodEnvChange(container.Name, variable, kind, name, identity.key, change.kind, change.changedAt))
+				*out = append(*out, newPodEnvChange(container.Name, variable, kind, name, identity.key, change.kind, changedAt, orderOnly))
 			}
 		}
 	}
 }
 
-func appendCurrentSourceChange(out *[]PodEnvChange, changes map[podEnvSourceKey]podEnvSourceChange, namespace, container, variable, kind, name, key string, startedAt time.Time, additionsOnly bool) {
+func appendCurrentSourceChange(out *[]PodEnvChange, changes map[podEnvSourceKey]podEnvSourceChange, namespace, container, variable, kind, name, key string, startedAt, completeSince time.Time, additionsOnly bool) {
 	change, ok := changes[podEnvSourceKey{kind: kind, namespace: namespace, name: name, key: key}]
-	if !ok || !startedAt.Before(change.changedAt) || (additionsOnly && change.kind != "added") {
+	if !ok || (additionsOnly && change.kind != "added") {
 		return
 	}
-	*out = append(*out, newPodEnvChange(container, variable, kind, name, key, change.kind, change.changedAt))
+	changedAt, orderOnly, stale := change.classify(startedAt, completeSince)
+	if !stale {
+		return
+	}
+	*out = append(*out, newPodEnvChange(container, variable, kind, name, key, change.kind, changedAt, orderOnly))
+}
+
+// classify returns the time and order-only state to report for a container
+// that started at startedAt. Only a "modified" key can be order-only; an
+// added or removed key keeps its latest time.
+func (c podEnvSourceChange) classify(startedAt, completeSince time.Time) (changedAt time.Time, orderOnly, stale bool) {
+	if c.kind != "modified" {
+		return c.changedAt, false, startedAt.Before(c.changedAt)
+	}
+	return c.since(startedAt, completeSince)
 }
 
 func podEnvSourceNames(pod *corev1.Pod) []string {
@@ -217,20 +262,21 @@ func latestPodEnvSourceChanges(events []timeline.TimelineEvent, sources map[envr
 		if (event.Kind != "ConfigMap" && event.Kind != "Secret") || event.Diff == nil || event.Timestamp.IsZero() {
 			continue
 		}
+		reordered := reorderedKeysByField(event.Diff.Fields)
 		for _, field := range event.Diff.Fields {
 			changeKind := podEnvChangeKind(field.Path)
 			if changeKind == "" && event.Kind == "ConfigMap" {
 				matchedKey := ""
 				for _, key := range sources[envresolve.SourceID{Kind: "ConfigMap", Name: event.Name}].Keys {
-					if (field.Path == "data."+key || strings.HasPrefix(field.Path, "data."+key+".")) && len(key) > len(matchedKey) {
+					if (field.Path == "data."+key || strings.HasPrefix(field.Path, "data."+key+".") || strings.HasPrefix(field.Path, "data."+key+"[")) && len(key) > len(matchedKey) {
 						matchedKey = key
 					}
 				}
 				if matchedKey != "" {
 					identity := podEnvSourceKey{kind: event.Kind, namespace: event.Namespace, name: event.Name, key: matchedKey}
-					if previous, ok := out[identity]; !ok || event.Timestamp.After(previous.changedAt) {
-						out[identity] = podEnvSourceChange{kind: "modified", changedAt: event.Timestamp}
-					}
+					change := out[identity]
+					change.observe("modified", event.Timestamp, false)
+					out[identity] = change
 				}
 			}
 			if changeKind == "" {
@@ -241,10 +287,13 @@ func latestPodEnvSourceChanges(events []timeline.TimelineEvent, sources map[envr
 				keys = stringValues(field.OldValue)
 			}
 			for _, key := range keys {
-				identity := podEnvSourceKey{kind: event.Kind, namespace: event.Namespace, name: event.Name, key: key}
-				if previous, ok := out[identity]; key != "" && (!ok || event.Timestamp.After(previous.changedAt)) {
-					out[identity] = podEnvSourceChange{kind: changeKind, changedAt: event.Timestamp}
+				if key == "" {
+					continue
 				}
+				identity := podEnvSourceKey{kind: event.Kind, namespace: event.Namespace, name: event.Name, key: key}
+				change := out[identity]
+				change.observe(changeKind, event.Timestamp, changeKind == "modified" && reordered[keyListFieldBase(field.Path)][key])
+				out[identity] = change
 			}
 		}
 	}
@@ -274,8 +323,12 @@ func envFromIdentityForEvidence(from corev1.EnvFromSource) (string, string, bool
 	return "", "", false
 }
 
-func newPodEnvChange(container, variable, kind, name, key, changeKind string, changedAt time.Time) PodEnvChange {
+func newPodEnvChange(container, variable, kind, name, key, changeKind string, changedAt time.Time, orderOnly bool) PodEnvChange {
 	verb := map[string]string{"added": "was added", "removed": "was removed", "modified": "changed"}[changeKind]
+	message := fmt.Sprintf("Radar observed that %s/%s key %s %s after this container started.", kind, name, key, verb)
+	if orderOnly {
+		message = fmt.Sprintf("Radar observed the comma-separated entries of %s/%s key %s reordered after this container started, with none added or removed. The container keeps the old order, which matters only if the app treats the new order differently.", kind, name, key)
+	}
 	return PodEnvChange{
 		Container: container,
 		Variable:  variable,
@@ -283,7 +336,7 @@ func newPodEnvChange(container, variable, kind, name, key, changeKind string, ch
 		Evidence: envresolve.ChangeEvidence{
 			Kind:      changeKind,
 			ChangedAt: changedAt,
-			Message:   fmt.Sprintf("Radar observed that %s/%s key %s %s after this container started.", kind, name, key, verb),
+			Message:   message,
 		},
 	}
 }

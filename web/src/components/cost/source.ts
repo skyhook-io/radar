@@ -3,12 +3,25 @@ import { previousSettingsNote, type PreviousIntegrationSettings } from '../../ho
 
 export function isCostConfigurable(reason?: string): boolean {
   return reason === 'no_prometheus' || reason === 'no_cost_source' || reason === 'source_unavailable'
+    || reason === 'metrics_port_forward_disabled' || reason === 'kubecost_port_forward_disabled'
     || reason === 'authentication_error' || reason === 'configuration_mismatch'
     || reason === 'metrics_settings_error' || reason === 'cost_settings_error'
 }
 
+export type CostSourcePreference = 'auto' | CostDataSource
+
+export const COST_SOURCE_OPTIONS: { value: CostSourcePreference; label: string; description: string }[] = [
+  { value: 'auto', label: 'Automatic', description: 'OpenCost metrics when available, otherwise Kubecost' },
+  { value: 'prometheus', label: 'OpenCost metrics', description: 'From the metrics connection' },
+  { value: 'kubecost', label: 'Kubecost', description: 'From a Kubecost Aggregator' },
+]
+
+export function costSourcePreferenceLabel(preference?: string): string {
+  return COST_SOURCE_OPTIONS.find(option => option.value === (preference || 'auto'))?.label ?? preference ?? 'Automatic'
+}
+
 export function costSourceLabel(source?: CostDataSource): string {
-  return source === 'kubecost' ? 'Kubecost Aggregator' : 'OpenCost via Prometheus'
+  return costSourcePreferenceLabel(source === 'kubecost' ? 'kubecost' : 'prometheus')
 }
 
 export function isCostDiscoveryPending(reason?: string): boolean {
@@ -22,6 +35,8 @@ export function costConfigurationAction(reason?: CostUnavailableReason, offers?:
 } {
   if (reason === 'metrics_settings_error') return { section: 'prometheus', label: 'Review metrics settings' }
   if (reason === 'cost_settings_error') return { section: 'cost', label: 'Review cost settings' }
+  if (reason === 'metrics_port_forward_disabled') return { section: 'prometheus', label: 'Configure metrics' }
+  if (reason === 'kubecost_port_forward_disabled') return { section: 'cost', label: 'Configure cost source' }
   const previousKind = reason === 'no_prometheus'
     ? offers?.metrics ? 'metrics' : offers?.explicitCostBackend ? 'cost' : undefined
     : reason === 'no_cost_source'
@@ -95,6 +110,10 @@ export function costIntegrationUnavailableMessage(
   settingsAvailable = true,
 ): string | undefined {
   switch (reason) {
+    case 'query_error':
+      return settingsAvailable
+        ? 'The selected cost source could not provide data. Check its connection in Settings → Metrics (OpenCost) or Settings → Cost (Kubecost).'
+        : 'The selected cost source could not provide data. Ask your operator to check its connection and query health.'
     case 'no_cost_source':
       return settingsAvailable
         ? 'No compatible cost source was found. Connect OpenCost metrics in Settings → Metrics or configure Kubecost in Settings → Cost.'
@@ -103,12 +122,20 @@ export function costIntegrationUnavailableMessage(
       return settingsAvailable
         ? 'Kubecost Aggregator is unavailable. Check the URL, network path, and cluster ID in Settings → Cost.'
         : 'Kubecost Aggregator is unavailable. Update this cluster’s cost-source configuration in the host application or Radar deployment.'
+    case 'metrics_port_forward_disabled':
+      return settingsAvailable
+        ? 'Automatic port-forwarding is turned off, and Prometheus isn’t reachable directly from this machine. Set a metrics URL in Settings → Metrics.'
+        : 'Automatic port-forwarding is turned off, and Prometheus isn’t reachable directly. Configure its URL in the host application or Radar deployment.'
+    case 'kubecost_port_forward_disabled':
+      return settingsAvailable
+        ? 'Automatic port-forwarding is turned off, so Radar can’t reach the Kubecost Aggregator it found in this cluster. Set the Kubecost URL in Settings → Cost.'
+        : 'Automatic port-forwarding is turned off, so Radar can’t reach the Kubecost Aggregator it found in this cluster. Configure its URL in the host application or Radar deployment.'
     case 'metrics_settings_error':
       return 'This cluster’s saved metrics settings need review before cost data can load. Review them in Settings → Metrics.'
     case 'cost_settings_error':
       return 'This cluster’s saved cost settings need review before cost data can load. Review them in Settings → Cost.'
     case 'deployment_configuration_error':
-      return 'Cost collection is misconfigured by this Radar deployment. Update its environment variables or Helm cost values, then restart Radar.'
+      return "Radar's operator-supplied cost or metrics configuration is invalid. Check local launch flags or the deployment environment variables and Helm values."
     case 'authentication_error':
       return settingsAvailable
         ? 'Kubecost rejected the configured API key. Update it in Settings → Cost.'

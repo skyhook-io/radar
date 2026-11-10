@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -50,7 +51,10 @@ func gpuPolicyName(p linux.WebviewGpuPolicy) string {
 
 func main() {
 	// Load persistent config (~/.radar/config.json) for flag defaults.
-	fileCfg := config.Load()
+	fileCfg, err := config.LoadForStartup()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Parse flags (defaults come from config file, falling back to hardcoded values)
 	kubeconfig := flag.String("kubeconfig", fileCfg.Kubeconfig, "Path to primary kubeconfig file (default: ~/.kube/config)")
@@ -61,8 +65,9 @@ func main() {
 	historyLimit := flag.Int("history-limit", fileCfg.HistoryLimitOr(10000), "Maximum number of events to retain in timeline")
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing")
-	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions")
-	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions")
+	disableHelmWrite := flag.Bool("disable-helm-write", false, "Disable Helm release writes, per-release source updates, values previews and manage_helm; also global repository/OCI changes without auth. Signed-in global source management and Cloud install/upgrade continue")
+	disableExec := flag.Bool("disable-exec", false, "Disable pod exec: terminal, debug shells, pod file browsing, CloudNativePG sessions and MCP exec_pod")
+	disableAutoPortForward := flag.Bool("disable-auto-port-forward", fileCfg.DisableAutoPortForward, "Never open port-forwards on Radar's own initiative (metrics, traffic, cost and Argo CD discovery); port-forwards you start still work")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
@@ -70,11 +75,22 @@ func main() {
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
+	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
+	noVersionCheck := flag.Bool("no-version-check", fileCfg.NoVersionCheck, "Disable automatic checks for newer Radar versions and releases; manual Desktop checks remain available (also enabled via RADAR_DISABLE_VERSION_CHECK=1)")
 	flag.Parse()
+
+	if *noVersionCheck {
+		versionpkg.SetDisabled(true)
+	}
 
 	if *showVersion {
 		fmt.Printf("radar-desktop %s\n", version)
 		os.Exit(0)
+	}
+
+	mcpMode, err := mcpFlags.Resolve()
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	// Suppress verbose client-go logs
@@ -91,9 +107,9 @@ func main() {
 	// No-op on macOS/Windows.
 	logBootEnv()
 
-	// Disable WebKit's DMABUF renderer on Linux unless the user opts in —
-	// it produces blank windows on Wayland+KDE/NVIDIA and upstream won't fix.
-	// Must run before Wails initializes WebKit.
+	// Default WebKit on Linux to shared-memory buffers — DMABUF buffers
+	// produce blank windows on Wayland+KDE/NVIDIA. Must run before Wails
+	// initializes WebKit.
 	applyWebKitDefaults()
 
 	// GUI apps (macOS .app, Linux .desktop) get a minimal PATH that
@@ -104,6 +120,13 @@ func main() {
 	// On Linux, detect system dark mode via xdg-desktop-portal D-Bus and
 	// set GTK_THEME so WebKitGTK's prefers-color-scheme media query works.
 	applySystemTheme()
+
+	// Inside the AppImage the process runs in the image's library directory
+	// (see scripts/build-appimage.sh). Relative paths in the environment are
+	// resolved against the folder it was launched from, then processes Radar
+	// starts get the environment it was launched with.
+	desktopenv.ResolveLaunchEnv()
+	separateChildEnv()
 
 	kubeconfigFlagSet := false
 	kubeconfigDirsFlagSet := false
@@ -137,18 +160,22 @@ func main() {
 		log.Printf("ERROR: invalid --opencost-currency %q: %v", *openCostCurrency, err)
 		os.Exit(1)
 	}
+	enablePprof, err := config.PprofOverrideFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
 		os.Exit(1)
 	}
-	if len(resolvedNamespaces) > k8s.MaxScopeCandidates {
-		log.Printf("ERROR: --namespaces lists %d namespaces but the RBAC probe fanout cap is %d", len(resolvedNamespaces), k8s.MaxScopeCandidates)
-		os.Exit(1)
-	}
 	resolvedKubeconfig, resolvedKubeconfigDirs := app.ResolveKubeconfigSelection(
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
+	resolvedKubeconfig = desktopenv.ResolveLaunchPath(resolvedKubeconfig)
+	for i, dir := range resolvedKubeconfigDirs {
+		resolvedKubeconfigDirs[i] = desktopenv.ResolveLaunchPath(dir)
+	}
 
 	// The device flow and consent page must identify this build and target the
 	// same control plane the CLI would — Desktop starts the same shared server.
@@ -177,14 +204,16 @@ func main() {
 		PortFallback:              desktopPortRemembered,
 		ListenAddress:             "127.0.0.1",
 		DevMode:                   false,
+		EnablePprof:               enablePprof,
 		HistoryLimit:              *historyLimit,
 		DebugEvents:               *debugEvents,
 		FakeInCluster:             *fakeInCluster,
 		DisableHelmWrite:          *disableHelmWrite,
 		DisableExec:               *disableExec,
+		DisableAutoPortForward:    *disableAutoPortForward,
 		PodShellDefault:           *podShellDefault,
 		TimelineStorage:           *timelineStorage,
-		TimelineDBPath:            *timelineDBPath,
+		TimelineDBPath:            desktopenv.ResolveLaunchPath(*timelineDBPath),
 		TimelinePostgresDSN:       os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
 		TimelineRetention:         *timelineRetention,
 		TimelineMaxSizeBytes:      timelineMaxSizeBytes,
@@ -204,9 +233,12 @@ func main() {
 		Version:                   version,
 		HubAPIURL:                 hubAPIURL,
 		HubAppURL:                 hubAppURL,
-		MCPEnabled:                fileCfg.MCPEnabledOr(true),
+		MCPEnabled:                mcpMode.Enabled,
+		MCPReadOnly:               mcpMode.ReadOnly,
+		MCPExecTools:              mcpFlags.ExecToolsEnabled(),
+		MCPHTTPTools:              mcpFlags.HTTPToolsEnabled(),
 		AIHistory:                 fileCfg.AIHistoryOr(true),
-		AIHistoryDBPath:           fileCfg.AIHistoryDBPath,
+		AIHistoryDBPath:           desktopenv.ResolveLaunchPath(fileCfg.AIHistoryDBPath),
 	}
 
 	if !cfg.RestoreLastDesktopContext {
@@ -215,21 +247,32 @@ func main() {
 
 	app.SetGlobals(cfg)
 	versionpkg.SetDesktop(true)
+	// Installs the in-app updater can't replace (AppImage, .deb/.rpm, a folder
+	// Radar can't write to) get no updater (below) and no cleanup of an .old
+	// file Radar didn't make; the UI says how to update instead.
+	updateMode := updater.DetectMode()
+	versionpkg.SetManualUpdate(string(updateMode))
 	desktopenv.SetGPUPolicy(gpuPolicyName(linuxGPUPolicy))
 
-	// Clean up leftover files from previous update
-	updater.CleanupOldUpdate()
+	if updateMode == updater.ModeInPlace {
+		updater.CleanupOldUpdate()
+	}
 
-	// Initialize K8s client — if this fails (e.g., no kubeconfig found),
-	// still start the UI so the user sees the error instead of a silent exit.
+	// The CLI's --max-scope-candidates, applied the same way the CLI applies it.
+	k8s.ConfigureDeadlines(k8s.DeadlineOptions{MaxScopeCandidates: fileCfg.MaxScopeCandidates})
+
+	// Initialize K8s client — if this fails (e.g., no kubeconfig found, or more
+	// namespaces than Radar checks), still start the UI so the user sees the
+	// error instead of a silent exit.
 	k8sInitErr := app.InitializeK8s(cfg)
+	k8sInitErr = withNamespaceCountCheck(k8sInitErr, cfg.Namespaces)
 	if k8sInitErr != nil {
 		log.Printf("K8s init failed (will show in UI): %v", k8sInitErr)
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:     k8s.StateDisconnected,
-			Error:     k8sInitErr.Error(),
-			ErrorType: "config",
-		})
+		status, blockConnect := initFailureStatus(k8sInitErr, k8s.GetContextName(), namespacesFlagSet, config.Path())
+		if blockConnect {
+			k8s.BlockClusterAccess(errors.New(status.Error))
+		}
+		k8s.SetConnectionStatus(status)
 	}
 
 	timelineStoreCfg, err := app.BuildTimelineStoreConfig(cfg)
@@ -240,8 +283,9 @@ func main() {
 
 	// Create server and attach desktop updater
 	srv := app.CreateServer(cfg)
-	desktopUpdater := updater.New()
-	srv.SetUpdater(desktopUpdater)
+	if updateMode == updater.ModeInPlace {
+		srv.SetUpdater(updater.New())
+	}
 
 	// Start server and wait until it's accepting connections
 	ready := make(chan struct{})

@@ -8,11 +8,14 @@ import {
 import {
   getCrossplaneResourceRefs,
   getBoundXRRef,
+  getCrossplanePauseState,
+  isManagedResource,
+  isComposite,
   isClaim,
   type CrossplaneResourceRef,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane'
 import { getResourceStatus } from '@skyhook-io/k8s-ui'
-import { kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
+import { kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 import type { ResourceRef as NavRef } from '../../types'
 import { fetchJSON, ApiError } from '../../api/client'
 
@@ -59,8 +62,8 @@ export function CompositeRenderer({ data, onNavigate }: CompositeRendererProps) 
     ],
     queryFn: async () => {
       const ns = boundXRRef!.namespace || '_'
-      const plural = kindToPlural(boundXRRef!.kind)
       const group = groupFromApiVersion(boundXRRef!.apiVersion)
+      const plural = kindToPluralWithGroup(boundXRRef!.kind, group)
       const query = group ? `?group=${encodeURIComponent(group)}` : ''
       return fetchJSON<{ resource: any }>(`/resources/${plural}/${ns}/${boundXRRef!.name}${query}`)
     },
@@ -99,7 +102,7 @@ export function CompositeRenderer({ data, onNavigate }: CompositeRendererProps) 
         queryKey: ['composed-ref', group, ref.kind, ref.namespace ?? '', ref.name],
         queryFn: async () => {
           const ns = ref.namespace || '_'
-          const plural = kindToPlural(ref.kind)
+          const plural = kindToPluralWithGroup(ref.kind, group)
           const query = group ? `?group=${encodeURIComponent(group)}` : ''
           return fetchJSON<{ resource: any }>(`/resources/${plural}/${ns}/${ref.name}${query}`)
         },
@@ -137,9 +140,10 @@ export function CompositeRenderer({ data, onNavigate }: CompositeRendererProps) 
         map.set(key, { ref, missing: true })
         return
       }
-      const status = getResourceStatus(kindToPlural(ref.kind), q.data.resource) ?? undefined
+      const status = getResourceStatus(kindToPluralWithGroup(ref.kind, groupFromApiVersion(ref.apiVersion)), q.data.resource) ?? undefined
       map.set(key, {
         ref,
+        pauseState: isManagedResource(q.data.resource) || isComposite(q.data.resource) || getCrossplanePauseState(q.data.resource) === 'acknowledged' ? getCrossplanePauseState(q.data.resource) : null,
         status: status ? { ...status, level: (status as any).level ?? 'unknown' } : undefined,
       })
     })

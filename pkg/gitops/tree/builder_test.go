@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/topology"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -76,7 +78,10 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
 		refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app,
 	}}
-	builder := NewBuilder(dynamic, topo)
+	dep := ownedObject("apps", "Deployment", "prod", "billing", nil, false)
+	rs := ownedObject("apps", "ReplicaSet", "prod", "billing-abc", &dep, true)
+	pod := ownedObject("", "Pod", "prod", "billing-abc-1", &rs, true)
+	builder := newTestBuilder(t, dynamic, topo).WithOwnership(ownershipSession(t, dep, rs, pod))
 
 	tree, _, err := builder.Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
@@ -127,7 +132,7 @@ func TestBuildDoesNotEnrichManagedResourcesOutsideAllowedNamespaces(t *testing.T
 		refKey(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"}):           deployment,
 	}}
 
-	tree, _, err := NewBuilder(dynamic, nil).
+	tree, _, err := newTestBuilder(t, dynamic, nil).
 		WithAllowedNamespaces([]string{"argocd"}).
 		Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
@@ -225,7 +230,7 @@ func TestBuildUnknownKindWarnsOnceAndKeepsSyntheticNodes(t *testing.T) {
 		dynamic.errs[refKey(ResourceRef{Group: "monitoring.coreos.com", Kind: "Prometheus", Namespace: "monitoring", Name: fmt.Sprintf("prom-%d", i)})] = unknownErr
 	}
 
-	tree, _, err := NewBuilder(dynamic, nil).
+	tree, _, err := newTestBuilder(t, dynamic, nil).
 		WithUnknownKindMatcher(func(err error) bool { return errors.Is(err, unknownErr) }).
 		Build(context.Background(), "applications", "argocd", "monitoring", "argoproj.io")
 	if err != nil {
@@ -280,7 +285,7 @@ func TestBuildParallelEnrichmentMatchesObjects(t *testing.T) {
 	}}
 	objects[refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "cms"})] = app
 
-	tree, _, err := NewBuilder(&fakeDynamic{objects: objects}, nil).
+	tree, _, err := newTestBuilder(t, &fakeDynamic{objects: objects}, nil).
 		Build(context.Background(), "applications", "argocd", "cms", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -342,7 +347,7 @@ func TestBuild_ControllerHealthWinsOverTopology(t *testing.T) {
 		},
 	})
 	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
-	tree, _, err := NewBuilder(dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	tree, _, err := newTestBuilder(t, dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -368,7 +373,7 @@ func TestBuild_AppTreeModeFillsTopologyKindsFromRadar(t *testing.T) {
 		},
 	})
 	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
-	tree, _, err := NewBuilder(dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	tree, _, err := newTestBuilder(t, dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -412,7 +417,7 @@ func TestBuild_RemoteDestinationReadsNothingLocal(t *testing.T) {
 	topo := healthProvenanceTopo()
 	topo.Nodes = append(topo.Nodes, topology.Node{ID: "pod/prod/billing-1", Kind: topology.KindPod, Name: "billing-1", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "prod"}})
 	topo.Edges = []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages}}
-	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	tree, _, err := newTestBuilder(t, dynamic, topo).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -474,7 +479,7 @@ func TestBuild_RemoteFluxKustomizationReadsNothingLocal(t *testing.T) {
 		},
 		Edges: []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages}},
 	}
-	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "kustomizations", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
+	tree, _, err := newTestBuilder(t, dynamic, topo).Build(context.Background(), "kustomizations", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -515,7 +520,7 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 	topo := &topology.Topology{Nodes: []topology.Node{
 		topoNode("Deployment", "demo", "podinfo", map[string]string{fluxHelmNameLabel: "podinfo", fluxHelmNamespaceLabel: "flux-system"}),
 	}}
-	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "helmreleases", "flux-system", "podinfo", "helm.toolkit.fluxcd.io")
+	tree, _, err := newTestBuilder(t, dynamic, topo).Build(context.Background(), "helmreleases", "flux-system", "podinfo", "helm.toolkit.fluxcd.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -527,4 +532,542 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 			t.Fatalf("remote HelmRelease picked up a local workload: %+v", n.Ref)
 		}
 	}
+}
+
+func TestFluxTreeFollowsObservedChartSourceAndGatesKinds(t *testing.T) {
+	for _, inline := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inline=%t", inline), func(t *testing.T) {
+			hr := helmRelease("team", "app")
+			hr.Object["spec"] = map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "chart", "namespace": "shared"}}
+			if inline {
+				hr.Object["spec"] = map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo", "namespace": "shared"}}}}
+				hr.Object["status"] = map[string]any{"helmChart": "shared/chart"}
+			}
+			chart := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmChart", "metadata": map[string]any{"name": "chart", "namespace": "shared", "labels": map[string]any{"private": "chart-label"}}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo"}}}}
+			repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmRepository", "metadata": map[string]any{"name": "repo", "namespace": "shared"}}}
+			hrr := ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}
+			cr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmChart", Namespace: "shared", Name: "chart"}
+			rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmRepository", Namespace: "shared", Name: "repo"}
+			topo := &topology.Topology{Nodes: []topology.Node{{ID: "helmchart/shared/chart", Kind: "HelmChart", Name: "chart", Data: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "namespace": "shared", "labels": map[string]string{fluxHelmNameLabel: "app", fluxHelmNamespaceLabel: "team"}}}}}
+			for _, denied := range []string{"", "HelmChart", "HelmRepository"} {
+				t.Run(denied, func(t *testing.T) {
+					getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(cr): chart, refKey(rr): repo}}
+					builder := newTestBuilder(t, getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied })
+					tree, _, err := builder.Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantNodes := 3
+					if denied == "HelmChart" {
+						wantNodes = 1
+						if inline {
+							wantNodes = 2
+						}
+					}
+					if denied == "HelmRepository" {
+						wantNodes = 2
+					}
+					wantEdges := wantNodes - 1
+					if inline && denied == "" {
+						wantEdges++
+					}
+					if len(tree.Nodes) != wantNodes || len(tree.Edges) != wantEdges {
+						t.Fatalf("denied %s: %+v", denied, tree)
+					}
+					for _, call := range getter.recordedCalls() {
+						if call.Kind == denied {
+							t.Fatalf("denied kind fetched: %+v", call)
+						}
+					}
+					if tree.Summary.Dependencies != wantNodes-1 || tree.Summary.Declared != 0 || tree.Summary.Degraded != 0 {
+						t.Fatalf("dependency membership: %+v", tree.Summary)
+					}
+					if denied == "" {
+						chartDependency := false
+						for _, edge := range tree.Edges {
+							if edge.Source == nodeID(hrr) && edge.Target == nodeID(cr) && edge.Type == EdgeSource {
+								chartDependency = true
+							}
+						}
+						if !chartDependency {
+							t.Fatalf("chart treated as installed release content: %+v", tree.Edges)
+						}
+						found := false
+						for _, edge := range tree.Edges {
+							if edge.Source == nodeID(cr) && edge.Target == nodeID(rr) && edge.Type == EdgeSource {
+								found = true
+							}
+						}
+						if !found {
+							t.Fatalf("chart source edge missing: %+v", tree.Edges)
+						}
+					}
+				})
+			}
+			if inline {
+				getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(rr): repo}}
+				tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+				if err != nil {
+					t.Fatal(err)
+				}
+				findNode(t, tree, rr)
+				if len(tree.Edges) != 2 {
+					t.Fatalf("unobserved chart lost declared source: %+v", tree)
+				}
+				for _, edge := range tree.Edges {
+					if edge.Source == nodeID(cr) {
+						t.Fatalf("unobserved chart acquired source: %+v", edge)
+					}
+				}
+			}
+
+		})
+	}
+}
+
+func TestFluxBootstrapSourceRetainsInventoryOwnership(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}}, "status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "flux-system_flux-system_source.toolkit.fluxcd.io_GitRepository", "v": "v1"}}}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}}}
+	kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "flux-system"}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "flux-system", Name: "flux-system"}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(kr): ks, refKey(rr): repo}}
+	tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "Kustomization", "flux-system", "flux-system", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoNode := findNode(t, tree, rr)
+	if repoNode.Dependency || repoNode.Data["relationship"] != "source" || tree.Summary.Declared != 1 || tree.Summary.Dependencies != 0 {
+		t.Fatalf("bootstrap membership lost: node=%+v summary=%+v", repoNode, tree.Summary)
+	}
+	if len(getter.recordedCalls()) != 2 {
+		t.Fatalf("overlapping source fetched twice: %v", getter.recordedCalls())
+	}
+	if len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeOwns {
+		t.Fatalf("bootstrap inventory ownership overwritten: %+v", tree.Edges)
+	}
+}
+
+func TestReadableGeneratedDescendantSurvivesDeniedIntermediate(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"namespace": "argocd", "name": "app"}, "spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, "status": map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "app"}}}}}
+	topo := &topology.Topology{Nodes: []topology.Node{
+		{ID: "deployment/prod/app", Kind: topology.KindDeployment, Name: "app", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
+		{ID: "replicaset/prod/hidden", Kind: topology.KindReplicaSet, Name: "hidden", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1", "labels": map[string]string{"private": "hidden-metadata"}}},
+		{ID: "pod/prod/visible", Kind: topology.KindPod, Name: "visible", Data: map[string]any{"namespace": "prod", "apiVersion": "v1"}},
+	}, Edges: []topology.Edge{{Source: "deployment/prod/app", Target: "replicaset/prod/hidden", Type: topology.EdgeManages}, {Source: "replicaset/prod/hidden", Target: "pod/prod/visible", Type: topology.EdgeManages}}}
+	dep := ownedObject("apps", "Deployment", "prod", "app", nil, false)
+	rs := ownedObject("apps", "ReplicaSet", "prod", "hidden", &dep, true)
+	pod := ownedObject("", "Pod", "prod", "visible", &rs, true)
+	for _, denied := range []string{"ReplicaSet", "Deployment"} {
+		t.Run(denied, func(t *testing.T) {
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "app"}): app}}
+			tree, _, err := newTestBuilder(t, getter, topo).WithOwnership(ownershipSession(t, dep, rs, pod)).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), "Application", "argocd", "app", "argoproj.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, n := range tree.Nodes {
+				if n.Ref.Kind == denied {
+					t.Fatalf("denied node emitted: %+v", n)
+				}
+				if n.Ref.Kind == "Pod" && n.Ref.Name == "visible" {
+					visible = true
+				}
+				if denied == "ReplicaSet" && strings.Contains(fmt.Sprint(n.Data), "hidden-metadata") {
+					t.Fatalf("denied metadata leaked: %+v", n.Data)
+				}
+			}
+			if !visible || len(tree.Warnings) == 0 {
+				t.Fatalf("readable descendant hidden or no incomplete warning: %+v", tree)
+			}
+			for _, e := range tree.Edges {
+				for _, n := range tree.Nodes {
+					if denied == "ReplicaSet" && n.Ref.Kind == "Pod" && e.Target == n.ID {
+						t.Fatalf("invented shortcut to Pod across denied owner: %+v", e)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDeniedFluxSourceIsDisclosedWithoutFetchingIt(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "app", "namespace": "prod"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "private"}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "prod", Name: "app"}): root,
+	}}
+	tree, _, err := newTestBuilder(t, getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "GitRepository" }).Build(context.Background(), "Kustomization", "prod", "app", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Nodes) != 1 || len(tree.Warnings) == 0 {
+		t.Fatalf("tree = %+v", tree)
+	}
+	for _, call := range getter.recordedCalls() {
+		if call.Kind == "GitRepository" {
+			t.Fatalf("denied source fetched: %+v", call)
+		}
+	}
+	if strings.Contains(strings.Join(tree.Warnings, " "), "private") {
+		t.Fatalf("warning leaks source name: %v", tree.Warnings)
+	}
+}
+
+func TestGeneratedTopologyReferencesKeepExactAPIIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		node        topology.Node
+		kind, group string
+	}{
+		{topology.Node{Kind: topology.KindDeployment, Name: "web", Data: map[string]any{"namespace": "team"}}, "Deployment", "apps"},
+		{topology.Node{Kind: topology.KindCAPICluster, Name: "cluster", Data: map[string]any{"namespace": "team", "apiVersion": "cluster.x-k8s.io/v1beta1"}}, "Cluster", "cluster.x-k8s.io"},
+		{topology.Node{Kind: topology.KindPodGroup, Name: "batch", Data: map[string]any{"namespace": "team", "apiVersion": "scheduling.volcano.sh/v1beta1"}}, "PodGroup", "scheduling.volcano.sh"},
+		{topology.Node{Kind: topology.KindPodGroup, Name: "display", Data: map[string]any{"namespace": "team", "podCount": 7}}, "PodGroup", ""},
+	} {
+		ref := refFromTopologyNode(tc.node)
+		if ref.Kind != tc.kind || ref.Group != tc.group || ref.Namespace != "team" {
+			t.Fatalf("node=%+v ref=%+v", tc.node, ref)
+		}
+	}
+}
+
+func TestExactDeclarationCannotHydrateDeniedCoreCollision(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": "app", "namespace": "team"},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+		"status":   map[string]any{"resources": []any{map[string]any{"group": "custom.example", "kind": "Secret", "namespace": "team", "name": "shared"}}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "team", Name: "app"}): root,
+	}}
+	topo := &topology.Topology{Nodes: []topology.Node{
+		{ID: "secret/team/shared", Kind: topology.KindSecret, Name: "shared", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "labels": map[string]string{"private": "denied-core-metadata"}}},
+		{ID: "pod/team/private", Kind: topology.KindPod, Name: "private", Data: map[string]any{"namespace": "team"}},
+	}, Edges: []topology.Edge{{Source: "secret/team/shared", Target: "pod/team/private", Type: topology.EdgeManages}}}
+	result, _, err := newTestBuilder(t, getter, topo).WithReadCheck(func(ref ResourceRef) bool {
+		return ref.Kind != "Secret" || ref.Group == "custom.example"
+	}).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Nodes) != 2 {
+		t.Fatalf("wrong-group descendants emitted: %+v", result.Nodes)
+	}
+	for _, n := range result.Nodes {
+		if strings.Contains(fmt.Sprint(n.Data), "denied-core-metadata") || n.Ref.Kind == "Pod" {
+			t.Fatalf("wrong-group hydration: %+v", n)
+		}
+		if n.Ref.Kind == "Secret" && (n.Health != "" || n.Ref.Group != "custom.example") {
+			t.Fatalf("wrong-group health/identity: %+v", n)
+		}
+	}
+	for _, call := range getter.recordedCalls() {
+		if call.Kind == "Secret" && call.Group == "" {
+			t.Fatalf("denied core fetch: %+v", call)
+		}
+	}
+}
+
+func TestCoreDeclarationNeverHydratesCustomCollision(t *testing.T) {
+	for _, withCore := range []bool{false, true} {
+		root := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+			"metadata": map[string]any{"name": "app", "namespace": "team"},
+			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+			"status":   map[string]any{"resources": []any{map[string]any{"kind": "Service", "namespace": "team", "name": "dual"}}},
+		}}
+		getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "team", Name: "app"}): root}}
+		topo := &topology.Topology{}
+		if withCore {
+			topo.Nodes = append(topo.Nodes, topology.Node{ID: "service/team/dual", Kind: topology.KindService, Name: "dual", Data: map[string]any{"namespace": "team", "labels": map[string]string{"source": "core"}}})
+		}
+		topo.Nodes = append(topo.Nodes, topology.Node{ID: "knative/team/dual", Kind: topology.KindKnativeService, Name: "dual", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "apiVersion": "serving.knative.dev/v1", "labels": map[string]string{"source": "custom"}}})
+		tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, node := range tree.Nodes {
+			if node.Ref.Kind == "Service" && (strings.Contains(fmt.Sprint(node.Data), "custom") || !withCore && node.Health != "") {
+				t.Fatalf("core declaration hydrated from custom group: %+v", node)
+			}
+		}
+	}
+}
+
+func TestRemoteInventoryDoesNotUseLocalReadPermissions(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "fleet", "namespace": "argocd"},
+		"spec":   map[string]any{"destination": map[string]any{"server": "https://remote.example"}},
+		"status": map[string]any{"resources": []any{map[string]any{"kind": "Secret", "namespace": "remote", "name": "declared", "status": "Synced"}}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "fleet"}): root}}
+	tree, _, err := newTestBuilder(t, getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != "Secret" }).Build(context.Background(), "Application", "argocd", "fleet", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := findNode(t, tree, ResourceRef{Kind: "Secret", Namespace: "remote", Name: "declared"})
+	if !node.Remote || node.Sync != "Synced" || node.Data["labels"] != nil {
+		t.Fatalf("remote declaration lost or enriched: %+v", node)
+	}
+	assertNoDynamicCall(t, getter, ResourceRef{Kind: "Secret", Namespace: "remote", Name: "declared"})
+}
+
+func TestExactLookupRetainsServedCalicoIdentities(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "app", "namespace": "team"}, "spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, "status": map[string]any{"resources": []any{map[string]any{"group": "crd.projectcalico.org", "kind": "NetworkPolicy", "namespace": "team", "name": "policy"}}}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "team", Name: "app"}): root}}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "calico/team/policy", Kind: topology.KindCalicoNetworkPolicy, Name: "policy", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "apiVersion": "projectcalico.org/v3", "apiVersions": []string{"projectcalico.org/v3", "crd.projectcalico.org/v1"}, "labels": map[string]string{"observed": "true"}}}}}
+	tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "Application", "team", "app", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := findNode(t, tree, ResourceRef{Group: "crd.projectcalico.org", Kind: "NetworkPolicy", Namespace: "team", Name: "policy"})
+	if policy.Health != "Healthy" || !strings.Contains(fmt.Sprint(policy.Data), "observed") {
+		t.Fatalf("served Calico identity lost: %+v", policy)
+	}
+}
+
+func TestFluxSharedSourceIsDependencyForEachConsumer(t *testing.T) {
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"namespace": "shared", "name": "repo"}, "spec": map[string]any{"url": "https://example.org/repo"}}}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "shared", Name: "repo"}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(rr): repo}}
+	for _, name := range []string{"one", "two"} {
+		kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "team", Name: name}
+		getter.objects[refKey(kr)] = &unstructured.Unstructured{Object: map[string]any{"apiVersion": kr.Group + "/v1", "kind": kr.Kind, "metadata": map[string]any{"namespace": kr.Namespace, "name": name}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "namespace": "shared", "name": "repo"}}}}
+		tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), kr.Kind, kr.Namespace, name, kr.Group)
+		if err != nil {
+			t.Fatal(err)
+		}
+		source := findNode(t, tree, rr)
+		if !source.Dependency || source.Data["sourceURL"] != "https://example.org/repo" || tree.Summary.Dependencies != 1 || tree.Summary.Declared != 0 || len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeSource {
+			t.Fatalf("shared source membership: %+v", tree)
+		}
+	}
+	if len(getter.recordedCalls()) != 4 {
+		t.Fatalf("source enrichment added reads: %v", getter.recordedCalls())
+	}
+}
+
+func TestRemoteFluxInventoryOverlapDoesNotEnrichFromLocalSource(t *testing.T) {
+	for _, withTopology := range []bool{false, true} {
+		root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"namespace": "flux-system", "name": "fleet"}, "spec": map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "spoke"}}, "sourceRef": map[string]any{"kind": "GitRepository", "namespace": "prod", "name": "flux-system"}}, "status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "prod_flux-system_source.toolkit.fluxcd.io_GitRepository", "v": "v1"}}}}}}
+		rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "prod", Name: "flux-system"}
+		repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": rr.Group + "/v1", "kind": rr.Kind, "metadata": map[string]any{"namespace": rr.Namespace, "name": rr.Name, "uid": "local-uid", "labels": map[string]any{"private": "local"}}, "spec": map[string]any{"url": "https://example.org/local"}, "status": map[string]any{"artifact": map[string]any{"revision": "local"}, "conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "FetchFailed", "message": "local failure"}}}}}
+		getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(rr): repo, refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "fleet"}): root}}
+		var topo *topology.Topology
+		if withTopology {
+			topo = &topology.Topology{Nodes: []topology.Node{{ID: "local-source", Kind: topology.KindGitRepository, Name: rr.Name, Data: map[string]any{"namespace": rr.Namespace, "apiVersion": repo.GetAPIVersion(), "labels": map[string]string{"private": "local"}}}}}
+		}
+		tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), root.GetKind(), root.GetNamespace(), root.GetName(), "kustomize.toolkit.fluxcd.io")
+		if err != nil {
+			t.Fatal(err)
+		}
+		node := findNode(t, tree, rr)
+		if !node.Remote || node.Dependency || node.Ref.UID != "" || node.Health != "" || node.Data["artifact"] != nil || node.Data["sourceURL"] != nil || node.Data["labels"] != nil || node.Data["relationship"] != "source" || len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeOwns {
+			t.Fatalf("topology=%t remote resource got local facts: %+v", withTopology, tree)
+		}
+	}
+}
+
+func TestHelmReleaseRootKeepsInstalledChartOverTopologyRevision(t *testing.T) {
+	hr := helmRelease("team", "app")
+	hr.Object["status"] = map[string]any{"lastAttemptedRevision": "6.16.0", "history": []any{map[string]any{"version": int64(2), "chartVersion": "6.16.0", "status": "failed"}, map[string]any{"version": int64(1), "chartVersion": "6.15.0", "status": "deployed"}}}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "helmrelease/team/app", Kind: "HelmRelease", Name: "app", Data: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "namespace": "team", "revision": 0}}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}): hr}}
+	tree, _, err := newTestBuilder(t, getter, topo).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Root.Data["revision"] != "6.15.0" {
+		t.Fatalf("root revision = %#v", tree.Root.Data["revision"])
+	}
+}
+
+func TestBuildDecidesToolByAPIGroup(t *testing.T) {
+	root := func(apiVersion, kind string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": apiVersion,
+			"kind":       kind,
+			"metadata":   map[string]any{"name": "web", "namespace": "apps"},
+			"spec":       map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+		}}
+	}
+	cases := []struct {
+		name, apiVersion, kind, requestKind, requestGroup string
+		want                                              Tool
+	}{
+		{"argo application", "argoproj.io/v1alpha1", "Application", "applications", "argoproj.io", ToolArgoCD},
+		{"flux kustomization", "kustomize.toolkit.fluxcd.io/v1", "Kustomization", "kustomizations", "kustomize.toolkit.fluxcd.io", ToolFluxCD},
+		{"sig apps application", "app.k8s.io/v1beta1", "Application", "applications", "app.k8s.io", ""},
+		{"query group cannot override object identity", "app.k8s.io/v1beta1", "Application", "applications", "argoproj.io", ""},
+		// Without ?group= the cache resolves the kind on its own; the object's
+		// apiVersion still decides.
+		{"sig apps application, no group requested", "app.k8s.io/v1beta1", "Application", "applications", "", ""},
+		{"vendor kind containing application", "some.vendor/v1", "FooApplication", "fooapplications", "some.vendor", ""},
+		{"argo rollout", "argoproj.io/v1alpha1", "Rollout", "rollouts", "argoproj.io", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := root(tc.apiVersion, tc.kind)
+			dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+				refKey(ResourceRef{Group: tc.requestGroup, Kind: tc.requestKind, Namespace: "apps", Name: "web"}): obj,
+			}}
+			tree, _, err := newTestBuilder(t, dynamic, &topology.Topology{}).Build(context.Background(), tc.requestKind, "apps", "web", tc.requestGroup)
+			if tc.want == "" {
+				if !errors.Is(err, ErrNotGitOpsResource) {
+					t.Fatalf("Build error = %v, want ErrNotGitOpsResource", err)
+				}
+				if tree != nil {
+					t.Fatalf("Build returned a tree for a non-GitOps root: %+v", tree)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if got := tree.Nodes[0].Tool; got != tc.want {
+				t.Fatalf("root tool = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildNotGitOpsErrorNamesTheResource(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "app.k8s.io/v1beta1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"name": "wordpress", "namespace": "shop"},
+	}}
+	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "app.k8s.io", Kind: "applications", Namespace: "shop", Name: "wordpress"}): obj,
+	}}
+	_, _, err := newTestBuilder(t, dynamic, &topology.Topology{}).Build(context.Background(), "applications", "shop", "wordpress", "app.k8s.io")
+	want := "Application.app.k8s.io shop/wordpress is not a supported Argo CD or Flux resource, so it has no GitOps view"
+	if err == nil || err.Error() != want {
+		t.Fatalf("error = %v, want %q", err, want)
+	}
+}
+
+func TestFluxTreeDropsNamespaceRecordedForClusterScopedKinds(t *testing.T) {
+	hr := helmRelease("flux", "release")
+	hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{
+		map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"},
+		map[string]any{"id": "prod_global_cert-manager.io_ClusterIssuer"},
+		map[string]any{"id": "prod_local_cert-manager.io_Issuer"},
+		map[string]any{"id": "prod_unknown_example.io_Widget"},
+	}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux", Name: "release"}): hr,
+	}}
+	session := ownershipSession(t,
+		ownedObject("cert-manager.io", "ClusterIssuer", "", "global", nil, false),
+		ownedObject("cert-manager.io", "Issuer", "prod", "local", nil, false),
+	)
+	tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "HelmRelease", "flux", "release", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"ClusterRole": "", "ClusterIssuer": "", "Issuer": "prod", "Widget": "prod"}
+	for _, node := range tree.Nodes {
+		if ns, ok := want[node.Ref.Kind]; ok {
+			if node.Ref.Namespace != ns {
+				t.Errorf("%s namespace = %q, want %q", node.Ref.Kind, node.Ref.Namespace, ns)
+			}
+			delete(want, node.Ref.Kind)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing from tree: %v", want)
+	}
+}
+
+func TestRemoteFluxTreeAlignsOnlyBuiltinScope(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"name": "fleet-prod", "namespace": "flux-system"},
+		"spec":     map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}}},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"},
+			map[string]any{"id": "prod_global_cert-manager.io_ClusterIssuer"},
+		}}},
+	}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "fleet-prod"}): ks,
+	}}
+	// The local catalog's scope for a custom kind says nothing about the remote cluster.
+	session := ownershipSession(t, ownedObject("cert-manager.io", "ClusterIssuer", "", "local-only", nil, false))
+	tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "Kustomization", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"ClusterRole": "", "ClusterIssuer": "prod"}
+	for _, node := range tree.Nodes {
+		if ns, ok := want[node.Ref.Kind]; ok {
+			if node.Ref.Namespace != ns {
+				t.Errorf("%s namespace = %q, want %q", node.Ref.Kind, node.Ref.Namespace, ns)
+			}
+			delete(want, node.Ref.Kind)
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing from tree: %v", want)
+	}
+}
+
+func TestFluxTreeKeepsRecordedNamespaceWhenScopeIsDisputed(t *testing.T) {
+	served := func(version, resource string, namespaced bool) ownership.ServedResource {
+		return ownership.ServedResource{Group: "rbac.authorization.k8s.io", Version: version, Kind: "ClusterRole", Resource: resource, Namespaced: namespaced, Verbs: []string{"get", "list", "watch"}}
+	}
+	for name, resources := range map[string][]ownership.ServedResource{
+		"ambiguous":         {served("v1", "clusterroles", false), served("v2", "tenantroles", true)},
+		"served namespaced": {served("v1", "clusterroles", true)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hr := helmRelease("flux", "release")
+			hr.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "prod_reader_rbac.authorization.k8s.io_ClusterRole"}}}}
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+				refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux", Name: "release"}): hr,
+			}}
+			session, err := ownershiptest.Scan(ownershiptest.World{Resources: resources}).Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tree, _, err := NewBuilder(getter, nil).WithOwnership(session).Build(context.Background(), "HelmRelease", "flux", "release", "helm.toolkit.fluxcd.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range tree.Nodes {
+				if node.Ref.Kind == "ClusterRole" {
+					if node.Ref.Namespace != "prod" {
+						t.Fatalf("disputed scope: namespace = %q, want the recorded prod", node.Ref.Namespace)
+					}
+					return
+				}
+			}
+			t.Fatal("ClusterRole missing from tree")
+		})
+	}
+}
+
+// Argo Changes rebuild each row from status.resources as recorded, so the
+// tree keeps Argo entries as recorded too; the two must name one object.
+func TestArgoTreeKeepsRecordedNamespace(t *testing.T) {
+	app := operatorApplication()
+	app.Object["status"] = map[string]any{"resources": []any{map[string]any{"group": "rbac.authorization.k8s.io", "kind": "ClusterRole", "namespace": "prod", "name": "reader", "status": "Synced"}}}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "monitoring"}): app}}
+	tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "Application", "argocd", "monitoring", "argoproj.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range tree.Nodes {
+		if node.Ref.Kind == "ClusterRole" {
+			if node.Ref.Namespace != "prod" {
+				t.Fatalf("Argo entry namespace = %q, want it as recorded", node.Ref.Namespace)
+			}
+			return
+		}
+	}
+	t.Fatal("ClusterRole missing from tree")
 }

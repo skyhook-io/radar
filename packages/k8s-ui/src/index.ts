@@ -55,6 +55,9 @@ export * from './components/checks'
 // queue)
 export * from './components/issues'
 
+// CloudNativePG workspace model (fleet derivation over /api/cnpg/workspace) and summaries
+export * from './components/cnpg'
+
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
 export * from './components/cluster-switcher'
 
@@ -79,3 +82,16 @@ export * from './components/compare'
 
 // Perf instrumentation (ELK + structureKey timers, surfaced in diagnostics overlay)
 export * from './perf'
+
+export { CertaintyGlyph, certaintyGlyph, certaintyValueLabel, type Certainty } from './components/facts/certainty'
+
+export * from './components/facts'
+export {
+  WorkspaceProblemCallout,
+  ProblemList,
+  ProblemMeta,
+  OpenIssueContext,
+  problemOriginLabel,
+  type WorkspaceProblem,
+  type ProblemOrigin,
+} from './components/problems'

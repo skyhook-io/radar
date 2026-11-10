@@ -38,6 +38,8 @@ func TestParseMessageClasses(t *testing.T) {
 		{name: "pod anti-affinity", clause: "3 node(s) didn't match pod anti-affinity rules", class: PodAntiAffinity},
 		{name: "topology spread", clause: "3 node(s) didn't match pod topology spread constraints", class: TopologySpread},
 		{name: "volume node affinity", clause: "3 node(s) had volume node affinity conflict", class: VolumeNodeAffinity},
+		{name: "PersistentVolume node affinity", clause: "3 node(s) didn't match PersistentVolume's node affinity", class: VolumeNodeAffinity},
+		{name: "volume zone", clause: "3 node(s) had no available volume zone", class: VolumeNodeAffinity},
 		{name: "unbound PVC", clause: "pod has unbound immediate PersistentVolumeClaims", class: VolumeBinding},
 		{name: "volume count", clause: "3 node(s) exceed max volume count", class: VolumeCount},
 		{name: "host port", clause: "3 node(s) didn't have free ports for the requested pod ports", class: NoPorts},
@@ -64,6 +66,16 @@ func TestParseMessageClasses(t *testing.T) {
 	}
 }
 
+// The duplicate_pvc rollout verdict: the PersistentVolume clause must not be
+// read as the Pod's own nodeSelector/affinity.
+func TestParseMessagePersistentVolumeAffinityWithAntiAffinity(t *testing.T) {
+	_, reasons := ParseMessage("0/3 nodes are available: 1 node(s) didn't satisfy existing pods anti-affinity rules, " +
+		"2 node(s) didn't match PersistentVolume's node affinity. preemption: 0/3 nodes are available: 1 No preemption victims found for incoming pod, 2 Preemption is not helpful for scheduling.")
+	if len(reasons) != 2 || reasons[0].Class != PodAntiAffinity || reasons[1].Class != VolumeNodeAffinity || reasons[1].NodeCount != 2 {
+		t.Fatalf("reasons = %+v, want pod anti-affinity then volume node affinity on 2 nodes", reasons)
+	}
+}
+
 func TestParseMessageWholeEmptyAndIgnoredVariants(t *testing.T) {
 	if total, reasons := ParseMessage("pod has unbound immediate PersistentVolumeClaims"); total != 0 || len(reasons) != 1 || reasons[0].Class != VolumeBinding {
 		t.Fatalf("whole-message PVC = %d/%+v", total, reasons)
@@ -76,6 +88,28 @@ func TestParseMessageWholeEmptyAndIgnoredVariants(t *testing.T) {
 	}
 	if total, reasons := ParseMessage("0/1 nodes are available: no new claims to deallocate."); total != 1 || len(reasons) != 0 {
 		t.Fatalf("ignored DRA-only message = %d/%+v", total, reasons)
+	}
+}
+
+// Volcano frames its verdict differently, and its gang-scheduling message is
+// not a list of node clauses.
+func TestParseMessageVolcano(t *testing.T) {
+	total, reasons := ParseMessage("Node: 0/21 nodes are unavailable: 1 Insufficient cpu, 16 node(s) didn't match Pod's node affinity/selector, 4 Insufficient pods.")
+	if total != 21 || len(reasons) != 3 {
+		t.Fatalf("Volcano node verdict = %d/%+v, want 21 nodes and three reasons", total, reasons)
+	}
+	if reasons[0].Class != InsufficientResource || reasons[0].Resource != "cpu" || reasons[0].NodeCount != 1 {
+		t.Errorf("first clause lost its count: %+v", reasons[0])
+	}
+	if _, reasons := ParseMessage("2 Too many pods"); len(reasons) != 1 || reasons[0].Class != InsufficientResource || reasons[0].Resource != "pods" || reasons[0].NodeCount != 2 {
+		t.Errorf("a single unframed clause should read as itself: %+v", reasons)
+	}
+	if _, reasons := ParseMessage("no new claims to deallocate, pod has unbound immediate PersistentVolumeClaims"); len(reasons) != 1 || reasons[0].Class != VolumeBinding {
+		t.Errorf("the volume verdict should survive DRA filler: %+v", reasons)
+	}
+	gang := "pod group is not ready, 1 Pending, 1 minAvailable; Pending: 1 Unschedulable"
+	if total, reasons := ParseMessage(gang); total != 0 || len(reasons) != 1 || reasons[0] != (Reason{Class: Other, Raw: gang}) {
+		t.Errorf("gang message = %d/%+v, want it whole, as one unclassified reason", total, reasons)
 	}
 }
 

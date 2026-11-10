@@ -2,6 +2,7 @@ package topology
 
 import (
 	"testing"
+	"time"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -209,6 +210,39 @@ func TestHPANodeHealth(t *testing.T) {
 			t.Errorf("hpaNodeHealth(nil) = %q, want %q", got, StatusUnknown)
 		}
 	})
+}
+
+func TestDeletingPodIsMarkedTerminating(t *testing.T) {
+	deleted := metav1.NewTime(time.Now())
+	draining := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "prod", DeletionTimestamp: &deleted},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	serving := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-2", Namespace: "prod"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+
+	if got := CreatePodNode(draining, nil, true).Data["terminating"]; got != 1 {
+		t.Errorf("deleting Pod node terminating = %#v, want 1", got)
+	}
+	if _, ok := CreatePodNode(serving, nil, true).Data["terminating"]; ok {
+		t.Error("a Pod that isn't being deleted carries terminating")
+	}
+
+	node := CreatePodGroupNode(&PodGroup{Key: "prod/Deployment/api", GroupName: "api", Pods: []*corev1.Pod{draining, serving}}, nil)
+	details, _ := node.Data["pods"].([]map[string]any)
+	if len(details) != 2 {
+		t.Fatalf("expected two pod details, got %#v", node.Data["pods"])
+	}
+	if details[0]["terminating"] != true {
+		t.Errorf("deleting group member terminating = %#v, want true", details[0]["terminating"])
+	}
+	if _, ok := details[1]["terminating"]; ok {
+		t.Error("a group member that isn't being deleted carries terminating")
+	}
 }
 
 // Expanding a pod group must not re-derive health from the phase: a

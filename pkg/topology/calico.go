@@ -344,7 +344,7 @@ func newCalicoWorkload(id, namespace string, workloadLabels map[string]string, s
 		id:             id,
 		namespace:      namespace,
 		labels:         workloadLabels,
-		endpointLabels: CalicoEndpointLabels(namespace, workloadLabels),
+		endpointLabels: CalicoEndpointLabels(namespace, workloadLabels, serviceAccount),
 		serviceAccount: serviceAccount,
 	}
 }
@@ -383,14 +383,22 @@ func CalicoStagedActionStagesRemoval(policy *unstructured.Unstructured) bool {
 }
 
 // CalicoEndpointLabels returns the labels Calico exposes for a Kubernetes
-// endpoint, including the labels it adds automatically to every workload.
-func CalicoEndpointLabels(namespace string, workloadLabels map[string]string) map[string]string {
-	endpointLabels := make(map[string]string, len(workloadLabels)+2)
+// endpoint, including the labels it adds automatically to every workload. An
+// empty serviceAccount is the namespace's default one, as on a pod spec.
+func CalicoEndpointLabels(namespace string, workloadLabels map[string]string, serviceAccount string) map[string]string {
+	endpointLabels := make(map[string]string, len(workloadLabels)+3)
 	for key, value := range workloadLabels {
 		endpointLabels[key] = value
 	}
 	endpointLabels["projectcalico.org/namespace"] = namespace
 	endpointLabels["projectcalico.org/orchestrator"] = "k8s"
+	if serviceAccount == "" {
+		serviceAccount = "default"
+	}
+	// Calico sets this only when the name fits in a label value.
+	if len(serviceAccount) < 63 {
+		endpointLabels["projectcalico.org/serviceaccount"] = serviceAccount
+	}
 	return endpointLabels
 }
 

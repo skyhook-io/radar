@@ -10,12 +10,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/probe"
 )
@@ -42,7 +42,7 @@ func traceServiceEntry(ctx context.Context, deps Deps, t *Trace) {
 		t.Downstream = []Hop{{
 			Resource: svcRef,
 			Edge:     "entry:Service",
-			Findings: hopFindings(deps.Issues, svcRef),
+			Findings: hopFindings(deps, svcRef),
 		}, {
 			Resource: ResourceRef{Kind: "ExternalName", Name: svc.Spec.ExternalName},
 			Edge:     "Service->ExternalName",
@@ -64,7 +64,7 @@ func traceServiceEntry(ctx context.Context, deps Deps, t *Trace) {
 			Resource: svcRef,
 			Edge:     "entry:Service",
 			Meta:     map[string]any{"selectorless": true},
-			Findings: append(hopFindings(deps.Issues, svcRef), Finding{
+			Findings: append(hopFindings(deps, svcRef), Finding{
 				Code:     "svc:selectorless",
 				Severity: SeverityInfo,
 				Message:  "Service has no selector; endpoints are managed manually and pod health is not derivable",
@@ -78,7 +78,7 @@ func traceServiceEntry(ctx context.Context, deps Deps, t *Trace) {
 	svcHop := Hop{
 		Resource: svcRef,
 		Edge:     "entry:Service",
-		Findings: hopFindings(deps.Issues, svcRef),
+		Findings: hopFindings(deps, svcRef),
 		Meta:     map[string]any{},
 		Config:   serviceConfig(svc),
 	}
@@ -444,8 +444,24 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 		Meta:     meta,
 		Config:   podsConfig(pods, svc),
 	}
-	if hop.Config != nil {
-		hop.Config.Workload = podsWorkload(deps, pods)
+	// What runs these Pods: one workload is named on the hop; several are a
+	// breakdown, often deliberate (canary, blue/green), so context only. When
+	// they don't all serve the Service, the issues engine warns on it.
+	backends := k8s.AnalyzeServiceBackends(deps.Cache, svc, pods)
+	if canNameWorkloads(deps, backends.Workloads, svc.Namespace) {
+		switch {
+		case backends.MultipleWorkloads():
+			meta["workloads"] = traceBackendWorkloads(backends.Workloads)
+			hop.Findings = append(hop.Findings, Finding{
+				Code:     "pods:multiple-workloads",
+				Severity: SeverityInfo,
+				Message:  "Selects " + backends.Summary(),
+			})
+		case len(backends.Workloads) == 1 && backends.Workloads[0].Kind != "Pod" && hop.Config != nil:
+			w := backends.Workloads[0]
+			ns, _ := k8s.WorkloadAccessNamespace(w, svc.Namespace)
+			hop.Config.Workload = &ResourceRef{Group: w.Group, Kind: w.Kind, Namespace: ns, Name: w.Name}
+		}
 	}
 	if unreadable {
 		hop.Findings = append(hop.Findings, Finding{
@@ -474,6 +490,9 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 		if res.denyPort > 0 {
 			meta["policyDenyPort"] = res.denyPort
 		}
+		if res.proto != "" {
+			meta["policyProtocol"] = string(res.proto)
+		}
 	}
 	if mesh := detectMesh(pods); mesh != "" {
 		hop.Findings = append(hop.Findings, Finding{
@@ -489,8 +508,10 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 	// when the detector emits one, already takes precedence here. For a
 	// publishNotReadyAddresses Service the same state is info-tier: endpoints
 	// publish regardless of readiness, so traffic still routes and 0 ready is
-	// often the intended shape - worth a glance, never an outage framing.
-	if len(pods) > 0 && readyCount(pods) == 0 &&
+	// often the intended shape - worth a glance, never an outage framing. An
+	// unreadable selection may be missing the ready siblings, so "none are
+	// Ready" can't be said from it.
+	if !unreadable && len(pods) > 0 && readyCount(pods) == 0 &&
 		worstSeverity(hop.Findings) != SeverityCritical && worstSeverity(hop.Findings) != SeverityWarning {
 		for _, pod := range pods {
 			if pod == nil || podIsReady(pod) {
@@ -526,32 +547,8 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 // labels/annotations are the injection request and catch the pre-Running case.
 func detectMesh(pods []*corev1.Pod) string {
 	for _, pod := range pods {
-		if pod == nil {
-			continue
-		}
-		for _, c := range pod.Spec.Containers {
-			switch c.Name {
-			case "istio-proxy":
-				return "Istio"
-			case "linkerd-proxy":
-				return "Linkerd"
-			case "consul-dataplane":
-				return "Consul"
-			}
-		}
-		if pod.Annotations["sidecar.istio.io/status"] != "" ||
-			pod.Labels["istio.io/rev"] != "" ||
-			pod.Labels["sidecar.istio.io/inject"] == "true" ||
-			pod.Annotations["sidecar.istio.io/inject"] == "true" {
-			return "Istio"
-		}
-		if pod.Labels["linkerd.io/inject"] == "enabled" ||
-			pod.Annotations["linkerd.io/inject"] == "enabled" {
-			return "Linkerd"
-		}
-		if pod.Labels["consul.hashicorp.com/connect-inject"] == "true" ||
-			pod.Annotations["consul.hashicorp.com/connect-inject"] == "true" {
-			return "Consul"
+		if mesh := k8s.PodMesh(pod); mesh != "" {
+			return mesh
 		}
 	}
 	return ""
@@ -872,7 +869,12 @@ func podFanoutFindings(deps Deps, pods []*corev1.Pod) []Finding {
 		}
 		ref := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		cause, command := podDiagnosis(pod)
-		for _, f := range hopFindings(deps.Issues, ref) {
+		for _, f := range hopFindings(deps, ref) {
+			// The hop's own policy evaluation reports the same isolation per
+			// port (netpol:would-deny); the policy issue shows on the Service.
+			if f.Code == k8s.NetworkPolicyDenyAllIngressFingerprint {
+				continue
+			}
 			prev, ok := seen[f.Code]
 			if !ok || severityRank(f.Severity) > severityRank(prev.Severity) {
 				podRef := ref
@@ -1018,19 +1020,43 @@ func selectedPods(deps Deps, svc *corev1.Service) (pods []*corev1.Pod, unreadabl
 		// rather than reporting a confident "0 ready pods".
 		return nil, true
 	}
+	// A namespace-scoped Pods informer (narrow pod RBAC) returns an EMPTY slice with
+	// no error for a namespace it doesn't watch, and one still filling its initial
+	// sync returns an empty or partial one - a NotReady pod without its ready
+	// siblings reads as "0 ready". Either way the counts are unknown, and a
+	// confident "no backends / 0 ready" would false-condemn the Service. The
+	// selection is complete only when the store holding this namespace covers it
+	// and had synced before the read; otherwise the pods found are kept for
+	// display but the hop is unreadable.
+	complete := deps.Cache.AssessKindRead("pods", []string{svc.Namespace}).Complete
 	got, err := deps.Cache.Pods().Pods(svc.Namespace).List(labels.SelectorFromSet(labels.Set(svc.Spec.Selector)))
 	if err != nil {
 		return nil, true
 	}
-	// A namespace-scoped Pods informer (narrow pod RBAC) returns an EMPTY slice with
-	// no error for a namespace it doesn't watch. That empty is "out of scope", not
-	// "0 pods" - reporting a confident "no backends / 0 ready" for a Service whose
-	// namespace falls outside pod scope would false-condemn it. Trust an empty list
-	// only when the informer actually covers this namespace.
-	if len(got) == 0 && !deps.Cache.KindCoversNamespace("pods", svc.Namespace) {
-		return nil, true
+	if !complete {
+		if len(got) == 0 {
+			return nil, true
+		}
+		return got, true
 	}
 	return got, false
+}
+
+// backendServiceUnverified reports whether a backend Service lookup failed
+// without proving the Service is gone: a non-NotFound error, or a NotFound from
+// a Services store that doesn't cover the namespace or hasn't synced. The
+// verdict layer reads a missing backend from the entry's missing-reference
+// issue, which stays silent in exactly these cases, so the hop has to carry the
+// uncertainty itself or the path reads healthy.
+func backendServiceUnverified(deps Deps, namespace, name string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if !apierrors.IsNotFound(err) {
+		return true
+	}
+	_, found, readable := deps.Cache.ReadableObject("services", namespace, name)
+	return !readable || found
 }
 
 // livePods drops pods that aren't serving - terminal (Succeeded/Failed) or being
@@ -1112,6 +1138,9 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 		// couldn't look, so absence isn't authoritative.
 		return nil, false
 	}
+	// Assessed before the read: a store that finished syncing after an
+	// incomplete read must not make that read authoritative.
+	complete := deps.Cache.AssessKindRead("ingresses", []string{svc.Namespace}).Complete
 	ingresses, err := deps.Cache.Ingresses().Ingresses(svc.Namespace).List(labels.Everything())
 	if err != nil {
 		return nil, false
@@ -1125,7 +1154,7 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 		out = append(out, Hop{
 			Resource: ref,
 			Edge:     "Ingress->Service",
-			Findings: hopFindings(deps.Issues, ref),
+			Findings: hopFindings(deps, ref),
 			// Config is what probeIngress reads to decide which hostnames
 			// to DNS / TCP / TLS / HTTP probe. Omitting it left upstream
 			// Ingress hops out of the active layer entirely even though
@@ -1135,11 +1164,12 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) ([]Hop, bool) {
 	}
 	// A non-empty read is not proof of a complete index: a warmup or
 	// namespace-scoped informer returns what it has with no error. Only a synced
-	// cache that reliably covers this Service's namespace is authoritative for
-	// "these are ALL the Ingresses"; anything less keeps the matches found but
-	// flags the enumeration as possibly incomplete.
-	authoritative := deps.Cache.IsSyncComplete() && deps.Cache.KindCoversNamespace("ingresses", svc.Namespace)
-	return out, authoritative
+	// store that covers this Service's namespace is authoritative for "these are
+	// ALL the Ingresses"; anything less keeps the matches found but flags the
+	// enumeration as possibly incomplete. That is the store's own sync, not the
+	// cache's first-paint phase: a slow Ingress informer is moved to the
+	// background and keeps loading after that phase.
+	return out, complete
 }
 
 func ingressReferencesService(ing *networkingIngress, svcName string) bool {
@@ -1218,7 +1248,7 @@ func routeUpstreamsForService(deps Deps, svc *corev1.Service, kind string) (hops
 		out = append(out, Hop{
 			Resource: ref,
 			Edge:     kind + "->Service",
-			Findings: hopFindings(deps.Issues, ref),
+			Findings: hopFindings(deps, ref),
 		})
 	}
 	if outOfScope > 0 {
@@ -1272,16 +1302,11 @@ func routeReferencesService(route *unstructured.Unstructured, svcNS, svcName str
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kindf, _ := refm["kind"].(string)
-			if group != "" || (kindf != "" && kindf != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			name, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			if name == svcName && ns == svcNS {
 				return true
 			}
@@ -1321,7 +1346,7 @@ func traceIngressEntry(ctx context.Context, deps Deps, t *Trace) {
 	hops := []Hop{{
 		Resource: ingRef,
 		Edge:     "entry:Ingress",
-		Findings: hopFindings(deps.Issues, ingRef),
+		Findings: hopFindings(deps, ingRef),
 		Config:   ingressConfig(ing),
 	}}
 	// An Ingress is only routing rules - surface WHO actually serves them (the
@@ -1361,14 +1386,15 @@ func traceIngressEntry(ctx context.Context, deps Deps, t *Trace) {
 		svcHop := Hop{
 			Resource: svcRef,
 			Edge:     "Ingress->Service",
-			Findings: hopFindings(deps.Issues, svcRef),
+			Findings: hopFindings(deps, svcRef),
 		}
 		svc, svcErr := deps.Cache.Services().Services(ing.Namespace).Get(name)
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
-		} else if !apierrors.IsNotFound(svcErr) {
-			// RBAC denial / transient API failure - we can't read the backend, so
-			// don't let the path read healthy. Mark endpointSource=unknown (mirrors
+		} else if backendServiceUnverified(deps, ing.Namespace, name, svcErr) {
+			// RBAC denial, transient API failure, or a miss from a Services cache
+			// that can't vouch for it - we can't read the backend, so don't let
+			// the path read healthy. Mark endpointSource=unknown (mirrors
 			// buildPodsHop's lister-error handling) so the verdict degrades to
 			// unknown rather than hiding an unreadable backend. A confirmed
 			// NotFound stays a real break handled by the verdict layer.
@@ -1582,7 +1608,7 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 	hops := []Hop{{
 		Resource: routeRef,
 		Edge:     "entry:" + kind,
-		Findings: hopFindings(deps.Issues, routeRef),
+		Findings: hopFindings(deps, routeRef),
 		Config:   routeConfig(route),
 	}}
 
@@ -1617,26 +1643,29 @@ func traceRouteEntry(ctx context.Context, deps Deps, t *Trace, kind string) {
 		svcHop := Hop{
 			Resource: svcRef,
 			Edge:     kind + "->Service",
-			Findings: hopFindings(deps.Issues, svcRef),
+			Findings: hopFindings(deps, svcRef),
 		}
 		svc, svcErr := deps.Cache.Services().Services(b.Namespace).Get(b.Name)
+		// A backend explicitly weighted to 0 while a sibling carries traffic is
+		// drained by design - it serves no requests, so trace it informationally
+		// (no pod fan-out, no probes) and keep it out of the verdict/coverage
+		// failure tally. Folding a down weight-0 backend in would false-condemn a
+		// path that intentionally carries zero traffic, and an unreadable one
+		// would leave the whole trace unknown for the same zero traffic.
+		drained := routeBackendDrained(route, b.Namespace, b.Name)
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
-		} else if !apierrors.IsNotFound(svcErr) {
-			// RBAC denial / transient API failure - mark the backend unreadable so
-			// the verdict degrades to unknown instead of reading healthy. A
-			// confirmed NotFound stays a real break for the verdict layer.
+		} else if !drained && backendServiceUnverified(deps, b.Namespace, b.Name, svcErr) {
+			// RBAC denial, transient API failure, or a miss from a Services cache
+			// that can't vouch for it - mark the backend unreadable so the verdict
+			// degrades to unknown instead of reading healthy. A confirmed NotFound
+			// stays a real break for the verdict layer.
 			if svcHop.Meta == nil {
 				svcHop.Meta = map[string]any{}
 			}
 			svcHop.Meta["endpointSource"] = "unknown"
 		}
-		// A backend explicitly weighted to 0 while a sibling carries traffic is
-		// drained by design - it serves no requests, so trace it informationally
-		// (no pod fan-out, no probes) and keep it out of the verdict/coverage
-		// failure tally. Folding a down weight-0 backend in would false-condemn a
-		// path that intentionally carries zero traffic.
-		if routeBackendDrained(route, b.Namespace, b.Name) {
+		if drained {
 			if svcHop.Meta == nil {
 				svcHop.Meta = map[string]any{}
 			}
@@ -1782,16 +1811,11 @@ func routeBackendPorts(route *unstructured.Unstructured, namespace, name string)
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kind, _ := refm["kind"].(string)
-			if group != "" || (kind != "" && kind != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			refName, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			if refName != name || ns != namespace {
 				continue
 			}
@@ -1831,16 +1855,11 @@ func routeBackendDrained(route *unstructured.Unstructured, namespace, name strin
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kind, _ := refm["kind"].(string)
-			if group != "" || (kind != "" && kind != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			refName, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			w, hasW := backendRefWeight(refm)
 			if refName == name && ns == namespace {
 				if !hasW {
@@ -1901,16 +1920,11 @@ func routeBackends(route *unstructured.Unstructured) []ResourceRef {
 			if !ok {
 				continue
 			}
-			group, _ := refm["group"].(string)
-			kind, _ := refm["kind"].(string)
-			if group != "" || (kind != "" && kind != "Service") {
+			if !configrefs.GatewayBackendIsService(refm) {
 				continue
 			}
 			name, _ := refm["name"].(string)
-			ns, _ := refm["namespace"].(string)
-			if ns == "" {
-				ns = route.GetNamespace()
-			}
+			ns := configrefs.GatewayRefNamespace(refm, route.GetNamespace())
 			key := ns + "/" + name
 			if name == "" || seen[key] {
 				continue
@@ -1945,16 +1959,11 @@ func routeParentGateways(deps Deps, route *unstructured.Unstructured) []Hop {
 		if !ok {
 			continue
 		}
-		group, _ := pm["group"].(string)
-		kind, _ := pm["kind"].(string)
-		if (group != "" && group != "gateway.networking.k8s.io") || (kind != "" && kind != "Gateway") {
+		if !configrefs.GatewayParentIsGateway(pm) {
 			continue
 		}
 		name, _ := pm["name"].(string)
-		ns, _ := pm["namespace"].(string)
-		if ns == "" {
-			ns = route.GetNamespace()
-		}
+		ns := configrefs.GatewayRefNamespace(pm, route.GetNamespace())
 		key := ns + "/" + name
 		if name == "" || seen[key] {
 			continue
@@ -1971,7 +1980,7 @@ func routeParentGateways(deps Deps, route *unstructured.Unstructured) []Hop {
 			continue
 		}
 		gw, gwErr := deps.Dynamic.Get(gvr, ns, name)
-		findings := hopFindings(deps.Issues, ref)
+		findings := hopFindings(deps, ref)
 		// Only escalate to "missing-parent" on a confirmed NotFound. The
 		// dynamic cache wraps its own sentinel rather than apimachinery's
 		// StatusError, so check both: apierrors.IsNotFound for the direct
@@ -2054,7 +2063,7 @@ func traceGatewayEntry(ctx context.Context, deps Deps, t *Trace) {
 	hops := []Hop{{
 		Resource: gwRef,
 		Edge:     "entry:Gateway",
-		Findings: hopFindings(deps.Issues, gwRef),
+		Findings: hopFindings(deps, gwRef),
 		Config:   gatewayConfig(gw),
 	}}
 
@@ -2084,16 +2093,20 @@ func traceGatewayEntry(ctx context.Context, deps Deps, t *Trace) {
 		hop := Hop{
 			Resource: ref,
 			Edge:     "Gateway->" + ref.Kind,
-			Findings: hopFindings(deps.Issues, ref),
+			Findings: hopFindings(deps, ref),
 		}
 		// L4 routes are inventoried so the attachment list never claims
 		// HTTP-only completeness, but radar doesn't walk their backends or
 		// probe them - say so instead of leaving an unexplained bare hop.
-		if ref.Kind == "TCPRoute" || ref.Kind == "TLSRoute" {
+		if ref.Kind == "TCPRoute" || ref.Kind == "TLSRoute" || ref.Kind == "UDPRoute" {
+			listener := "The Gateway listener's TCP reachability is still probed."
+			if ref.Kind == "UDPRoute" {
+				listener = "UDP listeners aren't probed either."
+			}
 			hop.Findings = append(hop.Findings, Finding{
 				Code:     "gateway:l4-route-not-traced",
 				Severity: SeverityInfo,
-				Message:  fmt.Sprintf("This %s is attached to the Gateway but its backends are not traced or tested - radar doesn't walk L4 routes. The Gateway listener's TCP reachability is still probed.", ref.Kind),
+				Message:  fmt.Sprintf("This %s is attached to the Gateway but its backends are not traced or tested - radar doesn't walk L4 routes. %s", ref.Kind, listener),
 			})
 			sortFindingsBySeverity(hop.Findings)
 		}
@@ -2173,10 +2186,10 @@ func gatewayConfig(gw *unstructured.Unstructured) *HopConfig {
 }
 
 // gatewayRouteKinds is the full set of Gateway API route kinds radar
-// inventories on a Gateway trace. TCPRoute/TLSRoute attachments are listed so
+// inventories on a Gateway trace. TCPRoute/TLSRoute/UDPRoute attachments are listed so
 // the inventory never claims HTTP-only completeness, even though their
 // backends aren't traced (see the l4-route note in traceGatewayEntry).
-var gatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"}
+var gatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"}
 
 // attachedRoutes enumerates every route attached to the Gateway. The third
 // return value reports whether the enumeration was authoritative: false means
@@ -2242,23 +2255,11 @@ func routeAttachedToGateway(route *unstructured.Unstructured, gwNS, gwName strin
 		if !ok {
 			continue
 		}
-		// parentRef.kind defaults to "Gateway" per the Gateway API spec.
-		// parentRef.group defaults to "gateway.networking.k8s.io". A Route
-		// that points at a same-named non-Gateway parent (e.g. another
-		// Route in a tree) must not appear on a Gateway trace.
-		kind, _ := pm["kind"].(string)
-		if kind != "" && kind != "Gateway" {
-			continue
-		}
-		group, _ := pm["group"].(string)
-		if group != "" && group != "gateway.networking.k8s.io" {
+		if !configrefs.GatewayParentIsGateway(pm) {
 			continue
 		}
 		name, _ := pm["name"].(string)
-		ns, _ := pm["namespace"].(string)
-		if ns == "" {
-			ns = route.GetNamespace()
-		}
+		ns := configrefs.GatewayRefNamespace(pm, route.GetNamespace())
 		if name == gwName && ns == gwNS {
 			return true
 		}
@@ -2329,62 +2330,35 @@ func sortRefs(refs []ResourceRef) {
 	})
 }
 
-// podsWorkload resolves what RUNS the selected Pods, walking the owner chain
-// (Pod -> ReplicaSet -> Deployment; a StatefulSet/DaemonSet/Job owns its Pods
-// directly). Returns nil unless EVERY sampled Pod agrees on one owner: a Service
-// fronting two workloads has no single answer, and naming one of them would be a
-// guess in a view whose whole point is not guessing.
-func podsWorkload(deps Deps, pods []*corev1.Pod) *ResourceRef {
-	var found *ResourceRef
-	for _, p := range pods {
-		ref := ownerWorkload(deps, p)
-		if ref == nil {
-			return nil
-		}
-		if found == nil {
-			found = ref
-			continue
-		}
-		if *found != *ref {
-			return nil
+func canNameWorkloads(deps Deps, workloads []k8s.ServiceBackendWorkload, namespace string) bool {
+	if deps.CanReadWorkload == nil {
+		return false
+	}
+	for _, w := range workloads {
+		ns, ok := k8s.WorkloadAccessNamespace(w, namespace)
+		if !ok || !deps.CanReadWorkload(w.Group, w.Kind, ns) {
+			return false
 		}
 	}
-	return found
+	return true
 }
 
-// ownerWorkload walks one Pod's owner chain to the workload a human would name.
-// A ReplicaSet is an implementation detail of a Deployment, so it resolves one
-// level further; every other controller IS the workload.
-func ownerWorkload(deps Deps, pod *corev1.Pod) *ResourceRef {
-	owner := controllerRef(pod.OwnerReferences)
-	if owner == nil {
-		return nil
-	}
-	if owner.Kind != "ReplicaSet" {
-		return &ResourceRef{Kind: owner.Kind, Namespace: pod.Namespace, Name: owner.Name}
-	}
-	// The ReplicaSet itself is a real answer whenever its parent can't be read -
-	// no cache and an unreadable ReplicaSet are the same situation, and returning
-	// nil for one of them would claim the Pod has no owner when we know it does.
-	rsRef := &ResourceRef{Kind: "ReplicaSet", Namespace: pod.Namespace, Name: owner.Name}
-	if deps.Cache == nil {
-		return rsRef
-	}
-	rs, err := deps.Cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
-	if err != nil || rs == nil {
-		return rsRef
-	}
-	if dep := controllerRef(rs.OwnerReferences); dep != nil {
-		return &ResourceRef{Kind: dep.Kind, Namespace: pod.Namespace, Name: dep.Name}
-	}
-	return rsRef
-}
+// maxTraceBackendWorkloads caps the breakdown like the per-pod roster; the
+// info finding still counts every workload.
+const maxTraceBackendWorkloads = 10
 
-func controllerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {
-	for i := range refs {
-		if refs[i].Controller != nil && *refs[i].Controller {
-			return &refs[i]
-		}
+// traceBackendWorkloads is the per-workload breakdown on a Pods hop's meta.
+func traceBackendWorkloads(workloads []k8s.ServiceBackendWorkload) []map[string]any {
+	if len(workloads) > maxTraceBackendWorkloads {
+		workloads = workloads[:maxTraceBackendWorkloads]
 	}
-	return nil
+	out := make([]map[string]any, 0, len(workloads))
+	for _, w := range workloads {
+		row := map[string]any{"kind": w.Kind, "name": w.Name, "pods": w.Pods, "ready": w.Ready}
+		if w.Group != "" {
+			row["group"] = w.Group
+		}
+		out = append(out, row)
+	}
+	return out
 }

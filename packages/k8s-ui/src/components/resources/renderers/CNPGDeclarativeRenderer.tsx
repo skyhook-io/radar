@@ -196,6 +196,31 @@ export function CNPGSubscriptionRenderer({
 }
 
 /**
+ * DatabaseRole (CNPG 1.30+) — one PostgreSQL role as its own object. The
+ * Cluster's spec.managed.roles wins for the same name; the operator then
+ * reports this object not applied, and that message renders verbatim above.
+ */
+export function CNPGDatabaseRoleRenderer({ data, onNavigate }: { data: any; onNavigate?: Nav }) {
+  const spec = data?.spec ?? {}
+  const details: Array<{ label: string; value: React.ReactNode }> = [
+    { label: 'Role', value: spec.name ?? '-' },
+    { label: 'Login', value: spec.login === true ? 'Allowed' : 'Not allowed' },
+  ]
+  if (spec.superuser === true) details.push({ label: 'Superuser', value: 'Yes' })
+  if (spec.disablePassword === true) details.push({ label: 'Password', value: 'Disabled' })
+  else if (spec.passwordSecret?.name) details.push({ label: 'Password Secret', value: spec.passwordSecret.name })
+  if (spec.validUntil) details.push({ label: 'Valid Until', value: spec.validUntil })
+  if (Array.isArray(spec.inRoles) && spec.inRoles.length > 0) details.push({ label: 'Member Of', value: spec.inRoles.join(', ') })
+  if (spec.connectionLimit != null && spec.connectionLimit !== -1) details.push({ label: 'Connection Limit', value: String(spec.connectionLimit) })
+  const cc = spec.clientCertificate
+  if (cc && cc.enabled !== false) {
+    const exp = data?.status?.clientCertificate?.expiration
+    details.push({ label: 'Client Certificate', value: `${data?.metadata?.name}-client-cert · ${exp ? `expires ${exp}` : 'expiry not reported'}` })
+  }
+  return <CNPGDeclarativeRenderer data={data} onNavigate={onNavigate} details={details} />
+}
+
+/**
  * ImageCatalog and ClusterImageCatalog — the PostgreSQL images a Cluster may
  * use, pinned per major version.
  *

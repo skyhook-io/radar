@@ -1,6 +1,10 @@
+import { relatedFindingLimitations } from "../../../utils/related-findings";
+import { uncheckedSourceLines } from "../../issues/uncheckedSources";
+import { type UncheckedSource } from "../../../api/client";
 import {
   type HPADiagnosisState,
   type Issue,
+  type RelatedFindingsGroup,
   type IssueRecentChange,
   type Topology,
   defaultConditionTone,
@@ -13,13 +17,23 @@ import {
   type DiagnosisChangeContext,
   type DiagnosisEvidenceLimitationBase,
   type DiagnosisPodLogEntry,
+  type DiagnosisResourceRef,
   diagnosisSeverityTone,
 } from "../diagnoseEvidenceTypes";
+import { getCrossplaneConditionTone } from "@skyhook-io/k8s-ui/components/resources/resource-utils-crossplane";
 import { investigationResourceEvidenceSummary } from "../investigationResourceEvidenceModel";
 import { kindToPluralWithGroup } from "../../../utils/navigation";
 import { pluralToKind } from "@skyhook-io/k8s-ui";
 import { stableHash } from "./identity";
-import { nonEmptyString, parseJSON, record, stringArray } from "./parse";
+import {
+  issue,
+  nonEmptyString,
+  nonNegativeInteger,
+  parseJSON,
+  record,
+  resourceRef,
+  stringArray,
+} from "./parse";
 import {
   type InvestigationEventEvidence,
   type InvestigationEvidenceGroup,
@@ -101,7 +115,8 @@ export function addTopologyLimitations(
       source,
       "Topology coverage",
       warning,
-      normalized.includes("large graph") || normalized.includes("too large")
+      !partiality.requiresNamespaceFilter &&
+        (normalized.includes("large graph") || normalized.includes("too large"))
         ? "truncated"
         : "unknown",
     );
@@ -135,7 +150,9 @@ export function addTopologyLimitations(
       source,
       "Topology scale",
       scaleDetails.join(" "),
-      "truncated",
+      // A graph that was never built shows nothing, so it is an unknown; the
+      // other notes describe a graph that is shown with detail grouped.
+      partiality.requiresNamespaceFilter ? "unknown" : "truncated",
     );
   }
 
@@ -182,6 +199,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_neighborhood: "Relationships",
   get_topology: "Topology",
   get_workload_logs: "Workload logs",
+  wait_for: "Wait",
   get_prometheus_rules: "Alert rules",
   get_helm_release: "Helm release",
   get_subject_permissions: "Permissions",
@@ -189,6 +207,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   top_resources: "Resource ranking",
   get_cluster_audit: "Posture findings",
   get_cluster_upgrade_readiness: "Upgrade readiness",
+  get_runtime_versions: "Runtime versions",
   list_helm_releases: "Helm releases",
   list_packages: "Installed packages",
   search: "Search results",
@@ -281,6 +300,8 @@ export class ProjectionBuilder {
   readonly projectedSources = new Set<string>();
   readonly checkedSources = new Set<string>();
   readonly limitedSources = new Set<string>();
+  readonly connectorRecoveryBySource = new Map<string, DiagnosisResourceRef>();
+
   readonly semanticCoverageBySource = new Map<
     string,
     Set<InvestigationSemanticDomain>
@@ -507,6 +528,14 @@ export function addNarrowHint(
   source: InvestigationEvidenceSource,
   value: Record<string, unknown>,
 ): void {
+  if (value.relatedIssuesTruncated === true) {
+    builder.limit(
+      source,
+      "Related Issues",
+      "Radar returned part of the related Issues; more findings may exist.",
+      "truncated",
+    );
+  }
   if (nonEmptyString(value.narrowHint)) {
     const label = investigationResultLabel(source);
     builder.limit(
@@ -518,12 +547,26 @@ export function addNarrowHint(
     );
   }
 }
+export function addUncheckedIssueLimitations(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  gaps: UncheckedSource[] | undefined,
+): void {
+  for (const line of uncheckedSourceLines(gaps)) {
+    builder.limit(source, "Issue scan", line, "unknown");
+  }
+}
 function addResourceContextLimitations(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   context: InvestigationResourceContext | undefined,
 ): void {
   if (!context) return;
+  addUncheckedIssueLimitations(
+    builder,
+    source,
+    context.issueSummary?.unchecked,
+  );
   for (const value of Array.isArray(context.omitted) ? context.omitted : []) {
     const omitted = record(value);
     if (
@@ -667,7 +710,9 @@ export function addResourceObservation(
       (available !== undefined && available < desired) ||
       (replicas?.unavailable ?? 0) > 0);
   const adverseCondition = (context?.statusSummary?.conditions ?? []).some(
-    (condition) => defaultConditionTone(condition) === "fail",
+    (condition) =>
+      (getCrossplaneConditionTone(resource, condition) ??
+        defaultConditionTone(condition)) === "fail",
   );
   const gitOpsAdverse = Boolean(
     gitOpsDiagnosis &&
@@ -700,6 +745,11 @@ export function addResourceObservation(
       : warnings.length > 0
         ? "warning"
         : "neutral";
+  // A Pod/template difference is listed with the warnings but does not set
+  // the tone: admission defaults (LimitRange, injected sidecars) produce it on
+  // healthy Pods.
+  const divergence = templateDivergenceWarning(context);
+  if (divergence) warnings = [...warnings, divergence];
   const namespace = resource.metadata.namespace;
   const identity = `${resource.apiVersion}:${resource.kind}:${namespace ?? ""}:${resource.metadata.name}`;
   builder.observe(identity, "resource", source, {
@@ -723,6 +773,21 @@ export function addResourceObservation(
     },
   });
   addResourceContextLimitations(builder, source, context);
+  addRelatedFindings(builder, source, context, relevance);
+}
+// The live Pod spec differing from its template is context, not a fault, so
+// it reads as a line on the resource card rather than a finding of its own.
+function templateDivergenceWarning(
+  context: InvestigationResourceContext | undefined,
+): string | undefined {
+  const divergence = context?.templateDivergence;
+  const first = divergence?.differences?.[0];
+  if (!divergence || !nonEmptyString(first)) return undefined;
+  const scope = divergence.examplePod
+    ? `${divergence.podsDiffering} of ${divergence.podsCompared} compared Pods${divergence.podsCapped ? " (the most recent)" : ""} differ from their template${divergence.podsNotCompared ? `, ${divergence.podsNotCompared} more not compared` : ""}`
+    : "Live Pod spec differs from its template";
+  const more = divergence.differences.length > 1 ? " (and more)" : "";
+  return `${scope}: ${first}${more}`;
 }
 export function addIssueObservation(
   builder: ProjectionBuilder,
@@ -730,6 +795,7 @@ export function addIssueObservation(
   value: Issue,
   producerRelevance: InvestigationEvidenceRelevance = "broader",
   pods?: string[],
+  associatedVia?: DiagnosisResourceRef,
 ): void {
   const matchesTarget = resourceMatchesTarget(builder.target, {
     kind: value.kind,
@@ -752,6 +818,7 @@ export function addIssueObservation(
     data: {
       type: "issue",
       issue: value,
+      ...(associatedVia ? { associatedVia } : {}),
       relevance,
       ...(pods && pods.length > 0 ? { pods } : {}),
     },
@@ -991,4 +1058,81 @@ export function invalidPayload(
     "Radar couldn't summarize this investigation step. Review it in Activity.",
     "unknown",
   );
+}
+
+function addRelatedFindings(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  context: InvestigationResourceContext | undefined,
+  relevance: InvestigationEvidenceRelevance,
+): void {
+  const raw = context?.relatedFindings;
+  if (raw === undefined) return;
+  if (!Array.isArray(raw)) {
+    invalidPayload(builder, source, "Related findings");
+    return;
+  }
+  for (const entry of raw) {
+    const value = record(entry);
+    const associatedVia = resourceRef(value?.associatedVia);
+    const kinds = record(value?.kinds);
+    const findingsRaw = value?.findings;
+    const findings = Array.isArray(findingsRaw)
+      ? findingsRaw.map(issue).filter((item): item is Issue => Boolean(item))
+      : [];
+    if (
+      !value ||
+      !associatedVia ||
+      !kinds ||
+      !nonNegativeInteger(kinds.count) ||
+      kinds.count === 0 ||
+      kinds.extent !== undefined ||
+      (kinds.names !== undefined &&
+        (!Array.isArray(kinds.names) ||
+          kinds.names.length !== kinds.count ||
+          !kinds.names.every((item) => {
+            const ref = record(item);
+            return (
+              ref &&
+              nonEmptyString(ref.kind) &&
+              (ref.group === undefined || typeof ref.group === "string")
+            );
+          }))) ||
+      !Array.isArray(value.gaps) ||
+      !value.gaps.every((gap) => nonEmptyString(record(gap)?.code)) ||
+      !nonNegativeInteger(value.checked) ||
+      !nonNegativeInteger(value.unknown) ||
+      value.unknown > value.checked ||
+      (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+      (findingsRaw !== undefined &&
+        (!Array.isArray(findingsRaw) || findings.length !== findingsRaw.length))
+    ) {
+      invalidPayload(builder, source, "Related findings group");
+      continue;
+    }
+    for (const finding of findings) {
+      addIssueObservation(
+        builder,
+        source,
+        finding,
+        relevance === "target" ? "producer-related" : "broader",
+        undefined,
+        associatedVia,
+      );
+    }
+    const group = {
+      ...value,
+      associatedVia,
+      findings,
+    } as unknown as RelatedFindingsGroup;
+    const anchor = `${associatedVia.kind} ${associatedVia.namespace ? associatedVia.namespace + "/" : ""}${associatedVia.name}${associatedVia.group ? " (" + associatedVia.group + ")" : ""}`;
+    for (const limit of relatedFindingLimitations(group)) {
+      builder.limit(
+        source,
+        `Related findings via ${anchor}`,
+        limit.message,
+        limit.kind,
+      );
+    }
+  }
 }

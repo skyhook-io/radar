@@ -10,6 +10,7 @@ interface ValuesDiffPreviewProps {
   onClose: () => void
   onApply: () => void
   isApplying: boolean
+  notice?: string
   title?: string
   applyLabel?: string
 }
@@ -19,6 +20,7 @@ export function ValuesDiffPreview({
   onClose,
   onApply,
   isApplying,
+  notice,
   title = 'Preview Changes',
   applyLabel = 'Apply Changes',
 }: ValuesDiffPreviewProps) {
@@ -81,7 +83,8 @@ export function ValuesDiffPreview({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-4">
+        {notice && <p className="px-4 py-2 text-sm break-words text-theme-text-secondary">{notice}</p>}
+      <div className="flex-1 overflow-auto p-4">
           {hasChanges ? (
             <div className="space-y-4">
               <p className="text-sm text-theme-text-secondary">

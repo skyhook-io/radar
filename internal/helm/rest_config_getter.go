@@ -10,6 +10,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
@@ -32,22 +35,27 @@ import (
 // is already using, so Helm can't drift to a different cluster or
 // fabricate a localhost target.
 type restConfigGetter struct {
-	config         *rest.Config
-	namespace      string
-	impersonate    string
-	impersonateGrp []string
+	config    *rest.Config
+	namespace string
+	user      *pkgauth.User
 
 	mu        sync.Mutex
 	discovery discovery.CachedDiscoveryInterface
 	mapper    meta.RESTMapper
 }
 
-func newRESTConfigGetter(cfg *rest.Config, namespace, user string, groups []string) *restConfigGetter {
+func newRESTConfigGetter(cfg *rest.Config, namespace string, user *pkgauth.User) *restConfigGetter {
+	if user != nil {
+		// Copy so a future Helm/middleware mutation can't bleed into a
+		// different user's request via the captured slices.
+		u := *user
+		u.Groups = append([]string(nil), user.Groups...)
+		user = &u
+	}
 	return &restConfigGetter{
-		config:         cfg,
-		namespace:      namespace,
-		impersonate:    user,
-		impersonateGrp: groups,
+		config:    cfg,
+		namespace: namespace,
+		user:      user,
 	}
 }
 
@@ -55,16 +63,10 @@ func (g *restConfigGetter) ToRESTConfig() (*rest.Config, error) {
 	if g.config == nil {
 		return nil, fmt.Errorf("no in-cluster rest config available")
 	}
-	cfg := rest.CopyConfig(g.config)
-	if g.impersonate != "" {
-		// Copy groups so a future Helm/middleware mutation can't bleed
-		// into a different user's request via the captured slice.
-		cfg.Impersonate = rest.ImpersonationConfig{
-			UserName: g.impersonate,
-			Groups:   append([]string(nil), g.impersonateGrp...),
-		}
+	if g.user != nil {
+		return k8s.UserRESTConfig(g.config, g.user), nil
 	}
-	return cfg, nil
+	return rest.CopyConfig(g.config), nil
 }
 
 func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterface, error) {

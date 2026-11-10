@@ -77,7 +77,7 @@ describe('getCNPGObjectStoreStatus', () => {
   it('is unknown, not healthy, when no server has reported', () => {
     const s = getCNPGObjectStoreStatus(store({}))
     expect(s.level).toBe('unknown')
-    expect(s.text).toBe('No backups yet')
+    expect(s.text).toBe('No backup recorded')
   })
 
   it('is unhealthy when any server is failing since its last success', () => {

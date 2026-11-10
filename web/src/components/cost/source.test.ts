@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { costConfigurationAction, isCostConfigurable, costDataThroughLabel, costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, isCostDiscoveryPending } from './source'
+import { COST_SOURCE_OPTIONS, costSourcePreferenceLabel, costConfigurationAction, isCostConfigurable, costDataThroughLabel, costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, isCostDiscoveryPending } from './source'
 
 describe('cost source presentation', () => {
   it('routes missing sources to one applicable previous connection', () => {
@@ -12,6 +12,11 @@ describe('cost source presentation', () => {
     expect(costConfigurationAction('authentication_error', { ...both, cost: undefined }).label).toBe('Configure cost source')
     expect(costConfigurationAction('configuration_mismatch', both).section).toBe('cost')
   })
+  it('sends a turned-off port-forward to the integration that needed it', () => {
+    const both = { metrics: 'previous', cost: 'previous', explicitCostBackend: true } as const
+    expect(costConfigurationAction('metrics_port_forward_disabled', both).section).toBe('prometheus')
+    expect(costConfigurationAction('kubecost_port_forward_disabled', both).section).toBe('cost')
+  })
   it('keeps the neutral action and explains reuse in the note', () => {
     const copy = { metrics: 'copy', explicitCostBackend: false } as const
     expect(costConfigurationAction('no_prometheus', copy)).toMatchObject({ section: 'prometheus', label: 'Configure metrics' })
@@ -23,13 +28,20 @@ describe('cost source presentation', () => {
     expect(isCostConfigurable(reason)).toBe(false)
   })
   it('distinguishes Prometheus windows from Kubecost ETL freshness', () => {
-    expect(costSourceLabel('prometheus')).toBe('OpenCost via Prometheus')
-    expect(costSourceLabel('kubecost')).toBe('Kubecost Aggregator')
+    expect(costSourceLabel('prometheus')).toBe('OpenCost metrics')
+    expect(costSourceLabel('kubecost')).toBe('Kubecost')
     expect(costFreshnessLabel('prometheus', '1h')).toBe('last 1h average')
     expect(costFreshnessLabel('kubecost', '1h', '2026-08-26T13:58:00Z')).toContain('1-hour allocation average')
     expect(costFreshnessLabel('kubecost', '1d', '2026-08-26T13:58:00Z')).toContain('1-day allocation average')
     expect(costDataThroughLabel('2026-08-26T13:58:00Z')).toContain('2026')
     expect(costDataThroughLabel('invalid')).toBe('')
+  })
+
+  it('names cost-source preferences the same way in every install type', () => {
+    expect(COST_SOURCE_OPTIONS.map(option => option.label)).toEqual(['Automatic', 'OpenCost metrics', 'Kubecost'])
+    expect(costSourcePreferenceLabel(undefined)).toBe('Automatic')
+    expect(costSourcePreferenceLabel('')).toBe('Automatic')
+    expect(costSourcePreferenceLabel('prometheus')).toBe('OpenCost metrics')
   })
 
   it('labels fallback allocation windows without calling a daily average current', () => {
@@ -50,4 +62,14 @@ describe('cost source presentation', () => {
     expect(costIntegrationUnavailableMessage('source_unavailable', false)).not.toContain('Settings')
     expect(costIntegrationUnavailableMessage('authentication_error', false)).not.toContain('Settings')
   })
+})
+
+it('gives connection guidance without claiming an unreachable source ran a query', () => {
+  const standalone = costIntegrationUnavailableMessage('query_error', true)
+  expect(standalone).toContain('Settings → Metrics')
+  expect(standalone).toContain('Settings → Cost')
+  expect(standalone).not.toContain('query failed')
+  const embedded = costIntegrationUnavailableMessage('query_error', false)
+  expect(embedded).toContain('Ask your operator')
+  expect(embedded).not.toContain('Settings')
 })

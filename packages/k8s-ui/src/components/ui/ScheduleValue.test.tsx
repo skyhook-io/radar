@@ -74,6 +74,11 @@ describe('TimeValue', () => {
     expect(html).not.toMatch(/\dT\d\d:\d\d:\d\dZ/)
   })
 
+  // A bare "6h" under "Started" or "Finished" reads as a duration.
+  it('says the moment was in the past', () => {
+    expect(render(<TimeValue timestamp={new Date(Date.now() - 6 * 3600_000).toISOString()} />)).toContain('6h ago')
+  })
+
   it('says so when the thing never happened', () => {
     expect(render(<TimeValue timestamp={undefined} fallback="Never" />)).toContain('Never')
   })

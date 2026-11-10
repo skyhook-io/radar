@@ -7,6 +7,7 @@ import {
   getVirtualServiceHostsList,
   getVirtualServiceGatewaysList,
   getVirtualServiceHttpRoutes,
+  resolveIstioServiceHost,
   getVirtualServiceTcpRoutes,
   getVirtualServiceTlsRoutes,
   getVirtualServiceRouteCount,
@@ -14,10 +15,11 @@ import {
 
 interface IstioVirtualServiceRendererProps {
   data: any
+  serviceDomain?: string
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualServiceRendererProps) {
+export function IstioVirtualServiceRenderer({ data, onNavigate, serviceDomain }: IstioVirtualServiceRendererProps) {
   const status = getVirtualServiceStatus(data)
   const hosts = getVirtualServiceHostsList(data)
   const gateways = getVirtualServiceGatewaysList(data)
@@ -148,6 +150,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                       {route.route.map((dest: any, di: number) => {
                         const weight = dest.weight ?? (route.route.length === 1 ? 100 : undefined)
                         const destHost = dest.destination?.host || ''
+                        const service = resolveIstioServiceHost(destHost, ns, serviceDomain)
                         const destPort = dest.destination?.port?.number
                         const destSubset = dest.destination?.subset
 
@@ -164,13 +167,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                                 <span className="text-theme-text-secondary font-medium">{weight}%</span>
                               </div>
                             )}
-                            <ResourceLink
-                              name={destHost.split('.')[0]}
-                              kind="services"
-                              namespace={destHost.includes('.') ? destHost.split('.')[1] : ns}
-                              label={destHost}
-                              onNavigate={onNavigate}
-                            />
+                            {service ? <ResourceLink name={service.name} kind="services" group="" namespace={service.namespace} label={destHost} onNavigate={onNavigate} /> : <span className="text-theme-text-primary break-all">{destHost}</span>}
                             {destPort && (
                               <span className="text-theme-text-tertiary">:{destPort}</span>
                             )}

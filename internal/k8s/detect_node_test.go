@@ -1,9 +1,12 @@
 package k8s
 
 import (
+	"fmt"
+	"testing"
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"testing"
 )
 
 func TestDetectNodeProblems(t *testing.T) {
@@ -49,7 +52,7 @@ func TestDetectNodeProblems(t *testing.T) {
 					},
 				},
 			},
-			wantCount:    2,
+			wantCount:    1,
 			wantSeverity: "critical",
 			wantProblem:  "NotReady",
 		},
@@ -66,9 +69,7 @@ func TestDetectNodeProblems(t *testing.T) {
 					},
 				},
 			},
-			wantCount:    1,
-			wantSeverity: "medium",
-			wantProblem:  "Cordoned",
+			wantCount: 0,
 		},
 		{
 			name: "pressure conditions",
@@ -185,5 +186,39 @@ func TestDetectVersionSkew(t *testing.T) {
 				t.Errorf("MaxVersion = %q, want %q", got.MaxVersion, tt.wantMax)
 			}
 		})
+	}
+}
+
+func TestNodeRemovalDoesNotHideFailures(t *testing.T) {
+	now := time.Now().UTC()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "removing"},
+		Spec:       corev1.NodeSpec{Unschedulable: true, Taints: []corev1.Taint{{Key: "ToBeDeletedByClusterAutoscaler", Value: fmt.Sprint(now.Add(-time.Minute).Unix()), Effect: corev1.TaintEffectNoSchedule}}},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: metav1.NewTime(now.Add(-10 * time.Second)), Message: "Kubelet stopped posting"}}},
+	}
+	if got := DetectNodeProblems([]*corev1.Node{node}); len(got) != 0 {
+		t.Fatalf("normal removal reported as failure: %+v", got)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-5 * time.Minute))
+	if got := DetectNodeProblems([]*corev1.Node{node}); len(got) != 1 || got[0].Problem != "NotReady" || got[0].Severity != "critical" {
+		t.Fatalf("preexisting failure hidden: %+v", got)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-10 * time.Second))
+	node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{Type: corev1.NodeDiskPressure, Status: corev1.ConditionTrue})
+	if got := DetectNodeProblems([]*corev1.Node{node}); len(got) != 1 || got[0].Problem != "DiskPressure" {
+		t.Fatalf("pressure hidden: %+v", got)
+	}
+	node.Status.Conditions = node.Status.Conditions[:1]
+	node.Spec.Taints[0].Value = fmt.Sprint(now.Add(-15 * time.Minute).Unix())
+	if got := DetectNodeProblems([]*corev1.Node{node}); len(got) != 1 || got[0].Problem != "Removal delayed" || got[0].Severity != "high" {
+		t.Fatalf("delayed removal hidden: %+v", got)
+	}
+	node.Spec.Taints[0].Value = fmt.Sprint(now.Add(-31 * time.Minute).Unix())
+	if got := DetectNodeProblems([]*corev1.Node{node}); len(got) != 1 || got[0].Severity != "critical" {
+		t.Fatalf("long removal hidden: %+v", got)
+	}
+	node.DeletionTimestamp = &metav1.Time{Time: now.Add(-time.Minute)}
+	if got := DetectNodeProblems([]*corev1.Node{node}); len(got) != 1 || got[0].Problem != "Removal delayed" || got[0].Severity != "critical" {
+		t.Fatalf("deletion reset the removal clock: %+v", got)
 	}
 }

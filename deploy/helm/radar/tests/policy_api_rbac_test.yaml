@@ -1,0 +1,55 @@
+suite: Policy API collector RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: reads the EKS VPC CNI and Antrea policy kinds by default
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["networking.k8s.aws"]
+            resources: ["applicationnetworkpolicies", "clusternetworkpolicies"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["crd.antrea.io"]
+            resources: ["networkpolicies", "clusternetworkpolicies"]
+            verbs: ["get", "list", "watch"]
+
+  - it: drops the EKS VPC CNI policy reads when awsNetworkPolicy is off
+    set:
+      rbac.crdGroups.awsNetworkPolicy: false
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "networking.k8s.aws")]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["crd.antrea.io"]
+            resources: ["networkpolicies", "clusternetworkpolicies"]
+            verbs: ["get", "list", "watch"]
+
+  - it: drops the Antrea policy reads when antrea is off
+    set:
+      rbac.crdGroups.antrea: false
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "crd.antrea.io")]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["networking.k8s.aws"]
+            resources: ["applicationnetworkpolicies", "clusternetworkpolicies"]
+            verbs: ["get", "list", "watch"]
+
+  - it: covers both through the wildcard when crdGroups.all is on
+    set:
+      rbac.crdGroups.all: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]

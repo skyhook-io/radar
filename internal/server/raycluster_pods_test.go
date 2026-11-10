@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func TestRayClusterPodsRequestContract(t *testing.T) {
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest("GET", "/api/workloads/rayclusters/default/cluster/pods?ownerUID=current&workerGroup=workers", nil))
 	var result struct {
-		Pods      []WorkloadPodInfo
+		Pods      []podlogs.PodInfo
 		Total     int
 		Truncated bool
 	}

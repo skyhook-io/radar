@@ -56,7 +56,13 @@ export interface GitOpsInsightSummary {
   source?: string
   targetRevision?: string
   lastRevision?: string
+  // Revision(s) deployed by the latest successful marked rollback, set only while
+  // effective auto-sync is off. Absence does not mean no rollback happened.
+  rollbackRevision?: string
   lastReconcile?: string
+  lastApplied?: string
+  lastApplyAttempt?: string
+  lastDeployed?: string
   partialReason?: string
   // Human-readable sync mode for the chip in the status strip.
   // Argo: "Manual" | "Auto" | "Auto · prune" | "Auto · self-heal" | "Auto · prune · self-heal"
@@ -84,8 +90,8 @@ export interface GitOpsInsightSummary {
   // controller's verdicts are not in the Application object and any
   // per-resource health shown is Radar's own read.
   resourceHealthMode?: GitOpsHealthMode
-  // The Application deploys to another cluster; Radar derives nothing about
-  // its resources from here.
+  // The current destination or recorded Argo comparison is elsewhere;
+  // Radar derives nothing from same-named local resources.
   remoteDestination?: boolean
   // Per-resource health came from Argo CD's API server: the verdicts shown
   // are Argo's even though the Application object doesn't carry them.
@@ -93,6 +99,12 @@ export interface GitOpsInsightSummary {
   // The controller's API server was asked and didn't answer usefully — why,
   // in the user's words. Only set when the integration is configured.
   resourceHealthApiError?: string
+  // The host is still connecting to the controller's API server; ask again
+  // shortly.
+  resourceHealthApiPending?: boolean
+  // The host couldn't reach the controller's API server and is retrying;
+  // ask again now and then.
+  resourceHealthApiRetrying?: boolean
 }
 
 export interface GitOpsIgnoredDifferences {
@@ -118,6 +130,14 @@ export interface GitOpsIssue {
   rawMessage?: string
   refs?: GitOpsInsightRef[]
   action?: string
+  /** Optional presentation split; action always retains the complete guidance. */
+  actionPrimary?: string
+  actionSecondaryTitle?: string
+  actionSecondary?: string[]
+  // Set when syncing would prune every managed
+  // resource or take resources over from another Application. Shown as a
+  // warning ahead of a failed operation's cause; resource rows defer sync advice to it.
+  hazard?: string
   // Plain-English root cause when the message matched a recognized error
   // pattern. Empty for unrecognized messages — UI falls back to the raw message.
   cause?: string
@@ -164,6 +184,7 @@ export interface GitOpsChange {
   hookPhase?: string
   hasDesired: boolean
   hasLive: boolean
+  missing?: boolean
   // Structured per-field diff between the desired state (parsed from
   // kubectl.kubernetes.io/last-applied-configuration) and the live spec.
   // Undefined when the diff couldn't be computed (no annotation, SSA-applied
@@ -177,6 +198,8 @@ export interface GitOpsChange {
   recentEvents?: GitOpsEventSummary[]
   partial: boolean
   partialNote?: string
+  // A Flux source or dependsOn target the root consumes but doesn't manage.
+  dependency?: boolean
 }
 
 export interface GitOpsDrift {
@@ -225,6 +248,12 @@ export interface GitOpsHistoryItem {
   rawMessage?: string
   source?: string
   initiatedBy?: string
+  // Whether an Argo CD history entry has an ID and recorded source(s), independently
+  // of auto-sync, lifecycle, in-flight operations and RBAC. Absent where not
+  // applicable (current-operation and Flux rows), or not supplied by Radar.
+  rollbackable?: boolean
+  // Compatibility warning: the current Application or history entry uses plural sources.
+  rollbackMultiSourceWarning?: boolean
 }
 
 export interface GitOpsCapabilities {
@@ -247,6 +276,12 @@ export interface GitOpsCapabilities {
   // tell "not set up" (offer Connect) from "set up but disconnected" (offer
   // Reconnect) — instead of advertising a diff that would fail.
   argoConfigured?: boolean
+  // Configured, and the host is still making the first connection; ask
+  // again shortly instead of reporting the diff as down.
+  argoConnecting?: boolean
+  // Configured, the connection failed in a way that may pass on its own, and
+  // the host is retrying; ask again now and then.
+  argoRetrying?: boolean
   // True on an Argo CD Application detail when the integration is connected,
   // meaning the revision-metadata endpoint can resolve Git commit details
   // (author, message, signature) for this app's deployed revisions.
@@ -269,13 +304,16 @@ export interface ArgoRevisionMetadata {
 // Response of GET /api/argo/applications/{ns}/{name}/resource-diff. `desired`
 // is the Git-rendered manifest, `live` the normalized cluster state — both YAML
 // for the line-by-line view. `fieldEntries` is the same diff structured per
-// path for a compact summary. `redacted` is set when Secret values were masked
+// path for a compact summary; Radars before the list was made non-null send
+// null when it is empty. `fieldEntriesTruncated` is set when the list was cut
+// at the server's entry cap. `redacted` is set when Secret values were masked
 // server-side; `hook` marks Argo sync-hook resources.
 export interface GitOpsResourceDiff {
   source: string
   desired: string
   live: string
-  fieldEntries: GitOpsResourceDiffFieldEntry[]
+  fieldEntries: GitOpsResourceDiffFieldEntry[] | null
+  fieldEntriesTruncated?: boolean
   redacted: boolean
   hook: boolean
 }

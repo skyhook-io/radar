@@ -20,6 +20,11 @@ var ErrWorkloadAccessDenied = errors.New("workload access denied")
 // permissions, and reporting a warming cache as a denial sends an operator
 // (or the agent) after an RBAC problem that does not exist.
 var ErrWorkloadCacheWarming = errors.New("workload cache is still loading")
+
+// ErrWorkloadNotFound is a confirmed absence: the covering, synced cache has
+// no such workload. Charts read it as "no current Pods"; a request naming one
+// workload reports it as not found.
+var ErrWorkloadNotFound = errors.New("workload not found")
 var ErrWorkloadSelectorUnavailable = errors.New("workload selector unavailable")
 
 // GetWorkloadSelector returns the label selector for a workload from cache.
@@ -165,9 +170,14 @@ func rolloutPodSelector(selector *metav1.LabelSelector) *metav1.LabelSelector {
 }
 
 // GetContainersForPod returns container names to target for log collection.
-// If selectedContainer is non-empty, validates it against containers.
-// If includeInit is true, also checks init containers.
-// If selectedContainer is empty, returns all main container names.
+// A non-empty selectedContainer is validated against the Pod's containers, and
+// against its init containers when includeInit is set. An empty one means every
+// main container and, with includeInit, each init container that is failing
+// while the Pod is still initializing: the main containers have no output then,
+// and the failure is why the Pod is stuck. Init steps that succeeded or are
+// still making progress are left out, so routine startup during a rollout
+// doesn't flood the merged view; they stay selectable by name. A native sidecar
+// that has started isn't blocking initialization and is left out too.
 func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit bool) []string {
 	if selectedContainer != "" {
 		for _, c := range pod.Spec.Containers {
@@ -185,8 +195,50 @@ func GetContainersForPod(pod *corev1.Pod, selectedContainer string, includeInit 
 		return nil
 	}
 	containers := make([]string, 0, len(pod.Spec.Containers))
+	if includeInit && !podInitialized(pod) {
+		sidecars := map[string]bool{}
+		for _, c := range pod.Spec.InitContainers {
+			if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
+				sidecars[c.Name] = true
+			}
+		}
+		for _, status := range pod.Status.InitContainerStatuses {
+			if sidecars[status.Name] && status.Started != nil && *status.Started {
+				continue
+			}
+			if initContainerFailing(status, sidecars[status.Name]) {
+				containers = append(containers, status.Name)
+			}
+		}
+	}
 	for _, c := range pod.Spec.Containers {
 		containers = append(containers, c.Name)
 	}
 	return containers
+}
+
+// initContainerFailing reports an init container whose last run failed, or
+// that is backing off or retrying after one. A run fails when it exits non-zero
+// or is OOM-killed, as the kubelet judges it; a native sidecar is restarted
+// whatever its exit code, so any exit before it has started counts.
+func initContainerFailing(status corev1.ContainerStatus, sidecar bool) bool {
+	failed := func(run *corev1.ContainerStateTerminated) bool {
+		return run != nil && (sidecar || run.ExitCode != 0 || run.Reason == "OOMKilled")
+	}
+	if terminated := status.State.Terminated; terminated != nil {
+		return failed(terminated)
+	}
+	if waiting := status.State.Waiting; waiting != nil && waiting.Reason == "CrashLoopBackOff" {
+		return true
+	}
+	return failed(status.LastTerminationState.Terminated)
+}
+
+func podInitialized(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodInitialized {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return len(pod.Spec.InitContainers) == 0
 }

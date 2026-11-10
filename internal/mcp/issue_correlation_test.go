@@ -23,26 +23,48 @@ func initCorrelationStore(t *testing.T) timeline.EventStore {
 	t.Helper()
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
-	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 200}); err != nil {
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 2000}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
 	// Backdate observation past the full window: a fresh store has watched
 	// for ~0s and correlation correctly refuses to claim anything.
 	timeline.SetObservationStartForTest(time.Now().Add(-2 * time.Hour))
+	// The timeline fills only while connected, and get_changes refuses to
+	// answer otherwise.
+	setConnectedForTest(t)
 	return timeline.GetStore()
 }
 
-// A store that has only just started observing must emit NO markers — in
-// either direction — rather than claim an hour-long window it never watched.
-func TestAttachIssueChangeCorrelation_SkipsOnShortObservation(t *testing.T) {
-	initCorrelationStore(t)
-	timeline.SetObservationStartForTest(time.Now().Add(-90 * time.Second))
+func setConnectedForTest(t *testing.T) {
+	t.Helper()
+	prev := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: prev.Context})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+}
 
-	resp := issues.ListResponse{Issues: []issuesapi.Issue{criticalIssue("Deployment", "web")}}
+// A store that has only just started observing must not claim "no recent
+// changes", but the changes it did record are still evidence.
+func TestAttachIssueChangeCorrelation_ShortObservation(t *testing.T) {
+	store := initCorrelationStore(t)
+	timeline.SetObservationStartForTest(time.Now().Add(-90 * time.Second))
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "web-spec", Timestamp: time.Now().Add(-30 * time.Second),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Deployment", APIVersion: "apps/v1", Namespace: "shop", Name: "web",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.template.spec.containers[web].image", OldValue: "web:1", NewValue: "web:2"}}, Summary: "image web:1→web:2"},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{criticalIssue("Deployment", "web"), criticalIssue("Deployment", "api")}}
 	attachIssueChangeCorrelation(context.Background(), &resp)
 
-	if resp.Issues[0].NoRecentChanges != nil || len(resp.Issues[0].CorrelatedChanges) > 0 {
-		t.Fatalf("90s-old store must not claim anything: %+v", resp.Issues[0])
+	if web := resp.Issues[0]; len(web.CorrelatedChanges) != 1 || web.NoRecentChanges != nil {
+		t.Fatalf("recorded change must be attached: %+v", web)
+	}
+	if api := resp.Issues[1]; api.NoRecentChanges != nil || len(api.CorrelatedChanges) > 0 {
+		t.Fatalf("90s-old store must not claim no recent changes: %+v", api)
 	}
 }
 
@@ -146,7 +168,7 @@ func TestCorrelationWindow_ClampsToObservation(t *testing.T) {
 	}{
 		{"observed longer than default window", 2 * time.Hour, meaningfulchanges.DefaultSince},
 		{"clamped to observation time", 30 * time.Minute, 30 * time.Minute},
-		{"below minimum observation", 4 * time.Minute, 0},
+		{"below minimum observation", 4 * time.Minute, 4 * time.Minute},
 		{"zero observation start", 0, 0},
 	}
 	for _, tt := range cases {
@@ -173,13 +195,13 @@ func TestCorrelationWindow_ClampsToObservation(t *testing.T) {
 }
 
 // When the subject's candidate fetch saturates (churn-heavy subjects can
-// exceed the newest-N window in an hour), an empty filtered result is
+// exceed the fetch bound in an hour), an empty filtered result is
 // UNKNOWN: emitting no_recent_changes would steer the agent away from a real
 // change the fetch never saw.
 func TestAttachIssueChangeCorrelation_OmitsMarkerOnSaturatedFetch(t *testing.T) {
 	store := initCorrelationStore(t)
 	now := time.Now()
-	for i := 0; i < 100; i++ {
+	for i := 0; i < meaningfulchanges.NamedFetchBound+1; i++ {
 		if err := store.Append(context.Background(), timeline.TimelineEvent{
 			ID: fmt.Sprintf("churn-%d", i), Timestamp: now.Add(-time.Duration(i) * time.Second),
 			Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),

@@ -1,10 +1,11 @@
 package server
 
 import (
-	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/pkg/topology"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 func TestRelationshipTopologyHidesUnreadableEndpointsWithoutMutatingCache(t *testing.T) {

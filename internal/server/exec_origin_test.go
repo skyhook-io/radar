@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 func TestWebSocketOriginPolicy(t *testing.T) {
@@ -40,7 +41,8 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 		{name: "unrelated development port", server: Server{devMode: true}, host: "localhost:9280", origin: "http://localhost:9274", fetchSite: "same-site", want: false},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			scheme := "http"
 			if tt.tls {
@@ -56,8 +58,8 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 			if tt.forwardedProto != "" {
 				req.Header.Set("X-Forwarded-Proto", tt.forwardedProto)
 			}
-			if got := tt.server.websocketOriginAllowed(req); got != tt.want {
-				t.Fatalf("websocketOriginAllowed() = %v, want %v", got, tt.want)
+			if got := tt.server.browserOriginAllowed(req); got != tt.want {
+				t.Fatalf("browserOriginAllowed() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -76,9 +78,11 @@ func TestUpgradeWebSocketUsesServerOriginPolicy(t *testing.T) {
 		{name: "foreign origin", origin: func(string) string { return "https://evil.example" }, wantOK: false},
 		{name: "authenticated Hub transport", origin: func(string) string { return "https://hub.example.com" }, fetchSite: "cross-site", tunnel: true, wantOK: true},
 		{name: "Vite development proxy", server: Server{devMode: true}, origin: func(string) string { return "http://localhost:9273" }, fetchSite: "same-site", wantOK: true},
+		{name: "trusted origin behind a Host-rewriting proxy", server: Server{trustedOrigins: trustedOriginSet(t, "http://radar.internal")}, origin: func(string) string { return "http://radar.internal" }, wantOK: true},
 	}
 
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := tt.server.upgradeWebSocket(w, r)
@@ -113,4 +117,17 @@ func TestUpgradeWebSocketUsesServerOriginPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func trustedOriginSet(t *testing.T, origins ...string) map[string]struct{} {
+	t.Helper()
+	set := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		normalized, ok := urlutil.NormalizeOrigin(origin)
+		if !ok {
+			t.Fatalf("urlutil.NormalizeOrigin(%q) failed", origin)
+		}
+		set[normalized] = struct{}{}
+	}
+	return set
 }

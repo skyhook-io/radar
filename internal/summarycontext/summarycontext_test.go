@@ -7,19 +7,24 @@
 package summarycontext
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/policyreports"
-	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // fakeIssuesProvider is a minimal issues.Provider for the BuildIssueIndex
@@ -32,6 +37,8 @@ import (
 // pin the actual bug.
 type fakeIssuesProvider struct {
 	problems []k8s.Detection
+	dynamic  map[schema.GroupVersionResource][]*unstructured.Unstructured
+	kinds    map[schema.GroupVersionResource]string
 }
 
 func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Detection {
@@ -53,6 +60,9 @@ func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Detection
 	}
 	return out
 }
+func (f *fakeIssuesProvider) DetectDynamicTerminatingProblems(_ []string, _ func(string, string, string) bool) []k8s.Detection {
+	return nil
+}
 func (f *fakeIssuesProvider) DetectCAPIProblems(_ []string) []k8s.Detection   { return nil }
 func (f *fakeIssuesProvider) DetectGitOpsProblems(_ []string) []k8s.Detection { return nil }
 func (f *fakeIssuesProvider) DetectMissingRefs(_ []string) []k8s.Detection    { return nil }
@@ -60,16 +70,22 @@ func (f *fakeIssuesProvider) DetectScheduling(_ []string) []k8s.Detection     { 
 func (f *fakeIssuesProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
 	return nil
 }
-func (f *fakeIssuesProvider) WatchedDynamic() []schema.GroupVersionResource { return nil }
-func (f *fakeIssuesProvider) ListDynamic(_ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
-	return nil, nil
+func (f *fakeIssuesProvider) WatchedDynamic() []schema.GroupVersionResource {
+	var out []schema.GroupVersionResource
+	for gvr := range f.dynamic {
+		out = append(out, gvr)
+	}
+	return out
 }
-func (f *fakeIssuesProvider) ListDynamicAllNamespaces(_ schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
-	return nil, nil
+func (f *fakeIssuesProvider) ListDynamic(gvr schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+	return f.dynamic[gvr], nil
 }
-func (f *fakeIssuesProvider) KindForGVR(_ schema.GroupVersionResource) string  { return "" }
-func (f *fakeIssuesProvider) KyvernoFindings() []policyreports.SubjectFindings { return nil }
-func (f *fakeIssuesProvider) KyvernoStatus() string                            { return "" }
+func (f *fakeIssuesProvider) ListDynamicAllNamespaces(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
+	return f.dynamic[gvr], nil
+}
+func (f *fakeIssuesProvider) KindForGVR(gvr schema.GroupVersionResource) string { return f.kinds[gvr] }
+func (f *fakeIssuesProvider) KyvernoFindings() []policyreports.SubjectFindings  { return nil }
+func (f *fakeIssuesProvider) KyvernoStatus() string                             { return "" }
 
 func fmtPodName(i int) string { return fmt.Sprintf("pod-%05d", i) }
 
@@ -81,10 +97,10 @@ func fmtPodName(i int) string { return fmt.Sprintf("pod-%05d", i) }
 // the moment a user has two operators each shipping a kind named
 // "Cluster" in the same namespace.
 func TestIssueIndexKey_GroupAware(t *testing.T) {
-	idx := IssueIndex{}
+	idx := &IssueIndex{counts: map[string]int{}}
 	// Same kind+ns+name, different groups — must be independent buckets.
-	idx[issueIndexKey("", "Service", "prod", "api")] = 2
-	idx[issueIndexKey("serving.knative.dev", "Service", "prod", "api")] = 5
+	idx.counts[issueIndexKey("", "Service", "prod", "api")] = 2
+	idx.counts[issueIndexKey("serving.knative.dev", "Service", "prod", "api")] = 5
 
 	if got := idx.Count("", "Service", "prod", "api"); got != 2 {
 		t.Errorf("core Service count = %d, want 2 (Knative bucket bleeding through?)", got)
@@ -112,7 +128,7 @@ func TestBuildIssueIndex_GroupAware(t *testing.T) {
 			{Kind: "Service", Group: "serving.knative.dev", Namespace: "prod", Name: "api", Reason: "RouteNotReady", Severity: "warning"},
 		},
 	}
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	// The index counts GROUPED issues (consistent with the issues tool), not flat
 	// rows: the two Knative rows share subject+category and fold into one grouped
 	// issue → count 1. The core Service is a distinct group → its own key (the
@@ -122,6 +138,54 @@ func TestBuildIssueIndex_GroupAware(t *testing.T) {
 	}
 	if got := idx.Count("serving.knative.dev", "Service", "prod", "api"); got != 1 {
 		t.Errorf("Knative Service count = %d, want 1 (two same-category rows fold to one grouped issue)", got)
+	}
+}
+
+// An issue about another subject counts on each resource it affects that the
+// caller can read, as the related-issues lookup shows it there.
+func TestBuildIssueIndex_CountsAffectedResources(t *testing.T) {
+	p := &fakeIssuesProvider{problems: []k8s.Detection{{
+		Kind: "Secret", Namespace: "shop", Name: "shop-tls", Severity: "critical", Reason: k8s.TLSCertificateExpiredReason,
+		AffectedRefs: []issuesapi.Ref{
+			{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "shop", Name: "web"},
+			{Group: "networking.k8s.io", Kind: "Ingress", Namespace: "shop", Name: "api"},
+		},
+	}}}
+	readAll := func(issues.Ref) bool { return true }
+	idx := BuildIssueIndex(p, issues.Filters{CanReadRelated: readAll})
+	for _, name := range []string{"web", "api"} {
+		if got := idx.Count("networking.k8s.io", "Ingress", "shop", name); got != 1 {
+			t.Errorf("Ingress %s count = %d, want 1", name, got)
+		}
+	}
+	if got := idx.Count("", "Secret", "shop", "shop-tls"); got != 1 {
+		t.Errorf("Secret count = %d, want 1", got)
+	}
+	notAPI := func(ref issues.Ref) bool { return ref.Name != "api" }
+	idx = BuildIssueIndex(p, issues.Filters{CanReadRelated: notAPI})
+	if got := idx.Count("networking.k8s.io", "Ingress", "shop", "api"); got != 0 {
+		t.Errorf("unreadable Ingress count = %d, want 0", got)
+	}
+	noSecrets := func(ref issues.Ref) bool { return ref.Kind != "Secret" }
+	idx = BuildIssueIndex(p, issues.Filters{CanReadRelated: readAll, CanReadSubject: noSecrets})
+	if got := idx.Count("networking.k8s.io", "Ingress", "shop", "web"); got != 0 {
+		t.Errorf("Ingress count without Secret access = %d, want 0", got)
+	}
+	if got := BuildIssueIndex(p, issues.Filters{}).Count("networking.k8s.io", "Ingress", "shop", "web"); got != 0 {
+		t.Errorf("Ingress count without an authorizer = %d, want 0", got)
+	}
+}
+
+// A NetworkPolicy that isolates a Service counts on that Service too.
+func TestBuildIssueIndex_CountsNetworkPolicyOnIsolatedService(t *testing.T) {
+	p := &fakeIssuesProvider{problems: []k8s.Detection{{
+		Kind: "NetworkPolicy", Group: "networking.k8s.io", Namespace: "shop", Name: "deny-all",
+		Severity: "warning", Reason: k8s.NetworkPolicyDenyAllIngressReason,
+		AffectedRefs: []issuesapi.Ref{{Kind: "Service", Namespace: "shop", Name: "recommendation"}},
+	}}}
+	idx := BuildIssueIndex(p, issues.Filters{CanReadRelated: func(issues.Ref) bool { return true }})
+	if got := idx.Count("", "Service", "shop", "recommendation"); got != 1 {
+		t.Errorf("isolated Service count = %d, want 1", got)
 	}
 }
 
@@ -138,7 +202,7 @@ func TestBuildIssueIndex_GroupedSubjectPropagation(t *testing.T) {
 				OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web"},
 		},
 	}
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	if got := idx.Count("apps", "Deployment", "prod", "web"); got != 1 {
 		t.Errorf("owning Deployment count = %d, want 1 (Pod-evidenced issue must surface on the grouped subject)", got)
 	}
@@ -161,7 +225,7 @@ func TestBuildIssueIndex_BeyondMaxLimit(t *testing.T) {
 		})
 	}
 	p := &fakeIssuesProvider{problems: probs}
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	tailName := fmtPodName(issues.MaxLimit + 25)
 	if got := idx.Count("", "Pod", "prod", tailName); got != 1 {
 		t.Fatalf("tail pod %s count = %d, want 1 (silent MaxLimit truncation?)", tailName, got)
@@ -205,7 +269,7 @@ func TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered(t *testing.T) 
 	}
 
 	// Cluster-wide compose (nil namespaces) — issue surfaces.
-	idx := BuildIssueIndex(p, nil)
+	idx := BuildIssueIndex(p, issues.Filters{})
 	if got := idx.Count("", "Node", "", "worker-1"); got != 1 {
 		t.Errorf("cluster-wide index: Node issueCount = %d, want 1 (cluster-scoped issue should appear)", got)
 	}
@@ -214,7 +278,7 @@ func TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered(t *testing.T) 
 	// ["prod","staging"] drops it because the user-namespaced perm
 	// slice never matches "". This is what the pre-fix handler did for
 	// Node lists.
-	scopedIdx := BuildIssueIndex(p, []string{"prod", "staging"})
+	scopedIdx := BuildIssueIndex(p, issues.Filters{Namespaces: []string{"prod", "staging"}})
 	if got := scopedIdx.Count("", "Node", "", "worker-1"); got != 0 {
 		t.Errorf("namespace-scoped index: Node issueCount = %d, want 0 (namespace filter drops cluster-scoped issue)", got)
 	}
@@ -243,7 +307,7 @@ func TestBuildIssueIndex_CRDPlural_NonZeroCount(t *testing.T) {
 	// Pre-fix simulation: the handler would have passed kindFilter="applications"
 	// — the URL plural. We no longer take a kindFilter, but verify that
 	// the index contains the row keyed by the canonical singular form.
-	idx := BuildIssueIndex(p, []string{"argocd"})
+	idx := BuildIssueIndex(p, issues.Filters{Namespaces: []string{"argocd"}})
 	if got := idx.Count("argoproj.io", "Application", "argocd", "storefront"); got != 1 {
 		t.Errorf("CRD Application count (singular kind) = %d, want 1", got)
 	}
@@ -276,8 +340,8 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	}
 
 	// Build the two indexes the search constructor would build.
-	namespacedIdx := BuildIssueIndex(p, []string{"prod"})
-	clusterIdx := BuildIssueIndex(p, nil)
+	namespacedIdx := BuildIssueIndex(p, issues.Filters{Namespaces: []string{"prod"}})
+	clusterIdx := BuildIssueIndex(p, issues.Filters{})
 
 	// Sanity: pre-fix, the search handler passed namespacedIdx for
 	// both; Node issueCount silently zeroed.
@@ -295,7 +359,7 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	// scope. Replay the dispatch via the shared helper to pin the
 	// end-to-end shape. Topology is nil; managedBy is nil but
 	// issueCount dispatch is what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 1 {
 		t.Errorf("Node hit via builder: got %+v, want IssueCount=1 (was 0 pre-fix)", sc)
 	}
@@ -315,15 +379,15 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 // re-introduce the bug, so we additionally assert no cross-bucket leak.
 func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 	// Build two distinct indexes so we can tell which one was consulted.
-	namespacedIdx := IssueIndex{}
-	namespacedIdx[issueIndexKey("", "Pod", "prod", "api-7")] = 4
+	namespacedIdx := &IssueIndex{counts: map[string]int{}}
+	namespacedIdx.counts[issueIndexKey("", "Pod", "prod", "api-7")] = 4
 
-	clusterIdx := IssueIndex{}
-	clusterIdx[issueIndexKey("", "Node", "", "worker-1")] = 2
+	clusterIdx := &IssueIndex{counts: map[string]int{}}
+	clusterIdx.counts[issueIndexKey("", "Node", "", "worker-1")] = 2
 
 	// Topology is nil — managedBy is nil but issueCount dispatch is
 	// what we're pinning here.
-	build := BuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+	build := BuilderFromIndexes(context.Background(), nil, namespacedIdx, clusterIdx, nil, nil)
 
 	// Cluster-scoped Node hit — must read clusterIdx.
 	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 2 {
@@ -345,62 +409,55 @@ func TestBuilderFromIndexes_DispatchesByScope(t *testing.T) {
 	}
 }
 
-// TestManagedByFromRelationships_PrefersManagedBy pins the topmost-manager
-// shortcut: when topology has synthesized a ManagedBy chain (Pod →
-// ReplicaSet → Deployment), the helper surfaces the Deployment, not the
-// noisy hash-suffixed ReplicaSet that sits in Owner.
-func TestManagedByFromRelationships_PrefersManagedBy(t *testing.T) {
-	rel := &topology.Relationships{
-		Owner: &topology.ResourceRef{Kind: "ReplicaSet", Namespace: "prod", Name: "api-7d5", Group: "apps"},
-		ManagedBy: []topology.ResourceRef{
-			{Kind: "Deployment", Namespace: "prod", Name: "api", Group: "apps"},
-		},
+func TestBuildIssueIndexDoesNotCountClusterIncidentOnNamespacedRun(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team"}})); err != nil {
+		t.Fatal(err)
 	}
-	got := ManagedByFromRelationships(rel)
-	want := &resourcecontext.ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: "prod"}
-	if got == nil || got.Kind != want.Kind || got.Name != want.Name || got.Namespace != want.Namespace || got.Source != want.Source {
-		t.Errorf("got %#v, want %#v", got, want)
+	t.Cleanup(k8s.ResetTestState)
+	var objects []runtime.Object
+	for _, raw := range []string{
+		`{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"Workload","metadata":{"name":"waiting","namespace":"team","uid":"waiting","generation":1,"creationTimestamp":"2026-01-01T00:00:00Z"},"spec":{"queueName":"q"},"status":{"conditions":[{"type":"QuotaReserved","status":"False","reason":"Inadmissible","message":"ClusterQueue gpu is inactive","observedGeneration":1}]}}`,
+		`{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"LocalQueue","metadata":{"name":"q","namespace":"team","uid":"q","generation":1,"creationTimestamp":"2026-01-01T00:00:00Z"},"spec":{"clusterQueue":"gpu"},"status":{"conditions":[{"type":"Active","status":"False","reason":"ClusterQueueIsInactive","observedGeneration":1}]}}`,
+		`{"apiVersion":"kueue.x-k8s.io/v1beta2","kind":"ClusterQueue","metadata":{"name":"gpu","uid":"gpu","generation":1,"creationTimestamp":"2026-01-01T00:00:00Z"},"spec":{"stopPolicy":"None"},"status":{"conditions":[{"type":"Active","status":"False","reason":"FlavorNotFound","message":"missing flavor","observedGeneration":1}]}}`,
+	} {
+		obj := &unstructured.Unstructured{}
+		if err := json.Unmarshal([]byte(raw), obj); err != nil {
+			t.Fatal(err)
+		}
+		objects = append(objects, obj)
 	}
-}
-
-// TestManagedByFromRelationships_FallsBackToOwner covers the case where
-// topology synthesis declined ManagedBy (e.g. cluster-scoped roots) —
-// we still surface the direct Owner so the row isn't context-less.
-func TestManagedByFromRelationships_FallsBackToOwner(t *testing.T) {
-	rel := &topology.Relationships{
-		Owner: &topology.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "storefront", Group: "argoproj.io"},
+	resources := []k8s.APIResource{
+		{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "Workload", Name: "workloads", Namespaced: true},
+		{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "LocalQueue", Name: "localqueues", Namespaced: true},
+		{Group: "kueue.x-k8s.io", Version: "v1beta2", Kind: "ClusterQueue", Name: "clusterqueues"},
 	}
-	got := ManagedByFromRelationships(rel)
-	if got == nil {
-		t.Fatalf("got nil, want Application ref")
+	listKinds := map[schema.GroupVersionResource]string{}
+	for i, res := range resources {
+		res.Verbs = []string{"get", "list", "watch"}
+		resources[i] = res
+		listKinds[schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name}] = res.Kind + "List"
 	}
-	if got.Source != "argocd" {
-		t.Errorf("Source = %q, want argocd", got.Source)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objects...), resources); err != nil {
+		t.Fatal(err)
 	}
-}
-
-// TestManagedByFromRelationships_ManagedByWinsOverOwner pins that when
-// both ManagedBy and Owner are set, ManagedBy[0] takes precedence — the
-// server-synthesized topmost-manager walk should never be shadowed by
-// the direct owner ref left over for back-compat.
-func TestManagedByFromRelationships_ManagedByWinsOverOwner(t *testing.T) {
-	rel := &topology.Relationships{
-		Owner: &topology.ResourceRef{Kind: "ReplicaSet", Namespace: "prod", Name: "api-7d5", Group: "apps"},
-		ManagedBy: []topology.ResourceRef{
-			{Kind: "Application", Namespace: "argocd", Name: "storefront", Group: "argoproj.io"},
-		},
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for gvr := range listKinds {
+		if _, err := k8s.GetDynamicResourceCache().ListBlocking(gvr, "", 5*time.Second); err != nil {
+			t.Fatal(err)
+		}
 	}
-	got := ManagedByFromRelationships(rel)
-	if got == nil || got.Kind != "Application" || got.Source != "argocd" {
-		t.Errorf("got %#v, want Application/argocd", got)
-	}
-}
-
-func TestManagedByFromRelationships_NilSafe(t *testing.T) {
-	if got := ManagedByFromRelationships(nil); got != nil {
-		t.Errorf("nil rel: got %#v, want nil", got)
-	}
-	if got := ManagedByFromRelationships(&topology.Relationships{}); got != nil {
-		t.Errorf("empty rel: got %#v, want nil", got)
+	ref := issuesapi.Ref{Group: "kueue.x-k8s.io", Kind: "Workload", Namespace: "team", Name: "waiting"}
+	p := issues.NewCacheProvider()
+	allow := func(issues.Ref) bool { return true }
+	allowEvidence := func(issues.EvidenceRead) bool { return true }
+	for _, namespaces := range [][]string{nil, {"team"}} {
+		idx := BuildIssueIndex(p, issues.Filters{Namespaces: namespaces, CanReadRelated: allow, CanReadEvidence: allowEvidence})
+		detail := issues.RelatedIssues(p, issues.RelatedIssueOptions{Namespaces: []string{"team"}, CanReadRelated: allow, CanReadEvidence: allowEvidence}, ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if got := idx.Count(ref.Group, ref.Kind, ref.Namespace, ref.Name); got != len(detail) || got != 1 {
+			t.Fatalf("namespaces=%v: summary=%d detail=%+v", namespaces, got, detail)
+		}
+		if len(namespaces) == 0 && idx.Count("kueue.x-k8s.io", "ClusterQueue", "", "gpu") != 1 {
+			t.Fatal("cluster incident lost its own count")
+		}
 	}
 }

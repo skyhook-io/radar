@@ -195,6 +195,13 @@ describe('getApplicationCostState', () => {
     ).toBe('not_found')
   })
 
+  it('does not report a cross-origin refusal as missing access', () => {
+    const refused = new ApiError('Radar refused this request because it came from http://radar.internal', 403, {
+      error_code: 'cross_origin_refused',
+    })
+    expect(getApplicationCostState(undefined, undefined, { currentError: refused })).toBe('load_error')
+  })
+
   it('queries only steady-state workload kinds', () => {
     const workloads = [
       { kind: 'Deployment', namespace: 'prod', name: 'api' },

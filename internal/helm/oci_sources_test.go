@@ -1,8 +1,6 @@
 package helm
 
 import (
-	"fmt"
-	"slices"
 	"testing"
 )
 
@@ -23,6 +21,9 @@ func TestNormalizeOCIPrefix(t *testing.T) {
 		{name: "scheme only", in: "oci://", wantErr: true},
 		{name: "metadata IP blocked", in: "oci://169.254.169.254/charts", wantErr: true},
 		{name: "link-local with port blocked", in: "oci://169.254.0.1:5000/charts", wantErr: true},
+		{name: "IPv6 link-local blocked", in: "oci://[fe80::1]/charts", wantErr: true},
+		{name: "IPv6 link-local with port blocked", in: "oci://[fe80::1]:5000/charts", wantErr: true},
+		{name: "IPv6 link-local with zone blocked", in: "oci://[fe80::1%25eth0]:5000/charts", wantErr: true},
 		{name: "loopback allowed (local dev registry)", in: "oci://localhost:5000/charts", want: "oci://localhost:5000/charts"},
 		{name: "private IP allowed (local dev registry)", in: "oci://10.0.0.5:5000/charts", want: "oci://10.0.0.5:5000/charts"},
 	}
@@ -68,180 +69,6 @@ func (f *fakeTagLister) Tags(ref string) ([]string, error) {
 		return nil, err
 	}
 	return f.tags[ref], nil
-}
-
-func TestDiscoverOCIUpgrade(t *testing.T) {
-	// Two registered prefixes; the chart lives under the second one only.
-	withOCISources(t, []string{"oci://ghcr.io/orgA/charts", "oci://ghcr.io/orgB/charts"})
-
-	lister := &fakeTagLister{
-		tags: map[string][]string{
-			// Tags() returns semver-sorted newest-first.
-			"ghcr.io/orgB/charts/mychart": {"1.4.0", "1.3.0", "1.2.0"},
-		},
-		errs: map[string]error{
-			"ghcr.io/orgA/charts/mychart": fmt.Errorf("not found"),
-		},
-	}
-
-	c := &Client{}
-	match := c.discoverOCIUpgrade("mychart", lister, map[string][]string{})
-	if match == nil {
-		t.Fatal("expected a match from orgB, got nil")
-	}
-	if match.LatestVersion != "1.4.0" {
-		t.Errorf("LatestVersion = %q, want 1.4.0", match.LatestVersion)
-	}
-	if match.ChartURL != "oci://ghcr.io/orgB/charts/mychart" {
-		t.Errorf("ChartURL = %q, want oci://ghcr.io/orgB/charts/mychart", match.ChartURL)
-	}
-}
-
-func TestDiscoverOCIUpgrade_PicksNewestAcrossPrefixes(t *testing.T) {
-	withOCISources(t, []string{"oci://reg1/c", "oci://reg2/c"})
-	lister := &fakeTagLister{
-		tags: map[string][]string{
-			"reg1/c/app": {"2.0.0"},
-			"reg2/c/app": {"2.1.0"},
-		},
-	}
-	c := &Client{}
-	match := c.discoverOCIUpgrade("app", lister, map[string][]string{})
-	if match == nil || match.LatestVersion != "2.1.0" {
-		t.Fatalf("expected newest 2.1.0 across prefixes, got %+v", match)
-	}
-}
-
-// Regression: discovery and upgrade resolution must agree on which prefix wins.
-// reg1 (first in settings order) also publishes the target version, but reg2 has the
-// higher newest tag, so the version picker shows reg2's list — the upgrade must
-// resolve from reg2, not "first prefix that happens to contain the tag" (reg1).
-func TestSelectBestOCIPrefix_ConsistentAcrossDiscoveryAndUpgrade(t *testing.T) {
-	withOCISources(t, []string{"oci://reg1/c", "oci://reg2/c"})
-	lister := &fakeTagLister{
-		tags: map[string][]string{
-			"reg1/c/app": {"1.0.0"},          // older, first in order, also has 1.0.0
-			"reg2/c/app": {"2.0.0", "1.0.0"}, // newer newest tag → wins
-		},
-	}
-	c := &Client{}
-	prefix, tags := c.selectBestOCIPrefix("app", lister, map[string][]string{})
-	if prefix != "oci://reg2/c" {
-		t.Fatalf("best prefix = %q, want oci://reg2/c (highest newest tag, not first-in-order)", prefix)
-	}
-	if len(tags) != 2 || tags[0] != "2.0.0" {
-		t.Fatalf("tags = %v, want reg2's [2.0.0 1.0.0]", tags)
-	}
-	// The version picker would offer 1.0.0 (in reg2's list); the upgrade must resolve
-	// 1.0.0 from reg2 too — the same prefix — even though reg1 also has it.
-	matchPrefix, matchTags := c.selectBestOCIPrefix("app", lister, map[string][]string{})
-	if matchPrefix != "oci://reg2/c" || !slices.Contains(matchTags, "1.0.0") {
-		t.Fatalf("upgrade resolution diverged: prefix=%q tags=%v", matchPrefix, matchTags)
-	}
-}
-
-func TestDiscoverOCIUpgrade_NoSourcesOrNoMatch(t *testing.T) {
-	withOCISources(t, nil)
-	c := &Client{}
-	if m := c.discoverOCIUpgrade("app", &fakeTagLister{}, map[string][]string{}); m != nil {
-		t.Errorf("expected nil with no registered sources, got %+v", m)
-	}
-
-	withOCISources(t, []string{"oci://reg/c"})
-	lister := &fakeTagLister{tags: map[string][]string{}} // chart not published anywhere
-	if m := c.discoverOCIUpgrade("app", lister, map[string][]string{}); m != nil {
-		t.Errorf("expected nil when chart not found, got %+v", m)
-	}
-}
-
-func TestDiscoverOCIUpgrade_TagCacheDedupes(t *testing.T) {
-	withOCISources(t, []string{"oci://reg/c"})
-	lister := &fakeTagLister{tags: map[string][]string{"reg/c/app": {"1.0.0"}}}
-	cache := map[string][]string{}
-	c := &Client{}
-	c.discoverOCIUpgrade("app", lister, cache)
-	c.discoverOCIUpgrade("app", lister, cache)
-	if len(lister.calls) != 1 {
-		t.Errorf("expected Tags called once (cached), got %d calls", len(lister.calls))
-	}
-}
-
-// transientTagLister fails the first failCount calls for a ref, then succeeds —
-// models a transient timeout/network error.
-type transientTagLister struct {
-	tags      []string
-	failCount int
-	calls     int
-}
-
-func (l *transientTagLister) Tags(string) ([]string, error) {
-	l.calls++
-	if l.calls <= l.failCount {
-		return nil, fmt.Errorf("transient timeout")
-	}
-	return l.tags, nil
-}
-
-func TestDiscoverOCIUpgrade_DoesNotCacheFailures(t *testing.T) {
-	withOCISources(t, []string{"oci://reg/c"})
-	lister := &transientTagLister{tags: []string{"1.0.0"}, failCount: 1}
-	cache := map[string][]string{}
-	c := &Client{}
-
-	// First probe fails transiently — must NOT be cached as "untracked".
-	if m := c.discoverOCIUpgrade("app", lister, cache); m != nil {
-		t.Fatalf("expected nil on transient failure, got %+v", m)
-	}
-	// Second probe retries (failure wasn't cached) and succeeds.
-	m := c.discoverOCIUpgrade("app", lister, cache)
-	if m == nil || m.LatestVersion != "1.0.0" {
-		t.Fatalf("expected retry to succeed with 1.0.0, got %+v (calls=%d)", m, lister.calls)
-	}
-	if lister.calls != 2 {
-		t.Errorf("expected 2 calls (retry after transient failure), got %d", lister.calls)
-	}
-}
-
-func TestApplyOCIUpgrade_SetsFields(t *testing.T) {
-	withOCISources(t, []string{"oci://reg/c"})
-	lister := &fakeTagLister{tags: map[string][]string{"reg/c/app": {"1.5.0"}}}
-	c := &Client{}
-
-	info := &UpgradeInfo{CurrentVersion: "1.4.0"}
-	if !c.applyOCIUpgrade(info, "app", "1.4.0", lister, map[string][]string{}) {
-		t.Fatal("expected applyOCIUpgrade to return true")
-	}
-	if info.SourceType != "oci" || info.LatestVersion != "1.5.0" || !info.UpdateAvailable {
-		t.Errorf("unexpected info: %+v", info)
-	}
-	if info.ChartRef != "oci://reg/c/app" {
-		t.Errorf("ChartRef = %q, want oci://reg/c/app", info.ChartRef)
-	}
-
-	// Same version → no update available, but still tracked.
-	info2 := &UpgradeInfo{CurrentVersion: "1.5.0"}
-	c.applyOCIUpgrade(info2, "app", "1.5.0", lister, map[string][]string{})
-	if info2.UpdateAvailable {
-		t.Error("expected UpdateAvailable=false when current == latest")
-	}
-}
-
-func TestResolveOCIUpgradeURLWithLister_UsesRegisteredPrefix(t *testing.T) {
-	withOCISources(t, []string{"oci://reg/c"})
-	lister := &fakeTagLister{tags: map[string][]string{"reg/c/app": {"1.4.0", "1.5.0"}}}
-	c := &Client{}
-
-	url, ok := c.resolveOCIUpgradeURLWithLister("app", "1.5.0", lister)
-	if !ok {
-		t.Fatal("expected OCI URL resolution")
-	}
-	if url != "oci://reg/c/app" {
-		t.Fatalf("url = %q, want oci://reg/c/app", url)
-	}
-
-	if _, ok := c.resolveOCIUpgradeURLWithLister("app", "2.0.0", lister); ok {
-		t.Fatal("unexpected resolution for a version not published by the registered source")
-	}
 }
 
 func TestSortVersionsDesc(t *testing.T) {

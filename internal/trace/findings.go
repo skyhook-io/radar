@@ -14,14 +14,21 @@ import (
 // match the same way internal/mcp/tools_diagnose.go's RelatedIssues selection
 // does - by (group, kind, namespace, name) - so a Phase 0 detection that
 // fires for a Service shows up on that Service's hop with no special-casing.
-func hopFindings(p *issues.CacheProvider, ref ResourceRef) []Finding {
+func hopFindings(deps Deps, ref ResourceRef) []Finding {
+	p := deps.Issues
 	if p == nil {
 		return nil
 	}
-	// Empty options means no namespace filter, and nil authorization predicates
-	// that fail closed on cross-resource diagnostic references rather than
-	// widening what a hop can surface.
-	related := issues.RelatedIssues(p, issues.RelatedIssueOptions{SkipPodTemplateContext: true}, ref.Group, ref.Kind, ref.Namespace, ref.Name)
+	// No namespace filter: the caller's authorizers gate each row, and a nil
+	// CanReadRelated fails closed on cross-resource diagnostic references
+	// rather than widening what a hop can surface.
+	related := issues.RelatedIssues(p, issues.RelatedIssueOptions{
+		SkipPodTemplateContext: true,
+		CanReadRelated:         deps.IssueAccess.CanReadRelated,
+		CanReadClusterScoped:   deps.IssueAccess.CanReadClusterScoped,
+		CanReadSubject:         deps.IssueAccess.CanReadSubject,
+		CanReadEvidence:        deps.IssueAccess.CanReadEvidence,
+	}, ref.Group, ref.Kind, ref.Namespace, ref.Name)
 	if len(related) == 0 {
 		return nil
 	}

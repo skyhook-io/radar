@@ -3,11 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -22,76 +22,12 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
-// The authenticated tunnel is server-to-server and carries a transport-bound
-// marker that browsers cannot forge, so its forwarded Origin is trusted.
-func checkWebSocketOrigin(r *http.Request) bool {
-	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
-		return true
-	}
-	if allowed, decided := fetchMetadataOriginVerdict(r); decided {
-		return allowed
-	}
-	return sameAuthorityOriginOK(r)
-}
-
-// fetchMetadataOriginVerdict uses the browser-controlled relationship between
-// the initiating page and this request when it is conclusive. It survives
-// reverse proxies that rewrite Host and cannot be forged by page scripts.
-func fetchMetadataOriginVerdict(r *http.Request) (allowed, decided bool) {
-	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin":
-		return true, true
-	case "cross-site":
-		return false, true
-	default:
-		return false, false
-	}
-}
-
-func sameAuthorityOriginOK(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	if (r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")) &&
-		!strings.EqualFold(u.Scheme, "https") {
-		return false
-	}
-	originAuthority, originOK := normalizeOrigin(origin)
-	requestAuthority, requestOK := normalizeOrigin(u.Scheme + "://" + r.Host)
-	return originOK && requestOK && originAuthority == requestAuthority
-}
-
-func (s *Server) viteDevProxyOriginOK(r *http.Request) bool {
-	if !s.devMode || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-		return false
-	}
-	u, err := url.Parse(r.Header.Get("Origin"))
-	return err == nil &&
-		u.Scheme == "http" &&
-		u.Port() == "9273" &&
-		browserLoopbackHostname(u.Hostname()) &&
-		requestHostIsLoopback(r)
-}
-
-func (s *Server) websocketOriginAllowed(r *http.Request) bool {
-	if checkWebSocketOrigin(r) {
-		return true
-	}
-	return s.viteDevProxyOriginOK(r)
-}
-
 func (s *Server) upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
-	return (&websocket.Upgrader{CheckOrigin: s.websocketOriginAllowed}).Upgrade(w, r, nil)
+	return (&websocket.Upgrader{CheckOrigin: s.browserOriginAllowed}).Upgrade(w, r, nil)
 }
 
 const podExecHeartbeatInterval = 30 * time.Second
@@ -159,25 +95,11 @@ func defaultExecCommand(override, fallback, podOS string) []string {
 	return []string{"sh", "-c", defaultShellScript}
 }
 
-// defaultContainerAnnotation is the client-side convention kubectl, k9s, and
-// Lens use to mark the "main" container of a multi-container pod. Service
-// meshes (Istio, Linkerd, ASM) set it during injection to point past their
-// sidecar — without it, an unspecified container defaults to containers[0],
-// which on a mesh pod is the distroless proxy with no shell.
-const defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
-
-// defaultExecContainer picks the container to target when the request doesn't
-// name one. It honors defaultContainerAnnotation (matching kubectl exec
-// behavior), falling back to the first container. Returns "" only for a pod
-// with no containers.
 func defaultExecContainer(pod *corev1.Pod) string {
-	if name := pod.Annotations[defaultContainerAnnotation]; name != "" {
-		for _, c := range pod.Spec.Containers {
-			if c.Name == name {
-				return name
-			}
-		}
+	if container := k8score.DefaultExecContainer(pod); container != "" {
+		return container
 	}
+	// An interactive terminal still needs a default for proxy-only gateway pods.
 	if len(pod.Spec.Containers) > 0 {
 		return pod.Spec.Containers[0].Name
 	}
@@ -341,8 +263,25 @@ func (t *terminalSizeQueue) Next() *remotecommand.TerminalSize {
 	return &size
 }
 
+// errExecDisabled reads as a Kubernetes "forbidden" so callers that classify
+// exec failures treat it as a permission denial.
+var errExecDisabled = errors.New("forbidden: exec is disabled on this Radar instance (--disable-exec)")
+
+// requireExecEnabled rejects routes that run commands in Pods or start debug
+// shells when the operator started Radar with --disable-exec.
+func (s *Server) requireExecEnabled(w http.ResponseWriter) bool {
+	if k8s.ForceDisableExec {
+		s.writeError(w, http.StatusForbidden, "exec is disabled on this Radar instance (--disable-exec)")
+		return false
+	}
+	return true
+}
+
 // handlePodExec handles WebSocket connections for pod exec
 func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")
@@ -666,6 +605,9 @@ type NodeDebugResponse struct {
 
 // handleNodeDebug creates a privileged debug pod on a node
 func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -776,6 +718,9 @@ type DebugContainerResponse struct {
 
 // handleCreateDebugContainer creates an ephemeral debug container in a pod
 func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	namespace := chi.URLParam(r, "namespace")
 	podName := chi.URLParam(r, "name")
 

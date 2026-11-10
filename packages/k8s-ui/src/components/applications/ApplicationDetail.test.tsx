@@ -377,6 +377,21 @@ describe("ApplicationDetail shell", () => {
     expect(local).toContain('ring is full, so the oldest activity is not loaded')
   })
 
+  it('shows the host history-limit note beside the history, and nothing without one', () => {
+    const base = {
+      selectedView: 'history' as const,
+      onSelectView: () => {},
+      selectedWorkloadKey: null,
+      onSelectWorkload: () => {},
+      historyMode: 'local' as const,
+      historyRange: 'all' as const,
+      historyRangeOptions: [{ value: 'all' as const, label: 'All observed' }],
+      historyItems: [],
+    }
+    expect(renderDetail({ ...base, historyRetentionNote: <span>Host limit note</span> })).toContain('<span>Host limit note</span>')
+    expect(renderDetail(base)).not.toContain('Host limit note')
+  })
+
   it('shows a single honest error state when runtime history fails without source history', () => {
     const html = renderDetail({
       selectedView: 'history',

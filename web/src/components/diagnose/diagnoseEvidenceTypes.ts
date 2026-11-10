@@ -93,6 +93,8 @@ export interface DiagnosisResourceContext {
   };
   runsOn?: DiagnosisResourceRef;
   scaledBy?: DiagnosisScalerRef[];
+  dependencies?: DiagnosisResourceRef[];
+  dependents?: DiagnosisResourceRef[];
   statusSummary?: {
     phase?: string;
     conditions?: Array<{

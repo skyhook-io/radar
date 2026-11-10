@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -26,6 +28,13 @@ type Manager struct {
 	clusterInfo  *ClusterInfo
 	contextName  string // current K8s context name
 	mu           sync.RWMutex
+
+	// The last detection, for callers that only ask whether traffic is
+	// available. A context switch builds a new Manager, so it never outlives
+	// the cluster it describes.
+	lastSources    *SourcesResponse
+	lastDetectedAt time.Time
+	lastConfigGen  uint64
 }
 
 var (
@@ -48,6 +57,10 @@ var (
 	// configuredBeylaJobSelector overrides the default `job` label matcher used
 	// to scope Beyla's Prometheus queries; empty means use the built-in default.
 	configuredBeylaJobSelector string
+	// metricsConfigGen counts changes to the settings above. Metrics-based
+	// sources (Caretta, Beyla) detect through them, so a remembered detection
+	// made under other settings is stale.
+	metricsConfigGen uint64
 )
 
 // SetMetricsURL sets a manual Prometheus/VictoriaMetrics URL, bypassing auto-discovery.
@@ -55,6 +68,7 @@ func SetMetricsURL(url string) {
 	metricsConfigMu.Lock()
 	defer metricsConfigMu.Unlock()
 	configuredMetricsURL = url
+	metricsConfigGen++
 }
 
 // SetMetricsHeaders sets HTTP headers attached to every Prometheus query.
@@ -63,6 +77,7 @@ func SetMetricsHeaders(h map[string]string) {
 	metricsConfigMu.Lock()
 	defer metricsConfigMu.Unlock()
 	configuredMetricsHeaders = copyMetricsHeaders(h)
+	metricsConfigGen++
 }
 
 // SetMetricsConfig applies URL and headers together. A source built between
@@ -73,6 +88,7 @@ func SetMetricsConfig(url string, h map[string]string) {
 	defer metricsConfigMu.Unlock()
 	configuredMetricsURL = url
 	configuredMetricsHeaders = copyMetricsHeaders(h)
+	metricsConfigGen++
 }
 
 func copyMetricsHeaders(h map[string]string) map[string]string {
@@ -92,6 +108,13 @@ func SetBeylaJobSelector(selector string) {
 	metricsConfigMu.Lock()
 	defer metricsConfigMu.Unlock()
 	configuredBeylaJobSelector = selector
+	metricsConfigGen++
+}
+
+func currentMetricsConfigGen() uint64 {
+	metricsConfigMu.RLock()
+	defer metricsConfigMu.RUnlock()
+	return metricsConfigGen
 }
 
 // BeylaJobSelector returns the configured Beyla job-label matcher fragment,
@@ -153,6 +176,32 @@ func GetManager() *Manager {
 func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.detectSourcesLocked(ctx)
+}
+
+// RecentSources returns the last detection when it is younger than maxAge,
+// and detects otherwise. It is for pages that only ask whether a source is
+// available: detection probes every source in turn while holding the manager
+// lock, which flow reads wait on. Concurrent callers share one detection, the
+// later ones finding the first one's result.
+func (m *Manager) RecentSources(ctx context.Context, maxAge time.Duration) (*SourcesResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastSources != nil && time.Since(m.lastDetectedAt) < maxAge && m.lastConfigGen == currentMetricsConfigGen() {
+		response := *m.lastSources
+		response.Detected = slices.Clone(m.lastSources.Detected)
+		response.NotDetected = slices.Clone(m.lastSources.NotDetected)
+		response.Active = ""
+		if m.activeSource != nil {
+			response.Active = m.activeSource.Name()
+		}
+		return &response, nil
+	}
+	return m.detectSourcesLocked(ctx)
+}
+
+func (m *Manager) detectSourcesLocked(ctx context.Context) (*SourcesResponse, error) {
+	configGen := currentMetricsConfigGen()
 
 	// Detect cluster info first
 	clusterInfo, err := m.detectClusterInfo(ctx)
@@ -160,7 +209,6 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 		log.Printf("[traffic] Warning: failed to detect cluster info: %v", err)
 		clusterInfo = &ClusterInfo{Platform: "generic"}
 	}
-	m.clusterInfo = clusterInfo
 
 	response := &SourcesResponse{
 		Cluster:     *clusterInfo,
@@ -180,6 +228,9 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 			continue
 		}
 		result, err := source.Detect(ctx)
+		if err != nil && ctx.Err() != nil {
+			break // the request ended; nothing below is kept
+		}
 		if err != nil {
 			log.Printf("[traffic] Error detecting %s: %v", name, err)
 			errorlog.Record("traffic", "warning", "error detecting %s: %v", name, err)
@@ -221,6 +272,14 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 		}
 	}
 
+	// A request cancelled midway reads as every remaining source failing. The
+	// active source and the remembered detection are shared by every user, so
+	// that must not switch traffic off for them.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	m.clusterInfo = clusterInfo
 	m.reconcileActiveSource(available)
 
 	// Set active source name in response
@@ -230,6 +289,13 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 
 	// Generate recommendation based on cluster type
 	response.Recommended = m.generateRecommendation(clusterInfo, response.Detected)
+
+	remembered := *response
+	remembered.Detected = slices.Clone(response.Detected)
+	remembered.NotDetected = slices.Clone(response.NotDetected)
+	m.lastSources = &remembered
+	m.lastDetectedAt = time.Now()
+	m.lastConfigGen = configGen
 
 	return response, nil
 }
@@ -250,6 +316,10 @@ func (m *Manager) detectClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 		if platform := k8score.DetectPlatformFromVersion(info.K8sVersion); platform != "unknown" {
 			info.Platform = platform
 		}
+	}
+
+	if info.Platform == "generic" && k8score.IsNKP(ctx, m.k8sClient) {
+		info.Platform = "nkp"
 	}
 
 	// Detect platform from nodes
@@ -334,17 +404,15 @@ func (m *Manager) detectCNI(ctx context.Context, platform string) (string, bool)
 		}
 	}
 
-	// Check for Calico
-	_, err = m.k8sClient.AppsV1().DaemonSets("kube-system").Get(ctx, "calico-node", metav1.GetOptions{})
-	if err == nil {
-		log.Printf("[traffic] Found calico-node DaemonSet")
+	// The Tigera operator, the install Calico's docs recommend, runs calico-node
+	// in calico-system; the plain manifest keeps it in kube-system.
+	if m.daemonSetExists(ctx, "calico-node", "kube-system", "calico-system") {
 		return "calico", false
 	}
 
-	// Check for Flannel
-	_, err = m.k8sClient.AppsV1().DaemonSets("kube-system").Get(ctx, "kube-flannel-ds", metav1.GetOptions{})
-	if err == nil {
-		log.Printf("[traffic] Found kube-flannel-ds DaemonSet")
+	// The current upstream kube-flannel.yml installs into its own kube-flannel
+	// namespace; older manifests used kube-system.
+	if m.daemonSetExists(ctx, "kube-flannel-ds", "kube-system", "kube-flannel") {
 		return "flannel", false
 	}
 
@@ -379,6 +447,16 @@ func (m *Manager) detectCNI(ctx context.Context, platform string) (string, bool)
 	return "unknown", false
 }
 
+func (m *Manager) daemonSetExists(ctx context.Context, name string, namespaces ...string) bool {
+	for _, ns := range namespaces {
+		if _, err := m.k8sClient.AppsV1().DaemonSets(ns).Get(ctx, name, metav1.GetOptions{}); err == nil {
+			log.Printf("[traffic] Found %s/%s DaemonSet", ns, name)
+			return true
+		}
+	}
+	return false
+}
+
 // generateRecommendation creates a recommendation based on cluster info
 func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceStatus) *Recommendation {
 	// If any source is already available, no recommendation needed
@@ -402,6 +480,14 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 
 	switch info.CNI {
 	case "cilium":
+		// Hubble is installed but unusable, and the detected entry already says
+		// why. Advice to enable it would contradict that and send the user to
+		// install what they already have.
+		for _, s := range detected {
+			if s.Name == "hubble" && s.Status == "not_found" {
+				return nil
+			}
+		}
 		if info.Platform == "gke" {
 			return &Recommendation{
 				Name:   "hubble",
@@ -553,6 +639,20 @@ func (m *Manager) SetActiveSource(name string) error {
 
 	m.activeSource = source
 	return nil
+}
+
+// ActiveSourceNameIfIdle is GetActiveSourceName without waiting. Detection
+// holds the manager lock while it probes every source in turn; ok is false
+// while it does.
+func (m *Manager) ActiveSourceNameIfIdle() (name string, ok bool) {
+	if !m.mu.TryRLock() {
+		return "", false
+	}
+	defer m.mu.RUnlock()
+	if m.activeSource == nil {
+		return "", true
+	}
+	return m.activeSource.Name(), true
 }
 
 // GetActiveSourceName returns the name of the active source

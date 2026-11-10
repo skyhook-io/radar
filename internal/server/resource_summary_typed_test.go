@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -37,6 +38,7 @@ func fatPod() *corev1.Pod {
 			ServiceAccountName: "web-sa",
 			NodeSelector:       map[string]string{"zone": "a"},
 			Tolerations:        []corev1.Toleration{{Key: "dedicated"}},
+			SchedulingGates:    []corev1.PodSchedulingGate{{Name: "kueue.x-k8s.io/admission"}},
 			Volumes:            []corev1.Volume{{Name: "data"}},
 			InitContainers: []corev1.Container{{
 				Name:          "sidecar",
@@ -140,6 +142,10 @@ func TestSummarizePodRowKeepsTableFields(t *testing.T) {
 	}
 	if got := dig(t, m, "spec", "nodeName"); got != "node-7" {
 		t.Errorf("spec.nodeName = %v", got)
+	}
+	gate := firstElem(t, dig(t, m, "spec", "schedulingGates"))
+	if gate["name"] != "kueue.x-k8s.io/admission" {
+		t.Errorf("spec.schedulingGates dropped — the status badge reads it to classify a held pod: %v", gate)
 	}
 	c := firstElem(t, dig(t, m, "spec", "containers"))
 	if c["name"] != "web" {
@@ -288,4 +294,48 @@ func TestSummarizeTypedListShapes(t *testing.T) {
 	if _, ok := summarizeTypedList("services", svcs).([]*corev1.Service); !ok {
 		t.Fatalf("unprofiled kind was transformed")
 	}
+}
+
+func TestSummarizePodRowKeepsPodLevelResources(t *testing.T) {
+	p := fatPod()
+	p.Spec.Resources = &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+	}
+	m := asJSONMap(t, summarizePodRow(p))
+	if got := dig(t, m, "spec", "resources", "limits", "cpu"); got != "2" {
+		t.Errorf("spec.resources.limits.cpu = %v — the CPU/Mem column reads the pod-level ceiling", got)
+	}
+}
+
+func TestPodSummaryKeepsReadinessGateEvidence(t *testing.T) {
+	p := &corev1.Pod{Spec: corev1.PodSpec{ReadinessGates: []corev1.PodReadinessGate{{ConditionType: "example.com/ready"}}}, Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, Reason: "ReadinessGatesNotReady", LastTransitionTime: metav1.Unix(1700000000, 0)}, {Type: corev1.ContainersReady, Status: corev1.ConditionTrue, LastTransitionTime: metav1.Unix(1700000060, 0)}}}}
+	p.Spec.Containers = []corev1.Container{{Name: "app", ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/ready"}}}}}
+	raw, err := json.Marshal(summarizePodRow(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got corev1.Pod
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Spec.ReadinessGates) != 1 || got.Spec.ReadinessGates[0] != p.Spec.ReadinessGates[0] {
+		t.Fatalf("gates lost: %s", raw)
+	}
+	for i, c := range got.Status.Conditions {
+		if !c.LastTransitionTime.Equal(&p.Status.Conditions[i].LastTransitionTime) {
+			t.Fatalf("transition lost: %s", raw)
+		}
+	}
+	if got.Spec.Containers[0].ReadinessProbe == nil || bytes.Contains(raw, []byte("httpGet")) {
+		t.Fatalf("need probe presence without its handler: %s", raw)
+	}
+	p.Spec.ReadinessGates = nil
+	raw, err = json.Marshal(summarizePodRow(p))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("lastTransitionTime")) || bytes.Contains(raw, []byte("readinessProbe")) {
+		t.Fatalf("ungated rows pay unused timestamp cost: %s", raw)
+	}
+
 }

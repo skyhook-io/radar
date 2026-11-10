@@ -23,11 +23,13 @@ import {
   getCNPGWALArchivingFailure,
   getCNPGLastBackupFailure,
   classifyCNPGClusterPhase,
+  cnpgBlockedPhaseExplanation,
   getCNPGClusterAvailability,
   CNPG_BARMAN_OBJECTSTORE_GROUP,
 } from '../resource-utils-cnpg'
 import { formatAge } from '../resource-utils'
 import { RecoveryTime } from './CNPGShared'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 interface CNPGClusterRendererProps {
   /** Filled by the host with the Databases, Publications and Subscriptions
@@ -99,6 +101,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
   const isFailover = phaseBucket === 'failing'
   const isSwitchover = phase === 'Switchover in progress'
   const isTerminal = phaseBucket === 'terminal'
+  const blocked = cnpgBlockedPhaseExplanation(phase, data.status?.phaseReason)
   // "The cluster is otherwise serving normally, so nothing else here will look
   // wrong" is a claim about the REST OF THIS DRAWER, so any other banner
   // falsifies it. It can no longer lean on isDegraded now that a
@@ -112,11 +115,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
     <>
       {/* Problem alerts */}
       {isTerminal && (
-        <AlertBanner
-          variant="error"
-          title="Reconciliation has stopped"
-          message={`${phase}. This state does not resolve on its own — the operator has stopped reconciling this cluster and it needs manual intervention.`}
-        />
+        <AlertBanner variant="error" title={blocked.title} message={blocked.message} />
       )}
       {hasSplitBrain && (
         <AlertBanner
@@ -195,7 +194,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
           variant="warning"
           title="Last backup failed"
           message={
-            `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatAge(lastBackupFailure.lastTransitionTime)} ago` : ''}.` +
+            `The most recent backup attempt failed${lastBackupFailure.lastTransitionTime ? ` ${formatRelativeAgeTime(lastBackupFailure.lastTransitionTime)}` : ''}.` +
             (lastBackupFailure.message ? ` Operator reported: ${lastBackupFailure.message}` : '')
           }
         />
@@ -342,7 +341,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
       {/* Storage */}
       <Section title="Storage" icon={HardDrive} defaultExpanded>
         <PropertyList>
-          <Property label="Data Size" value={getCNPGClusterStorage(data)} />
+          <Property label="Requested size" value={getCNPGClusterStorage(data)} />
           <Property label="Storage Class" value={getCNPGClusterStorageClass(data)} />
           {/* Requested size and class are spec-side intentions. These are what the
               operator reports about the volumes that actually exist. */}
@@ -363,7 +362,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
           <div className="mt-2 pt-2 border-t border-theme-border">
             <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">WAL Storage</div>
             <PropertyList>
-              {walStorage.size && <Property label="Size" value={walStorage.size} />}
+              {walStorage.size && <Property label="Requested size" value={walStorage.size} />}
               {walStorage.storageClass && <Property label="Storage Class" value={walStorage.storageClass} />}
             </PropertyList>
           </div>

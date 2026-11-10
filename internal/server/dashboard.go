@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,10 +20,16 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -58,10 +65,14 @@ type DashboardCRDsResponse struct {
 }
 
 type DashboardCluster struct {
-	Name      string `json:"name"`
-	Platform  string `json:"platform"`
-	Version   string `json:"version"`
-	Connected bool   `json:"connected"`
+	// Name is the kubeconfig context, or "in-cluster" in in-cluster mode.
+	Name string `json:"name"`
+	// KubeconfigCluster is the kubeconfig cluster entry the context points at.
+	// Several contexts can share one. Omitted in in-cluster mode.
+	KubeconfigCluster string `json:"kubeconfigCluster,omitempty"`
+	Platform          string `json:"platform"`
+	Version           string `json:"version"`
+	Connected         bool   `json:"connected"`
 	// UpgradeReviewedThrough is the newest Kubernetes minor the upgrade-impact
 	// catalog covers. A static catalog fact, so Home can hint that the cluster
 	// is behind without triggering the (expensive) upgrade-readiness scan.
@@ -89,6 +100,10 @@ type DashboardProblem struct {
 	DurationSeconds int64  `json:"durationSeconds"` // For sorting by problem age
 	OnsetUnknown    bool   `json:"onsetUnknown,omitempty"`
 	PodCount        int    `json:"podCount,omitempty"` // For workload rollups: number of affected pods
+	// requiredReads are the detection's evidence, checked like an issue's;
+	// degraded is what a caller who can't make them sees instead.
+	requiredReads []issues.EvidenceRead
+	degraded      *issues.DegradedFinding
 }
 
 // mergeResourceCounts adds src's per-namespace counts into dst. Cluster-scoped
@@ -196,12 +211,7 @@ type ResourceCount struct {
 	Unavailable int `json:"unavailable,omitempty"`
 }
 
-type NodeCount struct {
-	Total    int `json:"total"`
-	Ready    int `json:"ready"`
-	NotReady int `json:"notReady"`
-	Cordoned int `json:"cordoned"`
-}
+type NodeCount = health.NodeFleetCounts
 
 type JobCount struct {
 	Total     int `json:"total"`
@@ -239,23 +249,20 @@ type DashboardChange struct {
 	Timestamp  string `json:"timestamp"`
 }
 
+// DashboardTrafficSummary names the traffic source Radar has detected. Home's
+// Live Traffic card draws a fixed picture of the Traffic view and reads only
+// this name, so the dashboard does not read flows.
 type DashboardTrafficSummary struct {
-	Source    string             `json:"source"`
-	FlowCount int                `json:"flowCount"`
-	TopFlows  []DashboardTopFlow `json:"topFlows"`
-}
-
-type DashboardTopFlow struct {
-	Src            string  `json:"src"`
-	Dst            string  `json:"dst"`
-	RequestsPerSec float64 `json:"requestsPerSec,omitempty"`
-	Connections    int64   `json:"connections"`
+	Source string `json:"source"`
 }
 
 type DashboardHelmSummary struct {
-	Total      int                    `json:"total"`
-	Releases   []DashboardHelmRelease `json:"releases"`
-	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases (RBAC-denied)
+	Total    int                    `json:"total"`
+	Releases []DashboardHelmRelease `json:"releases"`
+	// Restricted is true when no Helm records could be read and the caller was
+	// refused. A refusal in only some namespaces leaves it false and fills
+	// UnreadNamespaces instead.
+	Restricted bool `json:"restricted,omitempty"`
 	// Error + ErrorCode are populated when the Helm read failed for a
 	// reason other than RBAC (Helm client not initialized, no resolved
 	// rest.Config, network error). Lets the dashboard widget render
@@ -265,6 +272,12 @@ type DashboardHelmSummary struct {
 	// unreachable, timed_out, unconfigured, auth_required).
 	Error     string `json:"error,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
+	// UnreadNamespaces are namespaces whose Helm records weren't read: the
+	// caller was refused there, or the permission check behind that went
+	// unanswered. Their releases are missing from Total and Releases; the Helm
+	// view may still list them from objects the caller can read. Absent when
+	// every namespace in scope was read, and on a restricted or failed answer.
+	UnreadNamespaces *resourceapi.NameSet `json:"unreadNamespaces,omitempty"`
 }
 
 type DashboardHelmRelease struct {
@@ -282,7 +295,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	dashStart := time.Now()
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if readscope.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, DashboardResponse{AccessRestricted: true})
 		return
 	}
@@ -330,11 +343,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	var wg sync.WaitGroup
 	var cluster DashboardCluster
 	var metrics *DashboardMetrics
-	var trafficSummary *DashboardTrafficSummary
 
 	ctx := r.Context()
 
-	wg.Add(3)
+	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		t := time.Now()
@@ -353,18 +365,17 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		k8s.LogTiming("  [dashboard] metrics: %v", time.Since(t))
 	}()
-	go func() {
-		defer wg.Done()
-		t := time.Now()
-		trafficSummary = s.getDashboardTrafficSummary(ctx, namespaces)
-		k8s.LogTiming("  [dashboard] traffic: %v", time.Since(t))
-	}()
 
 	// --- Fast cache-based calls: run while network calls are in flight ---
 	// Iterate per allowed namespace and aggregate. For cluster-admin / no-auth
 	// callers iterateNamespaces is [""], so this collapses to a single
 	// cluster-wide call.
 	t := time.Now()
+	// Problems follow the issues' read rules: a cluster-scoped problem needs
+	// list on its kind, and a Secret's own problem and one drawn from Secrets
+	// need Secret access.
+	canReadClusterScoped := s.issueClusterScopedAccess(r)
+	canReadSubject, canReadEvidence := s.issueSubjectAccess(r), s.issueEvidenceAccess(r)
 	for _, ns := range iterateNamespaces {
 		h, probs := s.getDashboardHealth(cache, ns)
 		resp.Health.Healthy += h.Healthy
@@ -373,6 +384,19 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		for _, p := range probs {
 			if p.Kind == "Node" && !canReadNodes {
 				continue
+			}
+			if p.Namespace == "" && !canReadClusterScoped(p.Kind, p.Group) {
+				continue
+			}
+			if !canReadSubject(issues.Ref{Group: p.Group, Kind: p.Kind, Namespace: p.Namespace, Name: p.Name}) {
+				continue
+			}
+			switch issues.ViewEvidence(p.requiredReads, p.degraded, canReadEvidence, false) {
+			case issues.EvidenceWithheld:
+				continue
+			case issues.EvidenceDegraded:
+				p.Message = p.degraded.Message
+				p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
 			}
 			resp.Problems = append(resp.Problems, p)
 		}
@@ -401,32 +425,42 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	resp.Audit = s.getDashboardAudit(r, cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
+	// A zero would read as an empty cluster, so a kind that neither the caller
+	// nor Radar's own identity can list is marked restricted. Without auth
+	// canRead is always true, yet Radar may have no informer for the kind.
+	nodesCounted := false
 	if canReadNodes {
 		if nodeLister := cache.Nodes(); nodeLister != nil {
 			nodeList, _ := nodeLister.List(labels.Everything())
-			resp.ResourceCounts.Nodes.Total = len(nodeList)
-			for _, n := range nodeList {
-				h := health.Node(n)
-				if h.Ready {
-					if h.Unschedulable {
-						resp.ResourceCounts.Nodes.Cordoned++
-					} else {
-						resp.ResourceCounts.Nodes.Ready++
-					}
-				} else {
-					resp.ResourceCounts.Nodes.NotReady++
-				}
-			}
+			resp.ResourceCounts.Nodes = health.CountNodeFleet(nodeList, time.Now())
+			nodesCounted = true
 		}
 	}
+	if !nodesCounted {
+		resp.ResourceCounts.Restricted = append(resp.ResourceCounts.Restricted, "nodes")
+	}
+	namespacesCounted := false
 	if canReadNamespaces {
 		if nsLister := cache.Namespaces(); nsLister != nil {
 			nss, _ := nsLister.List(labels.Everything())
 			resp.ResourceCounts.Namespaces = len(nss)
+			namespacesCounted = true
 		}
-	} else if len(namespaces) > 0 {
-		// Restricted user — surface their accessible count instead of "0".
-		resp.ResourceCounts.Namespaces = len(namespaces)
+	}
+	if !namespacesCounted {
+		// Count the namespaces the caller can see that Radar collects Pods in,
+		// whatever the picker narrowed this request to, as the listed count
+		// would be. It is a lower bound: the cluster may hold more.
+		// KindNamespaces is nil both for cluster-wide Pods and for no Pods at
+		// all; only the first may stand in for every namespace.
+		collected := cache.KindNamespaces(k8score.Pods)
+		if cache.KindReadinessFor(k8score.Pods) == k8s.KindUnavailable {
+			collected = []string{}
+		}
+		if visible := s.getUserNamespaces(r, nil); !readscope.NoNamespaceAccess(visible) {
+			resp.ResourceCounts.Namespaces = len(readscope.SelectNamespaces(collected, visible))
+		}
+		resp.ResourceCounts.Restricted = append(resp.ResourceCounts.Restricted, "namespaces")
 	}
 
 	if canReadNodes && cache.Nodes() != nil {
@@ -443,7 +477,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// data exists. metrics is now non-nil whenever nodes are cached, so gate the
 	// flag on actual usage so the frontend's "usage unavailable" hint still fires.
 	resp.MetricsServerAvailable = metrics != nil && metrics.UsageAvailable
-	resp.TrafficSummary = trafficSummary
+	resp.TrafficSummary = s.getDashboardTrafficSummary()
 
 	k8s.LogTiming(" [dashboard] total: %v", time.Since(dashStart))
 	s.writeJSON(w, resp)
@@ -454,13 +488,13 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces, ok := s.resolveHelmNamespaces(r)
+	namespaces, ok, checked, unread := s.resolveHelmStorageScope(r)
 	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
 		return
 	}
 
-	summary := s.getDashboardHelmSummary(r, namespaces)
+	summary := s.getDashboardHelmSummary(r, namespaces, checked, unread...)
 	s.writeJSON(w, summary)
 }
 
@@ -481,7 +515,7 @@ func (s *Server) handleDashboardCRDs(w http.ResponseWriter, r *http.Request) {
 	namespaces := s.parseNamespacesForUser(r)
 
 	clusterScoped := s.collectClusterScopedCRDCounts(r)
-	nsScoped := s.collectNamespacedCRDCounts(r.Context(), namespaces)
+	nsScoped := s.collectNamespacedCRDCounts(r, namespaces)
 
 	s.writeJSON(w, DashboardCRDsResponse{TopCRDs: mergeCRDCounts(clusterScoped, nsScoped)})
 }
@@ -491,8 +525,13 @@ func (s *Server) getDashboardCluster(ctx context.Context) DashboardCluster {
 	if err != nil {
 		return DashboardCluster{Connected: false}
 	}
+	return dashboardClusterFromInfo(info)
+}
+
+func dashboardClusterFromInfo(info *k8s.ClusterInfo) DashboardCluster {
 	return DashboardCluster{
-		Name:                   info.Cluster,
+		Name:                   info.DisplayName(),
+		KubeconfigCluster:      info.KubeconfigCluster(),
 		Platform:               info.Platform,
 		Version:                info.KubernetesVersion,
 		Connected:              true,
@@ -572,6 +611,10 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		}
 		sort.Strings(reasonParts)
 
+		duration := ""
+		if !g.onsetUnknown {
+			duration = timeutil.FormatAgeShort(g.newestDur)
+		}
 		problems = append(problems, DashboardProblem{
 			Kind:      key.kind,
 			Namespace: key.namespace,
@@ -584,10 +627,11 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 				return "pods"
 			}()),
 			Message:         k8s.Truncate(strings.Join(reasonParts, ", "), 200),
-			Age:             k8s.FormatAge(g.newestAge),
+			Age:             timeutil.FormatAgeShort(g.newestAge),
 			AgeSeconds:      int64(g.newestAge.Seconds()),
-			Duration:        k8s.FormatAge(g.newestDur),
+			Duration:        duration,
 			DurationSeconds: int64(g.newestDur.Seconds()),
+			OnsetUnknown:    g.onsetUnknown,
 			PodCount:        g.podCount,
 		})
 	}
@@ -686,6 +730,8 @@ func detectionToDashboardProblem(p k8s.Detection) DashboardProblem {
 		Duration:        p.Duration,
 		DurationSeconds: p.DurationSeconds,
 		OnsetUnknown:    p.OnsetUnknown,
+		requiredReads:   p.RequiredReads,
+		degraded:        p.Degraded,
 	}
 }
 
@@ -728,8 +774,15 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		}
 	}
 
+	if verdict := health.Pod(pod, now); verdict.Reason == "ReadinessGatesNotReady" {
+		reason, message = verdict.Reason, verdict.Message
+	}
 	ageDur := now.Sub(pod.CreationTimestamp.Time)
-	durDur := podProblemDuration(pod, now)
+	durDur, onsetUnknown := podProblemDuration(pod, now)
+	duration := ""
+	if !onsetUnknown {
+		duration = timeutil.FormatAgeShort(durDur)
+	}
 
 	return DashboardProblem{
 		Kind:            "Pod",
@@ -738,47 +791,56 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		Severity:        severity,
 		Reason:          reason,
 		Message:         k8s.Truncate(message, 200),
-		Age:             k8s.FormatAge(ageDur),
+		Age:             timeutil.FormatAgeShort(ageDur),
 		AgeSeconds:      int64(ageDur.Seconds()),
-		Duration:        k8s.FormatAge(durDur),
+		Duration:        duration,
 		DurationSeconds: int64(durDur.Seconds()),
+		OnsetUnknown:    onsetUnknown,
 	}
 }
 
 // podProblemDuration estimates how long a pod has been in a problematic state.
 // Uses condition lastTransitionTime when available, falls back to creation time.
-func podProblemDuration(pod *corev1.Pod, now time.Time) time.Duration {
+func podProblemDuration(pod *corev1.Pod, now time.Time) (time.Duration, bool) {
+	if verdict := health.Pod(pod, now); verdict.Reason == "ReadinessGatesNotReady" {
+		since, _ := health.PodReadinessGateFailure(pod, now)
+		if since.IsZero() {
+			return 0, true
+		}
+		return now.Sub(since), false
+	}
 	// For pending pods: use the PodScheduled or Ready condition transition
 	// For running-but-unhealthy: use ContainersReady condition transition
 	// For failed: use the Ready condition transition
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.ContainersReady && cond.Status == corev1.ConditionFalse {
 			if !cond.LastTransitionTime.IsZero() {
-				return now.Sub(cond.LastTransitionTime.Time)
+				return now.Sub(cond.LastTransitionTime.Time), false
 			}
 		}
 		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionFalse {
 			if !cond.LastTransitionTime.IsZero() {
-				return now.Sub(cond.LastTransitionTime.Time)
+				return now.Sub(cond.LastTransitionTime.Time), false
 			}
 		}
 		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
 			if !cond.LastTransitionTime.IsZero() {
-				return now.Sub(cond.LastTransitionTime.Time)
+				return now.Sub(cond.LastTransitionTime.Time), false
 			}
 		}
 	}
 	// Fallback: use pod creation time
-	return now.Sub(pod.CreationTimestamp.Time)
+	return now.Sub(pod.CreationTimestamp.Time), false
 }
 
 type ownerKey struct{ kind, namespace, name string }
 type ownerGroup struct {
-	podCount  int
-	severity  string
-	reasons   map[string]int
-	newestDur time.Duration
-	newestAge time.Duration
+	podCount     int
+	severity     string
+	reasons      map[string]int
+	newestDur    time.Duration
+	onsetUnknown bool
+	newestAge    time.Duration
 }
 
 // collectPodForRollup groups a problematic pod under its owner workload, or adds it as an orphan.
@@ -831,7 +893,8 @@ func collectPodForRollup(pod *corev1.Pod, severity string, now time.Time, groups
 	}
 
 	ageDur := now.Sub(pod.CreationTimestamp.Time)
-	durDur := podProblemDuration(pod, now)
+	durDur, onsetUnknown := podProblemDuration(pod, now)
+	g.onsetUnknown = g.onsetUnknown || onsetUnknown
 	if durDur < g.newestDur {
 		g.newestDur = durDur
 	}
@@ -1000,7 +1063,7 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 				counts.Gateways = len(gateways)
 			}
 		}
-		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
 			if rGVR, ok := resourceDiscovery.GetGVR(routeKind); ok {
 				routes, err := dynamicCache.List(rGVR, namespace)
 				if err != nil {
@@ -1167,79 +1230,22 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []str
 	return result
 }
 
-func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []string) *DashboardTrafficSummary {
+func (s *Server) getDashboardTrafficSummary() *DashboardTrafficSummary {
 	manager := traffic.GetManager()
 	if manager == nil {
 		return nil
 	}
-
 	sourceName := manager.GetActiveSourceName()
 	if sourceName == "" {
 		return nil
 	}
-
-	opts := traffic.DefaultFlowOptions()
-	// Traffic only supports single namespace filter for now
-	if len(namespaces) == 1 {
-		opts.Namespace = namespaces[0]
-	}
-
-	response, err := manager.GetFlows(ctx, opts)
-	if err != nil || len(response.Flows) == 0 {
-		return &DashboardTrafficSummary{
-			Source:    sourceName,
-			FlowCount: 0,
-			TopFlows:  []DashboardTopFlow{},
-		}
-	}
-
-	// The source only filters by a single namespace; restrict multi-namespace
-	// users here so the summary doesn't count flows outside their allowed set.
-	flows := response.Flows
-	if allowed := namespaceLookup(namespaces); allowed != nil {
-		kept := make([]traffic.Flow, 0, len(flows))
-		for _, f := range flows {
-			if flowVisibleForNamespaces(f, allowed) {
-				kept = append(kept, f)
-			}
-		}
-		flows = kept
-	}
-
-	// Aggregate flows
-	aggregated := traffic.AggregateFlows(flows)
-
-	// Sort by connection count
-	sort.Slice(aggregated, func(i, j int) bool {
-		return aggregated[i].Connections > aggregated[j].Connections
-	})
-
-	topFlows := make([]DashboardTopFlow, 0, 3)
-	limit := min(len(aggregated), 3)
-	for _, f := range aggregated[:limit] {
-		srcName := f.Source.Name
-		if f.Source.Workload != "" {
-			srcName = f.Source.Workload
-		}
-		dstName := f.Destination.Name
-		if f.Destination.Workload != "" {
-			dstName = f.Destination.Workload
-		}
-		topFlows = append(topFlows, DashboardTopFlow{
-			Src:         srcName,
-			Dst:         dstName,
-			Connections: f.Connections,
-		})
-	}
-
-	return &DashboardTrafficSummary{
-		Source:    sourceName,
-		FlowCount: len(aggregated),
-		TopFlows:  topFlows,
-	}
+	return &DashboardTrafficSummary{Source: sourceName}
 }
 
-func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {
+// unread are namespaces the storage scope already left out because the caller
+// can't list Secrets there; checked is false when a permission check behind
+// that went unanswered.
+func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, checked bool, unread ...string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
 		return DashboardHelmSummary{
@@ -1249,18 +1255,24 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 		}
 	}
 
-	var username string
-	var groups []string
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		username = user.Username
-		groups = user.Groups
-	}
-	releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
-	if err != nil {
-		if helm.IsForbiddenError(err) {
-			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
+	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()))
+	if (err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err) {
+		// With a permission check unanswered, the read may have fallen back
+		// to a cluster-wide list the caller can't make even though some
+		// namespace would allow it, so the refusal doesn't establish that.
+		if !checked {
+			return DashboardHelmSummary{
+				Releases:  []DashboardHelmRelease{},
+				Error:     "Couldn't check your access to Helm's records. Try again shortly.",
+				ErrorCode: ErrCodeUnreachable,
+			}
 		}
-		log.Printf("[dashboard] Failed to list Helm releases: %v", err)
+		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
+	}
+	if err != nil {
+		if !errors.Is(r.Context().Err(), context.Canceled) {
+			log.Printf("[dashboard] Failed to list Helm releases: %v", err)
+		}
 		return DashboardHelmSummary{
 			Releases:  []DashboardHelmRelease{},
 			Error:     err.Error(),
@@ -1268,7 +1280,11 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 		}
 	}
 
-	return dashboardHelmSummaryFromReleases(releases)
+	summary := dashboardHelmSummaryFromReleases(releases)
+	if missing := helm.UnreadStorageNamespaces(unread, denied); len(missing) > 0 {
+		summary.UnreadNamespaces = resourceapi.Names(missing, resourceapi.RESTSetLimit)
+	}
+	return summary
 }
 
 func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelmSummary {
@@ -1341,7 +1357,7 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 	// Capacity + scheduled-pod requests via the shared informer-derived
 	// computation (node_metrics.go). Namespace scoping keeps restricted users
 	// from seeing aggregate totals of namespaces they can't read.
-	cr := computeCapacityRequests(nodes, listPodsScoped(cache.Pods(), allowedNamespaces))
+	cr := computeCapacityRequests(nodes, readscope.ListPodsScoped(cache.Pods(), allowedNamespaces))
 	cpuCapacityMillis := cr.cpuCapMillis
 	memCapacityBytes := cr.memCapBytes
 	cpuRequestsMillis := cr.cpuReqMillis
@@ -1445,7 +1461,9 @@ func (s *Server) collectClusterScopedCRDCounts(r *http.Request) []DashboardCRDCo
 //     access). One call to dynamicCache.List with namespace="".
 //   - empty:      user has no namespace access; returns nil.
 //   - non-empty:  iterate per allowed namespace and sum.
-func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string) []DashboardCRDCount {
+//
+// Trivy reports count only in namespaces where the caller may list them.
+func (s *Server) collectNamespacedCRDCounts(r *http.Request, allowed []string) []DashboardCRDCount {
 	if allowed != nil && len(allowed) == 0 {
 		return nil
 	}
@@ -1461,6 +1479,7 @@ func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string)
 
 	seen := make(map[string]bool)
 	var counts []DashboardCRDCount
+	trivyAccess := s.newTrivyCountAccess(r)
 	for _, res := range resources {
 		if !res.IsCRD || !res.Namespaced {
 			continue
@@ -1478,8 +1497,16 @@ func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string)
 		if !dynamicCache.IsSynced(gvr) {
 			continue
 		}
+		scope := allowed
+		if res.Group == aicontext.TrivyGroup {
+			readable, all, complete := trivyAccess.scope(gvr, allowed)
+			if !complete || (!all && len(readable) == 0) {
+				continue
+			}
+			scope = readable
+		}
 		total := 0
-		if allowed == nil {
+		if scope == nil {
 			// Cluster-wide list across all namespaces.
 			items, err := dynamicCache.List(gvr, "")
 			if err != nil {
@@ -1488,7 +1515,7 @@ func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string)
 			}
 			total = len(items)
 		} else {
-			for _, ns := range allowed {
+			for _, ns := range scope {
 				items, err := dynamicCache.List(gvr, ns)
 				if err != nil {
 					log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s in ns=%s: %v", k8s.SanitizeForLog(res.Name), k8s.SanitizeForLog(res.Group), k8s.SanitizeForLog(ns), err)
@@ -1842,7 +1869,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				coveredIfStaged[workload.key] = true
 			}
 		}
-		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels)
+		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
 		for _, policy := range calicoPolicies {
 			if policy.definition.Namespaced && policy.policy.GetNamespace() != workload.namespace {
 				continue

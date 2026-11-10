@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Badge, Collapse, ConfirmDialog, SelectMenu } from '@skyhook-io/k8s-ui'
 import { ArrowLeft, Info } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
-import type { ConnectionFeedback } from './ConnectionFormActions'
+import type { FormFeedback } from './FormSaveActions'
 import {
   apiUrl,
   getApiBase,
@@ -47,11 +47,13 @@ export interface StoredConnection {
   source: string
   inFileName: string
   availability: 'available' | 'removed' | 'unavailable'
+  mode: string
   url: string
   headerKeys: string[]
   envHeaderKeys: string[]
   secretSet: boolean
   insecureTls: boolean
+  clusterId: string
   error?: string
 }
 export interface IntegrationProfile {
@@ -114,10 +116,22 @@ const savedCredential: Record<IntegrationKind, string> = {
 }
 function describeSource(kind: IntegrationKind, source: { url: string; secretSet: boolean; headerKeys: string[]; mode?: string; clusterId?: string }) {
   if (source.url) return source.url
-  if (kind === 'cost' && source.mode === 'prometheus') return 'OpenCost via this cluster’s metrics connection'
+  if (kind === 'cost' && source.mode === 'prometheus') return 'OpenCost metrics'
   if (source.secretSet || source.headerKeys.length > 0) return `Auto-discovery with ${savedCredential[kind]}`
   if (source.clusterId) return 'Auto-discovery with a Kubecost cluster mapping'
   return 'Auto-discovery'
+}
+// Cost's reset also returns the source picker to Automatic, so it can't share
+// the endpoint-only "auto-discovery" wording.
+const automaticAction: Record<IntegrationKind, string> = {
+  metrics: 'Use auto-discovery',
+  argocd: 'Use auto-discovery',
+  cost: 'Reset to Automatic'
+}
+function sameIdentity(a?: TargetIdentity, b?: TargetIdentity) {
+  return !!a && !!b && a.server === b.server && a.user === b.user &&
+    a.tlsName === b.tlsName && a.trust === b.trust && a.proxy === b.proxy &&
+    !!a.insecureTls === !!b.insecureTls
 }
 const names: Record<IntegrationKind, string> = {
   metrics: 'Metrics',
@@ -173,9 +187,18 @@ export function LocalConnectionSettings({
   const confirmationCopy = useRef({ title: '', message: '', label: '' })
   const [confirmBack, setConfirmBack] = useState(false)
   const [accepted, setAccepted] = useState<IntegrationKind[]>([])
-  const acceptedChanges = accepted.filter(
+  // The review page compares against one previous identity, so it can only
+  // approve integrations that were paused from that same identity.
+  const pausedKinds = (Object.keys(snapshot) as IntegrationKind[]).filter(
     (k) => snapshot[k].state === 'target_changed'
   )
+  const reviewKinds = pausedKinds.filter(
+    (k) => k === kind || sameIdentity(snapshot[k].previousIdentity, profile.previousIdentity)
+  )
+  const separateReviewKinds = pausedKinds.filter((k) => !reviewKinds.includes(k))
+  const separateIdentityKnown = !!profile.previousIdentity &&
+    separateReviewKinds.every((k) => !!snapshot[k].previousIdentity)
+  const acceptedChanges = accepted.filter((k) => reviewKinds.includes(k))
   const request = useRef<AbortController | null>(null)
   const catalogRequest = useRef<AbortController | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -184,6 +207,14 @@ export function LocalConnectionSettings({
   const editorRegion = useRef<HTMLFieldSetElement>(null)
   const trigger = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
+  // Focus moves in the commit that mounts a new draft form. Deferring it to a
+  // later frame lets keystrokes typed in between land in a different field.
+  const focusAfterDraft = useRef<(() => void) | null>(null)
+  useLayoutEffect(() => {
+    const focus = focusAfterDraft.current
+    focusAfterDraft.current = null
+    focus?.()
+  })
   const copySources = catalog.filter(c => c.integration === kind && !c.error && c.url && c.binding !== profile.target.binding)
   const removalContext = profile.target.context
   const dirty =
@@ -213,7 +244,7 @@ export function LocalConnectionSettings({
       .then(async (response) => {
         const data = (await response.json().catch(() => ({}))) as ConnectionResponse
         if (!response.ok)
-          throw new Error(data.error || 'Could not load saved connections.')
+          throw new Error(data.error || 'Could not load other clusters’ settings.')
         if (!controller.signal.aborted && getApiBase() === base) {
           setCatalog(data.connections)
           setCatalogError(false)
@@ -367,6 +398,7 @@ export function LocalConnectionSettings({
   const save = async (update: Update) => {
     const data = await fetchConnections(update)
     receive(data)
+    onDirtyChange(false)
     setConfirmBack(false)
     setTask('main')
     setPending(null)
@@ -448,7 +480,7 @@ export function LocalConnectionSettings({
         header.key.toLowerCase() === key.toLowerCase() && header.action === 'clear'))
       const keptSecret = credentialSource.secretSet && (!draft.secret || draft.secret.action === 'keep') && !draft.useCliToken
       if (keptHeaders || keptSecret) {
-        throw new Error('Remove or replace the saved credentials, or choose Use auto-discovery to clear this connection.')
+        throw new Error(`Remove or replace the saved credentials, or choose ${automaticAction[kind]} to clear this connection.`)
       }
     }
     const update: Update = automaticDraft && !draft.useCliToken
@@ -511,11 +543,12 @@ export function LocalConnectionSettings({
           setDiscoveryDraft(true)
           setDraftGeneration((generation) => generation + 1)
           setError('')
-          requestAnimationFrame(() => region.current?.querySelector<HTMLInputElement | HTMLSelectElement>('input:not(:disabled), select:not(:disabled)')?.focus())
+          // Cost's first control is its source picker, a listbox trigger.
+          focusAfterDraft.current = () => region.current?.querySelector<HTMLElement>('input:not(:disabled), button[aria-haspopup="listbox"]:not(:disabled)')?.focus()
         }}
         className="text-xs text-accent-text hover:underline disabled:opacity-50 shrink-0"
       >
-        Use auto-discovery
+        {automaticAction[kind]}
       </button>
     ) : undefined
   const previous = task === 'main' && profile.state === 'auto' ? profile.legacy : undefined
@@ -531,7 +564,7 @@ export function LocalConnectionSettings({
     setDraftGeneration(generation => generation + 1)
     setMessage('')
     setError('')
-    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+    focusAfterDraft.current = () => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
   }
   const copySource = (source: StoredConnection) => {
     setSelected(source)
@@ -547,7 +580,7 @@ export function LocalConnectionSettings({
     setDraftGeneration(generation => generation + 1)
     setMessage('')
     setError('')
-    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+    focusAfterDraft.current = () => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
   }
   const reuseOptions = task === 'main' && profile.state !== 'launch' ? [
     ...(previous ? [{
@@ -601,43 +634,63 @@ export function LocalConnectionSettings({
       {copyAction}
     </div>
   )
+  const previousIdentity = profile.previousIdentity
+  const currentIdentity = profile.target.identity
+  const trustChanges = previousIdentity ? [
+    previousIdentity.trust !== currentIdentity.trust && 'CA trust changed',
+    previousIdentity.proxy !== currentIdentity.proxy && 'Proxy changed',
+    (previousIdentity.tlsName !== currentIdentity.tlsName ||
+      previousIdentity.insecureTls !== currentIdentity.insecureTls) && 'TLS settings changed',
+  ].filter((change): change is string => !!change) : []
+  const removedByDiscovery = [
+    profile.url && (kind === 'cost' ? 'Kubecost endpoint' : 'endpoint'),
+    (profile.secretSet || profile.headerKeys.length > 0) &&
+      (kind === 'metrics' ? 'headers' : kind === 'argocd' ? 'API token' : 'API key'),
+    kind === 'cost' && profile.clusterId && 'Kubecost cluster mapping'
+  ].filter((item): item is string => !!item)
+  const removedList: string | undefined = removedByDiscovery.length > 1
+    ? `${removedByDiscovery.slice(0, -1).join(', ')} and ${removedByDiscovery[removedByDiscovery.length - 1]}`
+    : removedByDiscovery[0]
+  const removedPhrase = kind === 'cost'
+    ? removedList ?? 'cost settings'
+    : `${names[kind]} ${removedList ?? 'settings'}`
+  const discoveryNotice = kind === 'cost'
+    ? `Saving resets this cluster’s cost source to Automatic and removes its saved ${removedPhrase}. Other clusters are unchanged.`
+    : `Saving switches this cluster to auto-discovery and removes its saved ${removedPhrase}. Other clusters are unchanged.`
   const useMetricsForCost =
     pending?.action === 'auto' && pending.mode === 'prometheus'
+  // Paused settings have no editor, so an automatic reset there can only come
+  // from declining them.
+  const decliningPaused =
+    pending?.action === 'auto' && !useMetricsForCost && profile.state === 'target_changed'
   const confirmationTitle = useMetricsForCost
     ? 'Use metrics for cost data?'
-    : 'Replace saved connection?'
+    : decliningPaused
+      ? kind === 'cost' ? 'Reset cost source to Automatic?' : 'Use auto-discovery instead?'
+      : 'Replace saved connection?'
   const confirmationLabel = useMetricsForCost
     ? 'Use metrics connection'
-    : 'Replace connection'
+    : decliningPaused
+      ? automaticAction[kind]
+      : 'Replace connection'
   const confirmationMessage = useMetricsForCost
       ? `Remove the saved Kubecost connection, credentials and cluster mapping for ${removalContext || 'this cluster'} and use its metrics connection for cost data. Other clusters are unchanged.`
-      : `Replace the saved ${names[kind]} connection for ${removalContext || 'this cluster'} with your changes? Other clusters are unchanged.`
+      : decliningPaused
+        ? `Remove the saved ${removedPhrase} for ${removalContext || 'this cluster'} and ${kind === 'cost' ? 'reset its cost source to Automatic' : 'use auto-discovery'}? Other clusters are unchanged.`
+        : `Replace the saved ${names[kind]} connection for ${removalContext || 'this cluster'} with your changes? Other clusters are unchanged.`
   if (pending)
     confirmationCopy.current = {
       title: confirmationTitle,
       message: confirmationMessage,
       label: confirmationLabel
     }
-  const removedByDiscovery = [
-    profile.url && 'endpoint',
-    (profile.secretSet || profile.headerKeys.length > 0) &&
-      (kind === 'metrics' ? 'headers' : kind === 'argocd' ? 'API token' : 'API key'),
-    kind === 'cost' && profile.clusterId && 'Kubecost cluster mapping'
-  ].filter((item): item is string => !!item)
-  const discoveryNotice = `Saving switches this cluster to auto-discovery and removes its saved ${names[kind]} ${
-    removedByDiscovery.length
-      ? removedByDiscovery.length > 1
-        ? `${removedByDiscovery.slice(0, -1).join(', ')} and ${removedByDiscovery[removedByDiscovery.length - 1]}`
-        : removedByDiscovery[0]
-      : 'settings'
-  }. Other clusters are unchanged.`
   const showFeedback = discoveryDraft ? automaticDraft && hasSavedConfiguration : !!(
     message &&
     task === 'main' &&
     messageRevision === profile.revision &&
     (messageWarning || !dirty)
   )
-  const feedback: ConnectionFeedback | undefined = showFeedback ? {
+  const feedback: FormFeedback | undefined = showFeedback ? {
     tone: discoveryDraft ? 'info' : messageWarning ? 'warning' : 'success',
     message: discoveryDraft ? discoveryNotice : message,
   } : undefined
@@ -669,7 +722,7 @@ export function LocalConnectionSettings({
             className="flex items-center gap-1 text-xs text-accent-text"
           >
             <ArrowLeft className="h-3 w-3" />
-            Back to {names[kind].toLowerCase()}
+            Back to {names[kind]}
           </button>
           <h4
             ref={heading}
@@ -762,20 +815,29 @@ export function LocalConnectionSettings({
               </Badge>
               <p className="text-sm text-theme-text-secondary">
                 {profile.state === 'target_changed'
-                  ? `The server, certificate authority, proxy or user for this context changed, so its saved ${names[kind]} settings are paused. Review them to keep using them here.`
+                  ? `The server, certificate authority, proxy or user for this context changed, so its saved ${names[kind]} settings are paused. Review them to keep using them here, or ${kind === 'cost' ? 'reset this cluster to Automatic' : 'use auto-discovery instead'}.`
                   : profile.error}
               </p>
               {profile.state === 'target_changed' && (
-                <button
-                  type="button"
-                  className="btn-brand px-3 py-2 text-xs"
-                  onClick={() => {
-                    setAccepted([kind])
-                    openTask('reconfirm')
-                  }}
-                >
-                  Review changes
-                </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="btn-brand px-3 py-2 text-xs"
+                    onClick={() => {
+                      setAccepted([kind])
+                      openTask('reconfirm')
+                    }}
+                  >
+                    Review changes
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-accent-text hover:underline"
+                    onClick={() => confirm({ action: 'auto', ...(kind === 'cost' ? { mode: 'auto' } : {}) })}
+                  >
+                    {kind === 'cost' ? automaticAction.cost : 'Use auto-discovery instead'}
+                  </button>
+                </div>
               )}
               {profile.state === 'error' && !error && (
                 <button
@@ -799,7 +861,7 @@ export function LocalConnectionSettings({
           ) : null}
         </>
       )}
-      <fieldset ref={editorRegion} className="min-w-0">
+      <fieldset ref={editorRegion} className="min-w-0 empty:hidden">
         {editor &&
           (kind === 'metrics' ? (
             <PrometheusConnectionForm
@@ -867,7 +929,7 @@ export function LocalConnectionSettings({
             />
           ))}
       </fieldset>
-      {!editor && <Collapse open={showFeedback} className="!mt-0">
+      {!editor && task === 'main' && <Collapse open={showFeedback} className="!mt-0">
         <p role="status" className={`pt-2 text-xs ${messageWarning ? 'text-warning-text' : 'text-theme-text-secondary'}`}>{feedback?.message}</p>
       </Collapse>}
       <ConfirmDialog
@@ -901,35 +963,37 @@ export function LocalConnectionSettings({
             another cluster’s data.
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
-            <dt className="text-theme-text-tertiary">Previous server</dt>
-            <dd className="break-all">
-              {profile.previousIdentity?.server || 'Not recorded'}
-            </dd>
-            <dt className="text-theme-text-tertiary">Current server</dt>
-            <dd className="break-all">{profile.target.identity.server}</dd>
+            {previousIdentity && previousIdentity.server === currentIdentity.server ? (
+              <>
+                <dt className="text-theme-text-tertiary">Server</dt>
+                <dd className="break-all">{currentIdentity.server} (unchanged)</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-theme-text-tertiary">Previous server</dt>
+                <dd className="break-all">
+                  {previousIdentity?.server || 'Not recorded'}
+                </dd>
+                <dt className="text-theme-text-tertiary">Current server</dt>
+                <dd className="break-all">{currentIdentity.server}</dd>
+              </>
+            )}
             <dt className="text-theme-text-tertiary">User reference</dt>
             <dd>
-              {profile.previousIdentity?.user || '—'} →{' '}
-              {profile.target.identity.user || '—'}
+              {previousIdentity && previousIdentity.user === currentIdentity.user
+                ? `${currentIdentity.user || '—'} (unchanged)`
+                : `${previousIdentity?.user || '—'} → ${currentIdentity.user || '—'}`}
             </dd>
             <dt className="text-theme-text-tertiary">Trust / proxy</dt>
             <dd>
-              {profile.previousIdentity?.trust !== profile.target.identity.trust
-                ? 'CA trust changed. '
-                : ''}
-              {profile.previousIdentity?.proxy !== profile.target.identity.proxy
-                ? 'Proxy changed. '
-                : ''}
-              {profile.previousIdentity?.tlsName !==
-                profile.target.identity.tlsName ||
-              profile.previousIdentity?.insecureTls !==
-                profile.target.identity.insecureTls
-                ? 'TLS settings changed.'
-                : ''}
+              {!previousIdentity
+                ? 'Not recorded'
+                : trustChanges.length
+                  ? trustChanges.join(' · ')
+                  : 'Unchanged'}
             </dd>
           </dl>
-          {(Object.keys(snapshot) as IntegrationKind[])
-            .filter((k) => snapshot[k].state === 'target_changed')
+          {reviewKinds
             .map((k) => (
               <label key={k} className="flex items-center gap-2 text-sm">
                 <input
@@ -943,7 +1007,7 @@ export function LocalConnectionSettings({
                     )
                   }
                 />
-                {names[k]} · {snapshot[k].url || 'Cluster discovery'}
+                {names[k]} · {snapshot[k].url || 'Auto-discovery'}
               </label>
             ))}
           <button
@@ -956,6 +1020,14 @@ export function LocalConnectionSettings({
           >
             Keep selected settings for this cluster
           </button>
+          {separateReviewKinds.length > 0 && (
+            <p className="text-xs text-theme-text-secondary">
+              {separateReviewKinds.map((k) => names[k]).join(' and ')}{' '}
+              {separateIdentityKnown
+                ? `${separateReviewKinds.length > 1 ? 'were' : 'was'} saved for a different previous cluster, so ${separateReviewKinds.length > 1 ? 'review them in their own tabs' : 'review it in its own tab'}.`
+                : `${separateReviewKinds.length > 1 ? 'need separate reviews in their own tabs' : 'needs a separate review in its own tab'}.`}
+            </p>
+          )}
         </div>
       )}
       {error && !pending && (

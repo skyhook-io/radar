@@ -2,9 +2,11 @@ package upgrade
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +45,172 @@ func TestReadBoundedUpgradeResponse(t *testing.T) {
 			}
 			if !tc.wantErr && string(got) != tc.body {
 				t.Fatalf("body = %q, want %q", got, tc.body)
+			}
+		})
+	}
+}
+
+func TestReadAPIMetricsEvidenceKeepsOnlyDeprecatedAPISeries(t *testing.T) {
+	body := `# HELP apiserver_request_duration_seconds Response latency distribution.
+# TYPE apiserver_request_duration_seconds histogram
+apiserver_request_duration_seconds_bucket{verb="GET",le="0.05"} 12
+# HELP apiserver_requested_deprecated_apis_total Not the series we read.
+apiserver_requested_deprecated_apis_total{removed_release="1.25"} 9
+# HELP apiserver_requested_deprecated_apis Gauge of deprecated APIs that have been requested.
+# TYPE apiserver_requested_deprecated_apis gauge
+apiserver_requested_deprecated_apis{group="",removed_release="1.25",resource="podsecuritypolicies",subresource="",version="v1beta1"} 3
+# TYPE process_start_time_seconds gauge
+process_start_time_seconds 1.721234567e+09
+process_start_time_seconds_extra 7
+`
+	raw, err := readAPIMetricsEvidence(io.NopCloser(bytes.NewBufferString(body)), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("request_duration")) || bytes.Contains(raw, []byte("_total")) || bytes.Contains(raw, []byte("_extra")) {
+		t.Fatalf("unrelated series kept:\n%s", raw)
+	}
+	requests, startedAt, err := parseDeprecatedAPIRequests(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].Resource != "podsecuritypolicies" || requests[0].Requests != 3 {
+		t.Fatalf("requests = %+v", requests)
+	}
+	if got := startedAt.Unix(); got != 1721234567 {
+		t.Fatalf("process start = %d, want 1721234567", got)
+	}
+}
+
+func TestReadAPIMetricsEvidenceHandlesBodiesOverSixteenMiB(t *testing.T) {
+	var body bytes.Buffer
+	filler := "apiserver_request_duration_seconds_bucket{verb=\"GET\",resource=\"pods\",le=\"0.05\"} 12\n"
+	for body.Len() < 17<<20 {
+		body.WriteString(filler)
+	}
+	body.WriteString("apiserver_requested_deprecated_apis{group=\"\",removed_release=\"1.25\",resource=\"podsecuritypolicies\",subresource=\"\",version=\"v1beta1\"} 1\n")
+	raw, err := readAPIMetricsEvidence(io.NopCloser(&body), upgradeAPIMetricsResponseLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests, _, err := parseDeprecatedAPIRequests(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 {
+		t.Fatalf("requests = %+v, want the one deprecated series", requests)
+	}
+}
+
+func TestReadAPIMetricsEvidenceSkipsLongUnrelatedLines(t *testing.T) {
+	const deprecated = "apiserver_requested_deprecated_apis{group=\"\",removed_release=\"1.25\",resource=\"podsecuritypolicies\",subresource=\"\",version=\"v1beta1\"} 2"
+	body := "unrelated_metric{label=\"" + strings.Repeat("x", 2<<20) + "\"} 1\n" +
+		"# TYPE process_start_time_seconds gauge\nprocess_start_time_seconds 1.721234567e+09\n" +
+		deprecated
+	raw, err := readAPIMetricsEvidence(io.NopCloser(bytes.NewBufferString(body)), 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests, startedAt, err := parseDeprecatedAPIRequests(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || requests[0].Requests != 2 {
+		t.Fatalf("requests = %+v, want the deprecated series after the long line", requests)
+	}
+	if startedAt.Unix() != 1721234567 {
+		t.Fatalf("process start = %d, want 1721234567", startedAt.Unix())
+	}
+}
+
+func TestReadAPIMetricsEvidenceRejectsLongKeptLine(t *testing.T) {
+	body := "apiserver_requested_deprecated_apis{group=\"" + strings.Repeat("x", 2*upgradeAPIMetricsLineBuffer) + "\"} 1\n"
+	if _, err := readAPIMetricsEvidence(io.NopCloser(bytes.NewBufferString(body)), 1<<30); err == nil {
+		t.Fatal("expected an error for an oversized line the check needs")
+	}
+}
+
+func TestReadAPIMetricsEvidenceBoundsBytesScanned(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "at limit", body: "up 1\n"},
+		{name: "over limit", body: "up 1\nx", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := readAPIMetricsEvidence(io.NopCloser(bytes.NewBufferString(tc.body)), 5)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestReadAPIMetricsEvidenceWithoutDeprecatedSeriesIsObservedEmpty(t *testing.T) {
+	raw, err := readAPIMetricsEvidence(io.NopCloser(bytes.NewBufferString("up 1\n")), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests, _, err := parseDeprecatedAPIRequests(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests == nil || len(requests) != 0 {
+		t.Fatalf("requests = %#v, want observed empty slice", requests)
+	}
+}
+
+func TestCollectDeprecatedAPIRequestsReadsLargeMetricsBody(t *testing.T) {
+	const deprecated = "apiserver_requested_deprecated_apis{group=\"\",removed_release=\"1.25\",resource=\"podsecuritypolicies\",subresource=\"\",version=\"v1beta1\"} 4\n"
+	filler := "apiserver_request_duration_seconds_bucket{verb=\"GET\",resource=\"pods\",le=\"0.05\"} 12\n"
+	for _, tc := range []struct {
+		name         string
+		status       int
+		bodyBytes    int
+		wantRequests int
+		wantWindow   bool
+	}{
+		{name: "body over 16 MiB", status: http.StatusOK, bodyBytes: 17 << 20, wantRequests: 1, wantWindow: true},
+		{name: "body under 16 MiB", status: http.StatusOK, bodyBytes: 1 << 20, wantRequests: 1, wantWindow: true},
+		{name: "forbidden", status: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requestedPath string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestedPath = r.URL.Path
+				if tc.status != http.StatusOK {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`))
+					return
+				}
+				w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+				_, _ = io.WriteString(w, "# TYPE process_start_time_seconds gauge\nprocess_start_time_seconds 1.721234567e+09\n")
+				for written := 0; written < tc.bodyBytes; written += len(filler) {
+					_, _ = io.WriteString(w, filler)
+				}
+				_, _ = io.WriteString(w, deprecated)
+			}))
+			t.Cleanup(server.Close)
+
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests, window, failure := collectDeprecatedAPIRequestsWithClient(t.Context(), client.Discovery().RESTClient())
+			if requestedPath != "/metrics" {
+				t.Fatalf("request path = %q, want /metrics", requestedPath)
+			}
+			if len(requests) != tc.wantRequests || (window != "") != tc.wantWindow {
+				t.Fatalf("result = requests=%+v window=%q, want %d requests, window=%v", requests, window, tc.wantRequests, tc.wantWindow)
+			}
+			if tc.status == http.StatusForbidden && failure != upgradereadiness.APIMetricsForbidden {
+				t.Fatalf("failure = %q, want forbidden", failure)
+			}
+			if tc.status != http.StatusOK && requests != nil {
+				t.Fatalf("requests = %#v, want nil so the scan reports the metrics as unavailable", requests)
 			}
 		})
 	}
@@ -249,5 +417,130 @@ func TestCollectUpgradeNodeRuntimeEvidenceClassifiesObservedForbidden(t *testing
 	}
 	if requestedPath != "/api/v1/nodes/node-a/proxy/metrics" {
 		t.Fatalf("request path = %q, want node metrics proxy path", requestedPath)
+	}
+}
+
+func TestAPIMetricsFailuresReachUpgradeCheck(t *testing.T) {
+	for _, scenario := range []struct {
+		name        string
+		wantFailure upgradereadiness.APIMetricsFailure
+		wantText    string
+	}{
+		{"response too large", upgradereadiness.APIMetricsTooLarge, "exceeded Radar's size limit"},
+		{"required line too large", upgradereadiness.APIMetricsTooLarge, "exceeded Radar's size limit"},
+		{"forbidden", upgradereadiness.APIMetricsForbidden, "Grant get"},
+		{"unauthorized", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"truncated", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"malformed", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"HTML", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"metric then HTML", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"process metric then HTML", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"metric then malformed sample", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"malformed after validation batches", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"malformed metadata after sample", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"empty", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"canceled", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+		{"canceled during read", upgradereadiness.APIMetricsUnreadable, "could not read or parse"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if scenario.name == "canceled during read" {
+					w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+					_, _ = io.WriteString(w, "process_start_time_seconds 1721234567\n")
+					if err := http.NewResponseController(w).Flush(); err != nil {
+						t.Error(err)
+					}
+					cancel()
+					<-r.Context().Done()
+					return
+				}
+				if scenario.name == "truncated" {
+					hijacker, ok := w.(http.Hijacker)
+					if !ok {
+						t.Error("server cannot hijack connection")
+						return
+					}
+					conn, buf, err := hijacker.Hijack()
+					if err != nil {
+						t.Error(err)
+						return
+					}
+					defer conn.Close()
+					_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 9999\r\nContent-Type: text/plain\r\n\r\nprocess_start_time_seconds 1721234567\n")
+					_ = buf.Flush()
+					return
+				}
+				if scenario.name == "forbidden" || scenario.name == "unauthorized" {
+					w.Header().Set("Content-Type", "application/json")
+					if scenario.name == "unauthorized" {
+						w.WriteHeader(http.StatusUnauthorized)
+						_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Unauthorized","code":401}`)
+					} else {
+						w.WriteHeader(http.StatusForbidden)
+						_, _ = io.WriteString(w, `{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Forbidden","code":403}`)
+					}
+					return
+				}
+				w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+				switch scenario.name {
+				case "response too large":
+					// Isolate the byte cap from parsing work and the collection deadline.
+					chunk := strings.Repeat("# unrelated metrics metadata\n", 65536)
+					for written := 0; written <= upgradeAPIMetricsResponseLimit; written += len(chunk) {
+						if _, err := io.WriteString(w, chunk); err != nil {
+							return
+						}
+					}
+				case "required line too large":
+					_, _ = io.WriteString(w, "apiserver_requested_deprecated_apis{group=\""+strings.Repeat("x", 2*upgradeAPIMetricsLineBuffer)+"\"} 1\n")
+				case "malformed":
+					_, _ = io.WriteString(w, "process_start_time_seconds not-a-number\n")
+				case "HTML":
+					_, _ = io.WriteString(w, "<html><body>Sign in</body></html>\n")
+				case "metric then HTML":
+					_, _ = io.WriteString(w, "up 1\n<html><body>Sign in</body></html>\n")
+				case "process metric then HTML":
+					_, _ = io.WriteString(w, "process_start_time_seconds 1721234567\n<html><body>Sign in</body></html>\n")
+				case "metric then malformed sample":
+					_, _ = io.WriteString(w, "up 1\nunrelated_metric not-a-number\n")
+				case "malformed after validation batches":
+					_, _ = io.WriteString(w, strings.Repeat("unrelated_metric 1\n", 10000)+"<html>Sign in</html>\n")
+				case "malformed metadata after sample":
+					_, _ = io.WriteString(w, "up 1\n# TYPE unrelated_metric invalid_type\n")
+				}
+			}))
+			defer server.Close()
+			client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario.name == "canceled" {
+				cancel()
+			}
+			requests, window, failure := collectDeprecatedAPIRequestsWithClient(ctx, client.Discovery().RESTClient())
+			if requests != nil || window != "" || failure != scenario.wantFailure {
+				t.Fatalf("requests=%v window=%q failure=%q, want unavailable with %q", requests, window, failure, scenario.wantFailure)
+			}
+			result, err := RunFromCache(nil, nil, Options{CurrentVersion: "1.35", TargetVersion: "1.36", DeprecatedAPIRequests: requests, DeprecatedAPIMetricsWindow: window, DeprecatedAPIMetricsFailure: failure})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, check := range result.Checks {
+				if check.ID != "deprecated-api-requests" {
+					continue
+				}
+				if check.Status != upgradereadiness.CheckUnknown || !strings.Contains(check.Caveat, scenario.wantText) {
+					t.Fatalf("unexpected check: %+v", check)
+				}
+				if failure != upgradereadiness.APIMetricsForbidden && strings.Contains(check.Caveat, "Grant") {
+					t.Fatalf("non-permission failure suggests RBAC: %+v", check)
+				}
+				t.Logf("status=%s summary=%s caveat=%s", check.Status, check.Summary, check.Caveat)
+				return
+			}
+			t.Fatal("deprecated API check missing")
+		})
 	}
 }

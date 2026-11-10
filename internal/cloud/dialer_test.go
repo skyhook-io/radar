@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 func TestCloudHandshakeHeadersAlwaysAdvertiseSelfUpgradeCapability(t *testing.T) {
@@ -274,5 +276,16 @@ func TestDialLeavesAnUnansweredHandshakeUnmarked(t *testing.T) {
 	var answered *handshakeStatusError
 	if errors.As(err, &answered) {
 		t.Fatalf("a refused connection was marked as an answered handshake: %v", err)
+	}
+}
+
+func TestCloudHandshakeHeadersAdvertiseKubernetesCredentials(t *testing.T) {
+	if got := cloudHandshakeHeaders(Config{Token: "rhc_test"}, false).Get(kubernetesCredentialsHeader); got != "impersonate" {
+		t.Fatalf("default = %q, want impersonate", got)
+	}
+	pkgauth.SetCredentialMode(pkgauth.CredentialsUserToken)
+	t.Cleanup(func() { pkgauth.SetCredentialMode(pkgauth.CredentialsImpersonate) })
+	if got := cloudHandshakeHeaders(Config{Token: "rhc_test"}, false).Get(kubernetesCredentialsHeader); got != "user-token" {
+		t.Fatalf("user-token mode = %q", got)
 	}
 }

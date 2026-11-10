@@ -1,23 +1,39 @@
 package k8s
 
 import (
+	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func controllerRef(kind, name string) metav1.OwnerReference {
 	isController := true
-	return metav1.OwnerReference{APIVersion: "apps/v1", Kind: kind, Name: name, Controller: &isController}
+	api := "apps/v1"
+	if kind == "Job" || kind == "CronJob" {
+		api = "batch/v1"
+	}
+	if kind == "Rollout" {
+		api = "argoproj.io/v1alpha1"
+	}
+	return metav1.OwnerReference{APIVersion: api, Kind: kind, Name: name, UID: types.UID(name + "-uid"), Controller: &isController}
 }
 
 func ownedPod(namespace, name string, owner *metav1.OwnerReference, podLabels map[string]string) *corev1.Pod {
@@ -44,21 +60,27 @@ func newOwnershipCache(t *testing.T, types map[string]bool, objects ...runtime.O
 
 func TestWorkloadPodsFollowsControllerOwnership(t *testing.T) {
 	appLabels := map[string]string{"app": "api"}
-	apiRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
-	workerRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-worker-9c1", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api-worker")}}}
-	rolloutRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-rollout-a1b", OwnerReferences: []metav1.OwnerReference{controllerRef("Rollout", "api")}}}
+	apiRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", UID: "api-7f6-uid", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
+	workerRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-worker-9c1", UID: "api-worker-9c1-uid", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api-worker")}}}
+	rolloutRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-rollout-a1b", UID: "api-rollout-a1b-uid", OwnerReferences: []metav1.OwnerReference{controllerRef("Rollout", "api")}}}
 	apiOwner := controllerRef("ReplicaSet", "api-7f6")
 	workerOwner := controllerRef("ReplicaSet", "api-worker-9c1")
 	rolloutOwner := controllerRef("ReplicaSet", "api-rollout-a1b")
 	stsOwner := controllerRef("StatefulSet", "db")
-	nightlyJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "nightly-28800", OwnerReferences: []metav1.OwnerReference{controllerRef("CronJob", "nightly")}}}
-	adHocJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "nightly-manual"}}
+	nightlyJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "nightly-28800", UID: "nightly-28800-uid", OwnerReferences: []metav1.OwnerReference{controllerRef("CronJob", "nightly")}}}
+	adHocJob := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "nightly-manual", UID: "nightly-manual-uid"}}
 	nightlyOwner := controllerRef("Job", "nightly-28800")
 	adHocOwner := controllerRef("Job", "nightly-manual")
 	replicaStsOwner := controllerRef("StatefulSet", "db-replica")
 
 	cache := newOwnershipCache(t,
-		map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true, k8score.Jobs: true},
+		map[string]bool{k8score.Pods: true, k8score.Deployments: true, k8score.StatefulSets: true, k8score.DaemonSets: true, k8score.CronJobs: true, k8score.ReplicaSets: true, k8score.Jobs: true},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api", UID: "api-uid"}},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-worker", UID: "api-worker-uid"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "db", UID: "db-uid"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "db-replica", UID: "db-replica-uid"}},
+		&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "absent", UID: "absent-uid"}},
+		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "nightly", UID: "nightly-uid"}},
 		apiRS, workerRS, rolloutRS, nightlyJob, adHocJob,
 		ownedPod("shop", "api-7f6-b", &apiOwner, appLabels),
 		ownedPod("shop", "api-7f6-a", &apiOwner, appLabels),
@@ -86,7 +108,7 @@ func TestWorkloadPodsFollowsControllerOwnership(t *testing.T) {
 		{"daemonset", "absent", []string{}},
 	} {
 		t.Run(tc.kind+"/"+tc.name, func(t *testing.T) {
-			got, err := WorkloadPodNames(cache, tc.kind, "shop", tc.name)
+			got, err := WorkloadPodNames(context.Background(), cache, tc.kind, "shop", tc.name)
 			if err != nil {
 				t.Fatalf("WorkloadPodNames: %v", err)
 			}
@@ -100,19 +122,21 @@ func TestWorkloadPodsFollowsControllerOwnership(t *testing.T) {
 func TestWorkloadPodsReportsDeniedListersInsteadOfEmpty(t *testing.T) {
 	apiOwner := controllerRef("ReplicaSet", "api-7f6")
 	noReplicaSets := newOwnershipCache(t,
-		map[string]bool{k8score.Pods: true},
+		map[string]bool{k8score.Pods: true, k8score.Deployments: true, k8score.CronJobs: true},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api", UID: "api-uid"}},
+		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "nightly", UID: "nightly-uid"}},
 		ownedPod("shop", "api-7f6-a", &apiOwner, nil),
 	)
-	if _, err := WorkloadPods(noReplicaSets, "deployment", "shop", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), noReplicaSets, "deployment", "shop", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("deployment without replicasets lister: err = %v, want ErrWorkloadAccessDenied", err)
 	}
-	if _, err := WorkloadPods(noReplicaSets, "cronjob", "shop", "nightly"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), noReplicaSets, "cronjob", "shop", "nightly"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("cronjob without jobs lister: err = %v, want ErrWorkloadAccessDenied", err)
 	}
-	if _, err := WorkloadPods(&ResourceCache{}, "statefulset", "shop", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), &ResourceCache{}, "statefulset", "shop", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("no pods lister: err = %v, want ErrWorkloadAccessDenied", err)
 	}
-	if _, err := WorkloadPods(noReplicaSets, "service", "shop", "api"); err == nil {
+	if _, err := WorkloadPods(context.Background(), noReplicaSets, "service", "shop", "api"); err == nil {
 		t.Fatal("unsupported kind: want error")
 	}
 }
@@ -146,37 +170,52 @@ func newScopedOwnershipCache(t *testing.T, scopes map[string]k8score.ResourceSco
 // scope instead of permission.
 func TestWorkloadPodsRefuseNamespacesTheInformersDoNotCover(t *testing.T) {
 	apiOwner := controllerRef("ReplicaSet", "api-7f6")
-	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "api-7f6", UID: "api-7f6-uid", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
 
 	// Pods cover team-b; ReplicaSets watch only team-a. The parent lookup for
 	// every team-b pod misses, which would read as a workload with no pods.
 	hopElsewhere := newScopedOwnershipCache(t,
 		map[string]k8score.ResourceScope{
+			k8score.Deployments: {Enabled: true, Namespace: "team-b"},
 			k8score.Pods:        {Enabled: true, Namespace: "team-b"},
 			k8score.ReplicaSets: {Enabled: true, Namespace: "team-a"},
 		},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "api", UID: "api-uid"}},
 		ownedPod("team-b", "api-7f6-a", &apiOwner, nil), rs,
 	)
-	if _, err := WorkloadPods(hopElsewhere, "deployment", "team-b", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), hopElsewhere, "deployment", "team-b", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("replicasets scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
 	}
 
 	// The kinds needing no hop go through the same pod lister, so a pod
 	// informer that does not reach the namespace is refused for them too.
 	podsElsewhere := newScopedOwnershipCache(t,
-		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}},
+		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}, k8score.StatefulSets: {Enabled: true, Namespace: "team-b"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "db", UID: "db-uid"}},
 		ownedPod("team-b", "db-0", nil, nil),
 	)
-	if _, err := WorkloadPods(podsElsewhere, "statefulset", "team-b", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+	if _, err := WorkloadPods(context.Background(), podsElsewhere, "statefulset", "team-b", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("pods scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
+	}
+
+	// The root is read to learn its UID; a root informer scoped elsewhere
+	// would miss it and read as a deleted workload with no pods.
+	rootElsewhere := newScopedOwnershipCache(t,
+		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-b"}, k8score.StatefulSets: {Enabled: true, Namespace: "team-a"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "db", UID: "db-uid"}},
+		ownedPod("team-b", "db-0", nil, nil),
+	)
+	if _, err := WorkloadPods(context.Background(), rootElsewhere, "statefulset", "team-b", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("root informer scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
 	}
 
 	// The namespace it does cover still answers.
 	covered := newScopedOwnershipCache(t,
-		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}},
-		ownedPod("team-a", "db-0", &metav1.OwnerReference{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "db", Controller: func() *bool { b := true; return &b }()}, nil),
+		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}, k8score.StatefulSets: {Enabled: true, Namespace: "team-a"}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "db", UID: "db-uid"}},
+		ownedPod("team-a", "db-0", &metav1.OwnerReference{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "db", UID: "db-uid", Controller: func() *bool { b := true; return &b }()}, nil),
 	)
-	pods, err := WorkloadPodNames(covered, "statefulset", "team-a", "db")
+	pods, err := WorkloadPodNames(context.Background(), covered, "statefulset", "team-a", "db")
 	if err != nil {
 		t.Fatalf("covered namespace: %v", err)
 	}
@@ -190,25 +229,39 @@ func TestWorkloadPodsRefuseNamespacesTheInformersDoNotCover(t *testing.T) {
 // separates them.
 func TestWorkloadPodsSeparatesARolloutFromItsReferencedDeployment(t *testing.T) {
 	appLabels := map[string]string{"app": "api"}
-	deployRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-5d2", Labels: appLabels, OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
-	rolloutRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", Labels: appLabels, OwnerReferences: []metav1.OwnerReference{controllerRef("Rollout", "api")}}}
+	deployRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-5d2", UID: "api-5d2-uid", Labels: appLabels, OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
+	rolloutRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", UID: "api-7f6-uid", Labels: appLabels, OwnerReferences: []metav1.OwnerReference{controllerRef("Rollout", "api")}}}
 	deployPodOwner := controllerRef("ReplicaSet", "api-5d2")
 	rolloutPodOwner := controllerRef("ReplicaSet", "api-7f6")
 	cache := newOwnershipCache(t,
-		map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true},
+		map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true, k8score.Deployments: true},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api", UID: "api-uid"}},
 		deployRS, rolloutRS,
 		ownedPod("shop", "api-5d2-a", &deployPodOwner, appLabels),
 		ownedPod("shop", "api-7f6-a", &rolloutPodOwner, appLabels),
 	)
 
-	rollout, err := WorkloadPodNames(cache, "rollout", "shop", "api")
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "shop", "name": "api", "uid": "api-uid"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, root)
+	if err := InitTestDynamicResourceCache(dyn, []APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Rollout", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ResetTestDynamicState)
+	if err := GetDynamicResourceCache().EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
+		t.Fatal("Rollout cache did not sync")
+	}
+	rollout, err := WorkloadPodNames(context.Background(), cache, "rollout", "shop", "api")
 	if err != nil {
 		t.Fatalf("rollout: %v", err)
 	}
 	if len(rollout) != 1 || rollout[0] != "api-7f6-a" {
 		t.Fatalf("rollout pods = %v, want only the Rollout's", rollout)
 	}
-	deployment, err := WorkloadPodNames(cache, "deployment", "shop", "api")
+	deployment, err := WorkloadPodNames(context.Background(), cache, "deployment", "shop", "api")
 	if err != nil {
 		t.Fatalf("deployment: %v", err)
 	}
@@ -220,16 +273,17 @@ func TestWorkloadPodsSeparatesARolloutFromItsReferencedDeployment(t *testing.T) 
 // A ReplicaSet name is unique only within its namespace, so the owner lookup
 // must stay in the pod's namespace.
 func TestWorkloadPodsDoNotCrossNamespaces(t *testing.T) {
-	shopRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
-	otherRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "unrelated")}}}
+	shopRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", UID: "api-7f6-uid", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
+	otherRS := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "other", Name: "api-7f6", UID: "api-7f6-uid", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "unrelated")}}}
 	owner := controllerRef("ReplicaSet", "api-7f6")
 	cache := newOwnershipCache(t,
-		map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true},
+		map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true, k8score.Deployments: true},
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api", UID: "api-uid"}},
 		shopRS, otherRS,
 		ownedPod("shop", "api-7f6-a", &owner, nil),
 		ownedPod("other", "api-7f6-b", &owner, nil),
 	)
-	got, err := WorkloadPodNames(cache, "deployment", "shop", "api")
+	got, err := WorkloadPodNames(context.Background(), cache, "deployment", "shop", "api")
 	if err != nil {
 		t.Fatalf("WorkloadPodNames: %v", err)
 	}
@@ -274,5 +328,315 @@ func TestDirectlyOwnedPodsRefusesUncoveredNamespace(t *testing.T) {
 	cache := newScopedOwnershipCache(t, map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}})
 	if _, err := DirectlyOwnedPods(cache, "team-b", "cluster", "ray.io", "RayCluster", "uid"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWorkloadPodsForUIDVerifiesEveryControllerHop(t *testing.T) {
+	for _, tc := range []struct{ kind, group, childKind, childAPI string }{
+		{"Deployment", "apps", "ReplicaSet", "apps/v1"},
+		{"Rollout", "argoproj.io", "ReplicaSet", "apps/v1"},
+		{"CronJob", "batch", "Job", "batch/v1"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			controller := true
+			ref := func(api, kind, name, uid string) metav1.OwnerReference {
+				return metav1.OwnerReference{APIVersion: api, Kind: kind, Name: name, UID: types.UID(uid), Controller: &controller}
+			}
+			root := ref(tc.group+"/v1", tc.kind, "fleet", "current-root")
+			oldRoot := root
+			oldRoot.UID = "previous-root"
+			foreignRoot := root
+			foreignRoot.APIVersion = "other.example/v1"
+			rootObject := &unstructured.Unstructured{Object: map[string]any{"apiVersion": tc.group + "/v1", "kind": tc.kind, "metadata": map[string]any{"namespace": "shop", "name": "fleet", "uid": "current-root"}}}
+			objects := []runtime.Object{}
+			watches := map[string]bool{k8score.Pods: true}
+			switch tc.kind {
+			case "Deployment":
+				objects = append(objects, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "fleet", UID: "current-root"}})
+				watches[k8score.Deployments] = true
+			case "CronJob":
+				objects = append(objects, &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "fleet", UID: "current-root"}})
+				watches[k8score.CronJobs] = true
+			case "Rollout":
+				gvr := schema.GroupVersionResource{Group: tc.group, Version: "v1", Resource: "rollouts"}
+				dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rootObject)
+				if err := InitTestDynamicResourceCache(dyn, []APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: tc.kind, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(ResetTestDynamicState)
+				if err := GetDynamicResourceCache().EnsureWatching(gvr); err != nil {
+					t.Fatal(err)
+				}
+				if !GetDynamicResourceCache().WaitForSync(gvr, 5*time.Second) {
+					t.Fatal("cache did not sync")
+				}
+			}
+			for _, child := range []struct {
+				name, uid string
+				owner     metav1.OwnerReference
+			}{
+				{"active", "active-child", root}, {"previous", "previous-child", oldRoot}, {"foreign", "foreign-child", foreignRoot},
+			} {
+				metadata := metav1.ObjectMeta{Namespace: "shop", Name: child.name, UID: types.UID(child.uid), OwnerReferences: []metav1.OwnerReference{child.owner}}
+				if tc.childKind == "ReplicaSet" {
+					objects = append(objects, &appsv1.ReplicaSet{ObjectMeta: metadata})
+					watches[k8score.ReplicaSets] = true
+				} else {
+					objects = append(objects, &batchv1.Job{ObjectMeta: metadata})
+					watches[k8score.Jobs] = true
+				}
+				owner := ref(tc.childAPI, tc.childKind, child.name, child.uid)
+				objects = append(objects, ownedPod("shop", child.name+"-pod", &owner, nil))
+			}
+			staleChild := ref(tc.childAPI, tc.childKind, "active", "replaced-child")
+			foreignChild := ref("other.example/v1", tc.childKind, "active", "active-child")
+			objects = append(objects, ownedPod("shop", "stale-child-pod", &staleChild, nil), ownedPod("shop", "foreign-child-pod", &foreignChild, nil))
+			cache := newOwnershipCache(t, watches, objects...)
+			got, err := WorkloadPodsForUID(cache, tc.kind, "shop", "fleet", tc.group, "current-root")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].Name != "active-pod" {
+				t.Fatalf("current chain pods = %v", got)
+			}
+			current, err := WorkloadPods(context.Background(), cache, tc.kind, "shop", "fleet")
+			if err != nil || !reflect.DeepEqual(current, got) {
+				t.Fatalf("current reader disagrees with observed root: pods=%v err=%v", current, err)
+			}
+			got, err = WorkloadPodsForUID(cache, tc.kind, "shop", "fleet", tc.group, "")
+			if err != nil || len(got) != 0 {
+				t.Fatalf("missing root UID: pods=%v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestWorkloadPodsForUIDVerifiesDirectControllers(t *testing.T) {
+	for _, tc := range []struct{ kind, api, group string }{
+		{"StatefulSet", "apps/v1", "apps"}, {"DaemonSet", "apps/v1", "apps"}, {"ReplicaSet", "apps/v1", "apps"}, {"Job", "batch/v1", "batch"}, {"Workflow", "argoproj.io/v1alpha1", "argoproj.io"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			controller := true
+			current := metav1.OwnerReference{APIVersion: tc.api, Kind: tc.kind, Name: "fleet", UID: "current", Controller: &controller}
+			old := current
+			old.UID = "previous"
+			foreign := current
+			foreign.APIVersion = "other.example/v1"
+			cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true}, ownedPod("shop", "current-pod", &current, nil), ownedPod("shop", "old-pod", &old, nil), ownedPod("shop", "foreign-pod", &foreign, nil))
+			got, err := WorkloadPodsForUID(cache, tc.kind, "shop", "fleet", tc.group, "current")
+			if err != nil || len(got) != 1 || got[0].Name != "current-pod" {
+				t.Fatalf("pods=%v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestWorkloadPodsForUIDUsesOnlyReadyCache(t *testing.T) {
+	controller := true
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "rs", Namespace: "shop", UID: "rs-uid", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", UID: "root-uid", Controller: &controller}}}}
+	owner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs", UID: rs.UID, Controller: &controller}
+	root := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "fleet", UID: "root-uid"}}
+	client := fake.NewClientset(root, rs, ownedPod("shop", "current", &owner, nil))
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: client, ResourceTypes: map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true, k8score.Deployments: true}, DeferredTypes: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	cache := &ResourceCache{ResourceCache: core}
+	before := len(client.Actions())
+	for range 100 {
+		observed, err := WorkloadPodsForUID(cache, "deployment", "shop", "fleet", "apps", "root-uid")
+		if err != nil || len(observed) != 1 {
+			t.Fatalf("observed pods=%v err=%v", observed, err)
+		}
+		got, err := WorkloadPods(context.Background(), cache, "deployment", "shop", "fleet")
+		if err != nil || len(got) != 1 {
+			t.Fatalf("pods=%v err=%v", got, err)
+		}
+	}
+	for _, action := range client.Actions()[before:] {
+		if action.GetVerb() == "get" || action.GetVerb() == "list" {
+			t.Fatalf("hot relationship lookup fetched %s %s", action.GetVerb(), action.GetResource())
+		}
+	}
+	denied := newOwnershipCache(t, map[string]bool{k8score.Pods: true})
+	if _, err := WorkloadPodsForUID(denied, "deployment", "shop", "fleet", "apps", "root-uid"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("unavailable hop became empty membership: %v", err)
+	}
+}
+
+func TestWorkloadPodsRequiresAnObservedCurrentRoot(t *testing.T) {
+	root := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "db", UID: "current-root"}}
+	owner := controllerRef("StatefulSet", "db")
+	owner.UID = root.UID
+	pod := ownedPod("shop", "db-0", &owner, nil)
+	t.Run("denied", func(t *testing.T) {
+		cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true}, pod)
+		if _, err := WorkloadPods(context.Background(), cache, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+			t.Fatalf("unobserved root: %v", err)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true, k8score.StatefulSets: true}, pod)
+		if pods, err := WorkloadPods(context.Background(), cache, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadNotFound) || len(pods) != 0 {
+			t.Fatalf("deleted root: pods=%v err=%v, want ErrWorkloadNotFound", pods, err)
+		}
+	})
+	t.Run("warming", func(t *testing.T) {
+		core, err := k8score.NewResourceCache(k8score.CacheConfig{
+			Client:          fake.NewClientset(root, pod),
+			ResourceTypes:   map[string]bool{k8score.Pods: true, k8score.StatefulSets: true},
+			DeferredTypes:   map[string]bool{k8score.StatefulSets: true},
+			DebugSyncDelays: map[string]time.Duration{k8score.StatefulSets: time.Hour},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(core.Stop)
+		if _, err := WorkloadPods(context.Background(), &ResourceCache{ResourceCache: core}, "StatefulSet", "shop", "db"); !errors.Is(err, ErrWorkloadCacheWarming) {
+			t.Fatalf("warming root: %v", err)
+		}
+	})
+}
+
+func TestWorkloadPodsStartsDynamicRootInventory(t *testing.T) {
+	for _, kind := range []string{"Rollout", "Workflow"} {
+		t.Run(kind, func(t *testing.T) {
+			gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: strings.ToLower(kind) + "s"}
+			root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": kind, "metadata": map[string]any{"namespace": "shop", "name": "api", "uid": "current-root"}}}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: kind + "List"}, root)
+			if err := InitTestDynamicResourceCache(dyn, []APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: kind, Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(ResetTestDynamicState)
+			owner := controllerRef(kind, "api")
+			owner.APIVersion = "argoproj.io/v1alpha1"
+			owner.UID = "current-root"
+			podOwner := owner
+			watches := map[string]bool{k8score.Pods: true}
+			objects := []runtime.Object{}
+			if kind == "Rollout" {
+				watches[k8score.ReplicaSets] = true
+				objects = append(objects, &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "rs", UID: "rs-uid", OwnerReferences: []metav1.OwnerReference{owner}}})
+				podOwner = controllerRef("ReplicaSet", "rs")
+			}
+			objects = append(objects, ownedPod("shop", "current", &podOwner, nil))
+			cache := newOwnershipCache(t, watches, objects...)
+			if GetDynamicResourceCache().HasCoveringInformer(gvr, "shop") {
+				t.Fatal("root informer already started")
+			}
+			pods, err := WorkloadPods(context.Background(), cache, kind, "shop", "api")
+			if err != nil || len(pods) != 1 || pods[0].Name != "current" {
+				t.Fatalf("cold dynamic read: pods=%v err=%v", pods, err)
+			}
+			if pods, err := WorkloadPods(context.Background(), cache, kind, "shop", "deleted"); !errors.Is(err, ErrWorkloadNotFound) || len(pods) != 0 {
+				t.Fatalf("missing dynamic root: pods=%v err=%v, want ErrWorkloadNotFound", pods, err)
+			}
+			before := len(dyn.Actions())
+			for range 10 {
+				if _, err := WorkloadPods(context.Background(), cache, kind, "shop", "api"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, action := range dyn.Actions()[before:] {
+				if action.GetVerb() == "get" || action.GetVerb() == "list" {
+					t.Fatalf("warm root fetched %s", action.GetVerb())
+				}
+			}
+		})
+	}
+}
+
+func TestWorkloadPodsReportsDynamicInitializationAsWarming(t *testing.T) {
+	ResetTestDynamicState()
+	t.Cleanup(ResetTestDynamicState)
+	cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true})
+	for _, kind := range []string{"Rollout", "Workflow"} {
+		if _, err := WorkloadPods(context.Background(), cache, kind, "shop", "api"); !errors.Is(err, ErrWorkloadCacheWarming) {
+			t.Fatalf("%s before dynamic initialization: %v", kind, err)
+		}
+	}
+}
+
+// newBlockedRolloutInventory starts a dynamic cache whose Rollout list calls
+// run the given reactor, so tests can stall or deny the root's first read.
+func newBlockedRolloutInventory(t *testing.T, reactor k8stesting.ReactionFunc) (*ResourceCache, schema.GroupVersionResource) {
+	t.Helper()
+	ResetTestDynamicState()
+	t.Cleanup(ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "shop", "name": "api", "uid": "current-root"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, root)
+	dyn.PrependReactor("list", "rollouts", reactor)
+	if err := InitTestDynamicResourceCache(dyn, []APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Rollout", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	return newOwnershipCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}), gvr
+}
+
+func TestWorkloadPodsBoundsAColdDynamicRootRead(t *testing.T) {
+	previous := dynamicRootReadBudget
+	dynamicRootReadBudget = 100 * time.Millisecond
+	t.Cleanup(func() { dynamicRootReadBudget = previous })
+
+	release := make(chan struct{})
+	cache, gvr := newBlockedRolloutInventory(t, func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return false, nil, nil
+	})
+
+	started := time.Now()
+	if _, err := WorkloadPods(context.Background(), cache, "rollout", "shop", "api"); !errors.Is(err, ErrWorkloadCacheWarming) {
+		t.Fatalf("stalled acquisition: err = %v, want ErrWorkloadCacheWarming", err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("stalled acquisition held the read for %v", elapsed)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	dynamicRootReadBudget = time.Minute
+	time.AfterFunc(50*time.Millisecond, cancel)
+	if _, err := WorkloadPods(ctx, cache, "rollout", "shop", "api"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled read: err = %v, want context.Canceled", err)
+	}
+
+	// The acquisition outlives the reads that stopped waiting for it, so the
+	// inventory becomes ready without another caller having to wait it out.
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for !GetDynamicResourceCache().HasCoveringInformer(gvr, "shop") || !GetDynamicResourceCache().IsNamespaceSynced(gvr, "shop") {
+		if time.Now().After(deadline) {
+			t.Fatal("abandoned acquisition never started the Rollout informer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pods, err := WorkloadPods(context.Background(), cache, "rollout", "shop", "api"); err != nil || len(pods) != 0 {
+		t.Fatalf("warm read after acquisition: pods=%v err=%v", pods, err)
+	}
+}
+
+func TestWorkloadPodsReportsDeniedDynamicRoot(t *testing.T) {
+	cache, _ := newBlockedRolloutInventory(t, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "rollouts"}, "", errors.New("denied"))
+	})
+	if _, err := WorkloadPods(context.Background(), cache, "rollout", "shop", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("denied Rollout inventory: err = %v, want ErrWorkloadAccessDenied", err)
+	}
+}
+
+// Under a forced namespace scope the dynamic root of another namespace has
+// no informer and never will; that is a scope refusal, like a typed root's,
+// not a cache failure or a warming inventory.
+func TestWorkloadPodsRefusesDynamicRootsOutsideTheWatchedNamespace(t *testing.T) {
+	ResetTestDynamicState()
+	t.Cleanup(ResetTestDynamicState)
+	cache := newScopedOwnershipCache(t, map[string]k8score.ResourceScope{
+		k8score.Pods:        {Enabled: true, Namespace: "team-a"},
+		k8score.ReplicaSets: {Enabled: true, Namespace: "team-a"},
+	})
+	for _, kind := range []string{"Rollout", "Workflow"} {
+		if _, err := WorkloadPods(context.Background(), cache, kind, "team-b", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+			t.Fatalf("%s outside the watched namespace: err = %v, want ErrWorkloadAccessDenied", kind, err)
+		}
 	}
 }

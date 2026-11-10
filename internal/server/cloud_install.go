@@ -267,6 +267,9 @@ type cloudInstallFlow struct {
 	// canceling is set under the manager lock the moment a cancel is accepted,
 	// so the run goroutine cannot claim the provisioning state afterwards.
 	canceling bool
+	// prepareStep is the attemptStage* a preparing flow is in, so the dialog
+	// can show which check a long wait is spent on.
+	prepareStep string
 
 	connected *cloudInstallConnected
 	failure   *cloudInstallFailure
@@ -526,7 +529,7 @@ func hostOf(origin string) string {
 }
 
 func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *cloudInstallBlocked, error) {
-	flow := &cloudInstallFlow{id: newCloudFlowID(), state: cloudFlowPreparing}
+	flow := &cloudInstallFlow{id: newCloudFlowID(), state: cloudFlowPreparing, prepareStep: attemptStageInspect}
 	m.mu.Lock()
 	if m.flow != nil && !m.flow.terminal() {
 		active := m.flow
@@ -548,6 +551,17 @@ func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *
 }
 
 var errFlowActive = errors.New("a Cloud connection flow is already in progress")
+
+// setPrepareStep records progress only while flow is still the live flow: a
+// preparation canceled or replaced mid-way keeps running until its final
+// identity check and must not relabel the flow that took its place.
+func (m *cloudInstallManager) setPrepareStep(flow *cloudInstallFlow, step string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.flow == flow {
+		flow.prepareStep = step
+	}
+}
 
 // connectRequestFailure turns a failed connect-request creation into a
 // failure the card can show: a headline that says what happened in words,
@@ -694,6 +708,7 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 		}, nil
 	}
 
+	m.setPrepareStep(flow, attemptStagePrepare)
 	prepared, err := m.backend.prepare(ctx, clients, cloudinstall.PrepareConfig{
 		Namespace:     plan.Namespace,
 		ReleaseName:   plan.Release,
@@ -704,6 +719,7 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 	}
 	flow.prepared = prepared
 
+	m.setPrepareStep(flow, attemptStagePreflight)
 	pf, err := m.backend.preflight(ctx, clients, prepared)
 	if err != nil {
 		return nil, fmt.Errorf("permission preflight failed: %w", err)
@@ -1058,6 +1074,7 @@ func (m *cloudInstallManager) clearFlow(flow *cloudInstallFlow) {
 type cloudInstallStatus struct {
 	FlowID      string                   `json:"flowId,omitempty"`
 	State       string                   `json:"state"`
+	PrepareStep string                   `json:"prepareStep,omitempty"`
 	Plan        *cloudInstallPlanSummary `json:"plan,omitempty"`
 	ClusterName string                   `json:"clusterName,omitempty"`
 	ConnectURL  string                   `json:"connectUrl,omitempty"`
@@ -1084,7 +1101,9 @@ func (m *cloudInstallManager) statusLocked() cloudInstallStatus {
 		Connected:   flow.connected,
 		Failure:     flow.failure,
 	}
-	if flow.state != cloudFlowPreparing {
+	if flow.state == cloudFlowPreparing {
+		st.PrepareStep = flow.prepareStep
+	} else {
 		summary := flow.summary
 		if summary.Mode != "" {
 			st.Plan = &summary
@@ -1120,20 +1139,16 @@ func (s *Server) sharedListener() bool {
 	return !cloud.IsLoopbackHostname(s.listenAddress)
 }
 
-func (s *Server) requireCloudConnectDriver(w http.ResponseWriter, r *http.Request, mutating bool) bool {
+func (s *Server) requireCloudConnectDriver(w http.ResponseWriter) bool {
 	if s.cloudInstall == nil || !s.cloudConnectDriverEnabled() {
 		s.writeError(w, http.StatusNotFound, "Cloud connect is not available on this deployment")
-		return false
-	}
-	if mutating && !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin requests are not allowed")
 		return false
 	}
 	return true
 }
 
 func (s *Server) handleCloudInstallPrepare(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	if !s.requireConnected(w) {
@@ -1158,7 +1173,7 @@ func (s *Server) handleCloudInstallPrepare(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleCloudInstallDiscover(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, false) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	if !s.requireConnected(w) {
@@ -1177,7 +1192,7 @@ func (s *Server) handleCloudInstallDiscover(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleCloudInstallStart(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	var req cloudInstallStartRequest
@@ -1198,7 +1213,7 @@ func (s *Server) handleCloudInstallStart(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleCloudInstallStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, false) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -1206,7 +1221,7 @@ func (s *Server) handleCloudInstallStatus(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleCloudInstallCancel(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	var req struct {
@@ -1229,7 +1244,7 @@ func (s *Server) handleCloudInstallCancel(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleCloudInstallDismiss(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	var req struct {
@@ -1280,25 +1295,6 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 		AppURL: s.cloudConnectCfg.HubAppURL,
 		APIURL: s.cloudConnectCfg.HubAPIURL,
 	}
-}
-
-// sameOriginOK is CSRF protection for state-changing browser endpoints. It
-// compares the Origin scheme and authority against what the client actually
-// used, rather than an allowlist of loopback names — a loopback-only allowlist
-// would 403 the legitimate browser on a non-loopback listener (a supported
-// deployment) while still admitting a scripted caller that simply omits the
-// header.
-//
-// Loopback-to-loopback is additionally allowed for the Vite dev proxy, which
-// forwards its own :9273 origin to the backend on :9280.
-func (s *Server) sameOriginOK(r *http.Request) bool {
-	if allowed, decided := fetchMetadataOriginVerdict(r); decided {
-		return allowed
-	}
-	if sameAuthorityOriginOK(r) {
-		return true
-	}
-	return s.viteDevProxyOriginOK(r)
 }
 
 // redactCloudToken removes a cluster token that an upstream error may have

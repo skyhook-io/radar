@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useState,
-  type ComponentType,
   type ReactNode,
 } from "react";
 import {
@@ -14,12 +13,19 @@ import {
 } from "lucide-react";
 import {
   FreshnessControl,
+  healthToSeverity,
   formatDuration,
+  getRadarUpgradeRequirement,
+  RadarUpgradeAction,
+  radarUpgradeDetail,
+  radarUpgradeHeadline,
   memberRef,
   PaneLoader,
   ResourceBar,
   Tooltip,
   WithTooltip,
+  certaintyValueLabel,
+  CertaintyGlyph,
   type CapacityActivityEpisode,
   type CapacityCertainty,
   type CapacityClaimStage,
@@ -34,6 +40,7 @@ import {
   type CapacityManagerRollupStatus,
   type CapacityManagerSummary,
   type CapacityMemberType,
+  type CapacityNodeMember,
   type CapacityPoolSummary,
   type CapacityQuantityObservation,
   type CapacityResourceIdentity,
@@ -44,6 +51,7 @@ import {
   type StatusTone,
 } from "@skyhook-io/k8s-ui";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
+import { isGpuCountKey } from "@skyhook-io/k8s-ui/utils/extended-resources";
 import {
   formatCPUString,
   formatMemoryString,
@@ -51,26 +59,22 @@ import {
 import {
   isCapacityCursorInvalidError,
   isForbiddenError,
-  isNotFoundError,
   useCapacityPools,
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
 import { refToSelectedResource } from "../../utils/navigation";
+import { Notice, ScreenEmptyState } from "../workspace/layout";
 
 // ============================================================================
 // Route model + navigation
 // ============================================================================
 
-export type CapacityTopTab = "overview" | "demand" | "activity";
-export type PoolSection = "summary" | "workloads" | "members" | "configuration";
+import type { PoolSection } from './routes'
+export { capacityPoolPath, parseCapacityRoute } from './routes'
+export type { CapacityRoute, CapacityTopTab, PoolSection } from './routes'
+
 export type CapacityConnectionState =
   "connected" | "disconnected" | "connecting";
-
-export interface CapacityRoute {
-  topTab: CapacityTopTab;
-  poolName?: string;
-  poolSection: PoolSection;
-}
 
 export const POOL_SECTIONS: { id: PoolSection; label: string }[] = [
   { id: "summary", label: "Summary" },
@@ -78,40 +82,6 @@ export const POOL_SECTIONS: { id: PoolSection; label: string }[] = [
   { id: "members", label: "Nodes & claims" },
   { id: "configuration", label: "Configuration" },
 ];
-
-export function parseCapacityRoute(pathname: string): CapacityRoute {
-  const segments = pathname.replace(/^\/+|\/+$/g, "").split("/");
-  if (segments[0] !== "capacity")
-    return { topTab: "overview", poolSection: "summary" };
-  if (segments[1] === "pools" && segments[2]) {
-    const section = segments[3];
-    return {
-      topTab: "overview",
-      poolName: decodePathSegment(segments[2]),
-      poolSection:
-        section === "workloads" ||
-        section === "members" ||
-        section === "configuration"
-          ? section
-          : "summary",
-    };
-  }
-  if (segments[1] === "demand" || segments[1] === "activity")
-    return { topTab: segments[1], poolSection: "summary" };
-  return { topTab: "overview", poolSection: "summary" };
-}
-
-function decodePathSegment(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-export function capacityPoolPath(name: string): string {
-  return `/capacity/pools/${encodeURIComponent(name)}`;
-}
 
 export function identityToSelectedResource(
   identity: CapacityResourceIdentity,
@@ -261,20 +231,6 @@ function missingUsageMessage(coverage?: CapacitySourceCoverage): string {
 // = exact · ≥ lower bound · ≤ upper bound · ? unknown
 // ============================================================================
 
-export function certaintyGlyph(certainty: CapacityCertainty): string {
-  if (certainty === "exact") return "=";
-  if (certainty === "lower_bound") return "≥";
-  if (certainty === "upper_bound") return "≤";
-  return "?";
-}
-
-export function certaintyValueLabel(certainty: CapacityCertainty): string {
-  if (certainty === "exact") return "Exact";
-  if (certainty === "lower_bound") return "Lower bound";
-  if (certainty === "upper_bound") return "Upper bound";
-  return "Unknown certainty";
-}
-
 export function observationTitle(
   observation: CapacityQuantityObservation,
   definition?: string,
@@ -288,28 +244,6 @@ export function observationTitle(
     `Observed ${formatTimestamp(observation.asOf)}.`,
   ].filter(Boolean);
   return parts.join(" ");
-}
-
-/** Small bordered mono glyph chip; hover reveals certainty/source/asOf. */
-export function CertaintyGlyph({
-  certainty,
-  title,
-}: {
-  certainty: CapacityCertainty;
-  title?: string;
-}) {
-  return (
-    <WithTooltip tip={title ?? certaintyValueLabel(certainty)}>
-      <span
-        tabIndex={0}
-        role="note"
-        aria-label={title ?? certaintyValueLabel(certainty)}
-        className="cursor-help rounded border border-theme-border-light px-1 font-mono text-[10px] leading-tight text-theme-text-tertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
-      >
-        {certaintyGlyph(certainty)}
-      </span>
-    </WithTooltip>
-  );
 }
 
 // ============================================================================
@@ -369,6 +303,16 @@ export function sortedResourceEntries(
 }
 
 /** "8 CPU · 32Gi" style compact one-liner for a quantity observation. */
+// CPU and memory read by their units; every other quantity is a bare number
+// without its resource name.
+function labeledQuantity(resource: string, value: string): string {
+  const quantity = formatQuantity(resource, value);
+  if (resource === "cpu" || resource === "memory") return quantity;
+  if (resource === "pods") return `${quantity} ${quantity === "1" ? "pod" : "pods"}`;
+  if (isGpuCountKey(resource)) return `gpu ${quantity}`;
+  return `${resource} ${quantity}`;
+}
+
 export function quantityText(
   observation: CapacityQuantityObservation | undefined,
   options?: { max?: number },
@@ -379,7 +323,7 @@ export function quantityText(
   const max = options?.max ?? 4;
   const shown = entries
     .slice(0, max)
-    .map(([resource, value]) => formatQuantity(resource, value));
+    .map(([resource, value]) => labeledQuantity(resource, value));
   if (entries.length > max) shown.push(`+${entries.length - max}`);
   return shown.join(" · ");
 }
@@ -600,32 +544,21 @@ export function PoolReadyBadge({ ready }: { ready?: boolean }) {
 export function NodeReadyBadge({
   ready,
   cordoned,
+  lifecycle,
 }: {
   ready?: boolean;
   cordoned: boolean;
+  lifecycle?: CapacityNodeMember["lifecycle"];
 }) {
-  if (ready === false)
-    return (
-      <Badge severity="error" size="sm">
-        NotReady
-      </Badge>
-    );
-  if (ready === undefined)
-    return (
-      <Badge severity="neutral" size="sm">
-        Unknown
-      </Badge>
-    );
-  if (cordoned)
-    return (
-      <Badge severity="warning" size="sm">
-        Cordoned
-      </Badge>
-    );
+  if (lifecycle) {
+    return <Badge severity={healthToSeverity(lifecycle.level)} size="sm">{lifecycle.label}</Badge>;
+  }
   return (
-    <Badge severity="success" size="sm">
-      Ready
-    </Badge>
+    <WithTooltip tip="Kubernetes readiness only; removal status is unavailable from this Radar.">
+      <Badge severity={ready === false ? "error" : ready === undefined ? "neutral" : cordoned ? "warning" : "success"} size="sm">
+        {ready === false ? "NotReady (condition)" : ready === undefined ? "Readiness unknown" : cordoned ? "Cordoned" : "Ready (condition)"}
+      </Badge>
+    </WithTooltip>
   );
 }
 
@@ -1126,6 +1059,7 @@ export function KpiTile({
   attention = false,
   linkLabel,
   onClick,
+  className,
 }: {
   label: string;
   value: ReactNode;
@@ -1135,6 +1069,7 @@ export function KpiTile({
   attention?: boolean;
   linkLabel?: string;
   onClick?: () => void;
+  className?: string;
 }) {
   const clickable = Boolean(onClick);
   return (
@@ -1156,9 +1091,9 @@ export function KpiTile({
         clickable
           ? "cursor-pointer transition-colors hover:border-theme-border-light hover:bg-theme-hover/40"
           : ""
-      }`}
+      } ${className ?? ""}`}
     >
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 phone:flex-wrap phone:gap-y-1">
         <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           {label}
         </span>
@@ -1206,10 +1141,11 @@ export function KeyValueRows({ rows }: { rows: [string, ReactNode][] }) {
       {rows.map(([label, value], index) => (
         <div
           key={`${label}-${index}`}
-          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0"
+          // Phones: a value too long for the row moves under its label and breaks inside it.
+          className="flex items-center justify-between gap-4 py-2 first:pt-0 last:pb-0 phone:flex-wrap phone:gap-y-0.5"
         >
           <span className="text-sm text-theme-text-secondary">{label}</span>
-          <span className="text-right font-mono text-sm text-theme-text-primary">
+          <span className="text-right font-mono text-sm text-theme-text-primary phone:ml-auto phone:min-w-0 phone:[overflow-wrap:anywhere]">
             {value}
           </span>
         </div>
@@ -1235,7 +1171,8 @@ export function TokenGroup({
       <div className="flex flex-wrap gap-1">
         {values.length > 0 ? (
           values.map((value) => (
-            <Badge key={value} tone="structural" size="sm">
+            // Phones: a value wider than the row breaks inside its chip instead of being clipped.
+            <Badge key={value} tone="structural" size="sm" className="phone:[overflow-wrap:anywhere]">
               {value}
             </Badge>
           ))
@@ -1243,15 +1180,6 @@ export function TokenGroup({
           <span className="text-sm text-theme-text-secondary">{empty}</span>
         )}
       </div>
-    </div>
-  );
-}
-
-export function Notice({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text-secondary">
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
-      <div>{children}</div>
     </div>
   );
 }
@@ -1329,31 +1257,6 @@ export function InlineEmpty({
     <div className="px-4 py-8 text-center">
       <div className="text-sm font-medium text-theme-text-primary">{title}</div>
       <p className="mt-1 text-sm text-theme-text-secondary">{detail}</p>
-    </div>
-  );
-}
-
-export function EmptyState({
-  icon: Icon,
-  title,
-  detail,
-  action,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  title: string;
-  detail: ReactNode;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-theme-base p-6">
-      <div className="max-w-md text-center">
-        <Icon className="mx-auto h-9 w-9 text-theme-text-tertiary/50" />
-        <h2 className="mt-3 text-lg font-medium text-theme-text-primary">
-          {title}
-        </h2>
-        <p className="mt-1 text-sm text-theme-text-secondary">{detail}</p>
-        {action}
-      </div>
     </div>
   );
 }
@@ -1466,7 +1369,7 @@ rules:
 export function DeniedCapacityState({ detail }: { detail: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <EmptyState
+    <ScreenEmptyState
       icon={Shield}
       title="Capacity access denied"
       detail={detail}
@@ -1520,26 +1423,24 @@ export function integrationBlock(
   if (!response && error) {
     if (isForbiddenError(error))
       return <DeniedCapacityState detail={errorMessage(error)} />;
-    // A 404 on the top-level capacity routes means the route doesn't exist on
-    // this Radar — a pre-v1.9.0 binary behind a version-skewed host (Radar
-    // Cloud), not a failure. The embedded OSS binary can never hit this.
-    if (isNotFoundError(error))
+    // Only reachable behind a version-skewed host (Radar Cloud): the OSS
+    // binary always serves the routes its own frontend calls.
+    const upgrade = getRadarUpgradeRequirement(error);
+    if (upgrade)
       return (
-        <EmptyState
+        <ScreenEmptyState
           icon={Gauge}
-          title="Capacity needs a newer Radar"
-          detail={
-            <>
-              This cluster&rsquo;s Radar predates the Capacity view (added in
-              Radar v1.9.0).
-              <br />
-              Upgrade the in-cluster Radar to enable it.
-            </>
+          title={radarUpgradeHeadline("Capacity")}
+          detail={radarUpgradeDetail(upgrade)}
+          action={
+            <div className="mt-3 text-sm">
+              <RadarUpgradeAction requirement={upgrade} />
+            </div>
           }
         />
       );
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={AlertTriangle}
         title="Capacity unavailable"
         detail={errorMessage(error)}
@@ -1557,7 +1458,7 @@ export function integrationBlock(
     );
   if (response.state === "not_detected")
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={Gauge}
         title="Karpenter not detected"
         detail="Capacity appears automatically when this cluster exposes Karpenter NodePools."
@@ -1846,15 +1747,3 @@ export function PoolSelector({
     </div>
   );
 }
-
-// ============================================================================
-// Shared table cell classes (keeps every capacity table visually identical)
-// ============================================================================
-
-export const TABLE_WRAP = "overflow-x-auto";
-export const TABLE_HEAD =
-  "border-b border-theme-border bg-theme-base/60 text-[11px] uppercase tracking-wide text-theme-text-tertiary";
-export const TH = "px-3 py-2.5 text-left font-medium whitespace-nowrap";
-export const TD = "px-3 py-2.5 align-top text-sm text-theme-text-primary";
-export const TBODY = "table-divide-subtle";
-export const ROW_HOVER = "transition-colors hover:bg-theme-hover/50";

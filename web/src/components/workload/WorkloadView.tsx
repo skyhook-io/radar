@@ -1,42 +1,47 @@
-import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
-import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
-import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
-import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
-import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
-import { useMemo, useEffect, useCallback, useRef, useState } from 'react'
+import { RelatedFindingsSection } from './RelatedFindingsSection'
+import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
+import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
+import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { workloadPodAwaitsScheduling } from '../capacity/podDemandGate'
-import { clsx } from 'clsx'
-import { Terminal, Stethoscope } from 'lucide-react'
+import { Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
   EditableYamlView,
   FetchResult,
   Section,
   type WorkloadTabType,
-  type RendererOverrides,
+  type WorkloadExtraTab,
   type GitOpsOwnerRef,
-  type GitOpsStatus,
   type HelmOwnerRef,
   type AppRow,
   type ResourceOwnershipContext,
   type ServingResourceDetail,
   type AuditFinding,
+  dedupeResourceRefs,
   gitOpsRouteForOwner,
   gitOpsOwnerFromRelationships,
-  getGitOpsResourceStatus,
   isDiagnoseKind,
   isRolloutKind,
   canSetWorkloadImages,
   isCoreBatchJob,
-  type ManagedImageSource,
+  type SetImageOwnership,
+  SET_IMAGE_WRITES,
+  setImageWrites,
+  setImageSelectionKey,
+  gitOpsWriteEvidencePaths,
+  type SetImageSelection,
   type WorkloadImageTarget,
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
+import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
+import { NodeCertificateContext, NodeCertificateDetails, nodeCertificateContextVisible } from './NodeCertificateEvidence'
 import { useHistoryPaging } from './historyPaging'
+import { findInheritedGitOpsLookupRef, useResolvedGitOpsOwner } from '../../hooks/useResolvedGitOpsOwner'
+import { useGitOpsWriteGuard } from '../../hooks/useGitOpsWriteGuard'
 import {
   kindToPlural,
   kindToPluralWithGroup,
@@ -44,13 +49,14 @@ import {
   pluralToKind,
   relatedResourcePath,
   buildWorkloadPath,
+  namespacesFromSearch,
   type NavigateToResource,
 } from '../../utils/navigation'
 import {
   useWorkloadHistory,
   fetchWorkloadHistoryPage,
+  useChanges,
   useResourceWithRelationships,
-  usePodLogs,
   useTopology,
   useUpdateResource,
   usePreviewResources,
@@ -78,8 +84,8 @@ import {
   useCordonNode,
   useUncordonNode,
   useDrainNode,
+  useNodeDrainActivity,
   useDrainPlan,
-  DrainPlanUnsupportedError,
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
@@ -94,11 +100,16 @@ import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
-import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
-import { AuditAlerts, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
+import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
+import { useTrafficAvailable } from '../../api/traffic'
+import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
+import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
+import { MultiPodLogsTab } from '../logs/MultiPodLogsTab'
+import { RayClusterLogsTab } from '../logs/RayClusterLogsTab'
+import { isKubeRayCluster } from '../logs/rayClusterPods'
 import { BatchExecutionFullscreen } from '../execution/BatchExecutionView'
 import { workloadRunTimelineEvents } from '../execution/batch-timeline'
 import {
@@ -118,41 +129,26 @@ import {
   defaultPathForPort,
 } from '../curl/ServiceCurlButton'
 import { useToast } from '../ui/Toast'
-import { Tooltip } from '../ui/Tooltip'
-import { PodRenderer } from '../resources/renderers/PodRenderer'
-import { KarpenterNodePoolRenderer } from '../resources/renderers/KarpenterNodePoolRenderer'
-import { NodeRenderer } from '../resources/renderers/NodeRenderer'
-import { ServiceRenderer } from '../resources/renderers/ServiceRenderer'
-import { WorkloadRenderer } from '../resources/renderers/WorkloadRenderer'
-import { CompositeRenderer } from '../resources/CompositeRenderer'
-import { ServiceAccountRenderer } from '../resources/renderers/ServiceAccountRenderer'
-import { RoleRenderer } from '../resources/renderers/RoleRenderer'
-import { RoleBindingRenderer } from '../resources/renderers/RoleBindingRenderer'
-import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
-import { CAPIClusterRenderer } from '../resources/renderers/CAPIClusterRenderer'
-import { HPARenderer } from '../resources/renderers/HPARenderer'
-import { PVCRenderer } from '../resources/renderers/PVCRenderer'
-import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
-import { KyvernoPolicyCoverage } from '../resources/renderers/KyvernoPolicyCoverage'
-import { KyvernoPolicyQueued } from '../resources/renderers/KyvernoPolicyQueued'
-import { CNPGObjectStoreRenderer } from '../resources/renderers/CNPGObjectStoreRenderer'
-import { VeleroBSLRenderer } from '../resources/renderers/VeleroBSLRenderer'
-import { VeleroBackupRenderer } from '../resources/renderers/VeleroBackupRenderer'
-import { VeleroRestoreRenderer } from '../resources/renderers/VeleroRestoreRenderer'
-import { CNPGClusterRenderer } from '../resources/renderers/CNPGClusterRenderer'
-import { CNPGImageCatalogRenderer } from '../resources/renderers/CNPGImageCatalogRenderer'
-import {
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-} from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
+import { NodeDrainStatus } from './NodeDrainStatus'
+import { recordUsageEvent } from '../../api/usage-data'
+import { issueResourceOpener } from './issueResourceOpener'
 
 type TabType = WorkloadTabType
+
+// The usage-report view a tab counts under. Timeline holds the resource's
+// events (it replaced the Events tab), so it counts as panel:events.
+const PANEL_USAGE_VIEWS: Partial<Record<TabType, string>> = {
+  logs: 'panel:logs',
+  yaml: 'panel:yaml',
+  metrics: 'panel:metrics',
+  timeline: 'panel:events',
+}
+
 const BATCH_EXECUTION_KINDS = new Set([
   'Job',
   'CronJob',
@@ -171,41 +167,6 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
     return group === 'jobset.x-k8s.io' && isJobSetV1Alpha2({ kind, apiVersion })
   }
   return true
-}
-
-// Stable reference — web renderer wrappers inject platform hooks internally
-const rendererOverrides: RendererOverrides = {
-  RayJobRenderer,
-  JobRenderer,
-  JobSetRenderer,
-  RayServiceRenderer,
-  RayClusterRenderer,
-  KueueWorkloadRenderer,
-  CAPIClusterRenderer,
-  PodRenderer,
-  KarpenterNodePoolRenderer,
-  NodeRenderer,
-  ServiceRenderer,
-  WorkloadRenderer,
-  CompositeRenderer,
-  ServiceAccountRenderer,
-  RoleRenderer,
-  RoleBindingRenderer,
-  NamespaceRenderer,
-  HPARenderer,
-  PVCRenderer,
-  RolloutRenderer,
-  KyvernoPolicyCoverage,
-  KyvernoPolicyQueued,
-  CNPGObjectStoreRenderer,
-  VeleroBSLRenderer,
-  VeleroBackupRenderer,
-  VeleroRestoreRenderer,
-  CNPGClusterRenderer,
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-  CNPGImageCatalogRenderer,
 }
 
 // ============================================================================
@@ -276,6 +237,9 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     )
   }
 
+  const detailPath = resourceDetailRedirect({ kind, group, namespace, name }, searchParams)
+  if (detailPath) return <Navigate replace to={detailPath} state={location.state} />
+
   return (
     <WorkloadView
       kind={kind}
@@ -287,6 +251,10 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     />
   )
 }
+
+// The kinds the traffic map draws as a node of their own: those that own
+// pods, which it groups under them.
+const TRAFFIC_WORKLOAD_PLURALS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts', 'cronjobs', 'jobs'])
 
 // ============================================================================
 // WORKLOAD VIEW WRAPPER — injects data fetching hooks
@@ -311,6 +279,18 @@ interface WorkloadViewProps {
   initialTab?: 'detail' | 'yaml'
   group?: string
   pushTabHistory?: boolean
+  breadcrumb?: ReactNode
+  extraTabs?: WorkloadExtraTab[]
+  tabOrder?: string[]
+  subheader?: ReactNode
+  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
+  titlePrefix?: ReactNode
+  inlineBadges?: boolean
+  namespaceNote?: ReactNode
+  renderStatusBadge?: (resource: any) => ReactNode
+  statusNote?: ReactNode
+  onRefresh?: () => Promise<unknown>
+  hideKindBadge?: boolean
 }
 
 interface ImageTargetOwnershipContext {
@@ -321,7 +301,6 @@ interface ImageTargetOwnershipContext {
   }
   target: WorkloadImageTarget
   response: ResourceWithRelationships<Record<string, unknown>>
-  inheritedResponse?: ResourceWithRelationships<Record<string, unknown>>
 }
 
 function useActionsBarProps(
@@ -330,7 +309,9 @@ function useActionsBarProps(
   name: string,
   group: string | undefined,
   cascadeEnabled: boolean,
+  nodeUID: string,
 ) {
+  const [deletePreviewOpen, setDeletePreviewOpen] = useState(false)
   const { showCopied } = useToast()
   const { features } = useCapabilitiesContext()
   const openTerminal = useOpenTerminal()
@@ -392,23 +373,26 @@ function useActionsBarProps(
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
+  const { upgrade: argoResumeUpgrade, blockedReason: argoResumeBlockedReason } = useRadarFeature('argoAutoSyncEnable')
+  const { support: argoInheritanceSupport } = useRadarFeature('argoSyncInheritance')
 
   const {
     data: cascadePreview,
-    isLoading: cascadeLoading,
+    isFetching: cascadeLoading,
     isError: cascadeError,
   } = useCascadeDeletePreview(
     kind,
     namespace,
     name,
     group,
-    cascadeEnabled,
+    cascadeEnabled && deletePreviewOpen,
   )
 
   const canNodeWrite = useCanNodeWrite()
   const cordonMutation = useCordonNode()
   const uncordonMutation = useUncordonNode()
-  const drainMutation = useDrainNode()
+  const drainMutation = useDrainNode(nodeUID)
+  const { activity: drainActivity } = useNodeDrainActivity(name, nodeUID)
   const drainPlanMutation = useDrainPlan()
 
   const { renderAction: renderDiagnose } = useDiagnoseCustomization()
@@ -434,15 +418,18 @@ function useActionsBarProps(
       name: string
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
-    renderDiagnose,
+    renderDiagnose: decorateResourceDiagnose(renderDiagnose),
     onDelete: (
       params: Parameters<typeof deleteMutation.mutate>[0],
       callbacks?: { onSuccess?: () => void },
-    ) => deleteMutation.mutate(params, { onSuccess: callbacks?.onSuccess }),
+    ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
     isDeleting: deleteMutation.isPending,
+    onDeletePreviewOpenChange: setDeletePreviewOpen,
+    cascadeDetail: cascadePreview,
     cascadeDependents: cascadePreview?.dependents,
     cascadeLoading,
-    cascadeRootResolved: cascadeError ? false : cascadePreview?.rootResolved,
+    cascadeRootResolved: cascadePreview?.rootResolved,
+    cascadePreviewFailed: Boolean(cascadeError),
     onRestart: rolloutAllows('restart')
       ? (params: Parameters<typeof restartWorkloadMutation.mutate>[0]) =>
           restartWorkloadMutation.mutate(params)
@@ -492,9 +479,10 @@ function useActionsBarProps(
     onFluxResume: (params: Parameters<typeof fluxResumeMutation.mutate>[0]) =>
       fluxResumeMutation.mutate(params),
     isFluxResuming: fluxResumeMutation.isPending,
-    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutate>[0]) =>
-      argoSyncMutation.mutate(params),
+    onArgoSync: (params: Parameters<typeof argoSyncMutation.mutateAsync>[0]) =>
+      argoSyncMutation.mutateAsync(params),
     isArgoSyncing: argoSyncMutation.isPending,
+    argoSyncDialog: { pinsComparedRevision: argoInheritanceSupport === 'supported' },
     onArgoRefresh: (params: Parameters<typeof argoRefreshMutation.mutate>[0]) =>
       argoRefreshMutation.mutate(params),
     isArgoRefreshing: argoRefreshMutation.isPending,
@@ -504,6 +492,8 @@ function useActionsBarProps(
     onArgoResume: (params: Parameters<typeof argoResumeMutation.mutate>[0]) =>
       argoResumeMutation.mutate(params),
     isArgoResuming: argoResumeMutation.isPending,
+    argoResumeUpgrade,
+    argoResumeBlockedReason,
     canNodeWrite,
     onCordonNode: (params: Parameters<typeof cordonMutation.mutate>[0]) =>
       cordonMutation.mutate(params),
@@ -513,14 +503,16 @@ function useActionsBarProps(
     isUncordoningNode: uncordonMutation.isPending,
     onDrainNode: (params: Parameters<typeof drainMutation.mutate>[0]) =>
       drainMutation.mutate(params),
-    isDrainingNode: drainMutation.isPending,
+    isDrainingNode: nodeUID ? drainActivity?.status === 'pending' : drainMutation.isPending,
     onPlanDrain: (params: Parameters<typeof drainPlanMutation.mutate>[0]) =>
       drainPlanMutation.mutate(params),
     onPlanDrainReset: () => drainPlanMutation.reset(),
     drainPlan: drainPlanMutation.data ?? null,
     isPlanningDrain: drainPlanMutation.isPending,
     drainPlanError: drainPlanMutation.error?.message ?? null,
-    drainPlanUnsupported: drainPlanMutation.error instanceof DrainPlanUnsupportedError,
+    drainPlanUpgrade: isRadarFeatureUnsupported(drainPlanMutation.error, 'drainPlan')
+      ? getRadarUpgradeRequirement(drainPlanMutation.error)
+      : null,
   }
 }
 
@@ -533,11 +525,16 @@ export function WorkloadView({
   ...rest
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  const viewNamespacesKey = namespacesFromSearch(searchParams).join(',')
+  const viewNamespaces = useMemo(() => (viewNamespacesKey ? viewNamespacesKey.split(',') : []), [viewNamespacesKey])
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
     useState<ImageTargetOwnershipContext | null>(null)
   const imageOwnershipRequestRef = useRef(0)
+  // The image guard's evidence is read only once the user opens the dialog.
+  const [imageGuardRequested, setImageGuardRequested] = useState(false)
 
   // Tab state from URL query param — migrate legacy tab names
   const rawTab = searchParams.get('tab')
@@ -550,17 +547,23 @@ export function WorkloadView({
           ? 'reachability' // the network tab was renamed Reachability
           : (rawTab as TabType) || 'overview'
 
+
+  // A panel counts when someone switches to it. Counting renders instead would
+  // recount the same open tab: the drawer mounts hidden WorkloadView layers
+  // for expand-on-hover and crossfades.
   const handleTabChange = useCallback(
     (tab: TabType, opts?: { replace?: boolean }) => {
+      const panel = PANEL_USAGE_VIEWS[tab]
+      if (panel && tab !== migratedTab) recordUsageEvent({ type: 'view', name: panel })
       const params = new URLSearchParams(searchParams)
       if (tab === 'overview') {
         params.delete('tab')
       } else {
         params.set('tab', tab)
       }
-      setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory })
+      setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory, state: location.state })
     },
-    [pushTabHistory, searchParams, setSearchParams],
+    [migratedTab, pushTabHistory, searchParams, setSearchParams, location.state],
   )
 
   const selectedRunKey = searchParams.get('run') ?? ''
@@ -572,6 +575,13 @@ export function WorkloadView({
       setSearchParams(params, { replace: true })
     },
     [searchParams, setSearchParams],
+  )
+  // A pushed entry, so Back returns to the graph.
+  const handleSelectTopologyMember = useCallback(
+    (memberKey: string) => {
+      setSearchParams(memberOverviewParams(searchParams, memberKey), { state: location.state })
+    },
+    [searchParams, setSearchParams, location.state],
   )
 
   // Fetch resource with relationships
@@ -598,6 +608,8 @@ export function WorkloadView({
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
     refetchActive: true,
     clusterScoped: batchKind === 'ClusterWorkflowTemplate',
+    namespaces: viewNamespaces,
+    ownerUID: batchKind === 'CronJob' ? resource?.metadata?.uid : undefined,
   })
   const relatedTimelineEvents = useMemo(
     () => batchKind === 'JobSet' ? [] : workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
@@ -611,9 +623,11 @@ export function WorkloadView({
     () => (isDiagnoseKind(apiKind, effectiveGroup) ? [] : (relationships?.services ?? [])),
     [apiKind, effectiveGroup, relationships],
   )
+  const onRefresh = rest.onRefresh
   const refetchResourceAndRuns = useCallback(async () => {
     await Promise.all([
       refetchResource(),
+      onRefresh?.(),
       ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
         queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
         ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
@@ -627,7 +641,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, onRefresh])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],
@@ -652,125 +666,33 @@ export function WorkloadView({
         : null,
     [apiKind, imageTargetOwnership, name, namespace],
   )
-  const relationshipGitopsOwner = useMemo(
-    () => gitOpsOwnerFromRelationships(relationships),
-    [relationships],
-  )
-  const inheritedGitOpsLookupRef = useMemo(
-    () =>
-      findInheritedGitOpsLookupRef(relationships, relationshipGitopsOwner, {
-        kind: apiKind,
-        namespace,
-        name,
-        group: rest.group,
-      }),
-    [relationships, relationshipGitopsOwner, apiKind, namespace, name, rest.group],
-  )
-  const inheritedGitOpsResponse = useResourceWithRelationships<any>(
-    inheritedGitOpsLookupRef ? kindToPluralWithGroup(inheritedGitOpsLookupRef.kind, inheritedGitOpsLookupRef.group ?? '') : '',
-    inheritedGitOpsLookupRef?.namespace ?? '',
-    inheritedGitOpsLookupRef?.name ?? '',
-    inheritedGitOpsLookupRef?.group,
-  )
-  const inheritedGitopsOwner = useMemo(
-    () => gitOpsOwnerFromRelationships(inheritedGitOpsResponse.data?.relationships),
-    [inheritedGitOpsResponse.data?.relationships],
-  )
-  const relationshipHelmOwner = useMemo(
-    () =>
-      nativeHelmOwnerFromRelationships(relationships, resource?.metadata?.namespace ?? namespace),
-    [relationships, resource?.metadata?.namespace, namespace],
-  )
-  const inheritedHelmOwner = useMemo(
-    () =>
-      nativeHelmOwnerFromRelationships(
-        inheritedGitOpsResponse.data?.relationships,
-        inheritedGitOpsResponse.data?.resource?.metadata?.namespace ?? namespace,
-      ),
-    [
-      inheritedGitOpsResponse.data?.relationships,
-      inheritedGitOpsResponse.data?.resource?.metadata?.namespace,
-      namespace,
-    ],
-  )
-  const rawGitopsOwner = relationshipGitopsOwner ?? inheritedGitopsOwner
-  const gitOpsSourceResource = relationshipGitopsOwner
-    ? resource
-    : inheritedGitOpsResponse.data?.resource
-  const helmOwner = relationshipHelmOwner ?? inheritedHelmOwner
-  const helmSourceResource = relationshipHelmOwner
-    ? resource
-    : inheritedGitOpsResponse.data?.resource
-  const targetRelationshipGitopsOwner = useMemo(
-    () => gitOpsOwnerFromRelationships(activeImageTargetOwnership?.response.relationships),
-    [activeImageTargetOwnership?.response.relationships],
-  )
-  const targetInheritedGitopsOwner = useMemo(
-    () =>
-      gitOpsOwnerFromRelationships(
-        activeImageTargetOwnership?.inheritedResponse?.relationships,
-      ),
-    [activeImageTargetOwnership?.inheritedResponse?.relationships],
-  )
-  const targetRawGitopsOwner = targetRelationshipGitopsOwner ?? targetInheritedGitopsOwner
-  const targetRelationshipHelmOwner = nativeHelmOwnerFromRelationships(
-    activeImageTargetOwnership?.response.relationships,
-    activeImageTargetOwnership?.target.namespace ?? namespace,
-  )
-  const targetInheritedHelmOwner = nativeHelmOwnerFromRelationships(
-    activeImageTargetOwnership?.inheritedResponse?.relationships,
-    activeImageTargetOwnership?.target.namespace ?? namespace,
-  )
-  const targetHelmOwner = targetRelationshipHelmOwner ?? targetInheritedHelmOwner
-  const shouldResolveArgoOwner =
-    (rawGitopsOwner?.tool === 'argocd' && !rawGitopsOwner.namespace) ||
-    (targetRawGitopsOwner?.tool === 'argocd' && !targetRawGitopsOwner.namespace)
-  const { data: argoApplications } = useResources<any>('applications', undefined, 'argoproj.io', {
-    enabled: shouldResolveArgoOwner,
+  const workloadOwnership = useResolvedGitOpsOwner({
+    kind: apiKind,
+    group: rest.group,
+    namespace,
+    name,
+    relationships,
+    resource,
   })
-  const gitopsOwner = useMemo(
-    () => resolveGitOpsOwner(rawGitopsOwner, argoApplications),
-    [rawGitopsOwner, argoApplications],
-  )
-  const targetGitopsOwner = useMemo(
-    () => resolveGitOpsOwner(targetRawGitopsOwner, argoApplications),
-    [argoApplications, targetRawGitopsOwner],
-  )
-  const gitopsOwnerGroup = gitopsOwner ? gitOpsOwnerGroup(gitopsOwner) : ''
-  const shouldFetchGitOpsOwner = Boolean(gitopsOwner?.namespace)
-  const gitopsOwnerQuery = useResource<any>(
-    shouldFetchGitOpsOwner ? gitopsOwner!.kind : '',
-    gitopsOwner?.namespace ?? '',
-    gitopsOwner?.name ?? '',
-    gitopsOwnerGroup,
-  )
-  const targetGitopsOwnerGroup = targetGitopsOwner ? gitOpsOwnerGroup(targetGitopsOwner) : ''
-  const shouldFetchTargetGitOpsOwner = Boolean(
-    activeImageTargetOwnership && targetGitopsOwner?.namespace,
-  )
-  const targetGitopsOwnerQuery = useResource<Record<string, unknown>>(
-    shouldFetchTargetGitOpsOwner ? targetGitopsOwner!.kind : '',
-    targetGitopsOwner?.namespace ?? '',
-    targetGitopsOwner?.name ?? '',
-    targetGitopsOwnerGroup,
-    { enabled: shouldFetchTargetGitOpsOwner },
-  )
-  const gitOpsOwnerStatus = useMemo(
-    () => deriveGitOpsOwnerStatus(gitopsOwner, gitopsOwnerQuery.data),
-    [gitopsOwner, gitopsOwnerQuery.data],
-  )
-  const gitOpsOwnerVerified = Boolean(gitopsOwner?.namespace && gitopsOwnerQuery.data)
-  const gitOpsOwnerPending = Boolean(
-    gitopsOwner?.namespace && gitopsOwnerQuery.isLoading && !gitopsOwnerQuery.data,
-  )
-  const gitOpsOwnerSource = useMemo(
-    () => describeGitOpsOwnerSource(rawGitopsOwner, gitOpsSourceResource),
-    [rawGitopsOwner, gitOpsSourceResource],
-  )
-  const helmOwnerSource = useMemo(
-    () => describeHelmOwnerSource(helmOwner, helmSourceResource),
-    [helmOwner, helmSourceResource],
-  )
+  const {
+    owner: gitopsOwner,
+    ownerObject: gitopsOwnerObject,
+    ownerVerified: gitOpsOwnerVerified,
+    ownerPending: gitOpsOwnerPending,
+    ownerSource: gitOpsOwnerSource,
+    ownerStatus: gitOpsOwnerStatus,
+    helmOwner,
+    helmSource: helmOwnerSource,
+  } = workloadOwnership
+  const imageTargetOwnershipResolution = useResolvedGitOpsOwner({
+    kind: activeImageTargetOwnership?.target.resource ?? '',
+    group: activeImageTargetOwnership?.target.group,
+    namespace: activeImageTargetOwnership?.target.namespace ?? '',
+    name: activeImageTargetOwnership?.target.name ?? '',
+    relationships: activeImageTargetOwnership?.response.relationships,
+    resource: activeImageTargetOwnership?.response.resource,
+    enabled: Boolean(activeImageTargetOwnership),
+  })
 
   // Fetch topology for hierarchy building (only when expanded). Polled like
   // useTrace's "drawer feeling live" pattern — without this, a resource
@@ -801,18 +723,32 @@ export function WorkloadView({
   // colliding kind) under the wrong group and refetch once it settles.
   const historyGroupSettled = Boolean(rest.group) || resource !== undefined || resourceError != null
   const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded && historyGroupSettled)
+  // A Radar without the scoped history endpoint gets the namespace's newest
+  // changes instead, which the timeline filters to this workload.
+  const historyFallback = isRadarFeatureUnsupported(historyQuery.error, 'workloadHistory')
+  const namespaceChanges = useChanges({
+    namespaces: [namespace],
+    timeRange: 'all',
+    includeK8sEvents: true,
+    includeManaged: true,
+    limit: 10000,
+    enabled: expanded && historyFallback,
+  })
   const {
-    events: allEvents,
+    events: scopedEvents,
     truncated: historyTruncated,
     loadOlder: loadOlderHistory,
     loadingOlder: loadingOlderHistory,
     olderError: olderHistoryError,
   } = useHistoryPaging(
     `${effectiveGroup ?? ''}/${apiKind}/${namespace}/${name}`,
-    historyQuery.data,
+    historyFallback ? undefined : historyQuery.data,
     (beforeSeq) => fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, beforeSeq),
   )
-  const eventsLoading = historyQuery.isLoading || (expanded && !historyGroupSettled)
+  const allEvents = historyFallback ? namespaceChanges.data : scopedEvents
+  const eventsLoading = historyFallback
+    ? namespaceChanges.isLoading
+    : historyQuery.isLoading || (expanded && !historyGroupSettled)
 
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
@@ -897,6 +833,7 @@ export function WorkloadView({
     name,
     effectiveGroup,
     !resourceLoading && Boolean(resource),
+    apiKind === 'nodes' && !effectiveGroup ? resource?.metadata?.uid ?? '' : '',
   )
   const desktopDownload = useDesktopDownload()
 
@@ -908,9 +845,31 @@ export function WorkloadView({
   // would flip the query key when the manifest arrives, drop liveIssues, and flash
   // the renderer banners. The backend canonicalizes a plural kind via discovery,
   // so using the normalized API kind resolves direct links and app navigation alike.
-  const { data: liveIssues, isPending: issuesPending } = useResourceIssues(apiKind, rest.group, namespace, name)
+  const isCronJob = apiKind === 'cronjobs' && (!effectiveGroup || effectiveGroup === 'batch')
+  const isCoreNode = apiKind === 'nodes' && !effectiveGroup
+  const { support: coverageSupport } = useRadarFeature('resourceIssueCoverage')
+  const useReportCoverage = (isCronJob || isCoreNode) && coverageSupport === 'supported'
+  const issueObservation = resource ? JSON.stringify([resource.metadata?.uid, resource.metadata?.resourceVersion]) : undefined
+  const ordinaryIssues = useResourceIssues(apiKind, rest.group, namespace, name,
+    rest.active !== false && !useReportCoverage && !isNotFoundError(resourceError), issueObservation)
+  const subjectIssues = useSubjectIssues(useReportCoverage ? { kind: isCoreNode ? 'Node' : 'CronJob', group: isCoreNode ? '' : 'batch', namespace, name, uid: resource?.metadata?.uid } : null, useReportCoverage && Boolean(resource))
+  const liveIssues = useReportCoverage ? subjectIssues.data?.issues : ordinaryIssues.data
+  const issuesPending = useReportCoverage ? subjectIssues.isPending : ordinaryIssues.isPending
+  const schedulingEvidence = isCronJob && subjectIssues.data?.scheduling_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.scheduling_report : undefined
+  const certificateEvidence = isCoreNode && subjectIssues.data?.node_certificate_report?.uid === resource?.metadata?.uid ? subjectIssues.data?.node_certificate_report : undefined
+  const hasCertificateIssue = Boolean(liveIssues?.some(issue => issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry'))
+  const [reportTimelineFocus, setReportTimelineFocus] = useState<{ uid: string; id: string }>()
+  const viewSchedulingReport = useCallback(() => {
+    setReportTimelineFocus(schedulingEvidence?.event_id ? { uid: schedulingEvidence.uid, id: schedulingEvidence.event_id } : undefined)
+    handleTabChange('timeline')
+  }, [schedulingEvidence, handleTabChange])
+  const viewCertificateReport = useCallback(() => {
+    setReportTimelineFocus(certificateEvidence?.event_id ? { uid: certificateEvidence.uid, id: certificateEvidence.event_id } : undefined)
+    handleTabChange('timeline')
+  }, [certificateEvidence, handleTabChange])
   const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
+  const openIssueResource = issueResourceOpener(rest.onNavigateToResource)
   const {
     onCompareTo,
     onCompareAcrossClusters,
@@ -953,6 +912,23 @@ export function WorkloadView({
     (path: string) => navigateRouter(path),
     [navigateRouter],
   )
+  // Offered for the kinds the traffic map draws as one node, and only once a
+  // traffic source is known to be available on this cluster. A Job something
+  // controls (a CronJob, a JobSet) is not one: the map groups its pods under
+  // that owner, so it is offered only once the Job is known to have none.
+  const isJob = apiKind.toLowerCase() === 'jobs'
+  const controlledJob = isJob && (!resource ||
+    (resource.metadata?.ownerReferences ?? []).some((ref: { controller?: boolean }) => ref.controller))
+  const trafficKind = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(apiKind.toLowerCase()) && !controlledJob
+  const trafficAvailable = useTrafficAvailable(trafficKind)
+  const openLiveTraffic = useCallback(() => {
+    const params = new URLSearchParams()
+    const namespaces = searchParams.get('namespaces')
+    if (namespaces) params.set('namespaces', namespaces)
+    params.set('focus', `${namespace}/${name}`)
+    navigateRouter({ pathname: '/traffic', search: params.toString() })
+  }, [navigateRouter, searchParams, namespace, name])
+  const offerLiveTraffic = trafficKind && trafficAvailable
   // Drawer TraceSummary CTA → open the full resource view ON the Reachability tab.
   // The generic onExpand navigates to the workload path but drops the query, so we
   // navigate directly to that path WITH ?tab=reachability - the deeplink the
@@ -977,6 +953,10 @@ export function WorkloadView({
   const loadImagesWithTargetOwnership = useCallback(
     async (params: { kind: string; namespace: string; name: string }) => {
       const request = ++imageOwnershipRequestRef.current
+      setImageGuardRequested(true)
+      // Each open and refresh re-reads the evidence: the owner's sync policy
+      // or ignore rules may have changed since the dialog last opened.
+      void queryClient.invalidateQueries({ queryKey: ['gitops-write-evidence'] })
       const inventory = await baseActionsBarProps.onLoadImages!(params)
       const targetDiffers =
         inventory.target.resource.toLowerCase() !== params.kind.toLowerCase() ||
@@ -1022,14 +1002,17 @@ export function WorkloadView({
           group: inventory.target.group,
         },
       )
-      const inheritedResponse = inheritedRef
-        ? await fetchRelationships(
-            kindToPluralWithGroup(inheritedRef.kind, inheritedRef.group ?? ''),
-            inheritedRef.namespace,
-            inheritedRef.name,
-            inheritedRef.group,
-          )
-        : undefined
+      // Warm the cache the target's ownership resolution reads, so the
+      // dialog doesn't open on a still-pending inherited lookup. A failed
+      // read surfaces there as unknown ownership, not as a failed load.
+      if (inheritedRef) {
+        await fetchRelationships(
+          kindToPluralWithGroup(inheritedRef.kind, inheritedRef.group ?? ''),
+          inheritedRef.namespace,
+          inheritedRef.name,
+          inheritedRef.group,
+        ).catch(() => undefined)
+      }
       if (request === imageOwnershipRequestRef.current) {
         setImageTargetOwnership({
           root: {
@@ -1039,52 +1022,75 @@ export function WorkloadView({
           },
           target: inventory.target,
           response,
-          inheritedResponse,
         })
       }
       return inventory
     },
     [baseActionsBarProps.onLoadImages, queryClient, setImageTargetOwnership],
   )
-  const imageGitopsOwner = activeImageTargetOwnership ? targetGitopsOwner : gitopsOwner
-  const imageHelmOwner = activeImageTargetOwnership ? targetHelmOwner : helmOwner
-  const imageGitopsOwnerData = activeImageTargetOwnership
-    ? targetGitopsOwnerQuery.data
-    : gitopsOwnerQuery.data
-  const managedImageSources = useMemo<ManagedImageSource[] | undefined>(() => {
-    if (!activeImageTargetOwnership && inheritedGitOpsLookupRef && (inheritedGitOpsResponse.isPending || inheritedGitOpsResponse.isError)) {
-      return undefined
-    }
-    const sources: ManagedImageSource[] = []
-    if (imageGitopsOwner) {
-      sources.push({
-        type: 'GitOps',
-        label: imageGitopsOwner.namespace
-          ? `${imageGitopsOwner.namespace}/${imageGitopsOwner.name}`
-          : imageGitopsOwner.name,
-        onOpen: imageGitopsOwnerData
-          ? () => handleOpenGitOpsResource(imageGitopsOwner)
+  const imageOwnershipSource = activeImageTargetOwnership ? imageTargetOwnershipResolution : workloadOwnership
+  const imageGuardTarget = activeImageTargetOwnership
+    ? {
+        kind: activeImageTargetOwnership.target.kind,
+        group: activeImageTargetOwnership.target.group,
+        namespace: activeImageTargetOwnership.target.namespace,
+        name: activeImageTargetOwnership.target.name,
+      }
+    : { kind: resource?.kind ?? pluralToKind(apiKind), group: effectiveGroup ?? '', namespace, name }
+  // Once the dialog lists the containers, ask about each by name (so the
+  // evidence can't predate the list) and judge the ones being changed.
+  const [imageSelection, setImageSelection] = useState<SetImageSelection | null>(null)
+  const imageWrites = useMemo(
+    () =>
+      imageSelection
+        ? setImageWrites(imageSelection.changed.length ? imageSelection.changed : imageSelection.containers)
+        : SET_IMAGE_WRITES,
+    [imageSelection],
+  )
+  const imageEvidencePaths = useMemo(
+    () => (imageSelection ? gitOpsWriteEvidencePaths(setImageWrites(imageSelection.containers)) : undefined),
+    [imageSelection],
+  )
+  const { guard: imageGuard, ownership: imageGuardOwnership } = useGitOpsWriteGuard({
+    target: imageGuardTarget,
+    writes: imageWrites,
+    evidencePaths: imageEvidencePaths,
+    ownership: imageOwnershipSource,
+    relationshipsUnavailable: activeImageTargetOwnership
+      ? !activeImageTargetOwnership.response.relationships
+      : Boolean(resource) && !relationships,
+    enabled: imageGuardRequested,
+  })
+  const {
+    owner: imageOwner,
+    helmOwner: imageHelmOwner,
+    ownerVerified: imageOwnerVerified,
+  } = imageGuardOwnership
+  const imageOwnership = useMemo<SetImageOwnership | undefined>(() => {
+    if (!imageGuard) return undefined
+    const owner = imageOwner
+    const helmOwner = imageHelmOwner
+    return {
+      guard: imageGuard,
+      onSelectionChange: setImageSelection,
+      selectionKey: setImageSelectionKey(imageSelection),
+      onOpenManager: handleOpenGitOpsResource,
+      onOpenOwner: owner
+        ? imageOwnerVerified
+          ? () => handleOpenGitOpsResource(owner)
+          : undefined
+        : helmOwner
+          ? () => handleOpenHelmRelease(helmOwner)
           : undefined,
-      })
     }
-    if (imageHelmOwner) {
-      sources.push({
-        type: 'Helm',
-        label: `${imageHelmOwner.namespace}/${imageHelmOwner.name}`,
-        onOpen: () => handleOpenHelmRelease(imageHelmOwner),
-      })
-    }
-    return sources
   }, [
     handleOpenGitOpsResource,
     handleOpenHelmRelease,
-    activeImageTargetOwnership,
-    imageGitopsOwner,
-    imageGitopsOwnerData,
+    imageGuard,
+    imageOwner,
     imageHelmOwner,
-    inheritedGitOpsLookupRef,
-    inheritedGitOpsResponse.isError,
-    inheritedGitOpsResponse.isPending,
+    imageOwnerVerified,
+    imageSelection,
   ])
   const actionsBarProps = useMemo(
     () => ({
@@ -1094,12 +1100,12 @@ export function WorkloadView({
         : undefined,
       onCompareTo,
       onCompareAcrossClusters,
-      managedImageSources,
+      imageOwnership,
     }),
     [
       baseActionsBarProps,
       loadImagesWithTargetOwnership,
-      managedImageSources,
+      imageOwnership,
       onCompareTo,
       onCompareAcrossClusters,
     ],
@@ -1209,14 +1215,17 @@ export function WorkloadView({
         refetch={refetchResourceAndRuns}
         // Timeline
         allEvents={allEvents}
-        historyTruncated={historyTruncated}
-        onLoadOlderHistory={loadOlderHistory}
-        loadingOlderHistory={loadingOlderHistory}
-        olderHistoryError={olderHistoryError}
-        historyScoped
-        historyIncomplete={Boolean(historyQuery.data?.incomplete)}
-        historyError={historyQuery.error as Error | null}
-        onRetryHistory={() => void historyQuery.refetch()}
+        timelineFocusEvent={reportTimelineFocus?.uid === resource?.metadata?.uid ? reportTimelineFocus : undefined}
+        historyTruncated={!historyFallback && historyTruncated}
+        onLoadOlderHistory={historyFallback ? undefined : loadOlderHistory}
+        loadingOlderHistory={!historyFallback && loadingOlderHistory}
+        olderHistoryError={historyFallback ? null : olderHistoryError}
+        historyScoped={!historyFallback}
+        historyIncomplete={!historyFallback && Boolean(historyQuery.data?.incomplete)}
+        historyCoverage={historyFallback ? undefined : historyQuery.data?.historyCoverage}
+        historyGaps={historyFallback ? undefined : historyQuery.data?.gaps}
+        historyError={(historyFallback ? namespaceChanges.error : historyQuery.error) as Error | null}
+        onRetryHistory={() => void (historyFallback ? namespaceChanges.refetch() : historyQuery.refetch())}
         relatedTimelineEvents={relatedTimelineEvents}
         eventsLoading={eventsLoading || (batchExecution && batchKind !== 'JobSet' && batchRunsQuery.isLoading)}
         topology={topology}
@@ -1242,12 +1251,17 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            resourceLoading={resourceLoading}
+            resourceError={resourceError}
             group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
+            viewNamespaces={viewNamespaces}
           />
         )}
-        renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
+        {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, rest.extraTabs)}
+        onSelectTopologyMember={batchExecution && batchKind === 'JobSet' ? handleSelectTopologyMember : undefined}
+        renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res, leadContent }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
             <BatchExecutionFullscreen
@@ -1257,11 +1271,13 @@ export function WorkloadView({
               name={n}
               resource={res}
               selectedRunKey={selectedRunKey}
+              leadContent={leadContent}
               canViewLogs={baseActionsBarProps.canViewLogs}
               onSelectRun={handleSelectedRunChange}
               onSwitchToLogs={() => handleTabChange('logs')}
               onSwitchToTimeline={() => handleTabChange('timeline')}
               onNavigateToResource={rest.onNavigateToResource}
+              viewNamespaces={viewNamespaces}
             />
           ) : null
         }
@@ -1311,7 +1327,10 @@ export function WorkloadView({
         onDuplicate={handleDuplicate}
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
-        rendererOverrides={rendererOverrides}
+        rendererOverrides={resourceRendererOverrides}
+        renderOverviewIntro={apiKind === 'nodes' && !effectiveGroup && resource?.metadata?.uid
+          ? () => <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
+          : undefined}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1328,8 +1347,12 @@ export function WorkloadView({
           return (
           <>
             {diagnoseInline}
+            <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             {diagnoseHint}
-            <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
+            <RelatedFindingsSection
+              data={resourceResponse?.relatedFindings}
+              onResourceClick={openIssueResource}
+            />
             <AuditOverviewSection
               findings={auditFindings ?? []}
               onViewAll={() => navigateRouter('/checks')}
@@ -1338,25 +1361,28 @@ export function WorkloadView({
           )
         }}
         renderOverviewLead={() => (
+          <div className="flex flex-col gap-4">
+          <CronJobSchedulingContext evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
+          <NodeCertificateContext evidence={certificateEvidence} hasIssue={hasCertificateIssue} onViewTimeline={viewCertificateReport} />
           <ResourceIssuesSection
             issues={liveIssues}
+            renderDetailSection={({ issue }) => {
+              if (schedulingEvidence?.state === 'reported' && issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason) return <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
+              if (certificateEvidence && issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry') return <NodeCertificateDetails evidence={certificateEvidence} onViewTimeline={viewCertificateReport} includeOriginalReport={false} />
+              return null
+            }}
+            compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
-            onResourceClick={
-              rest.onNavigateToResource
-                ? (ref) =>
-                    rest.onNavigateToResource?.({
-                      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
-                      namespace: ref.namespace ?? '',
-                      name: ref.name,
-                      group: ref.group ?? '',
-                    })
-                : undefined
-            }
+            onResourceClick={openIssueResource}
           />
+          </div>
         )}
+        hasOverviewLead={hasOperationalIssues || Boolean(schedulingEvidence && schedulingEvidence.state !== 'reported') || nodeCertificateContextVisible(certificateEvidence, hasCertificateIssue)}
         hasOperationalIssues={hasOperationalIssues}
         operationalIssuesPending={issuesPending}
-        onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
+        // A manager answer's chip links only managers the server found; a
+        // disagreement has no lead, so no owner object, but its managers link.
+        onOpenGitOpsResource={gitopsOwnerObject || relationships?.ownership?.manager ? handleOpenGitOpsResource : undefined}
         resolvedGitOpsOwner={gitopsOwner}
         gitOpsOwnerVerified={gitOpsOwnerVerified}
         gitOpsOwnerPending={gitOpsOwnerPending}
@@ -1366,6 +1392,7 @@ export function WorkloadView({
         helmOwnerSource={helmOwnerSource}
         onOpenHelmRelease={handleOpenHelmRelease}
         onNavigateGitOpsPath={handleNavigateGitOpsPath}
+        onOpenLiveTraffic={offerLiveTraffic ? openLiveTraffic : undefined}
       />
       <CreateResourceDialog
         open={duplicateDialogOpen}
@@ -1387,53 +1414,25 @@ export function WorkloadView({
   )
 }
 
-function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
+/** The search params that open `memberKey` in the Overview: the member and
+ *  the tab change in one write, since two writes from the same render would
+ *  each start from the old params and the second would drop the first. */
+export function memberOverviewParams(current: URLSearchParams, memberKey: string): URLSearchParams {
+  const params = new URLSearchParams(current)
+  params.set('run', memberKey)
+  params.delete('tab')
+  return params
+}
+
+export function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
   if (!relationships) return []
-  return dedupeRefs([
+  return dedupeResourceRefs([
     ...(relationships.services ?? []),
     ...(relationships.ingresses ?? []),
     ...(relationships.gateways ?? []),
     ...(relationships.routes ?? []),
+    ...(relationships.routedFrom ?? []),
   ])
-}
-
-function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
-  const seen = new Set<string>()
-  return refs.filter((ref) => {
-    const key = `${ref.kind}/${ref.namespace}/${ref.name}/${ref.group ?? ''}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-function resolveGitOpsOwner(
-  owner: GitOpsOwnerRef | null,
-  argoApplications: any[] | undefined,
-): GitOpsOwnerRef | null {
-  if (!owner || owner.namespace || owner.tool !== 'argocd') return owner
-  const matches = (argoApplications ?? []).filter((app) => app?.metadata?.name === owner.name)
-  if (matches.length !== 1) return owner
-  const namespace = matches[0]?.metadata?.namespace
-  return namespace ? { ...owner, namespace } : owner
-}
-
-export function findInheritedGitOpsLookupRef(
-  relationships: Relationships | undefined,
-  directOwner: GitOpsOwnerRef | null,
-  current: ResourceRef,
-): ResourceRef | null {
-  if (directOwner) return null
-  const inheritedManagerRefs = (relationships?.managedBy ?? []).filter(
-    (ref) => !gitOpsOwnerFromRelationships({ managedBy: [ref] }) && !isNativeHelmManager(ref),
-  )
-  const candidates = [
-    relationships?.deployment,
-    ...inheritedManagerRefs,
-    relationships?.owner,
-  ].filter(Boolean) as ResourceRef[]
-
-  return candidates.find((ref) => !isCurrentResource(ref, current)) ?? null
 }
 
 const POD_OWNERSHIP_WORKLOAD_KINDS = new Set([
@@ -1515,89 +1514,6 @@ function sameWorkload(
   )
 }
 
-function nativeHelmOwnerFromRelationships(
-  relationships: Relationships | undefined,
-  fallbackNamespace: string,
-): HelmOwnerRef | null {
-  const ref = relationships?.managedBy?.[0]
-  if (!ref || !isNativeHelmManager(ref)) return null
-  return {
-    namespace: ref.namespace || fallbackNamespace,
-    name: ref.name,
-  }
-}
-
-function isCurrentResource(ref: ResourceRef, current: ResourceRef): boolean {
-  return (
-    kindToPluralWithGroup(ref.kind, ref.group ?? '') ===
-      kindToPluralWithGroup(current.kind, current.group ?? '') &&
-    ref.namespace === current.namespace &&
-    ref.name === current.name &&
-    (ref.group ?? '') === (current.group ?? '')
-  )
-}
-
-function isNativeHelmManager(ref: ResourceRef): boolean {
-  return ref.kind === 'HelmRelease' && ref.group !== 'helm.toolkit.fluxcd.io'
-}
-
-function describeGitOpsOwnerSource(owner: GitOpsOwnerRef | null, resource: any): string | null {
-  if (!owner || !resource) return null
-  const labels = resource.metadata?.labels ?? {}
-  const annotations = resource.metadata?.annotations ?? {}
-
-  if (owner.tool === 'fluxcd') {
-    const nameKey =
-      owner.kind === 'helmreleases'
-        ? 'helm.toolkit.fluxcd.io/name'
-        : 'kustomize.toolkit.fluxcd.io/name'
-    const nsKey =
-      owner.kind === 'helmreleases'
-        ? 'helm.toolkit.fluxcd.io/namespace'
-        : 'kustomize.toolkit.fluxcd.io/namespace'
-    if (labels[nameKey] || labels[nsKey]) {
-      return `${nameKey}=${labels[nameKey] ?? ''}, ${nsKey}=${labels[nsKey] ?? ''}`
-    }
-  }
-
-  const trackingID = annotations['argocd.argoproj.io/tracking-id']
-  if (trackingID) return `argocd.argoproj.io/tracking-id=${trackingID}`
-  const argoInstance = labels['argocd.argoproj.io/instance']
-  if (argoInstance) return `argocd.argoproj.io/instance=${argoInstance}`
-  return null
-}
-
-function describeHelmOwnerSource(owner: HelmOwnerRef | null, resource: any): string | null {
-  if (!owner || !resource) return null
-  const annotations = resource.metadata?.annotations ?? {}
-  const releaseName = annotations['meta.helm.sh/release-name']
-  const releaseNamespace = annotations['meta.helm.sh/release-namespace']
-  if (releaseName || releaseNamespace) {
-    return `meta.helm.sh/release-name=${releaseName ?? ''}, meta.helm.sh/release-namespace=${releaseNamespace ?? ''}`
-  }
-  return null
-}
-
-function gitOpsOwnerGroup(owner: GitOpsOwnerRef): string {
-  if (owner.tool === 'argocd') return 'argoproj.io'
-  if (owner.kind === 'kustomizations') return 'kustomize.toolkit.fluxcd.io'
-  return 'helm.toolkit.fluxcd.io'
-}
-
-function deriveGitOpsOwnerStatus(owner: GitOpsOwnerRef | null, resource: any): GitOpsStatus | null {
-  if (!owner || !resource || !hasGitOpsStatusPayload(owner, resource)) return null
-  return getGitOpsResourceStatus(owner.kind, resource)
-}
-
-function hasGitOpsStatusPayload(owner: GitOpsOwnerRef, resource: any): boolean {
-  if (owner.kind === 'applications') {
-    const status = resource.status ?? {}
-    return Boolean(status.sync?.status || status.health?.status || status.operationState?.phase)
-  }
-  if (resource.spec?.suspend === true) return true
-  return Array.isArray(resource.status?.conditions) && resource.status.conditions.length > 0
-}
-
 // ============================================================================
 // LOGS TAB — platform-specific (uses data-fetching hooks)
 // ============================================================================
@@ -1626,6 +1542,9 @@ function LogsTabContent({
   onConsumeInitialContainer,
   selectedRunKey,
   onSelectRun,
+  viewNamespaces,
+  resourceLoading,
+  resourceError,
 }: {
   kind: string
   apiKind: string
@@ -1640,6 +1559,9 @@ function LogsTabContent({
   onConsumeInitialContainer: () => void
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
+  viewNamespaces: string[]
+  resourceLoading: boolean
+  resourceError: Error | null
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1650,8 +1572,28 @@ function LogsTabContent({
           name={name}
           selectedRunKey={selectedRunKey}
           onSelectRun={onSelectRun}
+          viewNamespaces={viewNamespaces}
         />
       </div>
+    )
+  }
+
+  const integrationLogs = resourceLogs({ kind, group, namespace, name }, resource)
+  if (integrationLogs) return integrationLogs
+
+  if (isKubeRayCluster(kind, group, resource?.apiVersion)) {
+    return (
+      <RayClusterLogsTab
+        namespace={namespace}
+        name={name}
+        uid={resource?.metadata?.uid}
+        suspendRequested={resource?.spec?.suspend === true}
+        rootLoading={resourceLoading}
+        rootError={resourceError}
+        historyPods={pods}
+        selectedPod={selectedPod}
+        onSelectPod={onSelectPod}
+      />
     )
   }
 
@@ -1746,85 +1688,6 @@ function PodLogsTab({
         initialContainer={initialContainer || undefined}
         autoStream={autoStream}
       />
-    </div>
-  )
-}
-
-function MultiPodLogsTab({
-  pods,
-  namespace,
-  selectedPod,
-  onSelectPod,
-  initialContainer,
-}: {
-  pods: ResourceRef[]
-  namespace: string
-  selectedPod: string | null
-  onSelectPod: (name: string | null) => void
-  initialContainer?: string | null
-}) {
-  useEffect(() => {
-    if (pods.length > 0 && !selectedPod) {
-      onSelectPod(pods[0].name)
-    }
-  }, [pods, selectedPod, onSelectPod])
-
-  const podNamespace = pods.find((p) => p.name === selectedPod)?.namespace || namespace
-
-  // Fetch container list for the selected pod
-  const { data: logsData } = usePodLogs(podNamespace, selectedPod || '', {
-    tailLines: 1,
-  })
-  const containers = logsData?.containers || []
-
-  // A terminated pod (common for Job/CronJob children) has nothing to follow —
-  // only stream live ones. Wait for the pod to load before deciding so we don't
-  // briefly auto-stream a completed pod while its phase is still unknown.
-  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, selectedPod || '')
-  const phase = selectedPodResource?.status?.phase
-  const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
-
-  if (pods.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-        <Terminal className="w-12 h-12 mb-4 opacity-50" />
-        <p>No pods available</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="h-full flex flex-col">
-      {pods.length > 1 && (
-        <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
-          {pods.map((pod) => (
-            <button
-              key={pod.name}
-              onClick={() => onSelectPod(pod.name)}
-              className={clsx(
-                'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
-                selectedPod === pod.name
-                  ? 'bg-blue-500 text-theme-text-primary'
-                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover',
-              )}
-            >
-              {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
-            </button>
-          ))}
-        </div>
-      )}
-      {selectedPod && containers.length > 0 && (
-        <div className="flex-1 min-h-0">
-          <LogsViewer
-            key={selectedPod}
-            namespace={podNamespace}
-            podName={selectedPod}
-            containers={containers}
-            initialContainer={initialContainer || undefined}
-            autoStream={autoStream}
-          />
-        </div>
-      )}
     </div>
   )
 }
@@ -2329,137 +2192,6 @@ function DiagnoseInlineSection({ kind, namespace, name, group, onOpenReachabilit
   )
 }
 
-// FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)
-// that reference this Flux source CR — the inverse of `spec.sourceRef`. Renders
-// only when the focused resource is a Flux source kind; otherwise null. Sources
-// can have many consumers (one repo feeding multiple apps), so this answers
-// "if I edit this source, what gets affected on the next reconcile?".
-//
-// Filtering happens client-side off the namespaced reconciler lists — these
-// are typically small (tens, not thousands) and the dynamic informer cache
-// makes the request cheap. If a cluster ever has thousands of HelmReleases,
-// a dedicated /api/gitops/consumers endpoint would be the right move; today
-// it'd be premature.
-// Outer component is cheap — it does only the kind check and decides whether
-// to mount the data-fetching child. Without this split, useResources would
-// fire two API calls on EVERY workload drawer open (Pod, Deployment, Service,
-// …), since the hook has no `enabled` flag and can't be conditionally called
-// (Rules of Hooks). The hooks only need to run when the focused resource is
-// actually a Flux source CR.
-function FluxSourceConsumersSection({
-  kind,
-  namespace,
-  name,
-}: {
-  kind: string
-  namespace: string
-  name: string
-}) {
-  // The inner WorkloadView de-pluralizes the URL's plural form, which gives
-  // "Gitrepository" (single-uppercase) rather than the wire-correct
-  // "GitRepository" — so we match lowercase. spec.sourceRef.kind on consumers
-  // is always wire-correct, so we look that up separately.
-  const sourceKind = FLUX_SOURCE_KIND_BY_LOWER.get(kind.toLowerCase()) ?? null
-  if (!sourceKind) return null
-  return <FluxSourceConsumersInner sourceKind={sourceKind} namespace={namespace} name={name} />
-}
-
-function FluxSourceConsumersInner({
-  sourceKind,
-  namespace,
-  name,
-}: {
-  sourceKind: string
-  namespace: string
-  name: string
-}) {
-  const navigate = useNavigate()
-  const { data: kustomizations } = useResources<any>(
-    'kustomizations',
-    undefined,
-    'kustomize.toolkit.fluxcd.io',
-  )
-  const { data: helmReleases } = useResources<any>(
-    'helmreleases',
-    undefined,
-    'helm.toolkit.fluxcd.io',
-  )
-
-  const consumers: Array<{
-    kind: 'Kustomization' | 'HelmRelease'
-    namespace: string
-    name: string
-    plural: string
-  }> = []
-  for (const k of kustomizations ?? []) {
-    const ref = k?.spec?.sourceRef ?? {}
-    const refNs = ref.namespace || k?.metadata?.namespace
-    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
-      consumers.push({
-        kind: 'Kustomization',
-        namespace: k.metadata.namespace,
-        name: k.metadata.name,
-        plural: 'kustomizations',
-      })
-    }
-  }
-  for (const h of helmReleases ?? []) {
-    const ref = h?.spec?.chart?.spec?.sourceRef ?? {}
-    const refNs = ref.namespace || h?.metadata?.namespace
-    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
-      consumers.push({
-        kind: 'HelmRelease',
-        namespace: h.metadata.namespace,
-        name: h.metadata.name,
-        plural: 'helmreleases',
-      })
-    }
-  }
-
-  if (consumers.length === 0) {
-    return (
-      <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
-        <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Consumed by</h3>
-        <p className="text-xs text-theme-text-tertiary">
-          No Kustomization or HelmRelease references this source.
-        </p>
-      </section>
-    )
-  }
-
-  return (
-    <section className="rounded-lg border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
-      <h3 className="mb-3 text-sm font-semibold text-theme-text-primary">
-        Consumed by ({consumers.length})
-      </h3>
-      <div className="flex flex-wrap gap-1.5">
-        {consumers.map((c) => (
-          <Tooltip
-            key={`${c.kind}/${c.namespace}/${c.name}`}
-            content={`${c.kind} ${c.namespace}/${c.name}`}
-          >
-            <button
-              onClick={() =>
-                navigate(
-                  `/gitops/detail/${c.plural}/${encodeURIComponent(c.namespace)}/${encodeURIComponent(c.name)}`,
-                )
-              }
-              className="inline-flex items-center gap-1.5 rounded border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[11px] text-theme-text-secondary hover:border-skyhook-500/60 hover:text-skyhook-500 transition-colors"
-            >
-              <span className="text-theme-text-tertiary">
-                {c.kind === 'HelmRelease' ? 'HR' : 'K'}
-              </span>
-              <span>
-                {c.namespace}/{c.name}
-              </span>
-            </button>
-          </Tooltip>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 // Drawer mode: single chart + category tabs (compact for ~500px width).
 // Full-screen mode: multi-chart grid so CPU + Memory + Network can be
 // compared side-by-side without tab switching.
@@ -2533,18 +2265,6 @@ function DrawerMetricsContent({
     </div>
   )
 }
-
-// FLUX_SOURCE_KIND_BY_LOWER maps lowercase kind (what the inner WorkloadView
-// produces via its plural-to-singular fallback) to the wire-correct
-// PascalCase form that consumers carry in spec.sourceRef.kind. HelmChart is
-// intentionally absent — it's an auto-generated internal CR, not something
-// users create or point reconcilers at directly.
-const FLUX_SOURCE_KIND_BY_LOWER = new Map<string, string>([
-  ['gitrepository', 'GitRepository'],
-  ['helmrepository', 'HelmRepository'],
-  ['ocirepository', 'OCIRepository'],
-  ['bucket', 'Bucket'],
-])
 
 // Read-only manifest view for an object in the workload's neighborhood (the
 // YAML tab's object rail). Read-only by design — editing an arbitrary related

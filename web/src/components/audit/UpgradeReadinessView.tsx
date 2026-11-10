@@ -19,8 +19,12 @@ import {
   CollapseChevron,
   EmptyState,
   FreshnessControl,
+  getRadarUpgradeRequirement,
   PageHeader,
   PaneLoader,
+  RadarUpgradeAction,
+  radarUpgradeDetail,
+  radarUpgradeHeadline,
   SelectMenu,
 } from '@skyhook-io/k8s-ui'
 import {
@@ -43,7 +47,6 @@ interface UpgradeReadinessViewProps {
 
 const FINDING_CAP = 8
 export const UPGRADE_IMPACT_DOCS_URL = 'https://radarhq.io/docs/features/upgrade-impact'
-export const UPGRADE_IMPACT_MIN_RADAR_VERSION = 'v1.9.0'
 
 const statusMeta: Record<UpgradeReadinessCheckStatus, {
   label: string
@@ -250,22 +253,15 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
 }
 
 export function UpgradeReadinessError({ error, onResetTarget }: { error: unknown; onResetTarget?: () => void }) {
-  const missingEndpoint = error instanceof ApiError
-    && error.status === 404
-    && error.message === 'Unknown error'
-  if (missingEndpoint) {
+  const upgrade = getRadarUpgradeRequirement(error)
+  if (upgrade) {
     return (
       <EmptyState
         tone="neutral"
         icon={ShieldAlert}
-        headline="Upgrade impact needs a newer Radar"
-        body={
-          <>
-            This cluster&rsquo;s Radar predates Upgrade impact (added in Radar {UPGRADE_IMPACT_MIN_RADAR_VERSION}).
-            <br />
-            Upgrade the in-cluster Radar to enable it.
-          </>
-        }
+        headline={radarUpgradeHeadline('Upgrade impact')}
+        body={radarUpgradeDetail(upgrade)}
+        action={<RadarUpgradeAction requirement={upgrade} />}
       />
     )
   }

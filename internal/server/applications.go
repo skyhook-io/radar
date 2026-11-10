@@ -19,14 +19,20 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/imageutil"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readscope"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/jobset"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -57,6 +63,15 @@ import (
 type applicationsResponse struct {
 	Applications []appRow    `json:"applications"`
 	ArgoClaims   []argoClaim `json:"argoClaims,omitempty"`
+	// Access is set per request and never cached; absent means this caller's
+	// access couldn't be determined.
+	Access *applicationsAccess `json:"access,omitempty"`
+}
+
+// applicationsAccess tells a fleet reader whether a missing row can be explained
+// by this view being narrowed, which only the producer knows.
+type applicationsAccess struct {
+	Restricted bool `json:"restricted"`
 }
 
 // argoClaim propagates a declared Argo Application identity to the cluster its
@@ -71,6 +86,8 @@ type argoClaim struct {
 	DestServer    string        `json:"destServer,omitempty"`
 	DestName      string        `json:"destName,omitempty"`
 	DestNamespace string        `json:"destNamespace,omitempty"`
+	AppNamespace  string        `json:"appNamespace,omitempty"` // the Application itself, on the controller cluster
+	AppName       string        `json:"appName,omitempty"`
 	Workloads     []workloadRef `json:"workloads,omitempty"` // managed workloads (status.resources)
 }
 
@@ -131,6 +148,9 @@ type appRow struct {
 	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
 
 	sourceStrict bool
+	// sourceWithheld: this caller's copy dropped a source they can't read.
+	sourceWithheld bool
+	jobSetRoots    []appWorkload
 }
 
 type appSourceStatus struct {
@@ -247,6 +267,9 @@ type appWorkload struct {
 	Reason        string                          `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
 	Rollout       *health.WorkloadRolloutActivity `json:"rollout,omitempty"`
 	Batch         *appBatchSummary                `json:"batch,omitempty"`
+	// LatestRevisionAt is when the newest retained ReplicaSet or ControllerRevision
+	// was created. A rollback reuses an old revision, so it doesn't move this.
+	LatestRevisionAt string `json:"latestRevisionAt,omitempty"`
 
 	// envLabel is the explicit environment label, when the workload carries
 	// one (see envLabelOf) — app-identity resolver input, not on the wire.
@@ -258,6 +281,7 @@ type appWorkload struct {
 	// appAnnotation is app.skyhook.io/app — the user's explicit cross-cluster app
 	// declaration (authoritative, portable). Resolver input, not on the wire.
 	appAnnotation string
+	jobSetParent  string
 }
 
 type appBatchSummary struct {
@@ -286,7 +310,7 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := s.parseNamespacesForUser(r)
+	namespaces, accessUnknown := s.parseNamespacesForUserWithStatus(r)
 	resp, err := listApplicationsForRequest(r.Context(), namespaces, s.canRead(r, "argoproj.io", "clusterworkflowtemplates", "", "list"))
 	if err != nil {
 		if errors.Is(err, errResourceCacheUnavailable) {
@@ -297,7 +321,22 @@ func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, resp)
+	out := *s.filterApplicationsForUser(r, resp)
+	if perms := k8s.GetCachedPermissionResult(); !accessUnknown && perms != nil {
+		out.Access = &applicationsAccess{Restricted: applicationsViewRestricted(parseNamespaces(r.URL.Query()), namespaces, perms.ReadsApplicationsInEvery)}
+	}
+	s.writeJSON(w, &out)
+}
+
+// applicationsViewRestricted reports whether access, not the caller's own filter,
+// left applications out. requested is what the URL asked for (nil = all), effective
+// what the listing ran with, and readable whether Radar's own identity reads those
+// namespaces in full, the empty namespace meaning all of them.
+func applicationsViewRestricted(requested, effective []string, readable func(namespaces []string) bool) bool {
+	if requested == nil {
+		return effective != nil || !readable([]string{""})
+	}
+	return len(effective) < len(requested) || !readable(effective)
 }
 
 // handleApplicationHistory serves a focused app-level change narrative.
@@ -327,6 +366,7 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	resp = s.filterApplicationsForUser(r, resp)
 	var app *appRow
 	for i := range resp.Applications {
 		if resp.Applications[i].Key == key {
@@ -348,6 +388,8 @@ func (s *Server) handleApplicationHistory(w http.ResponseWriter, r *http.Request
 		anchors, partial := s.historyAnchorsForSource(r, app.SourceRef)
 		history.Anchors = anchors
 		history.PartialSources = append(history.PartialSources, partial...)
+	} else if app.sourceWithheld {
+		history.PartialSources = append(history.PartialSources, "Deployment-source history is unavailable because you don't have access to this app's deployment source.")
 	} else if message := unavailableSourceHistoryMessage(app); message != "" {
 		history.PartialSources = append(history.PartialSources, message)
 	}
@@ -391,7 +433,7 @@ func (s *Server) historyAnchorsForSource(r *http.Request, source *appSourceRef) 
 func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {
 	if source.Namespace != "" {
 		allowed := s.getUserNamespaces(r, []string{source.Namespace})
-		if noNamespaceAccess(allowed) {
+		if readscope.NoNamespaceAccess(allowed) {
 			return nil, []string{fmt.Sprintf("No access to source namespace %q.", source.Namespace)}
 		}
 	}
@@ -441,11 +483,7 @@ func (s *Server) helmHistoryAnchors(r *http.Request, source *appSourceRef) ([]ap
 	if client == nil {
 		return nil, []string{"Helm client is not initialized."}
 	}
-	username, groups := "", []string(nil)
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		username, groups = user.Username, user.Groups
-	}
-	release, err := client.GetReleaseAsUser(source.Namespace, source.Name, username, groups)
+	release, err := client.GetReleaseAsUser(source.Namespace, source.Name, auth.UserFromContext(r.Context()))
 	if err != nil {
 		if helm.IsForbiddenError(err) {
 			return nil, []string{"Insufficient permissions to read Helm release history."}
@@ -598,13 +636,26 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 			g = buildAppGraph(cache, namespaces)
 			graphAt = time.Now()
 		}
-		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, canListClusterWorkflowTemplates)
+		session, err := k8s.BeginOwnershipRead(cache)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+		}
+		// Rows are shared by every caller with these namespaces, so managers
+		// are read as Radar reads them, as the managed-source pass below reads
+		// every Application and Kustomization. Each caller's copy withholds a
+		// source they can't read (filterApplicationSources).
+		managers := ownership.NewView(session, ownership.Unrestricted())
+		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, managers, canListClusterWorkflowTemplates)
+		if err := session.ValidateCaches(); err != nil {
+			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
+		}
 		rows := groupApplications(wls)
 		sourcePaths, appSetChildren, argoItems := argoApplicationFacts(buildCtx, cache)
 		appSetByKey := appSetFanouts(appSetChildren)
 		enrichRowsWithManagedSourceRefs(buildCtx, cache, rows, argoItems)
 		enrichRowsWithArgoStatus(rows, argoItems)
 		resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(buildCtx, cache))
+		foldJobSetApplicationWorkloads(rows)
 		claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 		applicationsCacheMu.Lock()
 		if len(applicationsCache) >= applicationsCacheMaxEntries {
@@ -800,7 +851,7 @@ func (g *appGraph) relationshipsFor(kind, ns, name string, obj any) *appRelation
 		NetworkPolicies:   len(rel.NetworkPolicies),
 		serviceRefs:       refsByKey(rel.Services),
 		ingressRefs:       refsByKey(rel.Ingresses),
-		routeRefs:         refsByKey(appRouteRefs(rel.Routes, rel.Gateways)),
+		routeRefs:         refsByKey(appRouteRefs(rel.Routes, rel.Gateways, rel.Backends)),
 		configRefs:        refsByKey(rel.ConfigRefs),
 		scalerRefs:        refsByKey(rel.Scalers),
 		storageRefs:       refsByKey(rel.StorageRefs),
@@ -832,7 +883,7 @@ func appRouteRefs(routes []topology.ResourceRef, routeLikeGroups ...[]topology.R
 
 func isAppRouteKind(kind string) bool {
 	switch strings.ToLower(kind) {
-	case "httproute", "grpcroute", "tcproute", "tlsroute", "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
+	case "httproute", "grpcroute", "tcproute", "tlsroute", "udproute", "route", "ingressroute", "ingressroutetcp", "ingressrouteudp", "virtualservice", "httpproxy":
 		return true
 	default:
 		return false
@@ -861,8 +912,13 @@ type appWorkloadInput struct {
 // each to its structural root and label overlay, and classifies add-on
 // machinery. Pods and Warning events are indexed once per namespace and joined,
 // not re-listed per workload.
-func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, canListClusterWorkflowTemplates bool) []appWorkloadInput {
+func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, managers *ownership.View, canListClusterWorkflowTemplates bool) []appWorkloadInput {
 	var out []appWorkloadInput
+	jobSets := listDynamicByNamespacesGroup(ctx, cache, namespaces, jobset.Kind, jobset.Group)
+	jobSetByName := map[string]*unstructured.Unstructured{}
+	for _, root := range jobSets {
+		jobSetByName[root.GetNamespace()+"/"+root.GetName()] = root
+	}
 
 	podsByNS := indexPodsByNamespace(cache, namespaces)
 	eventsByObj := indexWarningEventsByObject(cache, namespaces, g)
@@ -870,6 +926,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	scaledJobBatches := scaledJobBatchSummaries(cache, namespaces)
 	cronWorkflowBatches := cronWorkflowBatchSummaries(ctx, cache, namespaces)
 	argoRollouts := listDynamicByNamespacesGroup(ctx, cache, namespaces, "Rollout", "argoproj.io")
+	latestRevisions := latestRevisionTimes(ctx, cache, namespaces)
 	var updatedRevisionTargets map[string]workloadRevisionTarget
 	var updatedRevisionTargetsOnce sync.Once
 	rolloutReferencedDeployments := map[string]bool{}
@@ -895,32 +952,38 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 			group = resourceid.GroupFromAPIVersion(resource.GetAPIVersion())
 		}
 		rootKey, rootKind, rootGroup, rootIdentity := g.rootOf(group, kind, ns, name)
+		source := workloadSourceRef(managers, resourceid.NewRef(group, kind, ns, name), obj)
 		rels := g.relationshipsFor(kind, ns, name, obj)
 		addon, why := packages.ClassifyAddon(lbls["helm.sh/chart"], lbls["app.kubernetes.io/name"], lbls["app.kubernetes.io/part-of"], name, lbls["addonmanager.kubernetes.io/mode"], image)
+		var latestRevisionAt string
+		if at, ok := latestRevisions[workloadUID(obj)]; ok {
+			latestRevisionAt = at.UTC().Format(time.RFC3339)
+		}
 		out = append(out, appWorkloadInput{
 			wl: appWorkload{
-				Kind:          kind,
-				Group:         group,
-				Namespace:     ns,
-				Name:          name,
-				WorkloadClass: classifyWorkload(kind, rels),
-				Image:         image,
-				Version:       imageTag(image),
-				AppVersion:    lbls["app.kubernetes.io/version"],
-				Health:        string(workloadHealth),
-				Ready:         ready,
-				Desired:       desired,
-				Restarts:      restarts,
-				Reason:        reason,
-				Rollout:       rollout,
-				Batch:         batch,
-				envLabel:      envLabelOf(lbls),
-				nameLabel:     lbls["app.kubernetes.io/name"],
-				appAnnotation: strings.TrimSpace(anns[appIdentityAnnotation]),
+				Kind:             kind,
+				Group:            group,
+				Namespace:        ns,
+				Name:             name,
+				WorkloadClass:    classifyWorkload(kind, rels),
+				Image:            image,
+				Version:          imageutil.ImageTag(image),
+				AppVersion:       lbls["app.kubernetes.io/version"],
+				Health:           string(workloadHealth),
+				Ready:            ready,
+				Desired:          desired,
+				Restarts:         restarts,
+				Reason:           reason,
+				Rollout:          rollout,
+				Batch:            batch,
+				LatestRevisionAt: latestRevisionAt,
+				envLabel:         envLabelOf(lbls),
+				nameLabel:        lbls["app.kubernetes.io/name"],
+				appAnnotation:    strings.TrimSpace(anns[appIdentityAnnotation]),
 			},
 			overlay:      overlay,
-			source:       sourceRefForInput(overlay, rootKind, rootGroup, rootKey),
-			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, pods),
+			source:       source,
+			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, workloadUID(obj), pods),
 			rels:         rels,
 			rootKey:      rootKey,
 			rootKind:     rootKind,
@@ -1024,6 +1087,9 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 					primaryImage(j.Spec.Template.Spec.Containers),
 					batchHealth(batch, levelToPackagesHealth(health.Workload(j, time.Now()).Level)),
 					0, 0, j.Spec.Selector, nil, batch)
+				if owner := metav1.GetControllerOf(j); owner != nil && jobset.Controls(jobSetByName[j.Namespace+"/"+owner.Name], j) {
+					out[len(out)-1].wl.jobSetParent = resourceid.ResourceKey(jobset.Group, jobset.Kind, j.Namespace, owner.Name)
+				}
 			}
 		})
 	}
@@ -1050,6 +1116,11 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 					0, 0, nil, nil, batch)
 			}
 		})
+	}
+	for _, root := range jobSets {
+		batch, workloadHealth := jobSetApplicationBatch(root)
+		add(root, jobset.Kind, root.GetNamespace(), root.GetName(), root.GetLabels(), root.GetAnnotations(),
+			jobSetPrimaryImage(root), workloadHealth, 0, 0, nil, nil, batch)
 	}
 	addScaledJobWorkloads(ctx, cache, namespaces, add, scaledJobBatches)
 	addArgoBatchWorkloads(ctx, cache, namespaces, add, cronWorkflowBatches, canListClusterWorkflowTemplates)
@@ -1111,6 +1182,45 @@ func applicationServingHealth(ready, desired int) packages.Health {
 		return packages.HealthDegraded
 	}
 	return packages.HealthUnhealthy
+}
+
+// latestRevisionTimes indexes the newest revision creation by owning workload,
+// from one walk of the cached ReplicaSets and ControllerRevisions. Rollouts own
+// ReplicaSets too, so the same index covers them.
+func latestRevisionTimes(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) map[types.UID]time.Time {
+	var revisions []metav1.Object
+	if cache.ReplicaSets() != nil {
+		forEachWorkloadNamespace(namespaces, func(namespace string) {
+			var replicaSets []*appsv1.ReplicaSet
+			if namespace == "" {
+				replicaSets, _ = cache.ReplicaSets().List(labels.Everything())
+			} else {
+				replicaSets, _ = cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
+			}
+			for _, replicaSet := range replicaSets {
+				revisions = append(revisions, replicaSet)
+			}
+		})
+	}
+	if cache.StatefulSets() != nil || cache.DaemonSets() != nil {
+		for _, revision := range listDynamicByNamespacesGroup(ctx, cache, namespaces, "ControllerRevision", "apps") {
+			revisions = append(revisions, revision)
+		}
+	}
+	return newestRevisionByOwner(revisions)
+}
+
+func newestRevisionByOwner(revisions []metav1.Object) map[types.UID]time.Time {
+	newest := make(map[types.UID]time.Time)
+	for _, revision := range revisions {
+		createdAt := revision.GetCreationTimestamp().Time
+		for _, owner := range revision.GetOwnerReferences() {
+			if existing, ok := newest[owner.UID]; !ok || createdAt.After(existing) {
+				newest[owner.UID] = createdAt
+			}
+		}
+	}
+	return newest
 }
 
 func applicationRevisionTargets(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, argoRollouts []*unstructured.Unstructured) map[string]workloadRevisionTarget {
@@ -1300,6 +1410,95 @@ func cronWorkflowBatchSummaries(ctx context.Context, cache *k8s.ResourceCache, n
 		applyRunToBatch(out[key], workflowRunInfo(wf))
 	}
 	return out
+}
+
+// Keep member evidence through grouping and identity resolution, then fold only
+// the visible workload list and runtime health onto the current JobSet root.
+func foldJobSetApplicationWorkloads(rows []appRow) {
+	for i := range rows {
+		row := &rows[i]
+		row.Workloads = append(row.Workloads, row.jobSetRoots...)
+		row.jobSetRoots = nil
+		roots := map[string]bool{}
+		for _, workload := range row.Workloads {
+			if workload.Kind == jobset.Kind && workload.Group == jobset.Group {
+				roots[resourceid.ResourceKey(jobset.Group, jobset.Kind, workload.Namespace, workload.Name)] = true
+			}
+		}
+		if len(roots) == 0 {
+			continue
+		}
+		visible := make([]appWorkload, 0, len(row.Workloads))
+		totalHealth, servingHealth := packages.Health(""), packages.Health("")
+		for _, workload := range row.Workloads {
+			if roots[workload.jobSetParent] {
+				continue
+			}
+			visible = append(visible, workload)
+			totalHealth = packages.WorseHealth(totalHealth, packages.Health(workload.Health))
+			if workload.WorkloadClass == "service" || workload.WorkloadClass == "worker" {
+				servingHealth = packages.WorseHealth(servingHealth, packages.Health(workload.Health))
+			}
+		}
+		row.Workloads = visible
+		if row.WorkloadClass == "mixed" && servingHealth != "" {
+			totalHealth = servingHealth
+		}
+		row.RuntimeHealth = string(totalHealth)
+		row.Health = row.RuntimeHealth
+		if row.SourceStatus != nil {
+			row.Health = string(packages.WorseHealth(totalHealth, argoDeliveryHealth(row.SourceStatus.Sync, row.SourceStatus.Health)))
+		}
+	}
+}
+
+func jobSetApplicationBatch(root *unstructured.Unstructured) (*appBatchSummary, packages.Health) {
+	state := jobset.Lifecycle(root)
+	batch := &appBatchSummary{RetainedRuns: 1, LatestRunName: root.GetName(), Message: state.Reason}
+	workloadHealth := packages.HealthNeutral
+	switch state.Phase {
+	case jobset.PhaseActive:
+		batch.LatestRunPhase = "Active"
+		if state.Condition == "RestartingJobSet" {
+			batch.LatestRunPhase = "Restarting"
+			workloadHealth = packages.HealthDegraded
+		} else if state.Condition == "StartupPolicyInProgress" {
+			batch.LatestRunPhase = "Starting"
+			workloadHealth = packages.HealthDegraded
+		}
+	case jobset.PhasePending:
+		batch.LatestRunPhase = "Pending"
+	case jobset.PhaseSuspended:
+		batch.Suspended = true
+		batch.LatestRunPhase = "Suspended"
+	case jobset.PhaseFinished:
+		if state.Outcome == jobset.OutcomeFailed {
+			batch.FailedRuns = 1
+			batch.LatestRunPhase = "Failed"
+			workloadHealth = packages.HealthUnhealthy
+		} else {
+			batch.SucceededRuns = 1
+			batch.LatestRunPhase = "Succeeded"
+		}
+	default:
+		batch.LatestRunPhase = "Unknown"
+		workloadHealth = packages.HealthUnknown
+	}
+	return batch, workloadHealth
+}
+
+func jobSetPrimaryImage(root *unstructured.Unstructured) string {
+	roles, _, _ := unstructured.NestedSlice(root.Object, "spec", "replicatedJobs")
+	for _, raw := range roles {
+		role, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if image := primaryUnstructuredImage(role, "template", "spec", "template", "spec", "containers"); image != "" {
+			return image
+		}
+	}
+	return ""
 }
 
 func addScaledJobWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, add addAppWorkloadFunc, batches map[string]*appBatchSummary) {
@@ -1722,10 +1921,35 @@ func forEachWorkloadNamespace(namespaces []string, fn func(ns string)) {
 // Satellites are attached but never used to merge: two apps that share a Service
 // stay two apps.
 func groupApplications(inputs []appWorkloadInput) []appRow {
+	memberRoots := map[string]bool{}
+	for _, input := range inputs {
+		if input.wl.jobSetParent != "" {
+			memberRoots[input.wl.jobSetParent] = true
+		}
+	}
+	deferredRoots := map[string]appWorkloadInput{}
+	evidence := make([]appWorkloadInput, 0, len(inputs))
+	for _, input := range inputs {
+		key := resourceid.ResourceKey(input.wl.Group, input.wl.Kind, input.wl.Namespace, input.wl.Name)
+		if input.wl.Kind == jobset.Kind && input.wl.Group == jobset.Group && memberRoots[key] {
+			deferredRoots[key] = input
+		} else {
+			evidence = append(evidence, input)
+		}
+	}
+	inputs = evidence
 	d := newDSU()
 	argoAppNamespaces := argoApplicationNamespaces(inputs)
 	for _, in := range inputs {
 		atoms := inputAtoms(in, argoAppNamespaces)
+		for i := 1; i < len(atoms); i++ {
+			d.union(atoms[0], atoms[i])
+		}
+	}
+	// The JobSet controller does not copy the JobSet's labels onto its Jobs, so
+	// a deferred root's own app declaration is still evidence for its members.
+	for _, root := range deferredRoots {
+		atoms := inputAtoms(root, argoAppNamespaces)
 		for i := 1; i < len(atoms); i++ {
 			d.union(atoms[0], atoms[i])
 		}
@@ -1752,7 +1976,16 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 	for _, comp := range order {
 		ins := members[comp]
 		r := &appRow{}
-		identifyApp(r, ins, rootGroups)
+		rootAdded := map[string]bool{}
+		identityInputs := ins
+		for _, input := range ins {
+			if root, ok := deferredRoots[input.wl.jobSetParent]; ok && !rootAdded[input.wl.jobSetParent] {
+				r.jobSetRoots = append(r.jobSetRoots, root.wl)
+				rootAdded[input.wl.jobSetParent] = true
+				identityInputs = append(identityInputs[:len(identityInputs):len(identityInputs)], root)
+			}
+		}
+		identifyApp(r, identityInputs, rootGroups)
 		servingHealth := packages.Health("")
 		appVers := map[string]struct{}{}
 		labeled := 0
@@ -1775,7 +2008,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			if in.wl.Namespace != "" {
 				nss[in.wl.Namespace] = struct{}{}
 			}
-			if repo, tag := imageRepo(in.wl.Image), in.wl.Version; repo != "" && tag != "" {
+			if repo, tag := imageutil.Repository(in.wl.Image), in.wl.Version; repo != "" && tag != "" {
 				if tagsByRepo[repo] == nil {
 					tagsByRepo[repo] = map[string]struct{}{}
 				}
@@ -1998,13 +2231,38 @@ func managerTier(kind, group string) (tier int, confidence string, ok bool) {
 	return 0, "", false
 }
 
-func sourceRefForInput(overlay *subject.AppOverlay, rootKind, rootGroup, rootKey string) *appSourceRef {
-	if overlay != nil {
-		if ref := sourceRefFromSubject(overlay.Winner.Ref); ref != nil {
-			return ref
-		}
+// workloadSourceRef answers ref's source from the managers' evidence. Workflow
+// template rows carry their object as its raw map.
+func workloadSourceRef(managers *ownership.View, ref resourceid.Ref, obj any) *appSourceRef {
+	meta, ok := obj.(metav1.Object)
+	if raw, isMap := obj.(map[string]any); isMap {
+		meta, ok = &unstructured.Unstructured{Object: raw}, true
 	}
-	return sourceRefFromRoot(rootKind, rootGroup, rootKey)
+	if !ok {
+		return nil
+	}
+	observed := ownership.Observe(ref, meta)
+	managers.Seed(observed)
+	answer := managers.Manager(ref)
+	// The session may hold a newer incarnation than the listed row describes.
+	if answer.Subject.Read.Object.UID != observed.UID {
+		return nil
+	}
+	return sourceRefFromManager(answer)
+}
+
+// sourceRefFromManager is the source system object a workload's manager answer
+// leads with, by the rule list and search summaries apply to a manager lead:
+// a manager whose list names the workload or its nearest controller ancestor,
+// a claim naming a manager that exists here (whose list may name it, lag
+// behind it or be unreadable), or a native Helm release named by its
+// annotations.
+func sourceRefFromManager(answer ownership.ManagerAnswer) *appSourceRef {
+	if resourcecontext.ManagerSummary(answer) == nil {
+		return nil
+	}
+	lead := answer.Lead
+	return sourceRefFromSubject(subject.Ref{Group: lead.Group, Kind: lead.Kind, Namespace: lead.Namespace, Name: lead.Name})
 }
 
 func sourceRefFromSubject(ref subject.Ref) *appSourceRef {
@@ -2020,24 +2278,6 @@ func sourceRefFromSubject(ref subject.Ref) *appSourceRef {
 		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
 	case ref.Kind == "HelmRelease" && ref.Group == "helm.toolkit.fluxcd.io":
 		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: ref.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}
-	default:
-		return nil
-	}
-}
-
-func sourceRefFromRoot(rootKind, rootGroup, rootKey string) *appSourceRef {
-	parts := strings.SplitN(rootKey, "/", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
-		return nil
-	}
-	ns, name := parts[0], parts[2]
-	switch {
-	case rootKind == string(topology.KindApplication) && rootGroup == "argoproj.io":
-		return &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: ns, Name: name}
-	case rootKind == string(topology.KindKustomization) && rootGroup == "kustomize.toolkit.fluxcd.io":
-		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: ns, Name: name}
-	case rootKind == string(topology.KindHelmRelease) && rootGroup == "helm.toolkit.fluxcd.io":
-		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: ns, Name: name}
 	default:
 		return nil
 	}
@@ -2285,7 +2525,7 @@ func refKey(r topology.ResourceRef) string {
 
 func classifyWorkload(kind string, rels *appRelationships) string {
 	switch kind {
-	case "Job", "CronJob", "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "ScaledJob":
+	case "Job", "CronJob", "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "ScaledJob", "JobSet":
 		return "job"
 	case "Deployment", "StatefulSet", "DaemonSet", "Rollout":
 		if rels != nil && (len(rels.Services) > 0 || len(rels.Ingresses) > 0 || len(rels.Routes) > 0 ||
@@ -2306,6 +2546,8 @@ func appWorkloadAPIGroup(kind string) string {
 		return "batch"
 	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "Rollout":
 		return "argoproj.io"
+	case "JobSet":
+		return jobset.Group
 	case "ScaledJob":
 		return "keda.sh"
 	default:
@@ -2556,20 +2798,30 @@ func podsRestarts(pods []*corev1.Pod) (int, string) {
 // eventsForWorkload joins a workload's Warning events from the per-namespace
 // index (the workload object + its pods), deduped by (object, reason) with
 // summed counts — the "why is it broken" feed (FailedScheduling, ImagePullBackOff,
-// FailedMount, …) that restarts alone miss.
-func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
+// FailedMount, …) that restarts alone miss. Only events about the current
+// workload and its current Pods join: a same-named Pod or workload replaced
+// earlier leaves events behind that would otherwise read as a current
+// problem. Those stay on the timeline.
+func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, uid types.UID, pods []*corev1.Pod) []appEvent {
 	if byObject == nil {
 		return nil
 	}
-	names := make([]string, 0, len(pods)+1)
-	names = append(names, resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName))
+	type subject struct {
+		key            string
+		uid, staticUID types.UID
+	}
+	subjects := make([]subject, 0, len(pods)+1)
+	subjects = append(subjects, subject{key: resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName), uid: uid})
 	for _, p := range pods {
-		names = append(names, resourceid.ResourceKey("", "Pod", "", p.Name))
+		subjects = append(subjects, subject{key: resourceid.ResourceKey("", "Pod", "", p.Name), uid: p.UID, staticUID: types.UID(p.Annotations[corev1.MirrorPodAnnotationKey])})
 	}
 	byKey := map[string]*appEvent{}
 	order := []string{}
-	for _, n := range names {
-		for _, e := range byObject[n] {
+	for _, n := range subjects {
+		for _, e := range byObject[n.key] {
+			if !k8s.EventDescribesIncarnation(e.InvolvedObject.UID, n.uid, n.staticUID) {
+				continue
+			}
 			key := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name + "/" + e.Reason
 			c := int(e.Count)
 			if c < 1 {
@@ -2600,6 +2852,14 @@ func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workl
 		out = append(out, *byKey[k])
 	}
 	return out
+}
+
+// workloadUID is the observed workload's UID, or "" when obj carries none.
+func workloadUID(obj any) types.UID {
+	if o, ok := obj.(metav1.Object); ok {
+		return o.GetUID()
+	}
+	return ""
 }
 
 func appEventFirstSeen(e *corev1.Event) string {
@@ -2650,40 +2910,6 @@ func cronWorkflowOwnerName(wf *unstructured.Unstructured) string {
 	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
 }
 
-// imageTag extracts the tag from an image ref. Digest-pinned refs (@sha256:…)
-// and untagged refs (implicit :latest) return "" — no false version.
-func imageTag(image string) string {
-	if image == "" {
-		return ""
-	}
-	if at := strings.Index(image, "@"); at >= 0 {
-		image = image[:at]
-	}
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon > slash {
-		return image[colon+1:]
-	}
-	return ""
-}
-
-// imageRepo is the image ref without its tag/digest — the unit version skew is
-// measured across: two workloads running the same repo at different tags.
-func imageRepo(image string) string {
-	if image == "" {
-		return ""
-	}
-	if at := strings.Index(image, "@"); at >= 0 {
-		image = image[:at]
-	}
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon > slash {
-		return image[:colon]
-	}
-	return image
-}
-
 // levelToPackagesHealth projects a canonical health.Level onto the package wire
 // vocabulary. neutral (intentional/idle — suspended, scaled-to-zero) maps to the
 // dedicated HealthNeutral; it aggregates as most-benign, so an all-idle app rolls
@@ -2709,3 +2935,94 @@ func namespaceFromKey(key string) string {
 
 // (worstAppHealth / appHealthRank removed — the app rollup now uses
 // packages.WorseHealth, the single rollup ordering.)
+
+// filterApplicationsForUser projects the shared rows for the caller.
+func (s *Server) filterApplicationsForUser(r *http.Request, shared *applicationsResponse) *applicationsResponse {
+	return s.filterApplicationSources(r, s.filterApplicationAuthenticationRefs(r, shared))
+}
+
+// filterApplicationSources withholds what names a GitOps manager the caller
+// can't get: a row's source and the delivery state read from it, and an Argo
+// CD claim. Rows and claims are found with Radar's own access, often in a
+// namespace the caller can't read. A native Helm source is named by the
+// workloads' own annotations, so it stays.
+func (s *Server) filterApplicationSources(r *http.Request, shared *applicationsResponse) *applicationsResponse {
+	if auth.UserFromContext(r.Context()) == nil {
+		return shared
+	}
+	out := *shared
+	changed := false
+	for i := range shared.Applications {
+		ref := shared.Applications[i].SourceRef
+		if ref == nil || ref.Type != "gitops" || s.canReadAppSource(r, ref.Group, ref.Kind, ref.Namespace) {
+			continue
+		}
+		if !changed {
+			out.Applications = append([]appRow(nil), shared.Applications...)
+			changed = true
+		}
+		row := &out.Applications[i]
+		row.SourceRef = nil
+		row.SourceStatus = nil
+		row.Health = row.RuntimeHealth
+		row.sourceWithheld = true
+	}
+	claims := make([]argoClaim, 0, len(shared.ArgoClaims))
+	for _, claim := range shared.ArgoClaims {
+		if s.canReadAppSource(r, "argoproj.io", "Application", claim.AppNamespace) {
+			claims = append(claims, claim)
+		}
+	}
+	if len(claims) != len(shared.ArgoClaims) {
+		out.ArgoClaims = claims
+		changed = true
+	}
+	if !changed {
+		return shared
+	}
+	return &out
+}
+
+func (s *Server) canReadAppSource(r *http.Request, group, kind, namespace string) bool {
+	resource := gitOpsPluralKind(kind)
+	return group != "" && resource != "" && namespace != "" && s.canRead(r, group, resource, namespace, "get")
+}
+
+// Applications rows are shared across callers, so authentication references are authorized on a copy after the cache.
+func (s *Server) filterApplicationAuthenticationRefs(r *http.Request, shared *applicationsResponse) *applicationsResponse {
+	if auth.UserFromContext(r.Context()) == nil {
+		return shared
+	}
+	out := *shared
+	out.Applications = append([]appRow(nil), shared.Applications...)
+	for i := range out.Applications {
+		row := &out.Applications[i]
+		if row.Relationships == nil {
+			continue
+		}
+		rel := *row.Relationships
+		refs := make(map[string]topology.ResourceRef, len(rel.configRefs))
+		withheld := false
+		for key, ref := range rel.configRefs {
+			if ref.Group == "keda.sh" && (ref.Kind == "TriggerAuthentication" || ref.Kind == "ClusterTriggerAuthentication") {
+				resource := "triggerauthentications"
+				if ref.Kind == "ClusterTriggerAuthentication" {
+					resource = "clustertriggerauthentications"
+				}
+				if !s.canRead(r, ref.Group, resource, ref.Namespace, "get") {
+					withheld = true
+					continue
+				}
+			}
+			refs[key] = ref
+		}
+		if !withheld {
+			continue
+		}
+		rel.configRefs = refs
+		rel.ConfigRefs = sortedRefs(refs, 20)
+		rel.Configs = len(refs)
+		row.Relationships = &rel
+	}
+	return &out
+}

@@ -54,6 +54,7 @@ type fakeProm struct {
 	rangeDelay     time.Duration                  // sleep before answering /api/v1/query_range, outside the lock so concurrent callers are not serialized
 	rangeBodyFunc  func(params url.Values) string // when set, renders the range body from the request (wins over rangeBody)
 	queryBodyFunc  func(params url.Values) string // same for /api/v1/query; an empty return falls back to queryBody
+	labelResponse  func(context.Context, url.Values) (int, string)
 	labelStatus    int
 	labelBody      string
 	labelDelay     time.Duration
@@ -97,6 +98,11 @@ func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api/v1/label/") && strings.HasSuffix(path, "/values"):
 		label := strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/label/"), "/values")
 		f.labelCalls = append(f.labelCalls, labelCall{label: label, params: q})
+		if f.labelResponse != nil {
+			status, body := f.labelResponse(r.Context(), q)
+			writeFakeBody(w, status, body)
+			return
+		}
 		if f.labelDelay > 0 {
 			time.Sleep(f.labelDelay)
 		}
@@ -1326,5 +1332,272 @@ func TestHandleQueryPrometheus_SelectorInventory(t *testing.T) {
 	}
 	if !strings.Contains(body, `"selectors":[]`) {
 		t.Fatalf("selectors must be an empty array when unknown, body: %s", body)
+	}
+}
+
+func TestHandleQueryPrometheus_Annotations(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode       string
+		empty, oversized bool
+	}{
+		{name: "instant", mode: "instant"},
+		{name: "range", mode: "range"},
+		{name: "empty with suggestion", mode: "instant", empty: true},
+		{name: "oversized", mode: "instant", oversized: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupFakeProm(t)
+			body := probeOKBody
+			if tc.mode == "range" {
+				body = defaultMatrixBody
+			}
+			if tc.empty {
+				body = emptyVectorBody
+			}
+			f.queryBody = strings.TrimSuffix(body, "}") + `,"warnings":["store unavailable at https://private.example/api?token=secret"],"infos":["metric might not be a counter"],"isPartial":true}`
+			f.rangeBody = f.queryBody
+			f.labelBody = `{"status":"success","data":["test_related_total"]}`
+			if tc.oversized {
+				t.Setenv("RADAR_MCP_PROM_MAX_RESPONSE_BYTES", "1")
+			}
+			result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "test_metric", Type: tc.mode})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := decodeQueryResponse(t, extractText(t, result))
+			if !resp.Partial || !strings.HasPrefix(resp.Note, "backend returned a partial result (some stores did not answer) — absent series are not zero.") {
+				t.Fatalf("missing partial qualification: %+v", resp)
+			}
+			want := []string{prom.RedactURLs("store unavailable at https://private.example/api?token=secret")}
+			if !reflect.DeepEqual(resp.Warnings, want) || !reflect.DeepEqual(resp.Infos, []string{"metric might not be a counter"}) || resp.AnnotationsOmitted != 0 {
+				t.Fatalf("warnings: %+v", resp)
+			}
+			if tc.empty && (!strings.Contains(resp.Note, "suggestedMetrics contains") || len(resp.SuggestedMetrics) != 1) {
+				t.Fatalf("lost suggestion: %+v", resp)
+			}
+			if tc.oversized && (!resp.Truncated || !strings.Contains(resp.Note, "result too large")) {
+				t.Fatalf("lost summary: %+v", resp)
+			}
+		})
+	}
+}
+
+func TestHandleQueryPrometheus_AnnotationBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		warnings, infos, want []string
+		omitted               int
+	}{
+		{"exact", []string{strings.Repeat("a", 2048)}, []string{"info"}, []string{strings.Repeat("a", 2048)}, 1},
+		{"overflow preserves prefix", []string{"first", strings.Repeat("b", 2048), "later"}, []string{"info"}, []string{"first"}, 3},
+		{"infos share budget", []string{strings.Repeat("a", 2040)}, []string{"info", "too long"}, []string{strings.Repeat("a", 2040), "info"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupFakeProm(t)
+			annotations, err := json.Marshal(map[string]any{"warnings": tc.warnings, "infos": tc.infos})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.queryBody = strings.TrimSuffix(probeOKBody, "}") + "," + string(annotations[1:])
+			result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "test_metric"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := decodeQueryResponse(t, extractText(t, result))
+			if got := append(append([]string{}, resp.Warnings...), resp.Infos...); !reflect.DeepEqual(got, tc.want) || resp.AnnotationsOmitted != tc.omitted {
+				t.Fatalf("warnings = %v, infos = %v, omitted = %d", resp.Warnings, resp.Infos, resp.AnnotationsOmitted)
+			}
+		})
+	}
+}
+
+func TestPromQueryError_HintsAndBodyCap(t *testing.T) {
+	duplicate := `{"status":"error","errorType":"execution","error":"vector cannot contain metrics with the same labelset"}`
+	right := `{"status":"error","errorType":"execution","error":"found duplicate series for the match group {job=\"kubernetes-pods\"} on the right hand-side of the operation: [{instance=\"10.0.5.104:9402\", job=\"kubernetes-pods\"}, {instance=\"10.0.4.32:15014\", job=\"kubernetes-pods\"}];many-to-many matching not allowed: matching labels must be unique on one side"}`
+	rangeType := `{"status":"error","errorType":"bad_data","error":"invalid parameter \"query\": 1:6: parse error: expected type range vector in call to function \"rate\", got instant vector"}`
+	rangeSelector := `{"status":"error","errorType":"bad_data","error":"invalid parameter \"query\": 1:19: parse error: ranges only allowed for vector selectors"}`
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body, hint string
+		discover   bool
+	}{
+		{"duplicate", 422, duplicate, "two or more result series ended up with identical labels; commonly a function such as rate() dropped the metric name across several metrics (query each metric separately), or label_replace/aggregation removed the label that kept series apart", false},
+		{"right", 422, right, "the right side has several series per on()/ignoring() group; aggregate that side by the matching labels, or match on labels that are unique on that side", false},
+		{"left", 400, strings.ReplaceAll(right, "right hand-side", "left hand-side"), "the left side has several series per on()/ignoring() group; aggregate that side by the matching labels, or match on labels that are unique on that side", false},
+		{"unknown side", 422, "many-to-many matching not allowed", "one side has several series per on()/ignoring() group; aggregate that side by the matching labels, or match on labels that are unique on that side", false},
+		{"range type", 400, rangeType, "rate() needs a range on a raw selector, e.g. rate(metric[5m]); apply it before aggregating: sum(rate(m[5m])), not rate(sum(m))", false},
+		{"range type gauge function", 400, strings.Replace(rangeType, `\"rate\"`, `\"avg_over_time\"`, 1), "this function needs a range vector: add a range to a raw selector, e.g. f(metric[5m]), or use a subquery for an expression, e.g. f((expr)[5m:1m])", false},
+		{"range selector", 400, rangeSelector, "a range applies only to a raw selector or a subquery; put it on the selector, e.g. sum(rate(m[5m])) for a counter, or write a subquery (expr)[5m:1m]", false},
+		{"unmatched", 422, "too many samples", "", false},
+		{"server", 500, duplicate, "", false},
+		{"other client", 429, duplicate, "", false},
+		{"first match", 422, duplicate + right, "two or more result series ended up with identical labels; commonly a function such as rate() dropped the metric name across several metrics (query each metric separately), or label_replace/aggregation removed the label that kept series apart", false},
+		{"long duplicate", 422, strings.Replace(right, "[{instance=", "["+strings.Repeat(`{instance=\"10.0.0.1:9402\", job=\"kubernetes-pods\"}, `, 100)+"{instance=", 1), "the right side has several series per on()/ignoring() group; aggregate that side by the matching labels, or match on labels that are unique on that side", false},
+		{"discover", 400, strings.Repeat("labels ", 700) + duplicate, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			httpErr := &prom.HTTPError{StatusCode: tc.status, Body: []byte(tc.body)}
+			got := promQueryError(context.Background(), "q", time.Second, httpErr)
+			noun := `query "q"`
+			if tc.discover {
+				got = promDiscoverError(context.Background(), "q", httpErr)
+				noun = `match "q"`
+			}
+			body := tc.body
+			if len(body) > 1024 {
+				body = body[:1024] + "…"
+			}
+			want := fmt.Sprintf("prometheus returned %d for %s: %s", tc.status, noun, body)
+			if tc.hint != "" {
+				want += " — hint: " + tc.hint
+			}
+			if got.Error() != want {
+				t.Fatalf("got %s; want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestHandleDiscoverMetrics_NearMisses(t *testing.T) {
+	const pattern = "orders_.*|.*queue.*"
+	const match = `{__name__=~"orders_.*|.*queue.*", namespace="shop"}`
+	const primary = `{"status":"success","data":["orders_total","shop_queue_depth"]}`
+	const scopeNames = `{"status":"success","data":["checkout_orders_attempts_total","orders_total","shop_queue_depth","unrelated"]}`
+	for _, tc := range []struct {
+		name, match, label, scope, scopeBody    string
+		usagePattern                            string
+		scopeError, timeout, counter, truncated bool
+		want                                    []string
+	}{
+		{name: "positive", match: match, scope: `{namespace="shop"}`, want: []string{"checkout_orders_attempts_total"}},
+		{name: "no scope", match: `{__name__=~"orders_.*"}`},
+		{name: "empty scope equality", match: `{__name__=~"orders_.*",namespace=""}`},
+		{name: "negative name regex", match: `{__name__!~"orders_.*",namespace="shop"}`},
+		{name: "second name matcher", match: `{__name__=~"orders_.*",__name__!="x",namespace="shop"}`},
+		{name: "metric selector", match: `foo{namespace="a"}`},
+		{name: "two selectors", match: match + " + " + match},
+		{name: "unknown", match: `{__name__=~"orders_.*",namespace=`},
+		{name: "label mode", match: match, label: "pod"},
+		{name: "invalid regex", match: `{__name__=~"[",namespace="shop"}`},
+		{name: "scope failure", match: match, scope: `{namespace="shop"}`, scopeError: true},
+		{name: "scope timeout", match: match, scope: `{namespace="shop"}`, timeout: true},
+		{name: "scope truncated", match: match, scope: `{namespace="shop"}`, truncated: true},
+		{name: "preserved matchers", match: `{__name__=~"orders_.*|.*queue.*",namespace="shop",job!="x",pod!~"test.*",cluster=~"prod|stage",zone="a\"b\\c"}`, scope: `{namespace="shop",job!="x",pod!~"test.*",cluster=~"prod|stage",zone="a\"b\\c"}`, want: []string{"checkout_orders_attempts_total"}},
+		{name: "counter usage", match: match, scope: `{namespace="shop"}`, counter: true, want: []string{"checkout_orders_attempts_total"}},
+		{name: "escaped pattern", match: `{__name__=~"orders\\.v2_.*",namespace="shop"}`, scope: `{namespace="shop"}`, scopeBody: `{"status":"success","data":["checkout_orders.v2_total"]}`, want: []string{"checkout_orders.v2_total"}, usagePattern: `orders\.v2_.*`},
+		{name: "primary excluded", match: match, scope: `{namespace="shop"}`, scopeBody: `{"status":"success","data":["prefix_orders_total"]}`, want: []string{"prefix_orders_total"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := setupFakeProm(t)
+			if tc.timeout {
+				oldTimeout := promNearMissTimeout
+				promNearMissTimeout = 20 * time.Millisecond
+				t.Cleanup(func() { promNearMissTimeout = oldTimeout })
+			}
+			calls := 0
+			f.labelResponse = func(ctx context.Context, params url.Values) (int, string) {
+				calls++
+				if calls == 1 {
+					return 200, primary
+				}
+				if tc.scope == "" {
+					t.Errorf("unexpected scope call: %v", params)
+				}
+				if !reflect.DeepEqual(params["match[]"], []string{tc.scope}) || params.Get("limit") != "501" {
+					t.Errorf("scope params: %v", params)
+				}
+				if tc.scopeError {
+					return 500, "unavailable"
+				}
+				if tc.timeout {
+					<-ctx.Done()
+					return 500, "timeout"
+				}
+				if tc.truncated {
+					names := make([]string, 501)
+					for i := range names {
+						names[i] = fmt.Sprintf("prefix_orders_%03d", i)
+					}
+					body, _ := json.Marshal(map[string]any{"status": "success", "data": names})
+					return 200, string(body)
+				}
+				return 200, orDefault(tc.scopeBody, scopeNames)
+			}
+			if tc.counter {
+				f.metadataBody = `{"status":"success","data":{"orders_total":[{"type":"counter","help":"orders"}]}}`
+			}
+			start := time.Now()
+			result, _, err := handleDiscoverMetrics(context.Background(), nil, discoverMetricsInput{Match: tc.match, Label: tc.label})
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := decodeDiscoverResponse(t, extractText(t, result))
+			if !reflect.DeepEqual(resp.NearMisses, tc.want) {
+				t.Fatalf("nearMisses=%v want %v", resp.NearMisses, tc.want)
+			}
+			if resp.Count != 2 || resp.Note != "" || resp.Truncated {
+				t.Fatalf("primary result changed: %+v", resp)
+			}
+			if tc.label == "" && (len(resp.Metrics) != 2 || resp.Metrics[0].Name != "orders_total") {
+				t.Fatalf("primary metrics lost: %+v", resp)
+			}
+			if tc.timeout && elapsed > 500*time.Millisecond {
+				t.Fatalf("scope exceeded timeout: %s", elapsed)
+			}
+			wantCalls := 1
+			if tc.scope != "" {
+				wantCalls = 2
+			}
+			f.mu.Lock()
+			gotCalls := calls
+			f.mu.Unlock()
+			if gotCalls != wantCalls {
+				t.Errorf("label calls=%d want %d", gotCalls, wantCalls)
+			}
+			if len(tc.want) > 0 {
+				wantPattern := pattern
+				if tc.usagePattern != "" {
+					wantPattern = tc.usagePattern
+				}
+				usage := "PromQL regex matchers are fully anchored; nearMisses contain your pattern but were excluded. To match anywhere use __name__=~" + strconv.Quote(".*(?:"+wantPattern+").*")
+				if tc.counter {
+					usage = "some results are counters (type=counter) — they only ever increase, so wrap them in rate(metric[5m]) before querying; gauges can be queried directly; " + usage
+				}
+				if resp.Usage != usage {
+					t.Errorf("usage=%s want %s", resp.Usage, usage)
+				}
+			} else if resp.Usage != "" {
+				t.Errorf("unexpected usage: %s", resp.Usage)
+			}
+		})
+	}
+}
+
+func TestHandleDiscoverMetrics_NearMissesSortedAndCapped(t *testing.T) {
+	f := setupFakeProm(t)
+	f.labelResponse = func(_ context.Context, params url.Values) (int, string) {
+		if strings.Contains(params.Get("match[]"), "__name__") {
+			return 200, `{"status":"success","data":["prefix_orders_primary"]}`
+		}
+		names := []string{"prefix_orders_primary", "prefix_orders_01"}
+		for i := 15; i >= 0; i-- {
+			names = append(names, fmt.Sprintf("prefix_orders_%02d", i))
+		}
+		body, _ := json.Marshal(map[string]any{"status": "success", "data": names})
+		return 200, string(body)
+	}
+	result, _, err := handleDiscoverMetrics(context.Background(), nil, discoverMetricsInput{Match: `{__name__=~"orders_.*",namespace="shop"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := decodeDiscoverResponse(t, extractText(t, result))
+	want := make([]string, 10)
+	for i := range want {
+		want[i] = fmt.Sprintf("prefix_orders_%02d", i)
+	}
+	if !reflect.DeepEqual(resp.NearMisses, want) {
+		t.Fatalf("nearMisses=%v want %v", resp.NearMisses, want)
 	}
 }

@@ -66,3 +66,19 @@ func TestMergeNamespaceCapabilitiesPreservesGlobalOnErroredChecks(t *testing.T) 
 		t.Fatalf("clean workload write denies should still override non-errored grants: %+v", caps.WorkloadWrites)
 	}
 }
+
+// Helm writes are namespace-scoped like the rest: a user who can create Secrets
+// only in their team's namespace gets the Helm buttons there and nowhere else.
+func TestMergeNamespaceCapabilitiesHelmWrite(t *testing.T) {
+	caps := &k8s.Capabilities{HelmWrite: false}
+	mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{HelmWrite: true})
+	if !caps.HelmWrite {
+		t.Fatal("a clean namespace grant should enable Helm writes there")
+	}
+
+	caps = &k8s.Capabilities{HelmWrite: true}
+	mergeNamespaceCapabilities(caps, &k8s.NamespaceCapabilities{})
+	if caps.HelmWrite {
+		t.Fatal("a clean namespace deny should override a global Helm write grant")
+	}
+}

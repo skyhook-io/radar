@@ -1,8 +1,8 @@
 import { Server, Settings } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
-import { formatAge } from '../resource-utils'
 import { getMachinePoolStatus } from '../resource-utils-capi'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface Props {
   data: any
@@ -44,7 +44,7 @@ export function CAPIMachinePoolRenderer({ data, onNavigate }: Props) {
             <Property label="Min Ready Seconds" value={String(spec.minReadySeconds)} />
           )}
           {readyCond?.lastTransitionTime && (
-            <Property label="Since" value={formatAge(readyCond.lastTransitionTime)} />
+            <Property label="Since" value={<TimeValue timestamp={readyCond.lastTransitionTime} />} />
           )}
         </PropertyList>
       </Section>

@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -102,16 +103,16 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	const ns = "alpha"
 	selector := map[string]string{"app": "fleet"}
 	isController := true
-	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", Controller: &isController}
-	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "fleet-rs", Controller: &isController}
+	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", UID: "current-fleet", Controller: &isController}
+	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "fleet-rs", UID: "current-fleet-rs", Controller: &isController}
 	objs := []runtime.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
 		&appsv1.ReplicaSet{
-			ObjectMeta: metav1.ObjectMeta{Name: "fleet-rs", Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
+			ObjectMeta: metav1.ObjectMeta{Name: "fleet-rs", Namespace: ns, UID: "current-fleet-rs", Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
 			Spec:       appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: selector}},
 		},
 		&appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: ns, UID: "current-fleet"},
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: selector},
 				Template: corev1.PodTemplateSpec{
@@ -123,7 +124,7 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	}
 	for i := 0; i < n; i++ {
 		objs = append(objs, &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{podOwner}},
+			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, UID: types.UID(fleetPodName(i)), Labels: selector, OwnerReferences: []metav1.OwnerReference{podOwner}},
 			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "fleet"}}},
 			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 		})
@@ -159,10 +160,14 @@ func diagnoseMetricsResult(t *testing.T, ctx context.Context, input diagnoseInpu
 	return got, &m
 }
 
-func grantDiagnoseDeploymentRead(t *testing.T, username string) {
+func grantDiagnoseRead(t *testing.T, username string) {
 	t.Helper()
 	perms := getPermCache().Get(username, nil)
 	perms.SetCanI("get", "apps", "deployments", "alpha", true)
+	perms.SetCanI("list", "", "pods", "alpha", true)
+	perms.SetCanI("list", "", "events", "alpha", true)
+	perms.SetCanI("get", "", "pods", "alpha", true)
+	perms.SetCanI("get", "argoproj.io", "rollouts", "alpha", true)
 	perms.SetCanI("list", "apps", "deployments", "alpha", true)
 	perms.SetCanI("list", "", "configmaps", "alpha", true)
 }
@@ -174,7 +179,7 @@ func TestHandleDiagnoseMetricsCapturesThreeSeriesOverExactPodSet(t *testing.T) {
 	f := setupFakeProm(t)
 	f.rangeBodyFunc = metricsMatrixForRequestAt(metricsVaryingValue("-0.0000345678912345678"))
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m == nil {
@@ -304,7 +309,7 @@ func TestHandleDiagnoseMetricsCapsPodSetByName(t *testing.T) {
 	f := setupFakeProm(t)
 	f.rangeBodyFunc = metricsMatrixForRequestAt(metricsVaryingValue("123456789.123"))
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "fleet"))
 	if m == nil {
@@ -354,7 +359,7 @@ func TestHandleDiagnoseMetricsOmittedWhenPrometheusAbsent(t *testing.T) {
 		prometheus.Initialize(nil, nil, "")
 	})
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m != nil {
@@ -376,7 +381,7 @@ func TestHandleDiagnoseMetricsReportsUnreachablePrometheus(t *testing.T) {
 		prometheus.Initialize(nil, nil, "")
 	})
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m == nil {
@@ -396,23 +401,19 @@ func TestHandleDiagnoseMetricsOmittedWhenWorkloadReadDenied(t *testing.T) {
 	t.Cleanup(timeline.ResetStore)
 	f := setupFakeProm(t)
 	ctx := withClusterAdmin(t, "scoped")
-	grantDiagnoseDeploymentRead(t, "scoped")
+	grantDiagnoseRead(t, "scoped")
 	getPermCache().Get("scoped", nil).SetCanI("get", "apps", "deployments", "alpha", false)
 
-	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "cart"))
-	if err != nil {
-		t.Fatalf("handleDiagnose: %v", err)
-	}
-	text := extractText(t, result)
-	var got map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(text), &got); err != nil {
+	result, metrics := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	var pods int
+	if err := json.Unmarshal(result["pods"], &pods); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := got["metrics"]; ok {
-		t.Fatal("metrics present although the caller cannot get the Deployment")
+	if len(result["resource"]) == 0 || string(result["resource"]) == "null" || pods == 0 {
+		t.Fatalf("namespace-visible cached evidence was withheld: %+v", result)
 	}
-	if strings.Contains(strings.ToLower(text), "prometheus") {
-		t.Fatal("a denied read leaked Prometheus state into the response")
+	if metrics != nil {
+		t.Fatalf("live metrics returned without workload Get: %+v", metrics)
 	}
 	if f.probeCalls != 0 || len(f.rangeParams) != 0 {
 		t.Fatalf("Prometheus was contacted (%d probes, %d range queries) for a denied read", f.probeCalls, len(f.rangeParams))
@@ -429,7 +430,7 @@ func TestHandleDiagnoseMetricsDropsSeriesOnTimeBudget(t *testing.T) {
 	diagnoseMetricsBudget = 200 * time.Millisecond
 	t.Cleanup(func() { diagnoseMetricsBudget = prev })
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	started := time.Now()
 	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
@@ -454,7 +455,7 @@ func TestHandleDiagnoseMetricsDropsSeriesOnSizeBudget(t *testing.T) {
 	f := setupFakeProm(t)
 	f.rangeBody = metricsMatrixBodyAt(600, metricsVaryingValue("123456789.123"))
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m == nil {
@@ -476,7 +477,7 @@ func TestHandleDiagnoseMetricsKeepsOtherSeriesWhenOneQueryFails(t *testing.T) {
 	f.rangeStatus = 422
 	f.rangeBody = `{"status":"error","errorType":"execution","error":"boom"}`
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m == nil {
@@ -504,7 +505,7 @@ func TestHandleDiagnoseMetricsKeepsOtherSeriesWhenOneCategoryFails(t *testing.T)
 		return metricsMatrixForRequest("1")(params)
 	}
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m == nil {
@@ -540,7 +541,7 @@ func TestHandleDiagnoseMetricsReportsFailedContainerFilterFallback(t *testing.T)
 		}
 	}
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m == nil {
@@ -566,9 +567,12 @@ func TestHandleDiagnoseMetricsGateFailsClosedWithoutDecision(t *testing.T) {
 	getPermCache().Get("undecided", nil).SetCanI("list", "", "configmaps", "alpha", true)
 	// No cached decision for get deployments: the gate must ask an apiserver
 	// the test does not have, so it denies, and Prometheus is never touched.
-	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
-	if m != nil {
-		t.Fatalf("metrics = %+v, want the field omitted when the gate cannot answer", m)
+	result, metrics := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if len(result["resource"]) == 0 || string(result["resource"]) == "null" {
+		t.Fatal("namespace-visible cached workload context was withheld")
+	}
+	if metrics != nil {
+		t.Fatalf("unanswered workload access returned metrics: %+v", metrics)
 	}
 	if f.probeCalls != 0 || len(f.rangeParams) != 0 {
 		t.Fatalf("Prometheus was contacted (%d probes, %d range queries) before the gate answered", f.probeCalls, len(f.rangeParams))
@@ -690,7 +694,7 @@ func TestHandleDiagnoseMetricsCompressesFlatSeriesAndKeepsTheObservedCount(t *te
 	f := setupFakeProm(t)
 	f.rangeBodyFunc = metricsMatrixForRequest("512000")
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
 	if m == nil {
@@ -730,7 +734,7 @@ func TestDiagnoseMetricsCanBeSwitchedOff(t *testing.T) {
 	f := setupFakeProm(t)
 	f.rangeBodyFunc = metricsMatrixForRequest("512000")
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	DiagnoseMetricsEnabled = false
 	t.Cleanup(func() { DiagnoseMetricsEnabled = true })
@@ -756,7 +760,7 @@ func TestHandleDiagnoseMetricsNamesTheWorkloadsOwnPods(t *testing.T) {
 	f := setupFakeProm(t)
 	f.rangeBodyFunc = metricsMatrixForRequest("1")
 	ctx := withClusterAdmin(t, "admin")
-	grantDiagnoseDeploymentRead(t, "admin")
+	grantDiagnoseRead(t, "admin")
 
 	// The vitals cover the pods the workload controls now, named exactly.
 	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
@@ -802,5 +806,18 @@ func TestDiagnoseMetricsErrorRedactsTheBackend(t *testing.T) {
 	}
 	if !strings.Contains(got, "/api/v1/query_range") || !strings.Contains(got, "overloaded") {
 		t.Errorf("the error should still say which call failed and why: %q", got)
+	}
+}
+
+func TestDiagnoseMetricsPreservesPodResolutionErrors(t *testing.T) {
+	f := setupFakeProm(t)
+	for _, err := range []error{errPodsNotListable, errPodsCacheWarming} {
+		metrics := diagnoseWorkloadMetrics(t.Context(), "apps", "deployments", "alpha", "fleet", nil, err, time.Hour, time.Now())
+		if metrics == nil || !strings.Contains(metrics.Error, err.Error()) || len(metrics.Series) != 0 {
+			t.Fatalf("pod resolution error lost: %+v", metrics)
+		}
+	}
+	if len(f.rangeParams) != 0 {
+		t.Fatalf("queried unresolved Pod membership: %v", f.rangeParams)
 	}
 }

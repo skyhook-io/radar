@@ -9,16 +9,23 @@ import (
 	"io"
 	"log"
 	"net"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
+	relaypb "github.com/cilium/cilium/api/v1/relay"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/timestamppb"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -68,6 +75,10 @@ type HubbleSource struct {
 	probeSeq       uint64 // last launched probe generation
 	probeApplied   uint64 // generation whose result is cached
 
+	// Relay's connected-node count, which splits the flow budget per node.
+	nodeCount   int
+	nodeCountAt time.Time
+
 	mu sync.RWMutex
 }
 
@@ -101,6 +112,10 @@ func (h *HubbleSource) Detect(ctx context.Context) (*DetectionResult, error) {
 		result.Message = "Hubble Relay not found. Install Cilium with Hubble enabled for traffic visibility."
 		return result, nil
 	}
+	// From here on Hubble is installed, so every way this can still fail is a
+	// problem with that install and its message has to reach the user — without
+	// Present it is reported as never installed, with advice to install it.
+	result.Present = true
 
 	// Count running pods and get the namespace
 	var relayNamespace string
@@ -143,10 +158,16 @@ func (h *HubbleSource) Detect(ctx context.Context) (*DetectionResult, error) {
 		return result, nil
 	}
 
-	// Step 5: Store discovered configuration
+	// Step 5: Store discovered configuration, unless the request ended: the
+	// lookups above then failed for that reason, not because of the cluster,
+	// and a later Connect would use what they left.
+	relayPort := h.resolveTargetPort(ctx, relaySvc)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	h.mu.Lock()
 	h.relayNamespace = relayNamespace
-	h.relayPort = h.resolveTargetPort(ctx, relaySvc)
+	h.relayPort = relayPort
 	h.servicePort = servicePort
 	h.clusterIP = relaySvc.Spec.ClusterIP
 	h.useTLS = useTLS
@@ -439,7 +460,11 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	log.Printf("[hubble] Direct connection to %s failed (%v); falling back to port-forward", directAddr, directErr)
+	if portforward.AutoDisabled() {
+		log.Printf("[hubble] Direct connection to %s failed (%v); automatic port-forwarding is turned off", directAddr, directErr)
+	} else {
+		log.Printf("[hubble] Direct connection to %s failed (%v); falling back to port-forward", directAddr, directErr)
+	}
 
 	// The cached verdict that skipped the direct lane may itself be stale (a
 	// probe that raced relay startup); once the fallback is dead too, paying
@@ -459,8 +484,14 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portfo
 	}
 
 	// Fallback lane: managed port-forward, which needs pods/portforward RBAC.
-	log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
-	connInfo, err := portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+	var connInfo *portforward.ConnectionInfo
+	var err error
+	if portforward.AutoDisabled() {
+		err = portforward.ErrAutoDisabled
+	} else {
+		log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
+		connInfo, err = portforward.Start(portforward.OwnerTraffic, ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+	}
 	if err != nil {
 		if info := retryDirectAfterSkip(); info != nil {
 			return info, nil
@@ -573,7 +604,11 @@ func (h *HubbleSource) probeDirectAsync(addr string) {
 	reachable := tcpReachable(addr, directDialTimeout)
 
 	if h.applyProbeResult(gen, addr, reachable) && !reachable {
-		log.Printf("[hubble] Direct address %s unreachable (background probe); connects will use port-forward", addr)
+		if portforward.AutoDisabled() {
+			log.Printf("[hubble] Direct address %s unreachable (background probe); automatic port-forwarding is turned off", addr)
+		} else {
+			log.Printf("[hubble] Direct address %s unreachable (background probe); connects will use port-forward", addr)
+		}
 	}
 }
 
@@ -608,6 +643,13 @@ var errDirectUnreachable = errors.New("tcp dial failed (unreachable or blocked)"
 // composeConnectError reports both failed lanes so the user sees the whole
 // picture; an RBAC-denied port-forward additionally names the real fixes.
 func composeConnectError(directAddr string, directErr, pfErr error) string {
+	if errors.Is(pfErr, portforward.ErrAutoDisabled) {
+		if errors.Is(directErr, errDirectUnreachable) {
+			return "Radar can't reach hubble-relay directly from this machine, and automatic port-forwarding is turned off. Live traffic needs a network route to the hubble-relay Service."
+		}
+		// The route works; the connection itself failed, so that is what to fix.
+		return fmt.Sprintf("Radar reached hubble-relay directly, but the connection failed: %v. Automatic port-forwarding is turned off, so there is no other way to connect.", directErr)
+	}
 	msg := fmt.Sprintf("direct connection to %s (%s) failed (%v); port-forward fallback failed: %v", hubbleRelayService, directAddr, directErr, pfErr)
 	if isForbiddenPortForward(pfErr) {
 		msg += " — grant Radar port-forward permission (Helm: rbac.portForward=true)"
@@ -783,16 +825,41 @@ func (h *HubbleSource) connectGRPCLocked(ctx context.Context, grpcAddr string) e
 	return lastErr
 }
 
-// testConnection tests the gRPC connection by calling ServerStatus
+var hubbleStatusTimeout = 3 * time.Second
+
+// hubbleObserverHealthService is the name Relay reports the Observer's health
+// under (Cilium's v1.ObserverServiceName).
+const hubbleObserverHealthService = "hubble.server.Observer"
+
+// testConnection reports whether a Hubble Relay answers on the connection. It
+// asks Relay's gRPC health service first: Relay answers that from the peer
+// state it already holds. ServerStatus, the fallback for a Relay without the
+// health service, asks every node Relay reads from, so a single node that is
+// down holds the answer past the timeout while Relay still serves flows from
+// all the others. NOT_SERVING is still an answer from Relay: the connection is
+// right, and the flow fetch says what is missing.
 func (h *HubbleSource) testConnection(ctx context.Context) bool {
-	if h.observerClient == nil {
+	if h.observerClient == nil || h.grpcConn == nil {
 		return false
 	}
 
-	testCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	testCtx, cancel := context.WithTimeout(ctx, hubbleStatusTimeout)
 	defer cancel()
 
-	_, err := h.observerClient.ServerStatus(testCtx, &observerpb.ServerStatusRequest{})
+	health, err := healthpb.NewHealthClient(h.grpcConn).Check(testCtx,
+		&healthpb.HealthCheckRequest{Service: hubbleObserverHealthService})
+	switch {
+	case err == nil:
+		if health.GetStatus() != healthpb.HealthCheckResponse_SERVING {
+			log.Printf("[hubble] Relay health is %s", health.GetStatus())
+		}
+		return true
+	case status.Code(err) != codes.Unimplemented && status.Code(err) != codes.NotFound:
+		log.Printf("[hubble] Connection test failed: %v", err)
+		return false
+	}
+
+	_, err = h.observerClient.ServerStatus(testCtx, &observerpb.ServerStatusRequest{})
 	if err != nil {
 		log.Printf("[hubble] Connection test failed: %v", err)
 		return false
@@ -830,7 +897,7 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		}, nil
 	}
 
-	flows, err := h.fetchFlowsViaGRPC(ctx, opts)
+	fetched, err := h.fetchFlowsViaGRPC(ctx, opts)
 	if err != nil {
 		log.Printf("[hubble] gRPC error: %v", err)
 		return &FlowsResponse{
@@ -841,48 +908,481 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		}, nil
 	}
 
-	return &FlowsResponse{
-		Source:    "hubble",
-		Timestamp: time.Now(),
-		Flows:     flows,
-	}, nil
+	flows := fetched.flows
+	response := &FlowsResponse{
+		Source:        "hubble",
+		Timestamp:     time.Now(),
+		Flows:         flows,
+		CoveredSince:  fetched.coveredSince,
+		NodeFlowLimit: fetched.nodeLimit,
+		FlowLimit:     fetched.flowLimit,
+	}
+	if fetched.incomplete != "" {
+		response.Warning = fetched.incomplete
+		// The fetch worked; it could not see everything. A busy node that keeps
+		// dropping events will keep saying so, which is the truth about its data
+		// rather than a failure to retry.
+		response.WarningKind = WarningIncomplete
+		// A stream that failed before any flow arrived is a failed fetch that
+		// happened to report some gaps first; retrying it can bring the flows.
+		if fetched.streamFailed && len(flows) == 0 {
+			response.WarningKind = WarningTransient
+		}
+	}
+	return response, nil
 }
 
-// fetchFlowsViaGRPC fetches flows using gRPC client
-func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) ([]Flow, error) {
+// hubbleFetch is what one GetFlows call established.
+type hubbleFetch struct {
+	flows []Flow
+	// incomplete explains, in terms a reader can act on, why the flows are not
+	// everything Hubble holds for the window; empty when nothing is missing.
+	incomplete   string
+	streamFailed bool
+	// coveredSince is when the flows start being complete: some node reached
+	// the per-node limit, and older traffic from it is not included. Nil when
+	// every node's traffic covers the whole window.
+	coveredSince *time.Time
+	nodeLimit    int
+	// flowLimit is the total cap, set when it dropped the oldest flows.
+	flowLimit int
+}
+
+// hubbleFlowsRequest builds the request for the newest flows. Since is left out
+// on purpose: given Since, Hubble rewinds to it and reads forward, so a node
+// with more than Number flows in the window returns its oldest ones and the
+// view ends minutes before now. Without it each node returns its newest Number,
+// and the window is applied as those arrive.
+func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsRequest {
+	req := &observerpb.GetFlowsRequest{
+		Follow:    follow,
+		FieldMask: &fieldmaskpb.FieldMask{Paths: hubbleFlowFields},
+	}
+	if !follow {
+		req.Number = hubbleDefaultNodeLimit
+		if opts.Limit > 0 {
+			req.Number = uint64(opts.Limit)
+		}
+	}
+	// Source OR destination: each filter is AND within itself, filters are OR'd.
+	// A selection is tied to the namespaces in view: a selected endpoint can sit
+	// outside them (a workload the view talks to), and its traffic with the rest
+	// of the cluster would otherwise fill each node's limit before the traffic
+	// the view shows.
+	var nsWhitelist []*flowpb.FlowFilter
+	if namespaces := hubbleNamespaces(opts); len(namespaces) > 0 {
+		prefixes := make([]string, len(namespaces))
+		for i, ns := range namespaces {
+			prefixes[i] = ns + "/"
+		}
+		nsWhitelist = []*flowpb.FlowFilter{
+			{SourcePod: prefixes},
+			{DestinationPod: prefixes},
+		}
+	}
+	req.Whitelist = nsWhitelist
+	if match := hubbleMatchWhitelist(opts.Match); match != nil {
+		if namespaces := hubbleNamespaces(opts); len(namespaces) > 0 {
+			match = hubbleWithinNamespaces(match, namespaces)
+		}
+		if match != nil {
+			req.Whitelist = match
+		}
+	}
+	req.Blacklist = []*flowpb.FlowFilter{
+		// Reply packets at L3/L4 are dropped by callerOrientedFlow anyway;
+		// excluding them here stops them spending the per-node limit, which on a
+		// live cluster they took over 40% of. Only packet traces with an explicit
+		// is_reply=true match — the only L3/L4 records Cilium marks as replies —
+		// so L7 responses, drops, policy verdicts, socket traces and flows of
+		// unknown direction all still arrive.
+		{
+			Reply:     []bool{true},
+			EventType: []*flowpb.EventTypeFilter{{Type: hubbleEventTypeTrace}},
+		},
+		// Agent and debug events are not flows, but a node counts them toward
+		// Number as it walks back through its buffer. Left in, a node could hit
+		// its limit while returning fewer flows than the limit, and the fetch
+		// would read as complete when it was cut.
+		{EventType: []*flowpb.EventTypeFilter{{Type: hubbleEventTypeAgent}, {Type: hubbleEventTypeDebug}}},
+	}
+	// Traffic the view hides is dropped at the node, where it would otherwise
+	// fill each node's Number before the traffic the view shows.
+	if len(opts.ExcludeNamespaces) > 0 {
+		prefixes := make([]string, len(opts.ExcludeNamespaces))
+		for i, ns := range opts.ExcludeNamespaces {
+			prefixes[i] = ns + "/"
+		}
+		req.Blacklist = append(req.Blacklist,
+			&flowpb.FlowFilter{SourcePod: prefixes},
+			&flowpb.FlowFilter{DestinationPod: prefixes},
+		)
+	}
+	if opts.ExcludeHost {
+		req.Blacklist = append(req.Blacklist,
+			&flowpb.FlowFilter{SourceLabel: hubbleHostLabels},
+			&flowpb.FlowFilter{DestinationLabel: hubbleHostLabels},
+		)
+	}
+	return req
+}
+
+// hubbleFlowFields are the parts of a flow the conversion reads
+// (callerOrientedFlow and what it calls, plus the time and node the fetch
+// tracks coverage by). Relay sends only these, so a flow arrives without its
+// Ethernet and tunnel headers, node labels, trace context, socket details and
+// the rest. A Relay older than Cilium 1.19 ignores the mask and sends whole
+// flows. TestHubbleFlowFieldsCoverConversion fails when the conversion starts
+// reading a field that is not listed.
+//
+// l4, l7 and IP are named whole: naming a field inside them makes Hubble
+// create the enclosing message on flows that have none, and an absent L7
+// record is meaningful here (a reply without one is not an edge).
+var hubbleFlowFields = []string{
+	"time", "node_name", "verdict", "drop_reason", "drop_reason_desc",
+	"IP", "l4", "l7", "is_reply", "traffic_direction",
+	"source.namespace", "source.pod_name", "source.labels", "source.workloads",
+	"destination.namespace", "destination.pod_name", "destination.labels", "destination.workloads",
+	"source_service.name", "destination_service.name",
+	"ingress_allowed_by", "egress_allowed_by", "ingress_denied_by", "egress_denied_by",
+}
+
+// hubbleHostLabels are the identities classifyNonPodIdentity reports as Host.
+var hubbleHostLabels = []string{"reserved:host", "reserved:remote-node", "reserved:kube-apiserver"}
+
+func hubbleNamespaces(opts FlowOptions) []string {
+	if len(opts.Namespaces) > 0 {
+		return opts.Namespaces
+	}
+	if opts.Namespace != "" {
+		return []string{opts.Namespace}
+	}
+	return nil
+}
+
+// hubbleGeneratedPodOwners are the workload kinds whose pods are named from
+// the workload's name: the controller names its pods, or its ReplicaSets or
+// Jobs, by appending a suffix to it.
+var hubbleGeneratedPodOwners = map[string]bool{
+	"Deployment": true, "ReplicaSet": true, "StatefulSet": true, "DaemonSet": true,
+	"Job": true, "CronJob": true, "Rollout": true,
+}
+
+// hubbleWorkloadPrefixLen is how much of a workload's name its pods are sure
+// to start with. Generated names are cut to 58 characters before the random
+// suffix, so anything shorter than that survives intact.
+const hubbleWorkloadPrefixLen = 40
+
+// hubblePodPrefix is the pod-name prefix that covers every pod of a
+// reference: the pod itself, or each pod a workload generated.
+func hubblePodPrefix(r EndpointRef) (string, bool) {
+	if r.Namespace == "" || r.Name == "" {
+		return "", false
+	}
+	switch {
+	case r.Kind == EndpointKindPod:
+		return r.Namespace + "/" + r.Name, true
+	case r.Kind == EndpointKindWorkload && hubbleGeneratedPodOwners[r.WorkloadKind]:
+		if len(r.Name) > hubbleWorkloadPrefixLen {
+			return r.Namespace + "/" + r.Name[:hubbleWorkloadPrefixLen], true
+		}
+		return r.Namespace + "/" + r.Name + "-", true
+	}
+	return "", false
+}
+
+// hubbleMaxMatchPods bounds the pod prefixes a selection sends to every
+// node. Each one is checked against each flow there, so a selection naming
+// thousands of pods is filtered here instead.
+const hubbleMaxMatchPods = 200
+
+// hubbleMatchWhitelist turns a selection into filters Hubble applies at the
+// node, or nil when it cannot express it. Hubble matches pod names by prefix,
+// so the result is a superset the caller narrows with Match.Matches. Only pods
+// can be named this way: an endpoint that is an external address or a host is
+// left open rather than guessed at. Each filter is also sent reversed, because
+// a reply travels callee to caller and is turned around only after it arrives
+// (callerOrientedFlow) — with the service port then on the source side.
+//
+// A small selection is sent pair by pair, each with its port, so traffic
+// between other combinations of the same pods, or on other ports, cannot use
+// up a node's limit before the selected traffic. A large one is sent as two
+// sets of pods, which is coarser but keeps the filter list short. An endpoint
+// is sent as its pods on either side.
+func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
+	if m == nil || m.Size() == 0 {
+		return nil
+	}
+	var filters []*flowpb.FlowFilter
+	if len(m.Pairs) > 0 {
+		pairs := hubblePairsWhitelist(m.Pairs)
+		if pairs == nil {
+			return nil
+		}
+		filters = append(filters, pairs...)
+	}
+	if len(m.Endpoints) > hubbleMaxMatchPods {
+		return nil
+	}
+	for _, e := range m.Endpoints {
+		pod, ok := hubblePodPrefix(e)
+		if !ok {
+			return nil
+		}
+		filters = append(filters, &flowpb.FlowFilter{SourcePod: []string{pod}}, &flowpb.FlowFilter{DestinationPod: []string{pod}})
+	}
+	return filters
+}
+
+func hubblePairsWhitelist(pairs []EndpointPair) []*flowpb.FlowFilter {
+	if len(pairs) <= hubbleMaxMatchPairs {
+		filters := make([]*flowpb.FlowFilter, 0, 2*len(pairs))
+		for _, p := range pairs {
+			src, srcOK := hubblePodPrefix(p.Source)
+			dst, dstOK := hubblePodPrefix(p.Destination)
+			if !srcOK && !dstOK {
+				return nil
+			}
+			fwd, rev := &flowpb.FlowFilter{}, &flowpb.FlowFilter{}
+			if srcOK {
+				fwd.SourcePod, rev.DestinationPod = []string{src}, []string{src}
+			}
+			if dstOK {
+				fwd.DestinationPod, rev.SourcePod = []string{dst}, []string{dst}
+			}
+			if p.Port > 0 {
+				port := strconv.Itoa(p.Port)
+				fwd.DestinationPort, rev.SourcePort = []string{port}, []string{port}
+			}
+			filters = append(filters, fwd, rev)
+		}
+		return filters
+	}
+	pods := func(refs []EndpointRef) []string {
+		out := make([]string, 0, len(refs))
+		seen := map[string]bool{}
+		for _, r := range refs {
+			p, ok := hubblePodPrefix(r)
+			if !ok {
+				return nil
+			}
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+		if len(out) > hubbleMaxMatchPods {
+			return nil
+		}
+		return out
+	}
+	srcs := make([]EndpointRef, len(pairs))
+	dsts := make([]EndpointRef, len(pairs))
+	for i, pair := range pairs {
+		srcs[i], dsts[i] = pair.Source, pair.Destination
+	}
+	sp, dp := pods(srcs), pods(dsts)
+	if len(sp) == 0 && len(dp) == 0 {
+		return nil
+	}
+	return []*flowpb.FlowFilter{
+		{SourcePod: sp, DestinationPod: dp},
+		{SourcePod: dp, DestinationPod: sp},
+	}
+}
+
+// hubbleWithinNamespaces narrows selection filters to flows with at least one
+// end in the namespaces: each filter becomes the variants that pin its source
+// or its destination to them, keeping only named pods inside them. A filter
+// with a side already wholly inside stays as it is; one whose ends are both
+// outside is dropped. Nil when nothing is left, or when pinning would send
+// more prefixes than hubbleMaxTiedPrefixes (a long namespace list on many
+// filters): every node checks each one against each flow.
+func hubbleWithinNamespaces(filters []*flowpb.FlowFilter, namespaces []string) []*flowpb.FlowFilter {
+	prefixes := make([]string, len(namespaces))
+	for i, ns := range namespaces {
+		prefixes[i] = ns + "/"
+	}
+	// within returns the pods inside the namespaces (all of them for an open
+	// side), and whether that is every pod the side named.
+	within := func(pods []string) ([]string, bool) {
+		if len(pods) == 0 {
+			return prefixes, false
+		}
+		var in []string
+		for _, pod := range pods {
+			for _, prefix := range prefixes {
+				if strings.HasPrefix(pod, prefix) {
+					in = append(in, pod)
+					break
+				}
+			}
+		}
+		return in, len(in) == len(pods)
+	}
+	var out []*flowpb.FlowFilter
+	added := 0
+	for _, f := range filters {
+		src, srcAll := within(f.GetSourcePod())
+		dst, dstAll := within(f.GetDestinationPod())
+		if srcAll || dstAll {
+			out = append(out, f)
+			continue
+		}
+		if added += len(src) + len(dst); added > hubbleMaxTiedPrefixes {
+			return nil
+		}
+		if len(src) > 0 {
+			v := proto.Clone(f).(*flowpb.FlowFilter)
+			v.SourcePod = src
+			out = append(out, v)
+		}
+		if len(dst) > 0 {
+			v := proto.Clone(f).(*flowpb.FlowFilter)
+			v.DestinationPod = dst
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// hubbleMaxTiedPrefixes bounds the namespace prefixes a selection tied to the
+// view's namespaces may add; past it the view's namespaces are sent alone.
+const hubbleMaxTiedPrefixes = 2000
+
+// hubbleMaxMatchPairs is the largest selection sent pair by pair.
+const hubbleMaxMatchPairs = 50
+
+// Cilium's monitor message types (pkg/monitor/api MessageType*), kept local
+// rather than importing that package for three numbers.
+const (
+	hubbleEventTypeDebug = 2
+	hubbleEventTypeTrace = 4
+	hubbleEventTypeAgent = 130
+)
+
+// hubbleDefaultNodeLimit is how many flows each node returns when the caller
+// sets no limit. Hubble Relay applies Number per node, not in total.
+const hubbleDefaultNodeLimit = 1000
+
+// hubbleFlowBudget is the most flows one fetch keeps in total. Number applies
+// per node, so without it a fetch grows with the cluster: a few hundred nodes
+// at the default limit is hundreds of thousands of flows, held here and then
+// aggregated per request. Up to 50 nodes it changes nothing.
+var hubbleFlowBudget = 50_000
+
+// hubbleMinNodeLimit keeps each node's share of the budget from shrinking to
+// a few flows on a very large cluster; the receive-time cap still holds the
+// total to the budget.
+const hubbleMinNodeLimit = 100
+
+// hubbleNodeLimit spreads the budget over the nodes Relay reads from, never
+// asking a node for more than the caller's per-node limit. With the node
+// count unknown it keeps the caller's limit and leaves the total to the
+// receive-time cap.
+func hubbleNodeLimit(perNode uint64, nodes int) uint64 {
+	if nodes <= 0 {
+		return perNode
+	}
+	share := uint64((hubbleFlowBudget + nodes - 1) / nodes)
+	share = max(share, hubbleMinNodeLimit)
+	return min(share, perNode)
+}
+
+// hubbleNodeCountTTL is how long the connected-node count from Relay is
+// reused; it changes with cluster size, not between refreshes.
+const hubbleNodeCountTTL = time.Minute
+
+// connectedNodes asks Relay how many nodes it reads from, 0 when nothing can
+// say. ServerStatus waits on every node, so it fails while one is unreachable,
+// which is when the per-node cap matters: a failed call counts the cluster's
+// nodes instead, an upper bound on Relay's, and keeps the last count if that
+// fails too.
+func (h *HubbleSource) connectedNodes(ctx context.Context, client observerpb.ObserverClient) int {
+	h.mu.RLock()
+	n, at := h.nodeCount, h.nodeCountAt
+	h.mu.RUnlock()
+	if !at.IsZero() && time.Since(at) < hubbleNodeCountTTL {
+		return n
+	}
+	statusCtx, cancel := context.WithTimeout(ctx, hubbleStatusTimeout)
+	defer cancel()
+	if status, err := client.ServerStatus(statusCtx, &observerpb.ServerStatusRequest{}); err == nil {
+		n = int(status.GetNumConnectedNodes().GetValue())
+	} else if c := h.clusterNodeCount(ctx); c > 0 {
+		n = c
+	}
+	if ctx.Err() != nil {
+		// The request ended: its failed lookups say nothing about the cluster,
+		// and a count stored now would be every user's for the next minute.
+		return n
+	}
+	h.mu.Lock()
+	h.nodeCount, h.nodeCountAt = n, time.Now()
+	h.mu.Unlock()
+	return n
+}
+
+// clusterNodeCount counts the cluster's nodes from a one-item page: the API
+// server reports how many it left out, so this reads one node, not all. 0 when
+// it cannot tell.
+func (h *HubbleSource) clusterNodeCount(ctx context.Context) int {
+	if h.k8sClient == nil {
+		return 0
+	}
+	listCtx, cancel := context.WithTimeout(ctx, hubbleStatusTimeout)
+	defer cancel()
+	nodes, err := h.k8sClient.CoreV1().Nodes().List(listCtx, metav1.ListOptions{Limit: 1})
+	if err != nil {
+		return 0
+	}
+	if nodes.RemainingItemCount != nil {
+		return len(nodes.Items) + int(*nodes.RemainingItemCount)
+	}
+	if nodes.Continue != "" {
+		return 0
+	}
+	return len(nodes.Items)
+}
+
+// keepNewest trims flows to the newest limit, returning the trimmed slice
+// and whether anything was dropped.
+func keepNewest(flows []Flow, limit int) ([]Flow, bool) {
+	if len(flows) <= limit {
+		return flows, false
+	}
+	slices.SortFunc(flows, func(a, b Flow) int { return b.LastSeen.Compare(a.LastSeen) })
+	clear(flows[limit:])
+	return flows[:limit], true
+}
+
+// fetchFlowsViaGRPC fetches the newest flows in the window.
+func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) (hubbleFetch, error) {
 	h.mu.RLock()
 	client := h.observerClient
 	h.mu.RUnlock()
 
 	if client == nil {
-		return nil, fmt.Errorf("not connected to Hubble Relay")
+		return hubbleFetch{}, fmt.Errorf("not connected to Hubble Relay")
 	}
 
-	// Build request
-	req := &observerpb.GetFlowsRequest{
-		Number: 1000, // Default limit
-		Follow: false,
-	}
-
-	if opts.Limit > 0 {
-		req.Number = uint64(opts.Limit)
-	}
-
-	// Add namespace filter if specified
-	// Use separate filters for source OR destination (each filter is AND within itself,
-	// but multiple filters are OR'd together)
-	if opts.Namespace != "" {
-		req.Whitelist = []*flowpb.FlowFilter{
-			{SourcePod: []string{opts.Namespace + "/"}},
-			{DestinationPod: []string{opts.Namespace + "/"}},
-		}
-	}
-
-	// Add time filter based on Since
+	req := hubbleFlowsRequest(opts, false)
+	// Split over every node Relay reads from, narrowed or not: a namespace's
+	// flows are recorded at both ends, so its traffic is on its peers' nodes
+	// too, and only every node bounds what the fetch transfers. Narrowing still
+	// covers more of the window, since Number counts only the flows that match.
+	req.Number = hubbleNodeLimit(req.Number, h.connectedNodes(ctx, client))
+	var windowStart time.Time
 	if opts.Since > 0 {
-		since := time.Now().Add(-opts.Since)
-		req.Since = timestamppb.New(since)
+		windowStart = time.Now().Add(-opts.Since)
 	}
+	type nodeSeen struct {
+		count  uint64
+		oldest time.Time
+	}
+	perNode := map[string]*nodeSeen{}
+	var flows []Flow
+	var streamFailed, trimmed bool
 
 	// Create context with timeout
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -890,22 +1390,47 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 
 	stream, err := client.GetFlows(reqCtx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get flows stream: %w", err)
+		return hubbleFetch{}, fmt.Errorf("failed to get flows stream: %w", err)
 	}
 
-	var flows []Flow
+	var gaps []string
+	var lost, delivered uint64
+	var unavailableNodes []string
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			// Check if we got any flows before the error
-			if len(flows) > 0 {
+			// Anything the stream delivered before failing — flows, or word of
+			// events lost and nodes unreachable — is still an answer, and a
+			// bare fetch error would throw away what is known to be missing.
+			if len(flows) > 0 || lost > 0 || len(unavailableNodes) > 0 {
 				log.Printf("[hubble] Stream ended with partial results: %v", err)
+				streamFailed = true
+				if len(flows) > 0 {
+					gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay ended early (%v), so flows after the first %d are missing", err, len(flows)))
+				} else {
+					gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay failed (%v) before delivering any flows", err))
+				}
 				break
 			}
-			return nil, fmt.Errorf("stream error: %w", err)
+			return hubbleFetch{}, fmt.Errorf("stream error: %w", err)
+		}
+
+		// Hubble reports in-band what it could not deliver: events a full
+		// buffer dropped, and nodes the relay could not reach. The flows around
+		// them are real, but the window is no longer everything that happened.
+		if le := resp.GetLostEvents(); le != nil {
+			lost += le.GetNumEventsLost()
+			continue
+		}
+		if ns := resp.GetNodeStatus(); ns != nil {
+			switch ns.GetStateChange() {
+			case relaypb.NodeState_NODE_UNAVAILABLE, relaypb.NodeState_NODE_ERROR:
+				unavailableNodes = append(unavailableNodes, ns.GetNodeNames()...)
+			}
+			continue
 		}
 
 		// Extract flow from response
@@ -913,13 +1438,139 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 		if pbFlow == nil {
 			continue
 		}
+		delivered++
+		// A flow without a timestamp can be placed in no window; it is kept
+		// rather than silently lost, and says nothing about coverage.
+		if pbFlow.GetTime() != nil {
+			ts := pbFlow.GetTime().AsTime()
+			seen := perNode[pbFlow.GetNodeName()]
+			if seen == nil {
+				seen = &nodeSeen{oldest: ts}
+				perNode[pbFlow.GetNodeName()] = seen
+			}
+			seen.count++
+			if ts.Before(seen.oldest) {
+				seen.oldest = ts
+			}
+			if !windowStart.IsZero() && ts.Before(windowStart) {
+				continue
+			}
+		}
 
-		flow := convertHubbleFlow(pbFlow)
+		flow, ok := callerOrientedFlow(pbFlow)
+		if !ok {
+			continue
+		}
 		flows = append(flows, flow)
+		// Trimming at twice the budget keeps memory bounded without sorting
+		// on every flow.
+		if len(flows) >= 2*hubbleFlowBudget {
+			var cut bool
+			flows, cut = keepNewest(flows, hubbleFlowBudget)
+			trimmed = trimmed || cut
+		}
+	}
+	var cut bool
+	flows, cut = keepNewest(flows, hubbleFlowBudget)
+	trimmed = trimmed || cut
+
+	// A node that returned its full limit may have had older traffic in the
+	// window that did not fit. Its oldest returned flow is where its data starts
+	// being complete; the view as a whole is complete from the latest of those.
+	var coveredSince *time.Time
+	for _, seen := range perNode {
+		if seen.count < req.Number || !seen.oldest.After(windowStart) {
+			continue
+		}
+		if coveredSince == nil || seen.oldest.After(*coveredSince) {
+			t := seen.oldest
+			coveredSince = &t
+		}
+	}
+	// Past the budget only the newest flows were kept, so the view is complete
+	// from the oldest of them — unless a node's own limit already cut later.
+	if trimmed {
+		oldest := flows[len(flows)-1].LastSeen
+		if coveredSince == nil || oldest.After(*coveredSince) {
+			coveredSince = &oldest
+		}
+	}
+	result := hubbleFetch{flows: flows, coveredSince: coveredSince, nodeLimit: int(req.Number)}
+	if trimmed {
+		result.flowLimit = hubbleFlowBudget
+	}
+
+	if lost > 0 {
+		log.Printf("[hubble] %d events lost against %d delivered", lost, delivered)
+	}
+	// A busy relay carries a few loss markers in its buffer nearly all the time —
+	// a handful against thousands of delivered events on a live cluster — and a
+	// warning on every fetch for those would be ignored along with the ones that
+	// matter. The threshold is a noise policy, not a completeness measure: loss
+	// markers are not scoped to the request's filters, so the two counts need
+	// not cover the same traffic.
+	if lost > 0 && float64(lost)*100 >= (float64(lost)+float64(delivered))*lostEventsWarnPercent {
+		gaps = append(gaps, fmt.Sprintf("Hubble reported %d events lost before they could be delivered", lost))
+	}
+	if len(unavailableNodes) > 0 {
+		slices.Sort(unavailableNodes)
+		unavailableNodes = slices.Compact(unavailableNodes)
+		// Counted, not named: this warning outlives namespace filtering, and a
+		// node's name is a cluster-scoped read the viewer may not have.
+		log.Printf("[hubble] Relay could not read flows from nodes: %s", strings.Join(unavailableNodes, ", "))
+		gaps = append(gaps, fmt.Sprintf("Hubble Relay could not read flows from %d node(s), so their traffic is missing", len(unavailableNodes)))
 	}
 
 	log.Printf("[hubble] Retrieved %d flows", len(flows))
-	return flows, nil
+	if len(gaps) > 0 {
+		result.incomplete = "Traffic data is incomplete: " + strings.Join(gaps, "; ") + "."
+		result.streamFailed = streamFailed
+	}
+	return result, nil
+}
+
+// lostEventsWarnPercent is the share of a fetch's events, lost ones included,
+// that must have been lost before the loss is worth a warning.
+const lostEventsWarnPercent = 1
+
+// callerOrientedFlow converts a Hubble flow and orients it from the caller to
+// the callee, reporting false for a flow that should not become an edge at all.
+//
+// Hubble records packets, so a conversation arrives from both ends: the reply
+// packets name the server as the source and the client's ephemeral port as the
+// destination port. Taken at face value they draw a second, reversed edge per
+// connection — server → client on a port nothing listens on. A reply at L3/L4
+// adds nothing the request-direction flow did not already say, so it is
+// dropped. An L7 response is the only record carrying the status code and
+// latency, so it is turned around onto the request's edge instead, and counts
+// no connection of its own.
+//
+// Only an explicit is_reply=true is acted on. Hubble leaves it unset when it
+// cannot tell (drops, encapsulation trace points), and those keep their
+// orientation — Hubble's own reply filter would discard them, which is why the
+// filter is not pushed into the request.
+func callerOrientedFlow(pbFlow *flowpb.Flow) (Flow, bool) {
+	flow := convertHubbleFlow(pbFlow)
+	if !pbFlow.GetIsReply().GetValue() {
+		return flow, true
+	}
+	if pbFlow.GetL7() == nil {
+		return Flow{}, false
+	}
+	flow.Source, flow.Destination = flow.Destination, flow.Source
+	flow.SourceService, flow.DestService = flow.DestService, flow.SourceService
+	if l4 := pbFlow.GetL4(); l4 != nil {
+		switch {
+		case l4.GetTCP() != nil:
+			flow.Port = int(l4.GetTCP().GetSourcePort())
+		case l4.GetUDP() != nil:
+			flow.Port = int(l4.GetUDP().GetSourcePort())
+		case l4.GetSCTP() != nil:
+			flow.Port = int(l4.GetSCTP().GetSourcePort())
+		}
+	}
+	flow.Connections = 0
+	return flow, true
 }
 
 // convertHubbleFlow converts a Hubble protobuf Flow to our internal Flow type
@@ -1048,30 +1699,38 @@ func convertEndpoint(ep *flowpb.Endpoint, ip string) Endpoint {
 		endpoint.Kind, endpoint.Name = classifyNonPodIdentity(ep.GetLabels(), ip)
 	}
 
-	// Extract workload name from labels
-	endpoint.Workload = extractWorkloadFromHubbleLabels(ep.GetLabels())
+	// Cilium resolves a pod's owning workload itself; the server prefers its
+	// own resolution from the pod cache and falls back to this one for pods it
+	// cannot see, such as those already gone.
+	if endpoint.Kind == EndpointKindPod {
+		if wl := ep.GetWorkloads(); len(wl) > 0 && wl[0].GetName() != "" {
+			endpoint.Workload = wl[0].GetName()
+			endpoint.WorkloadKind = wl[0].GetKind()
+			if endpoint.WorkloadKind == "ReplicaSet" {
+				if rollout, ok := rolloutOfReplicaSet(endpoint.Workload, ep.GetLabels()); ok {
+					endpoint.Workload, endpoint.WorkloadKind = rollout, "Rollout"
+				}
+			}
+		}
+	}
 
 	return endpoint
 }
 
-// extractWorkloadFromHubbleLabels extracts workload name from Hubble labels
-func extractWorkloadFromHubbleLabels(labels []string) string {
-	labelMap := make(map[string]string)
-	for _, l := range labels {
-		parts := strings.SplitN(l, "=", 2)
-		if len(parts) == 2 {
-			labelMap[parts[0]] = parts[1]
+// rolloutOfReplicaSet names the Argo Rollout behind a ReplicaSet Cilium
+// reported. Cilium tells a Deployment's ReplicaSet by its pods'
+// pod-template-hash label; a Rollout's pods carry rollouts-pod-template-hash
+// instead, so Cilium stops at the ReplicaSet, which is named after the Rollout
+// plus that hash.
+func rolloutOfReplicaSet(replicaSet string, labels []string) (string, bool) {
+	for _, label := range labels {
+		if hash, ok := strings.CutPrefix(label, "k8s:rollouts-pod-template-hash="); ok && hash != "" {
+			if rollout, ok := strings.CutSuffix(replicaSet, "-"+hash); ok && rollout != "" {
+				return rollout, true
+			}
 		}
 	}
-
-	// Common workload labels in order of preference
-	for _, key := range []string{"app", "app.kubernetes.io/name", "k8s-app", "name"} {
-		if name, ok := labelMap[key]; ok {
-			return name
-		}
-	}
-
-	return ""
+	return "", false
 }
 
 // StreamFlows returns a channel of flows for real-time updates
@@ -1090,17 +1749,7 @@ func (h *HubbleSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-cha
 			return
 		}
 
-		// Build streaming request
-		req := &observerpb.GetFlowsRequest{
-			Follow: true,
-		}
-
-		if opts.Namespace != "" {
-			req.Whitelist = []*flowpb.FlowFilter{
-				{SourcePod: []string{opts.Namespace + "/"}},
-				{DestinationPod: []string{opts.Namespace + "/"}},
-			}
-		}
+		req := hubbleFlowsRequest(opts, true)
 
 		stream, err := client.GetFlows(ctx, req)
 		if err != nil {
@@ -1126,7 +1775,10 @@ func (h *HubbleSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-cha
 				continue
 			}
 
-			flow := convertHubbleFlow(pbFlow)
+			flow, ok := callerOrientedFlow(pbFlow)
+			if !ok {
+				continue
+			}
 
 			select {
 			case flowCh <- flow:

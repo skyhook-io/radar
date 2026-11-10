@@ -2,6 +2,7 @@ package topology
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -14,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -41,6 +43,7 @@ const (
 	KindHTTPRoute                      NodeKind = "HTTPRoute"
 	KindGRPCRoute                      NodeKind = "GRPCRoute"
 	KindTCPRoute                       NodeKind = "TCPRoute"
+	KindUDPRoute                       NodeKind = "UDPRoute"
 	KindTLSRoute                       NodeKind = "TLSRoute"
 	KindService                        NodeKind = "Service"
 	KindDeployment                     NodeKind = "Deployment"
@@ -56,6 +59,7 @@ const (
 	KindNodeClass                      NodeKind = "NodeClass"            // Karpenter NodeClass (EC2NodeClass, AKSNodeClass, etc.)
 	KindScaledObject                   NodeKind = "ScaledObject"         // KEDA ScaledObject
 	KindScaledJob                      NodeKind = "ScaledJob"            // KEDA ScaledJob
+	KindJobSet                         NodeKind = "JobSet"               // jobset.x-k8s.io JobSet
 	KindGatewayClass                   NodeKind = "GatewayClass"         // Gateway API GatewayClass
 	KindVirtualService                 NodeKind = "VirtualService"       // Istio VirtualService
 	KindDestinationRule                NodeKind = "DestinationRule"      // Istio DestinationRule
@@ -186,6 +190,7 @@ const (
 
 // Topology represents the complete graph
 type Topology struct {
+	podConsumers            map[string][]ResourceRef
 	Nodes                   []Node   `json:"nodes"`
 	Edges                   []Edge   `json:"edges"`
 	Warnings                []string `json:"warnings,omitempty"`                // Warnings about resources that failed to load
@@ -224,26 +229,12 @@ func (t *Topology) StripNodeKinds(deny map[NodeKind]bool) {
 		return
 	}
 	dropped := make(map[string]bool)
-	kept := t.Nodes[:0]
 	for _, n := range t.Nodes {
 		if deny[n.Kind] {
 			dropped[n.ID] = true
-			continue
 		}
-		kept = append(kept, n)
 	}
-	t.Nodes = kept
-	if len(dropped) == 0 {
-		return
-	}
-	keptEdges := t.Edges[:0]
-	for _, e := range t.Edges {
-		if dropped[e.Source] || dropped[e.Target] {
-			continue
-		}
-		keptEdges = append(keptEdges, e)
-	}
-	t.Edges = keptEdges
+	t.StripNodeIDs(dropped)
 }
 
 // StripNodeIDs removes exact nodes plus every edge that references them.
@@ -254,8 +245,13 @@ func (t *Topology) StripNodeIDs(deny map[string]bool) {
 		return
 	}
 	kept := t.Nodes[:0]
+	hiddenPolicyNamespaces := map[string]bool{}
 	for _, n := range t.Nodes {
 		if deny[n.ID] {
+			if n.Kind == KindNetworkPolicy || n.Kind == KindCiliumNetworkPolicy || n.Kind == KindCiliumClusterwideNetworkPolicy || IsCalicoPolicyKind(n.Kind) {
+				ns, _ := n.Data["namespace"].(string)
+				hiddenPolicyNamespaces[ns] = true
+			}
 			continue
 		}
 		kept = append(kept, n)
@@ -270,6 +266,33 @@ func (t *Topology) StripNodeIDs(deny map[string]bool) {
 		keptEdges = append(keptEdges, e)
 	}
 	t.Edges = keptEdges
+	// Coverage metadata also contains graph references. Do not serialize names
+	// of hidden workloads through a readable clusterwide policy's Data.
+	for i := range t.Nodes {
+		node := &t.Nodes[i]
+		ns, _ := node.Data["namespace"].(string)
+		_, hasPolicyStatus := node.Data["policyStatus"]
+		if node.Data["policyCoverageWorkloads"] != nil || (hiddenPolicyNamespaces[""] || hiddenPolicyNamespaces[ns]) && hasPolicyStatus {
+			// Topology clones share node Data until a consumer modifies it.
+			node.Data = maps.Clone(node.Data)
+		}
+		for _, field := range []string{"policyCoverageWorkloads"} {
+			if refs, ok := node.Data[field].([]string); ok {
+				visible := make([]string, 0, len(refs))
+				for _, id := range refs {
+					if !deny[id] {
+						visible = append(visible, id)
+					}
+				}
+				node.Data[field] = visible
+			}
+		}
+		if hasPolicyStatus && (hiddenPolicyNamespaces[""] || hiddenPolicyNamespaces[ns]) {
+			// The annotation was computed before filtering. Withhold it when
+			// its evidence may include policies the caller cannot see.
+			delete(node.Data, "policyStatus")
+		}
+	}
 }
 
 // NodeClassRBACTuples returns the distinct exact provider resources present
@@ -373,7 +396,7 @@ type BuildOptions struct {
 	IncludePVCs          bool     // Include PersistentVolumeClaim nodes
 	IncludeReplicaSets   bool     // Include ReplicaSet nodes (noisy intermediate objects)
 	IncludeGenericCRDs   bool     // Include CRDs with owner refs to topology nodes (default: true)
-	ForRelationshipCache bool     // Skip large cluster guard — used for internal relationship cache builds
+	ForRelationshipCache bool     // Retain full template/Pod facts and skip the large-cluster guard for resource reads
 	ShowPolicyEffect     bool     // Evaluate NetworkPolicies and annotate edges with allow/block/unprotected
 	SummaryMode          bool     // Collapse the pod tier into per-workload/service counts (set by Build when estimate ≥ SummaryModeThreshold)
 }
@@ -392,6 +415,16 @@ func MatchesNamespace(namespaces []string, ns string) bool {
 // An empty filter means all namespaces match.
 func (opts BuildOptions) MatchesNamespaceFilter(ns string) bool {
 	return MatchesNamespace(opts.Namespaces, ns)
+}
+
+// RelationshipBuildOptions retains the complete cached graph for relationship
+// projection. A root's namespace is not a visibility boundary: controllers may
+// explicitly reference another namespace. Callers must authorize emitted refs.
+func RelationshipBuildOptions() BuildOptions {
+	opts := DefaultBuildOptions()
+	opts.IncludeReplicaSets = true
+	opts.ForRelationshipCache = true
+	return opts
 }
 
 // DefaultBuildOptions returns sensible defaults
@@ -424,24 +457,84 @@ type ReflectionRelationships struct {
 
 // Relationships holds computed relationships for a resource
 type Relationships struct {
+	// PodPlacementObserved and PodPlacementUnavailable carry in-process lookup
+	// state for context builders. They are not transport fields or cached counts.
+	PodPlacementObserved    bool `json:"-"`
+	PodPlacementUnavailable bool `json:"-"`
+
+	// IstioServiceDomain is the configured registry domain or upstream default; omitted when unknown.
+	IstioServiceDomain string `json:"istioServiceDomain,omitempty"`
 	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 
-	Owner           *ResourceRef  `json:"owner,omitempty"`           // Parent via ownerReference (manages edge)
-	Deployment      *ResourceRef  `json:"deployment,omitempty"`      // Grandparent Deployment (for Pods owned by ReplicaSets)
-	Children        []ResourceRef `json:"children,omitempty"`        // Resources this owns (manages edge)
-	Services        []ResourceRef `json:"services,omitempty"`        // Services selecting/exposing this
-	Ingresses       []ResourceRef `json:"ingresses,omitempty"`       // Ingresses routing to this
-	Gateways        []ResourceRef `json:"gateways,omitempty"`        // Gateways routing to this (via routes)
-	Routes          []ResourceRef `json:"routes,omitempty"`          // Routes attached to this Gateway
-	ConfigRefs      []ResourceRef `json:"configRefs,omitempty"`      // ConfigMaps/Secrets used by this
-	Consumers       []ResourceRef `json:"consumers,omitempty"`       // For ConfigMap/Secret: workloads that reference this
+	// Owner is the owner Kubernetes acts through: the controller reference,
+	// else the only reference. Owners are every owner reference that resolves
+	// to an existing owner, Children every object whose owner reference
+	// resolves to this one. With Ownership set they come from owner
+	// references; without it, from the topology's manages edges.
+	Owner      *ResourceRef  `json:"owner,omitempty"`
+	Owners     []ResourceRef `json:"owners,omitempty"`
+	Deployment *ResourceRef  `json:"deployment,omitempty"` // Grandparent Deployment (for Pods owned by ReplicaSets)
+	Children   []ResourceRef `json:"children,omitempty"`
+	// OlderRevisions are Children kept apart because they only keep
+	// history: ReplicaSets that run no Pods and aren't their owner's current
+	// revision. See SplitOlderRevisions.
+	OlderRevisions []ResourceRef `json:"olderRevisions,omitempty"`
+	// Managers and Manages are management without an owner reference: GitOps
+	// member lists, class bindings, spec and status references. They never
+	// mean garbage collection. Set only with Ownership. ApplyOwner instead
+	// fills Managers with residual spec controllers and leaves Manages empty.
+	Managers []ResourceRef `json:"managers,omitempty"`
+	Manages  []ResourceRef `json:"manages,omitempty"`
+	// Ownership says how complete the owner-reference answers are.
+	Ownership *OwnershipCoverage `json:"ownership,omitempty"`
+	// ControllerChain is the resource's controller chain as the caller
+	// reads it, for the resource contexts' top owner. Set only with
+	// Ownership; not on the wire.
+	ControllerChain *ControllerChain `json:"-"`
+	// OtherManagersIncomplete records unavailable spec-management sources;
+	// denied sources are hidden without disclosing that they exist.
+	OtherManagersIncomplete bool `json:"-"`
+	// manageSources and manageTargets are the resources this one's manages
+	// edges come from and go to, which ApplyOwnership sorts into ownership,
+	// management and display shortcuts.
+	manageSources, manageTargets []ResourceRef
+
+	Services        []ResourceRef `json:"services,omitempty"`   // Core Services selecting/exposing this
+	Ingresses       []ResourceRef `json:"ingresses,omitempty"`  // Ingresses routing to this
+	Gateways        []ResourceRef `json:"gateways,omitempty"`   // Gateway API Gateways routing to this
+	Routes          []ResourceRef `json:"routes,omitempty"`     // Recognized upstream routes routing to this
+	ConfigRefs      []ResourceRef `json:"configRefs,omitempty"` // ConfigMaps/Secrets used by this
+	Consumers       []ResourceRef `json:"consumers,omitempty"`  // For ConfigMap/Secret: workloads that reference this
+	Dependencies    []ResourceRef `json:"dependencies,omitempty"`
+	Dependents      []ResourceRef `json:"dependents,omitempty"`
 	Scalers         []ResourceRef `json:"scalers,omitempty"`         // HPA/ScaledObject/ScaledJob scaling this
 	StorageRefs     []ResourceRef `json:"storageRefs,omitempty"`     // PersistentVolumeClaims used by this workload
 	ScaleTarget     *ResourceRef  `json:"scaleTarget,omitempty"`     // For HPA/ScaledObject: what it scales
 	PDBs            []ResourceRef `json:"pdbs,omitempty"`            // PodDisruptionBudgets protecting this workload
 	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload
-	Pods            []ResourceRef `json:"pods,omitempty"`            // For Service: pods it routes to
+	Pods            []ResourceRef `json:"pods,omitempty"`            // Core Pods routed to, or reached through Deployment/Node shortcuts
+
+	// Monitors are Prometheus Operator resources scraping this target.
+	Monitors []ResourceRef `json:"monitors,omitempty"`
+
+	// MonitorTargets are the resources this Prometheus Operator monitor scrapes.
+	MonitorTargets []ResourceRef `json:"monitorTargets,omitempty"`
+
+	// Backends are non-Pod targets this resource routes to or exposes.
+	Backends []ResourceRef `json:"backends,omitempty"`
+
+	// RoutedFrom are upstream exposing resources other than core Services and recognized routes.
+	RoutedFrom []ResourceRef `json:"routedFrom,omitempty"`
+
+	// Protects are the resources selected by this disruption budget or network policy.
+	Protects []ResourceRef `json:"protects,omitempty"`
+
+	// HealthChecks are Cluster API MachineHealthChecks associated with this Cluster.
+	HealthChecks []ResourceRef `json:"healthChecks,omitempty"`
+
+	// StagedPolicies select this resource without enforcing policy.
+	StagedPolicies []ResourceRef `json:"stagedPolicies,omitempty"`
 
 	// ServiceAccount is the ServiceAccount selected by this Pod or workload.
 	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`
@@ -478,12 +571,220 @@ type SecretCertificateInfo struct {
 	Certificates []CertificateInfo `json:"certificates"`
 }
 
-// CascadeDeletePreview represents all resources that will be garbage-collected
-// when a parent resource is deleted via Kubernetes owner reference cascade.
+// CascadeDeletePreview reports deletion evidence. Basis ownerReferences marks
+// the cache-backed projection; without it Dependents are legacy graph links.
+// Coverage is absent when no ownership projection was possible. NotEnumerated
+// names deletion mechanisms outside the projection, never empty sets of objects.
 type CascadeDeletePreview struct {
-	Root         ResourceRef   `json:"root"`
-	RootResolved bool          `json:"rootResolved"`
-	Dependents   []ResourceRef `json:"dependents"`
+	MayReclaimStorage bool `json:"-"`
+	// Propagation is the normal-delete policy. Dependents project cascading
+	// collection; Orphan preserves them unless force removes the orphan finalizer.
+	Propagation        string              `json:"propagation,omitempty"`
+	Root               ResourceRef         `json:"root"`
+	RootResolved       bool                `json:"rootResolved"`
+	Dependents         []ResourceRef       `json:"dependents"`
+	Basis              string              `json:"basis,omitempty"`
+	PossibleDependents []ResourceRef       `json:"possibleDependents,omitempty"`
+	Coverage           *ChildrenCoverage   `json:"coverage,omitempty"`
+	UnavailableReason  string              `json:"unavailableReason,omitempty"`
+	ControllerTeardown *ControllerTeardown `json:"controllerTeardown,omitempty"`
+	NotEnumerated      []string            `json:"notEnumerated,omitempty"`
+}
+
+// OwnershipCoverage says how complete a resource's owner-reference and
+// recorded-membership answers are. With UnavailableReason set nothing else is
+// answered, so an empty field there says nothing. Otherwise an omitted count
+// or flag is zero, and an omitted Manages or Managers means there was nothing
+// to qualify.
+type OwnershipCoverage struct {
+	// PrimaryOwnerState is the state of the owner reference when Owner is empty:
+	// "gone" or "replaced" when it names a deleted owner, "withheld" when the
+	// caller may not read the owner, "unknown", "unresolvable", "excluded"
+	// when it names an Event, or "several" when there are several references
+	// and none is a controller. Empty when there is no owner reference, or
+	// Owner is set.
+	PrimaryOwnerState string `json:"primaryOwnerState,omitempty"`
+	// OwnerRef is the owner the reference names when it is gone, replaced or
+	// unknown: the object's own metadata names it.
+	OwnerRef *ResourceRef `json:"ownerRef,omitempty"`
+	// OwnerReason is a readreason code saying why an "unknown" owner couldn't
+	// be checked.
+	OwnerReason string `json:"ownerReason,omitempty"`
+	// Children says how complete Children and OlderRevisions are together.
+	Children ChildrenCoverage `json:"children"`
+	// Manages is set for a GitOps manager kind whose status lists its
+	// members, whether or not that list could be read.
+	Manages *MembersCoverage `json:"manages,omitempty"`
+	// Managers is set when the search for the GitOps managers whose status
+	// lists the resource, for Managers, couldn't settle every one the caller
+	// may read.
+	Managers *ManagersCoverage `json:"managers,omitempty"`
+	// Manager is what manages the resource, from the evidence on it or, when
+	// that doesn't settle it, on its nearest controller ancestor. Absent means
+	// no answer (an older Radar, or UnavailableReason), never "none".
+	Manager *ManagerAnswer `json:"manager,omitempty"`
+	// UnavailableReason is a reason code when Radar couldn't answer at all.
+	UnavailableReason string `json:"unavailableReason,omitempty"`
+}
+
+// ChildrenCoverage says how complete a resource's Children and
+// OlderRevisions are, together: OlderRevisions only sets some of them apart.
+type ChildrenCoverage struct {
+	// Complete: Children and OlderRevisions are every child the caller may
+	// read.
+	Complete bool `json:"complete"`
+	// NotChecked are the kinds and namespaces Radar couldn't search, and why.
+	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
+	// Truncated: there were more children than the response lists; the cap
+	// applies before OlderRevisions are set apart.
+	Truncated bool `json:"truncated,omitempty"`
+	// Narrowed: the caller wasn't known to read everywhere children could be,
+	// so Children are the ones it may read.
+	Narrowed bool `json:"narrowed,omitempty"`
+}
+
+// OwnershipGap is a kind that Radar couldn't read, with a readreason code
+// saying why, from Radar's caches or the caller's access: in Namespace, or
+// with no Namespace in several namespaces, every one, or the cluster for a
+// cluster-scoped kind. An empty Kind stands for kinds discovery didn't list;
+// an empty Group is the core group.
+type OwnershipGap struct {
+	Group     string `json:"group,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Reason    string `json:"reason"`
+}
+
+// ManagersCoverage says which GitOps managers the search for the resource's
+// Managers couldn't settle.
+type ManagersCoverage struct {
+	// Unreadable managers have a member list Radar can't read, so any of them
+	// may list the resource.
+	Unreadable int `json:"unreadable,omitempty"`
+	// Remote managers list an object at the resource's coordinates, in a
+	// cluster Radar can't confirm is this one.
+	Remote int `json:"remote,omitempty"`
+	// NotChecked are the manager kinds and namespaces Radar couldn't search,
+	// and why.
+	NotChecked []OwnershipGap `json:"notChecked,omitempty"`
+}
+
+// ManagerAnswer is what manages a resource: the managers whose status lists
+// name it and what its own metadata claims. It names no winner the evidence
+// doesn't support: a disagreement stays one.
+type ManagerAnswer struct {
+	// State sums up the evidence, counting claims as docs/ownership.md says
+	// (never a copied one; a native Helm release's only without other
+	// evidence): "agree" (one list names it and every claim names that
+	// manager), "listed" (one list names it, no claim counts),
+	// "disagree" (one list names it and a claim names another manager),
+	// "shared" (several lists name it), "claimed" (only claims name a
+	// manager), "unknown" (no evidence, and Radar couldn't look everywhere)
+	// or "none" (no evidence in what Radar collects and the caller may read;
+	// not a statement that nothing manages it).
+	State string `json:"state"`
+	// Lead is the manager to show first, never a verdict: the recorder for
+	// "agree" and "listed"; for "shared", the one recorder a claim names, if
+	// exactly one; for "claimed", the manager every claim names, if they
+	// agree; absent otherwise. Its namespace is empty when it comes from a
+	// claim that names none.
+	Lead *ResourceRef `json:"lead,omitempty"`
+	// Direct is the evidence on the resource itself.
+	Direct ManagerEvidence `json:"direct"`
+	// Via is the evidence on the nearest controller ancestor that settles the
+	// question when the resource's own doesn't, or, when nothing on the chain
+	// does and the resource makes no claim that isn't copied, on the nearest
+	// ancestor that makes one; State and Lead then come from it.
+	Via *ManagerEvidence `json:"via,omitempty"`
+	// Between is the evidence of other objects the walk passed that make
+	// claims, in chain order. When Via is a fallback to the nearest claim,
+	// claims farther up the chain stay here.
+	Between []ManagerEvidence `json:"between,omitempty"`
+	// ChainEnd is why a walk that found no settling evidence stopped short:
+	// "unfollowed", "cycle" or "truncated". Absent when evidence settled it
+	// first, whatever lies above, or when the walk reached the chain's top.
+	ChainEnd string `json:"chainEnd,omitempty"`
+	// Stop is the controller reference the walk couldn't follow, when
+	// ChainEnd is "unfollowed".
+	Stop *ManagerChainStop `json:"stop,omitempty"`
+	// Narrowed: the caller's access is restricted, so the evidence is the part
+	// it may read.
+	Narrowed bool `json:"narrowed,omitempty"`
+}
+
+// ManagerChainStop is a controller reference a walk up the chain couldn't
+// follow.
+type ManagerChainStop struct {
+	// At is the last object the walk reached, whose reference it is.
+	At ResourceRef `json:"at"`
+	// State is the reference's: "gone", "replaced", "withheld", "unknown",
+	// "unresolvable" or "excluded", as for primaryOwnerState.
+	State string `json:"state"`
+	// Owner is the owner the reference names when it is gone, replaced or
+	// unknown.
+	Owner *ResourceRef `json:"owner,omitempty"`
+	// Reason is a readreason code saying why an "unknown" owner couldn't be
+	// checked.
+	Reason string `json:"reason,omitempty"`
+}
+
+// ManagerEvidence is what names the managers of one object. Which managers
+// Radar couldn't search is not part of it: State says whether that left the
+// answer unknown, and for the resource itself OwnershipCoverage.Managers says
+// what its own search missed.
+type ManagerEvidence struct {
+	Object ResourceRef `json:"object"`
+	// Recorders are the local managers whose status lists name it.
+	Recorders []ResourceRef `json:"recorders,omitempty"`
+	// Claims are the managers its own metadata names.
+	Claims []ManagerClaim `json:"claims,omitempty"`
+}
+
+// ManagerClaim is a manager an object's metadata names, and what checking it
+// found.
+type ManagerClaim struct {
+	// Manager is the manager named; its namespace is empty when the metadata
+	// doesn't say.
+	Manager ResourceRef `json:"manager"`
+	// Source is the metadata: "flux-helm-labels", "flux-kustomize-labels",
+	// "argo-tracking-id", "argo-instance-label" or "helm-release". Source,
+	// Check and the answer's State and ChainEnd may gain values: a reader
+	// shows an unfamiliar one generically and never treats it as confirming.
+	Source string `json:"source"`
+	// Check is what checking the claim found: "recorded" (its list names
+	// the object), "omitted" (its list, read, doesn't), "unreadable" (its list
+	// can't be read), "remote" (it applies to a cluster Radar can't confirm
+	// is this one), "missing" (no such manager here), "not-recording" (a
+	// native Helm release, which keeps no list), "unresolved" (no namespace,
+	// and no listing manager has its name), "withheld" (the caller may not
+	// read it) or "unchecked" (Radar couldn't establish what its list says).
+	Check string `json:"check"`
+	// Copied: an Argo CD tracking ID naming another object.
+	Copied bool `json:"copied,omitempty"`
+	// Weak: the claim doesn't stop the walk up the controller chain, being
+	// copied, or an instance label or Helm release annotation on an object a
+	// controller owns. One that isn't copied can still answer when nothing
+	// on the chain settles it.
+	Weak bool `json:"weak,omitempty"`
+}
+
+// MembersCoverage says what a GitOps manager's status records of its
+// members beyond those Manages lists.
+type MembersCoverage struct {
+	// Membership is "recorded", "remote" (its destination isn't confirmed to
+	// be this cluster, so its members aren't listed) or "unreadable" (the
+	// status lists none Radar can read).
+	Membership string `json:"membership"`
+	// UnavailableReason is a readreason code when the member list couldn't be read,
+	// as opposed to the status recording none.
+	UnavailableReason string `json:"unavailableReason,omitempty"`
+	// Missing members Radar doesn't hold, Withheld ones the caller may not
+	// read, Unknown ones Radar can't say whether it holds.
+	Missing  int `json:"missing,omitempty"`
+	Withheld int `json:"withheld,omitempty"`
+	Unknown  int `json:"unknown,omitempty"`
+	// Truncated: there were more members than the response lists.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships
@@ -492,6 +793,8 @@ type ResourceWithRelationships struct {
 	Relationships   *Relationships         `json:"relationships,omitempty"`
 	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
 	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
+	// RelatedFindings does not affect parent health; absence is not an all-clear.
+	RelatedFindings []issuesapi.RelatedFindingsGroup `json:"relatedFindings,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.

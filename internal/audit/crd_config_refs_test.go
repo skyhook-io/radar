@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -44,7 +45,7 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			ns:   "edge",
 			obj: map[string]any{"spec": map[string]any{
 				"rootCAsSecrets":      []any{"root-ca"},
-				"certificatesSecrets": []any{map[string]any{"name": "client-cert"}},
+				"certificatesSecrets": []any{"client-cert"},
 			}},
 			want: refs(secret("edge", "root-ca"), secret("edge", "client-cert")),
 		},
@@ -62,11 +63,56 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			want: refs(secret("edge", "basic-users"), secret("edge", "digest-users"), secret("edge", "forward-ca")),
 		},
 		{
+			name: "traefik tcp transport and tls store certificates",
+			gvr:  gvr("traefik.io", "v1alpha1", "serverstransporttcps"),
+			ns:   "edge",
+			obj: map[string]any{"spec": map[string]any{"tls": map[string]any{
+				"rootCAs":             []any{map[string]any{"configMap": "ca-bundle"}, map[string]any{"secret": "ca"}},
+				"certificatesSecrets": []any{"client"},
+			}}},
+			want: refs(secret("edge", "ca"), secret("edge", "client"), configMap("edge", "ca-bundle")),
+		},
+		{
+			name: "traefik tls store certificates",
+			gvr:  gvr("traefik.io", "v1alpha1", "tlsstores"),
+			ns:   "edge",
+			obj:  map[string]any{"spec": map[string]any{"defaultCertificate": map[string]any{"secretName": "default"}, "certificates": []any{map[string]any{"secretName": "extra"}}}},
+			want: refs(secret("edge", "default"), secret("edge", "extra")),
+		},
+		{
 			name: "contour httpproxy tls",
 			gvr:  gvr("projectcontour.io", "v1", "httpproxies"),
 			ns:   "edge",
 			obj:  map[string]any{"spec": map[string]any{"virtualhost": map[string]any{"tls": map[string]any{"secretName": "contour-cert"}}}},
 			want: refs(secret("edge", "contour-cert")),
+		},
+		{
+			name: "contour httpproxy delegated tls",
+			gvr:  gvr("projectcontour.io", "v1", "httpproxies"),
+			ns:   "edge",
+			obj:  map[string]any{"spec": map[string]any{"virtualhost": map[string]any{"tls": map[string]any{"secretName": "certs/wildcard"}}}},
+			want: refs(secret("certs", "wildcard")),
+		},
+		{
+			name: "contour httpproxy validation secrets",
+			gvr:  gvr("projectcontour.io", "v1", "httpproxies"),
+			ns:   "edge",
+			obj: map[string]any{"spec": map[string]any{
+				"virtualhost": map[string]any{
+					"tls": map[string]any{
+						"secretName":       "serving",
+						"clientValidation": map[string]any{"caSecret": "client-ca", "crlSecret": "pki/client-crl"},
+					},
+					"jwtProviders": []any{map[string]any{"remoteJWKS": map[string]any{"validation": map[string]any{"caSecret": "jwks-ca"}}}},
+				},
+				"routes": []any{map[string]any{"services": []any{
+					map[string]any{"name": "api", "validation": map[string]any{"caSecret": "pki/upstream-ca"}},
+				}}},
+				"tcpproxy": map[string]any{"services": []any{
+					map[string]any{"name": "db", "validation": map[string]any{"caSecret": "db-ca"}},
+				}},
+			}},
+			want: refs(secret("edge", "serving"), secret("edge", "client-ca"), secret("pki", "client-crl"), secret("edge", "jwks-ca"), secret("pki", "upstream-ca"), secret("edge", "db-ca")),
 		},
 		{
 			name: "istio gateway tls credentials",
@@ -186,9 +232,16 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			obj: map[string]any{"spec": map[string]any{
 				"secretTargetRef":    []any{map[string]any{"name": "queue-secret"}},
 				"configMapTargetRef": []any{map[string]any{"name": "queue-config"}},
-				"gcpSecretManager":   map[string]any{"credentials": map[string]any{"clientSecret": map[string]any{"name": "gcp-secret"}}},
+				"gcpSecretManager":   map[string]any{"credentials": map[string]any{"clientSecret": map[string]any{"valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "gcp-secret", "key": "credentials.json"}}}}},
 			}},
 			want: refs(secret("app", "queue-secret"), configMap("app", "queue-config"), secret("app", "gcp-secret")),
+		},
+		{
+			name: "keda shallow GCP credentials are not a reference",
+			gvr:  gvr("keda.sh", "v1alpha1", "triggerauthentications"),
+			ns:   "app",
+			obj:  map[string]any{"spec": map[string]any{"gcpSecretManager": map[string]any{"credentials": map[string]any{"clientSecret": map[string]any{"name": "fictional"}}}}},
+			want: refs(),
 		},
 		{
 			name: "prometheus servicemonitor refs",
@@ -362,6 +415,41 @@ func TestListDynamicConfigObjectRefsFiltersByTargetNamespace(t *testing.T) {
 
 	got := listDynamicConfigObjectRefs([]string{"infra"}, dynamicConfigRefOptions{})
 	assertRefSet(t, got, refs(secret("infra", "shared-cert")))
+}
+
+func TestListDynamicConfigObjectRefsFindsDelegatedContourSecret(t *testing.T) {
+	proxyGVR := gvr("projectcontour.io", "v1", "httpproxies")
+	proxy := testUnstructured("projectcontour.io/v1", "HTTPProxy", "shop", "storefront", map[string]any{
+		"spec": map[string]any{"virtualhost": map[string]any{
+			"fqdn": "shop.example.com",
+			"tls":  map[string]any{"secretName": "certs/wildcard"},
+		}},
+	})
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{proxyGVR: "HTTPProxyList"},
+	)
+	if _, err := dynClient.Resource(proxyGVR).Namespace("shop").Create(context.Background(), proxy, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create HTTPProxy fixture: %v", err)
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynClient, []k8s.APIResource{
+		{Group: "projectcontour.io", Version: "v1", Kind: "HTTPProxy", Name: "httpproxies", Namespaced: true, Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	defer k8s.ResetTestDynamicState()
+
+	dynCache := k8s.GetDynamicResourceCache()
+	if err := dynCache.EnsureWatching(proxyGVR); err != nil {
+		t.Fatalf("EnsureWatching: %v", err)
+	}
+	if !dynCache.WaitForSync(proxyGVR, 2*time.Second) {
+		t.Fatal("dynamic HTTPProxy cache did not sync")
+	}
+
+	// Auditing only the delegating namespace must still see the proxy that uses its Secret.
+	got := listDynamicConfigObjectRefs([]string{"certs"}, dynamicConfigRefOptions{})
+	assertRefSet(t, got, refs(secret("certs", "wildcard")))
 }
 
 func TestListDynamicConfigObjectRefsAddsServiceAccountImagePullSecretsForPodTemplates(t *testing.T) {
@@ -599,5 +687,31 @@ func TestClusterIssuerNamespaceInferenceNeverGuesses(t *testing.T) {
 	c.Env = append(c.Env, corev1.EnvVar{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "config"}, Key: "namespace"}}})
 	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{fromEnv}); got != nil {
 		t.Fatalf("unknown override reused an earlier env value: %v", got)
+	}
+}
+
+func TestContourDelegatedTLSConfigReferences(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"namespace": "app"}, "spec": map[string]any{"virtualhost": map[string]any{"tls": map[string]any{"secretName": "tls/server", "clientValidation": map[string]any{"caSecret": "tls/ca", "crlSecret": "tls/crl"}}}}}}
+	got := contourHTTPProxyConfigRefs(obj)
+	want := refs(secret("tls", "server"), secret("tls", "ca"), secret("tls", "crl"))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs=%+v want=%+v", got, want)
+	}
+	if !configRefDependencies[schema.GroupResource{Group: "projectcontour.io", Resource: "httpproxies"}].crossNamespace {
+		t.Fatal("delegated references need cross-namespace completeness")
+	}
+}
+
+func TestContourUpstreamCAConfigReferences(t *testing.T) {
+	validation := map[string]any{"validation": map[string]any{"caSecret": "trust/ca"}}
+	obj := &unstructured.Unstructured{Object: map[string]any{"metadata": map[string]any{"namespace": "app"}, "spec": map[string]any{
+		"routes":      []any{map[string]any{"services": []any{validation}}},
+		"tcpproxy":    map[string]any{"services": []any{map[string]any{"validation": map[string]any{"caSecret": "trust/tcp"}}}},
+		"virtualhost": map[string]any{"jwtProviders": []any{map[string]any{"remoteJWKS": map[string]any{"validation": map[string]any{"caSecret": "trust/jwks"}}}}},
+	}}}
+	got := contourHTTPProxyConfigRefs(obj)
+	want := refs(secret("trust", "ca"), secret("trust", "tcp"), secret("trust", "jwks"))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs=%+v want=%+v", got, want)
 	}
 }

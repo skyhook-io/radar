@@ -67,5 +67,13 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 	return allowed
 }
 
+// workloadReadAccess adapts the request's checker to trace.Deps.CanReadWorkload.
+func workloadReadAccess(ctx context.Context) func(group, kind, namespace string) bool {
+	checker := newMCPRequestScopedChecker(ctx)
+	return func(group, kind, namespace string) bool {
+		return checker.CanRead(ctx, group, kind, namespace)
+	}
+}
+
 // Compile-time assertion that requestScopedChecker satisfies the contract.
 var _ resourcecontext.RefAccessChecker = (*requestScopedChecker)(nil)

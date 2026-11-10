@@ -14,6 +14,7 @@ import {
   getCNPGWALArchivingFailure,
   getCNPGLastBackupFailure,
   classifyCNPGClusterPhase,
+  cnpgBlockedPhaseExplanation,
   classifyCNPGBackupPhase,
   CNPG_CLUSTER_PHASES_HEALTHY,
   CNPG_CLUSTER_PHASES_TRANSIENT,
@@ -114,6 +115,26 @@ describe('getCNPGClusterCertificateExpirations', () => {
 // ============================================================================
 
 const cluster = (status: any = {}, spec: any = {}) => ({ spec, status })
+
+describe('cnpgBlockedPhaseExplanation', () => {
+  it('says the operator retries a plugin phase, and quotes its reason', () => {
+    const e = cnpgBlockedPhaseExplanation(
+      'Cluster cannot proceed to reconciliation due to an unknown plugin being required',
+      "Unknown plugin: 'barman-cloud.cloudnative-pg.io'. Check the operator and plugin logs for errors",
+    )
+    expect(e.title).toBe('Reconciliation is blocked by a plugin')
+    expect(e.body).toMatch(/retries every few seconds/)
+    expect(e.body).not.toMatch(/manual intervention|does not resolve/)
+    expect(e.body).toMatch(/The operator reports: Unknown plugin/)
+    expect(e.body.endsWith('for errors.')).toBe(true)
+    expect(e.message.startsWith('Cluster cannot proceed')).toBe(true)
+  })
+  it('keeps manual intervention for the one phase upstream says needs it', () => {
+    expect(cnpgBlockedPhaseExplanation('Cluster is unrecoverable and needs manual intervention').title).toBe('Cluster is unrecoverable')
+    const objects = cnpgBlockedPhaseExplanation('Unable to create required cluster objects', '  ')
+    expect(objects.body).toBe('The operator keeps retrying, but this does not clear until its cause is fixed.')
+  })
+})
 
 describe('classifyCNPGClusterPhase', () => {
   it('buckets every phase constant shipped by CNPG 1.27', () => {
@@ -365,13 +386,17 @@ describe('getCNPGClusterInstancesReportedState', () => {
 // ============================================================================
 
 describe('getCNPGPoolerStatus', () => {
+  it('uses the requested count during scale-down without claiming readiness', () => {
+    expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 3 } })).toMatchObject({ text: '2 instances requested', level: 'neutral' })
+    expect(getCNPGPoolerStatus({ spec: { instances: 1 }, status: { instances: 1 } })).toMatchObject({ text: '1 instance requested', level: 'neutral' })
+  })
   it('does not claim readiness from status.instances, which counts scheduled pods', () => {
     // Verified live: a Pooler whose 2 PgBouncer pods are both Pending (0/1
     // ready) still reports status.instances=2. Calling that "Ready" renders a
     // broken Pooler green.
     const s = getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 2 } })
-    expect(s.level).toBe('healthy')
-    expect(s.text).toBe('Scheduled')
+    expect(s.level).toBe('neutral')
+    expect(s.text).toBe('2 instances requested')
     expect(s.text).not.toBe('Ready')
   })
 
@@ -595,7 +620,7 @@ describe('status column filter reads the badge, not the raw phase', () => {
     )).toBe('Suspended')
     expect(getCellFilterValue(
       { apiVersion: 'postgresql.cnpg.io/v1', spec: { instances: 2 }, status: { instances: 2 } }, 'status', 'poolers',
-    )).toBe('Scheduled')
+    )).toBe('2 instances requested')
   })
 
   it('leaves a foreign CRD sharing the plural on the generic path', () => {
@@ -670,7 +695,7 @@ describe('an absent count is unknown, never zero', () => {
     expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 0 } }))
       .toMatchObject({ text: 'Not Scheduled', level: 'unhealthy' })
     expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 2 } }))
-      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
+      .toMatchObject({ text: '2 instances requested', level: 'neutral' })
   })
 })
 
@@ -696,9 +721,9 @@ describe('paused Pooler', () => {
 
   it('only an explicit true pauses', () => {
     expect(getCNPGPoolerStatus({ spec: { instances: 2, pgbouncer: {} }, status: { instances: 2 } }))
-      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
+      .toMatchObject({ text: '2 instances requested', level: 'neutral' })
     expect(getCNPGPoolerStatus({ spec: { instances: 2, pgbouncer: { paused: false } }, status: { instances: 2 } }))
-      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
+      .toMatchObject({ text: '2 instances requested', level: 'neutral' })
     expect(isCNPGPoolerPaused({ spec: { pgbouncer: { paused: true } } })).toBe(true)
     expect(isCNPGPoolerPaused({ spec: {} })).toBe(false)
   })
@@ -752,9 +777,9 @@ describe('CNPG scheduled backup lateness', () => {
     expect(badge.text).toBe('Overdue')
   })
 
-  it('stays healthy inside the operator reconcile window', () => {
+  it('stays neutral inside the operator reconcile window', () => {
     const badge = getCNPGScheduledBackupStatus(sb(false, at(-1 * MIN), at(-24 * 60 * MIN)))
-    expect(badge.level).toBe('healthy')
+    expect(badge.level).toBe('neutral')
   })
 
   it('keeps suspended as a deliberate state, not a missed backup', () => {
@@ -768,7 +793,7 @@ describe('CNPG scheduled backup lateness', () => {
     // The two read from one test. Before this they disagreed: the badge said
     // Active while this field said overdue on the same row.
     const justPastDue = sb(false, at(-1 * MIN), at(-24 * 60 * MIN))
-    expect(getCNPGScheduledBackupStatus(justPastDue).level).toBe('healthy')
+    expect(getCNPGScheduledBackupStatus(justPastDue).level).toBe('neutral')
     expect(getCNPGScheduledBackupNextSchedule(justPastDue)).toBe('due now')
 
     const longPastDue = sb(false, at(-200 * 24 * 60 * MIN), at(-200 * 24 * 60 * MIN))
@@ -783,7 +808,7 @@ describe('CNPG scheduled backup lateness', () => {
 
   it('says nothing when the operator published no next-run time', () => {
     expect(getCNPGScheduledBackupNextSchedule(sb(false))).toBe('-')
-    expect(getCNPGScheduledBackupStatus(sb(false, undefined, at(-24 * 60 * MIN))).level).toBe('healthy')
+    expect(getCNPGScheduledBackupStatus(sb(false, undefined, at(-24 * 60 * MIN))).level).toBe('neutral')
   })
 })
 

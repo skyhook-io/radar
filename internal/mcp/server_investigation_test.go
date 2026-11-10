@@ -182,6 +182,14 @@ func TestInvestigationHandlerRequiresTurnScope(t *testing.T) {
 }
 
 func TestInvestigationHandlerAnnotatesRealToolCallWithoutChangingPublicContract(t *testing.T) {
+	// The SDK client opens with initialize up to 2025-11-25 and with
+	// server/discover on 2026-07-28; the private mount must work on both.
+	for _, version := range []string{"2025-11-25", "2026-07-28"} {
+		t.Run(version, func(t *testing.T) { testInvestigationHandlerAnnotates(t, version) })
+	}
+}
+
+func testInvestigationHandlerAnnotates(t *testing.T, protocolVersion string) {
 	const payload = `{"kind":"Pod","status":"Running"}`
 	scope := strings.Repeat("a", 26)
 	refs := investigationrefs.NewRegistry()
@@ -221,12 +229,15 @@ func TestInvestigationHandlerAnnotatesRealToolCallWithoutChangingPublicContract(
 		session, err := client.Connect(
 			context.Background(),
 			&mcpsdk.StreamableClientTransport{Endpoint: endpoint},
-			nil,
+			&mcpsdk.ClientSessionOptions{ProtocolVersion: protocolVersion},
 		)
 		if err != nil {
 			t.Fatalf("initialize %s: %v", endpoint, err)
 		}
 		defer session.Close()
+		if got := session.InitializeResult().ProtocolVersion; got != protocolVersion {
+			t.Fatalf("%s negotiated %q, want %q", endpoint, got, protocolVersion)
+		}
 		result, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "fixture_read"})
 		if err != nil {
 			t.Fatalf("CallTool %s: %v", endpoint, err)
@@ -287,6 +298,7 @@ func TestInvestigationMiddlewareMarksScopeConnectedOnHandshake(t *testing.T) {
 		connected bool
 	}{
 		{name: "initialize", ctx: validCtx, method: "initialize", connected: true},
+		{name: "server/discover", ctx: validCtx, method: "server/discover", connected: true},
 		{name: "tools/list", ctx: validCtx, method: "tools/list", connected: true},
 		{name: "tools/call is not a handshake", ctx: validCtx, method: "tools/call"},
 		{name: "missing scope", ctx: context.Background(), method: "initialize"},

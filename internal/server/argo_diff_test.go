@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -209,6 +210,98 @@ func TestArgoResourceDiff_HappyPath(t *testing.T) {
 	}
 }
 
+// serveArgoDiff runs the handler for one ConfigMap managed-set entry and
+// returns the raw body plus the decoded response.
+func serveArgoDiff(t *testing.T, item argoapi.ResourceDiff) (string, argoResourceDiffResponse) {
+	t.Helper()
+	seedInClusterArgoApp(t, "argocd", "guestbook")
+	items := managedResourcesJSON(t, item)
+	srv, _ := startFakeArgoServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(items)
+	})
+	connectArgo(t, srv.URL)
+
+	req := newDiffRequest("argocd", "guestbook", "kind="+item.Kind+"&resourceNamespace="+item.Namespace+"&resourceName="+item.Name)
+	w := httptest.NewRecorder()
+	(&Server{}).handleArgoResourceDiff(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	var resp argoResourceDiffResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return w.Body.String(), resp
+}
+
+func configMapManifest(data map[string]any) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"name": "settings", "namespace": "default"},
+		"data":     data,
+	}
+}
+
+// TestArgoResourceDiff_FieldEntriesNeverNull pins that an empty field list is
+// sent as [] (UI consumers read its length), for an in-sync resource and for a
+// resource missing on one side.
+func TestArgoResourceDiff_FieldEntriesNeverNull(t *testing.T) {
+	same := configMapManifest(map[string]any{"mode": "steady"})
+	cases := map[string]argoapi.ResourceDiff{
+		"in sync": {
+			Kind: "ConfigMap", Namespace: "default", Name: "settings",
+			PredictedLiveState: jsonManifest(t, same), NormalizedLiveState: jsonManifest(t, same),
+		},
+		"missing from cluster": {
+			Kind: "ConfigMap", Namespace: "default", Name: "settings",
+			PredictedLiveState: jsonManifest(t, same),
+		},
+		"pending prune": {
+			Kind: "ConfigMap", Namespace: "default", Name: "settings",
+			NormalizedLiveState: jsonManifest(t, same),
+		},
+	}
+	for name, item := range cases {
+		t.Run(name, func(t *testing.T) {
+			body, resp := serveArgoDiff(t, item)
+			if !strings.Contains(body, `"fieldEntries":[]`) {
+				t.Errorf("fieldEntries must serialize as []:\n%s", body)
+			}
+			if len(resp.FieldEntries) != 0 || resp.FieldEntriesTruncated {
+				t.Errorf("fieldEntries = %+v, truncated = %v; want none", resp.FieldEntries, resp.FieldEntriesTruncated)
+			}
+		})
+	}
+}
+
+// TestArgoResourceDiff_FieldEntriesTruncated pins that a diff cut at the entry
+// cap says so, instead of presenting the cap as the exact count.
+func TestArgoResourceDiff_FieldEntriesTruncated(t *testing.T) {
+	desired, live := map[string]any{}, map[string]any{}
+	for i := 0; i < 60; i++ {
+		key := fmt.Sprintf("key%02d", i)
+		desired[key] = "desired"
+		live[key] = "live"
+	}
+	body, resp := serveArgoDiff(t, argoapi.ResourceDiff{
+		Kind: "ConfigMap", Namespace: "default", Name: "settings",
+		PredictedLiveState:  jsonManifest(t, configMapManifest(desired)),
+		NormalizedLiveState: jsonManifest(t, configMapManifest(live)),
+	})
+	if !resp.FieldEntriesTruncated {
+		t.Errorf("fieldEntriesTruncated = false for 60 differing fields:\n%s", body)
+	}
+
+	_, small := serveArgoDiff(t, argoapi.ResourceDiff{
+		Kind: "ConfigMap", Namespace: "default", Name: "settings",
+		PredictedLiveState:  jsonManifest(t, configMapManifest(map[string]any{"a": "1"})),
+		NormalizedLiveState: jsonManifest(t, configMapManifest(map[string]any{"a": "2"})),
+	})
+	if small.FieldEntriesTruncated {
+		t.Errorf("fieldEntriesTruncated = true for a one-field diff")
+	}
+}
+
 func TestArgoResourceDiff_SecretRedacted(t *testing.T) {
 	seedInClusterArgoApp(t, "argocd", "guestbook")
 	newPass := base64.StdEncoding.EncodeToString([]byte("BRAND-NEW-PASSWORD"))
@@ -268,19 +361,26 @@ func TestArgoResourceDiff_SecretRedacted(t *testing.T) {
 	if !resp.Redacted {
 		t.Errorf("Secret diff must set redacted=true")
 	}
-	// password differs → changed on both sides; shared identical → unchanged;
-	// extra present only on live → changed.
-	if !strings.Contains(resp.Desired, "password: "+redactedChanged) {
+	// password differs → a different marker per side, so it still reads as a
+	// change; shared identical → unchanged; extra present only on live → live marker.
+	if !strings.Contains(resp.Desired, "password: "+redactedDesired) {
 		t.Errorf("desired.password should be marked changed:\n%s", resp.Desired)
 	}
-	if !strings.Contains(resp.Live, "password: "+redactedChanged) {
+	if !strings.Contains(resp.Live, "password: "+redactedLive) {
 		t.Errorf("live.password should be marked changed:\n%s", resp.Live)
 	}
 	if !strings.Contains(resp.Desired, "shared: "+redactedUnchanged) {
 		t.Errorf("desired.shared should be marked unchanged:\n%s", resp.Desired)
 	}
-	if !strings.Contains(resp.Live, "extra: "+redactedChanged) {
+	if !strings.Contains(resp.Live, "extra: "+redactedLive) {
 		t.Errorf("live-only key should be marked changed:\n%s", resp.Live)
+	}
+	paths := map[string]bool{}
+	for _, e := range resp.FieldEntries {
+		paths[e.Path] = true
+	}
+	if !paths["data.password"] || !paths["data.extra"] || paths["data.shared"] {
+		t.Errorf("field entries = %+v; want data.password and data.extra, not data.shared", resp.FieldEntries)
 	}
 }
 

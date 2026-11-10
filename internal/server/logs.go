@@ -4,17 +4,91 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
+	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
+
+type podLogStreamHandle struct {
+	uid        types.UID
+	cancel     context.CancelFunc
+	follow     int
+	generation int
+	opened     atomic.Bool
+}
+
+type podLogSourceResult struct {
+	key    string
+	uid    types.UID
+	follow int
+	err    error
+}
+
+// dropDeselectedNotices forgets warnings about the Pod's containers outside
+// keep, including ones whose follow already ended; it reports a change.
+func dropDeselectedNotices(unavailable podlogs.UnavailableSources, podName string, keep map[string]bool) bool {
+	changed := false
+	for key := range unavailable {
+		name, container, _ := strings.Cut(key, "/")
+		if name == podName && !keep[container] && unavailable.Drop(key) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// stopDeselectedLogStreams stops following the Pod's containers that the
+// current selection no longer includes while they keep running: the default
+// selection drops a native sidecar once it has started. A container whose run
+// ended is left to finish its own follow. It returns the stopped keys.
+func stopDeselectedLogStreams(active *sync.Map, pod *corev1.Pod, selected []string) []string {
+	keep := make(map[string]bool, len(selected))
+	for _, name := range selected {
+		keep[name] = true
+	}
+	stopped := []string{}
+	active.Range(func(key, value any) bool {
+		podName, container, _ := strings.Cut(key.(string), "/")
+		handle := value.(*podLogStreamHandle)
+		if podName == pod.Name && handle.uid == pod.UID && !keep[container] && !podlogs.ContainerTerminated(pod, container) {
+			handle.cancel()
+			active.CompareAndDelete(key, value)
+			stopped = append(stopped, key.(string))
+		}
+		return true
+	})
+	return stopped
+}
+
+func stopPodLogStreams(active *sync.Map, cursors map[string]*podlogs.StreamCursor, podName string) {
+	active.Range(func(key, value any) bool {
+		if strings.HasPrefix(key.(string), podName+"/") {
+			value.(*podLogStreamHandle).cancel()
+			active.CompareAndDelete(key, value)
+		}
+		return true
+	})
+	for key := range cursors {
+		if strings.HasPrefix(key, podName+"/") {
+			delete(cursors, key)
+		}
+	}
+}
 
 // LogsResponse is the response for non-streaming logs
 type LogsResponse struct {
@@ -34,7 +108,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	sinceSecondsStr := r.URL.Query().Get("sinceSeconds")
 
 	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -42,8 +116,8 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tailLines := parseTailLines(tailLinesStr, 500)
-	sinceSeconds := parseSinceSeconds(sinceSecondsStr)
+	tailLines := podlogs.ParseTailLines(tailLinesStr, 500)
+	sinceSeconds := podlogs.ParseSinceSeconds(sinceSecondsStr)
 
 	client := s.getClientForRequest(r)
 	if client == nil {
@@ -79,6 +153,26 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
+		// These are answers about the pod, not failures in Radar. The code
+		// lets the viewer show them as such.
+		if errors.Is(err, k8score.ErrLogsUnavailable) {
+			s.writeErrorCode(w, http.StatusNotFound, "logs_unavailable", k8score.ErrLogsUnavailable.Error())
+			return
+		}
+		if previous && podlogs.IsNoPreviousRun(err) {
+			// The apiserver gives the same answer when the node has dropped
+			// the earlier run's record, so the pod's status tells them apart.
+			if hadEarlierRun, _ := podlogs.EarlierRun(pod, container); hadEarlierRun {
+				s.writeErrorCode(w, http.StatusNotFound, "logs_unavailable", "Kubernetes did not return the logs of this container's earlier run.")
+				return
+			}
+			s.writeErrorCode(w, http.StatusNotFound, "no_previous_run", "This container has not restarted, so there is no earlier run to show.")
+			return
+		}
+		if podlogs.IsContainerNotStarted(err) {
+			s.writeErrorCode(w, http.StatusNotFound, "container_not_started", podlogs.NotStartedMessage(pod, container, err))
+			return
+		}
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to fetch logs: %v", err))
 			return
@@ -115,7 +209,7 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 	tailLinesStr := r.URL.Query().Get("tailLines")
 
 	// Check namespace access for authenticated users
-	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
@@ -125,8 +219,8 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 
 	sinceStr := r.URL.Query().Get("sinceSeconds")
 
-	tailLines := parseTailLines(tailLinesStr, 100)
-	sinceSeconds := parseSinceSeconds(sinceStr)
+	tailLines := podlogs.ParseTailLines(tailLinesStr, 100)
+	sinceSeconds := podlogs.ParseSinceSeconds(sinceStr)
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -148,12 +242,8 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 
 	// If no container specified, get the first one
 	if container == "" {
-		cache := k8s.GetResourceCache()
-		if cache != nil {
-			pod, err := cache.Pods().Pods(namespace).Get(podName)
-			if err == nil && len(pod.Spec.Containers) > 0 {
-				container = pod.Spec.Containers[0].Name
-			}
+		if pod := cachedPod(namespace, podName); pod != nil && len(pod.Spec.Containers) > 0 {
+			container = pod.Spec.Containers[0].Name
 		}
 	}
 
@@ -168,18 +258,72 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 		"container": container,
 	})
 
-	stream, err := k8score.GetContainerLogs(r.Context(), client, namespace, podName, container, k8score.LogOptions{
-		TailLines:    &tailLines,
-		SinceSeconds: sinceSeconds,
-		Previous:     previous,
-		Timestamps:   true,
-		Follow:       true,
-	})
-	if err != nil {
-		// The connection is already open, so surface the failure as an SSE
-		// error event rather than an HTTP error the client would never see.
-		sendSSEError(w, flusher, fmt.Sprintf("Failed to open log stream: %v", err))
-		return
+	// A container that has not started has no logs yet, but often will soon
+	// (ContainerCreating, an image still pulling). The stream waits for it and
+	// says why it is waiting, instead of ending on an answer that goes stale.
+	// While Radar's pod cache still shows the container waiting, it doesn't ask
+	// the apiserver again, so a waiting viewer costs no cluster requests.
+	var waitingNotice string
+	var stream io.ReadCloser
+	lastWrite := time.Now()
+	for {
+		pod := cachedPod(namespace, podName)
+		if podlogs.PodStopped(pod) && podlogs.ContainerNotStartedYet(pod, container) {
+			// The pod finished without starting this container, so waiting would
+			// promise logs that never come. Answer and end, like the snapshot.
+			sendSSEEvent(w, flusher, "error", map[string]string{"error": podlogs.NotStartedMessage(pod, container, nil), "error_code": "container_not_started"})
+			return
+		}
+		if waitingNotice != "" && podlogs.ContainerNotStartedYet(pod, container) {
+			// Still waiting: the cache says why, without asking the apiserver.
+			if notice := podlogs.NotStartedMessage(pod, container, nil) + " Logs will show here once it starts."; notice != waitingNotice {
+				waitingNotice = notice
+				sendSSEEvent(w, flusher, "notice", map[string]string{"notice": notice, "notice_code": "container_not_started"})
+				lastWrite = time.Now()
+			}
+		} else {
+			var err error
+			stream, err = k8score.GetContainerLogs(r.Context(), client, namespace, podName, container, k8score.LogOptions{
+				TailLines:    &tailLines,
+				SinceSeconds: sinceSeconds,
+				Previous:     previous,
+				Timestamps:   true,
+				Follow:       true,
+			})
+			if err == nil {
+				break
+			}
+			if r.Context().Err() != nil {
+				return
+			}
+			if !podlogs.IsContainerNotStarted(err) {
+				// The connection is already open, so surface the failure as an SSE
+				// error event rather than an HTTP error the client would never see.
+				sendSSEError(w, flusher, fmt.Sprintf("Failed to open log stream: %v", err))
+				return
+			}
+			if notice := podlogs.NotStartedMessage(pod, container, err) + " Logs will show here once it starts."; notice != waitingNotice {
+				waitingNotice = notice
+				sendSSEEvent(w, flusher, "notice", map[string]string{"notice": notice, "notice_code": "container_not_started"})
+				lastWrite = time.Now()
+			}
+		}
+		if time.Since(lastWrite) >= waitingKeepaliveInterval {
+			// An unchanged notice sends nothing, and a proxy in front of Radar
+			// may close a connection that stays idle through a long image pull.
+			// An SSE comment keeps it open without reaching the viewer.
+			_, _ = fmt.Fprint(w, ": waiting\n\n")
+			flusher.Flush()
+			lastWrite = time.Now()
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(containerStartPollInterval):
+		}
+	}
+	if waitingNotice != "" {
+		sendSSEEvent(w, flusher, "notice", map[string]string{"notice": ""})
 	}
 	defer stream.Close()
 
@@ -191,6 +335,27 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 			return
 		default:
 			line, err := reader.ReadString('\n')
+			// Checked before the EOF branch: the notice is the whole body with
+			// no trailing newline, so it arrives together with EOF.
+			if followErr := k8score.LogFollowError(line); followErr != nil {
+				// Coded like the snapshot answer, so the viewer shows it as an
+				// answer about the pod rather than a Radar failure.
+				sendSSEEvent(w, flusher, "error", map[string]string{"error": followErr.Error(), "error_code": "logs_unavailable"})
+				return
+			}
+
+			line = strings.TrimSuffix(line, "\n")
+
+			if line != "" && (err == nil || err == io.EOF) {
+				// Parse timestamp and content
+				timestamp, content := podlogs.ParseLine(line)
+
+				sendSSEEvent(w, flusher, "log", map[string]string{
+					"timestamp": timestamp,
+					"content":   content,
+					"container": container,
+				})
+			}
 			if err != nil {
 				if err == io.EOF {
 					// Stream ended (pod terminated or container finished)
@@ -204,22 +369,28 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 				sendSSEError(w, flusher, fmt.Sprintf("Read error: %v", err))
 				return
 			}
-
-			line = strings.TrimSuffix(line, "\n")
-			if line == "" {
-				continue
-			}
-
-			// Parse timestamp and content
-			timestamp, content := parseLogLine(line)
-
-			sendSSEEvent(w, flusher, "log", map[string]string{
-				"timestamp": timestamp,
-				"content":   content,
-				"container": container,
-			})
 		}
 	}
+}
+
+// containerStartPollInterval is how often a waiting pod log stream checks
+// whether its container has started.
+var containerStartPollInterval = 2 * time.Second
+
+// waitingKeepaliveInterval bounds how long a waiting pod log stream stays
+// silent, well under common proxy idle timeouts.
+var waitingKeepaliveInterval = 15 * time.Second
+
+func cachedPod(namespace, name string) *corev1.Pod {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil
+	}
+	pod, err := cache.Pods().Pods(namespace).Get(name)
+	if err != nil {
+		return nil
+	}
+	return pod
 }
 
 // fetchContainerLogs fetches logs for a specific container. Callers pass
@@ -245,20 +416,11 @@ func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Inter
 		return "", err
 	}
 
-	return string(content), nil
-}
-
-// parseLogLine extracts timestamp from a log line (format: 2024-01-20T10:30:00.123456789Z content)
-func parseLogLine(line string) (timestamp, content string) {
-	// K8s timestamps are in RFC3339Nano format at the start of the line
-	if len(line) > 30 && line[4] == '-' && line[7] == '-' && line[10] == 'T' {
-		// Find the space after timestamp
-		spaceIdx := strings.Index(line, " ")
-		if spaceIdx > 20 && spaceIdx < 40 {
-			return line[:spaceIdx], line[spaceIdx+1:]
-		}
+	if body := string(content); k8score.IsLogsUnavailableNotice(body) {
+		return "", k8score.ErrLogsUnavailable
 	}
-	return "", line
+
+	return string(content), nil
 }
 
 // sendSSEEvent sends an SSE event

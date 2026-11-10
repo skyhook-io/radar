@@ -35,12 +35,23 @@ func resolveReadScope(namespaces, secretNamespaces []string, watched []schema.Gr
 	scope := &ReadScope{Namespaces: slices.Clone(namespaces), SecretNamespaces: slices.Clone(secretNamespaces), ClusterResources: map[string]bool{}}
 	seen := map[schema.GroupResource]bool{}
 	var groups []schema.GroupResource
+	for _, gvr := range storageClusterResources {
+		gr := gvr.GroupResource()
+		groups = append(groups, gr)
+		seen[gr] = true
+	}
 	for _, gvr := range watched {
 		if gvr.Group == "pkg.crossplane.io" || gvr.Group == "apiextensions.crossplane.io" {
 			continue
 		}
 		gr := gvr.GroupResource()
 		if !seen[gr] {
+			groups = append(groups, gr)
+			seen[gr] = true
+		}
+	}
+	for _, gvr := range pdPlacementClusterResources {
+		if gr := gvr.GroupResource(); !seen[gr] {
 			groups = append(groups, gr)
 			seen[gr] = true
 		}

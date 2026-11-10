@@ -6,10 +6,10 @@ import {
   getBackupRepositoryVolumeNamespace,
   getBackupRepositoryLocation,
   getBackupRepositoryMaintenanceFrequency,
-  getBackupRepositoryLastMaintenance,
   getBackupRepositoryMessage,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
+import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroBackupRepositoryRendererProps {
   data: any
@@ -52,7 +52,7 @@ export function VeleroBackupRepositoryRenderer({ data, onNavigate }: VeleroBacku
               last run is far older than its frequency is the shape of a
               controller that has stopped. The two are shown together so that
               comparison does not need a second screen. */}
-          <Property label="Last Maintenance" value={getBackupRepositoryLastMaintenance(data)} />
+          <Property label="Last Maintenance" value={<TimeValue timestamp={data.status?.lastMaintenanceTime} />} />
           <Property label="Maintenance Frequency" value={getBackupRepositoryMaintenanceFrequency(data)} />
         </PropertyList>
       </Section>

@@ -18,6 +18,7 @@ import (
 // inject fakes without standing up an informer stack.
 type Provider interface {
 	DetectProblems(namespaces []string) []k8s.Detection
+	DetectDynamicTerminatingProblems(namespaces []string, canList func(group, resource, namespace string) bool) []k8s.Detection
 	DetectCAPIProblems(namespaces []string) []k8s.Detection
 	// DetectGitOpsProblems returns failing ArgoCD Applications and Flux
 	// Kustomizations/HelmReleases — the reconciler-health failure class the
@@ -52,6 +53,14 @@ type dynamicScopeProvider interface {
 	NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool)
 }
 
+// dynamicSyncProvider reports whether a dynamic list for gvr in namespace is
+// authoritative. ListDynamic answers from an informer that has not synced yet
+// with an empty list and no error, so a detector that reads absence as
+// evidence must ask.
+type dynamicSyncProvider interface {
+	DynamicNamespaceSynced(gvr schema.GroupVersionResource, namespace string) bool
+}
+
 // ComposeStats reports anything the caller would want to surface
 // alongside the issue list — currently CEL-filter eval-error
 // counters so the caller can distinguish "filter excluded
@@ -66,6 +75,9 @@ type ComposeStats struct {
 	// "this cluster had 200." Equal to len(returned slice) when no
 	// truncation occurred.
 	TotalMatched int
+	// Unchecked lists the sources Compose couldn't fully read for this
+	// caller, so their issues may be missing from the result.
+	Unchecked []issuesapi.UncheckedSource
 }
 
 // ListResponse is the canonical base /api/issues + MCP `issues` response shape.
@@ -87,6 +99,7 @@ func NewListResponse(out []Issue, stats ComposeStats) ListResponse {
 		TotalMatched:      stats.TotalMatched,
 		FilterErrors:      stats.FilterErrors,
 		FilterErrorSample: stats.FilterErrorSample,
+		UncheckedSources:  stats.Unchecked,
 	}
 }
 
@@ -141,6 +154,10 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		}
 		return correlationAllowed
 	}
+	canList := func(group, resource, namespace string) bool {
+		return f.CanReadEvidence != nil && f.CanReadEvidence(EvidenceRead{Group: group, Resource: resource, Namespace: namespace, Verb: "list"})
+	}
+	finalizerObservations := map[string]finalizerObservation{}
 	emit := func(ps []k8s.Detection, source Source) {
 		for _, pr := range ps {
 			if pr.Severity == "info" {
@@ -152,20 +169,31 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 			if ref := pr.DiagnosisSource; ref != nil && f.CanReadRelated != nil {
 				gv, err := schema.ParseGroupVersion(ref.APIVersion)
 				if err != nil || !f.CanReadRelated(Ref{Group: gv.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}) {
-					pr.Cause, pr.Action = "", ""
+					pr.Cause, pr.Action, pr.Hazard = "", "", ""
+					pr.ActionPrimary, pr.ActionSecondaryTitle, pr.ActionSecondary = "", "", nil
 				}
+			}
+			if len(pr.TerminatingFinalizers) > 0 {
+				pr = enrichTerminatingProblem(pr, p, canList, finalizerObservations)
 			}
 			out = append(out, fromProblem(pr, now, source))
 		}
 	}
-	emit(p.DetectProblems(f.Namespaces), SourceProblem)       // hardcoded per-kind checks
+	var unchecked uncheckedSet
+	recordUnloadedTypedKinds(p, f, &unchecked)
+	emit(p.DetectProblems(f.Namespaces), SourceProblem) // hardcoded per-kind checks
+	if f.CanReadEvidence != nil {
+		emit(p.DetectDynamicTerminatingProblems(f.Namespaces, canList), SourceProblem)
+	}
 	emit(p.DetectCAPIProblems(f.Namespaces), SourceProblem)   // Cluster API
 	emit(p.DetectGitOpsProblems(f.Namespaces), SourceProblem) // Argo/Flux reconciler health
 	emit(p.DetectMissingRefs(f.Namespaces), SourceMissingRef) // dangling by-name refs
 	emit(p.DetectScheduling(f.Namespaces), SourceScheduling)  // placement/admission/post-bind
-	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f)
+	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f, &unchecked)
 	out = append(out, karpenterIssues...)
-	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects)...) // generic CRD .status.conditions
+	out = append(out, detectKueueIssues(p, f, &unchecked)...)
+	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects, &unchecked)...) // generic CRD .status.conditions
+	out = foldDeletingConditions(out)
 	out = elevateAdmissionWebhookBackendSeverity(out, p)
 
 	// ---- 2. Evidence-level transforms (operate on flat rows) ---------
@@ -173,6 +201,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// symptoms against parent rollups across member pods — both need the flat
 	// rows, so they run BEFORE grouping and BEFORE the public filters.
 	out = applyClusterScopedAccess(out, f)
+	out = applySubjectAccess(out, f.CanReadSubject)
+	out = applyOwnerAccess(out, f)
+	out = applyEvidenceAccess(out, f.CanReadEvidence, f.AllowUnfilteredEvidence, f.OnEvidenceWithheld)
 	out = redactUnreadableRelatedRefs(out, f.CanReadRelated)
 	out = dedupePodSchedulingOverProblem(out)
 	// Same-resource structural-root → symptom: fold a pod's runtime symptom into
@@ -200,11 +231,14 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		groupedForContext = out
 	}
 	out = enrichDiagnosticContextAuthorized(out, flatForContext, groupedForContext, p, f.CanReadClusterScoped)
+	out = enrichAdmissionWebhookCandidates(out, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated})
 	if !f.SkipPodTemplateContext {
 		out = enrichPodTemplateContext(out, flatForContext, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated}, f.Grouped, Ref{})
 	}
 
-	return finalizeShapedIssues(out, f, !f.Grouped, uncapped)
+	out, stats := finalizeShapedIssues(out, f, !f.Grouped, uncapped)
+	stats.Unchecked = unchecked.list()
+	return out, stats
 }
 
 // MergeExternalIssues adds already-shaped issue rows from handler-owned data

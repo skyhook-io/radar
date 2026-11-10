@@ -1,0 +1,24 @@
+suite: OIDC username claim
+templates:
+  - deployment.yaml
+set:
+  auth:
+    mode: oidc
+    oidc:
+      issuerURL: https://idp.example.com
+      clientID: radar
+      redirectURL: https://radar.example.com/auth/callback
+tests:
+  - it: renders no empty flag by default so the binary keeps email, then sub
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-oidc-username-claim=
+
+  - it: passes the configured claim
+    set:
+      auth.oidc.usernameClaim: preferred_username
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-oidc-username-claim=preferred_username

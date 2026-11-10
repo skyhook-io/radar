@@ -118,7 +118,7 @@ func TestReadAllKeepsAbsentKeys(t *testing.T) {
 
 // An override set to the empty string is NOT the same as an absent one: the
 // desktop app skips its own WebKit defaults for any variable that is merely
-// present, so this state leaves the DMABUF renderer enabled. Collapsing the two
+// present, and WebKit reads an empty value as "disable". Collapsing the two
 // would hide exactly the cause this section exists to surface.
 func TestReadAllDistinguishesEmptyFromAbsent(t *testing.T) {
 	t.Setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "")

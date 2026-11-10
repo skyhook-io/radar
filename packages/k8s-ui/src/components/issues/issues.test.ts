@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
 import { compareIssues, issueSortAnchor, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
-import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
+import { categoryLabel, groupBadgeClass, groupLabel, issueTitle } from './severity'
 import { IssueRow } from './IssuesView'
 import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing'
 
@@ -83,6 +83,8 @@ describe('category/group label fallbacks', () => {
   it('returns the mapped label, else humanizes (server-added category needs no frontend deploy)', () => {
     expect(categoryLabel('crashloop')).toBe('Crash loop')
     expect(categoryLabel('some_new_future_category')).toBe('Some new future category')
+    expect(issueTitle({ category: 'backup_failed', reason: 'CNPGWALArchivingFailing' })).toBe('WAL archiving failing')
+    expect(issueTitle({ category: 'backup_failed', reason: 'BackupFailed' })).toBe('Backup failed')
   })
   it('humanizes an unmapped group', () => {
     expect(groupLabel('runtime')).toBe('Runtime')
@@ -137,9 +139,36 @@ describe('IssueRow', () => {
     expect(html).toContain('after healthy')
   })
 
+  it('labels a stuck deletion by how long deletion has been pending', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        id: 'terminating',
+        kind: 'VMAgent',
+        group: 'operator.victoriametrics.com',
+        category: 'termination_stuck',
+        category_group: 'control_plane',
+        reason: 'Terminating stuck',
+        first_seen: '2026-06-30T11:30:00Z',
+        issue_timing: 'started_at_resource_creation',
+        issue_timing_basis: 'deletion',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('30m')
+    expect(html).toContain('since deletion')
+    expect(html).toContain('pending since deletion was requested')
+    expect(html).not.toContain('since creation')
+    expect(html).not.toContain('first reconciliation')
+  })
+
   it('uses the category-group chip class in the queue row', () => {
     const html = renderToString(createElement(IssueRow, {
-      issue: mk({ category_group: 'control_plane' }),
+      issue: mk({ category_group: 'control_plane', kind: 'Node' }),
       open: false,
       onToggle: () => undefined,
     }))
@@ -394,6 +423,25 @@ describe('issueTiming', () => {
     })
   })
 
+  it('times stuck deletions from the deletion request, however soon after creation it came', () => {
+    for (const timing of ['started_at_resource_creation', 'started_after_resource_was_healthy'] as const) {
+      for (const kind of ['Pod', 'VMAgent']) {
+        const display = issueTiming(mk({
+          kind,
+          category: 'termination_stuck',
+          issue_timing: timing,
+          issue_timing_basis: 'deletion',
+        }))
+        expect(display).toMatchObject({
+          kind: 'deletion',
+          chip: 'since deletion',
+          meta: 'pending since deletion was requested',
+        })
+        expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toMatch(/creation|healthy|deploy/i)
+      }
+    }
+  })
+
   it('describes direct after-healthy timing without coupling it to first_seen', () => {
     const display = issueTiming(mk({
       first_seen: '2026-06-30T10:00:00Z',
@@ -488,5 +536,31 @@ describe('IssueRow diagnosis raw messages', () => {
 
     expect(html).toContain('app path does not exist')
     expect(html).toContain('rpc error: code = Unknown desc = app path does not exist')
+  })
+
+  it("doesn't present Radar's own summary as a raw error", () => {
+    const base = {
+      category: 'network_policy_denied',
+      category_group: 'networking',
+      severity: 'warning' as const,
+      reason: 'NetworkPolicy denies all ingress',
+      message: 'Would block all inbound traffic to the 2 pods behind Service recommendation',
+      cause: 'NetworkPolicy deny-all leaves the 2 pods behind Service recommendation with no allowed inbound traffic.',
+    }
+    const radar = renderToString(createElement(IssueRow, {
+      issue: mk({
+        ...base,
+        message_source: 'radar',
+        diagnostic_context: { role: 'candidate', facts: [{ type: 'network_policy_isolates', confidence: 'high', refs: [{ kind: 'Service', namespace: 'shop', name: 'recommendation' }] }] },
+      }),
+      open: true, onToggle: () => undefined, as: 'div',
+    }))
+    expect(radar).not.toContain('Raw error')
+    expect(radar).toContain('leaves the 2 pods behind Service recommendation')
+    expect(radar).toContain('Affected resources')
+
+    // Without the marker the message is still treated as detector output.
+    const unmarked = renderToString(createElement(IssueRow, { issue: mk(base), open: true, onToggle: () => undefined, as: 'div' }))
+    expect(unmarked).toContain('Raw error')
   })
 })

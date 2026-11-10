@@ -1,12 +1,12 @@
+import { KnativeReferenceLink } from './KnativeReferenceLink'
 import { Clock, Server, Container, Link2 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
-import { kindToPlural } from '../../../utils/navigation'
+import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner } from '../../ui/drawer-components'
 import { getKnativeConditionStatus } from '../resource-utils-knative'
 
 interface RendererProps {
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
 function SinkProperty({ sink, ns, onNavigate }: { sink: any; ns: string; onNavigate?: RendererProps['onNavigate'] }) {
@@ -15,10 +15,9 @@ function SinkProperty({ sink, ns, onNavigate }: { sink: any; ns: string; onNavig
   if (sink.ref) {
     return (
       <Property label="Sink" value={
-        <ResourceLink
-          name={sink.ref.name}
-          kind={kindToPlural(sink.ref.kind || 'Service')}
-          namespace={sink.ref.namespace || ns}
+        <KnativeReferenceLink
+          reference={sink.ref}
+          namespace={ns}
           onNavigate={onNavigate}
         />
       } />
@@ -194,10 +193,9 @@ export function SinkBindingRenderer({ data, onNavigate }: RendererProps) {
               <Property label="Subject API" value={subjectRef.apiVersion} />
               {subjectRef.name && (
                 <Property label="Subject" value={
-                  <ResourceLink
-                    name={subjectRef.name}
-                    kind={kindToPlural(subjectRef.kind || 'Deployment')}
-                    namespace={subjectRef.namespace || ns}
+                  <KnativeReferenceLink
+                    reference={subjectRef}
+                    namespace={ns}
                     onNavigate={onNavigate}
                   />
                 } />

@@ -15,12 +15,16 @@ type Flow = pkgtraffic.Flow
 type Endpoint = pkgtraffic.Endpoint
 type PolicyVerdict = pkgtraffic.PolicyVerdict
 type PolicyRef = pkgtraffic.PolicyRef
+type FlowMatch = pkgtraffic.FlowMatch
+type EndpointRef = pkgtraffic.EndpointRef
+type EndpointPair = pkgtraffic.EndpointPair
 
 const (
 	EndpointKindPod      = pkgtraffic.EndpointKindPod
 	EndpointKindExternal = pkgtraffic.EndpointKindExternal
 	EndpointKindHost     = pkgtraffic.EndpointKindHost
 	EndpointKindUnknown  = pkgtraffic.EndpointKindUnknown
+	EndpointKindWorkload = pkgtraffic.EndpointKindWorkload
 )
 
 type FlowsResponse = pkgtraffic.FlowsResponse
@@ -35,11 +39,13 @@ type SourcesResponse = pkgtraffic.SourcesResponse
 
 // Re-export FlowsResponse.WarningKind values from pkg/traffic.
 const (
-	WarningTransient = pkgtraffic.WarningTransient
-	WarningPartial   = pkgtraffic.WarningPartial
+	WarningTransient  = pkgtraffic.WarningTransient
+	WarningPartial    = pkgtraffic.WarningPartial
+	WarningIncomplete = pkgtraffic.WarningIncomplete
 )
 
 // Re-export functions from pkg/traffic.
 var AggregateFlows = pkgtraffic.AggregateFlows
+var GraphFlows = pkgtraffic.GraphFlows
 var RoundRate = pkgtraffic.RoundRate
 var DefaultFlowOptions = pkgtraffic.DefaultFlowOptions

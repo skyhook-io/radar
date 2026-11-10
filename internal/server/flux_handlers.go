@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
 )
 
@@ -21,6 +22,7 @@ func (s *Server) handleFluxReconcile(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	entry = entry.Served(k8s.ServedGVR)
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
@@ -60,6 +62,7 @@ func (s *Server) fluxSetSuspend(w http.ResponseWriter, r *http.Request, suspend 
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	entry = entry.Served(k8s.ServedGVR)
 
 	action := "suspend"
 	if !suspend {
@@ -103,7 +106,7 @@ func (s *Server) handleFluxSyncWithSource(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	result, err := gitops.SyncFluxWithSource(r.Context(), client, kind, namespace, name)
+	result, err := gitops.SyncFluxWithSource(r.Context(), client, kind, namespace, name, k8s.ServedGVR)
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", "sync-with-source", namespace, name)
 		return

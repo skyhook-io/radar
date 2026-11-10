@@ -1,4 +1,4 @@
-import { formatAge } from '../resource-utils'
+import { formatRelativeAgeTime } from '../../../utils/format'
 
 /**
  * A recovery point, stated absolutely with the interval beside it.
@@ -21,7 +21,7 @@ export function RecoveryTime({ at }: { at: string }) {
       <span>{d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}</span>
       {/* One interpolation, so the age and its unit stay a single text node
           rather than being split by a renderer comment marker. */}
-      <span className="text-xs text-theme-text-tertiary shrink-0">{`${formatAge(at)} ago`}</span>
+      <span className="text-xs text-theme-text-tertiary shrink-0">{formatRelativeAgeTime(at)}</span>
     </span>
   )
 }

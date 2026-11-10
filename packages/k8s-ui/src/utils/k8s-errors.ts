@@ -6,7 +6,7 @@ interface FriendlyError {
   suggestion: string
 }
 
-const patterns: Array<{ test: (msg: string) => boolean; friendly: (msg: string) => FriendlyError }> = [
+const patterns: Array<{ test: (msg: string) => boolean; friendly: (msg: string, allowApply: boolean) => FriendlyError }> = [
   // Admission webhook timeout
   {
     test: (msg) => /failed calling webhook.*context deadline exceeded/i.test(msg),
@@ -75,9 +75,9 @@ const patterns: Array<{ test: (msg: string) => boolean; friendly: (msg: string) 
   // Already exists (create mode)
   {
     test: (msg) => /already exists/i.test(msg),
-    friendly: () => ({
+    friendly: (_msg, allowApply) => ({
       summary: 'Resource already exists',
-      suggestion: 'Switch to Apply mode to update the existing resource, or change the name to create a new one.',
+      suggestion: allowApply ? 'Switch to Apply mode to update the existing resource, or change the name to create a new one.' : 'Change the name to create a new resource, or remove this document if it was already created.',
     }),
   },
   // Quota exceeded
@@ -122,11 +122,11 @@ function stripPrefix(msg: string): string {
   return msg.replace(/^failed to (apply|create) resource:\s*/i, '')
 }
 
-export function getFriendlyError(rawError: string): { summary: string; suggestion: string; raw: string } | null {
+export function getFriendlyError(rawError: string, allowApply = true): { summary: string; suggestion: string; raw: string } | null {
   const cleaned = stripPrefix(rawError)
   for (const pattern of patterns) {
     if (pattern.test(cleaned)) {
-      const { summary, suggestion } = pattern.friendly(cleaned)
+      const { summary, suggestion } = pattern.friendly(cleaned, allowApply)
       return { summary, suggestion, raw: cleaned }
     }
   }
@@ -134,8 +134,8 @@ export function getFriendlyError(rawError: string): { summary: string; suggestio
 }
 
 // Always returns something displayable — friendly if matched, raw if not
-export function formatApplyError(rawError: string): { summary: string; suggestion?: string; raw: string } {
-  const friendly = getFriendlyError(rawError)
+export function formatApplyError(rawError: string, { allowApply = true }: { allowApply?: boolean } = {}): { summary: string; suggestion?: string; raw: string } {
+  const friendly = getFriendlyError(rawError, allowApply)
   if (friendly) return friendly
   const cleaned = stripPrefix(rawError)
   return { summary: cleaned, raw: rawError }

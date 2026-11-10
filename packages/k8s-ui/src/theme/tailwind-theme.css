@@ -6,6 +6,11 @@
  * Import after variables.css.
  */
 
+/* `phone:` styles apply on a narrow touch-first screen only (see
+ * PHONE_MEDIA_QUERY in hooks/usePhoneLayout.ts). A narrowed desktop window
+ * keeps the desktop layout. */
+@custom-variant phone (@media (max-width: 639px) and (pointer: coarse));
+
 @theme inline {
   /* Backgrounds */
   --color-theme-sidebar: var(--bg-sidebar);

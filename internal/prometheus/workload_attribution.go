@@ -32,6 +32,8 @@ func identitySelection(namespace string, pods []prom.WorkloadPodIdentity) prom.P
 	return prom.SelectPods(namespace, names)
 }
 
+var workloadAttributionProbeBudget = 8 * time.Second
+
 var partitionLabels = []string{"cluster", "cluster_name", "k8s_cluster_name", "kubernetes_cluster", "cluster_id"}
 
 func probeWorkloadAttributions(ctx context.Context, client *prom.Client, scope PodScope) (workloadAttributions, error) {
@@ -244,6 +246,10 @@ func attributionJob(rows []prom.Series, pods []prom.WorkloadPodIdentity, beyla b
 }
 
 func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map[string]string, []prom.WorkloadPodIdentity) {
+	return identifyPartitionWithUnlabeled(pods, rows, false)
+}
+
+func identifyPartitionWithUnlabeled(pods []prom.WorkloadPodIdentity, rows []prom.Series, includeUnlabeled bool) (map[string]string, []prom.WorkloadPodIdentity) {
 	var candidates []map[string]string
 	seen := map[string]bool{}
 	addCandidate := func(candidate map[string]string) {
@@ -255,7 +261,7 @@ func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map
 	}
 	for _, row := range rows {
 		for _, pod := range pods {
-			if row.Labels["pod"] != pod.Name || row.Labels["uid"] != pod.UID {
+			if pod.UID == "" || row.Labels["pod"] != pod.Name || row.Labels["uid"] != pod.UID {
 				continue
 			}
 			for _, label := range partitionLabels {
@@ -269,6 +275,13 @@ func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map
 				}
 			}
 		}
+	}
+	if includeUnlabeled && len(candidates) == 0 {
+		candidate := make(map[string]string, len(partitionLabels))
+		for _, label := range partitionLabels {
+			candidate[label] = ""
+		}
+		addCandidate(candidate)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if len(candidates[i]) != len(candidates[j]) {
@@ -284,6 +297,9 @@ func identifyPartition(pods []prom.WorkloadPodIdentity, rows []prom.Series) (map
 		var population []string
 		conflict := false
 		for _, pod := range pods {
+			if pod.UID == "" {
+				continue
+			}
 			found := false
 			for _, row := range rows {
 				if row.Labels["pod"] != pod.Name {
@@ -428,7 +444,8 @@ func (c *Client) automaticWorkloadAttributions(scope PodScope) (workloadAttribut
 		}
 		delete(c.workloadAttributionEntries, oldestKey)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout+8*time.Second)
+	probeBudget := workloadAttributionProbeBudget
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout+probeBudget)
 	entry = &workloadAttributionEntry{identity: identity, generation: c.discoveryGen, started: now, cancel: cancel, result: previous, expires: previousExpiry}
 	c.workloadAttributionEntries[key] = entry
 	go func() {
@@ -446,7 +463,7 @@ func (c *Client) automaticWorkloadAttributions(scope PodScope) (workloadAttribut
 			}
 			c.mu.RUnlock()
 			if evidenceClient != nil {
-				probeCtx, probeCancel := context.WithTimeout(ctx, 8*time.Second)
+				probeCtx, probeCancel := context.WithTimeout(ctx, probeBudget)
 				result, err = probeWorkloadAttributions(probeCtx, evidenceClient, scope)
 				probeCancel()
 			} else {

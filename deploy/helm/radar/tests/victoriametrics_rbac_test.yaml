@@ -1,0 +1,164 @@
+suite: VictoriaMetrics collector RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: does not collect credential-bearing VictoriaMetrics objects by default
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+
+  - it: grants only three read-only VictoriaMetrics kinds when Secrets reads are enabled
+    set:
+      rbac.secrets: true
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+          value:
+            apiGroups: ["operator.victoriametrics.com"]
+            resources: ["vmagents", "vmclusters", "vmsingles"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules[*].apiGroups
+          content: "*"
+
+  - it: grants only three read-only VictoriaMetrics kinds when Helm reads are enabled
+    set:
+      rbac.helm: true
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+          value:
+            apiGroups: ["operator.victoriametrics.com"]
+            resources: ["vmagents", "vmclusters", "vmsingles"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch"]
+
+  - it: grants only three read-only VictoriaMetrics kinds when OIDC auth is enabled with Secrets and Helm flags off
+    set:
+      auth.mode: oidc
+      rbac.secrets: false
+      rbac.helm: false
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+          value:
+            apiGroups: ["operator.victoriametrics.com"]
+            resources: ["vmagents", "vmclusters", "vmsingles"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules[*].apiGroups
+          content: "*"
+
+  - it: grants only three read-only VictoriaMetrics kinds when proxy auth is enabled with Secrets and Helm flags off
+    set:
+      auth.mode: proxy
+      rbac.secrets: false
+      rbac.helm: false
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+          value:
+            apiGroups: ["operator.victoriametrics.com"]
+            resources: ["vmagents", "vmclusters", "vmsingles"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules[*].apiGroups
+          content: "*"
+
+  - it: grants only three read-only VictoriaMetrics kinds when cloud mode is enabled with auth Secrets and Helm flags off
+    set:
+      cloud.enabled: true
+      cloud.token: dummy
+      cloud.url: wss://cloud.example
+      cloud.clusterName: test
+      auth.mode: none
+      rbac.secrets: false
+      rbac.helm: false
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+          value:
+            apiGroups: ["operator.victoriametrics.com"]
+            resources: ["vmagents", "vmclusters", "vmsingles"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules[*].apiGroups
+          content: "*"
+
+  - it: grants only three read-only VictoriaMetrics kinds when wildcard collection and Secrets reads are enabled
+    set:
+      rbac.crdGroups.all: true
+      rbac.secrets: true
+    asserts:
+      - equal:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+          value:
+            apiGroups: ["operator.victoriametrics.com"]
+            resources: ["vmagents", "vmclusters", "vmsingles"]
+            verbs: ["get", "list", "watch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch"]
+
+  - it: omits the VictoriaMetrics rule when Secrets reads are explicitly off
+    set:
+      rbac.secrets: false
+      rbac.helm: false
+      auth.mode: none
+      cloud.enabled: false
+    asserts:
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]
+
+  - it: creates no collector role when chart RBAC is disabled
+    set:
+      rbac.create: false
+      rbac.secrets: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: retains the explicit wildcard override including excluded resources
+    set:
+      rbac.crdGroups.all: true
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["get", "list", "watch"]
+      - notExists:
+          path: rules[?(@.apiGroups[0] == "operator.victoriametrics.com")]

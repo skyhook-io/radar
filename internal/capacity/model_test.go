@@ -1242,3 +1242,40 @@ func TestAcceleratorFamilyRecognitionByCloudConvention(t *testing.T) {
 		t.Fatalf("capped summary = %+v", long)
 	}
 }
+
+func TestNodeLifecycleKeepsRawCapacityFacts(t *testing.T) {
+	now := capacityTestTime()
+	pool := capacityTestPool("pool", "pool-uid", nil, nil)
+	ready := capacityTestNode("ready", "ready-uid", "", "pool", resourceList(map[corev1.ResourceName]string{corev1.ResourceCPU: "4"}))
+	ready.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}
+	removing := ready.DeepCopy()
+	removing.Name = "removing"
+	stamp := metav1.NewTime(now.Add(-time.Minute))
+	removing.DeletionTimestamp = &stamp
+	removing.Spec.Taints = []corev1.Taint{{Key: "karpenter.sh/disrupted", Effect: corev1.TaintEffectNoSchedule}}
+	removing.Status.Conditions[0] = corev1.NodeCondition{Type: corev1.NodeReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-time.Second))}
+	failed := removing.DeepCopy()
+	failed.Name = "failed"
+	failed.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Hour))
+	pressure := removing.DeepCopy()
+	pressure.Name = "pressure"
+	pressure.Status.Conditions = append(pressure.Status.Conditions, corev1.NodeCondition{Type: corev1.NodeDiskPressure, Status: corev1.ConditionTrue})
+	model := Build(Snapshot{GeneratedAt: now, NodePools: []*unstructured.Unstructured{pool}, Nodes: []*corev1.Node{ready, removing, failed, pressure}, Coverage: capacityTestCoverage()})
+	got := capacityTestMustPool(t, model, "pool")
+	counts := got.Observation.Nodes
+	if counts == nil || counts.Ready != 1 || counts.NotReady != 3 || counts.Terminating != 3 {
+		t.Fatalf("raw readiness/deletion facts changed: %+v", counts)
+	}
+	if counts.Operational == nil || counts.Operational.Ready != 1 || counts.Operational.NotReady != 1 || counts.Operational.Removing != 2 || counts.Operational.RemovingUnhealthy != 1 {
+		t.Fatalf("operational fleet status missing: %+v", counts)
+	}
+	for name, level := range map[string]string{"removing": "neutral", "failed": "unhealthy", "pressure": "unhealthy"} {
+		member := capacityTestMember(t, got.Nodes, name).Node
+		if member.Ready == nil || *member.Ready || member.Lifecycle == nil || string(member.Lifecycle.Level) != level || !member.Lifecycle.Removing {
+			t.Fatalf("%s lost raw/lifecycle separation: %+v", name, member)
+		}
+	}
+	if got.Observation.Ledger.Allocatable.Resources["cpu"] != "16" {
+		t.Fatalf("removal changed observed capacity: %+v", got.Observation.Ledger.Allocatable)
+	}
+}

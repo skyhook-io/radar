@@ -1,5 +1,5 @@
-import { useEffect, useId, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useId, useRef, useState } from 'react'
+import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, Check, Cloud, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
@@ -22,6 +22,7 @@ import {
   type CloudConnectSelf,
   type CloudInstallConnectedRadar,
   type CloudInstallBlocked,
+  type CloudInstallStage,
   type CloudInstallStatus,
   prepareCloudInstall,
   useCapabilities,
@@ -76,6 +77,7 @@ const ABOUT_URL = 'https://radarhq.io/about'
 const BENCHMARK_URL = 'https://radarhq.io/benchmark'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SEEN_KEY = 'radar.cloudFunnel.seen'
+const PREPARE_MUTATION_KEY = ['cloud-install-prepare']
 
 // localStorage access can throw (SecurityError) where storage is denied —
 // sandboxed embeds, some privacy modes. This button mounts in the top bar
@@ -104,6 +106,17 @@ export function CloudFunnelButton() {
   const [inFlowView, setInFlowView] = useState(false)
   const [selfManaged, setSelfManaged] = useState(false)
   const [blocked, setBlocked] = useState<CloudInstallBlocked | null>(null)
+  // The server flow this attempt was seen preparing, and the furthest check it
+  // reached. A blocked preparation clears the flow before its request answers,
+  // so a poll in between reads idle; the synthesized view resumes at this
+  // step rather than the first. Only this flow can stand in for a prepare
+  // answer that was lost: a status from before the click, or another flow
+  // fetched late, says nothing about this attempt.
+  const [seenPreparing, setSeenPreparing] = useState<{ flowId: string; step?: CloudInstallStage } | null>(null)
+  // Identifies the latest Connect attempt. The status poll can show a plan
+  // before its prepare request answers, so the person may move on and start
+  // again; a late answer from an earlier attempt must not act on the new one.
+  const attemptRef = useRef(0)
   // Set once an in-app attempt has ended without connecting, naming what
   // happened (a flow failure kind, a blocked plan, a canceled plan, or the
   // prepare call itself failing) and whether it is worth trying again. It
@@ -157,7 +170,8 @@ export function CloudFunnelButton() {
 
   // The flow is server-owned: polling here both drives the live progress view
   // and re-attaches to an ongoing flow after a reload or modal close.
-  const flowStatus = useCloudInstallStatus(lane === 'driver')
+  const preparing = useIsMutating({ mutationKey: PREPARE_MUTATION_KEY }) > 0
+  const flowStatus = useCloudInstallStatus(lane === 'driver', preparing)
   const flow = flowStatus.data
   const flowLive = cloudInstallActive(flow?.state) || flow?.state === 'connected' || flow?.state === 'failed'
 
@@ -167,19 +181,37 @@ export function CloudFunnelButton() {
     flowStatus.invalidate()
   }
 
-  const prepare = useMutation({
-    mutationFn: prepareCloudInstall,
-    onSuccess: (st) => {
+  // The variable is the attempt id, read back in the callbacks.
+  const prepare = useMutation<CloudInstallStatus, Error, number>({
+    mutationKey: PREPARE_MUTATION_KEY,
+    mutationFn: () => prepareCloudInstall(),
+    onSuccess: (st, attempt) => {
+      if (attempt !== attemptRef.current) return
       if (st.state === 'blocked' && st.blocked) setBlocked(st.blocked)
       else applyStatus(st)
     },
-    onError: (err) => {
+    onError: (err, attempt) => {
+      if (attempt !== attemptRef.current) return
       // A single-flight 409 is not a failure: its body IS the live flow (one
       // started in another tab, or before this tab's status cache refreshed).
       // Attach to it rather than showing an error over a running install.
       const live = err instanceof ApiError && err.status === 409 ? (err.data as CloudInstallStatus | undefined) : undefined
       if (live?.state) {
         applyStatus(live)
+        return
+      }
+      // The status poll may already have seen this attempt's preparation
+      // finish (and the flow move on from there): only this request's answer
+      // was lost. Stay on what the server reports rather than calling a
+      // finished inspection a failure.
+      const polled = queryClient.getQueryData<CloudInstallStatus>(['cloud-install-status'])
+      if (
+        polled?.flowId &&
+        polled.flowId === seenPreparing?.flowId &&
+        polled.state !== 'idle' &&
+        polled.state !== 'preparing'
+      ) {
+        flowStatus.invalidate()
         return
       }
       // Anything else failed before a flow existed. Return to the pitch rather
@@ -205,8 +237,10 @@ export function CloudFunnelButton() {
   const startConnect = () => {
     setBlocked(null)
     setHandoff(null)
+    setSeenPreparing(null)
     setInFlowView(true)
-    prepare.mutate()
+    attemptRef.current += 1
+    prepare.mutate(attemptRef.current)
   }
 
   // A flow that ended without connecting returns to a pitch whose CTA must
@@ -240,6 +274,13 @@ export function CloudFunnelButton() {
     if (st.state === 'blocked' && st.blocked) return handoffForBlocked(st.blocked.reason, st.blocked.attempted)
     if (st.state === 'connected' || st.state === 'idle') return null
     return { outcome: 'install_plan_canceled', retryable: false }
+  }
+
+  const observed = prepare.isPending && flow?.state === 'preparing' ? flow : undefined
+  if (observed?.flowId) {
+    const sameFlow = observed.flowId === seenPreparing?.flowId
+    const step = observed.prepareStep ?? (sameFlow ? seenPreparing?.step : undefined)
+    if (!sameFlow || step !== seenPreparing?.step) setSeenPreparing({ flowId: observed.flowId, step })
   }
 
   useEffect(() => {
@@ -280,7 +321,7 @@ export function CloudFunnelButton() {
   // explanation back to the pitch.
   const flowForView: CloudInstallStatus | undefined =
     prepare.isPending && !flowLive
-      ? { state: 'preparing' }
+      ? { state: 'preparing', prepareStep: seenPreparing?.step }
       : (flow ?? (blocked ? { state: 'blocked', blocked } : undefined))
 
   return (
@@ -291,7 +332,7 @@ export function CloudFunnelButton() {
         content={
           <>
             <span className="block font-semibold">Meet Radar Cloud</span>
-            See all your clusters in one place, share with your team, and get alerts and automatic AI investigations in Slack.
+            See all your clusters in one place, share with your team, and get alerts and automatic AI investigations.
           </>
         }
         delay={100}
@@ -665,7 +706,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
   // skimmable. Alerts and investigations lead: they are the two things the
   // OSS binary cannot do at all. Team, fleet and history follow.
   const highlights = [
-    { icon: Bell, lead: 'Alerts', rest: ' in Slack when something breaks. Once, not for every crash-looping pod.' },
+    { icon: Bell, lead: 'Alerts', rest: ' to Slack or any webhook. One per failure, not per crash-looping pod.' },
     { icon: Sparkles, lead: 'AI investigations', rest: ': root cause with evidence, automatic on alerts or on demand' },
     { icon: Users, lead: 'Your team', rest: ': share any view with just a link, scoped by your existing RBAC' },
     { icon: Globe, lead: 'Every cluster', rest: ': the whole fleet in one view and one MCP endpoint' },
@@ -678,7 +719,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
         Close the laptop. Radar keeps watching.
       </h3>
       <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-1.5">
-        Radar Cloud is the hosted side of Radar: Slack alerts, AI root cause and every cluster in one place, for
+        Radar Cloud is the hosted side of Radar: alerts, AI root cause and every cluster in one place, for
         you and your team.
       </p>
       <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-6">
@@ -724,9 +765,10 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Investigations</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              In our public benchmark, Radar's agent found the root cause 3× faster than the same model on plain
-              kubectl, and 2× faster than the other AI SRE tools we tested. Run it automatically on every alert, or
-              on demand from any issue, with no CLI or API key.{' '}
+              In our public benchmark, the same agent diagnosed faults 3× faster on average with Radar than with
+              plain kubectl, and Radar answered 1.6–3.6× faster on average than the other AI SRE tools we tested.
+              Run it automatically on the alert rules you choose, or on demand from any issue, with no CLI or API
+              key.{' '}
               <a href={BENCHMARK_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See the benchmarks →
               </a>
@@ -735,9 +777,8 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar Cloud is {freeLine}, with 100 investigations a month included, then $1 per investigation.
-              Paid plans add more clusters, more included investigations, and enterprise features like SSO, SCIM
-              and audit logs.{' '}
+              Radar Cloud is {freeLine}, including 100 investigations a month. Paid plans add investigations for
+              every cluster, with optional $1 overage, plus enterprise features like SSO, SCIM and audit logs.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
               </a>

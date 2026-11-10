@@ -43,6 +43,9 @@ type PodFilesystem struct {
 // handlePodFileList lists files at a given path inside a pod container.
 // GET /api/pods/{ns}/{name}/files?container=X&path=/
 func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -163,6 +166,9 @@ func (s *Server) listFilesWithLS(r *http.Request, namespace, podName, container,
 // handlePodFileDownload downloads a single file from a pod container.
 // GET /api/pods/{ns}/{name}/files/download?container=X&path=/some/file
 func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	src := s.openPodFileForRequest(w, r)
 	if src == nil {
 		return
@@ -198,11 +204,7 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 // fails, so the desktop app asks the backend to do the whole thing.
 // POST /api/pods/{ns}/{name}/files/save?container=X&path=/some/file
 func (s *Server) handlePodFileSave(w http.ResponseWriter, r *http.Request) {
-	// Runs a command in a pod and writes a file to the user's disk, which is
-	// exactly what the same-origin check exists to keep a page on another site
-	// from triggering.
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+	if !s.requireExecEnabled(w) {
 		return
 	}
 	if s.saveFileStreamFunc == nil {
@@ -1235,6 +1237,9 @@ func classifyOpenErrorForPreview(openErr *podFileOpenError) (int, string) {
 // and returns it in a JSON envelope for the inline viewer.
 // GET /api/pods/{ns}/{name}/file?container=X&path=/some/file
 func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
+	if !s.requireExecEnabled(w) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}

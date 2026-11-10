@@ -4,7 +4,7 @@ import {
   initNavigationMap,
   resetNavigationMap,
 } from '@skyhook-io/k8s-ui/utils/navigation'
-import { getNetworkPolicyResourceTarget, relatedResourcePath, resourcePath, withCrossViewParams } from './navigation'
+import { getNetworkPolicyResourceTarget, relatedResourcePath, resourcePath, withCrossViewParams, writeViewParams } from './navigation'
 
 afterEach(resetNavigationMap)
 
@@ -74,5 +74,17 @@ describe('withCrossViewParams', () => {
 
   it('leaves the path alone when nothing is scoped', () => {
     expect(withCrossViewParams('/helm', '')).toBe('/helm')
+  })
+})
+
+describe('writeViewParams', () => {
+  it('keeps topology mode and grouping only on topology', () => {
+    const topology = new URLSearchParams('namespace=old&apiGroup=example.com')
+    writeViewParams(topology, [], { mode: 'traffic', grouping: 'app' })
+    expect(topology.toString()).toBe('apiGroup=example.com&mode=traffic&group=app')
+
+    const issues = new URLSearchParams('mode=traffic&group=app&kind=Widget&apiGroup=example.com&resource=ns%2Fw')
+    writeViewParams(issues, ['ns'], null)
+    expect(issues.toString()).toBe('kind=Widget&apiGroup=example.com&resource=ns%2Fw&namespaces=ns')
   })
 })

@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { useWorkloadRuns, useResource, type WorkloadRun } from '../../api/client'
 import { WorkloadLogsViewer } from './WorkloadLogsViewer'
 import { pickDefaultRun, selectedRunMissing, workloadRunKey } from '../execution/BatchExecutionView'
+import { runStateLabel } from '../execution/runState'
 
 interface ScheduledWorkloadLogsViewerProps {
   kind: string
@@ -11,6 +12,8 @@ interface ScheduledWorkloadLogsViewerProps {
   name: string
   selectedRunKey?: string
   onSelectRun?: (runKey: string) => void
+  /** The view's namespace selection; narrows a cluster-scoped template's runs. */
+  viewNamespaces?: string[]
 }
 
 const EMPTY_RUNS: WorkloadRun[] = []
@@ -19,7 +22,7 @@ export function ScheduledWorkloadLogsViewer(props: ScheduledWorkloadLogsViewerPr
   return <ScheduledWorkloadLogsContent key={JSON.stringify([props.kind, props.namespace, props.name])} {...props} />
 }
 
-function ScheduledWorkloadLogsContent({ kind, namespace, name, selectedRunKey, onSelectRun }: ScheduledWorkloadLogsViewerProps) {
+function ScheduledWorkloadLogsContent({ kind, namespace, name, selectedRunKey, onSelectRun, viewNamespaces }: ScheduledWorkloadLogsViewerProps) {
   const clusterScoped = kind === 'ClusterWorkflowTemplate' || kind === 'clusterworkflowtemplates'
   const jobSet = kind.toLowerCase() === 'jobset' || kind.toLowerCase() === 'jobsets'
   const [localRunKey, setLocalRunKey] = useState('')
@@ -28,7 +31,7 @@ function ScheduledWorkloadLogsContent({ kind, namespace, name, selectedRunKey, o
   const [scope, setScope] = useState('selected')
   const [role, setRole] = useState('')
   const rootQuery = useResource<any>('jobsets', namespace, name, 'jobset.x-k8s.io', { enabled: jobSet })
-  const runsQuery = useWorkloadRuns(kind, namespace, name, true, { clusterScoped, refetchActive: true, ...(jobSet ? { selected: effectiveRunKey } : {}) })
+  const runsQuery = useWorkloadRuns(kind, namespace, name, true, { clusterScoped, namespaces: viewNamespaces, refetchActive: true, ...(jobSet ? { selected: effectiveRunKey } : {}) })
   const memberCollection = runsQuery.data?.collection === 'members'
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
   const selectedRunFromResponse = runsQuery.data?.selected
@@ -125,7 +128,7 @@ function ScheduledWorkloadLogsContent({ kind, namespace, name, selectedRunKey, o
             ))}
           </select>
           <span className={clsx('badge-sm', phaseBadgeClass(selectedRun.phase))}>
-            {selectedRun.phase}{selectedRun.deleting ? ' · deleting' : ''}
+            {runStateLabel(selectedRun)}
           </span>
           <span className="text-xs text-theme-text-tertiary">
             {formatRunTime(selectedRun)}
@@ -171,7 +174,7 @@ function formatRunTime(run: WorkloadRun): string {
 }
 
 function formatRunOption(run: WorkloadRun, showNamespace: boolean, memberCollection: boolean): string {
-  const bits = [showNamespace ? `${run.namespace}/${run.name}` : run.name, `${run.phase}${run.deleting ? ' · deleting' : ''}`]
+  const bits = [showNamespace ? `${run.namespace}/${run.name}` : run.name, runStateLabel(run)]
   if (memberCollection && run.jobset?.replicatedJob) {
     bits.push(`${run.jobset?.replicatedJob}${run.jobset?.jobIndex ? ` #${run.jobset?.jobIndex}` : ''}`)
   }

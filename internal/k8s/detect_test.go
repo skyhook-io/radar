@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,6 @@ func TestDetectProblems_PopulatesGroup(t *testing.T) {
 	oneReplica := int32(1)
 	minReplicas := int32(1)
 	now := time.Now()
-	// Job needs to be older than 1h to surface a "stuck" problem.
 	jobStart := metav1.NewTime(now.Add(-2 * time.Hour))
 
 	client := fake.NewClientset(
@@ -85,13 +85,13 @@ func TestDetectProblems_PopulatesGroup(t *testing.T) {
 				},
 			},
 		},
-		// Job stuck Active>0 for >1h with no completions.
+		// Job with a terminal JobFailed condition.
 		&batchv1.Job{
 			ObjectMeta: metav1.ObjectMeta{Name: "migrate", Namespace: "prod", CreationTimestamp: jobStart},
 			Status: batchv1.JobStatus{
-				Active:    1,
-				Succeeded: 0,
-				Failed:    0,
+				Conditions: []batchv1.JobCondition{
+					{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"},
+				},
 			},
 		},
 	)
@@ -325,6 +325,62 @@ func TestDetectProblems_ConfigSignals(t *testing.T) {
 		p := waitForProblem(t, "prod", "Service port mismatch")
 		if p.Kind != "Deployment" || p.Name != "frontend" || !strings.Contains(p.Message, "product-catalog:8082") || !strings.Contains(p.Message, "8080") {
 			t.Fatalf("env Service mismatch problem = %+v", p)
+		}
+	})
+
+	t.Run("env service port mismatch becomes issue while a rollout's new pod is unavailable", func(t *testing.T) {
+		defer ResetTestState()
+
+		replicas := int32(2)
+		client := fake.NewClientset(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod", CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute)), Generation: 2},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "app",
+						Env: []corev1.EnvVar{{
+							Name:  "PRODUCT_CATALOG_ADDR",
+							Value: "product-catalog:8082",
+						}},
+					}}}},
+				},
+				Status: appsv1.DeploymentStatus{
+					ObservedGeneration:  2,
+					Replicas:            3,
+					UpdatedReplicas:     1,
+					ReadyReplicas:       2,
+					AvailableReplicas:   2,
+					UnavailableReplicas: 1,
+					Conditions: []appsv1.DeploymentCondition{{
+						Type:   appsv1.DeploymentAvailable,
+						Status: corev1.ConditionTrue,
+					}, {
+						Type:   appsv1.DeploymentProgressing,
+						Status: corev1.ConditionTrue,
+						Reason: "ReplicaSetUpdated",
+					}},
+				},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "product-catalog", Namespace: "prod"},
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{{Port: 8080}},
+				},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		p := waitForProblem(t, "prod", "Service port mismatch")
+		if p.Kind != "Deployment" || p.Name != "frontend" {
+			t.Fatalf("env Service mismatch problem = %+v", p)
+		}
+		for _, p := range DetectProblems(GetResourceCache(), "prod") {
+			if p.Kind == "Deployment" && p.Name == "frontend" && strings.HasSuffix(p.Reason, " available") {
+				t.Fatalf("surge pod with all desired replicas available must not raise a capacity row: %+v", p)
+			}
 		}
 	})
 
@@ -989,6 +1045,91 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
 }
 
+// TestJobDetection_AgeAloneIsNotFailure guards that a long-running active Job
+// with no failure evidence is not reported as a failure, while a Job that has
+// truly failed — or whose pods are failing — still surfaces.
+func TestJobDetection_AgeAloneIsNotFailure(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	jobCtrl := true
+	// Healthy, long-running active Job: 12h old, one active pod, nothing failed
+	// or succeeded, no terminal condition. This is work in progress.
+	healthy := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "training", Namespace: "prod", UID: "training-uid", CreationTimestamp: metav1.NewTime(now.Add(-12 * time.Hour))},
+		Status:     batchv1.JobStatus{Active: 1},
+	}
+	// Truly failed Job: a terminal JobFailed condition.
+	failed := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "migrate", Namespace: "prod", UID: "migrate-uid", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit", LastTransitionTime: metav1.NewTime(now.Add(-time.Minute))}},
+		},
+	}
+	// A still-active Job whose pod is crash-looping: no terminal condition yet,
+	// but the failing pod is real evidence and must still surface (on the pod).
+	crashJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "importer", Namespace: "prod", UID: "importer-uid", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
+		Status:     batchv1.JobStatus{Active: 1},
+	}
+	crashPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "importer-abc", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour)),
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "importer", UID: "importer-uid", Controller: &jobCtrl}},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:         "app",
+				RestartCount: 5,
+				State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+					Reason: "Error", ExitCode: 1,
+					StartedAt: metav1.NewTime(now.Add(-3 * time.Second)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Second)),
+				}},
+			}},
+		},
+	}
+
+	client := fake.NewClientset(healthy, failed, crashJob, crashPod)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Job", "migrate", "BackoffLimitExceeded") &&
+			hasProblem(problems, "Pod", "importer-abc", "CrashLoopBackOff") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// Done-when #1: a healthy long-running Job produces no failure row.
+	for _, p := range problems {
+		if p.Kind == "Job" && p.Name == "training" {
+			t.Fatalf("healthy long-running Job should produce no problem, got %+v", p)
+		}
+	}
+	// Done-when #2: a truly failed Job still surfaces, and a failing pod of an
+	// otherwise-active Job still surfaces on the pod.
+	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
+	assertProblem(t, problems, "Pod", "importer-abc", "CrashLoopBackOff", "critical")
+	// The active crash-looping Job gets no Job-level row of its own (its evidence
+	// is the pod); age alone never fabricates one.
+	for _, p := range problems {
+		if p.Kind == "Job" && p.Name == "importer" {
+			t.Fatalf("active Job with a failing pod should carry no Job-level failure row, got %+v", p)
+		}
+	}
+}
+
 func TestPodsMatchingServiceExcludesSucceededPods(t *testing.T) {
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "prod"},
@@ -1204,7 +1345,7 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 					Name:         "app",
 					Ready:        false,
 					RestartCount: highRestartThreshold + 1,
-					State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: old}},
+					State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: recent}},
 					LastTerminationState: corev1.ContainerState{
 						Terminated: &corev1.ContainerStateTerminated{Reason: "Completed", FinishedAt: recent},
 					},
@@ -1223,6 +1364,74 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 				}},
 			},
 		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "replaced", Namespace: "prod", UID: "replacement-uid", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "static", Namespace: "prod", UID: "mirror-uid", CreationTimestamp: old, Annotations: map[string]string{corev1.MirrorPodAnnotationKey: "static-uid"}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "static.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "static", UID: "static-uid"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "contested", Namespace: "prod", UID: "contested-now", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "contested.now", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "contested", UID: "contested-now"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: current incarnation",
+			LastTimestamp:  recent,
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "contested.before", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "contested", UID: "contested-before"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: predecessor",
+			LastTimestamp:  metav1.NewTime(now.Add(-10 * time.Second)),
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "replaced.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "replaced", UID: "predecessor-uid"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
 		&corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: "liveness.1", Namespace: "prod"},
 			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "liveness"},
@@ -1233,7 +1442,7 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 		},
 		&corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: "thrash.1", Namespace: "prod"},
-			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "thrash"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "thrash", FieldPath: "spec.containers{app}"},
 			Type:           corev1.EventTypeWarning,
 			Reason:         "Unhealthy",
 			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
@@ -1263,8 +1472,11 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 		problems = DetectProblems(cache, "prod")
 		if hasProblem(problems, "Pod", "readiness", "ReadinessProbeFailed") &&
 			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") &&
-			hasProblem(problems, "Pod", "thrash", "HighRestartCount") &&
-			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") {
+			hasProblem(problems, "Pod", "thrash", "CrashLoopBackOff") &&
+			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") &&
+			hasProblem(problems, "Pod", "replaced", "CrashLoopBackOff") &&
+			hasProblem(problems, "Pod", "static", "LivenessProbeFailed") &&
+			hasProblem(problems, "Pod", "contested", "LivenessProbeFailed") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -1272,16 +1484,31 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 
 	assertProblem(t, problems, "Pod", "readiness", "ReadinessProbeFailed", "high")
 	assertProblem(t, problems, "Pod", "liveness", "LivenessProbeFailed", "critical")
-	assertProblem(t, problems, "Pod", "thrash", "HighRestartCount", "high")
-	assertProblem(t, problems, "Pod", "stale-probe", "CrashLoopBackOff", "critical")
-	if hasProblem(problems, "Pod", "thrash", "LivenessProbeFailed") {
-		t.Fatalf("liveness event should not mask high restart thrash: %+v", problems)
+	// Clean exits with liveness failures alongside are a restart loop: one
+	// crashloop row carrying the probe failure as evidence, not a liveness row.
+	assertProblem(t, problems, "Pod", "thrash", "CrashLoopBackOff", "critical")
+	if hasProblem(problems, "Pod", "thrash", "LivenessProbeFailed") || hasProblem(problems, "Pod", "thrash", "HighRestartCount") {
+		t.Fatalf("restart loop should be one crashloop row: %+v", problems)
 	}
+	if got, _ := lookupProblem(problems, "Pod", "thrash", "CrashLoopBackOff"); got.RestartLoop == nil || got.RestartLoop.LivenessProbeFailure == nil {
+		t.Fatalf("thrash restart loop = %+v, want liveness probe evidence", got.RestartLoop)
+	}
+	assertProblem(t, problems, "Pod", "stale-probe", "CrashLoopBackOff", "critical")
 	if hasProblem(problems, "Pod", "stale-probe", "LivenessProbeFailed") {
 		t.Fatalf("timeless probe event should not override the current pod reason: %+v", problems)
 	}
 	if got, ok := lookupProblem(problems, "Pod", "liveness", "LivenessProbeFailed"); !ok || !strings.Contains(got.Message, "HTTP probe failed") {
 		t.Fatalf("liveness probe problem = %+v, want event message detail", got)
+	}
+	assertProblem(t, problems, "Pod", "replaced", "CrashLoopBackOff", "critical")
+	if hasProblem(problems, "Pod", "replaced", "LivenessProbeFailed") {
+		t.Fatalf("a same-name predecessor's probe failure must not relabel its replacement: %+v", problems)
+	}
+	// Kubelet names a static Pod by its static UID, not its API mirror's.
+	assertProblem(t, problems, "Pod", "static", "LivenessProbeFailed", "critical")
+	// A predecessor stamped later must not displace this pod's own failure.
+	if got, ok := lookupProblem(problems, "Pod", "contested", "LivenessProbeFailed"); !ok || !strings.Contains(got.Message, "current incarnation") {
+		t.Fatalf("contested probe problem = %+v, want the current incarnation's failure", got)
 	}
 }
 
@@ -1652,6 +1879,183 @@ func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
 		t.Fatalf("replica failure problem = %+v, want controller message", p)
 	} else if !p.OnsetAt.Equal(retried.Time) || p.IssueTiming != "" || p.IssueTimingBasis != "" {
 		t.Fatalf("late replica failure on never-healthy Deployment = onset:%v timing:%q/%q, want exact condition onset %v and no false healthy-window claim", p.OnsetAt, p.IssueTiming, p.IssueTimingBasis, retried.Time)
+	}
+}
+
+// TestDetectProblems_DeploymentSurgePodIsNotDegraded pins that a RollingUpdate's
+// surge pod does not raise "N/N available". Mid-rollout (2 old + 1 surge, surge
+// not ready yet) the controller reports 1 unavailable while all 2 desired
+// replicas are serving; that is every rollout of a Deployment running
+// maxUnavailable 0, including the default strategy at 1-3 replicas. A dip within
+// maxUnavailable mid-rollout is planned and quiet too; a dip beyond it, or any
+// dip outside a rollout, must still be reported.
+func TestDetectProblems_DeploymentSurgePodIsNotDegraded(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	zero := intstr.FromInt32(0)
+	one := intstr.FromInt32(1)
+	rollingUpdate := func(surge, unavailable intstr.IntOrString) appsv1.DeploymentStrategy {
+		return appsv1.DeploymentStrategy{
+			Type:          appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{MaxSurge: &surge, MaxUnavailable: &unavailable},
+		}
+	}
+	rollingConditions := []appsv1.DeploymentCondition{
+		{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionTrue, Reason: "MinimumReplicasAvailable", LastTransitionTime: old},
+		{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue, Reason: "ReplicaSetUpdated", LastTransitionTime: metav1.Now(), LastUpdateTime: metav1.Now()},
+	}
+	client := fake.NewClientset(
+		// Mid-rollout, surge pod still starting: every desired replica serves.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.DeploymentSpec{Replicas: ptrInt32(2), Strategy: rollingUpdate(one, zero)},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration:  2,
+				Replicas:            3,
+				UpdatedReplicas:     1,
+				ReadyReplicas:       2,
+				AvailableReplicas:   2,
+				UnavailableReplicas: 1,
+				Conditions:          rollingConditions,
+			},
+		},
+		// Mid-rollout, one pod down within maxUnavailable 1: planned.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.DeploymentSpec{Replicas: ptrInt32(4), Strategy: rollingUpdate(one, one), ProgressDeadlineSeconds: ptrInt32(600)},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration:  2,
+				Replicas:            5,
+				UpdatedReplicas:     2,
+				ReadyReplicas:       3,
+				AvailableReplicas:   3,
+				UnavailableReplicas: 2,
+				Conditions:          rollingConditions,
+			},
+		},
+		// Mid-rollout with a dip beyond maxUnavailable: still reported.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.DeploymentSpec{Replicas: ptrInt32(4), Strategy: rollingUpdate(one, one), ProgressDeadlineSeconds: ptrInt32(600)},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration:  2,
+				Replicas:            5,
+				UpdatedReplicas:     2,
+				ReadyReplicas:       2,
+				AvailableReplicas:   2,
+				UnavailableReplicas: 3,
+				Conditions: []appsv1.DeploymentCondition{
+					{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse, Reason: "MinimumReplicasUnavailable", LastTransitionTime: metav1.Now()},
+					{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue, Reason: "ReplicaSetUpdated", LastTransitionTime: metav1.Now()},
+				},
+			},
+		},
+		// Steady state, one replica down: still reported.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "payments", Namespace: "shop", CreationTimestamp: old, Generation: 1},
+			Spec:       appsv1.DeploymentSpec{Replicas: ptrInt32(2)},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration:  1,
+				Replicas:            2,
+				UpdatedReplicas:     2,
+				ReadyReplicas:       1,
+				AvailableReplicas:   1,
+				UnavailableReplicas: 1,
+			},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "shop")
+		if hasProblem(problems, "Deployment", "payments", "1/2 available") && hasProblem(problems, "Deployment", "search", "2/4 available") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Deployment", "payments", "1/2 available", "critical")
+	assertProblem(t, problems, "Deployment", "search", "2/4 available", "critical")
+	for _, p := range problems {
+		if p.Kind == "Deployment" && (p.Name == "checkout" || p.Name == "catalog") {
+			t.Fatalf("a rollout within its RollingUpdate budget must not raise a Deployment problem, got %+v", p)
+		}
+	}
+}
+
+func TestDeploymentRolloutDipWithinBudget(t *testing.T) {
+	now := time.Now()
+	cond := func(typ appsv1.DeploymentConditionType, status corev1.ConditionStatus, reason string) appsv1.DeploymentCondition {
+		return appsv1.DeploymentCondition{Type: typ, Status: status, Reason: reason, LastUpdateTime: metav1.NewTime(now.Add(-time.Minute))}
+	}
+	planned := func() *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Generation: 2},
+			Spec:       appsv1.DeploymentSpec{Replicas: ptrInt32(4), ProgressDeadlineSeconds: ptrInt32(600)},
+			Status: appsv1.DeploymentStatus{
+				ObservedGeneration:  2,
+				AvailableReplicas:   3,
+				UnavailableReplicas: 2,
+				Conditions: []appsv1.DeploymentCondition{
+					cond(appsv1.DeploymentAvailable, corev1.ConditionTrue, "MinimumReplicasAvailable"),
+					cond(appsv1.DeploymentProgressing, corev1.ConditionTrue, "ReplicaSetUpdated"),
+				},
+			},
+		}
+	}
+	withProgressing := func(status corev1.ConditionStatus, reason string) func(*appsv1.Deployment) {
+		return func(d *appsv1.Deployment) {
+			d.Status.Conditions[1] = cond(appsv1.DeploymentProgressing, status, reason)
+		}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*appsv1.Deployment)
+		want   bool
+	}{
+		{"rolling within budget", func(*appsv1.Deployment) {}, true},
+		{"new ReplicaSet just created", withProgressing(corev1.ConditionTrue, "NewReplicaSetCreated"), true},
+		{"progress deadline just enabled, no rollout", withProgressing(corev1.ConditionTrue, "FoundNewReplicaSet"), false},
+		{"last progress older than the deadline", func(d *appsv1.Deployment) {
+			d.Status.Conditions[1].LastUpdateTime = metav1.NewTime(now.Add(-11 * time.Minute))
+		}, false},
+		{"last progress slightly ahead of this clock", func(d *appsv1.Deployment) {
+			d.Status.Conditions[1].LastUpdateTime = metav1.NewTime(now.Add(30 * time.Second))
+		}, true},
+		{"last progress further ahead than clock skew", func(d *appsv1.Deployment) {
+			d.Status.Conditions[1].LastUpdateTime = metav1.NewTime(now.Add(5 * time.Minute))
+		}, false},
+		{"steady state after the rollout completed", withProgressing(corev1.ConditionTrue, "NewReplicaSetAvailable"), false},
+		{"progress deadline exceeded", withProgressing(corev1.ConditionFalse, "ProgressDeadlineExceeded"), false},
+		{"resumed, no progress yet", withProgressing(corev1.ConditionUnknown, "DeploymentResumed"), false},
+		{"beyond budget", func(d *appsv1.Deployment) {
+			d.Status.Conditions[0] = cond(appsv1.DeploymentAvailable, corev1.ConditionFalse, "MinimumReplicasUnavailable")
+		}, false},
+		{"no Progressing condition", func(d *appsv1.Deployment) { d.Status.Conditions = d.Status.Conditions[:1] }, false},
+		{"paused with a stale rolling condition", func(d *appsv1.Deployment) { d.Spec.Paused = true }, false},
+		{"no progress deadline field", func(d *appsv1.Deployment) { d.Spec.ProgressDeadlineSeconds = nil }, false},
+		{"progress deadline disabled", func(d *appsv1.Deployment) { d.Spec.ProgressDeadlineSeconds = ptrInt32(math.MaxInt32) }, false},
+		{"status from an older generation", func(d *appsv1.Deployment) { d.Status.ObservedGeneration = 1 }, false},
+		{"nothing available, even within budget", func(d *appsv1.Deployment) { d.Status.AvailableReplicas = 0 }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := planned()
+			tc.mutate(d)
+			if got := deploymentRolloutDipWithinBudget(d, now); got != tc.want {
+				t.Fatalf("deploymentRolloutDipWithinBudget = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -2229,10 +2633,11 @@ func TestDetectProblems_PDBBlocksEvictions(t *testing.T) {
 	}
 }
 
-// TestDetectProblems_SharedRWOVolume pins the multi-replica ReadWriteOnce
-// conflict detector: a Deployment wanting >1 replica that mounts an RWO PVC is
-// flagged (only one node can attach it), while a single-replica RWO mount and a
-// multi-replica ReadWriteMany mount are not.
+// TestDetectProblems_SharedRWOVolume pins the multi-replica single-node volume
+// detector: a Deployment wanting >1 replica that mounts a ReadWriteOnce PVC is
+// info posture (replicas on one node share it fine), a ReadWriteOncePod mount is
+// high (only one pod can use it), and a single-replica RWO mount and a
+// multi-replica ReadWriteMany mount are not flagged.
 func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	defer ResetTestState()
 
@@ -2274,7 +2679,9 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 		mkDeploy("single", &one, "rwo-pvc"),   // 1 replica + RWO → fine
 		mkDeploy("rwx", &three, "rwx-pvc"),    // 3 replicas + RWX → fine
 		mkDeploy("pending", &two, "pending-pvc"),
+		mkDeploy("rwop", &two, "rwop-pvc"),
 		mkPVC("rwo-pvc", corev1.ReadWriteOnce),
+		mkPVC("rwop-pvc", corev1.ReadWriteOncePod),
 		mkPVC("rwx-pvc", corev1.ReadWriteMany),
 		mkPVCPhase("pending-pvc", corev1.ClaimPending, corev1.ReadWriteOnce),
 	)
@@ -2283,7 +2690,7 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	}
 	cache := GetResourceCache()
 
-	const reason = "ReadWriteOnce volume shared across replicas"
+	const reason = SharedRWOVolumeReason
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if hasProblem(DetectProblems(cache, "prod"), "Deployment", "conflict", reason) {
@@ -2293,7 +2700,15 @@ func TestDetectProblems_SharedRWOVolume(t *testing.T) {
 	}
 	problems := DetectProblems(cache, "prod")
 
-	assertProblem(t, problems, "Deployment", "conflict", reason, "high")
+	assertProblem(t, problems, "Deployment", "conflict", reason, "info")
+	if p, _ := lookupProblem(problems, "Deployment", "conflict", reason); strings.Contains(p.Message, "can't start") ||
+		!strings.Contains(p.Message, "only one node mount the volume") || !strings.Contains(p.Message, "replicas on that node can share it") {
+		t.Errorf("RWO message should describe the node-level risk, not claim replicas can't start: %q", p.Message)
+	}
+	assertProblem(t, problems, "Deployment", "rwop", SharedRWOPVolumeReason, "high")
+	if p, _ := lookupProblem(problems, "Deployment", "rwop", SharedRWOPVolumeReason); !strings.Contains(p.Message, "only one replica can run") {
+		t.Errorf("RWOP message = %q", p.Message)
+	}
 	if hasProblem(problems, "Deployment", "single", reason) {
 		t.Errorf("single-replica RWO mount should not be flagged: %+v", problems)
 	}
@@ -2667,4 +3082,202 @@ func TestJobDetectionStaysOwnSubject(t *testing.T) {
 	if owned.OwnerKind != "" {
 		t.Errorf("a CronJob-owned failed Job must stay its own subject (no owner stamp), got owner kind %q", owned.OwnerKind)
 	}
+}
+
+func TestStatefulSetRolloutWithinBudget(t *testing.T) {
+	rolling := func() *appsv1.StatefulSet {
+		return &appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Generation: 2},
+			Spec:       appsv1.StatefulSetSpec{Replicas: ptrInt32(3)},
+			Status: appsv1.StatefulSetStatus{
+				ObservedGeneration: 2,
+				Replicas:           3,
+				ReadyReplicas:      2,
+				AvailableReplicas:  2,
+				CurrentRevision:    "db-old",
+				UpdateRevision:     "db-new",
+			},
+		}
+	}
+	cases := []struct {
+		name   string
+		mutate func(*appsv1.StatefulSet)
+		want   bool
+	}{
+		{"one pod replaced at a time", func(*appsv1.StatefulSet) {}, true},
+		{"explicit RollingUpdate strategy", func(s *appsv1.StatefulSet) {
+			s.Spec.UpdateStrategy.Type = appsv1.RollingUpdateStatefulSetStrategyType
+		}, true},
+		{"rollout complete", func(s *appsv1.StatefulSet) { s.Status.CurrentRevision = "db-new" }, false},
+		{"no revision recorded", func(s *appsv1.StatefulSet) { s.Status.CurrentRevision, s.Status.UpdateRevision = "", "" }, false},
+		{"two short", func(s *appsv1.StatefulSet) { s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 1 }, false},
+		{"ready but not yet available counts against the budget", func(s *appsv1.StatefulSet) { s.Status.AvailableReplicas = 1 }, false},
+		{"nothing available", func(s *appsv1.StatefulSet) {
+			s.Spec.Replicas = ptrInt32(1)
+			s.Status.Replicas, s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 0, 0
+		}, false},
+		{"partitioned", func(s *appsv1.StatefulSet) {
+			s.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{Partition: ptrInt32(1)}
+		}, false},
+		{"OnDelete", func(s *appsv1.StatefulSet) { s.Spec.UpdateStrategy.Type = appsv1.OnDeleteStatefulSetStrategyType }, false},
+		{"maxUnavailable 2 is feature-gated, so two short stays critical", func(s *appsv1.StatefulSet) {
+			two := intstr.FromInt32(2)
+			s.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{MaxUnavailable: &two}
+			s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 1
+		}, false},
+		{"percentage maxUnavailable is feature-gated too", func(s *appsv1.StatefulSet) {
+			pct := intstr.FromString("70%")
+			s.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{MaxUnavailable: &pct}
+			s.Status.ReadyReplicas, s.Status.AvailableReplicas = 1, 1
+		}, false},
+		{"status from an older generation", func(s *appsv1.StatefulSet) { s.Status.ObservedGeneration = 1 }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := rolling()
+			tc.mutate(s)
+			if got := statefulSetRolloutWithinBudget(s, schedDesiredReplicas(s.Spec.Replicas)); got != tc.want {
+				t.Fatalf("statefulSetRolloutWithinBudget = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDaemonSetRolloutWithinBudget(t *testing.T) {
+	rolling := func(maxUnavailable, maxSurge intstr.IntOrString) *appsv1.DaemonSet {
+		return &appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Generation: 2},
+			Spec: appsv1.DaemonSetSpec{UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
+				Type:          appsv1.RollingUpdateDaemonSetStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDaemonSet{MaxUnavailable: &maxUnavailable, MaxSurge: &maxSurge},
+			}},
+			Status: appsv1.DaemonSetStatus{
+				ObservedGeneration:     2,
+				DesiredNumberScheduled: 10,
+				CurrentNumberScheduled: 10,
+				UpdatedNumberScheduled: 4,
+				NumberAvailable:        9,
+				NumberUnavailable:      1,
+			},
+		}
+	}
+	one, zero := intstr.FromInt32(1), intstr.FromInt32(0)
+	cases := []struct {
+		name string
+		ds   *appsv1.DaemonSet
+		want bool
+	}{
+		{"default budget of one", rolling(one, zero), true},
+		{"beyond budget", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.NumberAvailable, d.Status.NumberUnavailable = 8, 2
+			return d
+		}(), false},
+		{"percent rounds up: 15% of 10 allows 2", func() *appsv1.DaemonSet {
+			d := rolling(intstr.FromString("15%"), zero)
+			d.Status.NumberAvailable, d.Status.NumberUnavailable = 8, 2
+			return d
+		}(), true},
+		{"no surge or unavailability allowed falls back to one", rolling(zero, zero), true},
+		{"surge-only rollout keeps every node available", rolling(zero, one), false},
+		{"last replacement counted updated before it is available", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.UpdatedNumberScheduled = 10
+			return d
+		}(), false},
+		{"nothing available", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.DesiredNumberScheduled, d.Status.CurrentNumberScheduled, d.Status.UpdatedNumberScheduled = 1, 1, 0
+			d.Status.NumberAvailable, d.Status.NumberUnavailable = 0, 1
+			return d
+		}(), false},
+		{"status from an older generation", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Status.ObservedGeneration = 1
+			return d
+		}(), false},
+		{"OnDelete", func() *appsv1.DaemonSet {
+			d := rolling(one, zero)
+			d.Spec.UpdateStrategy = appsv1.DaemonSetUpdateStrategy{Type: appsv1.OnDeleteDaemonSetStrategyType}
+			return d
+		}(), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := daemonSetRolloutWithinBudget(tc.ds); got != tc.want {
+				t.Fatalf("daemonSetRolloutWithinBudget = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDetectProblems_RollingUpdateWithinBudgetIsWarning pins the severity
+// StatefulSets and DaemonSets carry while a RollingUpdate is replacing pods
+// within its budget: still listed, since nothing ends a stuck rollout of these
+// kinds, but not critical.
+func TestDetectProblems_RollingUpdateWithinBudgetIsWarning(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	one, zero := intstr.FromInt32(1), intstr.FromInt32(0)
+	dsStrategy := appsv1.DaemonSetUpdateStrategy{
+		Type:          appsv1.RollingUpdateDaemonSetStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateDaemonSet{MaxUnavailable: &one, MaxSurge: &zero},
+	}
+	client := fake.NewClientset(
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.StatefulSetSpec{Replicas: ptrInt32(3)},
+			Status: appsv1.StatefulSetStatus{ObservedGeneration: 2, Replicas: 3, ReadyReplicas: 2, AvailableReplicas: 2,
+				CurrentRevision: "db-old", UpdateRevision: "db-new"},
+		},
+		&appsv1.StatefulSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "shop", CreationTimestamp: old, Generation: 1},
+			Spec:       appsv1.StatefulSetSpec{Replicas: ptrInt32(3)},
+			Status: appsv1.StatefulSetStatus{ObservedGeneration: 1, Replicas: 3, ReadyReplicas: 2, AvailableReplicas: 2,
+				CurrentRevision: "cache-1", UpdateRevision: "cache-1"},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "agent", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.DaemonSetSpec{UpdateStrategy: dsStrategy},
+			Status: appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 4, CurrentNumberScheduled: 4,
+				UpdatedNumberScheduled: 2, NumberReady: 3, NumberAvailable: 3, NumberUnavailable: 1},
+		},
+		// Mid-rollout with a node lacking any pod: stays critical, since status
+		// can't separate the delete-then-create gap from a failed create.
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "proxy", Namespace: "shop", CreationTimestamp: old, Generation: 2},
+			Spec:       appsv1.DaemonSetSpec{UpdateStrategy: dsStrategy},
+			Status: appsv1.DaemonSetStatus{ObservedGeneration: 2, DesiredNumberScheduled: 4, CurrentNumberScheduled: 3,
+				UpdatedNumberScheduled: 2, NumberReady: 3, NumberAvailable: 3, NumberUnavailable: 1},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "logs", Namespace: "shop", CreationTimestamp: old, Generation: 1},
+			Spec:       appsv1.DaemonSetSpec{UpdateStrategy: dsStrategy},
+			Status: appsv1.DaemonSetStatus{ObservedGeneration: 1, DesiredNumberScheduled: 4, CurrentNumberScheduled: 4,
+				UpdatedNumberScheduled: 4, NumberReady: 3, NumberAvailable: 3, NumberUnavailable: 1},
+		},
+	)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "shop")
+		if hasProblem(problems, "StatefulSet", "cache", "2/3 ready") && hasProblem(problems, "DaemonSet", "logs", "1 unavailable") &&
+			hasProblem(problems, "StatefulSet", "db", "2/3 ready") && hasProblem(problems, "DaemonSet", "agent", "1 unavailable") &&
+			hasProblem(problems, "DaemonSet", "proxy", "1 not scheduled") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "StatefulSet", "db", "2/3 ready", "warning")
+	assertProblem(t, problems, "DaemonSet", "agent", "1 unavailable", "warning")
+	assertProblem(t, problems, "DaemonSet", "proxy", "1 not scheduled", "critical")
+	assertProblem(t, problems, "StatefulSet", "cache", "2/3 ready", "critical")
+	assertProblem(t, problems, "DaemonSet", "logs", "1 unavailable", "critical")
 }

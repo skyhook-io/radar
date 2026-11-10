@@ -149,6 +149,12 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// operators see the same "long enough to flag" semantics across surfaces.
 	findings = append(findings, checkCrossplaneStuck(tr, input)...)
 
+	// --- GKE: Persistent Disk volumes that can be scheduled onto nodes that
+	// attach only Hyperdisk. Self-gates on nil evidence (not GKE, or the
+	// reader can't list nodes/PVs/StorageClasses) and on the absence of
+	// Hyperdisk-only nodes.
+	findings = append(findings, checkPDVolumeHyperdiskPlacement(tr, input)...)
+
 	// --- GitOps coverage: workloads not tracked by a GitOps controller ---
 	// Self-gates on input.GitOpsToolsPresent; a no-GitOps cluster records
 	// nothing, so the check is absent from CheckCounts rather than reported as a
@@ -160,8 +166,18 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// and on ScheduledBackup absence-authority — records nothing rather than
 	// reporting a missing input.
 	findings = append(findings, checkCNPGDeclarativeBackup(tr, input)...)
+	findings = append(findings, checkStorage(tr, input, time.Now())...)
 
-	return buildResults(findings, tr, missingInputs)
+	// --- Per-resource opt-outs (radarhq.io/ignore-checks) ---
+	// One central seam instead of a per-check concern: every check emits
+	// normally, then a subject's annotation withdraws its own findings and its
+	// own evaluated tally before results are built.
+	findings, ignored := applyIgnoreAnnotations(findings, tr, buildIgnoreIndex(input))
+
+	results := buildResults(findings, tr, missingInputs)
+	results.IgnoreChecksAnnotation = IgnoreChecksAnnotation
+	results.AnnotationIgnoredByNamespace = ignored
+	return results
 }
 
 // ============================================================================
@@ -200,6 +216,42 @@ func (t *evalTracker) record(checkID, namespace string) {
 func (t *evalTracker) recordAll(ids []string, namespace string) {
 	for _, id := range ids {
 		t.record(id, namespace)
+	}
+}
+
+// skip reports input as missing because its absence left a subject
+// unevaluated. An evidence gap that still lets the check emit its finding
+// belongs in that finding's message, not here: consumers read every missing
+// input as checks that could not run.
+func (t *evalTracker) skip(input string) {
+	if !slices.Contains(t.missingInputs, input) {
+		t.missingInputs = append(t.missingInputs, input)
+	}
+}
+
+// unrecord removes one evaluated subject from checkID's tally — used when a
+// subject opts out of that check via annotation, so the denominator counts
+// only subjects the check actually spoke about.
+//
+// A check may emit a finding for a subject it never recorded (a ref-grain
+// finding under a subject-grain eligibility gate), so an absent tally means
+// "this subject was never in the denominator" and must be left alone rather
+// than driven negative.
+func (t *evalTracker) unrecord(checkID, namespace string) {
+	byNS := t.counts[checkID]
+	if byNS == nil {
+		return
+	}
+	if byNS[namespace] == 0 {
+		return
+	}
+	if byNS[namespace] == 1 {
+		delete(byNS, namespace)
+	} else {
+		byNS[namespace]--
+	}
+	if len(byNS) == 0 {
+		delete(t.counts, checkID)
 	}
 }
 
@@ -249,7 +301,7 @@ func checkWorkloadPodSpecs(tr *evalTracker, input *CheckInput) []Finding {
 	for _, w := range specs {
 		findings = append(findings, checkPodSpecSecurity(tr, w.kind, w.namespace, w.name, w.spec, saByKey, saCovers(w.namespace))...)
 		findings = append(findings, checkPodSpecReliability(tr, w.kind, w.namespace, w.name, w.spec)...)
-		findings = append(findings, checkPodSpecEfficiency(tr, w.kind, w.namespace, w.name, w.spec, limitsByNs[w.namespace], lrAuthoritative)...)
+		findings = append(findings, checkPodSpecEfficiency(tr, w.kind, w.namespace, w.name, w.spec, limitsByNs[w.namespace], lrAuthoritative, input.ClusterVersion)...)
 		findings = append(findings, checkPodSpecVolumes(tr, w.kind, w.namespace, w.name, w.spec)...)
 	}
 	return findings
@@ -305,40 +357,6 @@ func indexLimitRangesByNamespace(lrs []*corev1.LimitRange) map[string][]*corev1.
 		m[lr.Namespace] = append(m[lr.Namespace], lr)
 	}
 	return m
-}
-
-// containerDefaultsFromLimitRanges reports which container resource types
-// (cpu/memory requests/limits) would be filled in by admission based on the
-// namespace's LimitRange defaults. Only LimitRange items with Type=Container
-// contribute to container defaults.
-type containerDefaults struct {
-	cpuRequest, memoryRequest bool
-	cpuLimit, memoryLimit     bool
-}
-
-func containerDefaultsFromLimitRanges(lrs []*corev1.LimitRange) containerDefaults {
-	var d containerDefaults
-	for _, lr := range lrs {
-		for _, item := range lr.Spec.Limits {
-			if item.Type != corev1.LimitTypeContainer {
-				continue
-			}
-			// DefaultRequest covers requests; Default covers limits.
-			if _, ok := item.DefaultRequest[corev1.ResourceCPU]; ok {
-				d.cpuRequest = true
-			}
-			if _, ok := item.DefaultRequest[corev1.ResourceMemory]; ok {
-				d.memoryRequest = true
-			}
-			if _, ok := item.Default[corev1.ResourceCPU]; ok {
-				d.cpuLimit = true
-			}
-			if _, ok := item.Default[corev1.ResourceMemory]; ok {
-				d.memoryLimit = true
-			}
-		}
-	}
-	return d
 }
 
 // ============================================================================
@@ -799,42 +817,55 @@ func checkMissingPDB(tr *evalTracker, deployments []*appsv1.Deployment, stateful
 // Efficiency checks
 // ============================================================================
 
-func checkPodSpecEfficiency(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec, lrs []*corev1.LimitRange, lrAuthoritative bool) []Finding {
-	if !lrAuthoritative {
-		// LimitRange defaults suppress these findings; without the inventory
-		// every emission would be a potential false positive. Skip the whole
-		// family rather than report on data Radar couldn't see.
+func checkPodSpecEfficiency(tr *evalTracker, kind, namespace, name string, spec corev1.PodSpec, lrs []*corev1.LimitRange, lrAuthoritative bool, version string) []Finding {
+	if kind != "Pod" && !lrAuthoritative {
 		return nil
 	}
-	tr.recordAll(podSpecEfficiencyCheckIDs, namespace)
+	candidates := podResourceCandidates(spec, kind == "Pod", version, lrs)
+	containerSets := make([][]corev1.Container, len(candidates))
+	for i, candidate := range candidates {
+		containerSets[i] = efficiencyContainers(candidate)
+	}
 	var findings []Finding
-	f := func(checkID, severity, msg string) {
-		findings = append(findings, Finding{
-			Kind: kind, Namespace: namespace, Name: name,
-			CheckID: checkID, Category: CategoryEfficiency, Severity: severity, Message: msg,
-		})
+	for _, check := range []struct {
+		id, label string
+		resource  corev1.ResourceName
+		request   bool
+	}{
+		{"cpuRequestMissing", "CPU request", corev1.ResourceCPU, true},
+		{"memoryRequestMissing", "memory request", corev1.ResourceMemory, true},
+		{"cpuLimitMissing", "CPU limit", corev1.ResourceCPU, false},
+		{"memoryLimitMissing", "memory limit", corev1.ResourceMemory, false},
+	} {
+		allCovered, failed := true, false
+		for i, c := range efficiencyContainers(spec) {
+			alwaysMissing := true
+			for j, candidate := range candidates {
+				if resourceConfigured(candidate, containerSets[j][i], check.resource, check.request) {
+					alwaysMissing = false
+				} else {
+					allCovered = false
+				}
+			}
+			if alwaysMissing {
+				label := "Container"
+				if i >= len(spec.Containers) {
+					label = "Sidecar"
+				}
+				findings = append(findings, Finding{
+					Kind: kind, Namespace: namespace, Name: name,
+					CheckID: check.id, Category: CategoryEfficiency, Severity: SeverityWarning,
+					Message: fmt.Sprintf("%s %q has no %s", label, c.Name, check.label),
+				})
+				failed = true
+			}
+		}
+		if allCovered || failed {
+			tr.record(check.id, namespace)
+		} else {
+			tr.skip("pod-resource-defaulting")
+		}
 	}
-
-	// LimitRange defaults in the namespace are applied by admission — skip
-	// flagging missing values that would be filled in automatically.
-	defaults := containerDefaultsFromLimitRanges(lrs)
-
-	for _, c := range spec.Containers {
-		res := c.Resources
-		if (res.Requests.Cpu() == nil || res.Requests.Cpu().IsZero()) && !defaults.cpuRequest {
-			f("cpuRequestMissing", SeverityWarning, fmt.Sprintf("Container %q has no CPU request", c.Name))
-		}
-		if (res.Requests.Memory() == nil || res.Requests.Memory().IsZero()) && !defaults.memoryRequest {
-			f("memoryRequestMissing", SeverityWarning, fmt.Sprintf("Container %q has no memory request", c.Name))
-		}
-		if (res.Limits.Cpu() == nil || res.Limits.Cpu().IsZero()) && !defaults.cpuLimit {
-			f("cpuLimitMissing", SeverityWarning, fmt.Sprintf("Container %q has no CPU limit", c.Name))
-		}
-		if (res.Limits.Memory() == nil || res.Limits.Memory().IsZero()) && !defaults.memoryLimit {
-			f("memoryLimitMissing", SeverityWarning, fmt.Sprintf("Container %q has no memory limit", c.Name))
-		}
-	}
-
 	return findings
 }
 
@@ -874,27 +905,17 @@ func checkServiceNoMatchingPods(tr *evalTracker, services []*corev1.Service, pod
 func checkIngressNoMatchingService(tr *evalTracker, ingresses []*networkingv1.Ingress, servicesByName map[string]bool) []Finding {
 	var findings []Finding
 	for _, ing := range ingresses {
-		eligible := false
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service == nil {
-					continue
-				}
-				eligible = true
-				svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-				if !servicesByName[svcKey] {
-					findings = append(findings, Finding{
-						Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name,
-						CheckID: "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
-						Message: fmt.Sprintf("Ingress references non-existent Service %q", path.Backend.Service.Name),
-					})
-				}
+		backends := configrefs.IngressBackendServices(ing)
+		for _, name := range backends {
+			if !servicesByName[ing.Namespace+"/"+name] {
+				findings = append(findings, Finding{
+					Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name,
+					CheckID: "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
+					Message: fmt.Sprintf("Ingress references non-existent Service %q", name),
+				})
 			}
 		}
-		if eligible {
+		if len(backends) > 0 {
 			tr.record("ingressNoMatchingService", ing.Namespace)
 		}
 	}
@@ -991,9 +1012,7 @@ func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.D
 		}
 		if incomplete[d.Namespace] {
 			// An unresolved ReplicaSet may own another replica of this Deployment.
-			if !slices.Contains(tr.missingInputs, "replicaset-ownership") {
-				tr.missingInputs = append(tr.missingInputs, "replicaset-ownership")
-			}
+			tr.skip("replicaset-ownership")
 			continue
 		}
 		count := 0
@@ -1057,10 +1076,7 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 			complete = evidence.ReflectionsComplete[kind]
 		}
 		if !complete {
-			missing := strings.ToLower(kind) + "-references"
-			if !slices.Contains(tr.missingInputs, missing) {
-				tr.missingInputs = append(tr.missingInputs, missing)
-			}
+			tr.skip(strings.ToLower(kind) + "-references")
 			return false
 		}
 		tr.record("orphanConfigMapSecret", ns)
@@ -1386,49 +1402,17 @@ func podIsTerminal(pod *corev1.Pod) bool {
 }
 
 func collectPodSpecRefs(ns string, spec corev1.PodSpec, saByKey map[string]*corev1.ServiceAccount, cms, secrets map[string]bool) {
-	for _, c := range spec.InitContainers {
-		collectContainerRefs(ns, c, cms, secrets)
-	}
-	for _, c := range spec.Containers {
-		collectContainerRefs(ns, c, cms, secrets)
-	}
-	for _, c := range spec.EphemeralContainers {
-		collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
-	}
-	for _, v := range spec.Volumes {
-		collectVolumeRefs(ns, v, cms, secrets)
-	}
-	for _, ips := range spec.ImagePullSecrets {
-		addRef(secrets, ns, ips.Name)
+	for _, ref := range configrefs.PodSpecReferences(ns, spec) {
+		switch ref.Kind {
+		case "ConfigMap":
+			addRef(cms, ns, ref.Name)
+		case "Secret":
+			addRef(secrets, ns, ref.Name)
+		}
 	}
 	// ServiceAccount admission defaults imagePullSecrets only when the PodSpec leaves them empty.
 	if len(spec.ImagePullSecrets) == 0 {
 		collectServiceAccountImagePullSecrets(ns, spec, saByKey, secrets)
-	}
-}
-
-func collectContainerRefs(ns string, c corev1.Container, cms, secrets map[string]bool) {
-	collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
-}
-
-func collectEnvRefs(ns string, envs []corev1.EnvVar, envFroms []corev1.EnvFromSource, cms, secrets map[string]bool) {
-	for _, env := range envs {
-		if env.ValueFrom != nil {
-			if env.ValueFrom.ConfigMapKeyRef != nil {
-				addRef(cms, ns, env.ValueFrom.ConfigMapKeyRef.Name)
-			}
-			if env.ValueFrom.SecretKeyRef != nil {
-				addRef(secrets, ns, env.ValueFrom.SecretKeyRef.Name)
-			}
-		}
-	}
-	for _, envFrom := range envFroms {
-		if envFrom.ConfigMapRef != nil {
-			addRef(cms, ns, envFrom.ConfigMapRef.Name)
-		}
-		if envFrom.SecretRef != nil {
-			addRef(secrets, ns, envFrom.SecretRef.Name)
-		}
 	}
 }
 
@@ -1442,52 +1426,6 @@ func collectServiceAccountImagePullSecrets(ns string, spec corev1.PodSpec, saByK
 	}
 	for _, ips := range sa.ImagePullSecrets {
 		addRef(secrets, ns, ips.Name)
-	}
-}
-
-func collectVolumeRefs(ns string, v corev1.Volume, cms, secrets map[string]bool) {
-	if v.ConfigMap != nil {
-		addRef(cms, ns, v.ConfigMap.Name)
-	}
-	if v.Secret != nil {
-		addRef(secrets, ns, v.Secret.SecretName)
-	}
-	if v.Projected != nil {
-		for _, src := range v.Projected.Sources {
-			if src.ConfigMap != nil {
-				addRef(cms, ns, src.ConfigMap.Name)
-			}
-			if src.Secret != nil {
-				addRef(secrets, ns, src.Secret.Name)
-			}
-		}
-	}
-	if v.CSI != nil && v.CSI.NodePublishSecretRef != nil {
-		addRef(secrets, ns, v.CSI.NodePublishSecretRef.Name)
-	}
-	if v.FlexVolume != nil && v.FlexVolume.SecretRef != nil {
-		addRef(secrets, ns, v.FlexVolume.SecretRef.Name)
-	}
-	if v.AzureFile != nil {
-		addRef(secrets, ns, v.AzureFile.SecretName)
-	}
-	if v.CephFS != nil && v.CephFS.SecretRef != nil {
-		addRef(secrets, ns, v.CephFS.SecretRef.Name)
-	}
-	if v.RBD != nil && v.RBD.SecretRef != nil {
-		addRef(secrets, ns, v.RBD.SecretRef.Name)
-	}
-	if v.Cinder != nil && v.Cinder.SecretRef != nil {
-		addRef(secrets, ns, v.Cinder.SecretRef.Name)
-	}
-	if v.ScaleIO != nil && v.ScaleIO.SecretRef != nil {
-		addRef(secrets, ns, v.ScaleIO.SecretRef.Name)
-	}
-	if v.ISCSI != nil && v.ISCSI.SecretRef != nil {
-		addRef(secrets, ns, v.ISCSI.SecretRef.Name)
-	}
-	if v.StorageOS != nil && v.StorageOS.SecretRef != nil {
-		addRef(secrets, ns, v.StorageOS.SecretRef.Name)
 	}
 }
 
@@ -1737,12 +1675,12 @@ func imageTag(image string) string {
 	if strings.Contains(image, "@") {
 		return strings.SplitN(image, "@", 2)[1]
 	}
-	// Handle tag references (image:tag)
-	parts := strings.SplitN(image, ":", 2)
-	if len(parts) == 2 && !strings.Contains(parts[1], "/") {
-		return parts[1]
+	// A colon before the last slash is a registry port, not a tag separator.
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon == -1 || strings.LastIndex(image, "/") > lastColon {
+		return ""
 	}
-	return ""
+	return image[lastColon+1:]
 }
 
 func tagDisplay(tag string) string {
@@ -1807,6 +1745,18 @@ func checkStuckTerminating(tr *evalTracker, input *CheckInput) []Finding {
 		if len(finalizers) > 0 {
 			note = " — finalizers: " + strings.Join(finalizers, ", ")
 		}
+		// The storage protection finalizers hold deletion while the object is
+		// in use; they don't point at a stalled controller. Deletion can't be
+		// cancelled, and letting it complete may delete the data, so the note
+		// says what releases the hold without telling anyone to release it.
+		for _, f := range finalizers {
+			switch f {
+			case "kubernetes.io/pvc-protection":
+				note += ". kubernetes.io/pvc-protection holds deletion while a Pod uses the claim; when no Pod does, the claim is deleted and its volume follows its reclaim policy. Back up the data before then if the deletion was unintended, and don't remove the finalizer by hand"
+			case "kubernetes.io/pv-protection":
+				note += ". kubernetes.io/pv-protection holds deletion while the volume is bound to a claim; Kubernetes removes it once the volume is no longer bound. Don't remove the finalizer by hand"
+			}
+		}
 		findings = append(findings, Finding{
 			Kind:      kind,
 			Namespace: obj.GetNamespace(),
@@ -1852,6 +1802,12 @@ func checkStuckTerminating(tr *evalTracker, input *CheckInput) []Finding {
 	}
 	for _, sa := range input.ServiceAccounts {
 		emit("ServiceAccount", sa)
+	}
+	for _, pvc := range input.PersistentVolumeClaims {
+		emit("PersistentVolumeClaim", pvc)
+	}
+	for _, pv := range input.PersistentVolumes {
+		emit("PersistentVolume", pv)
 	}
 	return findings
 }

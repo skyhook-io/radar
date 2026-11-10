@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 type Connection struct {
@@ -30,7 +32,7 @@ func ValidateHTTPBaseURL(raw string) error {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return errors.New("must be an HTTP(S) base URL without credentials, query parameters or fragments")
 	}
-	if _, valid := NormalizeOrigin(raw); !valid {
+	if _, valid := urlutil.NormalizeOrigin(raw); !valid {
 		return errors.New("has an invalid port")
 	}
 	return nil

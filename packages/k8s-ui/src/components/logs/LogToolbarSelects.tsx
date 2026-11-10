@@ -18,9 +18,11 @@ interface ContainerSelectProps {
   includeAll?: boolean
   /** Dark/light palette selector. Defaults to `true` (dark viewer). */
   isDark?: boolean
+  /** Containers to mark as init containers in the list. */
+  initContainers?: ReadonlySet<string>
 }
 
-export function ContainerSelect({ containers, value, onChange, includeAll = false, isDark = true }: ContainerSelectProps) {
+export function ContainerSelect({ containers, value, onChange, includeAll = false, isDark = true, initContainers }: ContainerSelectProps) {
   if (containers.length <= 1 && !includeAll) return null
   const palette = getLogPalette(isDark)
   return (
@@ -31,7 +33,7 @@ export function ContainerSelect({ containers, value, onChange, includeAll = fals
         className={`${selectClass(palette)} pr-6`}
       >
         {includeAll && <option value="">All containers</option>}
-        {containers.map(c => <option key={c} value={c}>{c}</option>)}
+        {containers.map(c => <option key={c} value={c}>{initContainers?.has(c) ? `${c} (init)` : c}</option>)}
       </select>
       <ChevronDown className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 ${palette.textSecondary} pointer-events-none`} />
     </div>
@@ -50,6 +52,7 @@ interface LogRangeSelectProps {
   isDark?: boolean
   /** When true, the control is greyed out and non-interactive. */
   disabled?: boolean
+  disabledReason?: string
 }
 
 export function LogRangeSelect({
@@ -59,10 +62,11 @@ export function LogRangeSelect({
   tooltip = 'How many logs to load — by line count or time range',
   isDark = true,
   disabled = false,
+  disabledReason = 'Stop streaming to change the log range',
 }: LogRangeSelectProps) {
   const palette = getLogPalette(isDark)
   return (
-    <Tooltip content={disabled ? 'Stop streaming to change the log range' : tooltip} position="bottom">
+    <Tooltip content={disabled ? disabledReason : tooltip} position="bottom">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}

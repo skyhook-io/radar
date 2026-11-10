@@ -21,6 +21,8 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
   const awsSecretManager = spec.awsSecretManager
   const gcpSecretManager = spec.gcpSecretManager
   const podIdentity = spec.podIdentity
+  const credentialRef = gcpSecretManager?.credentials?.clientSecret?.valueFrom?.secretKeyRef
+  const namespace = data.metadata?.namespace
 
   return (
     <>
@@ -48,7 +50,7 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
                   <span className="text-theme-text-primary font-medium">{ref.parameter}</span>
                   <span className="text-theme-text-secondary">
-                    Secret: <ResourceLink name={ref.name} kind="secrets" namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} /> / {ref.key}
+                    Secret: {namespace ? <ResourceLink name={ref.name} kind="secrets" group="" namespace={namespace} onNavigate={onNavigate} /> : ref.name} / {ref.key}
                   </span>
                 </div>
               </div>
@@ -150,9 +152,10 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
       {gcpSecretManager && (
         <Section title="GCP Secret Manager" icon={Cloud}>
           <PropertyList>
-            {gcpSecretManager.credentials?.clientSecret?.name && (
-              <Property label="Credentials Secret" value={gcpSecretManager.credentials.clientSecret.name} />
+            {credentialRef?.name && (
+              <Property label="Credentials Secret" value={namespace ? <ResourceLink name={credentialRef.name} kind="secrets" group="" namespace={namespace} onNavigate={onNavigate} /> : credentialRef.name} />
             )}
+            {credentialRef?.key && <Property label="Credentials Key" value={credentialRef.key} />}
           </PropertyList>
           {gcpSecretManager.secrets && gcpSecretManager.secrets.length > 0 && (
             <div className="mt-2 space-y-1">

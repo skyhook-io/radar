@@ -298,7 +298,36 @@ func TestStatusErrors(t *testing.T) {
 			name:        "502 with non-JSON body is omitted, not echoed",
 			status:      http.StatusBadGateway,
 			body:        "upstream connect error with secret token abc123",
+			wantIs:      ErrGatewayUnavailable,
 			wantContain: "omitted",
+		},
+		{
+			name:        "503 from a gateway",
+			status:      http.StatusServiceUnavailable,
+			body:        "<html>503 Service Temporarily Unavailable</html>",
+			wantIs:      ErrGatewayUnavailable,
+			wantContain: "503",
+		},
+		{
+			name:        "504 from a gateway",
+			status:      http.StatusGatewayTimeout,
+			body:        "<html>504 Gateway Time-out</html>",
+			wantIs:      ErrGatewayUnavailable,
+			wantContain: "504",
+		},
+		{
+			name:          "a message echoing the sent token is redacted",
+			status:        http.StatusUnauthorized,
+			body:          `{"error": "invalid session", "message": "bad token Bearer test-token-6c1f"}`,
+			wantIs:        ErrUnauthorized,
+			wantContain:   "bad token Bearer <redacted-token>",
+			wantNotSecret: "test-token-6c1f",
+		},
+		{
+			name:          "a capped message never keeps part of the token",
+			status:        http.StatusInternalServerError,
+			body:          `{"message": "` + strings.Repeat("x", 190) + `test-token-6c1f"}`,
+			wantNotSecret: "test-tok",
 		},
 		{
 			name:          "long structured message is capped, raw body never leaks",
@@ -317,7 +346,7 @@ func TestStatusErrors(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := New(Options{BaseURL: srv.URL, Token: "t"})
+			c := New(Options{BaseURL: srv.URL, Token: "test-token-6c1f"})
 			_, err := c.ManagedResources(context.Background(), ManagedResourcesQuery{AppName: "guestbook"})
 			if err == nil {
 				t.Fatalf("expected error for status %d", tt.status)
@@ -325,7 +354,7 @@ func TestStatusErrors(t *testing.T) {
 			if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
 				t.Errorf("errors.Is(err, %v) = false, err = %v", tt.wantIs, err)
 			}
-			if tt.wantIs == nil && (errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrNotFound)) {
+			if tt.wantIs == nil && (errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrGatewayUnavailable)) {
 				t.Errorf("err unexpectedly matches a sentinel: %v", err)
 			}
 			if !strings.Contains(err.Error(), tt.wantContain) {

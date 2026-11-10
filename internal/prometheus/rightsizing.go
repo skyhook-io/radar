@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Sentinel errors distinguish the cache-loading failure modes so handlers can
@@ -290,15 +291,15 @@ type rightsizingWorkload struct {
 // so a cache that never syncs cannot hold the request open.
 const warmingRetryBudget = 3 * time.Second
 
-// workloadPodsOnceWarm reads the workload's pods, waiting out a cache that is
-// still loading. Warming and denial arrive at this call as the same empty pod
+// workloadPodsOnceWarm reads the pods of the workload incarnation the caller
+// already observed (uid), waiting out a cache that is still loading. Warming and denial arrive at this call as the same empty pod
 // list, but they are not the same thing: warming clears on its own within
 // seconds, so surfacing it would put a caveat on the recommendation that the
 // next refresh silently removes. A denial never clears, and is returned.
-func workloadPodsOnceWarm(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
+func workloadPodsOnceWarm(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string, uid types.UID) ([]*corev1.Pod, error) {
 	deadline := time.Now().Add(warmingRetryBudget)
 	for {
-		pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+		pods, err := k8s.WorkloadPodsForUID(cache, kind, namespace, name, "apps", uid)
 		if !errors.Is(err, k8s.ErrWorkloadCacheWarming) || time.Now().After(deadline) {
 			return pods, err
 		}
@@ -318,6 +319,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 
 	var podTemplate *corev1.PodSpec
 	var managedBy *WorkloadManager
+	var uid types.UID
 	scaledToZero := false
 	replicas := 0
 	switch strings.ToLower(kind) {
@@ -330,6 +332,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: deployment %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &d.Spec.Template.Spec
+		uid = d.UID
 		managedBy = detectWorkloadManager(d)
 		replicas = specReplicas(d.Spec.Replicas)
 		scaledToZero = replicas == 0
@@ -342,6 +345,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: statefulset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ss.Spec.Template.Spec
+		uid = ss.UID
 		managedBy = detectWorkloadManager(ss)
 		replicas = specReplicas(ss.Spec.Replicas)
 		scaledToZero = replicas == 0
@@ -354,6 +358,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: daemonset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ds.Spec.Template.Spec
+		uid = ds.UID
 		managedBy = detectWorkloadManager(ds)
 		replicas = int(ds.Status.DesiredNumberScheduled)
 		// Scans skip a zero the controller has observed, but a caller naming
@@ -376,7 +381,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		scaledToZero:  scaledToZero,
 		managedBy:     managedBy,
 	}
-	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name)
+	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name, uid)
 	if ctx.Err() != nil {
 		// The caller went away mid-wait. Reporting that as an unreadable
 		// inventory would answer a question nobody is listening for, and would
@@ -1011,7 +1016,7 @@ type PVCUsageResponse struct {
 	Capacity  int64   `json:"capacity"` // bytes
 	Ratio     float64 `json:"ratio"`    // 0.0 - 1.0
 	HasData   bool    `json:"hasData"`
-	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed
+	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed, ambiguous_scope, scope_mismatch
 }
 
 // handlePVCUsage returns current usage for a PVC, computed from
@@ -1032,50 +1037,32 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns := prom.SanitizeLabelValue(namespace)
-	pvc := prom.SanitizeLabelValue(name)
-
-	// kubelet's native label is `persistentvolumeclaim`; clusters with custom
-	// relabeling that renamed it will return no series.
-	usedQuery := fmt.Sprintf(`max(kubelet_volume_stats_used_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
-	capQuery := fmt.Sprintf(`max(kubelet_volume_stats_capacity_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
-
-	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: "query_failed"}
-
-	usedRes, err := client.Query(r.Context(), usedQuery)
-	if err != nil {
-		errorlog.Record("prometheus", "warning", "pvc used-bytes query failed for %s/%s: %v", namespace, name, err)
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-	capRes, err := client.Query(r.Context(), capQuery)
-	if err != nil {
-		errorlog.Record("prometheus", "warning", "pvc capacity-bytes query failed for %s/%s: %v", namespace, name, err)
+	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: PVCUsageQueryFailed}
+	matchers, _, err := client.resolveScope(r.Context(), namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
+	if failed, bad := pvcScopeFailure(err); bad {
+		if failed.Status == PVCUsageQueryFailed {
+			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for %s/%s: %v", namespace, name, err)
+		}
+		resp.Status = failed.Status
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
-	if usedRes == nil || capRes == nil || len(usedRes.Series) == 0 || len(capRes.Series) == 0 ||
-		len(usedRes.Series[0].DataPoints) == 0 || len(capRes.Series[0].DataPoints) == 0 {
-		resp.Status = "no_series"
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
-
-	used := firstValue(usedRes)
-	capacity := firstValue(capRes)
-	if used == nil || capacity == nil || math.IsInf(*used, 0) || math.IsInf(*capacity, 0) ||
-		*used < 0 || *capacity < 1 || *used >= math.Exp2(63) || *capacity >= math.Exp2(63) {
+	batch := queryPVCUsage(r.Context(), client, namespace, []string{name}, matchers)
+	if batch.Status != PVCUsageAvailable {
+		errorlog.Record("prometheus", "warning", "pvc usage query failed for %s/%s: %s", namespace, name, batch.Error)
+		resp.Status = batch.Status
+	} else if usage, ok := batch.Usage[name]; ok {
+		resp.Used = usage.UsedBytes
+		resp.Capacity = usage.CapacityBytes
+		resp.Ratio = usage.Ratio
+		resp.HasData = true
+		resp.Status = PVCUsageAvailable
+	} else if batch.Invalid[name] {
 		resp.Status = "invalid_data"
-		writeJSON(w, http.StatusOK, resp)
-		return
+	} else {
+		resp.Status = "no_series"
 	}
-
-	resp.Used = int64(*used)
-	resp.Capacity = int64(*capacity)
-	resp.Ratio = *used / *capacity
-	resp.HasData = true
-	resp.Status = "available"
 	writeJSON(w, http.StatusOK, resp)
 }
 

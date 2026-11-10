@@ -1,0 +1,323 @@
+{
+  "compacted": {
+    "changes": [
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "checkout",
+        "changeType": "update",
+        "summary": "env(checkout/CART_ADDR) changed",
+        "timestamp": "2026-10-16T04:55:24+03:00",
+        "change_category": "spec_config",
+        "rank_reason": "application configuration field changed",
+        "application_configuration_change": true,
+        "fields": [
+          {
+            "path": "spec.template.spec.containers[checkout].env[CART_ADDR]",
+            "oldValue": "cart:7070",
+            "newValue": "localhost:7070"
+          }
+        ]
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "debug",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:53:24+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "NetworkPolicy",
+        "apiVersion": "networking.k8s.io/v1",
+        "namespace": "shop",
+        "name": "deny-all",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:28+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "legacy",
+        "changeType": "delete",
+        "summary": "delete",
+        "timestamp": "2026-10-16T04:43:26+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "cart",
+        "changeType": "update",
+        "summary": "ready: 0→1",
+        "timestamp": "2026-10-16T04:43:54+03:00",
+        "change_category": "runtime_status",
+        "rank_reason": "status field changed",
+        "fields": [
+          {
+            "path": "status.readyReplicas",
+            "oldValue": 0,
+            "newValue": 1
+          }
+        ]
+      }
+    ],
+    "created": [
+      {
+        "namespace": "shop",
+        "first": "2026-10-16T04:43:24+03:00",
+        "count": 13,
+        "apiVersions": {
+          "ConfigMap": "v1",
+          "Deployment": "apps/v1",
+          "Service": "v1"
+        },
+        "objects": [
+          "+0s Deployment/cart",
+          "+0s Service/cart",
+          "+1s Deployment/checkout",
+          "+1s Service/checkout",
+          "+2s Deployment/frontend",
+          "+2s Service/frontend",
+          "+3s ConfigMap/checkout-config (used by Deployment/checkout)",
+          "+3s Deployment/payment",
+          "+3s Service/payment",
+          "+4s Deployment/shipping",
+          "+4s Service/shipping",
+          "+5s Deployment/catalog",
+          "+5s Service/catalog"
+        ]
+      }
+    ]
+  },
+  "original": {
+    "changes": [
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "checkout",
+        "changeType": "update",
+        "summary": "env(checkout/CART_ADDR) changed",
+        "timestamp": "2026-10-16T04:55:24+03:00",
+        "change_category": "spec_config",
+        "rank_reason": "application configuration field changed",
+        "application_configuration_change": true,
+        "fields": [
+          {
+            "path": "spec.template.spec.containers[checkout].env[CART_ADDR]",
+            "oldValue": "cart:7070",
+            "newValue": "localhost:7070"
+          }
+        ]
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "debug",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:53:24+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "catalog",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:29+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "catalog",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:29+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "shipping",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:28+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "NetworkPolicy",
+        "apiVersion": "networking.k8s.io/v1",
+        "namespace": "shop",
+        "name": "deny-all",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:28+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "shipping",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:28+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "ConfigMap",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "checkout-config",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:27+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state",
+        "consumed_by": [
+          "Deployment/checkout"
+        ]
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "payment",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:27+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "payment",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:27+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "frontend",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:26+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "frontend",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:26+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "legacy",
+        "changeType": "delete",
+        "summary": "delete",
+        "timestamp": "2026-10-16T04:43:26+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "checkout",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:25+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "checkout",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:25+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "cart",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:24+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Service",
+        "apiVersion": "v1",
+        "namespace": "shop",
+        "name": "cart",
+        "changeType": "add",
+        "summary": "add",
+        "timestamp": "2026-10-16T04:43:24+03:00",
+        "change_category": "lifecycle",
+        "rank_reason": "resource create/delete for config or desired state"
+      },
+      {
+        "kind": "Deployment",
+        "apiVersion": "apps/v1",
+        "namespace": "shop",
+        "name": "cart",
+        "changeType": "update",
+        "summary": "ready: 0→1",
+        "timestamp": "2026-10-16T04:43:54+03:00",
+        "change_category": "runtime_status",
+        "rank_reason": "status field changed",
+        "fields": [
+          {
+            "path": "status.readyReplicas",
+            "oldValue": 0,
+            "newValue": 1
+          }
+        ]
+      }
+    ]
+  }
+}

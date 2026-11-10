@@ -1,15 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { kindToPluralWithGroup } from '../../utils/navigation'
-import { IssueRow } from './IssuesView'
+import { IssueRow, type IssueRowSlotContext } from './IssuesView'
 import { compareIssues, subjectRef, type Issue, type IssueResourceRef } from './types'
 
 export function ResourceIssuesSection({
   issues,
   onResourceClick,
   subjectResource,
+  compact,
+  renderDetailSection,
+  heading = "Operational issues",
 }: {
+  compact?: boolean
+  renderDetailSection?: (ctx: IssueRowSlotContext) => ReactNode
   issues: Issue[] | undefined
+  heading?: string
   /** When provided, related resources in a causal link become clickable. */
   onResourceClick?: (ref: IssueResourceRef) => void
   /** The resource this section is embedded under. When an issue's subject IS
@@ -27,7 +33,7 @@ export function ResourceIssuesSection({
     <section className="space-y-2">
       <div className="flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
         <AlertTriangle className="h-4 w-4 text-theme-text-tertiary" aria-hidden />
-        <span>Operational issues ({sorted.length})</span>
+        <span>{heading} ({sorted.length})</span>
       </div>
       <ol className="flex flex-col gap-1.5">
         {sorted.map((issue) => {
@@ -36,6 +42,8 @@ export function ResourceIssuesSection({
             <IssueRow
               key={key}
               issue={issue}
+              compact={compact}
+              renderDetailSection={renderDetailSection}
               open={openId === key}
               onToggle={() => setOpenId((cur) => (cur === key ? null : key))}
               onResourceClick={onResourceClick}
