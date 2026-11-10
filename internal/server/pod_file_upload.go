@@ -122,8 +122,10 @@ const (
 //
 // When replacing, the temp file takes the old one's owner before the body is
 // written, so a user who could not keep that owner is refused before the
-// transfer; the mode is applied last, after the write (a read-only mode would
-// stop a non-root writer) and after chown (which clears setuid and setgid).
+// transfer. The comparison is with the temp file's own ids, not the writer's:
+// a setgid directory gives new files its group. The mode is applied last,
+// after the write (a read-only mode would stop a non-root writer) and after
+// chown (which clears setuid and setgid).
 //
 // The commit never treats the destination as a directory (-T), so a directory
 // that appears under that name mid-upload refuses it instead of swallowing the
@@ -168,8 +170,10 @@ tmp=$(mktemp ./.radar-upload.XXXXXX) || exit $?
 echo "tmp=${tmp#./}"
 if [ -e "$dest" ]; then
   replace=1
+  set -- $(ls -nd -- "$tmp")
+  uid=$3 gid=$4
   set -- $(ls -nd -- "$dest")
-  if [ "$3" != "$(id -u)" ] || [ "$4" != "$(id -g)" ]; then
+  if [ "$3" != "$uid" ] || [ "$4" != "$gid" ]; then
     chown "$3:$4" "$tmp" 2>/dev/null || { echo "radar: owner $3:$4 differs" >&2; exit 26; }
   fi
 fi
@@ -611,7 +615,7 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 			"Container has no shell (/bin/sh), which uploading needs. Distroless and scratch images cannot take uploads."
 	case isCommandMissing(streamErr, stderr):
 		return http.StatusNotImplemented, uploadCodeMissingTools,
-			"Container lacks a standard command uploading needs (it uses sh, mktemp, cat, wc, ln, mv, chmod, stat, ls, id and rm). Minimal images may not support uploads."
+			"Container lacks a standard command uploading needs (it uses sh, mktemp, cat, wc, ln, mv, chmod, stat, ls and rm). Minimal images may not support uploads."
 	case strings.Contains(combined, "read-only file system"):
 		return http.StatusConflict, uploadCodeReadOnly,
 			fmt.Sprintf("%s is on a read-only filesystem", dir)

@@ -339,3 +339,38 @@ func TestUploadScriptKeepsSpecialBitsAcrossOwnerChange(t *testing.T) {
 		t.Errorf("owner changed: %+v", st.Sys())
 	}
 }
+
+// A setgid directory gives the temp file the directory's group, so a replace
+// must restore the old file's group even when it matches the writer's.
+func TestUploadScriptKeepsGroupInSetgidDirectory(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to set up a setgid directory with a foreign group")
+	}
+	dir := realTempDir(t)
+	if err := os.Chown(dir, 0, 1234); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o775|os.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "a")
+	_ = os.WriteFile(dest, []byte("old"), 0o644)
+	if err := os.Chown(dest, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	code, _, stderr := runUploadScript(t, dir, "a", true, 3, []byte("new"))
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != "new" {
+		t.Errorf("content %q", got)
+	}
+	st, _ := os.Stat(dest)
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("no owner in %T", st.Sys())
+	}
+	if sys.Uid != 0 || sys.Gid != 0 {
+		t.Errorf("owner %d:%d, want 0:0", sys.Uid, sys.Gid)
+	}
+}

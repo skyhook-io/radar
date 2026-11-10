@@ -135,7 +135,7 @@ terminal. `--disable-exec` turns uploads off along with the terminal.
   replaced file keeps its permissions and owner; when the container's user
   cannot keep the owner, the upload is refused instead.
 - **What it needs.** The container needs `/bin/sh` plus `mktemp`, `cat`, `wc`,
-  `ln`, `mv`, `chmod`, `ls`, `id` and `rm`, and `stat` where `chmod --reference`
+  `ln`, `mv`, `chmod`, `ls` and `rm`, and `stat` where `chmod --reference`
   is missing (BusyBox). Distroless and scratch images are refused with an
   explanation.
 - **What it refuses.** Symlinks, directories and special files as destinations;
