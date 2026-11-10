@@ -198,6 +198,7 @@ func TestDescribeNeverReportsUnreadableCertificateDataAsAbsent(t *testing.T) {
 		{name: "certificate then malformed certificate", certificate: b64(join(leafPEM, notACertificate)), status: DecodePartial, read: 1, problems: []string{"PEM block 2 is not a valid certificate: x509:"}},
 		{name: "undecodable block then certificate", certificate: b64(join(brokenBase64, leafPEM)), status: DecodePartial, read: 1, problems: []string{"PEM block 1 could not be decoded"}},
 		{name: "certificate then request block", certificate: b64(join(leafPEM, requestBlock)), status: DecodePartial, read: 1, problems: []string{"PEM block 2 is a CERTIFICATE REQUEST, not a certificate"}},
+		{name: "unterminated block then certificate", certificate: b64(join([]byte("-----BEGIN CERTIFICATE-----\nbm90IGRlcg==\n"), leafPEM)), status: DecodePartial, read: 1, problems: []string{"PEM block 1 has no END line"}},
 		{name: "text before the certificate", certificate: b64(join([]byte("Certificate:\n    Data: ...\n"), leafPEM)), status: DecodePartial, read: 1, problems: []string{"status.certificate contains data outside PEM blocks"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

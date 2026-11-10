@@ -283,6 +283,11 @@ func decodeCertificate(value any, now time.Time) Certificate {
 			outside = true
 		}
 		end = span[1]
+		// A BEGIN with no END of its own pulls the next block into this span.
+		// pem.Decode skips the unterminated part, so report it here.
+		if bytes.Count(raw[span[0]:span[1]], []byte("-----BEGIN ")) > 1 {
+			out.Problems = append(out.Problems, fmt.Sprintf("PEM block %d has no END line", i+1))
+		}
 		block, _ := pem.Decode(raw[span[0]:span[1]])
 		switch {
 		case block == nil:
