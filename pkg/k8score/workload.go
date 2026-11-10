@@ -806,9 +806,10 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 	if m.dynClient == nil {
 		return fmt.Errorf("dynamic client not initialized")
 	}
+	normalizedKind := NormalizeWorkloadKind(strings.ToLower(kind))
 	// A Rollout's restart is spec.restartAt; the pod-template annotation below
 	// would change the template hash and re-run every canary step instead.
-	if NormalizeWorkloadKind(kind) == "rollouts" {
+	if normalizedKind == "rollouts" {
 		_, err := rollouts.Restart(ctx, m.dynClient, namespace, name)
 		return err
 	}
@@ -822,7 +823,7 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 		return fmt.Errorf("unknown resource kind: %s", kind)
 	}
 
-	if NormalizeWorkloadKind(kind) == "deployments" {
+	if normalizedKind == "deployments" {
 		deployment, err := m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to restart workload: %w", err)

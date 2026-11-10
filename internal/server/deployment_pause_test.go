@@ -339,19 +339,21 @@ func TestRestartPausedDeploymentReturnsWorkloadPaused(t *testing.T) {
 	router := chi.NewRouter()
 	router.Post("/api/workloads/{kind}/{namespace}/{name}/restart", (&Server{}).handleRestartWorkload)
 
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workloads/deployments/prod/web/restart", nil))
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("status = %d, want 409; body %s", rec.Code, rec.Body.String())
-	}
-	var body struct {
-		ErrorCode string `json:"error_code"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if body.ErrorCode != errCodeWorkloadPaused {
-		t.Fatalf("error_code = %q, want %q", body.ErrorCode, errCodeWorkloadPaused)
+	for _, kind := range []string{"deployments", "Deployments", "DEPLOYMENT"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/workloads/"+kind+"/prod/web/restart", nil))
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s: status = %d, want 409; body %s", kind, rec.Code, rec.Body.String())
+		}
+		var body struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.ErrorCode != errCodeWorkloadPaused {
+			t.Fatalf("%s: error_code = %q, want %q", kind, body.ErrorCode, errCodeWorkloadPaused)
+		}
 	}
 	if n := pausePatchCount(dyn); n != 0 {
 		t.Fatalf("issued %d patches for a paused Deployment", n)
