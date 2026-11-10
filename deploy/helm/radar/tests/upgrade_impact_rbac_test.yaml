@@ -23,7 +23,7 @@ tests:
           path: rules
           content:
             apiGroups: ["certificates.k8s.io"]
-            resources: ["certificatesigningrequests", "podcertificaterequests", "clustertrustbundles"]
+            resources: ["podcertificaterequests", "clustertrustbundles"]
             verbs: ["get", "list", "watch"]
       - contains:
           path: rules

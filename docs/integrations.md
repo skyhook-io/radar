@@ -1618,7 +1618,7 @@ chart.
 
 **AI Summary:** `list_resources` reports the state with the signer as `type`; `get_resource` replaces the base64 PEM payloads with what they decode to. See [MCP](mcp.md#certificatesigningrequests).
 
-**RBAC:** The Helm chart grants read-only `get/list/watch` on `certificatesigningrequests`. Radar Cloud's default tier bindings withhold it because a request records its requester's identity; see [the default read policy](cloud-rbac-baseline.md).
+**RBAC:** The Helm chart grants read-only `get/list/watch` on `certificatesigningrequests` together with RBAC objects: with authentication on or in cloud mode, or with `rbac.viewRBAC: true` on a no-auth install. Without it, the CertificateSigningRequest list is not shown. Radar Cloud's default tier bindings withhold it because a request records its requester's identity; see [the default read policy](cloud-rbac-baseline.md).
 
 ### Supported Kinds
 
