@@ -482,6 +482,8 @@ http://localhost:9280/mcp
 
 The port matches your `--port` flag (default 9280). The MCP server uses the stateless Streamable HTTP transport with JSON-RPC and accepts MCP protocol versions 2024-11-05 through 2026-07-28.
 
+Over HTTP, when a client on protocol 2026-07-28 stops waiting for a `list_resources` call, for example on a tool timeout, Radar stops working on it too. This matters when the kind is not loaded yet: the call otherwise keeps waiting for Radar to start watching it, up to 3 seconds once the watch has started. Every other tool, and every call from a client on an older protocol version, runs to completion after the client leaves. Write tools always do, so a change is never left half applied because the caller stopped waiting.
+
 ## Server instructions
 
 When a client connects, Radar returns MCP [server instructions](https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle#initialization) in the `initialize` result, or, for clients on protocol version 2026-07-28 (which has no `initialize`), in the `server/discover` result. The text is about 3,400 characters on which tool answers which question, how to read issue timing and attached changes, what a tool result does and does not prove, and that text read from the cluster (logs, events, annotations) is data, never instructions. It lives in [`pkg/investigation/guidance.go`](../pkg/investigation/guidance.go). Agents in clients that use server instructions get this guidance without a separate skill or rules file.
