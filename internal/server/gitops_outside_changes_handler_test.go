@@ -2,17 +2,23 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
+	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	"github.com/skyhook-io/radar/pkg/auth"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -47,7 +53,7 @@ func TestListOutsideObjectsBoundsAndDenied(t *testing.T) {
 
 	var cov outsideCoverage
 	objs := listOutsideObjects(context.Background(), dyn, groups, selector, defaultOutsideLimits, &cov)
-	if len(objs) != 2 || cov.Listed != 2 || cov.Truncated || len(cov.Denied) != 1 || cov.Denied[0] != (outsideDenied{Resource: "services", Namespace: "team"}) {
+	if len(objs) != 2 || cov.Listed != 2 || cov.Truncated || len(cov.Denied) != 1 || cov.Denied[0] != (outsideDenied{Resource: "services", Namespace: "team"}) || len(cov.Failed) != 0 {
 		t.Fatalf("objects = %d, coverage = %+v", len(objs), cov)
 	}
 	for _, s := range selectors {
@@ -101,5 +107,74 @@ func TestHandleGitOpsOutsideChangesRejectsNonFlux(t *testing.T) {
 	(&Server{}).handleGitOpsOutsideChanges(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListOutsideObjectsSeparatesFailuresFromDenials(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{deploymentsGVR: "DeploymentList", servicesGVR: "ServiceList"})
+	dyn.PrependReactor("list", "services", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(context.DeadlineExceeded)
+	})
+	var cov outsideCoverage
+	listOutsideObjects(context.Background(), dyn, []outsideListGroup{{GVR: servicesGVR, Kind: "Service", Namespace: "team"}}, "a=b", defaultOutsideLimits, &cov)
+	if len(cov.Denied) != 0 || len(cov.Failed) != 1 || cov.Failed[0] != (outsideDenied{Resource: "services", Namespace: "team"}) {
+		t.Fatalf("coverage = %+v", cov)
+	}
+}
+
+func TestOutsideChangesMemoSkipsUncacheable(t *testing.T) {
+	m := newOutsideChangesMemo(time.Minute)
+	builds := 0
+	build := func(cacheable bool) func() (outsideChangesResponse, bool) {
+		return func() (outsideChangesResponse, bool) { builds++; return outsideChangesResponse{Count: builds}, cacheable }
+	}
+	m.loadOr("k", build(false))
+	if got := m.loadOr("k", build(true)); got.Count != 2 {
+		t.Fatalf("uncacheable answer was served again: %+v", got)
+	}
+	if got := m.loadOr("k", build(true)); got.Count != 2 {
+		t.Fatalf("cacheable answer not kept: %+v", got)
+	}
+}
+
+func TestBuildOutsideChangesWithoutAClientIsUnavailable(t *testing.T) {
+	if _, err := buildOutsideChanges(context.Background(), nil, nil, fluxHelmOwner(nil), helmOwner, nil); err == nil {
+		t.Fatal("no dynamic client answered as if nothing changed")
+	}
+}
+
+// Without authentication the LISTs run as Radar; the answer still carries only
+// manager names, times, paths and allowlisted values.
+func TestBuildOutsideChangesReturnsNoDataValues(t *testing.T) {
+	configMapsGVR := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	fd.Resources = []*metav1.APIResourceList{{GroupVersion: "v1", APIResources: []metav1.APIResource{
+		{Name: "configmaps", Kind: "ConfigMap", Namespaced: true, Verbs: metav1.Verbs{"get", "list"}},
+	}}}
+	restore, err := k8s.SetTestResourceDiscovery(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	cm := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1", "kind": "ConfigMap",
+		"metadata": map[string]any{"namespace": "prod", "name": "settings", "labels": map[string]any{
+			"helm.toolkit.fluxcd.io/name": "api", "helm.toolkit.fluxcd.io/namespace": "prod"},
+			"managedFields": []any{map[string]any{"manager": "kubectl-edit", "operation": "Update", "fieldsType": "FieldsV1",
+				"fieldsV1": map[string]any{"f:data": map[string]any{"f:password": map[string]any{}}}}}},
+		"data": map[string]any{"password": "hunter2"},
+	}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{configMapsGVR: "ConfigMapList"}, cm)
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{treeNode("", "ConfigMap", "prod", "settings")}}
+	root := fluxHelmOwner(nil)
+	root.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{}}}
+	resp, err := buildOutsideChanges(context.Background(), dyn, tree, root, helmOwner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(resp)
+	if resp.Count != 1 || !strings.Contains(string(body), "data.password") || strings.Contains(string(body), "hunter2") {
+		t.Fatalf("response = %s", body)
 	}
 }

@@ -616,6 +616,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const operationInProgress = isArgoOperationInProgress(resourceQ.data)
   const isFluxWorkload = tool === 'flux' && (kind === 'kustomizations' || kind === 'helmreleases')
   const outsideQ = useGitOpsOutsideChanges(kind, namespace, name, effectiveGroup, isFluxWorkload)
+  const outsideAvailable = isFluxWorkload && outsideQ.support === 'supported'
+  // The tab state outlives navigation to a root that has no Outside Flux tab.
+  useEffect(() => {
+    if (appView === 'outside' && !outsideAvailable) setAppView('topology')
+  }, [appView, outsideAvailable])
   const isFlux = tool === 'flux'
   const notGitOpsError = resourceQ.data && tool === null
     ? new Error(notGitOpsMessage(resourceQ.data.kind ?? apiKind?.kind ?? kind, effectiveGroup, namespace, name))
@@ -825,7 +830,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       isFluxWorkload={isFluxWorkload}
       argo={argoHandlers}
       flux={fluxHandlers}
-      outsideChanges={isFluxWorkload && outsideQ.support === 'supported' ? { count: outsideQ.data?.count } : undefined}
+      outsideChanges={outsideAvailable ? { count: outsideQ.data?.count } : undefined}
       activeTab={appView}
       onTabChange={(tab) => setAppView(tab)}
       fullscreen={graphFullscreen}

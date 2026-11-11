@@ -40,6 +40,9 @@ describe('GitOpsOutsideChangesView', () => {
     expect(html).toMatch(/incomplete/i)
     expect(html).toContain('services in prod')
     expect(html).toContain('Secrets are never read')
+    const failed = render({ coverage: { listed: 3, failed: [{ resource: 'widgets', namespace: 'prod' }] } })
+    expect(failed).toContain("Radar couldn&#x27;t list widgets in prod")
+    expect(failed).not.toContain("You can&#x27;t list")
   })
 
   it('says when Radar could not read the policy', () => {

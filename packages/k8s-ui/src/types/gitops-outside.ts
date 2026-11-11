@@ -32,6 +32,8 @@ export interface GitOpsOutsideObject {
 export interface GitOpsOutsideCoverage {
   listed: number
   denied?: { resource: string; namespace: string }[]
+  // The LIST errored for a reason other than RBAC.
+  failed?: { resource: string; namespace: string }[]
   skipped?: string[]
   notChecked?: string[]
   labelScan?: boolean

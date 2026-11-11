@@ -152,6 +152,9 @@ func LeafPaths(raw []byte) ([]string, error) {
 }
 
 // listKey renders a k:{"name":"engine","port":80} member as name=engine,port=80.
+// The write-evidence path parser reads one key=value per bracket, so a
+// multi-key element is shown but never matched against the live object or an
+// ignore rule; such a path gets no value and keeps its policy outcome.
 func listKey(raw string) (string, error) {
 	var fields map[string]any
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {

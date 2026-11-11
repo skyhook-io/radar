@@ -10,6 +10,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -77,8 +78,11 @@ type outsideDenied struct {
 }
 
 type outsideCoverage struct {
-	Listed     int             `json:"listed"`
-	Denied     []outsideDenied `json:"denied,omitempty"`
+	Listed int             `json:"listed"`
+	Denied []outsideDenied `json:"denied,omitempty"`
+	// Failed: the LIST errored for a reason other than RBAC (removed CRD,
+	// server error, timeout).
+	Failed     []outsideDenied `json:"failed,omitempty"`
 	Skipped    []string        `json:"skipped,omitempty"`
 	NotChecked []string        `json:"notChecked,omitempty"`
 	// LabelScan: the release records no inventory, so a fixed set of common
@@ -116,7 +120,14 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 	if ownerObj != nil {
 		policy = readGitOpsWritePolicy(owner, ownerObj, obj)
 	}
-	for _, mf := range obj.GetManagedFields() {
+	entries := obj.GetManagedFields()
+	entryPaths := make([][]string, len(entries))
+	for i, mf := range entries {
+		if mf.FieldsV1 != nil {
+			entryPaths[i], _ = fieldwriters.LeafPaths(mf.FieldsV1.Raw)
+		}
+	}
+	for i, mf := range entries {
 		if mf.Subresource != "" {
 			continue
 		}
@@ -127,15 +138,7 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 			otherManagers = append(otherManagers, mf.Manager)
 			continue
 		}
-		var raw []byte
-		if mf.FieldsV1 != nil {
-			raw = mf.FieldsV1.Raw
-		}
-		paths, err := fieldwriters.LeafPaths(raw)
-		if err != nil {
-			continue
-		}
-		kept, label := fieldwriters.SplitHarmless(ownedValuePaths(obj.Object, paths))
+		kept, label := fieldwriters.SplitHarmless(ownedValuePaths(entryPaths, i))
 		if label != "" {
 			harmless = append(harmless, label)
 		}
@@ -198,14 +201,8 @@ func outsideOutcome(policy *gitOpsWritePolicy, ignore string) string {
 // on the allowlist: replicas, container images and resource requests and
 // limits. Env values, labels, annotations and data never leave the server.
 func outsideValue(obj map[string]any, path string) (string, bool) {
-	allowed := path == "spec.replicas" ||
-		(strings.HasSuffix(path, ".image") && (strings.Contains(path, "containers[") || strings.Contains(path, "initContainers["))) ||
-		strings.Contains(path, ".resources.requests.") || strings.Contains(path, ".resources.limits.")
-	if !allowed {
-		return "", false
-	}
 	segs, err := parseWriteFieldPath(path)
-	if err != nil {
+	if err != nil || !outsideValueAllowed(segs) {
 		return "", false
 	}
 	node, ok := liveNode(obj, segs)
@@ -221,23 +218,74 @@ func outsideValue(obj map[string]any, path string) (string, bool) {
 	return "", false
 }
 
-// ownedValuePaths drops map fields whose live value is a map or list: such an
-// entry owns only the container (Kubernetes keeps it after another manager
-// takes over every key inside), which changes no value. A keyed list element
-// stays, because owning it means the element was added.
-func ownedValuePaths(obj map[string]any, paths []string) []string {
-	var out []string
-	for _, p := range paths {
-		segs, err := parseWriteFieldPath(p)
-		if err == nil && segs[len(segs)-1].typ == segKey {
-			if node, ok := liveNode(obj, segs); ok {
-				switch node.(type) {
-				case map[string]any, []any:
-					continue
-				}
+// outsideValueAllowed matches parsed segments, so a quoted map key such as
+// annotations["team.resources.limits.note"] never passes for a resource path.
+func outsideValueAllowed(segs []fieldPathSegment) bool {
+	key := func(i int, names ...string) bool {
+		if i < 0 || i >= len(segs) || segs[i].typ != segKey {
+			return false
+		}
+		for _, n := range names {
+			if segs[i].key == n {
+				return true
 			}
 		}
-		out = append(out, p)
+		return false
+	}
+	n := len(segs)
+	if n == 2 && key(0, "spec") && key(1, "replicas") {
+		return true
+	}
+	// …containers[sel] is the anchor; everything before it must be plain keys.
+	anchor := -1
+	for i, seg := range segs {
+		if seg.typ == segMatch && key(i-1, "containers", "initContainers") {
+			anchor = i
+			break
+		}
+		if seg.typ != segKey {
+			return false
+		}
+	}
+	if anchor < 0 {
+		return false
+	}
+	rest := n - anchor - 1
+	switch {
+	case rest == 1:
+		return key(anchor+1, "image")
+	case rest == 3:
+		return key(anchor+1, "resources") && key(anchor+2, "requests", "limits") && segs[anchor+3].typ == segKey
+	}
+	return false
+}
+
+// ownedValuePaths drops a path another entry owns fields inside: this entry
+// then holds only the emptied container (Kubernetes keeps it after another
+// manager takes over every key), which changes no value. An atomic field
+// (args, a Service selector, Ingress rules) has a single owner of its whole
+// value, so it stays.
+func ownedValuePaths(entryPaths [][]string, self int) []string {
+	var out []string
+	for _, p := range entryPaths[self] {
+		container := false
+		for j, others := range entryPaths {
+			if j == self {
+				continue
+			}
+			for _, o := range others {
+				if strings.HasPrefix(o, p+".") || strings.HasPrefix(o, p+"[") {
+					container = true
+					break
+				}
+			}
+			if container {
+				break
+			}
+		}
+		if !container {
+			out = append(out, p)
+		}
 	}
 	return out
 }
@@ -398,7 +446,7 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 			return out
 		case err != nil:
 			log.Printf("[gitops] Failed to list %s in %s for outside changes: %v", g.GVR.Resource, sanitizeForLog(g.Namespace), err)
-			cov.Denied = append(cov.Denied, outsideDenied{Resource: g.GVR.Resource, Namespace: g.Namespace})
+			cov.Failed = append(cov.Failed, outsideDenied{Resource: g.GVR.Resource, Namespace: g.Namespace})
 			continue
 		}
 		for j := range list.Items {
@@ -434,8 +482,14 @@ func newOutsideChangesMemo(ttl time.Duration) *outsideChangesMemo {
 }
 
 func (m *outsideChangesMemo) load(key string, build func() outsideChangesResponse) outsideChangesResponse {
+	return m.loadOr(key, func() (outsideChangesResponse, bool) { return build(), true })
+}
+
+// loadOr keeps the built answer only when build reports it cacheable.
+func (m *outsideChangesMemo) loadOr(key string, build func() (outsideChangesResponse, bool)) outsideChangesResponse {
 	if m == nil || m.ttl <= 0 {
-		return build()
+		resp, _ := build()
+		return resp
 	}
 	m.mu.Lock()
 	now := time.Now()
@@ -456,9 +510,12 @@ func (m *outsideChangesMemo) load(key string, build func() outsideChangesRespons
 	if time.Now().Before(e.expiresAt) {
 		return e.value
 	}
-	e.value = build()
-	e.expiresAt = time.Now().Add(m.ttl)
-	return e.value
+	value, cacheable := build()
+	if cacheable {
+		e.value = value
+		e.expiresAt = time.Now().Add(m.ttl)
+	}
+	return value
 }
 
 func (m *outsideChangesMemo) clear() {
@@ -502,13 +559,22 @@ func (s *Server) handleGitOpsOutsideChanges(w http.ResponseWriter, r *http.Reque
 	owner := &topology.ResourceRef{Group: entry.GVR.Group, Kind: entry.Kind, Namespace: root.GetNamespace(), Name: root.GetName()}
 	key := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), nil) + "\x00" + owner.Group + "/" + owner.Kind + "/" + owner.Namespace + "/" + owner.Name + "\x00" + root.GetResourceVersion()
 	dyn := s.getDynamicClientForRequest(r)
-	resp := s.outsideChangesMemo.load(key, func() outsideChangesResponse {
-		return buildOutsideChanges(r.Context(), dyn, tree, root, owner, resolver)
+	if dyn == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes client not available for this request")
+		return
+	}
+	resp := s.outsideChangesMemo.loadOr(key, func() (outsideChangesResponse, bool) {
+		resp, _ := buildOutsideChanges(r.Context(), dyn, tree, root, owner, resolver)
+		// An answer cut short because the caller left is not kept for the next one.
+		return resp, r.Context().Err() == nil
 	})
 	s.writeJSON(w, resp)
 }
 
-func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, owner *topology.ResourceRef, resolver *insightsResolver) outsideChangesResponse {
+func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, owner *topology.ResourceRef, resolver *insightsResolver) (outsideChangesResponse, error) {
+	if dyn == nil {
+		return outsideChangesResponse{}, errOutsideNoClient
+	}
 	resp := outsideChangesResponse{
 		Root:         outsideRef{Group: owner.Group, Kind: owner.Kind, Namespace: owner.Namespace, Name: owner.Name},
 		Objects:      []outsideObject{},
@@ -521,7 +587,7 @@ func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitop
 	}
 	groups, cov := outsideListGroups(tree, root, k8s.ServedGVR)
 	resp.Coverage = cov
-	if dyn != nil {
+	{
 		harmless := map[string]int{}
 		others := map[string]int{}
 		for _, obj := range listOutsideObjects(ctx, dyn, groups, fluxMemberSelector(root), defaultOutsideLimits, &resp.Coverage) {
@@ -557,5 +623,7 @@ func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitop
 			}
 		}
 	}
-	return resp
+	return resp, nil
 }
+
+var errOutsideNoClient = errors.New("no Kubernetes client for this request")

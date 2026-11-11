@@ -90,7 +90,10 @@ func TestOutsideValueAllowlist(t *testing.T) {
 			t.Errorf("outsideValue(%q) = %q, %v; want %q", path, got, ok, want)
 		}
 	}
-	for _, path := range []string{"spec.template.spec.containers[name=engine].env[name=TOKEN].value", `metadata.annotations["x"]`, "spec.template.spec.containers[name=engine]"} {
+	obj["metadata"].(map[string]any)["annotations"].(map[string]any)["team.resources.limits.note"] = "private"
+	obj["data"] = map[string]any{"app.resources.requests.yaml": "private", "image": "private"}
+	for _, path := range []string{"spec.template.spec.containers[name=engine].env[name=TOKEN].value", `metadata.annotations["x"]`, "spec.template.spec.containers[name=engine]",
+		`metadata.annotations["team.resources.limits.note"]`, `data["app.resources.requests.yaml"]`, "data.image"} {
 		if got, ok := outsideValue(obj, path); ok {
 			t.Errorf("outsideValue(%q) leaked %q", path, got)
 		}
@@ -206,13 +209,32 @@ func TestFluxMemberSelector(t *testing.T) {
 	}
 }
 
-func TestClassifyOutsideObjectSkipsOwnedEmptyContainers(t *testing.T) {
+func TestClassifyOutsideObjectSkipsContainersOthersFill(t *testing.T) {
 	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{
+		fieldsEntry(t, "helm-controller", metav1.ManagedFieldsOperationApply, map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{"f:team": map[string]any{}}}}),
 		fieldsEntry(t, "node-fetch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{}}}),
 		fieldsEntry(t, "kubectl-patch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": map[string]any{`k:{"name":"app"}`: map[string]any{".": map[string]any{}}}}}}}),
 	})
 	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil))
 	if len(out.Changes) != 1 || out.Changes[0].Tool != "kubectl patch" || out.Changes[0].Paths[0] != "spec.template.spec.containers[name=app]" {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+}
+
+func TestClassifyOutsideObjectKeepsAtomicValues(t *testing.T) {
+	container := map[string]any{`k:{"name":"app"}`: map[string]any{"f:args": map[string]any{}}}
+	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{
+		fieldsEntry(t, "kubectl-edit", metav1.ManagedFieldsOperationUpdate, map[string]any{
+			"f:metadata": map[string]any{"f:finalizers": map[string]any{`v:"example.io/keep"`: map[string]any{}}, "f:labels": map[string]any{}},
+			"f:spec":     map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": container}}},
+		}),
+	})
+	obj.Object["metadata"].(map[string]any)["finalizers"] = []any{"example.io/keep"}
+	containers := obj.Object["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	containers[1].(map[string]any)["args"] = []any{"--debug"}
+	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil))
+	want := []string{"metadata.finalizers", "metadata.labels", "spec.template.spec.containers[name=app].args"}
+	if len(out.Changes) != 1 || !reflect.DeepEqual(out.Changes[0].Paths, want) {
 		t.Fatalf("changes = %+v", out.Changes)
 	}
 }

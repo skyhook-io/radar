@@ -135,6 +135,7 @@ function outsideCoverageNotes(data: GitOpsOutsideChanges): string[] {
   const notes: string[] = []
   if (c.truncated) notes.push(`Radar stopped after ${c.listed} objects or its time limit; the list is incomplete.`)
   if (c.denied?.length) notes.push(`You can't list ${c.denied.map((d) => `${d.resource} in ${d.namespace}`).join(', ')}.`)
+  if (c.failed?.length) notes.push(`Radar couldn't list ${c.failed.map((d) => `${d.resource} in ${d.namespace}`).join(', ')}.`)
   if (c.labelScan) notes.push('This release records no inventory, so Radar checked common kinds by Flux labels only.')
   if (c.notChecked?.length) notes.push(`Not checked: ${c.notChecked.join(', ')}.`)
   if (c.skipped?.includes('secrets')) notes.push('Secrets are never read: listing them would return their data.')
