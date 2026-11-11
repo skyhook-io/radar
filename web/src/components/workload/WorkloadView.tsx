@@ -107,7 +107,7 @@ import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
-import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName } from '@skyhook-io/k8s-ui'
+import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -1674,7 +1674,7 @@ function shouldAutoStreamWorkloadLogs(kind: string, resource: any): boolean {
   return true
 }
 
-function PodLogsTab({
+export function PodLogsTab({
   namespace,
   name,
   resource,
@@ -1687,12 +1687,7 @@ function PodLogsTab({
   initialContainer?: string | null
   onConsumeInitialContainer?: () => void
 }) {
-  const containers = useMemo(() => {
-    const names: string[] = []
-    for (const c of resource?.spec?.initContainers || []) if (c.name) names.push(c.name)
-    for (const c of resource?.spec?.containers || []) if (c.name) names.push(c.name)
-    return names
-  }, [resource])
+  const containers = useMemo(() => getLogContainerNames(resource), [resource])
 
   // A terminated pod has nothing to follow — only stream live ones. Wait for
   // the phase to be known so a completed pod isn't briefly streamed while the
@@ -1708,7 +1703,9 @@ function PodLogsTab({
 
   return (
     <div className="h-full">
+      {/* The viewer reads its initial container once; mount it again when the pod arrives. */}
       <LogsViewer
+        key={resource ? 'loaded' : 'loading'}
         namespace={namespace}
         podName={name}
         containers={containers}

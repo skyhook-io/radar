@@ -44,6 +44,15 @@ describe('getDefaultLogContainerName', () => {
     expect(getDefaultLogContainerName(pod)).toBe('seed')
   })
 
+  it('picks a native sidecar that keeps failing to start', () => {
+    const pod = initializingPod([
+      { name: 'migrate', state: { terminated: { exitCode: 0 } } },
+      { name: 'mesh', state: { waiting: { reason: 'CrashLoopBackOff' } } },
+      { name: 'seed', state: { waiting: { reason: 'PodInitializing' } } },
+    ])
+    expect(getDefaultLogContainerName(pod)).toBe('mesh')
+  })
+
   it('falls back to the default container once init has finished', () => {
     const pod = initializingPod([
       { name: 'migrate', state: { terminated: { exitCode: 0 } } },
