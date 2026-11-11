@@ -110,7 +110,8 @@ rbac:
 
   # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
   # so the resource browser can list them and the per-ServiceAccount "blast radius"
-  # Permissions panel can render. Auto-enabled when auth is on (auth.mode != none)
+  # Permissions panel can render. Also grants CertificateSigningRequest reads, since
+  # each request records its requester's username and groups. Auto-enabled when auth is on (auth.mode != none)
   # or in cloud mode, where every RBAC read is re-checked against the requesting
   # user's own permissions so the shared cache can't leak the authorization graph.
   # This flag therefore only matters for no-auth installs: there, cache-served reads

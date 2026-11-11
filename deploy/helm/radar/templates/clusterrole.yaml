@@ -176,6 +176,13 @@ rules:
       - clusterroles
       - clusterrolebindings
     verbs: ["get", "list", "watch"]
+  # CertificateSigningRequests record the requester's username, groups and
+  # authenticator extra data, which is the same authorization information,
+  # so they share this gate.
+  - apiGroups: ["certificates.k8s.io"]
+    resources:
+      - certificatesigningrequests
+    verbs: ["get", "list", "watch"]
   {{- end }}
 
   {{- if or .Values.rbac.viewWebhooks (ne .Values.auth.mode "none") .Values.cloud.enabled }}

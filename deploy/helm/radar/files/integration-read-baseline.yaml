@@ -241,6 +241,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "certificates.k8s.io"
+    resources: ["certificatesigningrequests"]
+    scope: Cluster
+    collection: ""
+    decision: withhold
+    reason: "Requests record the requester's username, UID, groups and authenticator extra data; reading them stays with the caller's own Kubernetes RBAC, as for PodCertificateRequests."
+    source: "https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/"
   - group: "cilium.io"
     resources: ["ciliumclusterwidenetworkpolicies"]
     scope: Cluster

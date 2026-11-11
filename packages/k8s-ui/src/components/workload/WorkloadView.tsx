@@ -39,7 +39,7 @@ import {
   Pause,
 } from 'lucide-react'
 import { isPausedDeployment } from '../../utils/bulk-workload-actions'
-import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
+import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo, CertificateSigningRequestDetails } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { ReadGap } from '../../types/read-coverage'
 import { workloadHistoryNotes, type WorkloadHistoryCoverage } from '../../utils/workload-history-notes'
@@ -194,6 +194,8 @@ interface WorkloadViewProps {
   relationships?: Relationships
   /** TLS certificate info for secrets */
   certificateInfo?: any
+  /** Decoded request and certificate for CertificateSigningRequest detail responses */
+  certificateSigningRequest?: CertificateSigningRequestDetails
   /** HPA diagnosis for HorizontalPodAutoscaler detail responses */
   hpaDiagnosis?: HPADiagnosis
   /** Compact diagnosis for autoscalers controlling this workload */
@@ -475,6 +477,7 @@ export function WorkloadView({
   resource,
   relationships,
   certificateInfo,
+  certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
   workloadPods,
@@ -1192,6 +1195,7 @@ export function WorkloadView({
                 relationships={rendererRelationships}
                 trackedBy={trackedBy}
                 certificateInfo={certificateInfo}
+                certificateSigningRequest={certificateSigningRequest}
                 hpaDiagnosis={hpaDiagnosis}
                 scalerDiagnostics={scalerDiagnostics}
                 workloadPods={workloadPods}
@@ -1420,6 +1424,7 @@ export function WorkloadView({
               relationships={rendererRelationships}
               trackedBy={trackedBy}
               certificateInfo={certificateInfo}
+              certificateSigningRequest={certificateSigningRequest}
               hpaDiagnosis={hpaDiagnosis}
               scalerDiagnostics={scalerDiagnostics}
               workloadPods={workloadPods}
@@ -2066,6 +2071,7 @@ function InfoTab({
   relationships,
   trackedBy,
   certificateInfo,
+  certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
   workloadPods,
@@ -2104,6 +2110,7 @@ function InfoTab({
   relationships?: Relationships
   trackedBy?: string
   certificateInfo?: any
+  certificateSigningRequest?: CertificateSigningRequestDetails
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
   workloadPods?: WorkloadPodInfo[]
@@ -2160,6 +2167,7 @@ function InfoTab({
           relationships={relationships}
           trackedBy={trackedBy}
           certificateInfo={certificateInfo}
+          certificateSigningRequest={certificateSigningRequest}
           hpaDiagnosis={hpaDiagnosis}
           scalerDiagnostics={scalerDiagnostics}
           onCopy={onCopy}

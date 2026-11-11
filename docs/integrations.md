@@ -1604,6 +1604,30 @@ chart.
 
 ---
 
+## Certificate Signing Requests
+
+[CertificateSigningRequests](https://kubernetes.io/docs/reference/access-authn-authz/certificate-signing-requests/) are how kubelets and other clients ask a signer for an X.509 certificate. This is the built-in, cluster-scoped `certificates.k8s.io/v1` API, not a CRD; Radar lists it under **Other Kubernetes APIs**. Support is read-only: Radar does not approve, deny or sign requests.
+
+### What Radar Shows
+
+**Status:** The table, the detail header, MCP and AI context share one reading, the one `kubectl` and client-go's `WaitForCertificate` use: **Pending approval**, **Approved, not issued** (approved, but the signer has not returned a certificate), **Issued**, **Denied** and **Failed**. Denied and Failed are final, and a certificate counts as issued only once the request is Approved. Waiting for an approver or a signer does not raise an Issue.
+
+**Detail View:** The deciding condition's reason, message and time; the signer, usages and requested duration; the requester (username, UID, groups and extra) as the API server recorded it; the identity decoded from the PKCS#10 request (subject, organizations, DNS/IP/email/URI SANs, key and signature algorithm), labelled as what was asked for rather than what was authorized or issued; and each returned certificate (subject, SANs, issuer, serial and validity) in the same view TLS Secrets use. Missing, malformed or partly unreadable data is reported as such, never as "no certificate".
+
+**Resource Browser:** Status, signer and requester columns.
+
+**AI Summary:** `list_resources` reports the state with the signer as `type`; `get_resource` replaces the base64 PEM payloads with what they decode to. See [MCP](mcp.md#certificatesigningrequests).
+
+**RBAC:** The Helm chart grants read-only `get/list/watch` on `certificatesigningrequests` together with RBAC objects: with authentication on or in cloud mode, or with `rbac.viewRBAC: true` on a no-auth install. Without it, the CertificateSigningRequest list is not shown. Radar Cloud's default tier bindings withhold it because a request records its requester's identity; see [the default read policy](cloud-rbac-baseline.md).
+
+### Supported Kinds
+
+| Kind | Group | Topology | Detail View | AI Summary |
+|------|-------|----------|-------------|------------|
+| CertificateSigningRequest | `certificates.k8s.io` (v1) | — | Yes | Yes |
+
+---
+
 ## NVIDIA GPU Operator
 
 The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/) manages the GPU software stack (driver, container toolkit, device plugin, DCGM) on Kubernetes.

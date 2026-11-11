@@ -106,6 +106,7 @@ import {
   getRevisionStatus,
 } from '../resources/resource-utils-knative'
 import { getHTTPProxyStatus } from '../resources/resource-utils-contour'
+import { getCertificateSigningRequestStatus, isCertificateSigningRequest } from '../resources/resource-utils-csr'
 import {
   isCalicoApiVersion,
   isCalicoPolicyKind,
@@ -149,6 +150,7 @@ import {
   PersistentVolumeRenderer,
   StorageClassRenderer,
   CertificateRequestRenderer,
+  CertificateSigningRequestRenderer,
   ClusterIssuerRenderer,
   IssuerRenderer,
   OrderRenderer,
@@ -314,7 +316,7 @@ import {
   isComposite,
   isClaim,
 } from '../resources/resource-utils-crossplane'
-import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom, TimelineEvent, HPADiagnosis, WorkloadPodInfo } from '../../types'
+import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, CertificateSigningRequestDetails, ResolvedEnvFrom, TimelineEvent, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { CopyHandler } from '../ui/drawer-components'
 import { AlertBanner } from '../ui/drawer-components'
 import { replicaScalers } from '../../utils/replica-scalers'
@@ -496,7 +498,7 @@ const KNOWN_KINDS = new Set([
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
-  'orders', 'challenges',
+  'orders', 'challenges', 'certificatesigningrequests',
   'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'udproutes', 'sealedsecrets', 'workflowtemplates', 'clusterworkflowtemplates',
   'networkpolicies', 'networkpolicy',
   'globalnetworkpolicies', 'globalnetworkpolicy',
@@ -599,6 +601,7 @@ interface ResourceRendererDispatchProps {
   /** See RelatedResourcesSection. */
   trackedBy?: string
   certificateInfo?: SecretCertificateInfo
+  certificateSigningRequest?: CertificateSigningRequestDetails
   hpaDiagnosis?: HPADiagnosis
   scalerDiagnostics?: ScalerDiagnosis[]
   workloadPods?: WorkloadPodInfo[]
@@ -647,6 +650,7 @@ export function ResourceRendererDispatch({
   relationships,
   trackedBy,
   certificateInfo,
+  certificateSigningRequest,
   hpaDiagnosis,
   scalerDiagnostics,
   workloadPods,
@@ -766,6 +770,7 @@ export function ResourceRendererDispatch({
     || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
     || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
+    || kind === 'certificatesigningrequests'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io')) ||
@@ -807,6 +812,7 @@ export function ResourceRendererDispatch({
     || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
     || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
       && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
+    || (kind === 'certificatesigningrequests' && isCertificateSigningRequest(data))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -933,6 +939,7 @@ export function ResourceRendererDispatch({
         {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'storageclasses' && <StorageClassRenderer data={data} />}
         {kind === 'certificaterequests' && <CertificateRequestRenderer data={data} />}
+        {kind === 'certificatesigningrequests' && isCertificateSigningRequest(data) && <CertificateSigningRequestRenderer data={data} details={certificateSigningRequest} />}
         {kind === 'clusterissuers' && <ClusterIssuerRenderer data={data} />}
         {kind === 'issuers' && <IssuerRenderer data={data} />}
         {kind === 'orders' && <OrderRenderer data={data} />}
@@ -1290,6 +1297,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   }
   if (k === 'persistentvolumes') return getPVStatus(data)
   if (k === 'certificaterequests') return getCertificateRequestStatus(data)
+  if (k === 'certificatesigningrequests' && isCertificateSigningRequest(data)) return getCertificateSigningRequestStatus(data)
   if (k === 'clusterissuers') return getClusterIssuerStatus(data)
   if (k === 'issuers') return getIssuerStatus(data)
   if (k === 'orders') return getOrderState(data)

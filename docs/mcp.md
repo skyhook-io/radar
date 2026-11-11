@@ -1739,6 +1739,19 @@ controllerless Pods; absence of an omission does not establish complete consumer
 coverage or prove that a resource is unused. Storage audit uses its own consumer
 inventory and coverage rules.
 
+### CertificateSigningRequests
+
+`list_resources` reports a request's state the way kubectl and the kubelet's
+client read it: `Pending approval`, `Approved, not issued`, `Issued`, `Denied`
+or `Failed`, with the signer as `type` and, for Denied or Failed, the deciding
+condition's reason and message as `issue`. Approval alone is not issuance, and
+neither waiting state is an Issue. `get_resource` replaces the base64 PEM in
+`spec.request` and `status.certificate` with what it decodes to: the subject,
+SANs and key the requester asked for, and the subject, issuer and validity of
+each returned certificate. Data that cannot be read is `invalid` or `partial`
+with its `problems`, never absent. The requested identity is the requester's
+claim, not proof of what was approved or issued.
+
 ### Pod/template differences in issue context
 
 Existing OOM/restart, unschedulable, and image-pull issues can carry a neutral

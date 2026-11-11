@@ -680,6 +680,7 @@ export function WorkloadView({
     [podWorkloadOwner, podOwnerAppsQuery.data?.applications],
   )
   const certificateInfo = resourceResponse?.certificateInfo
+  const certificateSigningRequest = resourceResponse?.certificateSigningRequest
   const hpaDiagnosis = resourceResponse?.hpaDiagnosis
   const activeImageTargetOwnership = useMemo(
     () =>
@@ -1220,6 +1221,7 @@ export function WorkloadView({
         ownershipContext={ownershipContext}
         onOpenApplication={handleOpenApplication}
         certificateInfo={certificateInfo}
+        certificateSigningRequest={certificateSigningRequest}
         hpaDiagnosis={hpaDiagnosis}
         workloadPods={supportsWorkloadPods ? workloadPodsQuery.data?.pods : undefined}
         onEvaluateCapacity={

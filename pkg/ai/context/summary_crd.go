@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/csr"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -101,6 +102,8 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeNvidiaClusterPolicy(obj)
 	case group == "nvidia.com" && kind == "NVIDIADriver":
 		return summarizeNvidiaDriver(obj)
+	case group == csr.Group && kind == csr.Kind:
+		return summarizeCertificateSigningRequest(obj)
 	}
 
 	// Generic fallback

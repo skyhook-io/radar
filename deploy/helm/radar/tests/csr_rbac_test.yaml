@@ -1,0 +1,63 @@
+suite: CertificateSigningRequest read RBAC
+templates:
+  - clusterrole.yaml
+tests:
+  - it: withholds CertificateSigningRequest reads on a no-auth install by default
+    set:
+      auth:
+        mode: none
+    asserts:
+      - notContains:
+          path: rules[*].resources
+          content: certificatesigningrequests
+      # The rest of the certificates.k8s.io grant stays, so the assertion
+      # above passes for the right reason.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["certificates.k8s.io"]
+            resources: ["podcertificaterequests", "clustertrustbundles"]
+            verbs: ["get", "list", "watch"]
+
+  - it: grants CertificateSigningRequest reads with rbac.viewRBAC
+    set:
+      rbac:
+        viewRBAC: true
+      auth:
+        mode: none
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["certificates.k8s.io"]
+            resources: ["certificatesigningrequests"]
+            verbs: ["get", "list", "watch"]
+
+  - it: grants CertificateSigningRequest reads when authentication is on
+    set:
+      auth:
+        mode: proxy
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["certificates.k8s.io"]
+            resources: ["certificatesigningrequests"]
+            verbs: ["get", "list", "watch"]
+
+  - it: grants CertificateSigningRequest reads in cloud mode
+    set:
+      auth:
+        mode: none
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["certificates.k8s.io"]
+            resources: ["certificatesigningrequests"]
+            verbs: ["get", "list", "watch"]

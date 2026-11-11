@@ -3054,12 +3054,12 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.writeJSON(w, topology.ResourceWithRelationships{
+		s.writeJSON(w, newResourceReadResponse(topology.ResourceWithRelationships{
 			RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
 			Resource:        resource,
 			Relationships:   relationships,
 			HPADiagnosis:    hpaDiagnosisFor(resource),
-		})
+		}))
 		return
 	}
 
@@ -3309,7 +3309,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 		return
 	}
-	s.writeJSON(w, response)
+	s.writeJSON(w, newResourceReadResponse(response))
 }
 
 // servedSecret returns a cached Secret as it may be served. The cache holds

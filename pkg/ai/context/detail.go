@@ -83,6 +83,7 @@ func pruneMapDetail(m map[string]any) {
 	if p, ok := statusProfileByKind[strings.ToLower(kind)]; ok {
 		prune.ApplyInPlace(m, p)
 	}
+	decodeCertificateSigningRequest(m)
 }
 
 // pruneSpecElements handles what the shared profiles can't: conditional

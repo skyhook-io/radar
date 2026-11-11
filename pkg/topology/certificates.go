@@ -39,32 +39,35 @@ func ParsePEMCertificates(certData []byte) []CertificateInfo {
 			continue
 		}
 
-		now := time.Now()
-		daysLeft := int(math.Floor(cert.NotAfter.Sub(now).Hours() / 24))
-
-		info := CertificateInfo{
-			Subject:      certSubjectCN(cert),
-			Issuer:       certIssuerCN(cert),
-			SelfSigned:   cert.Issuer.String() == cert.Subject.String(),
-			KeyType:      certKeyType(cert),
-			SerialNumber: fmt.Sprintf("%X", cert.SerialNumber),
-			NotBefore:    cert.NotBefore.Format(time.RFC3339),
-			NotAfter:     cert.NotAfter.Format(time.RFC3339),
-			DaysLeft:     daysLeft,
-			Expired:      now.After(cert.NotAfter),
-		}
-
-		for _, dns := range cert.DNSNames {
-			info.SANs = append(info.SANs, dns)
-		}
-		for _, ip := range cert.IPAddresses {
-			info.SANs = append(info.SANs, ip.String())
-		}
-
-		result = append(result, info)
+		result = append(result, NewCertificateInfo(cert, time.Now()))
 	}
 
 	return result
+}
+
+// NewCertificateInfo summarizes one parsed certificate, with its remaining
+// lifetime measured from now.
+func NewCertificateInfo(cert *x509.Certificate, now time.Time) CertificateInfo {
+	info := CertificateInfo{
+		Subject:      certSubjectCN(cert),
+		Issuer:       certIssuerCN(cert),
+		SelfSigned:   cert.Issuer.String() == cert.Subject.String(),
+		KeyType:      PublicKeyType(cert.PublicKey),
+		SerialNumber: fmt.Sprintf("%X", cert.SerialNumber),
+		NotBefore:    cert.NotBefore.Format(time.RFC3339),
+		NotAfter:     cert.NotAfter.Format(time.RFC3339),
+		DaysLeft:     int(math.Floor(cert.NotAfter.Sub(now).Hours() / 24)),
+		Expired:      now.After(cert.NotAfter),
+	}
+
+	for _, dns := range cert.DNSNames {
+		info.SANs = append(info.SANs, dns)
+	}
+	for _, ip := range cert.IPAddresses {
+		info.SANs = append(info.SANs, ip.String())
+	}
+
+	return info
 }
 
 func certSubjectCN(cert *x509.Certificate) string {
@@ -89,8 +92,10 @@ func certIssuerCN(cert *x509.Certificate) string {
 	return "-"
 }
 
-func certKeyType(cert *x509.Certificate) string {
-	switch pub := cert.PublicKey.(type) {
+// PublicKeyType names a public key's algorithm and size, e.g. "RSA 2048" or
+// "EC P-256".
+func PublicKeyType(pub any) string {
+	switch pub := pub.(type) {
 	case *rsa.PublicKey:
 		return fmt.Sprintf("RSA %d", pub.N.BitLen())
 	case *ecdsa.PublicKey:

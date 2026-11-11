@@ -55,6 +55,7 @@ grant access to the underlying Role or ClusterRole objects.
 | Crossplane Kubernetes/Helm ProviderConfig and Helm Release | Pending provider-specific credential/connection-details review; these are deliberate coverage limits, not claims that every instance is sensitive. |
 | Trivy ExposedSecretReport | Secret-detection excerpts; examples are masked, but no blanket masking guarantee is assumed. Other curated report kinds remain readable. |
 | Legacy `traefik.containo.us/serverstransporttcps` | Exact legacy-group schema remains unverified. The reviewed `traefik.io/serverstransporttcps` tuple remains readable. |
+| Kubernetes CertificateSigningRequest | Requests record the requester's username, UID, groups and authenticator extra data. Radar's service account reads them for the resource browser; a Cloud user needs their own `get/list` grant on `certificates.k8s.io/certificatesigningrequests`. |
 
 These exclusions are not a secret-free guarantee for the remaining grants.
 Argo CD Applications can retain local-sync manifests containing Secrets;

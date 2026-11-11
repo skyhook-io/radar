@@ -97,6 +97,9 @@ tests:
       - notContains:
           path: rules[*].resources
           content: secrets
+      - notContains:
+          path: rules[*].resources
+          content: certificatesigningrequests
 
   - it: follows the API registration collection gate
     set:

@@ -186,6 +186,8 @@ import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, Kustomization
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
 import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
+import { CertificateSigningRequestCell } from './renderers/csr-cells'
+import { isCertificateSigningRequest } from './resource-utils-csr'
 import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpenter-cells'
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
 import { ResourceClaimCell, ResourceClaimTemplateCell, DeviceClassCell, ResourceSliceCell } from './renderers/dra-cells'
@@ -1778,6 +1780,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
     { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36' },
     { key: 'target', label: 'Target', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  certificatesigningrequests: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-44', tooltip: 'Approval alone is not issuance: a request is Issued only once it is Approved and the signer has returned a certificate. Denied and Failed are final.' },
+    { key: 'signerName', label: 'Signer', width: 'w-72' },
+    { key: 'username', label: 'Requester', width: 'w-64', tooltip: 'The account that created the request, as the API server recorded it. Not the identity requested in the certificate.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
@@ -7911,6 +7920,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     case 'mutatingwebhookconfigurations':
     case 'validatingwebhookconfigurations':
       return <WebhookConfigCell resource={resource} column={column} />
+    case 'certificatesigningrequests':
+      if (!isCertificateSigningRequest(resource)) return <GenericCell resource={resource} column={column} />
+      return <CertificateSigningRequestCell resource={resource} column={column} />
     case 'events':
       return <EventCell resource={resource} column={column} />
     // FluxCD GitOps resources

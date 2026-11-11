@@ -40,6 +40,7 @@ import { getGenericResourceStatus } from './generic-status'
 import { getCrossplaneStatus, getProviderStatus, getProviderConfigStatus, isManagedResource, isComposite } from './resource-utils-crossplane'
 import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString, getAuthorizationPolicySelectorString as _getAuthorizationPolicySelectorString, getDestinationRuleTlsMode as _getDestinationRuleTlsMode } from './resource-utils-istio'
 import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
+import { getCertificateSigningRequestStatus as _getCertificateSigningRequestStatus, isCertificateSigningRequest as _isCertificateSigningRequest } from './resource-utils-csr'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -190,12 +191,12 @@ export function podMatchesProblemCategory(problems: PodProblem[], restarts: numb
 // also flags at once: fatal *container* states (CrashLoopBackOff, ImagePull,
 // InvalidImageName, OOMKilled, …) and Unschedulable (the scheduler tried and
 // could not place the pod).
-const PENDING_STUCK_MINUTES = 5
+export const PENDING_STUCK_MINUTES = 5
 const TERMINATING_STUCK_MINUTES = 10
 
 // minutesSince returns minutes elapsed since an ISO timestamp, or 0 when it's
 // missing/invalid — so "unknown age" is treated as not-yet-stuck (benign).
-function minutesSince(timestamp?: string): number {
+export function minutesSince(timestamp?: string): number {
   if (!timestamp) return 0
   const t = new Date(timestamp).getTime()
   if (Number.isNaN(t)) return 0
@@ -2551,6 +2552,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'cronjobs') return getCronJobStatus(resource).text
       if (kindLower === 'certificates') return getCertificateStatus(resource).text
       if (kindLower === 'certificaterequests') return getCertificateRequestStatus(resource).text
+      if (kindLower === 'certificatesigningrequests' && _isCertificateSigningRequest(resource)) return _getCertificateSigningRequestStatus(resource).text
       if (kindLower === 'clusterissuers' || kindLower === 'issuers') return getClusterIssuerStatus(resource).text
       if (kindLower === 'persistentvolumeclaims') return getPVCStatus(resource).text
       if (kindLower === 'persistentvolumes') return getPVStatus(resource).text
