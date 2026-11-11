@@ -3939,7 +3939,8 @@ export type RightsizingFit =
   | "oversized"
   | "under_requested"
   | "missing_request"
-  | "insufficient_history";
+  | "insufficient_history"
+  | "pod_level_request";
 export type RightsizingConfidence = "low" | "medium" | "high";
 export type RightsizingOwnerCoverage = "ksm_history" | "current_pods";
 
@@ -3952,6 +3953,9 @@ export interface RightsizingRow {
   currentRequestValue?: number;
   currentLimit?: string;
   currentLimitValue?: number;
+  /** The pod's fixed pod-level request (spec.resources), set when fit is pod_level_request. */
+  podLevelRequest?: string;
+  podLevelRequestValue?: number;
   observed?: {
     name: "P95" | "P99" | "Max";
     value: number;

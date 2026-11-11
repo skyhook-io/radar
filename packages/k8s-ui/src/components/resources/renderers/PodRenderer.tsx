@@ -781,8 +781,13 @@ export function PodRenderer({
                         {lastTermination.exitCode !== undefined && lastTermination.exitCode !== 0 && (
                           <span className="text-theme-text-tertiary">(code {lastTermination.exitCode})</span>
                         )}
-                        {lastTermination.reason === 'OOMKilled' && container.resources?.limits?.memory && (
-                          <span className="text-theme-text-tertiary">— limit: {container.resources.limits.memory}</span>
+                        {lastTermination.reason === 'OOMKilled' && (container.resources?.limits?.memory || podResources?.limits?.memory) && (
+                          <span className="text-theme-text-tertiary">
+                            — {[
+                              container.resources?.limits?.memory && `limit: ${container.resources.limits.memory}`,
+                              podResources?.limits?.memory && `pod limit: ${podResources.limits.memory}`,
+                            ].filter(Boolean).join(', ')}
+                          </span>
                         )}
                       </div>
                       {lastTermination.finishedAt && (() => {

@@ -677,11 +677,13 @@ func buildScanWorkload(input scanWorkload, evidence scanBatchEvidence) Rightsizi
 			out.Rows = append(out.Rows, row)
 		}
 	}
+	withholdIncreasesAbovePodLimit(out.Rows, input.workload.podSpec)
 	return out
 }
 
-func buildScanRow(container containerSpec, resourceName string, key scanKey, expected int, workload rightsizingWorkload, evidence scanBatchEvidence) RightsizingRow {
-	row := RightsizingRow{
+func buildScanRow(container containerSpec, resourceName string, key scanKey, expected int, workload rightsizingWorkload, evidence scanBatchEvidence) (row RightsizingRow) {
+	defer markPodLevelRequest(&row)
+	row = RightsizingRow{
 		Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow,
 		ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable,
 		LiveInventoryUnavailable: workload.liveInventoryUnavailable,
@@ -702,6 +704,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 		}
 	}
 	setCurrentQuantities(&row, request, limit, resourceName)
+	setPodLevelRequest(&row, podLevelRequestFor(container, resourceName), resourceName)
 	if queryErr := evidence.errors[resourceName]; queryErr != nil {
 		row.QueryError = RowUsageQueryFailed
 		return row
@@ -886,7 +889,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 	add := func(obj metav1.Object, kind string, replicas int, podSpec *corev1.PodSpec, scaledToZero bool) {
 		key := workloadIdentity(kind, obj.GetNamespace(), obj.GetName())
 		workloads[key] = &scanWorkload{kind: kind, namespace: obj.GetNamespace(), name: obj.GetName(), replicas: replicas, workload: rightsizingWorkload{
-			containers: extractRuntimeContainers(podSpec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, scaledToZero: scaledToZero,
+			podSpec: podSpec, containers: extractRuntimeContainers(podSpec), currentPodOOM: map[string]bool{}, hpaManaged: map[string]bool{}, scaledToZero: scaledToZero,
 			managedBy: detectWorkloadManager(obj),
 		}}
 	}

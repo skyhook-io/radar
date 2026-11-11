@@ -343,3 +343,14 @@ it('ranks known safety risks and increases above savings, while routine reviews 
   expect(names.slice(6, 9)).toEqual(['bursty', 'hpa', 'idle'])
   expect(names.slice(9)).toEqual(['failed-risk', 'steady'])
 })
+
+describe('pod-level requests', () => {
+  it('puts a container under a pod-level request in review, with no impact', () => {
+    const rows = [
+      metric({ fit: 'pod_level_request', resource: 'cpu', podLevelRequest: '200m' }),
+      metric({ fit: 'pod_level_request', resource: 'memory', podLevelRequest: '128Mi' }),
+    ]
+    expect(classifyRows(rows, 2)).toBe('review')
+    expect(calculateImpact(rows, 2)).toMatchObject({ cpuChange: 0, memoryChange: 0 })
+  })
+})

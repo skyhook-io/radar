@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
@@ -2806,6 +2807,21 @@ func mcpClusterInfoFromInfo(info *k8s.ClusterInfo) mcpClusterInfo {
 	}
 }
 
+// dashboardRequestTotals sums what the scheduler reserves for each live pod:
+// a pod-level budget (spec.resources) when one is set, otherwise its
+// containers, sidecars and init containers counted the way kube-scheduler does.
+func dashboardRequestTotals(pods []*corev1.Pod) (cpuMillis, memBytes int64) {
+	for _, pod := range pods {
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		requests := capacity.EffectivePodRequests(pod)
+		cpuMillis += requests.Cpu().MilliValue()
+		memBytes += requests.Memory().Value()
+	}
+	return cpuMillis, memBytes
+}
+
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
 	d := mcpDashboard{
 		ResourceCounts: make(map[string]int),
@@ -3190,21 +3206,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 							var cpuReqMillis, memReqBytes int64
 							if podLister := cache.Pods(); podLister != nil {
 								allPods, _ := podLister.List(labels.Everything())
-								for _, pod := range allPods {
-									if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-										continue
-									}
-									for _, c := range pod.Spec.Containers {
-										if c.Resources.Requests != nil {
-											if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-												cpuReqMillis += cpu.MilliValue()
-											}
-											if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-												memReqBytes += mem.Value()
-											}
-										}
-									}
-								}
+								cpuReqMillis, memReqBytes = dashboardRequestTotals(allPods)
 							}
 
 							if cpuCapMillis > 0 && memCapBytes > 0 {
