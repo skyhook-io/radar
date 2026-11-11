@@ -160,6 +160,8 @@ import {
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
   healthColors,
+  getLogContainerNames,
+  getDefaultLogContainerName,
 } from './resource-utils'
 import { TRIVY_GROUP, searchTrivyFindings, type TrivyFindingMatch, type TrivyFindingsSearch } from './resource-utils-trivy'
 import { getGenericResourceStatus } from './generic-status'
@@ -4755,9 +4757,9 @@ export function ResourcesView({
         const name = res.metadata?.name || ''
         if (kindLower === 'pods') {
           // For pods, use openLogs directly (not workload logs)
-          const containers = (res.spec?.containers || []).map((c: { name: string }) => c.name)
+          const containers = getLogContainerNames(res)
           if (containers.length > 0) {
-            openLogs?.({ namespace: ns, podName: name, containers })
+            openLogs?.({ namespace: ns, podName: name, containers, containerName: getDefaultLogContainerName(res) })
           }
         } else if (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })

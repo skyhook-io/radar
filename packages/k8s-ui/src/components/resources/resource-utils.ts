@@ -863,6 +863,29 @@ export function getExecContainerNames(pod: any): string[] {
   return [...regular, ...sidecars].filter(Boolean)
 }
 
+/** The containers that can have logs: init containers (in run order), then the regular ones. */
+export function getLogContainerNames(pod: any): string[] {
+  return [...(pod?.spec?.initContainers || []), ...(pod?.spec?.containers || [])]
+    .map((c: any) => c.name)
+    .filter(Boolean)
+}
+
+/**
+ * The container to open logs on. While a pod is stuck initializing, its regular
+ * containers wait in PodInitializing and have no logs, so this picks the first
+ * init container that hasn't completed (native sidecars run for the pod's
+ * lifetime and are skipped). Otherwise it falls back to getDefaultContainerName.
+ */
+export function getDefaultLogContainerName(pod: any): string | undefined {
+  const sidecars = new Set(
+    (pod?.spec?.initContainers || []).filter((c: any) => c.restartPolicy === 'Always').map((c: any) => c.name),
+  )
+  const stuck = (pod?.status?.initContainerStatuses || []).find(
+    (s: any) => !sidecars.has(s.name) && s.state?.terminated?.exitCode !== 0,
+  )
+  return stuck?.name || getDefaultContainerName(pod)
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []
