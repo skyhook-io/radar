@@ -88,3 +88,46 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 		})
 	}
 }
+
+func TestFluxDependsOnBecomesRequiredBy(t *testing.T) {
+	makeObject := func(group, kind, namespace, name string, dependsOn ...map[string]any) *unstructured.Unstructured {
+		deps := make([]any, 0, len(dependsOn))
+		for _, d := range dependsOn {
+			deps = append(deps, d)
+		}
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": group + "/v1", "kind": kind, "metadata": map[string]any{"namespace": namespace, "name": name}, "spec": map[string]any{"dependsOn": deps}}}
+	}
+	const ksGroup, hrGroup = "kustomize.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io"
+	base := makeObject(ksGroup, "Kustomization", "team", "base")
+	overlay := makeObject(ksGroup, "Kustomization", "team", "overlay", map[string]any{"name": "base"})
+	app := makeObject(hrGroup, "HelmRelease", "team", "app", map[string]any{"name": "base"})
+	db := makeObject(hrGroup, "HelmRelease", "team", "db-hr", map[string]any{"name": "missing"})
+	gvrs := map[string]schema.GroupVersionResource{
+		"Kustomization": {Group: ksGroup, Version: "v1", Resource: "kustomizations"},
+		"HelmRelease":   {Group: hrGroup, Version: "v2", Resource: "helmreleases"},
+	}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gvrs["Kustomization"]: {base, overlay}, gvrs["HelmRelease"]: {app, db},
+	}}, listCalls: map[string]int{}}
+	node := func(kind NodeKind, prefix, name, apiVersion string) Node {
+		return Node{ID: prefix + "/team/" + name, Kind: kind, Name: name, Data: map[string]any{"namespace": "team", "apiVersion": apiVersion}}
+	}
+	nodes := []Node{
+		node(KindKustomization, "kustomization", "base", base.GetAPIVersion()),
+		node(KindKustomization, "kustomization", "overlay", overlay.GetAPIVersion()),
+		node(KindHelmRelease, "helmrelease", "app", app.GetAPIVersion()),
+		node(KindHelmRelease, "helmrelease", "db-hr", db.GetAPIVersion()),
+	}
+	nodes, edges, warnings := addFluxSourceEdges(nodes, nil, []*unstructured.Unstructured{base, overlay, app, db}, p, DefaultBuildOptions())
+	if len(warnings) != 0 || len(nodes) != 4 {
+		t.Fatalf("nodes=%d warnings=%v, want 4 nodes and no warnings", len(nodes), warnings)
+	}
+	want := Edge{ID: "kustomization/team/overlay-to-kustomization/team/base", Source: "kustomization/team/overlay", Target: "kustomization/team/base", Type: EdgeUses, Label: "depends on"}
+	if len(edges) != 1 || !reflect.DeepEqual(edges[0], want) {
+		t.Fatalf("edges = %+v, want only %+v", edges, want)
+	}
+	rel := GetRelationships("Kustomization", "team", "base", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+	if rel == nil || len(rel.Dependents) != 1 || rel.Dependents[0].Name != "overlay" {
+		t.Fatalf("base dependents = %+v, want overlay", rel)
+	}
+}
