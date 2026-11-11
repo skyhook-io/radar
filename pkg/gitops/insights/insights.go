@@ -316,6 +316,12 @@ type HistoryItem struct {
 	Rollbackable *bool `json:"rollbackable,omitempty"`
 	// RollbackMultiSourceWarning warns when either the current spec or this entry uses plural sources.
 	RollbackMultiSourceWarning bool `json:"rollbackMultiSourceWarning,omitempty"`
+	// Flux Activity fields. DeployedAt stays the last time; Kind is
+	// "revision", "event" or "condition".
+	FirstAt  string `json:"firstAt,omitempty"`
+	Runs     int64  `json:"runs,omitempty"`
+	Duration string `json:"duration,omitempty"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 type Capabilities struct {
@@ -442,6 +448,7 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 	}
 	if tool == gitops.ToolFluxCD {
 		applyFluxChain(&out.Summary, root, resourceTree)
+		out.History = BuildFluxActivity(root, resolver)
 	}
 	out.Summary.PartialReason = "Radar shows the controller's drift assessment plus a per-resource field diff and recent events (when available). For the canonical line-by-line diff against Git, use the Argo CD UI or `argocd app diff`."
 	if resourceTree != nil {
