@@ -56,3 +56,46 @@ describe('GitOps status timing', () => {
     expect(html).not.toContain('23d ago')
   })
 })
+
+describe('Flux revision chain', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-10T10:05:00Z')) })
+  afterEach(() => vi.useRealTimers())
+
+  it('says when the source is ahead of what is applied', () => {
+    const html = render({ sourceRevision: 'main@sha1:bbbbbbb1234567890', sourceFetchedAt: '2026-11-10T10:04:00Z', appliedRevision: 'main@sha1:aaaaaaa1234567890', pending: true, objects: 3 })
+    expect(html).toContain('Pending: source is ahead of what is applied')
+    expect(html).toContain('bbbbbbb')
+    expect(html).toContain('aaaaaaa')
+    expect(html).toContain('3 objects')
+    expect(html).toContain('commit metadata')
+    expect(html).not.toContain('Revision:')
+  })
+
+  it('shortens sha256 digests', () => {
+    const html = render({ kind: 'HelmRelease', sourceRevision: 'latest@sha256:53884aebf2e5aa', appliedRevision: 'sha256:53884aebf2e5aa', pending: false })
+    expect(html).toContain('53884ae')
+    expect(html).not.toContain('53884aebf')
+  })
+
+  it('never claims up to date when the source is unknown', () => {
+    const html = render({ appliedRevision: 'main@sha1:aaaaaaa1234567890' })
+    expect(html).toContain('aaaaaaa')
+    expect(html).not.toContain('Pending')
+    expect(html).not.toMatch(/up to date/i)
+    expect(html).not.toContain('Source')
+  })
+
+  it('renders an older Radar summary as before', () => {
+    const html = render()
+    expect(html).toContain('Revision:')
+    expect(html).not.toContain('Applied')
+  })
+
+  it('estimates the next Kustomization run', () => {
+    const base = { appliedRevision: 'main@sha1:aaaaaaa1234567890', interval: '10m', lastApplied: '2026-11-10T10:00:00Z' }
+    expect(render(base)).toContain('next run in ~5m')
+    expect(render({ ...base, autoSyncMode: 'Suspended' })).not.toContain('next run')
+    expect(render({ ...base, lastApplied: '2026-11-10T09:00:00Z' })).not.toContain('next run')
+    expect(render({ ...base, kind: 'HelmRelease' })).not.toContain('next run')
+  })
+})

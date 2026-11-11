@@ -117,7 +117,7 @@ export function gitopsToSeverity(value: string | undefined): Severity {
   if (v === 'alert') return 'alert'
   if (v === 'warning' || v.includes('terminat') || v.includes('pending') || v.includes('wait')) return 'warning'
   if (v === 'info' || v.includes('progress') || v.includes('running') || v.includes('reconcil')) return 'info'
-  if (v.includes('succeed') || v === 'healthy' || v === 'ok') return 'success'
+  if (v.includes('succeed') || v === 'healthy' || v === 'ok' || v === 'applied' || v === 'deployed') return 'success'
   return 'neutral'
 }
 
