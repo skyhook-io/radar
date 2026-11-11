@@ -85,10 +85,12 @@ export function GitOpsOutsideChangesView({
                   </td>
                   <td className="py-1.5 pr-3 font-mono text-theme-text-primary">
                     {change.paths.map((path) => (
-                      <div key={path} className="truncate">
-                        {path}
-                        {change.values?.[path] !== undefined && <span className="text-theme-text-secondary"> = <span>{change.values[path]}</span></span>}
-                      </div>
+                      <Tooltip key={path} content={path} delay={400} wrapperClassName="block max-w-full">
+                        <div className="truncate">
+                          {path}
+                          {change.values?.[path] !== undefined && <span className="text-theme-text-secondary"> = <span>{change.values[path]}</span></span>}
+                        </div>
+                      </Tooltip>
                     ))}
                     {change.morePaths > 0 && <div className="text-theme-text-tertiary">+{change.morePaths} more</div>}
                   </td>
