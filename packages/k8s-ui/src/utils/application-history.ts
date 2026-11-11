@@ -197,13 +197,10 @@ function warningKey(item: ApplicationHistoryItem): string {
   return `${item.title}\u0000${resource?.kind ?? ''}\u0000${resource?.namespace ?? ''}\u0000${resource?.name ?? ''}\u0000${item.detail ?? ''}`
 }
 
-export function buildApplicationHistoryItems(
-  history: AppHistory | undefined,
-  events: TimelineEvent[],
-): ApplicationHistoryItem[] {
+/** One record per change: Argo CD reports its latest sync in both status.history and operationState. */
+export function coalesceHistoryAnchors(records: AppHistoryAnchor[]): AppHistoryAnchor[] {
   const anchorsByChange = new Map<string, AppHistoryAnchor>()
-  for (const anchor of history?.anchors ?? []) {
-    if (!validTimestamp(anchor.timestamp)) continue
+  for (const anchor of records) {
     const key = `${anchor.type}\u0000${anchor.title}\u0000${anchor.timestamp}\u0000${anchor.revision ?? ''}`
     const existing = anchorsByChange.get(key)
     if (!existing) {
@@ -218,7 +215,14 @@ export function buildApplicationHistoryItems(
       initiatedBy: anchor.initiatedBy ?? existing.initiatedBy,
     })
   }
-  const anchors = [...anchorsByChange.values()]
+  return [...anchorsByChange.values()]
+}
+
+export function buildApplicationHistoryItems(
+  history: AppHistory | undefined,
+  events: TimelineEvent[],
+): ApplicationHistoryItem[] {
+  const anchors = coalesceHistoryAnchors((history?.anchors ?? []).filter((anchor) => validTimestamp(anchor.timestamp)))
     .map((anchor, index) => anchorItem(anchor, history?.sourceRef, index))
     .filter((item): item is ApplicationHistoryItem => item !== null)
   const hasAnchors = anchors.length > 0

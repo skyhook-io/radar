@@ -46,11 +46,16 @@ type WorkloadRevision struct {
 	ReadyReplicas *int64 `json:"readyReplicas,omitempty"`
 	// Serving says whether this revision's pods are running and ready. Nil means
 	// the API can't tell: a StatefulSet or DaemonSet mid-update reports no split
-	// per revision. Rollouts leave it nil; IsStable is their signal.
+	// per revision, and a canary Rollout leaves it to IsStable.
 	Serving *bool `json:"serving,omitempty"`
 	// ChangeCause is the kubernetes.io/change-cause note on this revision, the
 	// one record of why it exists when no Helm or GitOps source does.
 	ChangeCause string `json:"changeCause,omitempty"`
+	// MatchesDesired says whether a Deployment's spec asks for this revision's
+	// pod template. IsCurrent is only the highest number: no revision matches
+	// while a change waits, as it does on a paused Deployment, and an older one
+	// matches when a paused Deployment is changed back. Nil on other kinds.
+	MatchesDesired *bool `json:"matchesDesired,omitempty"`
 }
 
 // UpdateResourceOptions contains options for updating a resource.
@@ -968,7 +973,13 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 
 	switch normalizedKind {
 	case "deployments":
-		return m.listDeploymentRevisions(ctx, namespace, name, workloadUID)
+		rsList, err := m.listDeploymentReplicaSets(ctx, namespace)
+		if err != nil {
+			return nil, err
+		}
+		revisions := BuildDeploymentRevisions(rsList, workloadUID)
+		applyDeploymentDesiredTemplate(revisions, rsList, workload, workloadUID)
+		return revisions, nil
 	case "statefulsets", "daemonsets":
 		revisions, err := m.listControllerRevisions(ctx, namespace, name, workloadUID)
 		if err != nil {
@@ -999,12 +1010,13 @@ func (m *WorkloadManager) listRolloutRevisions(ctx context.Context, namespace, n
 			Replicas:      r.Replicas,
 			Template:      r.Template,
 			ReadyReplicas: &readyReplicas,
+			Serving:       r.Serving,
 		})
 	}
 	return out, nil
 }
 
-func (m *WorkloadManager) listDeploymentRevisions(ctx context.Context, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
+func (m *WorkloadManager) listDeploymentReplicaSets(ctx context.Context, namespace string) ([]unstructured.Unstructured, error) {
 	rsGVR, ok := m.discovery.GetGVR("replicasets")
 	if !ok {
 		return nil, fmt.Errorf("replicasets resource not found")
@@ -1015,7 +1027,35 @@ func (m *WorkloadManager) listDeploymentRevisions(ctx context.Context, namespace
 		return nil, fmt.Errorf("failed to list replicasets: %w", err)
 	}
 
-	return BuildDeploymentRevisions(rsList.Items, workloadUID), nil
+	return rsList.Items, nil
+}
+
+// applyDeploymentDesiredTemplate marks which revision the Deployment's spec asks for.
+func applyDeploymentDesiredTemplate(revisions []WorkloadRevision, rsList []unstructured.Unstructured, workload *unstructured.Unstructured, workloadUID string) {
+	desired, found, err := unstructured.NestedMap(workload.Object, "spec", "template")
+	if err != nil || !found {
+		return
+	}
+	templates := make(map[int64]map[string]any, len(rsList))
+	for i := range rsList {
+		rs := &rsList[i]
+		if !ownedBy(rs, types.UID(workloadUID)) {
+			continue
+		}
+		number, err := strconv.ParseInt(rs.GetAnnotations()["deployment.kubernetes.io/revision"], 10, 64)
+		if err != nil {
+			continue
+		}
+		if template, found, err := unstructured.NestedMap(rs.Object, "spec", "template"); err == nil && found {
+			templates[number] = template
+		}
+	}
+	for i := range revisions {
+		matches, err := podTemplatesEqual(templates[revisions[i].Number], desired, true)
+		if err == nil {
+			revisions[i].MatchesDesired = &matches
+		}
+	}
 }
 
 // BuildDeploymentRevisions builds WorkloadRevision[] from unstructured ReplicaSets owned by a Deployment.
@@ -1213,11 +1253,12 @@ func BuildControllerRevisions(crList []unstructured.Unstructured, workloadUID st
 			podHash = cr.GetName()
 		}
 		revisions = append(revisions, WorkloadRevision{
-			Number:    revNum,
-			CreatedAt: cr.GetCreationTimestamp().Time,
-			Image:     image,
-			Template:  templateStr,
-			PodHash:   podHash,
+			Number:      revNum,
+			CreatedAt:   cr.GetCreationTimestamp().Time,
+			Image:       image,
+			Template:    templateStr,
+			PodHash:     podHash,
+			ChangeCause: cr.GetAnnotations()["kubernetes.io/change-cause"],
 		})
 	}
 
