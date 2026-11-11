@@ -412,3 +412,29 @@ it('shows what the live stream is waiting for, and drops it once lines arrive', 
   expect(element.textContent).not.toContain(waiting)
   expect(element.textContent).toContain('OTHER 1')
 })
+
+async function renderPod(containers: string[], initialContainer?: string, initContainers?: string[], fetchLogs = vi.fn(async () => ({}))) {
+  await act(async () =>
+    root.render(
+      <ToastProvider>
+        <LogsViewer namespace="default" podName="job-0" containers={containers} initialContainer={initialContainer} initContainers={initContainers} fetchLogs={fetchLogs} />
+      </ToastProvider>,
+    ),
+  )
+  return fetchLogs
+}
+
+it('opens the preferred container, else the first, when the containers arrive after mount', async () => {
+  const fetchLogs = await renderPod([])
+  await renderPod(['migrate', 'app'], 'migrate', ['migrate'], fetchLogs)
+  expect(fetchLogs).toHaveBeenLastCalledWith(expect.objectContaining({ container: 'migrate' }))
+
+  await renderPod(['sidecar', 'app'], undefined, undefined, fetchLogs)
+  expect(fetchLogs).toHaveBeenLastCalledWith(expect.objectContaining({ container: 'sidecar' }))
+})
+
+it('labels init containers in the container selector', async () => {
+  await renderPod(['migrate', 'app'], 'migrate', ['migrate'])
+  const select = [...element.querySelectorAll('select')].find((s) => s.value === 'migrate')!
+  expect([...select.options].map((o) => o.textContent)).toEqual(['migrate (init)', 'app'])
+})

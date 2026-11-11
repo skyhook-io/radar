@@ -107,7 +107,7 @@ import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useTrafficAvailable } from '../../api/traffic'
 import { isNotFoundError, useResourceAudit, useResourceIssues, useSubjectIssues, useRadarFeature, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
-import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames } from '@skyhook-io/k8s-ui'
+import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows, getDefaultLogContainerName, getLogContainerNames, getInitContainerNames } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -1674,7 +1674,7 @@ function shouldAutoStreamWorkloadLogs(kind: string, resource: any): boolean {
   return true
 }
 
-export function PodLogsTab({
+function PodLogsTab({
   namespace,
   name,
   resource,
@@ -1688,6 +1688,7 @@ export function PodLogsTab({
   onConsumeInitialContainer?: () => void
 }) {
   const containers = useMemo(() => getLogContainerNames(resource), [resource])
+  const initContainers = useMemo(() => getInitContainerNames(resource), [resource])
 
   // A terminated pod has nothing to follow — only stream live ones. Wait for
   // the phase to be known so a completed pod isn't briefly streamed while the
@@ -1703,13 +1704,12 @@ export function PodLogsTab({
 
   return (
     <div className="h-full">
-      {/* The viewer reads its initial container once; mount it again when the pod arrives. */}
       <LogsViewer
-        key={resource ? 'loaded' : 'loading'}
         namespace={namespace}
         podName={name}
         containers={containers}
         initialContainer={initialContainer || getDefaultLogContainerName(resource)}
+        initContainers={initContainers}
         autoStream={autoStream}
       />
     </div>

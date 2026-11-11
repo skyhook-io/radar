@@ -29,7 +29,7 @@ import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
-import { getDefaultContainerName, getDefaultLogContainerName, getExecContainerNames, getLogContainerNames } from '../resources/resource-utils'
+import { getDefaultContainerName, getDefaultLogContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resources/resource-utils'
 import { argoApplicationSyncOptions, argoComparedRevisionCurrent, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoMultiSource, isArgoOperationInProgress } from '../resources/resource-utils-argo'
 import { SyncOptionsDialog, type ArgoSyncOpts } from '../gitops/SyncOptionsDialog'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
@@ -77,7 +77,7 @@ interface ResourceActionsBarProps {
 
   // Dock actions (injected by platform)
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
-  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
 
@@ -287,6 +287,7 @@ export function ResourceActionsBar({
   const isRunning = kind === 'pods' ? data?.status?.phase === 'Running' : true
   const containers = data?.spec?.containers?.map((c: any) => c.name) || []
   const logContainers = getLogContainerNames(data)
+  const initContainers = getInitContainerNames(data)
 
   const handleOpenTerminal = () => {
     if (resource.namespace && resource.name && containers.length > 0) {
@@ -306,6 +307,7 @@ export function ResourceActionsBar({
         podName: resource.name,
         containers: logContainers,
         containerName: containerName || getDefaultLogContainerName(data),
+        initContainers,
       })
     }
   }
@@ -374,6 +376,7 @@ export function ResourceActionsBar({
                     >
                       <Box className="w-3 h-3 text-theme-text-tertiary shrink-0" />
                       <span className="truncate">{container}</span>
+                      {initContainers.includes(container) && <span className="ml-auto shrink-0 text-theme-text-tertiary">init</span>}
                     </button>
                   ))}
                 </div>

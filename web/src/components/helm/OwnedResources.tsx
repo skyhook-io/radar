@@ -12,7 +12,7 @@ import { PortForwardInlineButton } from '../portforward/PortForwardButton'
 import { useAvailablePorts } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
-import { pluralize, getExecContainerNames, getLogContainerNames, getDefaultLogContainerName } from '@skyhook-io/k8s-ui'
+import { pluralize, getExecContainerNames, getLogContainerNames, getDefaultLogContainerName, getInitContainerNames } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 
 interface OwnedResourcesProps {
@@ -379,6 +379,7 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
         podName,
         containers: getLogContainerNames(data.resource),
         containerName: getDefaultLogContainerName(data.resource),
+        initContainers: getInitContainerNames(data.resource),
       })
     } catch (error) {
       console.error('Failed to open logs:', error)
