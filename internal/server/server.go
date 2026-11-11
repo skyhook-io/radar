@@ -1525,8 +1525,15 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	var caps *k8s.Capabilities
 	var err error
 
-	// When auth is enabled, check capabilities for the specific user
-	if user := auth.UserFromContext(r.Context()); user != nil {
+	// No RBAC checks until connected. Each one runs the exec credential plugin,
+	// so a page loaded while Radar is still connecting would queue a dozen
+	// extra plugin runs (and browser sign-in tabs) behind the connectivity
+	// check. The browser fetches capabilities again once connected.
+	connected := k8s.GetConnectionStatus().State == k8s.StateConnected
+	if !connected {
+		caps = &k8s.Capabilities{HelmWriteUnavailable: true}
+	} else if user := auth.UserFromContext(r.Context()); user != nil {
+		// When auth is enabled, check capabilities for the specific user
 		caps, err = k8s.CheckCapabilitiesForUser(r.Context(), user.Username, user.Groups)
 	} else {
 		caps, err = k8s.CheckCapabilities(r.Context())
@@ -1564,7 +1571,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// Namespace-scoped re-check for controls whose permission can differ by
 	// namespace. This keeps action visibility aligned with the namespace the
 	// user is viewing rather than only the kubeconfig default namespace.
-	if ns := r.URL.Query().Get("namespace"); ns != "" {
+	if ns := r.URL.Query().Get("namespace"); ns != "" && connected {
 		var nsCaps *k8s.NamespaceCapabilities
 		if user := auth.UserFromContext(r.Context()); user != nil {
 			nsCaps, err = k8s.CheckNamespaceCapabilitiesForUser(r.Context(), user.Username, user.Groups, ns)
@@ -5081,6 +5088,7 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 		// Lets the browser stand down its auto-retry for the whole auth-loss
 		// episode, even when the live errorType flips to non-auth values.
 		"authRecoveryOwed": k8s.RuntimeAuthRecoveryOwed(),
+		"autoRetryStopped": status.AutoRetryStopped,
 	}
 	// Context enumeration re-reads kubeconfig files (under the client write
 	// lock in multi-file mode) — too expensive for the UI's perpetual

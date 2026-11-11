@@ -247,6 +247,9 @@ func main() {
 
 	app.SetGlobals(cfg)
 	versionpkg.SetDesktop(true)
+	// Someone is at the window to click Retry, so stop re-running a failing
+	// sign-in plugin (which may open a browser tab each time) after a few tries.
+	k8s.SetAutomaticRetryLimit(3)
 	// Installs the in-app updater can't replace (AppImage, .deb/.rpm, a folder
 	// Radar can't write to) get no updater (below) and no cleanup of an .old
 	// file Radar didn't make; the UI says how to update instead.

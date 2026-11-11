@@ -34,6 +34,10 @@ type ConnectionStatus struct {
 	// so the UI can say how long the cluster has been down. Set by
 	// SetConnectionStatus; callers leave it empty.
 	DisconnectedAt string `json:"disconnectedAt,omitempty"`
+	// AutoRetryStopped: Radar has stopped reconnecting on its own (desktop
+	// app, after repeated failures) and waits for the user to retry. Set by
+	// SetConnectionStatus; callers leave it false.
+	AutoRetryStopped bool `json:"autoRetryStopped,omitempty"`
 }
 
 // outageStart carries DisconnectedAt from one status to the next: it starts
@@ -74,6 +78,7 @@ func GetConnectionStatus() ConnectionStatus {
 func SetConnectionStatus(status ConnectionStatus) {
 	connectionStatusMu.Lock()
 	status.DisconnectedAt = outageStart(connectionStatus, status, time.Now())
+	status.AutoRetryStopped = status.State == StateDisconnected && automaticRetriesStopped()
 	if connectionStatus == status {
 		connectionStatusMu.Unlock()
 		return
@@ -90,6 +95,7 @@ func SetConnectionStatus(status ConnectionStatus) {
 	switch status.State {
 	case StateConnected:
 		runtimeAuthRecoveryOwed.Store(false)
+		resetAutomaticRetries()
 		resetInconclusiveStreak()
 	case StateDisconnected:
 		if isAuthClassification(status.ErrorType) {
@@ -100,6 +106,21 @@ func SetConnectionStatus(status ConnectionStatus) {
 		}
 	}
 
+	notifyConnectionChange(status)
+}
+
+// publishAutomaticRetriesStopped flags the current disconnect so the error
+// screen stops saying Radar keeps checking in the background.
+func publishAutomaticRetriesStopped() {
+	connectionStatusMu.Lock()
+	status := connectionStatus
+	if status.State != StateDisconnected || status.AutoRetryStopped {
+		connectionStatusMu.Unlock()
+		return
+	}
+	status.AutoRetryStopped = true
+	connectionStatus = status
+	connectionStatusMu.Unlock()
 	notifyConnectionChange(status)
 }
 

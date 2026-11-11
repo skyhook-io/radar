@@ -364,13 +364,14 @@ func (b *SSEBroadcaster) registerConnectionStateCallback() {
 		b.Broadcast(SSEEvent{
 			Event: "connection_state",
 			Data: map[string]any{
-				"state":           status.State,
-				"context":         status.Context,
-				"clusterName":     status.ClusterName,
-				"error":           status.Error,
-				"errorType":       status.ErrorType,
-				"progressMessage": status.ProgressMsg,
-				"disconnectedAt":  status.DisconnectedAt,
+				"state":            status.State,
+				"context":          status.Context,
+				"clusterName":      status.ClusterName,
+				"error":            status.Error,
+				"errorType":        status.ErrorType,
+				"progressMessage":  status.ProgressMsg,
+				"disconnectedAt":   status.DisconnectedAt,
+				"autoRetryStopped": status.AutoRetryStopped,
 			},
 		})
 
@@ -1373,13 +1374,14 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 	// Send current connection state immediately so client knows current status
 	status := k8s.GetConnectionStatus()
 	connData, err := json.Marshal(map[string]any{
-		"state":           status.State,
-		"context":         status.Context,
-		"clusterName":     status.ClusterName,
-		"error":           status.Error,
-		"errorType":       status.ErrorType,
-		"progressMessage": status.ProgressMsg,
-		"disconnectedAt":  status.DisconnectedAt,
+		"state":            status.State,
+		"context":          status.Context,
+		"clusterName":      status.ClusterName,
+		"error":            status.Error,
+		"errorType":        status.ErrorType,
+		"progressMessage":  status.ProgressMsg,
+		"disconnectedAt":   status.DisconnectedAt,
+		"autoRetryStopped": status.AutoRetryStopped,
 	})
 	if err == nil {
 		fmt.Fprintf(w, "event: connection_state\ndata: %s\n\n", connData)
