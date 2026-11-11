@@ -78,3 +78,73 @@ func TestFluxDeployedReleaseKeepsIdentityAndTimeTogether(t *testing.T) {
 		t.Fatalf("unrelated kind got deployed snapshot %+v", got)
 	}
 }
+
+func TestFluxKustomizationHistoryReadsEntries(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"status": map[string]any{"history": []any{
+			map[string]any{"digest": "sha256:old", "firstReconciled": "2026-11-10T08:00:00Z", "lastReconciled": "2026-11-10T10:00:00Z",
+				"lastReconciledDuration": "900ms", "lastReconciledStatus": "ReconciliationFailed", "totalReconciliations": int64(3),
+				"metadata": map[string]any{"revision": "main@sha1:aaa"}},
+			map[string]any{"digest": "sha256:new", "firstReconciled": "2026-11-10T10:30:00Z", "lastReconciled": "2026-11-10T11:00:00Z",
+				"lastReconciledDuration": "1.102930992s", "lastReconciledStatus": "ReconciliationSucceeded", "totalReconciliations": int64(12),
+				"metadata": map[string]any{"revision": "main@sha1:bbb"}},
+		}},
+	}}
+	got := FluxKustomizationHistory(root)
+	if len(got) != 2 {
+		t.Fatalf("entries = %d, want 2", len(got))
+	}
+	want := FluxReconcileEntry{Revision: "main@sha1:bbb", Digest: "sha256:new", FirstReconciled: "2026-11-10T10:30:00Z", LastReconciled: "2026-11-10T11:00:00Z", Duration: "1.102930992s", Status: "ReconciliationSucceeded", Runs: 12}
+	if got[0] != want {
+		t.Fatalf("newest = %+v, want %+v", got[0], want)
+	}
+	if got[1].Revision != "main@sha1:aaa" || got[1].Status != "ReconciliationFailed" || got[1].Runs != 3 {
+		t.Fatalf("older = %+v", got[1])
+	}
+	if FluxHelmHistory(root) != nil {
+		t.Fatal("Helm reader accepted a Kustomization")
+	}
+	root.SetAPIVersion("example.io/v1")
+	if FluxKustomizationHistory(root) != nil {
+		t.Fatal("non-Flux group got history")
+	}
+}
+
+func TestFluxHelmHistoryReadsEntries(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"status": map[string]any{"history": []any{
+			map[string]any{"version": float64(58), "status": "superseded", "chartVersion": "5.4.0"},
+			map[string]any{"version": int64(59), "status": "deployed", "chartVersion": "5.5.0", "appVersion": "2.1.0",
+				"firstDeployed": "2026-11-10T09:00:00Z", "lastDeployed": "2026-11-10T09:01:00Z", "ociDigest": "sha256:abc"},
+		}},
+	}}
+	got := FluxHelmHistory(root)
+	if len(got) != 2 || got[0].Version != 59 || got[1].Version != 58 {
+		t.Fatalf("entries = %+v, want 59 then 58", got)
+	}
+	want := FluxHelmEntry{Version: 59, ChartVersion: "5.5.0", AppVersion: "2.1.0", Status: "deployed", FirstDeployed: "2026-11-10T09:00:00Z", LastDeployed: "2026-11-10T09:01:00Z", OCIDigest: "sha256:abc"}
+	if got[0] != want {
+		t.Fatalf("newest = %+v, want %+v", got[0], want)
+	}
+	if FluxKustomizationHistory(root) != nil {
+		t.Fatal("Kustomization reader accepted a HelmRelease")
+	}
+	root.SetAPIVersion("example.io/v1")
+	if FluxHelmHistory(root) != nil {
+		t.Fatal("non-Flux group got history")
+	}
+}
+
+func TestFluxDeployedReleaseCarriesOCIDigest(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"status": map[string]any{"history": []any{
+			map[string]any{"version": int64(59), "status": "deployed", "chartVersion": "5.5.0", "ociDigest": "sha256:abc"},
+		}},
+	}}
+	if got := FluxDeployedRelease(root); got == nil || got.OCIDigest != "sha256:abc" {
+		t.Fatalf("deployed = %+v, want OCIDigest sha256:abc", got)
+	}
+}
