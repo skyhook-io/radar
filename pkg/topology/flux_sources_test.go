@@ -101,7 +101,7 @@ func TestFluxDependsOnBecomesRequiredBy(t *testing.T) {
 	base := makeObject(ksGroup, "Kustomization", "team", "base")
 	overlay := makeObject(ksGroup, "Kustomization", "team", "overlay", map[string]any{"name": "base"})
 	app := makeObject(hrGroup, "HelmRelease", "team", "app", map[string]any{"name": "base"})
-	db := makeObject(hrGroup, "HelmRelease", "team", "db-hr", map[string]any{"name": "missing"})
+	db := makeObject(hrGroup, "HelmRelease", "team", "db-hr", map[string]any{"name": "missing"}, map[string]any{"name": "db-hr"})
 	gvrs := map[string]schema.GroupVersionResource{
 		"Kustomization": {Group: ksGroup, Version: "v1", Resource: "kustomizations"},
 		"HelmRelease":   {Group: hrGroup, Version: "v2", Resource: "helmreleases"},

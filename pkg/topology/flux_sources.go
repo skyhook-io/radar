@@ -76,6 +76,9 @@ func fluxDependsOn(root *unstructured.Unstructured) []declaredDependency {
 		if namespace == "" {
 			namespace = root.GetNamespace()
 		}
+		if namespace == root.GetNamespace() && name == root.GetName() {
+			continue
+		}
 		refs = append(refs, declaredDependency{Source: source, Target: resourceid.NewRef(group, kind, namespace, name), Label: "depends on"})
 	}
 	return refs

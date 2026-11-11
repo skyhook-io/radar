@@ -173,7 +173,7 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
               <Property label="Applied" value={status.lastAppliedRevision} />
             )}
             {status.lastAttemptedRevision && status.lastAttemptedRevision !== status.lastAppliedRevision && (
-              <Property label="Attempted" value={<>{status.lastAttemptedRevision}{status.lastAppliedRevision && <> <Badge severity="warning" size="sm">newer than applied</Badge></>}</>} />
+              <Property label="Attempted" value={<>{status.lastAttemptedRevision}{status.lastAppliedRevision && <> <Badge severity="warning" size="sm">not yet applied</Badge></>}</>} />
             )}
             {lastApply && (
               <Property

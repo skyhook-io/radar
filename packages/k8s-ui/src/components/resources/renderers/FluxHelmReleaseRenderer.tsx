@@ -340,7 +340,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
               <Property label="Applied Revision" value={status.lastAppliedRevision} />
             )}
             {status.lastAttemptedRevision && (
-              <Property label="Attempted Revision" value={<>{status.lastAttemptedRevision}{lastRelease?.chartVersion && lastRelease.chartVersion !== status.lastAttemptedRevision && <> <Badge severity="warning" size="sm">newer than applied</Badge></>}</>} />
+              <Property label="Attempted Revision" value={<>{status.lastAttemptedRevision}{lastRelease?.chartVersion && lastRelease.chartVersion !== status.lastAttemptedRevision && <> <Badge severity="warning" size="sm">not yet applied</Badge></>}</>} />
             )}
             <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>
