@@ -9,10 +9,22 @@ package server
 // Secrets are never listed: a LIST would return their data.
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/gitops"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/pkg/gitops/fieldwriters"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -326,4 +338,195 @@ func fluxMemberSelector(root *unstructured.Unstructured) string {
 		prefix = "helm.toolkit.fluxcd.io"
 	}
 	return fmt.Sprintf("%s/name=%s,%s/namespace=%s", prefix, root.GetName(), prefix, root.GetNamespace())
+}
+
+type outsideLimits struct {
+	Lists, Objects int
+	Timeout        time.Duration
+}
+
+var defaultOutsideLimits = outsideLimits{Lists: maxOutsideListGroups, Objects: 2000, Timeout: 8 * time.Second}
+
+// listOutsideObjects runs one LIST per group, as the caller, by the root's
+// Flux labels. A denied group is recorded and skipped; hitting a bound stops
+// the scan and marks the answer truncated.
+func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []outsideListGroup, selector string, limits outsideLimits, cov *outsideCoverage) []*unstructured.Unstructured {
+	ctx, cancel := context.WithTimeout(ctx, limits.Timeout)
+	defer cancel()
+	var out []*unstructured.Unstructured
+	for i, g := range groups {
+		if i >= limits.Lists || ctx.Err() != nil {
+			cov.Truncated = true
+			break
+		}
+		list, err := dyn.Resource(g.GVR).Namespace(g.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		switch {
+		case apierrors.IsForbidden(err):
+			cov.Denied = append(cov.Denied, outsideDenied{Resource: g.GVR.Resource, Namespace: g.Namespace})
+			continue
+		case ctx.Err() != nil:
+			cov.Truncated = true
+			return out
+		case err != nil:
+			log.Printf("[gitops] Failed to list %s in %s for outside changes: %v", g.GVR.Resource, sanitizeForLog(g.Namespace), err)
+			cov.Denied = append(cov.Denied, outsideDenied{Resource: g.GVR.Resource, Namespace: g.Namespace})
+			continue
+		}
+		for j := range list.Items {
+			if len(out) >= limits.Objects {
+				cov.Truncated = true
+				return out
+			}
+			out = append(out, &list.Items[j])
+			cov.Listed++
+		}
+	}
+	return out
+}
+
+// outsideChangesMemo keeps one answer per user and root for a short window:
+// the header count and the tab ask for the same thing, and the answer costs
+// up to 40 LISTs. The key carries the caller's identity, so one user's answer
+// never serves another.
+type outsideChangesMemo struct {
+	ttl     time.Duration
+	mu      sync.Mutex
+	entries map[string]*outsideMemoEntry
+}
+
+type outsideMemoEntry struct {
+	mu        sync.Mutex
+	expiresAt time.Time
+	value     outsideChangesResponse
+}
+
+func newOutsideChangesMemo(ttl time.Duration) *outsideChangesMemo {
+	return &outsideChangesMemo{ttl: ttl, entries: map[string]*outsideMemoEntry{}}
+}
+
+func (m *outsideChangesMemo) load(key string, build func() outsideChangesResponse) outsideChangesResponse {
+	if m == nil || m.ttl <= 0 {
+		return build()
+	}
+	m.mu.Lock()
+	now := time.Now()
+	for k, e := range m.entries {
+		if now.After(e.expiresAt) && !e.expiresAt.IsZero() {
+			delete(m.entries, k)
+		}
+	}
+	e, ok := m.entries[key]
+	if !ok {
+		e = &outsideMemoEntry{}
+		m.entries[key] = e
+	}
+	m.mu.Unlock()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if time.Now().Before(e.expiresAt) {
+		return e.value
+	}
+	e.value = build()
+	e.expiresAt = time.Now().Add(m.ttl)
+	return e.value
+}
+
+func (m *outsideChangesMemo) clear() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.entries = map[string]*outsideMemoEntry{}
+	m.mu.Unlock()
+}
+
+// handleGitOpsOutsideChanges serves GET /api/gitops/outside-changes/{kind}/{namespace}/{name}
+// for a Flux Kustomization or HelmRelease. Gate: the caller's namespace
+// access (parseGitOpsRequest) and the per-user tree; the member LISTs are
+// impersonated, so the API server enforces the caller's RBAC on each.
+// Without authentication it reads with Radar's identity like every other
+// read and returns only manager names, times, paths and allowlisted values.
+func (s *Server) handleGitOpsOutsideChanges(w http.ResponseWriter, r *http.Request) {
+	entry, err := gitops.ResolveFluxKind(chi.URLParam(r, "kind"))
+	group := r.URL.Query().Get("group")
+	if err != nil || (entry.Kind != "Kustomization" && entry.Kind != "HelmRelease") || (group != "" && group != entry.GVR.Group) {
+		s.writeError(w, http.StatusBadRequest, "changes made outside Flux are only available for a Flux Kustomization or HelmRelease")
+		return
+	}
+	if !s.requireConnected(w) {
+		return
+	}
+	req, ok := s.parseGitOpsRequest(w, r)
+	if !ok {
+		return
+	}
+	if !req.HasNamespaceAccess() {
+		s.writeError(w, http.StatusForbidden, "no namespace access")
+		return
+	}
+	tree, root, resolver, err := s.resolveGitOpsTree(r, req)
+	if err != nil {
+		s.writeGitOpsBuildError(w, req, err)
+		return
+	}
+	owner := &topology.ResourceRef{Group: entry.GVR.Group, Kind: entry.Kind, Namespace: root.GetNamespace(), Name: root.GetName()}
+	key := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), nil) + "\x00" + owner.Group + "/" + owner.Kind + "/" + owner.Namespace + "/" + owner.Name + "\x00" + root.GetResourceVersion()
+	dyn := s.getDynamicClientForRequest(r)
+	resp := s.outsideChangesMemo.load(key, func() outsideChangesResponse {
+		return buildOutsideChanges(r.Context(), dyn, tree, root, owner, resolver)
+	})
+	s.writeJSON(w, resp)
+}
+
+func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, owner *topology.ResourceRef, resolver *insightsResolver) outsideChangesResponse {
+	resp := outsideChangesResponse{
+		Root:         outsideRef{Group: owner.Group, Kind: owner.Kind, Namespace: owner.Namespace, Name: owner.Name},
+		Objects:      []outsideObject{},
+		Harmless:     []outsideToolCount{},
+		OtherWriters: []outsideOtherWriter{},
+		DriftEvents:  []gitopsinsights.EventSummary{},
+	}
+	if p := readGitOpsWritePolicy(owner, root, root); p != nil {
+		resp.Policy = &outsidePolicy{Tool: p.Tool, DriftDetection: p.DriftDetection, Suspended: p.Suspended != nil && *p.Suspended, Interval: p.Interval}
+	}
+	groups, cov := outsideListGroups(tree, root, k8s.ServedGVR)
+	resp.Coverage = cov
+	if dyn != nil {
+		harmless := map[string]int{}
+		others := map[string]int{}
+		for _, obj := range listOutsideObjects(ctx, dyn, groups, fluxMemberSelector(root), defaultOutsideLimits, &resp.Coverage) {
+			out, labels, otherManagers := classifyOutsideObject(obj, owner, root)
+			for _, l := range labels {
+				harmless[l]++
+			}
+			seen := map[string]bool{}
+			for _, m := range otherManagers {
+				if !seen[m] {
+					seen[m] = true
+					others[m]++
+				}
+			}
+			if len(out.Changes) > 0 {
+				resp.Objects = append(resp.Objects, out)
+			}
+		}
+		for tool, n := range harmless {
+			resp.Harmless = append(resp.Harmless, outsideToolCount{Tool: tool, Count: n})
+		}
+		sort.Slice(resp.Harmless, func(i, j int) bool { return resp.Harmless[i].Tool < resp.Harmless[j].Tool })
+		for m, n := range others {
+			resp.OtherWriters = append(resp.OtherWriters, outsideOtherWriter{Manager: m, Objects: n})
+		}
+		sort.Slice(resp.OtherWriters, func(i, j int) bool { return resp.OtherWriters[i].Manager < resp.OtherWriters[j].Manager })
+	}
+	resp.Count = len(resp.Objects)
+	if resolver != nil {
+		for _, ev := range resolver.RecentEvents(owner.Group, owner.Kind, owner.Namespace, owner.Name) {
+			if ev.Type == "Warning" && ev.Reason == "DriftDetected" {
+				resp.DriftEvents = append(resp.DriftEvents, ev)
+			}
+		}
+	}
+	return resp
 }
