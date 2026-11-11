@@ -163,7 +163,7 @@ The reserved `*.localhost` family is accepted; arbitrary local DNS and
 To put a non-loopback hostname or reverse proxy in front of Radar, enable Radar
 authentication; do not switch to `0.0.0.0` merely to bypass this check.
 
-To reach Radar through a VM, WSL, dev container, jump host, or another machine,
+To reach Radar through a VM, dev container, jump host, or another machine,
 opt into a shared listener explicitly:
 
 ```bash
