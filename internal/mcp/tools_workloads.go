@@ -120,7 +120,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 	case "restart":
 		warnings := schedulingBlockerWarnings(ctx, kind, input.Namespace, input.Name)
 		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
-			return nil, nil, fmt.Errorf("restart failed: %w", err)
+			return nil, nil, restartFailure(err)
 		}
 		resp := map[string]any{
 			"next":    fmt.Sprintf("wait_for %s %s in %s to see it finish", k8s.CanonicalWorkloadKind(kind), input.Name, input.Namespace),
@@ -190,6 +190,13 @@ func deploymentPausedResult(namespace, name string, paused bool) map[string]any 
 		"status":  "ok",
 		"message": fmt.Sprintf("Resumed rollouts of Deployment %s/%s", namespace, name),
 	}
+}
+
+func restartFailure(err error) error {
+	if errors.Is(err, k8score.ErrRestartPaused) {
+		return fmt.Errorf("restart failed: %w (manage_workload action=resume)", err)
+	}
+	return fmt.Errorf("restart failed: %w", err)
 }
 
 // rollbackResult builds the manage_workload rollback result. A revision whose

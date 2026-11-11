@@ -806,9 +806,10 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 	if m.dynClient == nil {
 		return fmt.Errorf("dynamic client not initialized")
 	}
+	normalizedKind := NormalizeWorkloadKind(strings.ToLower(kind))
 	// A Rollout's restart is spec.restartAt; the pod-template annotation below
 	// would change the template hash and re-run every canary step instead.
-	if NormalizeWorkloadKind(kind) == "rollouts" {
+	if normalizedKind == "rollouts" {
 		_, err := rollouts.Restart(ctx, m.dynClient, namespace, name)
 		return err
 	}
@@ -820,6 +821,16 @@ func (m *WorkloadManager) RestartWorkload(ctx context.Context, kind, namespace, 
 	gvr, ok := m.discovery.GetGVR(kind)
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", kind)
+	}
+
+	if normalizedKind == "deployments" {
+		deployment, err := m.dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to restart workload: %w", err)
+		}
+		if paused, _, _ := unstructured.NestedBool(deployment.Object, "spec", "paused"); paused {
+			return fmt.Errorf("Deployment %s/%s: %w", namespace, name, ErrRestartPaused)
+		}
 	}
 
 	restartTime := time.Now().Format(time.RFC3339)
@@ -1331,6 +1342,11 @@ func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace,
 // rolling it out, so a rollback that reports success would change nothing.
 // kubectl rollout undo refuses for the same reason.
 var ErrWorkloadPaused = errors.New("the Deployment is paused, so a rollback would not roll out; resume it, then roll back")
+
+// ErrRestartPaused: a paused Deployment would record the restart without
+// rolling it out, and then roll it out on the next resume. kubectl rollout
+// restart refuses for the same reason.
+var ErrRestartPaused = errors.New("the Deployment is paused, so a restart would not roll out; resume it, then restart")
 
 // deploymentRollbackKeptAnnotations are the Deployment annotations a rollback keeps
 // from the live object; every other annotation is restored from the target

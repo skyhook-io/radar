@@ -4696,6 +4696,10 @@ func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
 			s.writeRolloutError(w, err, "restart", namespace, name)
 			return
 		}
+		if errors.Is(err, k8score.ErrRestartPaused) {
+			s.writeErrorCode(w, http.StatusConflict, errCodeWorkloadPaused, err.Error())
+			return
+		}
 		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return

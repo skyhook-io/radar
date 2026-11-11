@@ -5405,8 +5405,7 @@ export function useRestartWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new Error(restartErrorMessage(await readErrorBody(response), response.status));
       }
       return response.json();
     },
@@ -5676,6 +5675,13 @@ export function useRefreshRevisionsOnNewRollout(
 export function rollbackErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
   if (body.error_code === "workload_paused") {
     return "This Deployment is paused. Click Resume rollout, then roll back.";
+  }
+  return body.error || `HTTP ${status}`;
+}
+
+export function restartErrorMessage(body: { error?: string; error_code?: string }, status: number): string {
+  if (body.error_code === "workload_paused") {
+    return "This Deployment is paused. Click Resume rollout, then restart.";
   }
   return body.error || `HTTP ${status}`;
 }
