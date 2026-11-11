@@ -37,6 +37,14 @@ describe('Flux drawer and resource timing', () => {
     expect(html).toContain('10m')
   })
 
+  it('lists a HelmRelease inventory when helm-controller records one', () => {
+    const entries = [{ id: 'shop_checkout_apps_Deployment', v: 'v1' }, { id: 'shop_checkout__Service', v: 'v1' }]
+    const html = renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, inventory: { entries } } }} />)
+    expect(html).toContain('Inventory (2 resources)')
+    expect(html).toContain('checkout')
+    expect(renderToString(<FluxHelmReleaseRenderer data={helm} />)).not.toContain('Inventory (')
+  })
+
   it('shows the deployed snapshot in the drawer and resource cells after a failed upgrade', () => {
     const drawer = renderToString(<FluxHelmReleaseRenderer data={helm} />)
     const current = drawer.slice(drawer.indexOf('Current Release'), drawer.indexOf('History ('))

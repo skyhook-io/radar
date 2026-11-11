@@ -148,13 +148,24 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     withheld: "you can't view it",
     unchecked: "Radar couldn't check its status",
   }
+  // Flux's list is its status.inventory, so name it and the usual reasons it disagrees with the labels.
+  const fluxReasons: Record<string, Partial<Record<ManagerClaim['check'], string>>> = {
+    'kustomize.toolkit.fluxcd.io': {
+      omitted: "its inventory doesn't list this resource; it may have been removed from the source while pruning is off, or the latest apply hasn't finished",
+      unreadable: 'its status has no inventory yet; Flux records one once an apply succeeds',
+    },
+    'helm.toolkit.fluxcd.io': {
+      omitted: "its inventory doesn't list this resource; the chart may no longer render it, or the latest release hasn't finished",
+      unreadable: "its status has no inventory; older helm-controllers don't record one",
+    },
+  }
   const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
   const details: string[] = []
   const whose = answer.via ? `${managerRefLabel(evidence.object)}'s` : "This resource's"
   // A newer Radar may send a check this UI doesn't know.
   const why = (c: ManagerClaim, object: string) => c.check === 'missing'
     ? `there's no such ${c.manager.kind} here`
-    : (reasons[c.check] ?? "Radar couldn't confirm its status lists this resource").replace('manager of', `${c.manager.kind} of`).replace('this resource', object)
+    : (fluxReasons[c.manager.group ?? '']?.[c.check] ?? reasons[c.check] ?? "Radar couldn't confirm its status lists this resource").replace('manager of', `${c.manager.kind} of`).replace('this resource', object)
   // Tracked by names what metadata says, which Radar hasn't confirmed: one
   // claim says why in the same sentence.
   const single = answer.state === 'claimed' && claims.length === 1 && claims[0].check !== 'recorded' ? claims[0] : null

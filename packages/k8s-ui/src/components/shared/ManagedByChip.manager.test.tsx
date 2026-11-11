@@ -36,6 +36,19 @@ describe('manager answer chip', () => {
     expect(html).toContain('Tracked by')
     expect(html).toContain(reason)
   })
+  it.each([
+    [{ kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', namespace: 'flux-system', name: 'apps' }, 'omitted',
+      "This resource's label names Kustomization flux-system/apps, but its inventory doesn't list it; it may have been removed from the source while pruning is off, or the latest apply hasn't finished."],
+    [{ kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', namespace: 'flux-system', name: 'apps' }, 'unreadable',
+      "This resource's label names Kustomization flux-system/apps, but its status has no inventory yet; Flux records one once an apply succeeds."],
+    [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'unreadable',
+      "This resource's label names HelmRelease demo/web, but its status has no inventory; older helm-controllers don't record one."],
+    [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'withheld',
+      "This resource's label names HelmRelease demo/web, but you can't view it."],
+  ] as const)('claimed explains a Flux %o %s in Flux terms', (manager, check, reason) => {
+    const html = render({ state: 'claimed', lead: manager, direct: { object, claims: [{ manager, source: manager.kind === 'HelmRelease' ? 'flux-helm-labels' : 'flux-kustomize-labels', check }] } })
+    expect(html).toContain(reason)
+  })
   it('disagree names the claim and recorder with a warning', () => {
     const html = render({ state: 'disagree', direct: { object, claims: [claim], recorders: [b] } })
     expect(html).toContain('Tracked by')
