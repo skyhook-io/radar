@@ -88,4 +88,28 @@ describe('Flux drawer and resource timing', () => {
     const invalidHistory = renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { history: [{ ...helm.status.history[0], lastDeployed: 'invalid' }] } }} />)
     expect(invalidHistory).not.toContain('Attempt started')
   })
+
+  const text = (html: string) => html.replaceAll('<!-- -->', '')
+  const ready = [{ type: 'Ready', status: 'True', reason: 'ReconciliationSucceeded' }]
+
+  it('opens Revision and flags an attempted revision newer than applied (Kustomization)', () => {
+    const html = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, conditions: ready, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:bbb' } }} />))
+    expect(html).toContain('main@sha1:aaa')
+    expect(html).toContain('newer than applied')
+  })
+
+  it('flags a HelmRelease whose attempted chart differs from the deployed one', () => {
+    const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, conditions: ready, lastAttemptedRevision: '1.4.0' } }} />))
+    expect(html).toContain('newer than applied')
+  })
+
+  it('shows no marker when the revisions match or one is missing', () => {
+    const ks = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:aaa' } }} />))
+    const hrMatch = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, lastAttemptedRevision: '1.2.0' } }} />))
+    const hrNoHistory = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { lastAttemptedRevision: '1.4.0' } }} />))
+    expect(ks).not.toContain('newer than applied')
+    expect(hrMatch).not.toContain('newer than applied')
+    expect(hrNoHistory).not.toContain('newer than applied')
+  })
 })
+
