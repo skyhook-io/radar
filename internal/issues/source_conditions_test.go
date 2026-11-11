@@ -869,6 +869,196 @@ func TestDetectGatewayRouteParentIssues_IgnoresParentsRemovedFromSpec(t *testing
 	}
 }
 
+// The moved-listener route above, at generation 2, in the other shapes a
+// controller leaves in status.parents: NGINX Gateway Fabric's single-listener
+// report for a parentRef that names no listener, the old listener's entry after
+// the parentRef was widened, a route with no spec.parentRefs, and a failing exact
+// parent whose observedGeneration lags.
+func TestDetectGatewayRouteParentIssues_ListenerShapesAtCurrentGeneration(t *testing.T) {
+	ts := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	gwRef := func(section string) map[string]any {
+		ref := map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "envoy-public", "namespace": "kube-system"}
+		if section != "" {
+			ref["sectionName"] = section
+		}
+		return ref
+	}
+	cond := func(condType, status, reason, message string, gen int64) map[string]any {
+		return map[string]any{"type": condType, "status": status, "reason": reason, "message": message, "observedGeneration": gen, "lastTransitionTime": ts}
+	}
+	report := func(ref map[string]any, conds ...any) map[string]any {
+		return map[string]any{"parentRef": ref, "conditions": conds}
+	}
+	route := func(specRefs []any, parents ...any) *unstructured.Unstructured {
+		obj := map[string]any{
+			"metadata": map[string]any{"name": "immich", "namespace": "immich", "generation": int64(2)},
+			"status":   map[string]any{"parents": parents},
+		}
+		if specRefs != nil {
+			obj["spec"] = map[string]any{"parentRefs": specRefs}
+		}
+		return &unstructured.Unstructured{Object: obj}
+	}
+	unscoped := []any{gwRef("")}
+	oldHTTPS := report(gwRef("https"), cond("Accepted", "False", "NoMatchingParent", "No listeners match this parent ref", 1))
+	accepted := report(gwRef(""),
+		cond("Accepted", "True", "Accepted", "Route is accepted", 2),
+		cond("ResolvedRefs", "True", "ResolvedRefs", "Resolved all the Object references for the Route", 2),
+	)
+
+	tests := []struct {
+		name        string
+		route       *unstructured.Unstructured
+		wantReasons []string
+	}{
+		{
+			name: "single-listener report for an unscoped parentRef at the current generation",
+			route: route(unscoped, report(gwRef("web"),
+				cond("Accepted", "False", "NoMatchingListenerHostname", "no hostname intersections", 2),
+			)),
+			wantReasons: []string{"Accepted: NoMatchingListenerHostname"},
+		},
+		{
+			name:  "widened parentRef drops the old listener's entry before the new report",
+			route: route(unscoped, oldHTTPS),
+		},
+		{
+			name:  "widened parentRef drops the old listener's entry next to the new report",
+			route: route(unscoped, oldHTTPS, accepted),
+		},
+		{
+			name: "single-listener report missing observedGeneration is not inferred",
+			route: route(unscoped, report(gwRef("web"), map[string]any{
+				"type": "Accepted", "status": "False", "reason": "NoMatchingListenerHostname", "message": "no hostname intersections", "lastTransitionTime": ts,
+			})),
+		},
+		{
+			name: "no spec.parentRefs attaches to nothing, even at the current generation",
+			route: route(nil, report(gwRef("web"),
+				cond("Accepted", "False", "NoMatchingListenerHostname", "no hostname intersections", 2),
+			)),
+		},
+		{
+			name: "failing exact parent with a lagging observedGeneration is still reported",
+			route: route([]any{gwRef("websecure")}, report(gwRef("websecure"),
+				cond("Accepted", "False", "NotAllowedByListeners", "listener does not allow this route", 1),
+			)),
+			wantReasons: []string{"Accepted: NotAllowedByListeners"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Compose(httpRouteProvider(tt.route), Filters{})
+			var reasons []string
+			for _, iss := range got {
+				reasons = append(reasons, iss.Reason)
+			}
+			if !slices.Equal(reasons, tt.wantReasons) {
+				t.Fatalf("reasons = %q, want %q", reasons, tt.wantReasons)
+			}
+		})
+	}
+}
+
+type routeCond struct {
+	condType, status, reason string
+	observed                 int64
+}
+
+// routeParentReport builds a status.parents entry for Gateway infra/gw with the
+// given listener ("" for none) and conditions written as type/status/reason
+// plus observedGeneration (0 leaves it out).
+func routeParentReport(section string, conds ...routeCond) map[string]any {
+	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+	ref := map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "gw", "namespace": "infra"}
+	if section != "" {
+		ref["sectionName"] = section
+	}
+	out := make([]any, 0, len(conds))
+	for _, c := range conds {
+		cm := map[string]any{"type": c.condType, "status": c.status, "reason": c.reason, "message": c.reason + " detail", "lastTransitionTime": now}
+		if c.observed > 0 {
+			cm["observedGeneration"] = c.observed
+		}
+		out = append(out, cm)
+	}
+	return map[string]any{"parentRef": ref, "conditions": out}
+}
+
+// NGINX Gateway Fabric writes the listener into status for an unscoped spec
+// parentRef when the Gateway has a single listener. That report is the route's
+// real, current status, so its failure must surface.
+func TestDetectGatewayRouteParentIssues_ListenerScopedReportForUnscopedRef(t *testing.T) {
+	route := httpRouteObject(1,
+		[]any{map[string]any{"name": "gw", "namespace": "infra"}},
+		[]any{routeParentReport("web",
+			routeCond{"Accepted", "False", "NoMatchingListenerHostname", 1},
+			routeCond{"ResolvedRefs", "True", "ResolvedRefs", 1},
+		)},
+	)
+	got := Compose(httpRouteProvider(route), Filters{})
+	if len(got) != 1 || got[0].Reason != "Accepted: NoMatchingListenerHostname" {
+		t.Fatalf("listener-scoped report for an unscoped parentRef must surface its failure, got %d: %+v", len(got), got)
+	}
+}
+
+// The same shape is what widening a scoped parentRef to an unscoped one leaves
+// behind. Only conditions written for the current generation can tell them
+// apart, so an older-generation listener report never counts for an unscoped
+// ref, with or without a replacement report and with or without mixed
+// generations inside the report.
+func TestDetectGatewayRouteParentIssues_ListenerScopedReportNeedsCurrentGeneration(t *testing.T) {
+	spec := []any{map[string]any{"name": "gw", "namespace": "infra"}}
+	for _, tt := range []struct {
+		name       string
+		parents    []any
+		wantReason string
+	}{
+		{
+			name:    "old scope left behind, controller has not written the new report",
+			parents: []any{routeParentReport("https", routeCond{"Accepted", "False", "NoMatchingParent", 1})},
+		},
+		{
+			name: "old scope left behind next to the new exact report",
+			parents: []any{
+				routeParentReport("https", routeCond{"Accepted", "False", "NoMatchingParent", 1}),
+				routeParentReport("", routeCond{"Accepted", "True", "Accepted", 2}),
+			},
+		},
+		{
+			name:    "no observedGeneration proves nothing",
+			parents: []any{routeParentReport("web", routeCond{"Accepted", "False", "NoMatchingListenerHostname", 0})},
+		},
+		{
+			name: "only the current-generation condition of a mixed report counts",
+			parents: []any{routeParentReport("https",
+				routeCond{"Accepted", "False", "NoMatchingParent", 1},
+				routeCond{"ResolvedRefs", "False", "BackendNotFound", 2},
+			)},
+			wantReason: "ResolvedRefs: BackendNotFound",
+		},
+		{
+			name: "another controller's healthy exact report does not hide a current listener report",
+			parents: []any{
+				routeParentReport("", routeCond{"Accepted", "True", "Accepted", 2}),
+				routeParentReport("web", routeCond{"Accepted", "False", "NoMatchingListenerHostname", 2}),
+			},
+			wantReason: "Accepted: NoMatchingListenerHostname",
+		},
+	} {
+		got := Compose(httpRouteProvider(httpRouteObject(2, spec, tt.parents)), Filters{})
+		if tt.wantReason == "" {
+			if len(got) != 0 {
+				t.Errorf("%s: want no issue, got %d: %+v", tt.name, len(got), got)
+			}
+			continue
+		}
+		if len(got) != 1 || got[0].Reason != tt.wantReason {
+			t.Errorf("%s: want one %q issue, got %d: %+v", tt.name, tt.wantReason, len(got), got)
+		}
+	}
+}
+
 func TestDetectGenericCRDIssues_PlatformConditions(t *testing.T) {
 	apiGVR := schema.GroupVersionResource{Group: "apiregistration.k8s.io", Version: "v1", Resource: "apiservices"}
 	crdGVR := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}

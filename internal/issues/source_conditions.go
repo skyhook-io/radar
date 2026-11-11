@@ -382,10 +382,11 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 	// A controller can leave a status.parents entry behind after its parent was
 	// removed from spec.parentRefs; that stale entry must not raise a warning
 	// while the route's current parent is healthy. Keep only status entries that
-	// still describe a parent the route attaches to (see gatewayStatusParentCounts).
+	// still describe a parent the route attaches to (see gatewayStatusParentMatch).
 	routeNS := u.GetNamespace()
 	specParents, _, _ := unstructured.NestedSlice(u.Object, "spec", "parentRefs")
 	attachedByDefault := routeUsesDefaultGateways(u)
+	generation := u.GetGeneration()
 
 	for _, parent := range parents {
 		pm, ok := parent.(map[string]any)
@@ -393,7 +394,8 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 			continue
 		}
 		ref, _ := pm["parentRef"].(map[string]any)
-		if !gatewayStatusParentCounts(ref, specParents, routeNS, attachedByDefault) {
+		match := gatewayStatusParentMatch(ref, specParents, routeNS, attachedByDefault)
+		if match == gatewayParentIgnored {
 			continue
 		}
 		gwLabel, gwKey, section := gatewayParentRef(pm)
@@ -412,6 +414,9 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 			}
 			reason, _ := cm["reason"].(string)
 			if conditions.IsInProgressForIssues(reason) {
+				continue
+			}
+			if match == gatewayParentCurrentConditions && !gatewayConditionObservedAt(cm, generation) {
 				continue
 			}
 			msg, _ := cm["message"].(string)
@@ -465,19 +470,61 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 	return out
 }
 
-// gatewayStatusParentCounts reports whether a route's status.parents entry still
-// describes a parent the route attaches to. A parent matching a current
-// spec.parentRef always counts. A route that opts into default Gateways also
-// attaches to Gateways it does not name in spec, so an unmatched entry counts
-// only when it could be such a default attachment — i.e. it references a Gateway;
-// an unmatched non-Gateway entry (a mesh Service the spec dropped) is a leftover
-// and is ignored. Mirrors the route-status evidence rule in the shared UI
-// (resource-utils routeParentEvidence).
-func gatewayStatusParentCounts(ref map[string]any, specParents []any, routeNamespace string, attachedByDefault bool) bool {
+type gatewayParentMatch int
+
+const (
+	gatewayParentIgnored gatewayParentMatch = iota
+	gatewayParentAllConditions
+	// Only conditions observed at the route's current generation count.
+	gatewayParentCurrentConditions
+)
+
+// gatewayStatusParentMatch reports whether a route's status.parents entry still
+// describes a parent the route attaches to, and which of its conditions count.
+//
+// A parent matching a current spec.parentRef exactly counts with all its
+// conditions, including ones from an older generation: a slow controller's last
+// failure stays visible. A route that opts into default Gateways also attaches
+// to Gateways it does not name in spec, so an unmatched entry counts when it
+// could be such a default attachment, i.e. it references a Gateway; an unmatched
+// non-Gateway entry (a mesh Service the spec dropped) is a leftover.
+//
+// A listener-scoped entry for a Gateway that the spec names without a listener
+// is how NGINX Gateway Fabric reports a single-listener Gateway, but it is also
+// what a scoped parentRef widened to an unscoped one leaves behind. Only
+// conditions written for the current generation tell the two apart, so only
+// those count.
+//
+// The shared UI route status (resource-utils routeParentEvidence) uses the
+// same membership and listener-scoped rules, but on an exact match it also
+// drops conditions from an older generation.
+func gatewayStatusParentMatch(ref map[string]any, specParents []any, routeNamespace string, attachedByDefault bool) gatewayParentMatch {
 	if configrefs.GatewayParentRefInSpec(ref, specParents, routeNamespace) {
-		return true
+		return gatewayParentAllConditions
 	}
-	return attachedByDefault && len(ref) > 0 && configrefs.GatewayParentIsGateway(ref)
+	if attachedByDefault && len(ref) > 0 && configrefs.GatewayParentIsGateway(ref) {
+		return gatewayParentAllConditions
+	}
+	if configrefs.GatewayParentRefExpandsSpec(ref, specParents, routeNamespace) {
+		return gatewayParentCurrentConditions
+	}
+	return gatewayParentIgnored
+}
+
+// gatewayConditionObservedAt reports whether a condition records the given
+// generation. A missing observedGeneration or generation proves nothing.
+func gatewayConditionObservedAt(cond map[string]any, generation int64) bool {
+	if generation <= 0 {
+		return false
+	}
+	switch v := cond["observedGeneration"].(type) {
+	case int64:
+		return v == generation
+	case float64:
+		return int64(v) == generation
+	default:
+		return false
+	}
 }
 
 // routeUsesDefaultGateways reports whether the route opts into attaching to

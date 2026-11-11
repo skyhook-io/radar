@@ -277,6 +277,80 @@ describe('getRouteStatus', () => {
     expect(getRouteStatus(r)).toMatchObject({ text: 'Accepted', level: 'healthy' })
   })
 
+  it('reads a listener report for an unscoped parentRef', () => {
+    // NGINX Gateway Fabric names the listener in status when the Gateway has
+    // only one, even though the route's parentRef names none.
+    const r = route({
+      generation: 1,
+      parents: [{
+        parentRef: { group: 'gateway.networking.k8s.io', kind: 'Gateway', name: 'gw', namespace: 'prod', sectionName: 'web' },
+        conditions: [cond('Accepted', 'True', 1), cond('ResolvedRefs', 'False', 1)],
+      }],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Degraded', level: 'degraded' })
+  })
+
+  it('reads a rejecting listener report for an unscoped parentRef as Not Accepted', () => {
+    const r = route({
+      generation: 1,
+      parents: [{ parentRef: { name: 'gw', sectionName: 'web' }, conditions: [cond('Accepted', 'False', 1)] }],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Not Accepted', level: 'unhealthy' })
+  })
+
+  it('ignores the old listener report left behind after the parentRef was widened', () => {
+    // Widening bumps the generation, so the leftover only carries older
+    // conditions; it must not speak for the route, whether or not the
+    // controller has written the new report yet.
+    const leftover = { parentRef: { name: 'gw', sectionName: 'https' }, conditions: [cond('Accepted', 'False', 1)] }
+    expect(getRouteStatus(route({ generation: 2, parents: [leftover] })))
+      .toMatchObject({ text: 'Unknown', level: 'unknown' })
+    expect(getRouteStatus(route({
+      generation: 2,
+      parents: [leftover, { parentRef: { name: 'gw' }, conditions: [cond('Accepted', 'True', 2), cond('ResolvedRefs', 'True', 2)] }],
+    }))).toMatchObject({ text: 'Accepted', level: 'healthy' })
+  })
+
+  it('does not read a listener report for an unscoped parentRef without observedGeneration', () => {
+    const r = route({
+      generation: 1,
+      parents: [{ parentRef: { name: 'gw', sectionName: 'web' }, conditions: [cond('Accepted', 'False')] }],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Unknown', level: 'unknown' })
+  })
+
+  it('reads only the current conditions of a listener report for an unscoped parentRef', () => {
+    const r = route({
+      generation: 2,
+      parents: [{
+        parentRef: { name: 'gw', sectionName: 'https' },
+        conditions: [cond('Accepted', 'False', 1), cond('ResolvedRefs', 'True', 2)],
+      }],
+    })
+    // The stale Accepted=False does not count; nothing current confirms Accepted.
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Pending', level: 'degraded' })
+  })
+
+  it('does not let another healthy report hide a current listener report for the same parent', () => {
+    const r = route({
+      generation: 2,
+      parents: [
+        { parentRef: { name: 'gw' }, controllerName: 'old/ctrl', conditions: [cond('Accepted', 'True', 2), cond('ResolvedRefs', 'True', 2)] },
+        { parentRef: { name: 'gw', sectionName: 'web' }, controllerName: 'new/ctrl', conditions: [cond('Accepted', 'False', 2)] },
+      ],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Degraded', level: 'degraded' })
+  })
+
+  it('keeps exact matching for a parentRef scoped by port', () => {
+    const r = route({
+      generation: 1,
+      refs: [{ name: 'gw', port: 80 }],
+      parents: [{ parentRef: { name: 'gw', sectionName: 'web' }, conditions: [cond('Accepted', 'False', 1)] }],
+    })
+    expect(getRouteStatus(r)).toMatchObject({ text: 'Unknown', level: 'unknown' })
+  })
+
   it('does not match a report for a different sectionName', () => {
     const r = route({
       refs: [{ name: 'gw', sectionName: 'https' }],
@@ -304,6 +378,22 @@ describe('getRouteStatusReason', () => {
       },
     }
     expect(getRouteStatusReason(r)).toBe('gw: BackendNotFound: Service prod/api not found')
+  })
+
+  it('explains a failing listener report for an unscoped parentRef', () => {
+    const r = {
+      metadata: { namespace: 'prod', generation: 1 },
+      spec: { parentRefs: [{ name: 'gw' }] },
+      status: {
+        parents: [{
+          parentRef: { name: 'gw', sectionName: 'web' },
+          conditions: [
+            cond('Accepted', 'False', { reason: 'NoMatchingListenerHostname', message: 'no hostname match', observedGeneration: 1 }),
+          ],
+        }],
+      },
+    }
+    expect(getRouteStatusReason(r)).toBe('gw: NoMatchingListenerHostname: no hostname match')
   })
 
   it('is empty when nothing is failing, so a healthy badge carries no hover', () => {
