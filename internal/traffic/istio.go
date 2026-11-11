@@ -147,11 +147,89 @@ func (s *IstioSource) defaultQuery(ctx context.Context, query string) (*prom.Que
 	return client.Query(ctx, query)
 }
 
+// istioReporterSelector picks one side's report of each request: the
+// destination proxy's.
+const istioReporterSelector = `reporter="destination"`
+
+const istioTCPMetric = "istio_tcp_connections_opened_total"
+
+// istioScopes keeps each Istio metric family to this cluster's series: HTTP
+// (istio_requests_total and its byte sums, reported by the same proxies) and
+// TCP. They are checked separately, like Beyla's, so a family scraped without
+// the cluster label does not empty the other.
+type istioScopes struct {
+	http, tcp clusterScope
+	// tcpUnchecked is set when Radar could not check which cluster the TCP
+	// series belong to. They are left out and named as missing, as a failed
+	// TCP query is, rather than drawn unchecked.
+	tcpUnchecked bool
+}
+
+// resolveScopes decides each family's cluster scope. Filtering applies only to
+// a configured metrics store: one Radar discovered in the cluster holds this
+// cluster's metrics.
+func (s *IstioSource) resolveScopes(ctx context.Context) (istioScopes, error) {
+	url, _ := metricsConfig()
+	http, err := scopeForMetric(ctx, "istio_requests_total", istioReporterSelector, url != "")
+	if err != nil {
+		return istioScopes{}, err
+	}
+	tcp, err := scopeForMetric(ctx, istioTCPMetric, istioReporterSelector, url != "")
+	return istioScopes{http: http, tcp: tcp, tcpUnchecked: err != nil}, nil
+}
+
+func (s *IstioSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {
+	qr, err := s.queryFn(ctx, query)
+	if err != nil || qr == nil {
+		return nil, err
+	}
+	rows := make([]map[string]string, 0, len(qr.Series))
+	for _, series := range qr.Series {
+		rows = append(rows, series.Labels)
+	}
+	return rows, nil
+}
+
+// familyMismatch explains why the cluster matchers left a family with no
+// series: it looks at the family's series present in the window without them.
+func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc clusterScope, metric string) string {
+	if sc.matchers == "" {
+		return ""
+	}
+	present := func(more string) string {
+		return fmt.Sprintf(`last_over_time(%s{%s%s}[5m])`, metric, istioReporterSelector, more)
+	}
+	selector := present("")
+	if opts.Namespace != "" {
+		safeNS := prom.SanitizeLabelValue(opts.Namespace)
+		selector = present(fmt.Sprintf(`, source_workload_namespace="%s"`, safeNS)) + " or " +
+			present(fmt.Sprintf(`, destination_workload_namespace="%s"`, safeNS))
+	}
+	rows, err := s.identityRows(ctx, sc.identityCountQuery(selector))
+	if err != nil {
+		return ""
+	}
+	family := "Istio HTTP"
+	if metric == istioTCPMetric {
+		family = "Istio TCP"
+	}
+	return sc.clusterMismatchWarning(rows, family)
+}
+
+// errIstioTCPUnchecked stands in for the TCP query when its cluster scope
+// could not be checked.
+var errIstioTCPUnchecked = errors.New("could not check which cluster the TCP series belong to")
+
 // GetFlows retrieves flows from Istio metrics via the shared Prometheus client
 func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
 	var missing []string
 
-	httpFlows, err := s.queryHTTPFlows(ctx, opts, &missing)
+	scopes, err := s.resolveScopes(ctx)
+	if err != nil {
+		return scopeCheckFailed("istio"), nil
+	}
+
+	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, &missing)
 	if errors.Is(err, errIstioPrometheusUnavailable) {
 		return &FlowsResponse{
 			Source:    "istio",
@@ -170,7 +248,11 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}, nil
 	}
 
-	tcpFlows, tcpErr := s.queryTCPFlows(ctx, opts)
+	httpCount := len(httpFlows)
+	tcpFlows, tcpErr := []Flow(nil), errIstioTCPUnchecked
+	if !scopes.tcpUnchecked {
+		tcpFlows, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
+	}
 	if tcpErr != nil {
 		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", tcpErr)
 		missing = append(missing, "TCP connections")
@@ -191,6 +273,10 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		// Without this the edges read as measured: a failed 5xx query shows as no
 		// errors, and failed TCP or byte queries as no traffic of that kind.
 		response.Warning = fmt.Sprintf("Istio metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(missing, ", "))
+		if scopes.tcpUnchecked {
+			response.Warning += " " + uncheckedFamilyNote
+			response.WarningClusterScope = true
+		}
 		// Missing figures qualify the edges shown. Missing TCP connections are
 		// edges that may not be shown at all, which holds whatever is filtered.
 		response.WarningKind = WarningPartial
@@ -198,7 +284,36 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 			response.WarningKind = WarningTransient
 		}
 	}
+	mismatch := ""
+	switch {
+	case len(httpFlows) == 0:
+		if mismatch = s.familyMismatch(ctx, opts, scopes.http, "istio_requests_total"); mismatch == "" && tcpErr == nil {
+			mismatch = s.familyMismatch(ctx, opts, scopes.tcp, istioTCPMetric)
+		}
+	case httpCount == 0:
+		// TCP connections drew, but the cluster filter may have removed every
+		// HTTP series. Say so, or the map reads as carrying no requests.
+		s.noteFamilyMismatch(ctx, opts, response, scopes.http, "istio_requests_total", "HTTP requests aren't shown on this map.")
+	case len(tcpFlows) == 0 && tcpErr == nil:
+		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, "TCP connections aren't shown on this map.")
+	}
+	applyClusterScopeWarning(response, mismatch, scopes.http.mixed || scopes.tcp.mixed)
 	return response, nil
+}
+
+// noteFamilyMismatch adds why one family is missing while the other drew.
+// Its edges are missing, not figures on the edges shown, so the warning holds
+// whatever a viewer's filters leave, as missing TCP connections do.
+func (s *IstioSource) noteFamilyMismatch(ctx context.Context, opts FlowOptions, response *FlowsResponse, sc clusterScope, metric, lead string) {
+	reason := s.familyMismatch(ctx, opts, sc, metric)
+	if reason == "" {
+		return
+	}
+	response.Warning = strings.TrimSpace(lead + " " + reason + " " + response.Warning)
+	response.WarningClusterScope = true
+	if response.WarningKind != WarningTransient {
+		response.WarningKind = WarningIncomplete
+	}
 }
 
 // flowKey uniquely identifies a source→destination service pair for map lookups
@@ -222,12 +337,13 @@ type istioSeriesKey struct {
 // istioHTTPGroupBy is shared by every HTTP query so their series join one to one.
 const istioHTTPGroupBy = "source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol"
 
-// istioRateQuery builds `sum by (groupBy) (rate(metric{reporter="destination"extra}[5m]))`.
-// A namespace filter has to become two OR'd selectors: PromQL cannot express
-// "source OR destination namespace matches" inside one label selector.
-func istioRateQuery(groupBy, metric, extra, namespace string) string {
+// istioRateQuery builds `sum by (groupBy) (rate(metric{reporter="destination"extra}[5m]))`
+// within the cluster scope. A namespace filter has to become two OR'd
+// selectors: PromQL cannot express "source OR destination namespace matches"
+// inside one label selector.
+func istioRateQuery(groupBy, metric, extra, namespace string, sc clusterScope) string {
 	sum := func(more string) string {
-		return fmt.Sprintf(`sum by (%s) (rate(%s{reporter="destination"%s%s}[5m]))`, groupBy, metric, extra, more)
+		return fmt.Sprintf(`sum by (%s) (rate(%s{%s}[5m]))`, groupBy, metric, sc.with(istioReporterSelector+extra+more))
 	}
 	if namespace == "" {
 		return sum("")
@@ -271,23 +387,23 @@ func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (m
 // Response codes are aggregated (not split per-code) and a separate error query
 // provides 5xx error rates per series. Optional figures that cannot be read are
 // appended to missing.
-func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, missing *[]string) ([]Flow, error) {
-	result, err := s.queryFn(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", "", opts.Namespace))
+func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc clusterScope, missing *[]string) ([]Flow, error) {
+	result, err := s.queryFn(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", "", opts.Namespace, sc))
 	if err != nil {
 		return nil, err
 	}
 
-	errorRates, err := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", `, response_code=~"5.."`, opts.Namespace))
+	errorRates, err := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", `, response_code=~"5.."`, opts.Namespace, sc))
 	if err != nil {
 		log.Printf("[istio] Error querying 5xx rates (continuing without error data): %v", err)
 		*missing = append(*missing, "5xx error rates")
 	}
 
-	bytesSent, sentErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_request_bytes_sum", "", opts.Namespace))
+	bytesSent, sentErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_request_bytes_sum", "", opts.Namespace, sc))
 	if sentErr != nil {
 		log.Printf("[istio] Error querying request bytes (continuing without byte data): %v", sentErr)
 	}
-	bytesRecv, recvErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_response_bytes_sum", "", opts.Namespace))
+	bytesRecv, recvErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_response_bytes_sum", "", opts.Namespace, sc))
 	if recvErr != nil {
 		log.Printf("[istio] Error querying response bytes (continuing without byte data): %v", recvErr)
 	}
@@ -370,8 +486,8 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, miss
 }
 
 // queryTCPFlows queries istio_tcp_connections_opened_total for TCP traffic
-func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions) ([]Flow, error) {
-	query := istioRateQuery("source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name", "istio_tcp_connections_opened_total", "", opts.Namespace)
+func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) ([]Flow, error) {
+	query := istioRateQuery("source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name", istioTCPMetric, "", opts.Namespace, sc)
 
 	result, err := s.queryFn(ctx, query)
 	if err != nil {

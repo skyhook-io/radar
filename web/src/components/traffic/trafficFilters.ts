@@ -1,4 +1,4 @@
-import type { AggregatedFlow, TrafficFlow } from '../../types'
+import type { AggregatedFlow, TrafficFlow, TrafficWarningKind } from '../../types'
 import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
 import type { TrafficGraphSelection } from './TrafficGraph'
 
@@ -707,4 +707,33 @@ export function verdictChoices(seen: Iterable<string>): string[] {
   const present = new Set(seen)
   if (present.size === 1 && present.has('forwarded')) return []
   return ['forwarded', 'dropped', 'error'].filter(v => present.has(v))
+}
+
+/** Whether an empty map with this warning is worth fetching again at once. Only
+ *  a transient one (or one from a Radar that sends no kind) may clear on its own;
+ *  the rest are the answer, and polling them costs the source a burst of queries. */
+export function warningRetries(kind: TrafficWarningKind | undefined): boolean {
+  return kind !== 'partial' && kind !== 'incomplete' && kind !== 'cluster'
+}
+
+/** Title of the banner shown beside flows that carry a warning. */
+export function warningBannerTitle(kind: TrafficWarningKind | undefined): string {
+  switch (kind) {
+    // About values on edges that are shown - a port reported as 0, UDP as TCP -
+    // so "unreliable", not "incomplete", which would send the reader looking
+    // for missing workloads.
+    case 'partial': return 'Some values on this map are unreliable'
+    case 'cluster': return "This map may include other clusters' traffic"
+    default: return 'Some traffic may be missing from this map'
+  }
+}
+
+/** Headline of the empty map when the source explained why it is empty. */
+export function emptyWarningHeadline(kind: TrafficWarningKind | undefined): string {
+  switch (kind) {
+    case 'partial': return 'No traffic Radar can place on the map'
+    case 'incomplete': return 'No traffic seen, but some may be missing'
+    case 'cluster': return 'No traffic labeled as this cluster'
+    default: return 'Unable to fetch traffic data'
+  }
 }

@@ -38,7 +38,7 @@ installed version. Several flags also take a persistent default from `~/.radar/c
 | `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
 | `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery). In local CLI/Desktop mode, applies only to the launch's initial context and never inherits saved headers. |
 | `--prometheus-single-cluster` | `false` | Declare the backend dedicated to this cluster for workload metrics and PVC usage, replacing automatic identity matching. Other metrics do not use this override. [Scope and lifetime](workload-metrics.md#optional-operator-override). |
-| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
+| `--prometheus-cluster-label` | (automatic matching) | Optional workload/PVC metrics override for a shared backend, also used for the Caretta/Beyla/Istio traffic map on a metrics store you configured, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). In local CLI/Desktop mode, requires `--prometheus-url` in the same launch and applies only to the launch's initial context. |
 | `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](workload-metrics.md#request-sources). |
@@ -837,6 +837,10 @@ Leave both unset for automatic matching. Configured labels must exist on each
 affected metric source, including kubelet volume stats. See
 [scope and remedies](workload-metrics.md#pvc-usage-scope).
 
+The same `--prometheus-cluster-label` labels also scope the Caretta, Beyla and
+Istio traffic map when it reads a metrics store you configured. See
+[Traffic map in a shared metrics store](#traffic-map-in-a-shared-metrics-store).
+
 | Run mode | How to configure an explicit override |
 |---|---|
 | Local CLI / `kubectl radar` | Supply the flag on each launch that needs it. These overrides have no `config.json` key or environment-variable equivalent. |
@@ -848,6 +852,25 @@ Changing the Kubernetes connection, logical metrics backend or headers clears
 an active override and resumes automatic matching. A new local port-forward to
 the same discovered Service is not a different backend. Only reapply an override
 after verifying the new connection's scope. See [operator override details](workload-metrics.md#optional-operator-override).
+
+### Traffic map in a shared metrics store
+
+When the traffic map reads Caretta, Beyla or Istio traffic from a metrics store
+you configured (`--prometheus-url`, Helm `traffic.prometheusUrl`, or a URL saved
+in Settings), it tries to keep to this cluster's traffic. It uses the
+`--prometheus-cluster-label` labels when they're set, otherwise the cluster
+label kube-state-metrics carries for this cluster's Pods. Stores Radar finds on
+its own, including Caretta's own store, are read as they are.
+
+When the traffic doesn't match this cluster's labels, may include other
+clusters' traffic, or Radar couldn't check, the map says so and links here. A map
+without a note isn't proof, though: traffic under one cluster name Radar can't
+confirm, or with no cluster label at all, is shown as is. In a shared store,
+label each cluster's traffic where it's scraped or sent to the store (for example
+with a relabel rule or an external label), and set this cluster's label and value
+the same way as for workload metrics
+([by run mode](#workload-metrics-overrides-by-run-mode)). The traffic metrics
+must carry every label you set; traffic without them isn't shown.
 
 ## Startup Context
 

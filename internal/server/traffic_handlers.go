@@ -317,8 +317,10 @@ func addFlowsWarning(result map[string]any, response *traffic.FlowsResponse, flo
 	// may be missing, which may be exactly why this user sees none. A source
 	// that returned no flows in the first place is different again: there the
 	// warning is the explanation for the empty result, which is what it is for.
+	// A cluster warning beside flows is the note that they may include other
+	// clusters' traffic, so it goes with them the same way.
 	filteredEverythingOut := len(flows) == 0 && len(response.Flows) > 0
-	if response.WarningKind == traffic.WarningPartial && filteredEverythingOut {
+	if (response.WarningKind == traffic.WarningPartial || response.WarningKind == traffic.WarningCluster) && filteredEverythingOut {
 		return
 	}
 
@@ -330,6 +332,9 @@ func addFlowsWarning(result map[string]any, response *traffic.FlowsResponse, flo
 		// endless retry loop.
 		if response.WarningKind != "" {
 			result["warningKind"] = response.WarningKind
+		}
+		if response.WarningClusterScope {
+			result["warningClusterScope"] = true
 		}
 	}
 }

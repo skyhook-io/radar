@@ -120,3 +120,33 @@ func TestTrafficFlowsPayloadCarriesCoverage(t *testing.T) {
 		t.Error("coveredSince set for a window that was fully covered")
 	}
 }
+
+// The note that flows may include other clusters' traffic goes with those flows.
+// Kept after filtering removed all of them, it would sit on an empty map under
+// a headline saying no traffic carries this cluster's label.
+func TestTrafficFlowsPayloadDropsClusterNoteWhenFilteringRemovedEverything(t *testing.T) {
+	note := &traffic.FlowsResponse{
+		Source:      "caretta",
+		Flows:       []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}},
+		Warning:     "Radar couldn't work out which cluster this traffic comes from.",
+		WarningKind: traffic.WarningCluster,
+	}
+	if _, ok := trafficFlowsPayload(note, []traffic.Flow{}, false)["warning"]; ok {
+		t.Error("the mixed-clusters note should go with the flows it describes")
+	}
+	empty := &traffic.FlowsResponse{
+		Source:              "caretta",
+		Flows:               []traffic.Flow{},
+		Warning:             "The metrics store has traffic, but none of it is labeled cluster=a.",
+		WarningKind:         traffic.WarningCluster,
+		WarningClusterScope: true,
+	}
+	payload := trafficFlowsPayload(empty, []traffic.Flow{}, false)
+	if got := payload["warningKind"]; got != traffic.WarningCluster {
+		t.Errorf("an empty map's cluster explanation must survive, got kind %v", got)
+	}
+	// The client links to the cluster-label docs only when this travels.
+	if got := payload["warningClusterScope"]; got != true {
+		t.Errorf("warningClusterScope = %v, want true", got)
+	}
+}

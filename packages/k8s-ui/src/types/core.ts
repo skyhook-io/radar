@@ -1748,9 +1748,18 @@ export interface TrafficFlowsResponse {
    *  their values are missing or wrong, so show the warning next to them and do
    *  not refetch. 'incomplete' means the fetch worked but could not see
    *  everything — events lost, nodes unreachable — so flows may be missing; show
-   *  it, with or without flows, and do not retry at once. */
-  warningKind?: 'transient' | 'partial' | 'incomplete'
+   *  it, with or without flows, and do not retry at once. 'cluster' is about
+   *  which cluster the traffic belongs to in a metrics store shared by several:
+   *  why none of it could be tied to this cluster, or, beside flows, that they
+   *  may include other clusters'. It holds until the configuration changes, so
+   *  do not retry. */
+  warningKind?: TrafficWarningKind
+  /** Set when the warning includes a reason tied to keeping the map to this
+   *  cluster in a shared metrics store, so the view links to how that works. */
+  warningClusterScope?: boolean
 }
+
+export type TrafficWarningKind = 'transient' | 'partial' | 'incomplete' | 'cluster'
 
 // Response from GET /api/traffic/flows/records — the newest records behind
 // one graph selection.
@@ -1766,7 +1775,7 @@ export interface TrafficRecordsResponse {
   nodeFlowLimit?: number
   flowLimit?: number
   warning?: string
-  warningKind?: 'transient' | 'partial' | 'incomplete'
+  warningKind?: TrafficWarningKind
 }
 
 // Wizard state for traffic setup

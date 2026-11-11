@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -695,5 +695,22 @@ describe('verdictChoices', () => {
 
   it('offers Forwarded when another verdict without a chip is present, since it then excludes something', () => {
     expect(verdictChoices(['forwarded', 'redirected'])).toEqual(['forwarded'])
+  })
+})
+
+describe('flows warning kinds', () => {
+  // A cluster warning is the answer about a shared metrics store, not a failed
+  // fetch: retrying it only repeats the store's queries.
+  it('retries only warnings that may clear on their own', () => {
+    expect(warningRetries(undefined)).toBe(true)
+    expect(warningRetries('transient')).toBe(true)
+    expect(warningRetries('partial')).toBe(false)
+    expect(warningRetries('incomplete')).toBe(false)
+    expect(warningRetries('cluster')).toBe(false)
+  })
+
+  it('does not call a cluster warning a fetch failure or missing traffic', () => {
+    expect(emptyWarningHeadline('cluster')).not.toBe(emptyWarningHeadline('transient'))
+    expect(warningBannerTitle('cluster')).not.toBe(warningBannerTitle('transient'))
   })
 })

@@ -243,8 +243,12 @@ type FlowsResponse struct {
 	// it keeps the retrying behaviour it had. A client must not retry
 	// WarningPartial: the answer will not change, and the warning explains
 	// something the user needs to read rather than wait out. WarningIncomplete
-	// is not retried either.
+	// and WarningCluster are not retried either.
 	WarningKind string `json:"warningKind,omitempty"`
+	// WarningClusterScope is set when Warning includes a reason tied to keeping
+	// the map to this cluster in a metrics store shared by several, so a client
+	// can link to how that works and how to set this cluster's label.
+	WarningClusterScope bool `json:"warningClusterScope,omitempty"`
 	// CoveredSince is when Flows start being complete, set when a source read
 	// only its newest records and some of the window did not fit: Hubble
 	// returns at most NodeFlowLimit flows per node. Before it, traffic may be
@@ -274,6 +278,11 @@ const (
 	// came with, so it is shown beside them and not retried for, and it goes
 	// when they are filtered away.
 	WarningPartial = "partial"
+	// WarningCluster is about which cluster the traffic belongs to, in a
+	// metrics store shared by several: why none of it could be tied to this
+	// cluster, or that the flows shown may include other clusters'. It holds
+	// until the store or Radar's cluster labels change, so it is not retried.
+	WarningCluster = "cluster"
 )
 
 // AggregatedFlow represents flows aggregated by service pair.

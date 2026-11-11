@@ -738,7 +738,7 @@ func TestManager_DetectSources_IncludesBeyla(t *testing.T) {
 }
 
 func TestBeylaSource_QueryL4_NamespaceFilterIsValidPromQL(t *testing.T) {
-	q := beylaRateQuery(beylaL4GroupBy, beylaFlowMetric, "test-ns", beylaL4DirectionFilter, beylaWindow(0))
+	q := beylaRateQuery(beylaL4GroupBy, beylaFlowMetric, beylaJobSelector(), "test-ns", beylaL4DirectionFilter, beylaWindow(0))
 	if !strings.Contains(q, `k8s_src_namespace="test-ns"}`) || !strings.Contains(q, `k8s_dst_namespace="test-ns"}`) {
 		t.Errorf("namespace matchers must live inside the label selector, got: %s", q)
 	}
@@ -748,7 +748,7 @@ func TestBeylaSource_QueryL4_NamespaceFilterIsValidPromQL(t *testing.T) {
 }
 
 func TestBeylaSource_QueryL7_UsesCorrectMetricAndLabels(t *testing.T) {
-	q := beylaL7RateQuery("test-ns", beylaWindow(0))
+	q := beylaL7RateQuery(beylaJobSelector(), "test-ns", beylaWindow(0))
 	if !strings.Contains(q, "http_server_request_duration_seconds_count") {
 		t.Errorf("expected the OTel-aligned Beyla HTTP server metric, got: %s", q)
 	}
@@ -1625,7 +1625,7 @@ func TestQueryL7DetailCombinesReplicasOnOnePort(t *testing.T) {
 		return emptyResult(), nil
 	}
 
-	latency, errors, _ := src.queryL7Detail(context.Background(), FlowOptions{})
+	latency, errors, _ := src.queryL7Detail(context.Background(), FlowOptions{}, beylaJobSelector())
 	key := dstPortKey{"demo", "web", 80}
 
 	got, ok := errors.perPort[key]
@@ -1720,7 +1720,7 @@ func TestReplyLossFractionRejectsAnImpossibleFraction(t *testing.T) {
 			src.queryFn = func(_ context.Context, _ string) (*prom.QueryResult, error) {
 				return promResult("vector", promSeries(map[string]string{}, tc.val)), nil
 			}
-			if got := src.replyLossFraction(context.Background(), beylaWindow(0)); got != tc.want {
+			if got := src.replyLossFraction(context.Background(), beylaWindow(0), beylaJobSelector()); got != tc.want {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
