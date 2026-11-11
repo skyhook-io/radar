@@ -198,11 +198,13 @@ function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsIns
 }
 
 // fluxNextRunMinutes estimates a Kustomization's next run from its last run
-// and interval. HelmRelease history records deploys, not runs, so it has none.
+// and interval; after a failed apply Flux retries on retryInterval, which
+// defaults to interval. HelmRelease history records deploys, not runs.
 function fluxNextRunMinutes(summary: GitOpsInsightSummary): number | null {
   if (summary.kind !== 'Kustomization' || summary.autoSyncMode === 'Suspended') return null
   const last = Date.parse(summary.lastApplied || summary.lastApplyAttempt || '')
-  const seconds = summary.interval ? parseInterval(summary.interval) : null
+  const interval = (!summary.lastApplied && summary.retryInterval) || summary.interval
+  const seconds = interval ? parseInterval(interval) : null
   if (!Number.isFinite(last) || !seconds) return null
   const remaining = last + seconds * 1000 - Date.now()
   return remaining > 0 ? Math.ceil(remaining / 60000) : null

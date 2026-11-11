@@ -3094,6 +3094,27 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
+	// The newest status.history entry names the release; it is what current
+	// Flux records, so its summary line wins over lastAppliedRevision's.
+	historyChanged := false
+	if newHistory := gitops.FluxHelmHistory(newHR); len(newHistory) > 0 {
+		n := newHistory[0]
+		outcome := ""
+		if n.Status != "" && n.Status != "deployed" {
+			outcome = ", " + n.Status
+		}
+		newValue := fmt.Sprintf("%s (release %d)", n.ChartVersion, n.Version)
+		if oldHistory := gitops.FluxHelmHistory(oldHR); len(oldHistory) == 0 {
+			historyChanged = true
+			changes = append(changes, FieldChange{Path: "status.history[0]", NewValue: newValue})
+			summary = append(summary, fmt.Sprintf("chart %s (release %d%s)", n.ChartVersion, n.Version, outcome))
+		} else if o := oldHistory[0]; o.Version != n.Version || o.ChartVersion != n.ChartVersion {
+			historyChanged = true
+			changes = append(changes, FieldChange{Path: "status.history[0]", OldValue: fmt.Sprintf("%s (release %d)", o.ChartVersion, o.Version), NewValue: newValue})
+			summary = append(summary, fmt.Sprintf("chart %s → %s (release %d → %d%s)", o.ChartVersion, n.ChartVersion, o.Version, n.Version, outcome))
+		}
+	}
+
 	// Check last applied revision: a chart version string on current Flux,
 	// an integer on objects from older API versions.
 	appliedChanged := false
@@ -3103,7 +3124,9 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 		if oldApplied != newApplied {
 			appliedChanged = true
 			changes = append(changes, FieldChange{Path: "status.lastAppliedRevision", OldValue: oldApplied, NewValue: newApplied})
-			summary = append(summary, fmt.Sprintf("revision: %s→%s", oldApplied, newApplied))
+			if !historyChanged {
+				summary = append(summary, fmt.Sprintf("revision: %s→%s", oldApplied, newApplied))
+			}
 		}
 	} else {
 		oldRevision, _, _ := unstructured.NestedInt64(oldStatus, "lastAppliedRevision")
@@ -3111,23 +3134,9 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 		if oldRevision != newRevision && newRevision != 0 {
 			appliedChanged = true
 			changes = append(changes, FieldChange{Path: "status.lastAppliedRevision", OldValue: oldRevision, NewValue: newRevision})
-			summary = append(summary, fmt.Sprintf("revision: %d→%d", oldRevision, newRevision))
-		}
-	}
-
-	if oldHistory, newHistory := gitops.FluxHelmHistory(oldHR), gitops.FluxHelmHistory(newHR); len(oldHistory) > 0 && len(newHistory) > 0 {
-		o, n := oldHistory[0], newHistory[0]
-		if o.Version != n.Version || o.ChartVersion != n.ChartVersion {
-			changes = append(changes, FieldChange{
-				Path:     "status.history[0]",
-				OldValue: fmt.Sprintf("%s (release %d)", o.ChartVersion, o.Version),
-				NewValue: fmt.Sprintf("%s (release %d)", n.ChartVersion, n.Version),
-			})
-			outcome := ""
-			if n.Status != "" && n.Status != "deployed" {
-				outcome = ", " + n.Status
+			if !historyChanged {
+				summary = append(summary, fmt.Sprintf("revision: %d→%d", oldRevision, newRevision))
 			}
-			summary = append(summary, fmt.Sprintf("chart %s → %s (release %d → %d%s)", o.ChartVersion, n.ChartVersion, o.Version, n.Version, outcome))
 		}
 	}
 
@@ -3140,7 +3149,7 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 			OldValue: oldReleased,
 			NewValue: newReleased,
 		})
-		if !appliedChanged { // Only show if not already showing applied revision
+		if !appliedChanged && !historyChanged { // Only show if not already showing the release change
 			summary = append(summary, fmt.Sprintf("released: rev %d→%d", oldReleased, newReleased))
 		}
 	}

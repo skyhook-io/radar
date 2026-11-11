@@ -13,6 +13,7 @@ import (
 // has no node and leaves Pending nil.
 func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstree.ResourceTree) {
 	s.Interval, _, _ = unstructured.NestedString(root.Object, "spec", "interval")
+	s.RetryInterval, _, _ = unstructured.NestedString(root.Object, "spec", "retryInterval")
 	if entries, present, _ := unstructured.NestedSlice(root.Object, "status", "inventory", "entries"); present {
 		s.Objects = len(entries)
 	} else if tree != nil {

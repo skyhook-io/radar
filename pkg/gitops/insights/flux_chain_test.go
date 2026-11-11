@@ -115,3 +115,14 @@ func TestFluxChainHelmChartWithDigestMatchesChartVersion(t *testing.T) {
 		t.Fatalf("summary = %+v", s)
 	}
 }
+
+func TestFluxChainCarriesRetryInterval(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"namespace": "team", "name": "app"},
+		"spec":     map[string]any{"interval": "10m", "retryInterval": "2m"},
+	}}
+	if s := Build(root, nil, nil).Summary; s.RetryInterval != "2m" {
+		t.Fatalf("summary = %+v", s)
+	}
+}

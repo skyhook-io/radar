@@ -70,6 +70,7 @@ export interface GitOpsInsightSummary {
   appliedRevision?: string
   pending?: boolean
   interval?: string
+  retryInterval?: string
   objects?: number
   partialReason?: string
   // Human-readable sync mode for the chip in the status strip.

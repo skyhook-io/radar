@@ -97,5 +97,8 @@ describe('Flux revision chain', () => {
     expect(render({ ...base, autoSyncMode: 'Suspended' })).not.toContain('next run')
     expect(render({ ...base, lastApplied: '2026-11-10T09:00:00Z' })).not.toContain('next run')
     expect(render({ ...base, kind: 'HelmRelease' })).not.toContain('next run')
+    const failed = { appliedRevision: 'main@sha1:aaaaaaa1234567890', interval: '10m', retryInterval: '2m', lastApplyAttempt: '2026-11-10T10:04:00Z' }
+    expect(render(failed)).toContain('next run in ~1m')
+    expect(render({ ...failed, retryInterval: undefined })).toContain('next run in ~9m')
   })
 })

@@ -63,6 +63,7 @@ type Summary struct {
 	AppliedRevision string `json:"appliedRevision,omitempty"`
 	Pending         *bool  `json:"pending,omitempty"`
 	Interval        string `json:"interval,omitempty"`
+	RetryInterval   string `json:"retryInterval,omitempty"`
 	Objects         int    `json:"objects,omitempty"`
 	PartialReason   string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
@@ -442,13 +443,14 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 		Issues:       buildIssues(root, resourceTree, tool, resolver),
 		Changes:      buildChanges(root, resourceTree, tool, resolver),
 		Plan:         buildPlan(root, resourceTree, tool),
-		History:      BuildHistory(root),
 		Capabilities: buildCapabilities(root, tool),
 		Partial:      true,
 	}
 	if tool == gitops.ToolFluxCD {
 		applyFluxChain(&out.Summary, root, resourceTree)
 		out.History = BuildFluxActivity(root, resolver)
+	} else {
+		out.History = buildHistory(root, tool)
 	}
 	out.Summary.PartialReason = "Radar shows the controller's drift assessment plus a per-resource field diff and recent events (when available). For the canonical line-by-line diff against Git, use the Argo CD UI or `argocd app diff`."
 	if resourceTree != nil {

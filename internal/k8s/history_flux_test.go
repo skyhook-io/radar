@@ -71,3 +71,20 @@ func TestFluxHelmReleaseDiffNamesReleaseOutcome(t *testing.T) {
 		t.Fatalf("diff = %+v", diff)
 	}
 }
+
+func TestFluxHelmReleaseDiffNamesFirstInstall(t *testing.T) {
+	newHR := fluxHelmRelease(map[string]any{"history": []any{helmEntry(1, "5.5.0", "2026-11-10T09:00:00Z")}})
+	diff := ComputeDiff("HelmRelease", fluxHelmRelease(map[string]any{}), newHR)
+	if !diffPath(diff, "status.history[0]") || !strings.Contains(diff.Summary, "chart 5.5.0 (release 1)") {
+		t.Fatalf("diff = %+v", diff)
+	}
+}
+
+func TestFluxHelmReleaseDiffNamesTheChangeOnce(t *testing.T) {
+	oldHR := fluxHelmRelease(map[string]any{"lastAppliedRevision": "5.4.0", "history": []any{helmEntry(58, "5.4.0", "2026-11-09T09:00:00Z")}})
+	newHR := fluxHelmRelease(map[string]any{"lastAppliedRevision": "5.5.0", "history": []any{helmEntry(59, "5.5.0", "2026-11-10T09:00:00Z")}})
+	diff := ComputeDiff("HelmRelease", oldHR, newHR)
+	if !diffPath(diff, "status.lastAppliedRevision") || strings.Contains(diff.Summary, "revision: 5.4.0→5.5.0") || !strings.Contains(diff.Summary, "chart 5.4.0 → 5.5.0") {
+		t.Fatalf("diff = %+v", diff)
+	}
+}
