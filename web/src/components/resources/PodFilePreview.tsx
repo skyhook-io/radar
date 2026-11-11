@@ -305,7 +305,7 @@ export function PodFilePreview({
         <AlertBanner
           variant="warning"
           title="The file changed since you opened it"
-          message={`${problem.message}. Your edits are still here; copy what you need, then reload to see the current file.`}
+          message="Your edits were not saved and are still here. Copy what you need, then reload to see the current file."
           className="mb-0"
           action={<button type="button" onClick={reloadDiscardingEdits} className="text-xs text-accent hover:underline">Discard my edits and reload</button>}
         />

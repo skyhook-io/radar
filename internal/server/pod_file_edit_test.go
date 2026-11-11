@@ -343,3 +343,31 @@ func TestPodFilePreviewReturnsTheHashOfTheBytesServed(t *testing.T) {
 		t.Errorf("content %q is not the bytes served, BOM and CRLF included", got.Content)
 	}
 }
+
+// The re-read is the first exec, so an apiserver refusal surfaces there and
+// must be named, not reported as a failed read.
+func TestPodFileEditNamesExecRefusalsAtTheReRead(t *testing.T) {
+	forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "pods/exec"}, "pod", errors.New("no"))
+	for name, tc := range map[string]struct {
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		"forbidden":         {forbidden, http.StatusForbidden, uploadCodeForbidden},
+		"missing container": {errors.New("unable to upgrade connection: container nope is not valid for pod pod"), http.StatusBadRequest, uploadCodeNoSuchContainer},
+		"missing pod":       {errors.New(`unable to upgrade connection: pods "pod" not found`), http.StatusNotFound, uploadCodePodNotFound},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := uploadServer(t, true, func(_ context.Context, req uploadExec, _ remotecommand.StreamOptions) error {
+				if !req.isRead() {
+					t.Errorf("unexpected exec %q", req.command)
+				}
+				return tc.err
+			})
+			status, e, raw := putEdit(t, editURL(h.ts, "/data/a.txt", sha256Hex([]byte("x"))), []byte("y"))
+			if status != tc.wantStatus || e.Code != tc.wantCode {
+				t.Errorf("got %d %s, want %d %s", status, raw, tc.wantStatus, tc.wantCode)
+			}
+		})
+	}
+}

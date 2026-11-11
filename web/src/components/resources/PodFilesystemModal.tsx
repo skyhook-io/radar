@@ -158,6 +158,7 @@ export function PodFilesystemModal({
   pod,
 }: PodFilesystemModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [currentPath, setCurrentPath] = useState('/')
@@ -450,6 +451,17 @@ export function PodFilesystemModal({
     return () => document.removeEventListener('keydown', handleKeyDown, true)
   }, [open, onClose, previewFile, editDirty, pendingLeave, guardLeave, backToListing])
 
+  // An Escape the editor kept (see above) has done its job once it bubbles
+  // out of the dialog; past here the page's own Escape shortcut would leave
+  // the page, unsaved edits and all.
+  useEffect(() => {
+    const overlay = overlayRef.current
+    if (!open || !overlay) return
+    const stop = (e: KeyboardEvent) => { if (e.key === 'Escape') e.stopPropagation() }
+    overlay.addEventListener('keydown', stop)
+    return () => overlay.removeEventListener('keydown', stop)
+  }, [open, previewFile])
+
   // Focus trap
   useEffect(() => {
     if (open && dialogRef.current) {
@@ -477,6 +489,7 @@ export function PodFilesystemModal({
 
   return createPortal(
     <div
+      ref={overlayRef}
       className="fixed inset-0 z-[100] flex items-center justify-center"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}

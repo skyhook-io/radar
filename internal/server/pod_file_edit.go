@@ -200,6 +200,12 @@ func (s *Server) readPodFileForEdit(ctx context.Context, client kubernetes.Inter
 		stream, openErr = s.openPodFileWithCat(ctx, client, config, namespace, podName, container, filePath)
 	}
 	if openErr != nil {
+		// The apiserver refused the exec itself (RBAC, a missing pod or
+		// container); the write classifier names those, the read one does not.
+		if isExecForbidden(openErr.err) || upgradeRefusal(openErr.err) != "" {
+			status, code, message := classifyPodFileWriteError(editWording, filePath, openErr.err, "")
+			return nil, status, code, message
+		}
 		switch {
 		case openErr.notFound:
 			return changed("was removed")
