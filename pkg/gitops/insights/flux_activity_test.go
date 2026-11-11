@@ -110,3 +110,14 @@ func TestBuildUsesFluxActivityOnlyForFlux(t *testing.T) {
 		}
 	}
 }
+
+func TestFluxActivitySortsMixedTimeZones(t *testing.T) {
+	resolver := &fakeResolver{events: map[string][]EventSummary{"app": {
+		{Type: "Warning", Reason: "HealthCheckFailed", LastTimestamp: "2026-11-10T12:30:00+02:00"},
+	}}}
+	rows := BuildFluxActivity(fluxKustomization(map[string]any{"history": kustomizationHistory()}), resolver)
+	// 10:30Z sits between the 11:00Z and 10:00Z history rows.
+	if len(rows) != 3 || rows[0].Revision != "main@sha1:bbb" || rows[1].ID != "HealthCheckFailed" {
+		t.Fatalf("rows = %+v", rows)
+	}
+}

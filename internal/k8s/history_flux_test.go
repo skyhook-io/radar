@@ -61,3 +61,13 @@ func TestFluxHelmReleaseDiffIgnoresUnchangedHistory(t *testing.T) {
 		t.Fatal("unchanged release reported as a chart change")
 	}
 }
+
+func TestFluxHelmReleaseDiffNamesReleaseOutcome(t *testing.T) {
+	failed := helmEntry(60, "5.6.0", "2026-11-11T09:00:00Z")
+	failed["status"] = "failed"
+	oldHR := fluxHelmRelease(map[string]any{"history": []any{helmEntry(59, "5.5.0", "2026-11-10T09:00:00Z")}})
+	newHR := fluxHelmRelease(map[string]any{"history": []any{failed, helmEntry(59, "5.5.0", "2026-11-10T09:00:00Z")}})
+	if diff := ComputeDiff("HelmRelease", oldHR, newHR); diff == nil || !strings.Contains(diff.Summary, "chart 5.5.0 → 5.6.0 (release 59 → 60, failed)") {
+		t.Fatalf("diff = %+v", diff)
+	}
+}

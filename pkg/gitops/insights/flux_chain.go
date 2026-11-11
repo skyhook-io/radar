@@ -54,7 +54,13 @@ func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstre
 		break
 	}
 	if s.SourceRevision != "" && s.AppliedRevision != "" {
-		pending := !fluxRevisionsMatch(s.SourceRevision, s.AppliedRevision)
+		source := s.SourceRevision
+		if primary.Kind == "HelmChart" {
+			// A chart pulled from an OCI repository records "<version>@<digest>";
+			// the release records the version alone.
+			source, _, _ = strings.Cut(source, "@")
+		}
+		pending := !fluxRevisionsMatch(source, s.AppliedRevision)
 		s.Pending = &pending
 	}
 }

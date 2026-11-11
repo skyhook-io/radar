@@ -3123,7 +3123,11 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 				OldValue: fmt.Sprintf("%s (release %d)", o.ChartVersion, o.Version),
 				NewValue: fmt.Sprintf("%s (release %d)", n.ChartVersion, n.Version),
 			})
-			summary = append(summary, fmt.Sprintf("chart %s → %s (release %d → %d)", o.ChartVersion, n.ChartVersion, o.Version, n.Version))
+			outcome := ""
+			if n.Status != "" && n.Status != "deployed" {
+				outcome = ", " + n.Status
+			}
+			summary = append(summary, fmt.Sprintf("chart %s → %s (release %d → %d%s)", o.ChartVersion, n.ChartVersion, o.Version, n.Version, outcome))
 		}
 	}
 

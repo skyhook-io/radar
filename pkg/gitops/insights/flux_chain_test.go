@@ -102,3 +102,16 @@ func TestFluxChainUnknownWithoutSourceNode(t *testing.T) {
 		t.Fatalf("summary = %+v", s)
 	}
 }
+
+func TestFluxChainHelmChartWithDigestMatchesChartVersion(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+		"metadata": map[string]any{"namespace": "team", "name": "app"},
+		"spec":     map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "app"}},
+		"status":   map[string]any{"history": []any{map[string]any{"version": int64(3), "status": "deployed", "chartVersion": "5.5.0"}}},
+	}}
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{sourceNode("HelmChart", "app", "5.5.0@sha256:abc", "")}}
+	if s := Build(root, tree, nil).Summary; s.Pending == nil || *s.Pending {
+		t.Fatalf("summary = %+v", s)
+	}
+}

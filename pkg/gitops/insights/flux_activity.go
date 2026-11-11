@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -46,7 +47,9 @@ func BuildFluxActivity(root *unstructured.Unstructured, resolver Resolver) []His
 			rows = append(rows, HistoryItem{Kind: "event", ID: ev.Reason, Phase: ev.Type, Message: ev.Message, DeployedAt: ev.LastTimestamp, Runs: int64(ev.Count)})
 		}
 	}
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].DeployedAt > rows[j].DeployedAt })
+	// Event times carry the server's local offset and history times are UTC,
+	// so compare instants, not strings.
+	sort.SliceStable(rows, func(i, j int) bool { return activityTime(rows[i].DeployedAt).After(activityTime(rows[j].DeployedAt)) })
 
 	for _, c := range conditions(root) {
 		if (c.typ == "Ready" && c.status == "False") || (c.typ == "Stalled" && c.status == "True") {
@@ -62,4 +65,9 @@ func capitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+func activityTime(value string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339Nano, value)
+	return parsed
 }
