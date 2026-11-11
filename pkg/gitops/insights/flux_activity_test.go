@@ -47,7 +47,7 @@ func TestFluxActivityHelmReleaseRows(t *testing.T) {
 		}},
 	}}
 	rows := BuildFluxActivity(root, nil)
-	if len(rows) != 2 || rows[0].Revision != "5.5.0 · release 59" || rows[0].Phase != "Deployed" || rows[0].ID != "59" || rows[0].FirstAt != "2026-11-10T09:00:00Z" || rows[0].DeployedAt != "2026-11-10T09:01:00Z" || rows[1].Phase != "Superseded" || rows[0].Kind != "revision" {
+	if len(rows) != 2 || rows[0].Revision != "5.5.0 · release 59" || rows[0].Phase != "Deployed" || rows[0].ID != "59" || rows[0].FirstAt != "" || rows[0].DeployedAt != "2026-11-10T09:01:00Z" || rows[1].Phase != "Superseded" || rows[0].Kind != "revision" {
 		t.Fatalf("rows = %+v", rows)
 	}
 }

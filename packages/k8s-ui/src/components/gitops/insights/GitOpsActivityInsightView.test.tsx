@@ -59,14 +59,17 @@ describe('Flux Activity rows', () => {
     const html = render({
       summary: { tool: 'fluxcd', kind: 'Kustomization', namespace: 'team', name: 'app' },
       history: [
+        { kind: 'revision', id: 'sha256:y', revision: 'main@sha1:ccc', phase: 'Applied', runs: 2, duration: '984.729484ms', deployedAt: '2026-11-08T10:00:00Z' },
         { kind: 'event', id: 'HealthCheckFailed', phase: 'Warning', message: 'timeout waiting for app', deployedAt: '2026-11-10T11:00:00Z' },
-        { kind: 'revision', id: 'sha256:x', revision: 'main@sha1:bbb', phase: 'Applied', runs: 12, duration: '1.1s', firstAt: '2026-11-09T10:00:00Z', deployedAt: '2026-11-10T10:00:00Z' },
+        { kind: 'revision', id: 'sha256:x', revision: 'main@sha1:bbb', phase: 'Applied', runs: 12, duration: '1.102930992s', firstAt: '2026-11-09T10:00:00Z', deployedAt: '2026-11-10T10:00:00Z' },
       ],
     })
     expect(html).toContain('>Applied<')
     expect(html).toContain('12 runs')
-    expect(html).toContain('1.1s')
+    expect(html).toContain('took 1.1s')
     expect(html).toContain('first ')
+    expect(html).toContain('took 985ms')
+    expect(html).not.toContain('984.729484ms')
     expect(html).toContain('HealthCheckFailed')
     expect(html).toContain('timeout waiting for app')
   })

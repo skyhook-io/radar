@@ -208,6 +208,15 @@ function fluxNextRunMinutes(summary: GitOpsInsightSummary): number | null {
   return remaining > 0 ? Math.ceil(remaining / 60000) : null
 }
 
+// formatFluxDuration rounds the Go duration Flux records ("984.729484ms",
+// "1.102930992s") for display; anything else passes through.
+function formatFluxDuration(duration: string): string {
+  const match = duration.match(/^(\d+(?:\.\d+)?)(ms|s)$/)
+  if (!match) return duration
+  const value = Number(match[1])
+  return match[2] === 'ms' ? `${Math.round(value)}ms` : `${value.toFixed(1)}s`
+}
+
 // shortRevisionForCommit normalizes a controller-reported revision to a
 // commit-ish short form. Git SHAs collapse to 7 chars; revisions that
 // already look short (tags, semver, "master@sha1:..." truncated) pass
@@ -1807,7 +1816,7 @@ function HistoryRows({
                 <span className="font-mono text-xs text-theme-text-primary">{(item.kind === 'event' ? item.id : item.revision) || item.phase || '-'}</span>
                 <PhaseChip phase={item.phase} message={item.message} />
                 <span className="text-[11px] text-theme-text-tertiary">{formatRelativeAgeTime(item.deployedAt)}</span>
-                {item.duration && <span className="text-[11px] text-theme-text-tertiary">took {item.duration}</span>}
+                {item.duration && <span className="text-[11px] text-theme-text-tertiary">took {formatFluxDuration(item.duration)}</span>}
                 {item.kind === 'revision' && item.runs ? <span className="text-[11px] text-theme-text-tertiary">{item.runs} {item.runs === 1 ? 'run' : 'runs'}</span> : null}
                 {item.firstAt && item.firstAt !== item.deployedAt && <span className="text-[11px] text-theme-text-tertiary">first {formatRelativeAgeTime(item.firstAt)}</span>}
                 {item.initiatedBy && (

@@ -24,7 +24,9 @@ func BuildFluxActivity(root *unstructured.Unstructured, resolver Resolver) []His
 	}
 	for _, e := range gitops.FluxHelmHistory(root) {
 		version := strconv.FormatInt(e.Version, 10)
-		rows = append(rows, HistoryItem{Kind: "revision", ID: version, Revision: e.ChartVersion + " · release " + version, FirstAt: e.FirstDeployed, DeployedAt: e.LastDeployed, Phase: capitalize(e.Status)})
+		// Helm's firstDeployed is when the release was first installed, not
+		// this revision, so it is left out.
+		rows = append(rows, HistoryItem{Kind: "revision", ID: version, Revision: e.ChartVersion + " · release " + version, DeployedAt: e.LastDeployed, Phase: capitalize(e.Status)})
 	}
 	if len(rows) == 0 {
 		rows = buildHistory(root, gitops.ToolFluxCD)
