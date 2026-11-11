@@ -23,6 +23,7 @@ Open the **GitOps** tab in the sidebar. Argo + Flux rows mix in the same table o
 - **Filters**: Sync, Health, Project, Namespace, Labels, Automation (auto-sync / manual / suspended), Lifecycle (active / terminating), Kind (Applications / ApplicationSets — Argo only, shown once a cluster has ApplicationSets)
 - **Modes**: Applications / Sources / Projects / Alerts
 - **Default sort**: smart-tiered by urgency — Failed > Terminating > Degraded > Missing > OutOfSync > Suspended > Progressing > Synced
+- **Live updates**: rows follow changes to Applications, ApplicationSets, Kustomizations, HelmReleases and Flux sources within about 15 seconds through the live event stream. The totals behind the empty state refresh when a GitOps object is added or deleted. A 2-minute poll is the fallback. A spec-only edit (e.g. `spec.syncPolicy` changed with kubectl) isn't streamed, because Radar's Argo CD and Flux change detection compares status, so it waits for the poll
 
 The **Activity** column and cards name the event beside its age: a Flux apply (**Applied** when it succeeded, **Apply attempt** when it did not), a Helm deployment, an Argo sync attempt or deployment, or a status change. When Flux apply or deployment timing is unavailable, they show the latest recorded condition transition as **Status changed**. If neither event date is available, they show the resource's creation date with a **Created** label. An old deployment date does not make a healthy application stale.
 
