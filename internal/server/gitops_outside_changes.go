@@ -135,7 +135,7 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 		if err != nil {
 			continue
 		}
-		kept, label := fieldwriters.SplitHarmless(paths)
+		kept, label := fieldwriters.SplitHarmless(ownedValuePaths(obj.Object, paths))
 		if label != "" {
 			harmless = append(harmless, label)
 		}
@@ -208,19 +208,54 @@ func outsideValue(obj map[string]any, path string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
+	node, ok := liveNode(obj, segs)
+	if !ok {
+		return "", false
+	}
+	switch v := node.(type) {
+	case string:
+		return v, true
+	case int64, int32, int, float64, bool:
+		return fmt.Sprint(v), true
+	}
+	return "", false
+}
+
+// ownedValuePaths drops map fields whose live value is a map or list: such an
+// entry owns only the container (Kubernetes keeps it after another manager
+// takes over every key inside), which changes no value. A keyed list element
+// stays, because owning it means the element was added.
+func ownedValuePaths(obj map[string]any, paths []string) []string {
+	var out []string
+	for _, p := range paths {
+		segs, err := parseWriteFieldPath(p)
+		if err == nil && segs[len(segs)-1].typ == segKey {
+			if node, ok := liveNode(obj, segs); ok {
+				switch node.(type) {
+				case map[string]any, []any:
+					continue
+				}
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func liveNode(obj map[string]any, segs []fieldPathSegment) (any, bool) {
 	var node any = obj
 	for _, seg := range segs {
 		switch seg.typ {
 		case segKey:
 			m, ok := node.(map[string]any)
 			if !ok {
-				return "", false
+				return nil, false
 			}
 			node = m[seg.key]
 		case segMatch:
 			list, ok := node.([]any)
 			if !ok {
-				return "", false
+				return nil, false
 			}
 			node = nil
 			for _, item := range list {
@@ -230,16 +265,10 @@ func outsideValue(obj map[string]any, path string) (string, bool) {
 				}
 			}
 		default:
-			return "", false
+			return nil, false
 		}
 	}
-	switch v := node.(type) {
-	case string:
-		return v, true
-	case int64, int32, int, float64, bool:
-		return fmt.Sprint(v), true
-	}
-	return "", false
+	return node, node != nil
 }
 
 type outsideListGroup struct {

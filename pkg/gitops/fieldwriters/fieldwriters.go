@@ -37,7 +37,7 @@ func Classify(manager string, owners, extraHand map[string]bool) Class {
 	switch {
 	case owners[manager]:
 		return ClassOwner
-	case extraHand[manager], strings.HasPrefix(manager, "kubectl"):
+	case extraHand[manager], extraHand[strings.ToLower(manager)], strings.HasPrefix(manager, "kubectl"):
 		return ClassHand
 	}
 	if _, ok := handTools[manager]; ok {
@@ -49,7 +49,7 @@ func Classify(manager string, owners, extraHand map[string]bool) Class {
 // ToolName is how a person would name the tool behind a manager.
 func ToolName(manager string, extraHand map[string]bool) string {
 	switch {
-	case extraHand[manager]:
+	case extraHand[manager], extraHand[strings.ToLower(manager)]:
 		return "Radar"
 	case manager == "kubectl-client-side-apply":
 		return "kubectl apply"

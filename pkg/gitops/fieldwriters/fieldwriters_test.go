@@ -56,6 +56,7 @@ func TestClassifyManagers(t *testing.T) {
 		"node-fetch":              ClassHand,
 		"k9s":                     ClassHand,
 		"radar":                   ClassHand,
+		"Radar":                   ClassHand,
 		"helm":                    ClassOther,
 		"kube-controller-manager": ClassOther,
 		"Runner":                  ClassOther,
@@ -76,6 +77,7 @@ func TestToolNames(t *testing.T) {
 		"kubectl":                   "kubectl",
 		"node-fetch":                "Lens",
 		"radar":                     "Radar",
+		"Radar":                     "Radar",
 		"k9s":                       "k9s",
 	} {
 		if got := ToolName(manager, radar); got != want {

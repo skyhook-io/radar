@@ -205,3 +205,14 @@ func TestFluxMemberSelector(t *testing.T) {
 		t.Fatalf("kustomize selector = %q", got)
 	}
 }
+
+func TestClassifyOutsideObjectSkipsOwnedEmptyContainers(t *testing.T) {
+	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{
+		fieldsEntry(t, "node-fetch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{}}}),
+		fieldsEntry(t, "kubectl-patch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": map[string]any{`k:{"name":"app"}`: map[string]any{".": map[string]any{}}}}}}}),
+	})
+	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil))
+	if len(out.Changes) != 1 || out.Changes[0].Tool != "kubectl patch" || out.Changes[0].Paths[0] != "spec.template.spec.containers[name=app]" {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+}
