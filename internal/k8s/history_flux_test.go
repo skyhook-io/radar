@@ -88,3 +88,14 @@ func TestFluxHelmReleaseDiffNamesTheChangeOnce(t *testing.T) {
 		t.Fatalf("diff = %+v", diff)
 	}
 }
+
+func TestFluxHelmReleaseDiffNamesStatusChangeOnSameRelease(t *testing.T) {
+	pending := helmEntry(60, "5.6.0", "2026-11-11T09:00:00Z")
+	pending["status"] = "pending-upgrade"
+	failed := helmEntry(60, "5.6.0", "2026-11-11T09:00:00Z")
+	failed["status"] = "failed"
+	diff := ComputeDiff("HelmRelease", fluxHelmRelease(map[string]any{"history": []any{pending}}), fluxHelmRelease(map[string]any{"history": []any{failed}}))
+	if !diffPath(diff, "status.history[0]") || !strings.Contains(diff.Summary, "chart 5.6.0 (release 60, failed)") {
+		t.Fatalf("diff = %+v", diff)
+	}
+}

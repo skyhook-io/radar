@@ -85,6 +85,24 @@ describe('Flux revision chain', () => {
     expect(html).not.toContain('Source')
   })
 
+  it('shows the fetched source before the first apply', () => {
+    const html = render({ lastRevision: undefined, sourceRevision: 'main@sha1:bbbbbbb1234567890', objects: 2 })
+    expect(html).toContain('bbbbbbb')
+    expect(html).toContain('2 objects')
+    expect(html).not.toContain('Applied')
+    expect(html).not.toContain('Revision:')
+  })
+
+  it('names the deployed chart beside a HelmRelease digest', () => {
+    const html = render({ kind: 'HelmRelease', lastRevision: '5.5.0', sourceRevision: 'latest@sha256:53884aebf2e5aa', appliedRevision: 'latest@sha256:53884aebf2e5aa', pending: false })
+    expect(html).toContain('5.5.0 (53884ae)')
+  })
+
+  it('keeps an OCI tag in a non-Flux revision', () => {
+    const html = renderToString(<GitOpsStatusStrip insight={{ summary: { tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'app', lastRevision: '1.0.0@sha256:53884aebf2e5aa' } }} />).replace(/<!-- -->/g, '')
+    expect(html).toContain('1.0.0@sha256:53884aebf2e5aa')
+  })
+
   it('renders an older Radar summary as before', () => {
     const html = render()
     expect(html).toContain('Revision:')
@@ -100,5 +118,6 @@ describe('Flux revision chain', () => {
     const failed = { appliedRevision: 'main@sha1:aaaaaaa1234567890', interval: '10m', retryInterval: '2m', lastApplyAttempt: '2026-11-10T10:04:00Z' }
     expect(render(failed)).toContain('next run in ~1m')
     expect(render({ ...failed, retryInterval: undefined })).toContain('next run in ~9m')
+    expect(render({ ...failed, lastApplied: '2026-11-10T09:00:00Z' })).toContain('next run in ~1m')
   })
 })

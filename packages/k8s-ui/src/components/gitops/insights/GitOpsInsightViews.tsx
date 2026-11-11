@@ -89,7 +89,7 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
     (i) => i.severity === 'critical' && i.scope === 'operation' && i.stuck,
   )
   const operationTooltipMessage = summary.rawOperationMessage || summary.operationMessage
-  const fluxChain = summary.tool === 'fluxcd' && !!summary.appliedRevision
+  const fluxChain = summary.tool === 'fluxcd' && !!(summary.appliedRevision || summary.sourceRevision)
   return (
     <div className="border-b border-theme-border bg-theme-base px-4 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
@@ -174,18 +174,22 @@ function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsIns
         <>
           <span className="shrink-0">Source</span>
           <Tooltip content={summary.sourceRevision} delay={400}>
-            <span className="font-mono font-medium text-theme-text-primary">{shortRevisionForCommit(summary.sourceRevision)}</span>
+            <span className="font-mono font-medium text-theme-text-primary">{shortFluxRevision(summary.sourceRevision)}</span>
           </Tooltip>
           {summary.sourceFetchedAt && <span>· fetched {formatRelativeAgeTime(summary.sourceFetchedAt)}</span>}
-          <span aria-hidden>→</span>
         </>
       )}
-      <span className="shrink-0">Applied</span>
-      <Tooltip content={applied} delay={400}>
-        <span className={clsx('font-mono font-medium', summary.pending ? SEVERITY_TEXT.warning : 'text-theme-text-primary')}>{shortRevisionForCommit(applied)}</span>
-      </Tooltip>
-      {renderRevisionMeta?.(applied)}
-      {nextRun !== null && <span>· next run in ~{nextRun}m</span>}
+      {applied && (
+        <>
+          {summary.sourceRevision && <span aria-hidden>→</span>}
+          <span className="shrink-0">Applied</span>
+          <Tooltip content={applied} delay={400}>
+            <span className={clsx('font-mono font-medium', summary.pending ? SEVERITY_TEXT.warning : 'text-theme-text-primary')}>{appliedLabel(summary)}</span>
+          </Tooltip>
+          {renderRevisionMeta?.(applied)}
+          {nextRun !== null && <span>· next run in ~{nextRun}m</span>}
+        </>
+      )}
       {summary.objects ? (
         <>
           <span aria-hidden>→</span>
@@ -197,13 +201,33 @@ function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsIns
   )
 }
 
+// Flux records OCI artifacts as "<tag>@sha256:<digest>"; the chain shows
+// the digest's first 7 hex chars, like a Git short SHA.
+function shortFluxRevision(revision: string): string {
+  const digest = revision.match(/sha256:([0-9a-f]{7,64})/i)
+  return digest ? digest[1].slice(0, 7) : shortRevisionForCommit(revision)
+}
+
+// A HelmRelease is compared by digest, but people read the chart version.
+function appliedLabel(summary: GitOpsInsightSummary): string {
+  const applied = summary.appliedRevision || ''
+  const short = shortFluxRevision(applied)
+  if (summary.kind === 'HelmRelease' && summary.lastRevision && summary.lastRevision !== applied) {
+    return `${summary.lastRevision} (${short})`
+  }
+  return short
+}
+
 // fluxNextRunMinutes estimates a Kustomization's next run from its last run
 // and interval; after a failed apply Flux retries on retryInterval, which
 // defaults to interval. HelmRelease history records deploys, not runs.
 function fluxNextRunMinutes(summary: GitOpsInsightSummary): number | null {
   if (summary.kind !== 'Kustomization' || summary.autoSyncMode === 'Suspended') return null
-  const last = Date.parse(summary.lastApplied || summary.lastApplyAttempt || '')
-  const interval = (!summary.lastApplied && summary.retryInterval) || summary.interval
+  const applied = Date.parse(summary.lastApplied || '')
+  const attempt = Date.parse(summary.lastApplyAttempt || '')
+  const failedLast = Number.isFinite(attempt) && !(applied >= attempt)
+  const last = failedLast ? attempt : applied
+  const interval = (failedLast && summary.retryInterval) || summary.interval
   const seconds = interval ? parseInterval(interval) : null
   if (!Number.isFinite(last) || !seconds) return null
   const remaining = last + seconds * 1000 - Date.now()
@@ -227,8 +251,8 @@ function shortRevisionForCommit(revision: string): string {
   const trimmed = revision.trim()
   if (!trimmed) return ''
   // Flux records "master@sha1:9f4969..." — strip the prefix and shorten.
-  const shaMatch = trimmed.match(/sha(?:1|256):([0-9a-f]{7,64})/i)
-  if (shaMatch) return shaMatch[1].slice(0, 7)
+  const sha1Match = trimmed.match(/sha1:([0-9a-f]{7,40})/i)
+  if (sha1Match) return sha1Match[1].slice(0, 7)
   // Pure 40-char SHA → 7 chars.
   if (/^[0-9a-f]{40}$/i.test(trimmed)) return trimmed.slice(0, 7)
   return trimmed

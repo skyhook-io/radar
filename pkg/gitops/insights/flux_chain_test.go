@@ -111,7 +111,7 @@ func TestFluxChainHelmChartWithDigestMatchesChartVersion(t *testing.T) {
 		"status":   map[string]any{"history": []any{map[string]any{"version": int64(3), "status": "deployed", "chartVersion": "5.5.0"}}},
 	}}
 	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{sourceNode("HelmChart", "app", "5.5.0@sha256:abc", "")}}
-	if s := Build(root, tree, nil).Summary; s.Pending == nil || *s.Pending {
+	if s := Build(root, tree, nil).Summary; s.Pending == nil || *s.Pending || s.SourceRevision != "5.5.0" {
 		t.Fatalf("summary = %+v", s)
 	}
 }

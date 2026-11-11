@@ -29,12 +29,12 @@ func BuildFluxActivity(root *unstructured.Unstructured, resolver Resolver) []His
 		// this revision, so it is left out.
 		rows = append(rows, HistoryItem{Kind: "revision", ID: version, Revision: e.ChartVersion + " · release " + version, DeployedAt: e.LastDeployed, Phase: capitalize(e.Status)})
 	}
-	if len(rows) == 0 {
+	hasHistory := len(rows) > 0
+	if !hasHistory {
 		rows = buildHistory(root, gitops.ToolFluxCD)
 		for i := range rows {
 			rows[i].Kind = "condition"
 		}
-		return rows
 	}
 
 	if resolver != nil {
@@ -51,6 +51,9 @@ func BuildFluxActivity(root *unstructured.Unstructured, resolver Resolver) []His
 	// so compare instants, not strings.
 	sort.SliceStable(rows, func(i, j int) bool { return activityTime(rows[i].DeployedAt).After(activityTime(rows[j].DeployedAt)) })
 
+	if !hasHistory {
+		return rows
+	}
 	for _, c := range conditions(root) {
 		if (c.typ == "Ready" && c.status == "False") || (c.typ == "Stalled" && c.status == "True") {
 			failing := HistoryItem{Kind: "condition", ID: c.typ, Phase: fluxPhaseLabel(c.status, c.reason), Message: c.message, DeployedAt: c.lastTransitionTime}

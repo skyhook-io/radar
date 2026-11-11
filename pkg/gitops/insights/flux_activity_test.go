@@ -121,3 +121,15 @@ func TestFluxActivitySortsMixedTimeZones(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 }
+
+func TestFluxActivityKeepsEventsWithoutHistory(t *testing.T) {
+	resolver := &fakeResolver{events: map[string][]EventSummary{"app": {
+		{Type: "Warning", Reason: "BuildFailed", Message: "kustomize build failed", LastTimestamp: "2026-11-10T12:00:00Z"},
+	}}}
+	root := fluxKustomization(map[string]any{"conditions": []any{
+		map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed", "message": "kustomize build failed", "lastTransitionTime": "2026-11-10T11:00:00Z"}}})
+	rows := BuildFluxActivity(root, resolver)
+	if len(rows) != 2 || rows[0].Kind != "event" || rows[0].ID != "BuildFailed" || rows[1].Kind != "condition" || rows[1].ID != "Ready" {
+		t.Fatalf("rows = %+v", rows)
+	}
+}

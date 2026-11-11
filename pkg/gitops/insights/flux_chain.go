@@ -51,17 +51,16 @@ func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstre
 			continue
 		}
 		s.SourceRevision = gitops.StringValue(node.Data["artifactRevision"])
+		if primary.Kind == "HelmChart" {
+			// A chart pulled from an OCI repository records "<version>@<digest>";
+			// the release records the version alone, so the version is the fact.
+			s.SourceRevision, _, _ = strings.Cut(s.SourceRevision, "@")
+		}
 		s.SourceFetchedAt = gitops.StringValue(node.Data["artifactUpdatedAt"])
 		break
 	}
 	if s.SourceRevision != "" && s.AppliedRevision != "" {
-		source := s.SourceRevision
-		if primary.Kind == "HelmChart" {
-			// A chart pulled from an OCI repository records "<version>@<digest>";
-			// the release records the version alone.
-			source, _, _ = strings.Cut(source, "@")
-		}
-		pending := !fluxRevisionsMatch(source, s.AppliedRevision)
+		pending := !fluxRevisionsMatch(s.SourceRevision, s.AppliedRevision)
 		s.Pending = &pending
 	}
 }

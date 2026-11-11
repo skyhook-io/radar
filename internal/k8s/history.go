@@ -3112,6 +3112,12 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 			historyChanged = true
 			changes = append(changes, FieldChange{Path: "status.history[0]", OldValue: fmt.Sprintf("%s (release %d)", o.ChartVersion, o.Version), NewValue: newValue})
 			summary = append(summary, fmt.Sprintf("chart %s → %s (release %d → %d%s)", o.ChartVersion, n.ChartVersion, o.Version, n.Version, outcome))
+		} else if o.Status != n.Status && n.Status != "" {
+			// Helm keeps the release number while an upgrade moves from
+			// pending-upgrade to its outcome.
+			historyChanged = true
+			changes = append(changes, FieldChange{Path: "status.history[0]", OldValue: fmt.Sprintf("%s (release %d, %s)", o.ChartVersion, o.Version, o.Status), NewValue: fmt.Sprintf("%s (release %d, %s)", n.ChartVersion, n.Version, n.Status)})
+			summary = append(summary, fmt.Sprintf("chart %s (release %d, %s)", n.ChartVersion, n.Version, n.Status))
 		}
 	}
 
