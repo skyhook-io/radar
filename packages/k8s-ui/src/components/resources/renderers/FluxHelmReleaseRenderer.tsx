@@ -280,7 +280,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
       {managedResources.length > 0 && (
         <ManagedResourcesList
           resources={managedResources}
-          title={`Inventory (${managedResources.length} resources)`}
+          title="Inventory"
         />
       )}
 

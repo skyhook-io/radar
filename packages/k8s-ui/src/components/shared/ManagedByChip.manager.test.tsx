@@ -42,7 +42,9 @@ describe('manager answer chip', () => {
     [{ kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', namespace: 'flux-system', name: 'apps' }, 'unreadable',
       "This resource's label names Kustomization flux-system/apps, but its status has no inventory yet; Flux records one once an apply succeeds."],
     [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'unreadable',
-      "This resource's label names HelmRelease demo/web, but its status has no inventory; older helm-controllers don't record one."],
+      "This resource's label names HelmRelease demo/web, but its status has no inventory; helm-controller records one after a successful release, and older versions don't record one."],
+    [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'omitted',
+      "This resource's label names HelmRelease demo/web, but its inventory doesn't list it; it may be a Helm hook, kept by helm.sh/resource-policy: keep, or the latest release hasn't finished."],
     [{ kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'demo', name: 'web' }, 'withheld',
       "This resource's label names HelmRelease demo/web, but you can't view it."],
   ] as const)('claimed explains a Flux %o %s in Flux terms', (manager, check, reason) => {
