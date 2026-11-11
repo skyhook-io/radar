@@ -1,16 +1,19 @@
-import { useEffect, useState } from 'react'
-import Editor from '@monaco-editor/react'
-import { AlertTriangle, Download, FileText, RotateCw } from 'lucide-react'
-import { PaneLoader, ensureMonacoRuntime } from '@skyhook-io/k8s-ui'
+import { useEffect, useRef, useState } from 'react'
+import Editor, { type OnMount } from '@monaco-editor/react'
+import { AlertTriangle, Download, FileText, Loader2, Pencil, RotateCw } from 'lucide-react'
+import { AlertBanner, PaneLoader, ensureMonacoRuntime } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../../utils/format'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { nonJsonErrorMessage } from '../../api/httpErrors'
+import { Tooltip } from '../ui/Tooltip'
+import { FILE_CHANGED, PodFileSaveError, type SaveResult } from './pod-file-edit'
+import { POD_FILE_PERSISTENCE_NOTE } from './pod-file-upload'
 
 // A curated inline viewer for text files inside a pod container, rendered in
 // place of the file listing by PodFilesystemModal — never as its own dialog.
-// Deliberately read-only for v1. Every error path is a named `code` from the
-// backend so this file switches on intent, not on stderr wording.
+// Every error path is a named `code` from the backend so this file switches on
+// intent, not on stderr wording. Editing is opt-in through the `edit` prop.
 
 // Mirrors podFilePreviewByteCap on the server. The listing already knows each
 // file's size, so a file over the cap is marked unopenable up front instead
@@ -35,6 +38,8 @@ type PreviewSuccess = {
   mimeType: string
   encoding: string
   empty: boolean
+  /** Hex SHA-256 of the bytes served; absent from a Radar too old to save edits. */
+  sha256?: string
 }
 
 export type PreviewError = {
@@ -105,6 +110,7 @@ async function fetchPodFilePreview(
     mimeType: (body.mimeType as string) ?? 'text/plain',
     encoding: (body.encoding as string) ?? 'utf-8',
     empty: body.code === 'empty_file',
+    sha256: typeof body.sha256 === 'string' ? body.sha256 : undefined,
   }
 }
 
@@ -145,6 +151,16 @@ function useMonacoTheme() {
   return dark ? 'vs-dark' : 'vs'
 }
 
+export interface PodFileEditing {
+  /** Why this file can't be edited, given its contents; null when it can. */
+  blockedReason: (content: string) => string | null
+  save: (content: string, sha256: string) => Promise<SaveResult>
+  onDirtyChange: (dirty: boolean) => void
+  /** Runs `discard` once the user agrees to drop unsaved changes. */
+  confirmDiscard: (discard: () => void) => void
+  onSaved: (result: SaveResult) => void
+}
+
 interface PodFilePreviewProps {
   namespace: string
   podName: string
@@ -152,7 +168,15 @@ interface PodFilePreviewProps {
   filePath: string
   fileName: string
   onDownload: () => void
+  /** Omitted when the user can't edit here (no exec, or a Radar without the endpoint). */
+  edit?: PodFileEditing
 }
+
+type SaveProblem = { kind: 'changed' | 'failed'; message: string }
+
+// The BOM and the file's own line endings are part of the bytes being saved;
+// the plain getValue() drops the BOM.
+const TEXT_DEFINED_EOL = 0
 
 export function PodFilePreview({
   namespace,
@@ -161,12 +185,26 @@ export function PodFilePreview({
   filePath,
   fileName,
   onDownload,
+  edit,
 }: PodFilePreviewProps) {
   const [result, setResult] = useState<PreviewResult | null>(null)
   const [loading, setLoading] = useState(true)
   const [reloadCount, setReloadCount] = useState(0)
   const [runtime, setRuntime] = useState<'loading' | 'ready' | 'error'>('loading')
   const theme = useMonacoTheme()
+  const [editing, setEditing] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [problem, setProblem] = useState<SaveProblem | null>(null)
+  // Remounting the editor is how Cancel puts the opened contents back.
+  const [editorKey, setEditorKey] = useState(0)
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null)
+  const onDirtyChange = edit?.onDirtyChange
+
+  useEffect(() => {
+    onDirtyChange?.(dirty)
+  }, [dirty, onDirtyChange])
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -196,6 +234,15 @@ export function PodFilePreview({
     }
   }, [])
 
+  const leaveEditing = () => {
+    setEditing(false)
+    setDirty(false)
+    setProblem(null)
+    setEditorKey((k) => k + 1)
+  }
+
+  const currentText = () => editorRef.current?.getModel()?.getValue(TEXT_DEFINED_EOL, true) ?? ''
+
   if (loading) return <PaneLoader label="Reading file…" className="flex-1" />
   if (!result) return null
 
@@ -209,7 +256,110 @@ export function PodFilePreview({
     )
   }
 
-  if (result.empty) return <PreviewEmptyState fileName={fileName} />
+  const opened = result
+  const blocked = edit ? edit.blockedReason(opened.content) : null
+  const canEdit = !!edit && !!opened.sha256 && runtime === 'ready'
+
+  const save = async () => {
+    if (!edit || !opened.sha256 || saving) return
+    const content = currentText()
+    setSaving(true)
+    setProblem(null)
+    try {
+      const saved = await edit.save(content, opened.sha256)
+      setResult({ ...opened, content, size: saved.size, sha256: saved.sha256, empty: content === '' })
+      leaveEditing()
+      edit.onSaved(saved)
+    } catch (err) {
+      if (err instanceof PodFileSaveError && err.code === FILE_CHANGED) {
+        setProblem({ kind: 'changed', message: err.message })
+      } else {
+        setProblem({ kind: 'failed', message: err instanceof Error ? err.message : String(err) })
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const cancel = () => {
+    if (!dirty) {
+      leaveEditing()
+      return
+    }
+    edit?.confirmDiscard(leaveEditing)
+  }
+
+  const reloadDiscardingEdits = () => {
+    edit?.confirmDiscard(() => {
+      leaveEditing()
+      setReloadCount((n) => n + 1)
+    })
+  }
+
+  const toolbar = canEdit && (
+    <div className="shrink-0 border-b border-theme-border px-3 py-2 flex flex-col gap-2">
+      {editing && (
+        <AlertBanner variant="info" title="Saving changes the live container" message={POD_FILE_PERSISTENCE_NOTE} className="mb-0" />
+      )}
+      {editing && problem?.kind === 'changed' && (
+        <AlertBanner
+          variant="warning"
+          title="The file changed since you opened it"
+          message={`${problem.message}. Your edits are still here; copy what you need, then reload to see the current file.`}
+          className="mb-0"
+          action={<button type="button" onClick={reloadDiscardingEdits} className="text-xs text-accent hover:underline">Discard my edits and reload</button>}
+        />
+      )}
+      {editing && problem?.kind === 'failed' && (
+        <AlertBanner variant="error" title="Could not save" message={problem.message} className="mb-0" />
+      )}
+      <div className="flex items-center gap-2">
+        {editing ? (
+          <>
+            <span className="text-xs text-theme-text-tertiary mr-auto">{dirty ? 'Unsaved changes' : 'No changes yet'}</span>
+            <button
+              type="button"
+              onClick={cancel}
+              disabled={saving}
+              className="px-3 py-1 text-xs rounded border border-theme-border text-theme-text-secondary hover:bg-theme-hover disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || saving}
+              className="btn-brand inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium disabled:opacity-50 disabled:pointer-events-none"
+            >
+              {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </>
+        ) : (
+          <Tooltip content={blocked ?? 'Edit this file in the running container'} wrapperClassName="ml-auto">
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              disabled={blocked !== null}
+              className="btn-brand inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              Edit
+            </button>
+          </Tooltip>
+        )}
+      </div>
+    </div>
+  )
+
+  if (opened.empty && !editing) {
+    return (
+      <div className="flex-1 min-h-0 flex flex-col">
+        {toolbar}
+        <PreviewEmptyState fileName={fileName} />
+      </div>
+    )
+  }
 
   if (runtime === 'loading') return <PaneLoader label="Loading editor…" className="flex-1" />
 
@@ -222,14 +372,21 @@ export function PodFilePreview({
   }
 
   return (
-    <div className="flex-1 min-h-0">
+    <div className="flex-1 min-h-0 flex flex-col">
+      {toolbar}
+      <div className="flex-1 min-h-0">
       <Editor
-        value={result.content}
+        key={editorKey}
+        value={opened.content}
         language={detectLanguage(fileName)}
         theme={theme}
+        onMount={(editor) => { editorRef.current = editor }}
+        onChange={() => {
+          if (editing) setDirty(currentText() !== opened.content)
+        }}
         options={{
-          readOnly: true,
-          domReadOnly: true,
+          readOnly: !editing || saving,
+          domReadOnly: !editing || saving,
           minimap: { enabled: false },
           scrollBeyondLastLine: false,
           fontSize: 12,
@@ -239,6 +396,7 @@ export function PodFilePreview({
         }}
         loading={<PaneLoader label="Loading editor…" className="h-full" />}
       />
+      </div>
     </div>
   )
 }
