@@ -481,10 +481,6 @@ func newOutsideChangesMemo(ttl time.Duration) *outsideChangesMemo {
 	return &outsideChangesMemo{ttl: ttl, entries: map[string]*outsideMemoEntry{}}
 }
 
-func (m *outsideChangesMemo) load(key string, build func() outsideChangesResponse) outsideChangesResponse {
-	return m.loadOr(key, func() (outsideChangesResponse, bool) { return build(), true })
-}
-
 // loadOr keeps the built answer only when build reports it cacheable.
 func (m *outsideChangesMemo) loadOr(key string, build func() (outsideChangesResponse, bool)) outsideChangesResponse {
 	if m == nil || m.ttl <= 0 {
@@ -587,34 +583,32 @@ func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitop
 	}
 	groups, cov := outsideListGroups(tree, root, k8s.ServedGVR)
 	resp.Coverage = cov
-	{
-		harmless := map[string]int{}
-		others := map[string]int{}
-		for _, obj := range listOutsideObjects(ctx, dyn, groups, fluxMemberSelector(root), defaultOutsideLimits, &resp.Coverage) {
-			out, labels, otherManagers := classifyOutsideObject(obj, owner, root)
-			for _, l := range labels {
-				harmless[l]++
-			}
-			seen := map[string]bool{}
-			for _, m := range otherManagers {
-				if !seen[m] {
-					seen[m] = true
-					others[m]++
-				}
-			}
-			if len(out.Changes) > 0 {
-				resp.Objects = append(resp.Objects, out)
+	harmless := map[string]int{}
+	others := map[string]int{}
+	for _, obj := range listOutsideObjects(ctx, dyn, groups, fluxMemberSelector(root), defaultOutsideLimits, &resp.Coverage) {
+		out, labels, otherManagers := classifyOutsideObject(obj, owner, root)
+		for _, l := range labels {
+			harmless[l]++
+		}
+		seen := map[string]bool{}
+		for _, m := range otherManagers {
+			if !seen[m] {
+				seen[m] = true
+				others[m]++
 			}
 		}
-		for tool, n := range harmless {
-			resp.Harmless = append(resp.Harmless, outsideToolCount{Tool: tool, Count: n})
+		if len(out.Changes) > 0 {
+			resp.Objects = append(resp.Objects, out)
 		}
-		sort.Slice(resp.Harmless, func(i, j int) bool { return resp.Harmless[i].Tool < resp.Harmless[j].Tool })
-		for m, n := range others {
-			resp.OtherWriters = append(resp.OtherWriters, outsideOtherWriter{Manager: m, Objects: n})
-		}
-		sort.Slice(resp.OtherWriters, func(i, j int) bool { return resp.OtherWriters[i].Manager < resp.OtherWriters[j].Manager })
 	}
+	for tool, n := range harmless {
+		resp.Harmless = append(resp.Harmless, outsideToolCount{Tool: tool, Count: n})
+	}
+	sort.Slice(resp.Harmless, func(i, j int) bool { return resp.Harmless[i].Tool < resp.Harmless[j].Tool })
+	for m, n := range others {
+		resp.OtherWriters = append(resp.OtherWriters, outsideOtherWriter{Manager: m, Objects: n})
+	}
+	sort.Slice(resp.OtherWriters, func(i, j int) bool { return resp.OtherWriters[i].Manager < resp.OtherWriters[j].Manager })
 	resp.Count = len(resp.Objects)
 	if resolver != nil {
 		for _, ev := range resolver.RecentEvents(owner.Group, owner.Kind, owner.Namespace, owner.Name) {

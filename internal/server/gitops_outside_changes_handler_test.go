@@ -3,16 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
-	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	"github.com/skyhook-io/radar/pkg/auth"
+	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -78,20 +78,20 @@ func TestOutsideChangesMemoIsPerUser(t *testing.T) {
 		t.Fatal("two users share a memo key")
 	}
 	builds := 0
-	build := func(count int) func() outsideChangesResponse {
-		return func() outsideChangesResponse { builds++; return outsideChangesResponse{Count: count} }
+	build := func(count int) func() (outsideChangesResponse, bool) {
+		return func() (outsideChangesResponse, bool) { builds++; return outsideChangesResponse{Count: count}, true }
 	}
-	if got := m.load(a, build(1)); got.Count != 1 {
+	if got := m.loadOr(a, build(1)); got.Count != 1 {
 		t.Fatalf("a = %+v", got)
 	}
-	if got := m.load(b, build(2)); got.Count != 2 || builds != 2 {
+	if got := m.loadOr(b, build(2)); got.Count != 2 || builds != 2 {
 		t.Fatalf("b = %+v, builds = %d", got, builds)
 	}
-	if got := m.load(a, build(9)); got.Count != 1 || builds != 2 {
+	if got := m.loadOr(a, build(9)); got.Count != 1 || builds != 2 {
 		t.Fatalf("cached a = %+v, builds = %d", got, builds)
 	}
 	m.clear()
-	if got := m.load(a, build(3)); got.Count != 3 || builds != 3 {
+	if got := m.loadOr(a, build(3)); got.Count != 3 || builds != 3 {
 		t.Fatalf("after clear a = %+v, builds = %d", got, builds)
 	}
 }
@@ -127,7 +127,10 @@ func TestOutsideChangesMemoSkipsUncacheable(t *testing.T) {
 	m := newOutsideChangesMemo(time.Minute)
 	builds := 0
 	build := func(cacheable bool) func() (outsideChangesResponse, bool) {
-		return func() (outsideChangesResponse, bool) { builds++; return outsideChangesResponse{Count: builds}, cacheable }
+		return func() (outsideChangesResponse, bool) {
+			builds++
+			return outsideChangesResponse{Count: builds}, cacheable
+		}
 	}
 	m.loadOr("k", build(false))
 	if got := m.loadOr("k", build(true)); got.Count != 2 {
