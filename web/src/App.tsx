@@ -9,7 +9,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY, isGitOpsCountGroup } from '@skyhook-io/k8s-ui'
 import { resetNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
@@ -1128,9 +1128,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const cnpgInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
-    gitopsRowsChanged: boolean   // Argo/Flux row kinds → GitOps table
+    gitopsRowsChanged: boolean   // Argo/Flux row and source kinds → GitOps table rows
+    gitopsCountsChanged: boolean // add/delete in a GitOps group → GitOps table totals
     timer: number | null
-  }>({ updatedKinds: new Set(), gitopsRowsChanged: false, timer: null })
+  }>({ updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null })
   const timelineInvalidationRef = useRef<{ timer: number | null }>({ timer: null })
 
   const handleK8sEvent = useCallback((event: K8sEvent) => {
@@ -1176,6 +1177,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (!structural || applicationWorkload) slow.updatedKinds.add(kind)
     const gitopsRow = changesGitOpsRow(event.kind, event.group)
     if (gitopsRow) slow.gitopsRowsChanged = true
+    const gitopsCount = structural && isGitOpsCountGroup(event.group)
+    if (gitopsCount) slow.gitopsCountsChanged = true
 
     // FAST tier — membership-sensitive + cheap, bounded 3s latency.
     if (fast.timer === null) {
@@ -1221,7 +1224,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     // SLOW tier — throttle expensive status churn. Workload membership changes
     // also pass through here so the Applications refetch lands after its cache TTL.
-    if ((!structural || applicationWorkload || gitopsRow) && slow.timer === null) {
+    if ((!structural || applicationWorkload || gitopsRow || gitopsCount) && slow.timer === null) {
       slow.timer = window.setTimeout(() => {
         const s = slowInvalidationRef.current
         for (const k of s.updatedKinds) {
@@ -1230,12 +1233,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         if ([...s.updatedKinds].some((k) => ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(k))) {
           queryClient.invalidateQueries({ queryKey: ['applications'] })
         }
-        if (s.gitopsRowsChanged) {
-          queryClient.invalidateQueries({ queryKey: ['gitops-rows-main'] })
-          queryClient.invalidateQueries({ queryKey: ['gitops-resource-counts'] })
-        }
+        if (s.gitopsRowsChanged) queryClient.invalidateQueries({ queryKey: ['gitops-rows-main'] })
+        if (s.gitopsCountsChanged) queryClient.invalidateQueries({ queryKey: ['gitops-resource-counts'] })
         queryClient.invalidateQueries({ queryKey: ['dashboard'] }) // health reflects status updates
-        slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, timer: null }
+        slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
       }, 15000)
     }
   }, [queryClient])
@@ -1249,7 +1250,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
     fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
-    slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, timer: null }
+    slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
     timelineInvalidationRef.current = { timer: null }
   }, [])
 
@@ -1271,7 +1272,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
       if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
       fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
-      slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, timer: null }
+      slowInvalidationRef.current = { updatedKinds: new Set(), gitopsRowsChanged: false, gitopsCountsChanged: false, timer: null }
       timelineInvalidationRef.current = { timer: null }
 
       // Close any open drawers/overlays — old cluster's resources don't exist on the new one
