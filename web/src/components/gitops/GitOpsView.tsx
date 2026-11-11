@@ -103,9 +103,7 @@ type ArgoSyncDialogTarget =
 
 const KIND_BY_NAME = new Map(GITOPS_KINDS.map((k) => [k.name, k]))
 
-// Rows are the table's primary content; their poll cadence is what the toolbar
-// freshness signal advertises ("Auto-refreshes every 2m"). Single source of
-// truth so the signal can't drift from the actual refetchInterval below.
+// Fallback poll for the rows; SSE changes to row kinds refetch them within 15s (App.tsx slow tier).
 const GITOPS_ROWS_REFRESH_INTERVAL_MS = 120_000
 
 interface ResourceCountsResponse {
