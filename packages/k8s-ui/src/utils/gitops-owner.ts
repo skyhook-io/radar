@@ -156,7 +156,7 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
     },
     'helm.toolkit.fluxcd.io': {
       omitted: "its inventory doesn't list this resource; it may be a Helm hook, kept by helm.sh/resource-policy: keep, or the latest release hasn't finished",
-      unreadable: "its status has no inventory; helm-controller records one after a successful release, and older versions don't record one",
+      unreadable: "its status has no inventory; Flux records one after a successful release from version 2.8, and earlier versions never do",
     },
   }
   const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
