@@ -568,6 +568,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// Outside the 60s timeout group because a large upload over a slow
 		// cluster link takes longer.
 		r.Post("/pods/{namespace}/{name}/files/upload", s.handlePodFileUpload)
+		// A save is two execs (re-read, then write); it carries its own bound,
+		// podFileEditTimeout, like the upload beside it.
+		r.Put("/pods/{namespace}/{name}/files/content", s.handlePodFileEdit)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 		r.Get("/cnpg/clusters/{namespace}/{name}/logs/stream", s.handleCNPGClusterLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
@@ -1518,6 +1521,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
+		PodFileEdit:              true,
 	}
 }
 
@@ -1547,8 +1551,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = advertisedFeatures()
-	// handlePodFileUpload refuses in Radar Cloud; hide the control to match.
+	// handlePodFileUpload and handlePodFileEdit refuse in Radar Cloud; hide
+	// the controls to match.
 	caps.Features.PodFileUpload = !cloudMode()
+	caps.Features.PodFileEdit = !cloudMode()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)

@@ -104,6 +104,7 @@ const (
 	uploadExitIncomplete    = 27
 	uploadExitSymlinkedDir  = 28
 	uploadExitTempChanged   = 29
+	uploadExitChanged       = 30
 )
 
 // podFileUploadScript writes stdin to a file without ever exposing a partial
@@ -152,10 +153,16 @@ const (
 // leaves the request hanging; reading the rest is what lets the refusal
 // arrive. The UI checks what it can beforehand so this is rarely paid.
 //
+// An optional $5 is the SHA-256 the destination must still have, for an edit
+// saved over the file the user previewed. It is checked just before the
+// commit, so only the time between the hash and the rename is left uncovered.
+// A container without sha256sum skips that check and relies on the one the
+// server made before the exec.
+//
 // The mount check reads /proc/self/mountinfo, so it misses a mount point
 // whose path the kernel escapes (a name with spaces). mv onto a mount point
 // then fails with EBUSY, which the classifier reports the same way.
-const podFileUploadScript = `dir=$1 name=$2 overwrite=$3 size=$4 tmp= replace=
+const podFileUploadScript = `dir=$1 name=$2 overwrite=$3 size=$4 expect=${5-} tmp= replace=
 set -f
 drain() { cat >/dev/null 2>&1 || while read -r _; do :; done; }
 mode_of() {
@@ -227,6 +234,13 @@ if [ -n "$replace" ]; then
 else
   chmod "$(printf %o $((0666 & ~0$(umask))))" "$f" || exit $?
 fi
+if [ -n "$expect" ]; then
+  [ -e "$dest" ] || { echo "radar: file changed" >&2; exit 30; }
+  if command -v sha256sum >/dev/null 2>&1; then
+    set -- $(sha256sum < "$dest" 2>/dev/null)
+    [ "${1-}" = "$expect" ] || { echo "radar: file changed" >&2; exit 30; }
+  fi
+fi
 if [ "$overwrite" != 1 ]; then
   if ln -T -- "$tmp" "$dest" 2>/dev/null; then committed; fi
   check_dest
@@ -240,11 +254,21 @@ mv -f -- "$tmp" "$dest" && committed
 `
 
 func podFileUploadCommand(dir, name string, overwrite bool, size int64) []string {
+	return podFileWriteCommand(dir, name, overwrite, size, "")
+}
+
+// podFileWriteCommand is podFileUploadCommand with the hash the destination
+// must still have; "" checks nothing.
+func podFileWriteCommand(dir, name string, overwrite bool, size int64, expectSHA256 string) []string {
 	ow := "0"
 	if overwrite {
 		ow = "1"
 	}
-	return []string{"/bin/sh", "-c", podFileUploadScript, "sh", dir, name, ow, strconv.FormatInt(size, 10)}
+	cmd := []string{"/bin/sh", "-c", podFileUploadScript, "sh", dir, name, ow, strconv.FormatInt(size, 10)}
+	if expectSHA256 != "" {
+		cmd = append(cmd, expectSHA256)
+	}
+	return cmd
 }
 
 const podFileUploadCleanupScript = `cd -- "$1" && rm -f -- "./$2"`
@@ -631,13 +655,34 @@ func upgradeRefusal(err error) string {
 	return ""
 }
 
+// podFileWriteWording words a failure for the operation that hit it.
+type podFileWriteWording struct {
+	gerund  string // "uploading": "..., which uploading requires"
+	noun    string // "upload": "the upload stopped"
+	verb    string // "upload": "browse there to upload"
+	refusal string // "cannot take uploads"
+	recheck string // "refresh the listing": what shows whether it happened
+	title   string // "Upload": "Upload failed: ..."
+}
+
+var (
+	uploadWording = podFileWriteWording{gerund: "uploading", noun: "upload", verb: "upload", refusal: "cannot take uploads",
+		recheck: "refresh the listing", title: "Upload"}
+	editWording = podFileWriteWording{gerund: "saving files", noun: "save", verb: "edit files", refusal: "cannot have files edited",
+		recheck: "reopen the file", title: "Save"}
+)
+
 // classifyPodFileUploadError maps a failed upload to a status, a code the UI
 // can act on, and a message for the person who tried it.
 func classifyPodFileUploadError(destPath string, streamErr error, stderr string) (int, string, string) {
+	return classifyPodFileWriteError(uploadWording, destPath, streamErr, stderr)
+}
+
+func classifyPodFileWriteError(wd podFileWriteWording, destPath string, streamErr error, stderr string) (int, string, string) {
 	dir := path.Dir(destPath)
 	if isExecForbidden(streamErr) {
 		return http.StatusForbidden, uploadCodeForbidden,
-			fmt.Sprintf("You are not allowed to exec into this pod, which uploading requires: %v", streamErr)
+			fmt.Sprintf("You are not allowed to exec into this pod, which %s requires: %v", wd.gerund, streamErr)
 	}
 
 	// The apiserver turned the exec away, so nothing ran in the container.
@@ -671,12 +716,12 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 		case uploadExitSymlinkedDir:
 			real := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(stderr), "radar: resolves to "))
 			return http.StatusConflict, uploadCodeSymlinkedDir,
-				fmt.Sprintf("%s goes through a symlink and resolves to %s; browse to %s to upload there", dir, real, real)
+				fmt.Sprintf("%s goes through a symlink and resolves to %s; browse to %s to %s there", dir, real, real, wd.verb)
 		case uploadExitTempChanged:
 			return http.StatusConflict, uploadCodeTempChanged,
-				fmt.Sprintf("Something else in the container changed the upload's temp file while it was being written, so the upload stopped. Check %s: it may not hold your file.", destPath)
+				fmt.Sprintf("Something else in the container changed the %s's temp file while it was being written, so the %s stopped. Check %s: it may not hold your file.", wd.noun, wd.noun, destPath)
 		case uploadExitIncomplete:
-			return http.StatusBadRequest, uploadCodeIncomplete, "The upload stopped before the whole file arrived; nothing was written"
+			return http.StatusBadRequest, uploadCodeIncomplete, fmt.Sprintf("The %s stopped before the whole file arrived; nothing was written", wd.noun)
 		}
 	}
 
@@ -684,15 +729,15 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 	switch {
 	case isShellMissing(combined):
 		return http.StatusNotImplemented, uploadCodeNoShell,
-			"Container has no shell (/bin/sh), which uploading needs. Distroless and scratch images cannot take uploads."
+			fmt.Sprintf("Container has no shell (/bin/sh), which %s needs. Distroless and scratch images %s.", wd.gerund, wd.refusal)
 	case isCommandMissing(streamErr, stderr):
 		const fallback = " If the image has tar, kubectl cp can still copy the file in."
 		if cmd := missingCommandName(stderr); cmd != "" {
 			return http.StatusNotImplemented, uploadCodeMissingTools,
-				fmt.Sprintf("This container has no %s command, which uploading needs, so nothing was written.", cmd) + fallback
+				fmt.Sprintf("This container has no %s command, which %s needs, so nothing was written.", cmd, wd.gerund) + fallback
 		}
 		return http.StatusNotImplemented, uploadCodeMissingTools,
-			"This container lacks a command uploading needs (it uses sh, mktemp, cat, wc, ln, mv, chmod, ls and rm), so nothing was written." + fallback
+			fmt.Sprintf("This container lacks a command %s needs (it uses sh, mktemp, cat, wc, ln, mv, chmod, ls and rm), so nothing was written.", wd.gerund) + fallback
 	case strings.Contains(combined, "read-only file system"):
 		return http.StatusConflict, uploadCodeReadOnly,
 			fmt.Sprintf("%s is on a read-only filesystem", dir)
@@ -709,7 +754,7 @@ func classifyPodFileUploadError(destPath string, streamErr error, stderr string)
 
 	if !errors.As(streamErr, &exitErr) {
 		return http.StatusBadGateway, uploadCodeUncertain,
-			fmt.Sprintf("The connection to the container dropped before it confirmed the upload; refresh the listing to see whether %s changed", destPath)
+			fmt.Sprintf("The connection to the container dropped before it confirmed the %s; %s to see whether %s changed", wd.noun, wd.recheck, destPath)
 	}
-	return http.StatusInternalServerError, uploadCodeFailed, fmt.Sprintf("Upload failed: %s", strings.TrimSpace(fmt.Sprintf("%v %s", streamErr, stderr)))
+	return http.StatusInternalServerError, uploadCodeFailed, fmt.Sprintf("%s failed: %s", wd.title, strings.TrimSpace(fmt.Sprintf("%v %s", streamErr, stderr)))
 }
