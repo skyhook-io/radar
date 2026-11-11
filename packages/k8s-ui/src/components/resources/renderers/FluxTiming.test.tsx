@@ -103,6 +103,8 @@ describe('Flux drawer and resource timing', () => {
   it('falls back to the applied revision for a HelmRelease without release history', () => {
     const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { lastAppliedRevision: '1.2.0', lastAttemptedRevision: '1.4.0' } }} />))
     expect(html).toContain('not yet applied')
+    const noChart = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { history: [{ version: 4, status: 'deployed' }], lastAppliedRevision: '1.2.0', lastAttemptedRevision: '1.4.0' } }} />))
+    expect(noChart).toContain('not yet applied')
   })
 
   it('flags a HelmRelease whose attempted chart differs from the deployed one', () => {

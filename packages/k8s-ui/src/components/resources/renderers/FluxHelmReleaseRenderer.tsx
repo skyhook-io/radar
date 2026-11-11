@@ -85,7 +85,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const sourceRef = chartRef.sourceRef || {}
 
   const lastRelease = getFluxDeployedRelease(data)
-  const deployedRevision = lastRelease?.chartVersion ?? status.lastAppliedRevision
+  const deployedRevision = lastRelease?.chartVersion || status.lastAppliedRevision
 
   return (
     <>
@@ -332,7 +332,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
 
       {/* Revision info */}
       {(status.helmChart || status.lastAppliedRevision || status.lastAttemptedRevision || handledRequest) && (
-        <Section title="Revision Info">
+        <Section title="Revision Info" defaultExpanded={true}>
           <PropertyList>
             {status.helmChart && (
               <Property label="Helm Chart" value={status.helmChart} />

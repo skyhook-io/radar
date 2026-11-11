@@ -167,7 +167,7 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
 
       {/* Revision info */}
       {(status.lastAppliedRevision || status.lastAttemptedRevision || lastApply || handledRequest) && (
-        <Section title="Revision">
+        <Section title="Revision" defaultExpanded={true}>
           <PropertyList>
             {status.lastAppliedRevision && (
               <Property label="Applied" value={status.lastAppliedRevision} />
