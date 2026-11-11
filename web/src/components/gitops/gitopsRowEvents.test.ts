@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { isGitOpsCountGroup } from '@skyhook-io/k8s-ui'
-import { changesGitOpsRow } from './gitopsRowEvents'
+import { changesGitOpsRow, gitopsTableChange } from './gitopsRowEvents'
 
 describe('changesGitOpsRow', () => {
   it('matches the kinds the GitOps table lists', () => {
@@ -34,5 +34,15 @@ describe('isGitOpsCountGroup', () => {
     expect(isGitOpsCountGroup('apps')).toBe(false)
     expect(isGitOpsCountGroup('')).toBe(false)
     expect(isGitOpsCountGroup(undefined)).toBe(false)
+  })
+})
+
+describe('gitopsTableChange', () => {
+  it('refreshes rows on any row change but totals only on add or delete', () => {
+    expect(gitopsTableChange('Application', 'argoproj.io', 'update')).toEqual({ rows: true, counts: false })
+    expect(gitopsTableChange('Application', 'argoproj.io', 'add')).toEqual({ rows: true, counts: true })
+    expect(gitopsTableChange('Alert', 'notification.toolkit.fluxcd.io', 'delete')).toEqual({ rows: false, counts: true })
+    expect(gitopsTableChange('Alert', 'notification.toolkit.fluxcd.io', 'update')).toEqual({ rows: false, counts: false })
+    expect(gitopsTableChange('Deployment', 'apps', 'add')).toEqual({ rows: false, counts: false })
   })
 })

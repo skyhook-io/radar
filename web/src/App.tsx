@@ -9,7 +9,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY, isGitOpsCountGroup } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, usePhoneLayout, PHONE_MEDIA_QUERY } from '@skyhook-io/k8s-ui'
 import { resetNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
@@ -26,7 +26,7 @@ import { CostView } from './components/cost/CostView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
-import { changesGitOpsRow } from './components/gitops/gitopsRowEvents'
+import { gitopsTableChange } from './components/gitops/gitopsRowEvents'
 import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
@@ -1175,10 +1175,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const slow = slowInvalidationRef.current
     if (!structural || applicationWorkload) slow.updatedKinds.add(kind)
-    const gitopsRow = changesGitOpsRow(event.kind, event.group)
-    if (gitopsRow) slow.gitopsRowsChanged = true
-    const gitopsCount = structural && isGitOpsCountGroup(event.group)
-    if (gitopsCount) slow.gitopsCountsChanged = true
+    const gitops = gitopsTableChange(event.kind, event.group, event.operation)
+    if (gitops.rows) slow.gitopsRowsChanged = true
+    if (gitops.counts) slow.gitopsCountsChanged = true
 
     // FAST tier — membership-sensitive + cheap, bounded 3s latency.
     if (fast.timer === null) {
@@ -1224,7 +1223,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     // SLOW tier — throttle expensive status churn. Workload membership changes
     // also pass through here so the Applications refetch lands after its cache TTL.
-    if ((!structural || applicationWorkload || gitopsRow || gitopsCount) && slow.timer === null) {
+    if ((!structural || applicationWorkload || gitops.rows || gitops.counts) && slow.timer === null) {
       slow.timer = window.setTimeout(() => {
         const s = slowInvalidationRef.current
         for (const k of s.updatedKinds) {
