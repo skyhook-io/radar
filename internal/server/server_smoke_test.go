@@ -1927,7 +1927,15 @@ func TestSmokePprofGating(t *testing.T) {
 			}
 			srv := New(cfg)
 			defer srv.Stop()
-			for _, path := range []string{"/debug/pprof", "/debug/pprof/", "/debug/pprof/cmdline"} {
+			paths := []string{"/debug/pprof", "/debug/pprof/", "/debug/pprof/cmdline"}
+			if !tt.want {
+				// Every mounted profile, so a route registered outside the gate is caught.
+				// Enabled cases skip them: profile and trace collect for seconds.
+				for _, p := range []string{"profile", "symbol", "trace", "allocs", "block", "goroutine", "heap", "mutex", "threadcreate", "goroutineleak"} {
+					paths = append(paths, "/debug/pprof/"+p)
+				}
+			}
+			for _, path := range paths {
 				req := httptest.NewRequest(http.MethodGet, "http://localhost"+path, nil)
 				req.Header.Set("X-Forwarded-User", "pprof-test")
 				rec := httptest.NewRecorder()

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,8 +12,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
@@ -58,19 +55,10 @@ type applicationEvidenceRequest struct {
 	ConfirmNetworkAccess bool             `json:"confirmNetworkAccess"`
 }
 
-func (s *Server) applicationEvidenceEnabled(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	ip := net.ParseIP(host)
-	return err == nil && ip != nil && ip.IsLoopback() && requestHostIsLoopback(r) &&
-		deploymentMode() == k8s.DeploymentModeLocal && !s.authConfig.Enabled() &&
-		!s.cloudConnectCfg.CloudTunnelConfigured && !cloud.IsAuthenticatedTunnelRequest(r.Context()) &&
-		auth.UserFromContext(r.Context()) == nil
-}
-
 func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	response := applicationEvidenceCandidatesResponse{CandidateSet: collector.CandidateSet{Candidates: []collector.Candidate{}}}
-	if !s.applicationEvidenceEnabled(r) {
+	if !s.applicationEvidenceAvailable(r) {
 		s.writeJSON(w, response)
 		return
 	}
@@ -167,7 +155,7 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 
 func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !s.applicationEvidenceEnabled(r) {
+	if !s.applicationEvidenceAvailable(r) {
 		s.writeError(w, http.StatusNotFound, "application evidence collection is not available on this deployment")
 		return
 	}

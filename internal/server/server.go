@@ -320,13 +320,13 @@ func New(cfg Config) *Server {
 			}
 		}
 	}
-	if s.allowAnyHost && !cfg.AuthConfig.Enabled() && !cloud.IsLoopbackHostname(cfg.ListenAddress) {
+	if allowAnyHostWarning(s.allowAnyHost, cfg.AuthConfig.Enabled(), cfg.ListenAddress) {
 		log.Printf("WARNING: --allowed-hosts=* turns off Host validation; any web page that rebinds its hostname to this address can use Radar")
 	}
 	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.applicationEvidence = newApplicationEvidenceAPI()
-	s.cloudInstall.sharedListener = s.sharedListener
+	s.cloudInstall.sharedListener = s.cloudConnectNeedsSharedAck
 
 	// Turn on AI investigations if an agent CLI is installed. Later installs are
 	// picked up by refreshAIEngine when a client asks for the agent list.
@@ -533,7 +533,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Route("/debug/pprof", func(r chi.Router) {
 			r.Get("/", pprof.Index)
 			r.Get("/cmdline", func(w http.ResponseWriter, r *http.Request) {
-				if s.authConfig.Enabled() {
+				if !s.pprofCmdlineAllowed() {
 					s.writeError(w, http.StatusForbidden, "command-line arguments may contain credentials and are unavailable on authenticated installations")
 					return
 				}
@@ -1291,7 +1291,7 @@ func (s *Server) StartWithReady(ready chan<- struct{}) error {
 	} else {
 		// Keep the security warnings fail-safe for any direct Server caller that
 		// opts out of the full CLI/desktop startup block.
-		if shouldWarnUnauthenticatedListener(listenAddress, s.authConfig.Enabled()) && !cloud.Mode() {
+		if unauthenticatedListenerWarning(listenAddress, s.authConfig.Enabled(), cloud.Mode()) {
 			log.Printf("WARNING: Radar's HTTP listener is unauthenticated and reachable on %s", listenAddress)
 		}
 		if s.authConfig.Mode == "proxy" && !cloud.Mode() {
@@ -1319,10 +1319,6 @@ func listenPreferringPort(listenAddress string, port int, fallback bool) (net.Li
 	}
 	log.Printf("Port %d is unavailable (%v); using an OS-assigned port", port, err)
 	return net.Listen("tcp", socketAddress(listenAddress, 0))
-}
-
-func shouldWarnUnauthenticatedListener(listenAddress string, authEnabled bool) bool {
-	return !authEnabled && !cloud.IsLoopbackHostname(listenAddress)
 }
 
 // localTCPHandler is the handler exposed on Radar's ordinary pod/host listener.
@@ -6502,14 +6498,4 @@ func (s *Server) handleDebugInformers(w http.ResponseWriter, r *http.Request) {
 		"dynamicInformers": len(gvrs),
 		"watchedResources": resources,
 	})
-}
-
-func (s *Server) pprofEnabled() bool {
-	if cloudMode() {
-		return false
-	}
-	if s.enablePprof != nil {
-		return *s.enablePprof
-	}
-	return s.authConfig.Enabled() || s.listenAddress == "" || !s.sharedListener()
 }
