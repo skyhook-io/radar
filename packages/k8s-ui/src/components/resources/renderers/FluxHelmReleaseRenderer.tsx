@@ -85,6 +85,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const sourceRef = chartRef.sourceRef || {}
 
   const lastRelease = getFluxDeployedRelease(data)
+  const deployedRevision = lastRelease?.chartVersion ?? status.lastAppliedRevision
 
   return (
     <>
@@ -340,7 +341,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
               <Property label="Applied Revision" value={status.lastAppliedRevision} />
             )}
             {status.lastAttemptedRevision && (
-              <Property label="Attempted Revision" value={<>{status.lastAttemptedRevision}{lastRelease?.chartVersion && lastRelease.chartVersion !== status.lastAttemptedRevision && <> <Badge severity="warning" size="sm">not yet applied</Badge></>}</>} />
+              <Property label="Attempted Revision" value={<>{status.lastAttemptedRevision}{deployedRevision && deployedRevision !== status.lastAttemptedRevision && <> <Badge severity="warning" size="sm">not yet applied</Badge></>}</>} />
             )}
             <Property label="Last handled manual request" value={handledRequest} />
           </PropertyList>
