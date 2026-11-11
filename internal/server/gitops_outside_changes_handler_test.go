@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,17 +82,17 @@ func TestOutsideChangesMemoIsPerUser(t *testing.T) {
 	build := func(count int) func() (outsideChangesResponse, bool) {
 		return func() (outsideChangesResponse, bool) { builds++; return outsideChangesResponse{Count: count}, true }
 	}
-	if got := m.loadOr(a, build(1)); got.Count != 1 {
+	if got := m.loadOr(m.generation(), a, build(1)); got.Count != 1 {
 		t.Fatalf("a = %+v", got)
 	}
-	if got := m.loadOr(b, build(2)); got.Count != 2 || builds != 2 {
+	if got := m.loadOr(m.generation(), b, build(2)); got.Count != 2 || builds != 2 {
 		t.Fatalf("b = %+v, builds = %d", got, builds)
 	}
-	if got := m.loadOr(a, build(9)); got.Count != 1 || builds != 2 {
+	if got := m.loadOr(m.generation(), a, build(9)); got.Count != 1 || builds != 2 {
 		t.Fatalf("cached a = %+v, builds = %d", got, builds)
 	}
 	m.clear()
-	if got := m.loadOr(a, build(3)); got.Count != 3 || builds != 3 {
+	if got := m.loadOr(m.generation(), a, build(3)); got.Count != 3 || builds != 3 {
 		t.Fatalf("after clear a = %+v, builds = %d", got, builds)
 	}
 }
@@ -132,17 +133,17 @@ func TestOutsideChangesMemoSkipsUncacheable(t *testing.T) {
 			return outsideChangesResponse{Count: builds}, cacheable
 		}
 	}
-	m.loadOr("k", build(false))
-	if got := m.loadOr("k", build(true)); got.Count != 2 {
+	m.loadOr(m.generation(), "k", build(false))
+	if got := m.loadOr(m.generation(), "k", build(true)); got.Count != 2 {
 		t.Fatalf("uncacheable answer was served again: %+v", got)
 	}
-	if got := m.loadOr("k", build(true)); got.Count != 2 {
+	if got := m.loadOr(m.generation(), "k", build(true)); got.Count != 2 {
 		t.Fatalf("cacheable answer not kept: %+v", got)
 	}
 }
 
 func TestBuildOutsideChangesWithoutAClientIsUnavailable(t *testing.T) {
-	if _, err := buildOutsideChanges(context.Background(), nil, nil, fluxHelmOwner(nil), helmOwner, nil); err == nil {
+	if _, _, err := buildOutsideChanges(context.Background(), nil, nil, fluxHelmOwner(nil), helmOwner, nil); err == nil {
 		t.Fatal("no dynamic client answered as if nothing changed")
 	}
 }
@@ -172,12 +173,96 @@ func TestBuildOutsideChangesReturnsNoDataValues(t *testing.T) {
 	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{treeNode("", "ConfigMap", "prod", "settings")}}
 	root := fluxHelmOwner(nil)
 	root.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{}}}
-	resp, err := buildOutsideChanges(context.Background(), dyn, tree, root, helmOwner, nil)
+	resp, _, err := buildOutsideChanges(context.Background(), dyn, tree, root, helmOwner, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, _ := json.Marshal(resp)
 	if resp.Count != 1 || !strings.Contains(string(body), "data.password") || strings.Contains(string(body), "hunter2") {
 		t.Fatalf("response = %s", body)
+	}
+}
+
+func TestListOutsideObjectsKeepsOnlyMembersAndPages(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{deploymentsGVR: "DeploymentList"},
+		labelledDeployment("a"), labelledDeployment("b"))
+	var limits []int64
+	dyn.PrependReactor("list", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		limits = append(limits, action.(k8stesting.ListActionImpl).ListOptions.Limit)
+		return false, nil, nil
+	})
+	var cov outsideCoverage
+	objs := listOutsideObjects(context.Background(), dyn, []outsideListGroup{{GVR: deploymentsGVR, Kind: "Deployment", Namespace: "team", Members: map[string]bool{"a": true}}}, "", defaultOutsideLimits, &cov)
+	if len(objs) != 1 || objs[0].GetName() != "a" || cov.Listed != 1 {
+		t.Fatalf("objects = %d, coverage = %+v", len(objs), cov)
+	}
+	if len(limits) != 1 || limits[0] <= 0 || limits[0] > int64(defaultOutsideLimits.Objects) {
+		t.Fatalf("list limits = %v", limits)
+	}
+}
+
+func TestBuildOutsideChangesIsIncompleteAfterAFailedList(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{deploymentsGVR: "DeploymentList"})
+	dyn.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(context.DeadlineExceeded)
+	})
+	var cov outsideCoverage
+	listOutsideObjects(context.Background(), dyn, []outsideListGroup{{GVR: deploymentsGVR, Kind: "Deployment", Namespace: "team"}}, "", defaultOutsideLimits, &cov)
+	if outsideScanComplete(cov) {
+		t.Fatalf("failed scan reported complete: %+v", cov)
+	}
+	if !outsideScanComplete(outsideCoverage{Listed: 3, Denied: []outsideDenied{{Resource: "services", Namespace: "x"}}}) {
+		t.Fatal("a stable RBAC denial made the scan incomplete")
+	}
+}
+
+func TestOutsideChangesMemoForgetsUncacheableEntries(t *testing.T) {
+	m := newOutsideChangesMemo(time.Minute)
+	m.loadOr(m.generation(), "k", func() (outsideChangesResponse, bool) { return outsideChangesResponse{}, false })
+	if len(m.entries) != 0 {
+		t.Fatalf("uncacheable entry kept: %d", len(m.entries))
+	}
+}
+
+func TestOutsideChangesMemoDropsAnswersFromBeforeAContextSwitch(t *testing.T) {
+	m := newOutsideChangesMemo(time.Minute)
+	gen := m.generation()
+	m.clear()
+	m.loadOr(gen, "k", func() (outsideChangesResponse, bool) { return outsideChangesResponse{Count: 1}, true })
+	if got := m.loadOr(m.generation(), "k", func() (outsideChangesResponse, bool) { return outsideChangesResponse{Count: 2}, true }); got.Count != 2 {
+		t.Fatalf("pre-switch answer served after the switch: %+v", got)
+	}
+}
+
+func TestOutsideMemoKeyCarriesAllowedNamespaces(t *testing.T) {
+	user := &auth.User{Username: "a"}
+	if outsideMemoKey(user, []string{"team"}, helmOwner, "1") == outsideMemoKey(user, []string{"team", "other"}, helmOwner, "1") {
+		t.Fatal("namespace scope missing from the memo key")
+	}
+}
+
+func TestOutsideChangesMemoBuildsOncePerKey(t *testing.T) {
+	m := newOutsideChangesMemo(time.Minute)
+	var builds atomic.Int32
+	start := make(chan struct{})
+	done := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		go func() {
+			<-start
+			m.loadOr(m.generation(), "k", func() (outsideChangesResponse, bool) {
+				builds.Add(1)
+				time.Sleep(20 * time.Millisecond)
+				return outsideChangesResponse{}, true
+			})
+			done <- struct{}{}
+		}()
+	}
+	close(start)
+	for i := 0; i < 4; i++ {
+		<-done
+	}
+	if n := builds.Load(); n != 1 {
+		t.Fatalf("builds = %d, want 1", n)
 	}
 }

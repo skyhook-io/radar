@@ -7363,6 +7363,8 @@ const fluxInvalidateKeys = (v: FluxResourceVars) => [
   ["resource", v.kind, v.namespace, v.name],
   ["gitops-tree", v.kind, v.namespace, v.name],
   ["gitops-insights", v.kind, v.namespace, v.name],
+  // Suspend and resume change what the tab says Flux does about each edit.
+  ["gitops-outside-changes", v.kind, v.namespace, v.name],
 ];
 const argoInvalidateKeys = (v: ArgoAppVars) => [
   ["resources", "applications"],

@@ -238,3 +238,53 @@ func TestClassifyOutsideObjectKeepsAtomicValues(t *testing.T) {
 		t.Fatalf("changes = %+v", out.Changes)
 	}
 }
+
+func TestClassifyOutsideObjectSplitsIgnoredPaths(t *testing.T) {
+	spec := map[string]any{"f:replicas": map[string]any{}, "f:paused": map[string]any{}}
+	labels := map[string]any{}
+	for _, k := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m"} {
+		labels["f:"+k] = map[string]any{}
+	}
+	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{fieldsEntry(t, "kubectl-edit", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": spec, "f:metadata": map[string]any{"f:labels": labels}})})
+	owner := fluxHelmOwner(map[string]any{"mode": "enabled", "ignore": []any{map[string]any{"paths": []any{"/spec/replicas"}}}})
+	out, _, _ := classifyOutsideObject(obj, helmOwner, owner)
+	byOutcome := map[string]outsideChange{}
+	for _, c := range out.Changes {
+		byOutcome[c.Outcome] = c
+	}
+	if len(out.Changes) != 2 || !reflect.DeepEqual(byOutcome["ignored"].Paths, []string{"spec.replicas"}) {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+	reverted := byOutcome["reverted"]
+	if len(reverted.Paths) != 12 || reverted.MorePaths != 2 {
+		t.Fatalf("reverted = %+v", reverted)
+	}
+}
+
+func TestOutsideListGroupsScansHelmReleaseWithUnreadableInventory(t *testing.T) {
+	root := fluxHelmOwner(nil)
+	root.Object["status"] = map[string]any{"inventory": map[string]any{"entries": "broken"}}
+	if _, cov := outsideListGroups(&gitopstree.ResourceTree{}, root, fakeResolve); !cov.LabelScan {
+		t.Fatalf("coverage = %+v", cov)
+	}
+	root.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{}}}
+	if _, cov := outsideListGroups(&gitopstree.ResourceTree{}, root, fakeResolve); cov.LabelScan {
+		t.Fatalf("readable inventory still label-scanned: %+v", cov)
+	}
+}
+
+func TestOutsideListGroupsCarryTreeMembers(t *testing.T) {
+	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{treeNode("apps", "Deployment", "team", "a")}}
+	groups, _ := outsideListGroups(tree, kustomizationRoot(), fakeResolve)
+	if len(groups) != 1 || !groups[0].Members["a"] || groups[0].Members["b"] {
+		t.Fatalf("groups = %+v", groups)
+	}
+	root := fluxHelmOwner(nil)
+	root.Object["spec"].(map[string]any)["targetNamespace"] = "team"
+	groups, _ = outsideListGroups(tree, root, fakeResolve)
+	for _, g := range groups {
+		if g.Members != nil {
+			t.Fatalf("label-scanned group restricted to tree members: %+v", g)
+		}
+	}
+}
