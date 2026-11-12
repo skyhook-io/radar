@@ -1171,9 +1171,9 @@ A cluster asking for a major the catalog does not list reports "incomplete or in
 |-------|-----------------|
 | `cnpgNoDeclarativeBackup` | A CNPG Cluster with a backup destination and no ScheduledBackup targeting it |
 | `cnpgNoBackupDestination` | A CNPG Cluster that declares no backup destination: no barman-cloud plugin with an ObjectStore, no in-tree `barmanObjectStore` with a `destinationPath`, no `volumeSnapshot` (any other enabled CNPG-I plugin counts as a destination) |
-| `cnpgNoWALArchiving` | A CNPG Cluster with a destination but no WAL archiver: no enabled plugin marked `isWALArchiver` and no in-tree `destinationPath` (for example, volume snapshots only) |
+| `cnpgNoWALArchiving` | A CNPG Cluster with a destination but no WAL archiver: no in-tree `destinationPath` and no enabled plugin marked `isWALArchiver` (the barman-cloud plugin counts only with an ObjectStore), for example volume snapshots only. CNPG may still report ContinuousArchiving as working: with no archiver it accepts each WAL file without keeping it |
 | `cnpgSingleInstance` | A CNPG Cluster with `spec.instances` 1 or unset, so there is no standby to fail over to |
-| `cnpgInTreeBackupDeprecated` | A CNPG Cluster that backs up through the in-tree `barmanObjectStore` (deprecated since CNPG 1.26) with no enabled barman-cloud plugin |
+| `cnpgInTreeBackupDeprecated` | A CNPG Cluster that backs up through the in-tree `barmanObjectStore` with a `destinationPath` (deprecated since CNPG 1.26) and no enabled barman-cloud plugin |
 
 All five are posture findings (warning, default severity Medium, not badge-worthy) that state what the Cluster declares to CNPG. A dump job or storage snapshots outside CNPG are invisible to them, so none says a database has no backups. One cause gives one finding: a Cluster with no destination gets `cnpgNoBackupDestination` only, and neither the WAL rule nor the schedule rule evaluates it.
 

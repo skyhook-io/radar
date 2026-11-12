@@ -147,7 +147,7 @@
       "objectStore": "",
       "serverName": "pg"
     },
-    "archivesWAL": true
+    "archivesWAL": false
   },
   {
     "name": "enabled Barman",

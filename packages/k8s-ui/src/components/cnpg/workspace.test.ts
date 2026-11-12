@@ -584,6 +584,16 @@ it('counts an enabled destination-blocked schedule as a Cluster protection probl
   expect(buildCNPGFleet(resp({ clusters: [c], scheduledBackups: [schedule] }, { coverage: { scheduledBackups: { state: 'denied' } } })).attentionCount).toBe(0)
 })
 
+it('does not repeat a blocked schedule as the no-destination posture finding', () => {
+  const c = cluster('payments', 'db', { spec: { instances: 1 }, status: { readyInstances: 1, phase: 'Cluster in healthy state' } })
+  const schedule = { apiVersion: G, kind: 'ScheduledBackup', metadata: { name: 'payments-nightly', namespace: 'db' }, spec: { cluster: { name: 'payments' } } }
+  const audit = [{ checkId: 'cnpgNoBackupDestination', severity: 'warning', kind: 'Cluster', namespace: 'db', name: 'payments', message: 'no destination' }]
+  const blocked = buildCNPGFleet(resp({ clusters: [c], scheduledBackups: [schedule] }, { audit, issues: [serverProblem('CNPGScheduleDestinationMissing', 'Backup schedule payments-nightly cannot run: no backup destination', 'ScheduledBackup', 'payments-nightly')] }))
+  expect(blocked.rows[0].problems.map((p) => p.id)).not.toContain('audit:cnpgNoBackupDestination:db/payments')
+  const unscheduled = buildCNPGFleet(resp({ clusters: [c] }, { audit }))
+  expect(unscheduled.rows[0].problems.map((p) => p.id)).toContain('audit:cnpgNoBackupDestination:db/payments')
+})
+
 it('marks a schedule-method mismatch even when the Cluster has another working destination', () => {
   const c = cluster('payments', 'db', { spec: { instances: 1, plugins: [{ name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true, parameters: { barmanObjectName: 'store' } }] }, status: { readyInstances: 1, conditions: [{ type: 'ContinuousArchiving', status: 'True' }] } })
   const schedule = { metadata: { name: 'payments-nightly', namespace: 'db' }, spec: { cluster: { name: 'payments' }, method: 'barmanObjectStore' } }

@@ -6,7 +6,7 @@
 # four different badges.
 ---
 # Baseline. Everything healthy, no backup configuration at all — which also
-# makes it the cluster the `cnpgNoDeclarativeBackup` audit check reports.
+# makes it a cluster the `cnpgNoBackupDestination` audit check reports.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:

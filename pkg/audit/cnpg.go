@@ -62,7 +62,8 @@ func checkCNPGDeclarativeBackup(tr *evalTracker, input *CheckInput) []Finding {
 		}
 		// A schedule can't run without a destination; that Cluster is the
 		// destination rule's finding, one cause, one finding.
-		if !cnpg.ParseBackupDeclaration(c).HasDestination() {
+		d := cnpg.ParseBackupDeclaration(c)
+		if !d.HasDestination() {
 			continue
 		}
 		ns, name := c.GetNamespace(), c.GetName()
@@ -78,19 +79,19 @@ func checkCNPGDeclarativeBackup(tr *evalTracker, input *CheckInput) []Finding {
 			CheckID:   checkCNPGNoDeclarativeBackup,
 			Category:  CategoryReliability,
 			Severity:  SeverityWarning,
-			Message:   cnpgNoScheduleMessage(c),
+			Message:   cnpgNoScheduleMessage(d),
 		})
 	}
 	return findings
 }
 
-func cnpgNoScheduleMessage(c *unstructured.Unstructured) string {
+func cnpgNoScheduleMessage(d cnpg.BackupDeclaration) string {
 	const base = "No ScheduledBackup targets this PostgreSQL cluster, so no backup schedule is declared in the cluster. " +
 		"On-demand Backups or an external scheduler may still cover it — this reports what is declared, not whether backups exist."
 	switch {
-	case cnpgHasBarmanPlugin(c):
+	case hasBarmanPlugin(d):
 		return base + " Backup for this cluster runs through the barman-cloud plugin; a ScheduledBackup with spec.method: plugin is what schedules it."
-	case cnpgHasInTreeBackup(c):
+	case d.InTreeConfigured:
 		return base + " A backup destination is configured (spec.backup.barmanObjectStore), but nothing triggers it on a schedule."
 	default:
 		return base
@@ -141,7 +142,7 @@ func checkCNPGClusterPosture(tr *evalTracker, input *CheckInput) []Finding {
 		}
 
 		tr.record(checkCNPGInTreeBackupDeprecated, ns)
-		if _, plugin := d.BarmanPlugin(); d.InTreeConfigured && !plugin {
+		if _, plugin := d.BarmanPlugin(); d.InTreeDestination != "" && !plugin {
 			emit(checkCNPGInTreeBackupDeprecated, "This PostgreSQL cluster backs up through CNPG's in-tree spec.backup.barmanObjectStore, which CNPG deprecated in 1.26 in favour of the barman-cloud plugin. "+
 				"Its backups keep running for now; this reports the configuration, not a failure.")
 		}
@@ -163,11 +164,7 @@ func cnpgDesiredInstances(c *unstructured.Unstructured) int64 {
 	return 1
 }
 
-func cnpgHasBarmanPlugin(c *unstructured.Unstructured) bool {
-	_, present := cnpg.ParseBackupDeclaration(c).BarmanPlugin()
+func hasBarmanPlugin(d cnpg.BackupDeclaration) bool {
+	_, present := d.BarmanPlugin()
 	return present
-}
-
-func cnpgHasInTreeBackup(c *unstructured.Unstructured) bool {
-	return cnpg.ParseBackupDeclaration(c).InTreeConfigured
 }

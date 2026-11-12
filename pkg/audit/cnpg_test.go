@@ -279,6 +279,8 @@ func TestCNPGClusterPosture_Matrix(t *testing.T) {
 		{"in-tree beside the plugin", map[string]any{"instances": int64(2), "backup": inTree, "plugins": []any{barmanPlugin("store", true)}}, nil},
 		{"plugin that does not archive WAL", map[string]any{"instances": int64(2), "plugins": []any{barmanPlugin("store", false)}}, []string{checkCNPGNoWALArchiving}},
 		{"one instance", map[string]any{"instances": int64(1), "plugins": []any{barmanPlugin("store", true)}}, []string{checkCNPGSingleInstance}},
+		{"empty in-tree block", map[string]any{"instances": int64(2), "backup": map[string]any{"barmanObjectStore": map[string]any{}}}, []string{checkCNPGNoBackupDestination}},
+		{"snapshots beside an archiver plugin without a store", map[string]any{"instances": int64(2), "backup": map[string]any{"volumeSnapshot": map[string]any{}}, "plugins": []any{barmanPlugin("", true)}}, []string{checkCNPGNoWALArchiving}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -326,10 +328,16 @@ func TestCNPGClusterPosture_MessagesStateWhatIsDeclared(t *testing.T) {
 }
 
 func TestCNPGClusterPosture_RegistryAndCounts(t *testing.T) {
-	for _, id := range []string{checkCNPGNoBackupDestination, checkCNPGNoWALArchiving, checkCNPGSingleInstance, checkCNPGInTreeBackupDeprecated} {
+	for _, id := range []string{checkCNPGNoBackupDestination, checkCNPGNoWALArchiving, checkCNPGSingleInstance, checkCNPGInTreeBackupDeprecated, checkCNPGNoDeclarativeBackup} {
 		meta, ok := CheckRegistry[id]
 		if !ok {
 			t.Fatalf("%s has no CheckRegistry entry", id)
+		}
+		// The titles say what the Cluster declares, like the messages.
+		for _, bad := range []string{"has backups", "no backups", "unprotected", "not protected"} {
+			if strings.Contains(meta.Title, bad) {
+				t.Errorf("%s title overclaims (%q): %q", id, bad, meta.Title)
+			}
 		}
 		if meta.Category != CategoryReliability || meta.DefaultSeverity != sevMedium || meta.BadgeWorthy {
 			t.Errorf("%s registry = %+v", id, meta)
@@ -352,5 +360,8 @@ func TestCNPGClusterPosture_RegistryAndCounts(t *testing.T) {
 		if f.Name == "bare" && f.CheckID == checkCNPGSingleInstance {
 			t.Fatalf("the ignore-checks annotation should withdraw %s", f.CheckID)
 		}
+	}
+	if got := results.CheckCounts[checkCNPGSingleInstance]; got.Evaluated != 1 || got.Passed != 1 {
+		t.Errorf("an ignored Cluster should leave the tally too: %+v, want Evaluated 1 / Passed 1", got)
 	}
 }

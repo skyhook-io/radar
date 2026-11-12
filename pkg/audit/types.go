@@ -94,8 +94,8 @@ type CheckInput struct {
 	AllServices []*corev1.Service
 
 	// CloudNativePG CRDs arrive unstructured (no shared typed schema). Clusters
-	// are the subjects of the declarative-backup check; ScheduledBackups are the
-	// targets it looks for. Both nil when CNPG isn't installed or RBAC denies it.
+	// are the subjects of the CNPG checks; ScheduledBackups are the targets the
+	// declarative-backup check looks for. Both nil when CNPG isn't installed or RBAC denies it.
 	CNPGClusters         []*unstructured.Unstructured
 	CNPGScheduledBackups []*unstructured.Unstructured
 	// CNPGScheduledBackupsAuthoritative is true only when a synced cluster-wide
