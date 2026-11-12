@@ -633,7 +633,9 @@ function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const declaration = cnpgBackupDeclaration(cluster)
   const plugin = cnpgBarmanPlugin(declaration)
   const archivers = declaration.plugins.filter((p) => p.enabled && p.isWALArchiver)
-  // Any archiver counts here, even one with no store: CNPG reports its failures.
+  // Gates only the Failing state: a declared archiver CNPG reports as failing
+  // keeps the operator's message even with no store. Otherwise a store-less
+  // archiver reads "no destination" below, the same as cnpgArchivesWAL.
   const archiveConfigured = archivers.length > 0 || !!declaration.inTreeDestination
   if (c?.status === 'False' && archiveConfigured) {
     return { state: 'failing', text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
