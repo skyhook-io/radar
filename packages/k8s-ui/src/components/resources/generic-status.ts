@@ -2,6 +2,7 @@ import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus } from './resource-utils-strimzi'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
+import { K3S_HELM_GROUP, getK3sHelmChartStatus } from './resource-utils-k3s'
 import { isApiGroup } from './resource-utils-cnpg'
 import type { HealthLevel } from './resource-utils'
 import { getGatewayPolicyStatus } from './gateway-policy-status'
@@ -109,6 +110,13 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
       return { text: native.text, tone: native.level }
     }
     if (resource.kind === 'MetricTemplate') return { text: 'Configured', tone: 'neutral' }
+  }
+  if (isApiGroup(resource?.apiVersion, K3S_HELM_GROUP)) {
+    if (resource.kind === 'HelmChart') {
+      const native = getK3sHelmChartStatus(resource)
+      return { text: native.text, tone: native.level }
+    }
+    if (resource.kind === 'HelmChartConfig') return { text: 'Configured', tone: 'neutral' }
   }
   const status = resource?.status
   if (!status || typeof status !== 'object') return null

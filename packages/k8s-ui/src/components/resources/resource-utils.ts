@@ -2,6 +2,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getK3sHelmChartColumnValue } from './resource-utils-k3s'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -2521,6 +2522,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const k3sValue = getK3sHelmChartColumnValue(resource, column)
+  if (k3sValue !== undefined) return k3sValue
   const crdValue = getCRDColumnValue(resource, column)
   if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()

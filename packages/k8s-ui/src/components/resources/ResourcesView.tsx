@@ -3,6 +3,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { K3S_HELM_GROUP, getK3sHelmChartColumnValue } from './resource-utils-k3s'
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
 import React, { useState, useMemo, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
@@ -635,6 +636,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'target', label: 'Canary Target', width: 'min-w-40' },
     { key: 'canaryWeight', label: 'Reported Weight', width: 'w-36 shrink-0', tooltip: 'Last reported canary routing weight, not measured traffic. Blue/green and A/B strategies are not weighted.' },
     { key: 'suspended', label: 'Suspend Requested', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  helmcharts: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'chart', label: 'Chart', width: 'min-w-48' },
+    { key: 'version', label: 'Version', width: 'w-28 shrink-0' },
+    { key: 'targetNamespace', label: 'Target Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-32 shrink-0', tooltip: 'What helm-controller reports about its install Job. Whether the release is healthy is in the Helm view.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   metrictemplates: [
@@ -2964,6 +2974,7 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
   metrictemplates: ['flagger.app'],
+  helmcharts: ['helm.cattle.io'],
   challenges: ['acme.cert-manager.io'],
   orders: ['acme.cert-manager.io'],
   compositeresourcedefinitions: ['apiextensions.crossplane.io'],
@@ -5569,6 +5580,8 @@ export function ResourcesView({
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const k3sValue = getK3sHelmChartColumnValue(resource, column)
+    if (k3sValue !== undefined) return k3sValue
 
     switch (column) {
       case 'name':
@@ -7794,6 +7807,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getFlaggerColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, K3S_HELM_GROUP) && kindLower === 'helmcharts') {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{getK3sHelmChartColumnValue(resource, column) || '-'}</span>
   }
   switch (kindLower) {
     case 'pods':
