@@ -47,12 +47,14 @@ encrypted PKCS#8 files, RSA and P-256 keys are not accepted by this version.
 Choose the intended cluster and a namespace dedicated to Radar. Create the
 namespace if it does not exist, then create a separate Secret from the private
 file. When migrating from shared-secret enrollment, keep the old Secret until
-the new agents and their access are verified.
+the new agents and their access are verified. Keeping that Secret preserves the
+old enrollment credential for rollback; it does not preserve trust when
+switching back.
 
 ```sh
 kubectl -n radar create secret generic radar-hub-enrollment-private \
   --from-file=private-key=radar-enrollment.pem \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --dry-run=client -o yaml | kubectl apply --server-side --field-manager=radar-enrollment -f -
 ```
 
 Run these commands only against the cluster you intend to connect. The private
@@ -104,11 +106,16 @@ ordinary keys created in the app require the actual organization ID.
 ## Rotation and revocation
 
 Register a new public key using **Replace existing key** and confirm the
-predecessor. Hub preserves each existing predecessor cluster's trust when it
-rejoins; new clusters still follow the new key's policy and limits. Update the
-private-key Secrets, restart the affected Radars deliberately, and verify their
+predecessor. Rotate one predecessor at a time: Hub preserves exact trust only
+when a cluster moves from the named old key to its replacement. New clusters
+still follow the new key's policy and limits. Update the private-key Secrets,
+restart the affected Radars deliberately, and verify their
 cluster IDs, history and access before revoking the old enrollment key. The
 agent rereads its private file each time it enrolls.
+
+Switching back to an old key, or skipping to a different replacement, can apply
+that key's trust default again. Before users rely on a rolled-back cluster, an
+owner must check its trust setting and restore it if needed.
 
 For an existing self-hosted install secret, migrate through an app-created
 replacement public key while leaving the install secret configured. Changing
