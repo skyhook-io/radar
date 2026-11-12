@@ -1169,9 +1169,15 @@ A cluster asking for a major the catalog does not list reports "incomplete or in
 
 | Check | What it catches |
 |-------|-----------------|
-| `cnpgNoDeclarativeBackup` | A CNPG Cluster with no ScheduledBackup targeting it |
+| `cnpgNoDeclarativeBackup` | A CNPG Cluster with a backup destination and no ScheduledBackup targeting it |
+| `cnpgNoBackupDestination` | A CNPG Cluster that declares no backup destination: no barman-cloud plugin with an ObjectStore, no in-tree `barmanObjectStore` with a `destinationPath`, no `volumeSnapshot` (any other enabled CNPG-I plugin counts as a destination) |
+| `cnpgNoWALArchiving` | A CNPG Cluster with a destination but no WAL archiver: no enabled plugin marked `isWALArchiver` and no in-tree `destinationPath` (for example, volume snapshots only) |
+| `cnpgSingleInstance` | A CNPG Cluster with `spec.instances` 1 or unset, so there is no standby to fail over to |
+| `cnpgInTreeBackupDeprecated` | A CNPG Cluster that backs up through the in-tree `barmanObjectStore` (deprecated since CNPG 1.26) with no enabled barman-cloud plugin |
 
-Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups, volume snapshots and external schedulers all exist), so the finding asserts only that no schedule is *declared*, at posture severity. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. The check does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable.
+All five are posture findings (warning, default severity Medium, not badge-worthy) that state what the Cluster declares to CNPG. A dump job or storage snapshots outside CNPG are invisible to them, so none says a database has no backups. One cause gives one finding: a Cluster with no destination gets `cnpgNoBackupDestination` only, and neither the WAL rule nor the schedule rule evaluates it.
+
+The schedule rule is deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups and external schedulers exist), so the finding asserts only that no schedule is *declared*. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. It does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable. The other four read only the Cluster object and need no other inventory. All five obey `radarhq.io/ignore-checks` on the Cluster.
 
 ### Supported CRDs
 
