@@ -1311,6 +1311,7 @@ export function WorkloadView({
           showGitOpsChip && (
             <ManagedByChip key="gitops" manager={manager} owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} listing={listing} onOpen={onOpenGitOpsResource} variant="block" />
           ),
+          showGitOpsChip && gitOpsEditChip && <span key="gitops-edit" className="inline-flex">{gitOpsEditChip}</span>,
           helmOwner && (
             <HelmManagedByChip key="helm" manager={manager} owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
           ),

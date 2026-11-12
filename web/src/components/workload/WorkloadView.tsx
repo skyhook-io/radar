@@ -1420,7 +1420,7 @@ export function WorkloadView({
         gitOpsOwnerPending={gitOpsOwnerPending}
         gitOpsOwnerSource={gitOpsOwnerSource}
         gitOpsOwnerStatus={gitOpsOwnerStatus}
-        gitOpsEditChip={fluxManaged && fieldWriters.data ? <OutsideEditChip changes={fieldWriters.data.changes} /> : undefined}
+        gitOpsEditChip={fluxManaged && fieldWriters.data?.changes.length ? <OutsideEditChip changes={fieldWriters.data.changes} /> : undefined}
         helmOwner={helmOwner}
         helmOwnerSource={helmOwnerSource}
         onOpenHelmRelease={handleOpenHelmRelease}
