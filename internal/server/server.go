@@ -180,8 +180,6 @@ type Server struct {
 	// gitopsIssuesMemo shares the issues-engine composition between the
 	// GitOps tree and insights requests of one page load (per user).
 	gitopsIssuesMemo *gitopsIssuesMemo
-	// outsideChangesMemo holds the per-user answer of /gitops/outside-changes.
-	outsideChangesMemo *outsideChangesMemo
 
 	capacityIssueMemo *capacityIssueMemo
 
@@ -290,7 +288,6 @@ func New(cfg Config) *Server {
 		cloudConnectCfg:         cfg.CloudConnect,
 		topoMemo:                topology.NewMemoizer(5 * time.Second),
 		gitopsIssuesMemo:        newGitopsIssuesMemo(5 * time.Second),
-		outsideChangesMemo:      newOutsideChangesMemo(30 * time.Second),
 		rbacMemo:                rbac.NewMemoizer(5 * time.Second),
 		capacityIssueMemo:       newCapacityIssueMemo(5 * time.Second),
 		yamlSchemaCache:         make(map[string][]byte),

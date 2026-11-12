@@ -75,15 +75,17 @@ var harmless = []struct {
 
 // SplitHarmless drops paths that record an action rather than a change of
 // desired state (a rollout restart, Lens's edit marker, a Flux reconcile
-// request). label names the first kind dropped, "" when nothing was.
-func SplitHarmless(paths []string) (kept []string, label string) {
+// request) and names each kind of action dropped, sorted.
+func SplitHarmless(paths []string) (kept []string, labels []string) {
+	seen := map[string]bool{}
 	for _, p := range paths {
 		dropped := false
 		for _, h := range harmless {
 			if h.match(p) {
 				dropped = true
-				if label == "" {
-					label = h.label
+				if !seen[h.label] {
+					seen[h.label] = true
+					labels = append(labels, h.label)
 				}
 				break
 			}
@@ -92,7 +94,8 @@ func SplitHarmless(paths []string) (kept []string, label string) {
 			kept = append(kept, p)
 		}
 	}
-	return kept, label
+	sort.Strings(labels)
+	return kept, labels
 }
 
 var plainKey = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -115,14 +118,19 @@ func LeafPaths(raw []byte) ([]string, error) {
 			switch {
 			case strings.HasPrefix(member, "f:"):
 				name := strings.TrimPrefix(member, "f:")
-				if plainKey.MatchString(name) {
-					if path == "" {
-						next = name
-					} else {
-						next = path + "." + name
-					}
-				} else {
-					next = fmt.Sprintf("%s[%q]", path, name)
+				switch {
+				case plainKey.MatchString(name) && path == "":
+					next = name
+				case plainKey.MatchString(name):
+					next = path + "." + name
+				// The path parser reads a quoted key up to the matching quote
+				// and has no escapes, so pick the quote the key doesn't use.
+				case !strings.Contains(name, `"`):
+					next = path + `["` + name + `"]`
+				case !strings.Contains(name, "'"):
+					next = path + `['` + name + `']`
+				default:
+					continue
 				}
 			case strings.HasPrefix(member, "k:"):
 				key, err := listKey(strings.TrimPrefix(member, "k:"))

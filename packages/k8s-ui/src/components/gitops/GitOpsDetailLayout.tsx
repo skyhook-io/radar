@@ -384,7 +384,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                 )}
                 {(outsideChanges?.count ?? 0) > 0 && (
                   <button type="button" onClick={() => onTabChange('outside')} className="shrink-0">
-                    <Badge severity="warning" size="sm">{outsideChanges?.count} changed outside Flux</Badge>
+                    <Badge severity="warning" size="sm">{outsideChanges?.count} {outsideChanges?.count === 1 ? 'object' : 'objects'} changed outside Flux</Badge>
                   </button>
                 )}
                 {isFleetContext && destinationCluster && (
