@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"net/http"
 	"slices"
 	"sort"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/trace"
+	"github.com/skyhook-io/radar/pkg/certs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/traefik"
@@ -348,4 +350,187 @@ func entryPointsOverlap(a, b []string) bool {
 		}
 	}
 	return false
+}
+
+var (
+	traefikRouteGroups      = []string{"traefik.io", "traefik.containo.us"}
+	traefikIngressRouteKind = integration.WorkspaceKind{Key: "ingressroutes", Group: "traefik.io", Kind: "IngressRoute", Resource: "ingressroutes"}
+	traefikMiddlewareKind   = integration.WorkspaceKind{Key: "middlewares", Group: "traefik.io", Kind: "Middleware", Resource: "middlewares"}
+)
+
+const (
+	traefikRouteRowLimit      = 5000
+	traefikMiddlewareRowLimit = 200
+)
+
+// handleTraefikRoutes serves one row per IngressRoute rule (match, hosts,
+// entry points, middlewares, backends with ready pods, TLS and problems),
+// composed from the caches in one request, as the caller sees it:
+//   - IngressRoutes and Middlewares through readWorkspaceKind, so a row exists
+//     only where the caller can list IngressRoutes, with per-kind coverage;
+//   - whether a Service or Middleware exists comes from the live
+//     missing-reference detector, kept only where the caller may see every
+//     read behind it (issueEvidenceAccess) and the target's namespace, else
+//     null ("can't tell"), never "missing";
+//   - a certificate's expiry only where the caller may list Secrets in the
+//     route's namespace; only notAfter leaves the server, never Secret data.
+//
+// ?namespace=&name= returns one IngressRoute's rows, with usedBy for its
+// middlewares counted over every route the caller can see; ?middleware=ns/name
+// the rows that use a Middleware (at most 200). On a shared listener without
+// auth it reads as Radar's identity; a cross-site request is refused by
+// requireSameOrigin.
+func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	routeNs, routeName, middleware := q.Get("namespace"), q.Get("name"), q.Get("middleware")
+	if middleware != "" && (routeNs != "" || routeName != "") {
+		s.writeError(w, http.StatusBadRequest, "namespace/name and middleware can't be combined")
+		return
+	}
+	if (routeNs == "") != (routeName == "") {
+		s.writeError(w, http.StatusBadRequest, "namespace and name go together")
+		return
+	}
+	mwNs, mwName, _ := strings.Cut(middleware, "/")
+	if middleware != "" && (mwNs == "" || mwName == "") {
+		s.writeError(w, http.StatusBadRequest, "middleware must be namespace/name")
+		return
+	}
+	if !s.requireConnected(w) {
+		return
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+		return
+	}
+	resp := traefikRoutesResponse{Coverage: map[string]integration.KindCoverage{}, Routes: []traefikRouteRow{}, Middlewares: []traefikMiddlewareUse{}}
+	discovery := k8s.GetResourceDiscovery()
+	if discovery != nil {
+		for _, g := range traefikRouteGroups {
+			if _, ok := discovery.GetGVRWithGroup("IngressRoute", g); ok {
+				resp.Installed = true
+			}
+		}
+	}
+	if !resp.Installed {
+		s.writeJSON(w, resp)
+		return
+	}
+
+	namespaces := s.parseNamespacesForUser(r)
+	budget := newSyncBudget(r.Context())
+	routeAccess, routes := s.readWorkspaceKind(r, cache, traefikIngressRouteKind, namespaces, traefikRouteGroups, budget)
+	mwAccess, _ := s.readWorkspaceKind(r, cache, traefikMiddlewareKind, namespaces, traefikRouteGroups, budget)
+	svcAccess, _ := s.typedKindScope(r, cache, namespaces, "", "services")
+	resp.Coverage["ingressroutes"] = routeAccess.Coverage()
+	resp.Coverage["middlewares"] = mwAccess.Coverage()
+	resp.Coverage["services"] = svcAccess.Coverage()
+	resp.Coverage["secrets"] = traefikSecretsCoverage(s.secretReadableNamespaces(r, namespaces), namespaces)
+
+	assessor := k8s.NewTraefikRouteAssessor(cache, k8s.GetDynamicResourceCache(), discovery)
+	in := traefikRoutesInput{
+		Routes:    routes,
+		Refs:      assessor.RuleRefs,
+		CanRead:   s.issueEvidenceAccess(r),
+		NSVisible: s.callerNamespaces(r),
+		Service: func(ns, name string) (*corev1.Service, bool) {
+			lister := cache.Services()
+			if lister == nil {
+				return nil, false
+			}
+			svc, err := lister.Services(ns).Get(name)
+			return svc, err == nil
+		},
+		Pods: func(ns string, sel labels.Selector) ([]*corev1.Pod, error) {
+			lister := cache.Pods()
+			if lister == nil {
+				return nil, fmt.Errorf("pods not cached")
+			}
+			return lister.Pods(ns).List(sel)
+		},
+		Cert: func(ns, name string) (string, *time.Time) {
+			if allowed := s.secretReadableNamespaces(r, []string{ns}); len(allowed) == 0 {
+				return "denied", nil
+			}
+			obj, found, ok := cache.ReadableObject("secrets", ns, name)
+			switch {
+			case !ok:
+				return "notLoaded", nil
+			case !found:
+				return "notFound", nil
+			}
+			sec, isSecret := obj.(*corev1.Secret)
+			if !isSecret {
+				return "notTLS", nil
+			}
+			cert, isTLS := certs.FromTLSSecret(sec)
+			if !isTLS || cert.NotAfter == nil {
+				return "notTLS", nil
+			}
+			return "read", cert.NotAfter
+		},
+		Now:   time.Now(),
+		Limit: traefikRouteRowLimit,
+	}
+	rows, uses, truncated := buildTraefikRoutes(in)
+	switch {
+	case routeName != "":
+		used := map[[2]string]bool{}
+		for _, row := range rows {
+			if row.Ref.Namespace == routeNs && row.Ref.Name == routeName {
+				resp.Routes = append(resp.Routes, row)
+				for _, m := range row.Middlewares {
+					used[[2]string{m.Namespace, m.Name}] = true
+				}
+			}
+		}
+		for _, u := range uses {
+			if used[[2]string{u.Namespace, u.Name}] {
+				resp.Middlewares = append(resp.Middlewares, u)
+			}
+		}
+	case middleware != "":
+		for _, row := range rows {
+			for _, m := range row.Middlewares {
+				if m.Namespace == mwNs && m.Name == mwName {
+					if len(resp.Routes) >= traefikMiddlewareRowLimit {
+						truncated = true
+						break
+					}
+					resp.Routes = append(resp.Routes, row)
+					break
+				}
+			}
+		}
+		for _, u := range uses {
+			if u.Namespace == mwNs && u.Name == mwName {
+				resp.Middlewares = append(resp.Middlewares, u)
+			}
+		}
+	default:
+		resp.Routes, resp.Middlewares = rows, uses
+	}
+	if resp.Routes == nil {
+		resp.Routes = []traefikRouteRow{}
+	}
+	if resp.Middlewares == nil {
+		resp.Middlewares = []traefikMiddlewareUse{}
+	}
+	resp.Truncated = truncated
+	s.writeJSON(w, resp)
+}
+
+// traefikSecretsCoverage reads secretReadableNamespaces' answer: nil is every
+// namespace, empty none.
+func traefikSecretsCoverage(readable, requested []string) integration.KindCoverage {
+	switch {
+	case readable == nil:
+		return integration.KindCoverage{State: integration.KindCoverageFull}
+	case len(readable) == 0:
+		return integration.KindCoverage{State: integration.KindCoverageDenied}
+	case requested != nil && len(readable) == len(requested):
+		return integration.KindCoverage{State: integration.KindCoverageFull}
+	}
+	return integration.KindCoverage{State: integration.KindCoveragePartial, AllowedNamespaces: readable}
 }
