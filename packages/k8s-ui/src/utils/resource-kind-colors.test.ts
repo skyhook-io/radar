@@ -26,4 +26,11 @@ describe('resource icon group identity', () => {
     expect(getResourceKindIconColor('Deployment', 'example.io')).toBe('text-gray-400')
     expect(getResourceKindIconColor('Widget', 'example.io')).toBe('text-gray-400')
   })
+
+  it('matches supported scheduler PodGroups without coloring unrelated homonyms', () => {
+    for (const group of ['scheduling.volcano.sh', 'scheduling.run.ai']) {
+      expect(getResourceKindIconColor('PodGroup', group)).toBe(getResourceKindIconColor('PodGroup'))
+    }
+    expect(getResourceKindIconColor('PodGroup', 'example.io')).toBe('text-gray-400')
+  })
 })
