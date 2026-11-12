@@ -112,3 +112,18 @@ func TestHelmReleaseRevisionIsTheInstalledChart(t *testing.T) {
 		t.Fatalf("failed upgrade: revision = %v attempted = %v", node.Data["revision"], node.Data["attemptedRevision"])
 	}
 }
+
+func TestArtifactGeneratorSourceFacts(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"name": "gen", "namespace": "team"},
+		"status": map[string]any{"inventory": []any{map[string]any{"name": "a"}, map[string]any{"name": "b"}},
+			"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "SourceNotReady", "message": "source not ready"}}}}}
+	node := enrichNodeFromObject(Node{Tool: ToolFluxCD, Sync: "Synced"}, obj)
+	if node.Health != "Degraded" || node.Data["readyMessage"] != "source not ready" || node.Data["generatedCount"] != 2 || node.Data["artifact"] != nil || node.Sync != "" {
+		t.Fatalf("generator facts: %+v", node)
+	}
+	obj.SetAPIVersion("example.org/v1")
+	if other := enrichNodeFromObject(Node{Tool: ToolFluxCD, Sync: "Synced"}, obj); other.Data["generatedCount"] != nil {
+		t.Fatalf("foreign group read as a generator: %+v", other)
+	}
+}

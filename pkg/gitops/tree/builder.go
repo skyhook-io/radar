@@ -251,35 +251,49 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			return !member || release != identity(rootRef)
 		})
 	}
-	// A referenced chart's source is local to that observed chart. Follow only
-	// the already-prefetched chart, never every chart in the cluster.
-	var chartSources []relatedResource
-	var chartRefs []ResourceRef
-	for _, related := range fluxRelated {
-		if related.Ref.Group != "source.toolkit.fluxcd.io" || related.Ref.Kind != "HelmChart" {
-			continue
-		}
-		chart := objects[refKey(related.Ref)]
-		if chart == nil {
-			continue
-		}
-		for _, source := range gitops.FluxSourceReferences(chart) {
-			ref := ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}
-			if !b.canEmit(ref) {
-				omittedDependencies = true
+	// Follow the source chain upstream from what the root references: a
+	// HelmChart to its source, an ExternalArtifact to its ArtifactGenerator,
+	// a generator to its sources. Only objects already reached are followed,
+	// so a generator's other artifacts never join a release's tree, and the
+	// walk stops after a few levels whatever the objects say.
+	seenUpstream := map[string]bool{}
+	frontier := fluxRelated
+	for level := 0; level < maxFluxSourceLevels && len(frontier) > 0; level++ {
+		var next []relatedResource
+		var refs []ResourceRef
+		for _, related := range frontier {
+			if !isUpstreamFluxKind(related.Ref) || seenUpstream[refKey(related.Ref)] {
 				continue
 			}
-			chartSources = append(chartSources, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: map[string]any{"relationship": source.Role}})
-			chartRefs = append(chartRefs, ref)
+			seenUpstream[refKey(related.Ref)] = true
+			obj := objects[refKey(related.Ref)]
+			if obj == nil {
+				continue
+			}
+			for _, source := range gitops.FluxSourceReferences(obj) {
+				ref := ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}
+				if !b.canEmit(ref) {
+					omittedDependencies = true
+					continue
+				}
+				data := map[string]any{"relationship": source.Role}
+				if source.Alias != "" {
+					data["alias"] = source.Alias
+				}
+				next = append(next, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: data})
+				refs = append(refs, ref)
+			}
 		}
-	}
-	if len(chartRefs) > 0 {
-		chartObjects, unavailable, _ := b.prefetchObjects(ctx, chartRefs)
-		for key, object := range chartObjects {
+		if len(refs) == 0 {
+			break
+		}
+		fetched, unavailable, _ := b.prefetchObjects(ctx, refs)
+		for key, object := range fetched {
 			objects[key] = object
 		}
 		unknownKinds = append(unknownKinds, unavailable...)
-		fluxRelated = append(fluxRelated, chartSources...)
+		fluxRelated = append(fluxRelated, next...)
+		frontier = next
 	}
 
 	view := ownership.NewView(b.ownership, traversalScope{namespaces: b.allowedNamespaces})
@@ -675,4 +689,19 @@ func materialize(nodes map[string]Node, edges map[string]Edge) ([]Node, []Edge) 
 		return edgeList[i].Target < edgeList[j].Target
 	})
 	return nodeList, edgeList
+}
+
+// maxFluxSourceLevels bounds the walk up a Flux source chain from what the
+// root references (ExternalArtifact → ArtifactGenerator → its sources).
+const maxFluxSourceLevels = 3
+
+// isUpstreamFluxKind: a source that itself names further sources.
+func isUpstreamFluxKind(ref ResourceRef) bool {
+	switch {
+	case ref.Group == "source.toolkit.fluxcd.io":
+		return ref.Kind == "HelmChart" || ref.Kind == "ExternalArtifact"
+	case ref.Group == "source.extensions.fluxcd.io":
+		return ref.Kind == "ArtifactGenerator"
+	}
+	return false
 }

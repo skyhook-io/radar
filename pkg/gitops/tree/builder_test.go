@@ -1071,3 +1071,72 @@ func TestArgoTreeKeepsRecordedNamespace(t *testing.T) {
 	}
 	t.Fatal("ClusterRole missing from tree")
 }
+
+func TestFluxTreeFollowsArtifactChain(t *testing.T) {
+	hr := helmRelease("team", "app")
+	hr.Object["spec"] = map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "app"}}
+	ea := func(name string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
+			"metadata": map[string]any{"name": name, "namespace": "team"},
+			"spec":     map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}},
+			"status":   map[string]any{"artifact": map[string]any{"revision": "latest@sha256:abc"}}}}
+	}
+	inventory := []any{}
+	for i := 0; i < 143; i++ {
+		inventory = append(inventory, map[string]any{"name": fmt.Sprintf("art-%d", i), "namespace": "team"})
+	}
+	gen := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"name": "gen", "namespace": "team"},
+		"spec": map[string]any{"sources": []any{
+			map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"},
+			map[string]any{"alias": "charts", "kind": "OCIRepository", "name": "charts"},
+		}},
+		"status": map[string]any{"inventory": inventory, "conditions": []any{map[string]any{"type": "Ready", "status": "True"}}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"name": "platform", "namespace": "team"}, "spec": map[string]any{"url": "https://user:secret@git.example.com/platform"}}}
+	oci := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "OCIRepository", "metadata": map[string]any{"name": "charts", "namespace": "team"}}}
+	hrr := ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}
+	ear := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "ExternalArtifact", Namespace: "team", Name: "app"}
+	genr := ResourceRef{Group: "source.extensions.fluxcd.io", Kind: "ArtifactGenerator", Namespace: "team", Name: "gen"}
+	repor := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "team", Name: "platform"}
+	ocir := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "OCIRepository", Namespace: "team", Name: "charts"}
+	objects := map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(ear): ea("app"), refKey(genr): gen, refKey(repor): repo, refKey(ocir): oci}
+	for i := 0; i < 142; i++ {
+		sibling := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "ExternalArtifact", Namespace: "team", Name: fmt.Sprintf("art-%d", i)}
+		objects[refKey(sibling)] = ea(sibling.Name)
+	}
+	getter := &fakeDynamic{objects: objects}
+	tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Nodes) != 5 {
+		t.Fatalf("nodes = %d: %+v", len(tree.Nodes), tree.Nodes)
+	}
+	genNode := findNode(t, tree, genr)
+	if genNode.Data["generatedCount"] != 143 {
+		t.Fatalf("generator data = %+v", genNode.Data)
+	}
+	repoNode := findNode(t, tree, repor)
+	if repoNode.Data["alias"] != "repo" || strings.Contains(fmt.Sprint(repoNode.Data["sourceURL"]), "secret") {
+		t.Fatalf("source data = %+v", repoNode.Data)
+	}
+	for _, want := range [][2]ResourceRef{{hrr, ear}, {ear, genr}, {genr, repor}, {genr, ocir}} {
+		found := false
+		for _, edge := range tree.Edges {
+			if edge.Source == nodeID(want[0]) && edge.Target == nodeID(want[1]) && edge.Type == EdgeSource {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("edge %s → %s missing: %+v", want[0].Kind, want[1].Kind, tree.Edges)
+		}
+	}
+	for _, call := range getter.recordedCalls() {
+		if call.Kind == "ExternalArtifact" && call.Name != "app" {
+			t.Fatalf("sibling artifact fetched: %+v", call)
+		}
+		if call.Kind != "HelmRelease" && call.Kind != "ExternalArtifact" && call.Kind != "ArtifactGenerator" && call.Kind != "GitRepository" && call.Kind != "OCIRepository" {
+			t.Fatalf("followed past the generator's sources: %+v", call)
+		}
+	}
+}

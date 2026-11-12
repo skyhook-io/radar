@@ -139,6 +139,14 @@ func fluxSourceWarnings(tree *gitopstree.ResourceTree, issues []Issue) []Issue {
 	for _, node := range tree.Nodes {
 		ref := refFromTree(node.Ref)
 		relationship := stringData(node.Data, "relationship")
+		if ref.Group == "source.extensions.fluxcd.io" && ref.Kind == "ArtifactGenerator" && relationship == "generator" && !referenced[ref] && !node.Remote {
+			if stringData(node.Data, "readyStatus") == "False" {
+				out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "SourceNotReady",
+					Message: fmt.Sprintf("ArtifactGenerator %s/%s isn't ready, so the artifacts it generates may be out of date.", ref.Namespace, ref.Name),
+					Cause:   fluxFailureDetail(node), Refs: []Ref{ref}, Action: "Open the generator and fix the reported failure."})
+			}
+			continue
+		}
 		if ref.Group != "source.toolkit.fluxcd.io" || referenced[ref] || (relationship != "source" && relationship != "chart source" && relationship != "chart reference") || node.Remote {
 			continue
 		}
