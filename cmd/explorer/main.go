@@ -158,6 +158,7 @@ func main() {
 	authUserHeader := flag.String("auth-user-header", "X-Forwarded-User", "Header for username (proxy mode)")
 	authGroupsHeader := flag.String("auth-groups-header", "X-Forwarded-Groups", "Header for groups (proxy mode)")
 	authProxyLogoutURL := flag.String("auth-proxy-logout-url", "", "URL the logout button redirects to in proxy mode, to tear down the upstream proxy session (e.g. oauth2-proxy's /oauth2/sign_out). The proxy must actually invalidate the session at this URL — Radar only clears its own cookie (Basic Auth has no logout). Empty = clear Radar's cookie only.")
+	authProxyLogoutCookies := flag.String("auth-proxy-logout-cookies", "", "Comma-separated names of the auth proxy's session cookies, for example '_oauth2_proxy*' (* matches any characters). In proxy mode, logout deletes every matching cookie the browser sends, so the next request goes back through the proxy's sign-in. Use it when the proxy has no sign-out URL, or together with --auth-proxy-logout-url.")
 	authOIDCIssuer := flag.String("auth-oidc-issuer", "", "OIDC issuer URL")
 	authOIDCInternalIssuer := flag.String("auth-oidc-internal-issuer", "", "Internal OIDC issuer base URL used by Radar for discovery and derived server-side endpoints; tokens are still validated against --auth-oidc-issuer")
 	authOIDCAuthorizationURL := flag.String("auth-oidc-authorization-url", "", "Browser-facing OIDC authorization endpoint URL (overrides discovery)")
@@ -264,6 +265,9 @@ func main() {
 		*authUserHeader = "X-Forwarded-User"
 		*authGroupsHeader = "X-Forwarded-Groups"
 		log.Printf("[cloud] RADAR_CLOUD_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
+	}
+	if err := pkgauth.ValidateProxyLogoutCookies(parseCSV(*authProxyLogoutCookies)); err != nil {
+		log.Fatalf("--auth-proxy-logout-cookies: %v", err)
 	}
 	credentialMode, err := pkgauth.ParseCredentialMode(*k8sCredentials)
 	if err != nil {
@@ -486,6 +490,7 @@ func main() {
 			UserHeader:                *authUserHeader,
 			GroupsHeader:              *authGroupsHeader,
 			ProxyLogoutURL:            *authProxyLogoutURL,
+			ProxyLogoutCookies:        parseCSV(*authProxyLogoutCookies),
 			OIDCIssuer:                *authOIDCIssuer,
 			OIDCInternalIssuer:        *authOIDCInternalIssuer,
 			OIDCAuthorizationURL:      *authOIDCAuthorizationURL,

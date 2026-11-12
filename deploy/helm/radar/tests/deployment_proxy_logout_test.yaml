@@ -1,0 +1,62 @@
+suite: Proxy logout
+templates:
+  - deployment.yaml
+tests:
+  - it: joins logout cookie names into one flag
+    set:
+      auth:
+        mode: proxy
+        proxy:
+          logoutCookies:
+            - _oauth2_proxy*
+            - authelia_session
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-proxy-logout-cookies=_oauth2_proxy*,authelia_session
+
+  - it: omits the flag when no cookies are listed
+    set:
+      auth:
+        mode: proxy
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-proxy-logout-cookies=
+        any: true
+
+  - it: passes the logout URL alongside the cookies
+    set:
+      auth:
+        mode: proxy
+        proxy:
+          logoutURL: https://auth.example.com/oauth2/sign_out
+          logoutCookies:
+            - _oauth2_proxy*
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-proxy-logout-url=https://auth.example.com/oauth2/sign_out
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-proxy-logout-cookies=_oauth2_proxy*
+
+  - it: rejects a name with a comma at install time
+    set:
+      auth:
+        mode: proxy
+        proxy:
+          logoutCookies:
+            - a,b
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects a malformed pattern at install time instead of crash-looping Radar
+    set:
+      auth:
+        mode: proxy
+        proxy:
+          logoutCookies:
+            - _oauth2_proxy[
+    asserts:
+      - failedTemplate: {}

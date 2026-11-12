@@ -9,10 +9,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // DefaultCookieName is the default session cookie name
@@ -278,6 +283,114 @@ func ClearSessionCookie(r *http.Request) []*http.Cookie {
 		}
 	}
 	return cookies
+}
+
+// ValidateProxyLogoutCookies rejects malformed name patterns at startup, so a
+// typo fails loudly instead of silently leaving the proxy's session in place.
+func ValidateProxyLogoutCookies(patterns []string) error {
+	for _, p := range patterns {
+		if _, err := path.Match(p, ""); err != nil {
+			return fmt.Errorf("invalid cookie name pattern %q: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// ClearProxyCookies expires every cookie the browser sent whose name matches
+// one of patterns (path.Match syntax, e.g. "_oauth2_proxy*"). The request
+// carries only names, not the Domain or Path a cookie was set with, and a
+// deletion has to repeat both. So each match is expired host-only and for every
+// parent domain up to the registrable domain, at "/", at every parent of
+// basePath, and at basePath with and without a trailing slash. Every listed
+// combination is one Set-Cookie header, so keep the patterns specific.
+func ClearProxyCookies(r *http.Request, patterns []string, basePath string) []*http.Cookie {
+	if r == nil || len(patterns) == 0 {
+		return nil
+	}
+	https := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	domains := append([]string{""}, cookieParentDomains(r.Host)...)
+	paths := cookieParentPaths(basePath)
+
+	var cookies []*http.Cookie
+	seen := make(map[string]bool)
+	for _, c := range r.Cookies() {
+		if seen[c.Name] || !cookieNameMatches(c.Name, patterns) {
+			continue
+		}
+		seen[c.Name] = true
+		// Browsers ignore a __Secure- or __Host- cookie without Secure, the
+		// deletion included, even when TLS ends before Radar.
+		secure := https || hasSecurePrefix(c.Name)
+		for _, domain := range domains {
+			for _, p := range paths {
+				expired := expireCookie(c.Name, secure)
+				expired.Domain = domain
+				expired.Path = p
+				cookies = append(cookies, expired)
+			}
+		}
+	}
+	return cookies
+}
+
+func hasSecurePrefix(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, "__secure-") || strings.HasPrefix(lower, "__host-")
+}
+
+// cookieParentPaths lists the paths a cookie sent to Radar could have been set
+// on: "/", each parent of basePath, and basePath with and without a trailing
+// slash, e.g. "/", "/platform", "/platform/radar" and "/platform/radar/".
+func cookieParentPaths(basePath string) []string {
+	paths := []string{"/"}
+	prefix := ""
+	for _, segment := range strings.Split(strings.Trim(basePath, "/"), "/") {
+		if segment == "" {
+			continue
+		}
+		prefix += "/" + segment
+		paths = append(paths, prefix)
+	}
+	if prefix != "" {
+		paths = append(paths, prefix+"/")
+	}
+	return paths
+}
+
+func cookieNameMatches(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if ok, _ := path.Match(p, name); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// cookieParentDomains lists the domains a cookie for host could have been
+// scoped to: host itself and each parent, stopping at the registrable domain
+// (example.com, example.co.uk). IP addresses and single-label hosts only take
+// host-only cookies.
+func cookieParentDomains(host string) []string {
+	hostname := (&url.URL{Host: host}).Hostname()
+	if hostname == "" || net.ParseIP(hostname) != nil || !strings.Contains(hostname, ".") {
+		return nil
+	}
+	registrable, err := publicsuffix.EffectiveTLDPlusOne(hostname)
+	if err != nil {
+		return nil
+	}
+	var domains []string
+	for d := hostname; ; {
+		domains = append(domains, d)
+		if d == registrable {
+			return domains
+		}
+		_, parent, ok := strings.Cut(d, ".")
+		if !ok {
+			return domains
+		}
+		d = parent
+	}
 }
 
 // expireCookie returns a cookie that immediately clears the named cookie. It
