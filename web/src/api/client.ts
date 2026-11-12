@@ -2811,9 +2811,6 @@ export function useGitOpsInsights(
   });
 }
 
-// Fields of a Flux root's managed objects last written by a person's tool.
-// The server lists the members live (bounded) and caches per user for 30s,
-// so no polling: the header count and the tab share this one query.
 // Hand edits on one object Radar names a Flux manager for (the resource
 // header's "Edited outside Flux" chip). The caller enables it only then.
 export function useGitOpsFieldWriters(kind: string, namespace: string, name: string, group: string | undefined, enabled: boolean) {
@@ -2829,6 +2826,9 @@ export function useGitOpsFieldWriters(kind: string, namespace: string, name: str
   });
 }
 
+// Fields of a Flux root's managed objects last written by a person's tool.
+// The server lists the members live (bounded) and caches per user for 30s,
+// so no polling: the header count and the tab share this one query.
 export function useGitOpsOutsideChanges(kind: string, namespace: string, name: string, group: string | undefined, enabled: boolean) {
   const { guard, gatedKey, support } = useRadarFeature("gitopsOutsideChanges");
   const params = group ? `?group=${encodeURIComponent(group)}` : "";

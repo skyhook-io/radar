@@ -8,7 +8,9 @@ import { Tooltip } from '../ui/Tooltip'
 export function OutsideEditChip({ changes }: { changes: GitOpsOutsideChange[] }) {
   const edits = changes.filter((c) => !c.harmless && c.paths.length > 0)
   if (edits.length === 0) return null
-  const newest = edits.reduce((a, b) => (Date.parse(b.time ?? '') > Date.parse(a.time ?? '') ? b : a))
+  // An entry without a time sorts last.
+  const at = (c: GitOpsOutsideChange) => Date.parse(c.time ?? '') || -Infinity
+  const newest = edits.reduce((a, b) => (at(b) > at(a) ? b : a))
   const age = newest.time ? `, ${formatRelativeAgeTime(newest.time)}` : ''
   return (
     <Tooltip
@@ -24,8 +26,9 @@ export function OutsideEditChip({ changes }: { changes: GitOpsOutsideChange[] })
         </div>
       }
     >
-      <Badge severity="warning" size="sm">
-        Edited outside Flux · {newest.paths[0]} · {newest.tool}{age}
+      {/* Only the path shortens: the tool and the age are what the chip is for. */}
+      <Badge severity="warning" size="sm" className="inline-flex max-w-full items-baseline whitespace-nowrap">
+        Edited outside Flux ·&nbsp;<span className="min-w-0 max-w-[18rem] truncate">{newest.paths[0]}</span>&nbsp;· {newest.tool}{age}
       </Badge>
     </Tooltip>
   )

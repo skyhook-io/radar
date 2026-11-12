@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,25 +14,61 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic"
 )
 
 type fieldWritersResponse struct {
-	Manager *topology.ManagerAnswer `json:"manager,omitempty"`
-	Changes []outsideChange         `json:"changes"`
+	Changes []outsideChange `json:"changes"`
 }
 
-// fluxLead is the manager answer's lead when it is a Flux Kustomization or
-// HelmRelease, the only roots whose hand edits this reports.
+// fluxLead is the Flux Kustomization or HelmRelease that manages the object
+// itself, on evidence that it still does: a status list that names it, or a
+// claim whose manager exists here and can't contradict it (the same bar the
+// AI context's manager summary uses). A manager inherited from an ancestor
+// (a Pod of a Flux-applied Deployment) doesn't count: Flux never applied the
+// object, so its edits aren't "outside Flux".
 func fluxLead(manager *topology.ManagerAnswer) *topology.ResourceRef {
-	if manager == nil || manager.Lead == nil {
+	if manager == nil || manager.Lead == nil || manager.Via != nil || manager.Lead.Namespace == "" {
 		return nil
 	}
-	switch lead := manager.Lead; {
-	case lead.Group == "kustomize.toolkit.fluxcd.io" && lead.Kind == "Kustomization",
-		lead.Group == "helm.toolkit.fluxcd.io" && lead.Kind == "HelmRelease":
+	lead := manager.Lead
+	if !(lead.Group == "kustomize.toolkit.fluxcd.io" && lead.Kind == "Kustomization") &&
+		!(lead.Group == "helm.toolkit.fluxcd.io" && lead.Kind == "HelmRelease") {
+		return nil
+	}
+	switch manager.State {
+	case "agree", "listed", "shared":
 		return lead
+	case "claimed":
+		for _, claim := range manager.Direct.Claims {
+			if claim.Copied || claim.Weak || claim.Manager != *lead {
+				continue
+			}
+			switch claim.Check {
+			case "recorded", "omitted", "unreadable":
+				return lead
+			}
+		}
 	}
 	return nil
+}
+
+// fieldWritersFor reads the Flux root as the caller for its policy; without
+// it the outcome is unknown, and the changes say so.
+func fieldWritersFor(ctx context.Context, dyn dynamic.Interface, target *unstructured.Unstructured, lead *topology.ResourceRef) []outsideChange {
+	var ownerObj *unstructured.Unstructured
+	if lead != nil {
+		if ownerGVR, ok := gitOpsOwnerGVR(lead); ok {
+			obj, err := dyn.Resource(ownerGVR).Namespace(lead.Namespace).Get(ctx, lead.Name, metav1.GetOptions{})
+			switch {
+			case err == nil:
+				ownerObj = obj
+			case !apierrors.IsForbidden(err) && !apierrors.IsNotFound(err):
+				log.Printf("[gitops] Failed to read %s %s/%s for field writers: %v", lead.Kind, sanitizeForLog(lead.Namespace), sanitizeForLog(lead.Name), err)
+			}
+		}
+	}
+	return fieldWriterChanges(target, lead, ownerObj)
 }
 
 func fieldWriterChanges(target *unstructured.Unstructured, lead *topology.ResourceRef, ownerObj *unstructured.Unstructured) []outsideChange {
@@ -98,18 +135,9 @@ func (s *Server) handleGitOpsFieldWriters(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp := fieldWritersResponse{Changes: []outsideChange{}}
+	var manager *topology.ManagerAnswer
 	if fetched, ok := k8s.OwnershipObservation(target); ok {
-		resp.Manager, _ = k8s.AnswerLiveManager(fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+		manager, _ = k8s.AnswerLiveManager(fetched, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 	}
-	lead := fluxLead(resp.Manager)
-	var ownerObj *unstructured.Unstructured
-	if lead != nil && lead.Namespace != "" {
-		if ownerGVR, ok := gitOpsOwnerGVR(lead); ok {
-			// Without the root the policy is unknown, and the changes say so.
-			ownerObj, _ = dyn.Resource(ownerGVR).Namespace(lead.Namespace).Get(r.Context(), lead.Name, metav1.GetOptions{})
-		}
-	}
-	resp.Changes = fieldWriterChanges(target, lead, ownerObj)
-	s.writeJSON(w, resp)
+	s.writeJSON(w, fieldWritersResponse{Changes: fieldWritersFor(r.Context(), dyn, target, fluxLead(manager))})
 }

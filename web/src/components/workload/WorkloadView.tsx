@@ -614,8 +614,12 @@ export function WorkloadView({
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
-  const managerLeadGroup = relationships?.ownership?.manager?.lead?.group
-  const fluxManaged = managerLeadGroup === 'kustomize.toolkit.fluxcd.io' || managerLeadGroup === 'helm.toolkit.fluxcd.io'
+  const managerAnswer = relationships?.ownership?.manager
+  const managerLeadGroup = managerAnswer?.lead?.group
+  // The server decides whether the evidence is strong enough; this only skips
+  // objects it would never answer for (inherited managers, Secrets).
+  const fluxManaged = (managerLeadGroup === 'kustomize.toolkit.fluxcd.io' || managerLeadGroup === 'helm.toolkit.fluxcd.io')
+    && !managerAnswer?.via && !(apiKind === 'secrets' && !rest.group)
   const fieldWriters = useGitOpsFieldWriters(apiKind, namespace, name, rest.group, fluxManaged)
   useRefreshRevisionsOnNewRollout(
     apiKind.toLowerCase(),
