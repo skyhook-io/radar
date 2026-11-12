@@ -3,6 +3,9 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
+
+const FLUX_OPERATOR_PLURALS = ['fluxinstances', 'fluxreports', 'resourcesets', 'resourcesetinputproviders']
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
 import React, { useState, useMemo, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
@@ -1802,6 +1805,40 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   // ============================================================================
   // FLUXCD GITOPS RESOURCES
   // ============================================================================
+  fluxinstances: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'version', label: 'Version', width: 'w-28', tooltip: 'Flux distribution version the instance tracks' },
+    { key: 'applied', label: 'Applied', width: 'w-48', tooltip: 'Last applied distribution revision' },
+    { key: 'components', label: 'Components', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  fluxreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'version', label: 'Flux', width: 'w-28', tooltip: 'Installed Flux version' },
+    { key: 'operator', label: 'Operator', width: 'w-28', tooltip: 'Flux Operator version' },
+    { key: 'failing', label: 'Failing', width: 'w-24', tooltip: 'Flux objects failing to reconcile, all kinds' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  resourcesets: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'inputs', label: 'Inputs', width: 'w-24', tooltip: 'Inline inputs plus input providers' },
+    { key: 'resources', label: 'Resources', width: 'w-24', tooltip: 'Objects in its inventory' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  resourcesetinputproviders: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'type', label: 'Type', width: 'w-48' },
+    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
   gitrepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
@@ -3105,6 +3142,10 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   knativeroutes: ['serving.knative.dev'],
   knativeservices: ['serving.knative.dev'],
   gitrepositories: ['source.toolkit.fluxcd.io'],
+  fluxinstances: ['fluxcd.controlplane.io'],
+  fluxreports: ['fluxcd.controlplane.io'],
+  resourcesets: ['fluxcd.controlplane.io'],
+  resourcesetinputproviders: ['fluxcd.controlplane.io'],
   helmrepositories: ['source.toolkit.fluxcd.io'],
   ocirepositories: ['source.toolkit.fluxcd.io'],
   apiserversources: ['sources.knative.dev'],
@@ -7790,6 +7831,14 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{getOpenTelemetryColumnValue(resource, column) || '-'}</span>
+  }
+  if (isApiGroup(resource.apiVersion, FLUX_OPERATOR_GROUP)) {
+    if (column === 'status' && FLUX_OPERATOR_PLURALS.includes(kindLower)) {
+      const status = getFluxOperatorStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
+    }
+    const value = getFluxOperatorColumnValue(kindLower, resource, column)
+    if (value !== undefined) return <span className="text-sm text-theme-text-secondary break-all">{value || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, 'flagger.app') && ['canaries', 'metrictemplates'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
