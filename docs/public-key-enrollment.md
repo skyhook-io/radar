@@ -45,10 +45,12 @@ encrypted PKCS#8 files, RSA and P-256 keys are not accepted by this version.
 ## Create the private-key Secret
 
 Choose the intended cluster and a namespace dedicated to Radar. Create the
-namespace if it does not exist, then create the Secret from the private file:
+namespace if it does not exist, then create a separate Secret from the private
+file. When migrating from shared-secret enrollment, keep the old Secret until
+the new agents and their access are verified.
 
 ```sh
-kubectl -n radar create secret generic radar-hub-enrollment \
+kubectl -n radar create secret generic radar-hub-enrollment-private \
   --from-file=private-key=radar-enrollment.pem \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
@@ -68,7 +70,7 @@ cloud:
   enrollment:
     organization: org_from_hub_setup
     publicKey:
-      existingSecret: radar-hub-enrollment
+      existingSecret: radar-hub-enrollment-private
       existingSecretKey: private-key
 ```
 
