@@ -2792,6 +2792,8 @@ type mcpHelmRelease struct {
 	HealthSummary            string              `json:"healthSummary,omitempty"`
 	LastOperation            *helm.HelmOperation `json:"lastOperation,omitempty"`
 	ManagedByFluxHelmRelease string              `json:"managedByFluxHelmRelease,omitempty"`
+	ManagedByK3sHelmChart    string              `json:"managedByK3sHelmChart,omitempty"`
+	K3sHelmChartConfig       string              `json:"k3sHelmChartConfig,omitempty"`
 }
 
 func mcpHelmDashboardPriority(r helm.HelmRelease) int {
@@ -3161,6 +3163,8 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 						HealthSummary:            r.HealthSummary,
 						LastOperation:            r.LastOperation,
 						ManagedByFluxHelmRelease: r.ManagedByFluxHelmRelease,
+						ManagedByK3sHelmChart:    r.ManagedByK3sHelmChart,
+						K3sHelmChartConfig:       r.K3sHelmChartConfig,
 					})
 				}
 			}

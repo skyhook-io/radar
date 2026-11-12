@@ -344,3 +344,14 @@ func TestBuildOperationInsightUninstallHasNoSuggestedCompare(t *testing.T) {
 		t.Fatalf("insight = %#v, want nil without actionable resources or comparison", got)
 	}
 }
+
+func TestBuildOperationInsightSuppressesK3sOwnedReleases(t *testing.T) {
+	detail := &HelmReleaseDetail{
+		ManagedByK3sHelmChart: "kube-system/traefik",
+		LastOperation:         &HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 2},
+		History:               []HelmRevision{{Revision: 2, Status: "failed"}, {Revision: 1, Status: "deployed"}},
+	}
+	if got := buildOperationInsight(detail); got != nil {
+		t.Fatalf("insight = %+v, want none: the HelmChart reinstalls this release", got)
+	}
+}

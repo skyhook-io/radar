@@ -243,6 +243,12 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if detail.ManagedByFluxHelmRelease != "" {
 			return nil, nil, fmt.Errorf("release is managed by Flux HelmRelease %s; change its source configuration instead", detail.ManagedByFluxHelmRelease)
 		}
+		if chart := detail.ManagedByK3sHelmChart; chart != "" {
+			if detail.K3sHelmChartConfig != "" {
+				return nil, nil, fmt.Errorf("release is managed by k3s HelmChart %s; change its values in HelmChartConfig %s instead", chart, detail.K3sHelmChartConfig)
+			}
+			return nil, nil, fmt.Errorf("release is managed by k3s HelmChart %s; create a HelmChartConfig %s to change its values instead", chart, chart)
+		}
 		if in.Action == "uninstall" {
 			bindingBytes, err := json.Marshal(struct {
 				Namespace, Name string

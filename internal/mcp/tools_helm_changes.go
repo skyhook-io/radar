@@ -33,7 +33,7 @@ func helmRecentChanges(releases []helm.HelmRelease, name string, since time.Dura
 	cutoff := now.Add(-since)
 	var out []issuesapi.RecentChange
 	for _, rel := range releases {
-		if rel.ManagedByFluxHelmRelease != "" {
+		if rel.ManagedByFluxHelmRelease != "" || rel.ManagedByK3sHelmChart != "" {
 			continue
 		}
 		if name != "" && rel.Name != name {

@@ -140,3 +140,16 @@ func TestNativeHelmReleaseUninstallStuckIssue(t *testing.T) {
 		t.Fatalf("Flux-owned release issues = %#v", got)
 	}
 }
+
+// k3s reports no failures of its own, so a failed release it installs still
+// raises the native Helm issue (unlike a Flux-owned one).
+func TestNativeHelmReleaseIssuesKeepsK3sOwnedReleases(t *testing.T) {
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	got := NativeHelmReleaseIssues([]helm.HelmRelease{{
+		Name: "traefik", Namespace: "kube-system", ManagedByK3sHelmChart: "kube-system/traefik",
+		LastOperation: &helm.HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 4, Updated: now.Add(-time.Minute)},
+	}}, now)
+	if len(got) != 1 || got[0].Name != "traefik" {
+		t.Fatalf("issues = %#v, want one for traefik", got)
+	}
+}
