@@ -57,4 +57,16 @@ describe('GitOpsOutsideChangesView', () => {
     expect(html).toContain('Flux reported drift')
     expect(html).toContain('Deployment/prod/api drifted')
   })
+
+  it('says when an object opts out of reconciliation', () => {
+    const html = render({ count: 1, objects: [{ ref: { group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'api' }, changes: [
+      { manager: 'kubectl-edit', tool: 'kubectl edit', operation: 'Update', paths: ['spec.replicas'], morePaths: 0, outcome: 'opted-out', harmless: false },
+    ] }] })
+    expect(html).toContain('This object opts out of Flux reconciliation')
+  })
+
+  it('says when the root applies elsewhere or records no inventory', () => {
+    expect(render({ coverage: { listed: 0, remote: true } })).toContain('applies to another cluster')
+    expect(render({ coverage: { listed: 0, noInventory: true } })).toContain('records no inventory')
+  })
 })

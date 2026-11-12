@@ -750,6 +750,9 @@ type fieldPathSegment struct {
 	key   string
 	value string
 	index int
+	// also holds further key=value pairs of a multi-key selector
+	// ([containerPort=80,protocol=TCP]); an element matches when all do.
+	also [][2]string
 }
 
 func unquoteFieldPath(s string) string {
@@ -799,8 +802,7 @@ func parseWriteFieldPath(path string) ([]fieldPathSegment, error) {
 			case body == "*":
 				segs = append(segs, fieldPathSegment{typ: segAny})
 			case body != "" && body[0] != '"' && body[0] != '\'' && strings.Contains(body, "="):
-				eq := strings.Index(body, "=")
-				segs = append(segs, fieldPathSegment{typ: segMatch, key: strings.TrimSpace(body[:eq]), value: unquoteFieldPath(body[eq+1:])})
+				segs = append(segs, parseMatchSegment(body))
 			default:
 				if n, err := strconv.Atoi(body); err == nil && n >= 0 {
 					segs = append(segs, fieldPathSegment{typ: segIndex, index: n})
@@ -824,13 +826,43 @@ func parseWriteFieldPath(path string) ([]fieldPathSegment, error) {
 	return segs, nil
 }
 
+// parseMatchSegment reads key=value, or several comma-separated pairs when
+// every part is one (a value may itself contain a comma otherwise).
+func parseMatchSegment(body string) fieldPathSegment {
+	pair := func(part string) (string, string) {
+		eq := strings.Index(part, "=")
+		return strings.TrimSpace(part[:eq]), unquoteFieldPath(part[eq+1:])
+	}
+	parts := strings.Split(body, ",")
+	for _, part := range parts {
+		if !strings.Contains(part, "=") {
+			parts = []string{body}
+			break
+		}
+	}
+	key, value := pair(parts[0])
+	seg := fieldPathSegment{typ: segMatch, key: key, value: value}
+	for _, part := range parts[1:] {
+		k, v := pair(part)
+		seg.also = append(seg.also, [2]string{k, v})
+	}
+	return seg
+}
+
 func matchesSelector(item any, seg fieldPathSegment) bool {
 	m, ok := item.(map[string]any)
 	if !ok {
 		return false
 	}
-	v, ok := m[seg.key]
-	return ok && fmt.Sprint(v) == seg.value
+	if v, ok := m[seg.key]; !ok || fmt.Sprint(v) != seg.value {
+		return false
+	}
+	for _, kv := range seg.also {
+		if v, ok := m[kv[0]]; !ok || fmt.Sprint(v) != kv[1] {
+			return false
+		}
+	}
+	return true
 }
 
 func hasWildcard(segs []fieldPathSegment) bool {

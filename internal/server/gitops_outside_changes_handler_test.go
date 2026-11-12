@@ -6,14 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/auth"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -70,33 +69,6 @@ func TestListOutsideObjectsBoundsAndDenied(t *testing.T) {
 	}
 }
 
-func TestOutsideChangesMemoIsPerUser(t *testing.T) {
-	m := newOutsideChangesMemo(time.Minute)
-	root := "\x00helm.toolkit.fluxcd.io/HelmRelease/prod/api\x00rv1"
-	a := gitopsIssuesMemoKey(&auth.User{Username: "a"}, nil) + root
-	b := gitopsIssuesMemoKey(&auth.User{Username: "b"}, nil) + root
-	if a == b {
-		t.Fatal("two users share a memo key")
-	}
-	builds := 0
-	build := func(count int) func() (outsideChangesResponse, bool) {
-		return func() (outsideChangesResponse, bool) { builds++; return outsideChangesResponse{Count: count}, true }
-	}
-	if got := m.loadOr(m.generation(), a, build(1)); got.Count != 1 {
-		t.Fatalf("a = %+v", got)
-	}
-	if got := m.loadOr(m.generation(), b, build(2)); got.Count != 2 || builds != 2 {
-		t.Fatalf("b = %+v, builds = %d", got, builds)
-	}
-	if got := m.loadOr(m.generation(), a, build(9)); got.Count != 1 || builds != 2 {
-		t.Fatalf("cached a = %+v, builds = %d", got, builds)
-	}
-	m.clear()
-	if got := m.loadOr(m.generation(), a, build(3)); got.Count != 3 || builds != 3 {
-		t.Fatalf("after clear a = %+v, builds = %d", got, builds)
-	}
-}
-
 func TestHandleGitOpsOutsideChangesRejectsNonFlux(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/?group=argoproj.io", nil)
 	route := chi.NewRouteContext()
@@ -124,26 +96,8 @@ func TestListOutsideObjectsSeparatesFailuresFromDenials(t *testing.T) {
 	}
 }
 
-func TestOutsideChangesMemoSkipsUncacheable(t *testing.T) {
-	m := newOutsideChangesMemo(time.Minute)
-	builds := 0
-	build := func(cacheable bool) func() (outsideChangesResponse, bool) {
-		return func() (outsideChangesResponse, bool) {
-			builds++
-			return outsideChangesResponse{Count: builds}, cacheable
-		}
-	}
-	m.loadOr(m.generation(), "k", build(false))
-	if got := m.loadOr(m.generation(), "k", build(true)); got.Count != 2 {
-		t.Fatalf("uncacheable answer was served again: %+v", got)
-	}
-	if got := m.loadOr(m.generation(), "k", build(true)); got.Count != 2 {
-		t.Fatalf("cacheable answer not kept: %+v", got)
-	}
-}
-
 func TestBuildOutsideChangesWithoutAClientIsUnavailable(t *testing.T) {
-	if _, _, err := buildOutsideChanges(context.Background(), nil, nil, fluxHelmOwner(nil), helmOwner, nil); err == nil {
+	if _, err := buildOutsideChanges(context.Background(), nil, nil, fluxHelmOwner(nil), helmOwner, nil); err == nil {
 		t.Fatal("no dynamic client answered as if nothing changed")
 	}
 }
@@ -173,7 +127,7 @@ func TestBuildOutsideChangesReturnsNoDataValues(t *testing.T) {
 	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{treeNode("", "ConfigMap", "prod", "settings")}}
 	root := fluxHelmOwner(nil)
 	root.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{}}}
-	resp, _, err := buildOutsideChanges(context.Background(), dyn, tree, root, helmOwner, nil)
+	resp, err := buildOutsideChanges(context.Background(), dyn, tree, root, helmOwner, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,67 +156,29 @@ func TestListOutsideObjectsKeepsOnlyMembersAndPages(t *testing.T) {
 	}
 }
 
-func TestBuildOutsideChangesIsIncompleteAfterAFailedList(t *testing.T) {
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{deploymentsGVR: "DeploymentList"})
-	dyn.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewInternalError(context.DeadlineExceeded)
-	})
-	var cov outsideCoverage
-	listOutsideObjects(context.Background(), dyn, []outsideListGroup{{GVR: deploymentsGVR, Kind: "Deployment", Namespace: "team"}}, "", defaultOutsideLimits, &cov)
-	if outsideScanComplete(cov) {
-		t.Fatalf("failed scan reported complete: %+v", cov)
+func TestBuildOutsideChangesCountsFoldedActionsPerObject(t *testing.T) {
+	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	fd.Resources = []*metav1.APIResourceList{{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{
+		{Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: metav1.Verbs{"get", "list"}},
+	}}}
+	restore, err := k8s.SetTestResourceDiscovery(fd)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !outsideScanComplete(outsideCoverage{Listed: 3, Denied: []outsideDenied{{Resource: "services", Namespace: "x"}}}) {
-		t.Fatal("a stable RBAC denial made the scan incomplete")
+	t.Cleanup(restore)
+	restart := map[string]any{"f:spec": map[string]any{"f:template": map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{"f:kubectl.kubernetes.io/restartedAt": map[string]any{}}}}}}
+	d := labelledDeployment("a")
+	d.SetLabels(map[string]string{"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"})
+	d.Object["metadata"].(map[string]any)["managedFields"] = []any{
+		map[string]any{"manager": "kubectl-rollout", "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": restart},
+		map[string]any{"manager": "radar", "operation": "Update", "fieldsType": "FieldsV1", "fieldsV1": restart},
 	}
-}
-
-func TestOutsideChangesMemoForgetsUncacheableEntries(t *testing.T) {
-	m := newOutsideChangesMemo(time.Minute)
-	m.loadOr(m.generation(), "k", func() (outsideChangesResponse, bool) { return outsideChangesResponse{}, false })
-	if len(m.entries) != 0 {
-		t.Fatalf("uncacheable entry kept: %d", len(m.entries))
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{deploymentsGVR: "DeploymentList"}, d)
+	resp, err := buildOutsideChanges(context.Background(), dyn, &gitopstree.ResourceTree{Nodes: []gitopstree.Node{treeNode("apps", "Deployment", "team", "a")}}, kustomizationRoot(), &topology.ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "apps"}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestOutsideChangesMemoDropsAnswersFromBeforeAContextSwitch(t *testing.T) {
-	m := newOutsideChangesMemo(time.Minute)
-	gen := m.generation()
-	m.clear()
-	m.loadOr(gen, "k", func() (outsideChangesResponse, bool) { return outsideChangesResponse{Count: 1}, true })
-	if got := m.loadOr(m.generation(), "k", func() (outsideChangesResponse, bool) { return outsideChangesResponse{Count: 2}, true }); got.Count != 2 {
-		t.Fatalf("pre-switch answer served after the switch: %+v", got)
-	}
-}
-
-func TestOutsideMemoKeyCarriesAllowedNamespaces(t *testing.T) {
-	user := &auth.User{Username: "a"}
-	if outsideMemoKey(user, []string{"team"}, helmOwner, "1") == outsideMemoKey(user, []string{"team", "other"}, helmOwner, "1") {
-		t.Fatal("namespace scope missing from the memo key")
-	}
-}
-
-func TestOutsideChangesMemoBuildsOncePerKey(t *testing.T) {
-	m := newOutsideChangesMemo(time.Minute)
-	var builds atomic.Int32
-	start := make(chan struct{})
-	done := make(chan struct{})
-	for i := 0; i < 4; i++ {
-		go func() {
-			<-start
-			m.loadOr(m.generation(), "k", func() (outsideChangesResponse, bool) {
-				builds.Add(1)
-				time.Sleep(20 * time.Millisecond)
-				return outsideChangesResponse{}, true
-			})
-			done <- struct{}{}
-		}()
-	}
-	close(start)
-	for i := 0; i < 4; i++ {
-		<-done
-	}
-	if n := builds.Load(); n != 1 {
-		t.Fatalf("builds = %d, want 1", n)
+	if len(resp.Harmless) != 1 || resp.Harmless[0].Count != 1 {
+		t.Fatalf("harmless = %+v", resp.Harmless)
 	}
 }

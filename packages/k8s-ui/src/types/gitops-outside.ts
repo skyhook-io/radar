@@ -1,7 +1,7 @@
 // GET /api/gitops/outside-changes/{kind}/{namespace}/{name}: fields of a Flux
 // root's managed objects last written by a person's tool rather than Flux.
 
-export type GitOpsOutsideOutcome = 'reverted' | 'reported' | 'stays' | 'may-overwrite' | 'ignored' | 'suspended' | 'unknown'
+export type GitOpsOutsideOutcome = 'reverted' | 'reported' | 'stays' | 'may-overwrite' | 'ignored' | 'opted-out' | 'suspended' | 'unknown'
 
 export interface GitOpsOutsideRef {
   group: string
@@ -37,6 +37,10 @@ export interface GitOpsOutsideCoverage {
   skipped?: string[]
   notChecked?: string[]
   labelScan?: boolean
+  // A Kustomization without a readable inventory: its members are unknown.
+  noInventory?: boolean
+  // The root applies to another cluster (spec.kubeConfig).
+  remote?: boolean
   truncated?: boolean
 }
 

@@ -110,7 +110,8 @@ func TestOutsideOutcome(t *testing.T) {
 	}{
 		{nil, "", "unknown"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &yes, DriftDetection: "enabled"}, "", "suspended"},
-		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, DriftDetection: "enabled", ObjectReconcile: "ignore"}, "", "ignored"},
+		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, DriftDetection: "enabled", ObjectReconcile: "ignore"}, "", "opted-out"},
+		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, ObjectReconcile: "if-not-present"}, "", "opted-out"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, DriftDetection: "enabled"}, "effective", "ignored"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no}, "", "may-overwrite"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, DriftDetection: "enabled"}, "", "reverted"},
@@ -286,5 +287,56 @@ func TestOutsideListGroupsCarryTreeMembers(t *testing.T) {
 		if g.Members != nil {
 			t.Fatalf("label-scanned group restricted to tree members: %+v", g)
 		}
+	}
+}
+
+func TestOutsideMultiKeyListElementsResolve(t *testing.T) {
+	obj := map[string]any{"spec": map[string]any{"ports": []any{
+		map[string]any{"port": int64(80), "protocol": "UDP"},
+		map[string]any{"port": int64(80), "protocol": "TCP", "targetPort": int64(8080)},
+	}}}
+	segs, err := parseWriteFieldPath("spec.ports[port=80,protocol=TCP].targetPort")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node, ok := liveNode(obj, segs); !ok || node != int64(8080) {
+		t.Fatalf("node = %v, %v", node, ok)
+	}
+}
+
+func TestClassifyOutsideObjectIgnoresAMultiKeyElementByPointer(t *testing.T) {
+	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{fieldsEntry(t, "kubectl-edit", metav1.ManagedFieldsOperationUpdate, map[string]any{
+		"f:spec": map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": map[string]any{`k:{"name":"app"}`: map[string]any{
+			"f:ports": map[string]any{`k:{"containerPort":80,"protocol":"TCP"}`: map[string]any{".": map[string]any{}, "f:name": map[string]any{}}},
+		}}}}},
+	})})
+	containers := obj.Object["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
+	containers[1].(map[string]any)["ports"] = []any{map[string]any{"containerPort": int64(80), "protocol": "TCP", "name": "http"}}
+	owner := fluxHelmOwner(map[string]any{"mode": "enabled", "ignore": []any{map[string]any{"paths": []any{"/spec/template/spec/containers/1/ports/0"}}}})
+	out, _, _ := classifyOutsideObject(obj, helmOwner, owner)
+	if len(out.Changes) != 1 || out.Changes[0].Outcome != "ignored" {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+}
+
+func TestOutsideListGroupsSkipRemoteRoots(t *testing.T) {
+	for _, root := range []*unstructured.Unstructured{fluxHelmOwner(nil), kustomizationRoot()} {
+		root.Object["spec"] = map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "remote"}}}
+		tree := &gitopstree.ResourceTree{RemoteDestination: true, Nodes: []gitopstree.Node{treeNode("apps", "Deployment", "team", "a")}}
+		groups, cov := outsideListGroups(tree, root, fakeResolve)
+		if len(groups) != 0 || !cov.Remote || cov.LabelScan {
+			t.Fatalf("%s: groups = %+v, coverage = %+v", root.GetKind(), groups, cov)
+		}
+	}
+}
+
+func TestOutsideListGroupsSayAKustomizationHasNoInventory(t *testing.T) {
+	if _, cov := outsideListGroups(&gitopstree.ResourceTree{}, kustomizationRoot(), fakeResolve); !cov.NoInventory {
+		t.Fatalf("coverage = %+v", cov)
+	}
+	root := kustomizationRoot()
+	root.Object["status"] = map[string]any{"inventory": map[string]any{"entries": []any{}}}
+	if _, cov := outsideListGroups(&gitopstree.ResourceTree{}, root, fakeResolve); cov.NoInventory {
+		t.Fatalf("readable inventory reported missing: %+v", cov)
 	}
 }

@@ -16,11 +16,9 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -88,15 +86,13 @@ type outsideCoverage struct {
 	// LabelScan: the release records no inventory, so a fixed set of common
 	// kinds was listed by Flux's labels; other kinds weren't checked.
 	LabelScan bool `json:"labelScan,omitempty"`
+	// NoInventory: a Kustomization without a readable status.inventory (Flux
+	// records one only when pruning is on), so its members are unknown.
+	NoInventory bool `json:"noInventory,omitempty"`
+	// Remote: the root applies to another cluster (spec.kubeConfig), whose
+	// objects Radar doesn't read.
+	Remote    bool `json:"remote,omitempty"`
 	Truncated bool `json:"truncated,omitempty"`
-	timedOut  bool
-}
-
-// outsideScanComplete: an answer worth keeping for the next request. A list
-// that errored or a scan that ran out of time may succeed on a retry; a
-// denial or a hit object bound is the same answer next time.
-func outsideScanComplete(cov outsideCoverage) bool {
-	return len(cov.Failed) == 0 && !cov.timedOut
 }
 
 type outsidePolicy struct {
@@ -146,10 +142,8 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 			otherManagers = append(otherManagers, mf.Manager)
 			continue
 		}
-		kept, label := fieldwriters.SplitHarmless(ownedValuePaths(entryPaths, i))
-		if label != "" {
-			harmless = append(harmless, label)
-		}
+		kept, labels := fieldwriters.SplitHarmless(ownedValuePaths(entryPaths, i))
+		harmless = append(harmless, labels...)
 		if len(kept) == 0 {
 			continue
 		}
@@ -205,7 +199,9 @@ func outsideOutcome(policy *gitOpsWritePolicy, ignore string) string {
 		return "unknown"
 	case policy.Suspended != nil && *policy.Suspended:
 		return "suspended"
-	case policy.ObjectReconcile != "" || ignore == "effective":
+	case policy.ObjectReconcile != "":
+		return "opted-out"
+	case ignore == "effective":
 		return "ignored"
 	case policy.DriftDetection == "":
 		return "may-overwrite"
@@ -360,6 +356,12 @@ var outsideLabelScanKinds = []struct{ Group, Kind string }{
 // (resource, namespace). Secrets are never listed.
 func outsideListGroups(tree *gitopstree.ResourceTree, root *unstructured.Unstructured,
 	resolve func(group, kind string) (schema.GroupVersionResource, bool)) (groups []outsideListGroup, cov outsideCoverage) {
+	if _, remote, _ := unstructured.NestedFieldNoCopy(root.Object, "spec", "kubeConfig"); remote || (tree != nil && tree.RemoteDestination) {
+		cov.Remote = true
+		return nil, cov
+	}
+	_, inventoryReadable, inventoryErr := unstructured.NestedSlice(root.Object, "status", "inventory", "entries")
+	inventoryReadable = inventoryReadable && inventoryErr == nil
 	index := map[string]int{}
 	skipped := map[string]bool{}
 	notChecked := map[string]bool{}
@@ -398,10 +400,13 @@ func outsideListGroups(tree *gitopstree.ResourceTree, root *unstructured.Unstruc
 			add(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name)
 		}
 	}
+	if root.GetKind() == "Kustomization" && !inventoryReadable {
+		cov.NoInventory = true
+	}
 	if root.GetKind() == "HelmRelease" {
 		// The tree reads members from status.inventory.entries; when that isn't
 		// a readable list, the labels are the only way to find them.
-		if _, readable, err := unstructured.NestedSlice(root.Object, "status", "inventory", "entries"); !readable || err != nil {
+		if !inventoryReadable {
 			namespace, _, _ := unstructured.NestedString(root.Object, "spec", "targetNamespace")
 			if namespace == "" {
 				namespace = root.GetNamespace()
@@ -475,7 +480,7 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 				return out
 			}
 			if ctx.Err() != nil {
-				cov.Truncated, cov.timedOut = true, true
+				cov.Truncated = true
 				return out
 			}
 			lists++
@@ -488,7 +493,7 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 			case apierrors.IsForbidden(err):
 				cov.Denied = append(cov.Denied, outsideDenied{Resource: g.GVR.Resource, Namespace: g.Namespace})
 			case ctx.Err() != nil:
-				cov.Truncated, cov.timedOut = true, true
+				cov.Truncated = true
 				return out
 			case err != nil:
 				log.Printf("[gitops] Failed to list %s in %s for outside changes: %v", g.GVR.Resource, sanitizeForLog(g.Namespace), err)
@@ -517,111 +522,6 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 	return out
 }
 
-// outsideChangesMemo keeps one answer per user and root for a short window:
-// the header count and the tab ask for the same thing, and the answer costs
-// up to 40 LISTs. The key carries the caller's identity, so one user's answer
-// never serves another.
-type outsideChangesMemo struct {
-	ttl time.Duration
-	mu  sync.Mutex
-	// gen counts context switches. An answer built under an earlier
-	// generation (the request resolved its tree on the previous cluster) is
-	// never stored.
-	gen     uint64
-	entries map[string]*outsideMemoEntry
-}
-
-type outsideMemoEntry struct {
-	build sync.Mutex // one scan per key at a time
-	// guarded by outsideChangesMemo.mu
-	busy      int
-	expiresAt time.Time
-	value     outsideChangesResponse
-}
-
-func newOutsideChangesMemo(ttl time.Duration) *outsideChangesMemo {
-	return &outsideChangesMemo{ttl: ttl, entries: map[string]*outsideMemoEntry{}}
-}
-
-func (m *outsideChangesMemo) generation() uint64 {
-	if m == nil {
-		return 0
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.gen
-}
-
-// loadOr returns the stored answer for key, or builds one (once per key at a
-// time) and stores it only when build reports it cacheable and no context
-// switch happened since gen was read.
-func (m *outsideChangesMemo) loadOr(gen uint64, key string, build func() (outsideChangesResponse, bool)) outsideChangesResponse {
-	if m == nil || m.ttl <= 0 {
-		resp, _ := build()
-		return resp
-	}
-	m.mu.Lock()
-	if gen != m.gen {
-		m.mu.Unlock()
-		resp, _ := build()
-		return resp
-	}
-	now := time.Now()
-	for k, e := range m.entries {
-		if e.busy == 0 && now.After(e.expiresAt) {
-			delete(m.entries, k)
-		}
-	}
-	e, ok := m.entries[key]
-	if !ok {
-		e = &outsideMemoEntry{}
-		m.entries[key] = e
-	}
-	e.busy++
-	m.mu.Unlock()
-
-	e.build.Lock()
-	defer e.build.Unlock()
-	m.mu.Lock()
-	if time.Now().Before(e.expiresAt) {
-		value := e.value
-		e.busy--
-		m.mu.Unlock()
-		return value
-	}
-	m.mu.Unlock()
-
-	value, cacheable := build()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	e.busy--
-	current := m.entries[key] == e
-	switch {
-	case cacheable && current && gen == m.gen:
-		e.value = value
-		e.expiresAt = time.Now().Add(m.ttl)
-	case current && e.busy == 0 && !time.Now().Before(e.expiresAt):
-		delete(m.entries, key)
-	}
-	return value
-}
-
-func (m *outsideChangesMemo) clear() {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	m.gen++
-	m.entries = map[string]*outsideMemoEntry{}
-	m.mu.Unlock()
-}
-
-// outsideMemoKey: the answer depends on who asks (identity and groups) and on
-// the namespaces they may read now, as well as on the root's version.
-func outsideMemoKey(user *auth.User, allowed []string, owner *topology.ResourceRef, resourceVersion string) string {
-	return gitopsIssuesMemoKey(user, allowed) + "\x00" + owner.Group + "/" + owner.Kind + "/" + owner.Namespace + "/" + owner.Name + "\x00" + resourceVersion
-}
-
 // handleGitOpsOutsideChanges serves GET /api/gitops/outside-changes/{kind}/{namespace}/{name}
 // for a Flux Kustomization or HelmRelease. Gate: the caller's namespace
 // access (parseGitOpsRequest) and the per-user tree; the member LISTs are
@@ -638,7 +538,6 @@ func (s *Server) handleGitOpsOutsideChanges(w http.ResponseWriter, r *http.Reque
 	if !s.requireConnected(w) {
 		return
 	}
-	gen := s.outsideChangesMemo.generation()
 	req, ok := s.parseGitOpsRequest(w, r)
 	if !ok {
 		return
@@ -653,24 +552,20 @@ func (s *Server) handleGitOpsOutsideChanges(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	owner := &topology.ResourceRef{Group: entry.GVR.Group, Kind: entry.Kind, Namespace: root.GetNamespace(), Name: root.GetName()}
-	key := outsideMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces, owner, root.GetResourceVersion())
 	dyn := s.getDynamicClientForRequest(r)
 	if dyn == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes client not available for this request")
 		return
 	}
-	resp := s.outsideChangesMemo.loadOr(gen, key, func() (outsideChangesResponse, bool) {
-		resp, complete, err := buildOutsideChanges(r.Context(), dyn, tree, root, owner, resolver)
-		// An answer cut short (the caller left, a list failed, time ran out)
-		// is served but not kept for the next request.
-		return resp, err == nil && complete && r.Context().Err() == nil
-	})
+	// No server-side cache: the header count and the tab share one browser
+	// query, and a cached answer would outlive a change to the caller's access.
+	resp, _ := buildOutsideChanges(r.Context(), dyn, tree, root, owner, resolver)
 	s.writeJSON(w, resp)
 }
 
-func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, owner *topology.ResourceRef, resolver *insightsResolver) (resp outsideChangesResponse, complete bool, err error) {
+func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, owner *topology.ResourceRef, resolver *insightsResolver) (resp outsideChangesResponse, err error) {
 	if dyn == nil {
-		return outsideChangesResponse{}, false, errOutsideNoClient
+		return outsideChangesResponse{}, errOutsideNoClient
 	}
 	resp = outsideChangesResponse{
 		Root:         outsideRef{Group: owner.Group, Kind: owner.Kind, Namespace: owner.Namespace, Name: owner.Name},
@@ -688,8 +583,12 @@ func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitop
 	others := map[string]int{}
 	for _, obj := range listOutsideObjects(ctx, dyn, groups, fluxMemberSelector(root), defaultOutsideLimits, &resp.Coverage) {
 		out, labels, otherManagers := classifyOutsideObject(obj, owner, root)
+		counted := map[string]bool{}
 		for _, l := range labels {
-			harmless[l]++
+			if !counted[l] {
+				counted[l] = true
+				harmless[l]++
+			}
 		}
 		seen := map[string]bool{}
 		for _, m := range otherManagers {
@@ -718,7 +617,7 @@ func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitop
 			}
 		}
 	}
-	return resp, outsideScanComplete(resp.Coverage), nil
+	return resp, nil
 }
 
 var errOutsideNoClient = errors.New("no Kubernetes client for this request")

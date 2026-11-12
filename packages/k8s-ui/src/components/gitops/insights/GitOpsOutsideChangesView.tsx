@@ -21,6 +21,8 @@ export function outsideOutcomeText(code: GitOpsOutsideOutcome): string {
       return 'Flux may overwrite this on its next run'
     case 'ignored':
       return "Ignored by this release's drift rules"
+    case 'opted-out':
+      return 'This object opts out of Flux reconciliation'
     case 'suspended':
       return 'Flux is suspended; nothing changes until it resumes'
   }
@@ -136,6 +138,8 @@ function outsideCoverageNotes(data: GitOpsOutsideChanges): string[] {
   if (c.truncated) notes.push(`Radar stopped after ${c.listed} objects or its time limit; the list is incomplete.`)
   if (c.denied?.length) notes.push(`You can't list ${c.denied.map((d) => `${d.resource} in ${d.namespace}`).join(', ')}.`)
   if (c.failed?.length) notes.push(`Radar couldn't list ${c.failed.map((d) => `${d.resource} in ${d.namespace}`).join(', ')}.`)
+  if (c.remote) notes.push("This root applies to another cluster, whose objects Radar doesn't read.")
+  if (c.noInventory) notes.push('This Kustomization records no inventory (Flux keeps one only when pruning is on), so Radar can\'t tell which objects it applies.')
   if (c.labelScan) notes.push('This release records no inventory, so Radar checked common kinds by Flux labels only.')
   if (c.notChecked?.length) notes.push(`Not checked: ${c.notChecked.join(', ')}.`)
   if (c.skipped?.includes('secrets')) notes.push('Secrets are never read: listing them would return their data.')
