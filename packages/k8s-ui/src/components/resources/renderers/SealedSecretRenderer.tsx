@@ -8,7 +8,7 @@ export interface SealedSecretsController {
   controller?: { kind: string; namespace: string; name: string; ready: boolean }
   controllerState: 'ok' | 'denied' | 'notFound' | 'notCollected'
   keys?: { name: string; createdAt: string; notBefore?: string; notAfter?: string; active: boolean; notUsed?: boolean }[]
-  keysState: 'ok' | 'denied' | 'notCollected' | 'loading' | 'unknown'
+  keysState: 'ok' | 'denied' | 'notCollected' | 'loading' | 'failed' | 'unknown'
   counts?: { total: number; synced: number; notSynced: number; partial: boolean }
 }
 
@@ -54,7 +54,7 @@ function ControllerSection({ controller, isSynced, onNavigate }: { controller: S
         {counts && (
           <Property
             label="SealedSecrets"
-            value={`${counts.synced} synced · ${counts.notSynced} not synced${counts.partial ? ' in namespaces you can list' : ''}`}
+            value={`${counts.synced} synced · ${counts.notSynced} not synced${counts.total > counts.synced + counts.notSynced ? ` · ${counts.total - counts.synced - counts.notSynced} without a Synced condition` : ''}${counts.partial ? ' in namespaces you can list' : ''}`}
           />
         )}
       </PropertyList>
@@ -84,7 +84,9 @@ function ControllerSection({ controller, isSynced, onNavigate }: { controller: S
         </table>
       )}
       {controller.keysState === 'denied' && <div className="mt-2 text-sm text-theme-text-tertiary">No access to Secrets{where}, so the sealing keys are not shown.</div>}
-      {controller.keysState === 'loading' && <div className="mt-2 text-sm text-theme-text-tertiary">Sealing keys are still loading; reopen the drawer in a moment.</div>}
+      {controller.keysState === 'ok' && controller.keys?.length === 0 && <div className="mt-2 text-sm text-theme-text-tertiary">No sealing keys found{where}.</div>}
+      {controller.keysState === 'loading' && <div className="mt-2 text-sm text-theme-text-tertiary">Sealing keys are still loading.</div>}
+      {controller.keysState === 'failed' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar could not load Secrets{where}, so the sealing keys are not shown.</div>}
       {controller.keysState === 'notCollected' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar does not collect Secrets{where}, so the sealing keys are not shown.</div>}
       {!isSynced && (
         <div className="mt-3 text-xs text-theme-text-secondary">

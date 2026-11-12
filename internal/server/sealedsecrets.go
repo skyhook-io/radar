@@ -86,8 +86,9 @@ func sealedSecretsControllerRefFor(d *appsv1.Deployment) sealedSecretsController
 // which is the one the controller seals new secrets with.
 func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 	type entry struct {
-		key  sealingKey
-		when time.Time
+		key    sealingKey
+		when   time.Time
+		parsed bool
 	}
 	var entries []entry
 	for _, o := range objs {
@@ -100,14 +101,14 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 			continue
 		}
 		k := sealingKey{Name: sec.Name, CreatedAt: sec.CreationTimestamp.Time, NotUsed: value != "active"}
-		when := k.CreatedAt
+		when, parsed := k.CreatedAt, false
 		if certs := topology.ParsePEMCertificates(sec.Data["tls.crt"]); len(certs) > 0 {
-			k.NotBefore, k.NotAfter = certs[0].NotBefore, certs[0].NotAfter
+			k.NotBefore, k.NotAfter, parsed = certs[0].NotBefore, certs[0].NotAfter, true
 			if t, err := time.Parse(time.RFC3339, k.NotBefore); err == nil {
 				when = t
 			}
 		}
-		entries = append(entries, entry{k, when})
+		entries = append(entries, entry{k, when, parsed})
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
 		if !entries[i].when.Equal(entries[j].when) {
@@ -118,7 +119,8 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 	out := make([]sealingKey, 0, len(entries))
 	activeSet := false
 	for _, e := range entries {
-		if !activeSet && !e.key.NotUsed {
+		// A key whose certificate doesn't parse can't be the one sealing.
+		if !activeSet && !e.key.NotUsed && e.parsed {
 			e.key.Active, activeSet = true, true
 		}
 		out = append(out, e.key)
@@ -126,11 +128,15 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 	return out
 }
 
-// unreadKeysState tells a Secret store still syncing (Radar just started or
-// switched context) from one Radar does not hold for the namespace.
+// unreadKeysState says why the controller namespace's Secrets can't be read
+// from the cache: still syncing (Radar just started or switched context),
+// failed to load, or not held by Radar at all.
 func unreadKeysState(a k8score.KindReadAssessment) string {
-	if len(a.Loading) > 0 || (a.Read == nil && a.Readiness == k8score.KindPending) {
+	switch {
+	case len(a.Loading) > 0:
 		return "loading"
+	case len(a.Failed) > 0:
+		return "failed"
 	}
 	return "notCollected"
 }
@@ -167,7 +173,8 @@ var sealedSecretsKind = integration.WorkspaceKind{Key: "sealedSecrets", Group: "
 //     cluster-wide), omitted when they can list none.
 //
 // In shared no-auth mode the names and dates are Radar's own read and carry
-// no secret material.
+// no secret material. A caller denied the controller learns only that one
+// exists (controllerState "denied", not "notFound"), never where.
 func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -192,7 +199,13 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 	} else if deployments, err := lister.List(labels.Everything()); err != nil {
 		log.Printf("[sealedsecrets] Failed to list Deployments: %v", err)
 		resp.ControllerState = "notCollected"
-	} else if d := findSealedSecretsController(deployments); d != nil {
+	} else if d := findSealedSecretsController(deployments); d == nil {
+		// Deployments cached for some namespaces only: the controller may be
+		// in one Radar doesn't watch, so it is unread rather than missing.
+		if cache.KindNamespaces("deployments") != nil {
+			resp.ControllerState = "notCollected"
+		}
+	} else {
 		ns := d.Namespace
 		if s.canRead(r, "apps", "deployments", ns, "get") {
 			ref := sealedSecretsControllerRefFor(d)

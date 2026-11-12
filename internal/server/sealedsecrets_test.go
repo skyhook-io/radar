@@ -268,14 +268,61 @@ func TestUnreadKeysState(t *testing.T) {
 		a    k8score.KindReadAssessment
 		want string
 	}{
-		{"one informer still syncing", k8score.KindReadAssessment{Readiness: k8score.KindPending, AllNamespaces: true}, "loading"},
 		{"namespace informer still syncing", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Loading: []string{"kube-system"}}, "loading"},
 		{"not watched", k8score.KindReadAssessment{Readiness: k8score.KindUnavailable}, "notCollected"},
 		{"namespace not covered", k8score.KindReadAssessment{Readiness: k8score.KindReady, Read: []string{}, Uncovered: []string{"kube-system"}}, "notCollected"},
-		{"load failed", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Failed: []string{"kube-system"}}, "notCollected"},
+		{"load failed", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Failed: []string{"kube-system"}}, "failed"},
 	} {
 		if got := unreadKeysState(tc.a); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A key whose certificate doesn't parse can't be the one the controller
+// seals with, even when it is the newest by creation time.
+func TestSealingKeysUnparsedCertIsNeverActive(t *testing.T) {
+	now := time.Now().UTC()
+	got := sealingKeysFromSecrets([]runtime.Object{
+		sealingKeySecret("broken", "kube-system", "active", []byte("garbage"), now),
+		sealingKeySecret("old", "kube-system", "active", sealingKeyPEM(t, now.Add(-400*24*time.Hour)), now.Add(-400*24*time.Hour)),
+	})
+	for _, k := range got {
+		if k.Active != (k.Name == "old") {
+			t.Errorf("%s active = %v, want only old", k.Name, k.Active)
+		}
+	}
+}
+
+func TestSealedSecretsControllerMixedAccess(t *testing.T) {
+	seedSealedSecretsFixture(t, nil)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	allow(perms, "bitnami.com", "sealedsecrets", "", false)
+	allow(perms, "bitnami.com", "sealedsecrets", "team", true)
+	allow(perms, "", "secrets", "kube-system", true)
+	perms.SetCanI("get", "apps", "deployments", "kube-system", false)
+	env.srv.permCache.Set("erin", nil, perms)
+
+	got, raw := getSealedSecretsController(t, env.authGet(t, "/api/sealedsecrets/controller", "erin", ""))
+	if got.ControllerState != "denied" || got.Controller != nil || strings.Contains(raw, "kube-system") {
+		t.Errorf("controller = %q %+v, want denied with no namespace in %s", got.ControllerState, got.Controller, raw)
+	}
+	if got.KeysState != "ok" || len(got.Keys) != 2 {
+		t.Errorf("keys = %q %d, want ok with both keys", got.KeysState, len(got.Keys))
+	}
+}
+
+// With Deployments cached for some namespaces only, a controller outside them
+// is unread, not missing.
+func TestSealedSecretsControllerNamespaceScopedDeployments(t *testing.T) {
+	seedSealedSecretsFixture(t, map[string]k8score.ResourceScope{"deployments": {Enabled: true, Namespace: "team"}, "secrets": {Enabled: true}})
+	resp, err := http.Get(testServer.URL + "/api/sealedsecrets/controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := getSealedSecretsController(t, resp)
+	if got.ControllerState != "notCollected" || got.KeysState != "unknown" {
+		t.Fatalf("got controller %q keys %q, want notCollected / unknown", got.ControllerState, got.KeysState)
 	}
 }

@@ -71,4 +71,15 @@ it('says the sealing keys are still loading rather than not collected', () => {
   const html = renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ keys: undefined, keysState: 'loading' })} />)
   expect(html).toContain('still loading')
   expect(html).not.toContain('does not collect')
+  expect(html).not.toContain('reopen')
+})
+
+it('names a failed key load and an empty key list', () => {
+  expect(renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ keys: undefined, keysState: 'failed' })} />)).toContain('could not load Secrets')
+  expect(renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ keys: [] })} />).replace(/<!-- -->/g, '')).toContain('No sealing keys found in kube-system')
+})
+
+it('counts SealedSecrets without a Synced condition instead of dropping them', () => {
+  const html = renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ counts: { total: 5, synced: 3, notSynced: 1, partial: false } })} />).replace(/<!-- -->/g, '')
+  expect(html).toContain('3 synced · 1 not synced · 1 without a Synced condition')
 })
