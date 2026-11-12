@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ApiError } from '../../api/client'
 import { RadarFeatureUnsupportedError } from '../../api/radarFeatures'
-import { UPGRADE_IMPACT_DOCS_URL, UpgradePlansNotice, distributionUpgradePlans, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary, upgradeEvidenceCoverageLabel, upgradeUnavailableKindsMessage } from './UpgradeReadinessView'
+import { UPGRADE_IMPACT_DOCS_URL, UpgradePlansNotice, distributionUpgradePlans, planCountIsLowerBound, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary, upgradeEvidenceCoverageLabel, upgradeUnavailableKindsMessage } from './UpgradeReadinessView'
 
 describe('UpgradeReadinessError', () => {
   it('maps an unsupported-feature error to the v1.9 upgrade message', () => {
@@ -185,5 +185,12 @@ describe('upgrade Plans notice', () => {
   it('says at least N when the caller could list only some Plans', () => {
     const html = renderToStaticMarkup(UpgradePlansNotice({ partial: true, plans: [{ namespace: 'system-upgrade', name: 'k3s-server', version: 'v1', state: 'Complete' }], onNavigateToResource: () => {} }))
     expect(html).toContain('At least 1 upgrade Plan is defined for this cluster')
+  })
+  it('counts Plans exactly only when the list covers the cluster', () => {
+    expect(planCountIsLowerBound({ status: 'complete' } as any)).toBe(false)
+    expect(planCountIsLowerBound({ status: 'partial' } as any)).toBe(true)
+    expect(planCountIsLowerBound({ status: 'complete', narrowedBy: ['namespace_collection'] } as any)).toBe(true)
+    expect(planCountIsLowerBound({ status: 'unknown' } as any)).toBe(true)
+    expect(planCountIsLowerBound(undefined)).toBe(true)
   })
 })

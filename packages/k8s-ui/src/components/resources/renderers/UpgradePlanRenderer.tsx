@@ -1,5 +1,6 @@
 import { Badge } from '../../ui/Badge'
 import { healthToSeverity } from '../../../utils/badge-colors'
+import { HEALTH_META } from '../../../utils/applications'
 import { Section, Property, PropertyList, ResourceLink, ConditionsSection, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import type { ResourceRef } from '../../../types'
 import { getUpgradePlanStatus, upgradePlanProgress, upgradePlanTarget, type PlanNode, type PlanNodeState } from '../resource-utils-upgrade-plan'
@@ -25,7 +26,7 @@ function Progress({ data, nodes, onNavigate }: { data: any; nodes: PlanNode[] | 
     <>
       <div className="mb-1 text-sm text-theme-text-primary">{p.upgraded} of {p.total} nodes upgraded{p.upgrading > 0 ? ` · ${p.upgrading} upgrading` : ''}</div>
       <div className="mb-3 h-1.5 w-full overflow-hidden rounded bg-theme-elevated">
-        <div className="h-full bg-accent" style={{ width: `${pct}%` }} />
+        <div className={`h-full ${HEALTH_META.healthy.bar}`} style={{ width: `${pct}%` }} />
       </div>
       <table className="w-full text-xs">
         <tbody>

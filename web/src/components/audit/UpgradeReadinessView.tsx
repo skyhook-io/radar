@@ -41,6 +41,8 @@ import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { useAPIResources } from '../../api/apiResources'
 import { getUpgradePlanStatus, isDistributionUpgradePlan, upgradePlanTarget } from '@skyhook-io/k8s-ui/components/resources/resource-utils-upgrade-plan'
+import { isLowerBound } from '@skyhook-io/k8s-ui/utils/resource-coverage'
+import type { ResourceCoverage } from '@skyhook-io/k8s-ui/types/resource-coverage'
 import { ChecksViewTabs } from './ChecksViewTabs'
 
 interface UpgradeReadinessViewProps {
@@ -89,8 +91,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
   const plansQuery = useResources<any>('plans', undefined, 'upgrade.cattle.io', { enabled: plansServed })
   // An unreadable Plan list shows no notice: absence of Plans is not claimed.
   const upgradePlans = useMemo(() => (plansQuery.error ? [] : distributionUpgradePlans(plansQuery.data)), [plansQuery.error, plansQuery.data])
-  // A caller who could list Plans in some namespaces only sees a lower bound.
-  const plansPartial = plansQuery.coverage?.status === 'partial'
+  const plansPartial = planCountIsLowerBound(plansQuery.coverage)
   const plansNotice = upgradePlans.length > 0 ? <UpgradePlansNotice plans={upgradePlans} partial={plansPartial} onNavigateToResource={onNavigateToResource} /> : null
   const targetOptions = useMemo(
     () => buildTargetOptions(data?.currentVersion, data?.reviewedThrough, requestedTarget ?? data?.targetVersion),
@@ -115,6 +116,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
     return (
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
         <ChecksViewTabs />
+        {plansNotice}
         <PaneLoader label="Analyzing upgrade impact…" className="flex-1" />
       </div>
     )
@@ -433,6 +435,13 @@ export function summaryMeta(
     body: 'Every applicable reviewed check passed. This result covers the evidence sources listed below.',
     icon: CheckCircle2, iconClass: 'text-emerald-600 dark:text-emerald-400', className: 'border-emerald-500/30 bg-emerald-500/5',
   }
+}
+
+// The visible Plans are a lower bound unless the list covers the whole
+// cluster: a partial read, a list narrowed to the namespaces Radar collects,
+// or an older Radar that reports no coverage can't establish a total.
+export function planCountIsLowerBound(coverage: ResourceCoverage | undefined): boolean {
+  return !coverage || coverage.status === 'unknown' || isLowerBound(coverage)
 }
 
 // system-upgrade-controller Plans that upgrade the distribution itself (k3s,
