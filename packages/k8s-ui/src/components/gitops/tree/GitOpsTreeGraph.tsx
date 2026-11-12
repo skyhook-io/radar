@@ -702,7 +702,7 @@ function gitopsToolForNode(node: GitOpsTreeNode): 'argocd' | 'fluxcd' | undefine
   return undefined
 }
 
-function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> {
+export function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> {
   const data = node.data ?? {}
   const chips: Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> = []
   // Terminating dominates: surface a single Terminating chip and skip the
@@ -725,7 +725,10 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   const hook = stringData(data.hook)
   if (hook) chips.push({ value: hook })
   const relationship = stringData(data.relationship)
-  if (relationship) chips.push({ value: relationship })
+  // An ArtifactGenerator names each source by the alias its copy rules use.
+  const alias = stringData(data.alias)
+  if (relationship) chips.push({ value: alias ? `${relationship} @${alias}` : relationship })
+  if (typeof data.generatedCount === 'number') chips.push({ label: 'artifacts', value: String(data.generatedCount) })
   if (node.sync === 'OutOfSync') chips.push({ value: 'OutOfSync', tone: 'warning' })
   const health = treeNodeHealth(node)
   if (health === 'Degraded' || health === 'Missing') chips.push({ value: health, tone: 'danger' })

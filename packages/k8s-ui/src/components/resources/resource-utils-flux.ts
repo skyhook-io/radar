@@ -2,6 +2,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
+import { isApiGroup } from './resource-utils-cnpg'
 import type { FluxCondition } from '../../types/gitops'
 import { getFluxDeployedRelease, getFluxHelmChartVersion } from '../../utils/flux-history'
 
@@ -211,7 +212,15 @@ export function getExternalArtifactRevision(ea: any): string {
 
 export function getExternalArtifactGenerator(ea: any): string {
   const ref = ea.spec?.sourceRef
-  return ref?.kind === 'ArtifactGenerator' ? ref.name || '' : ''
+  if (ref?.kind !== 'ArtifactGenerator') return ''
+  if (ref.apiVersion && !isApiGroup(ref.apiVersion, 'source.extensions.fluxcd.io')) return ''
+  return ref.name || ''
+}
+
+// Digest revisions ("latest@sha256:…") read as the tag and 12 hex chars.
+export function shortArtifactRevision(revision: string): string {
+  const at = revision.indexOf('@sha256:')
+  return at >= 0 ? `${revision.slice(0, at)}@${revision.slice(at + 8, at + 20)}` : revision
 }
 
 export function getArtifactGeneratorSources(ag: any): string {

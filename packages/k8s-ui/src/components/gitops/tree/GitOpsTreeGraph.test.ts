@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildCauseByRef, getSubtitle, nodeCause } from './GitOpsTreeGraph'
+import { buildCauseByRef, buildChips, getSubtitle, nodeCause } from './GitOpsTreeGraph'
 import type { GitOpsIssue, GitOpsTreeNode } from '../../../types'
 
 function node(extras: Partial<GitOpsTreeNode> = {}): GitOpsTreeNode {
@@ -177,5 +177,14 @@ describe('buildCauseByRef', () => {
 
   it('skips issues without a cause or a ref', () => {
     expect(buildCauseByRef([issue({ cause: undefined }), issue({ refs: [] })]).size).toBe(0)
+  })
+})
+
+describe('Flux artifact chain cards', () => {
+  it('name the alias a generator gives a source and how many artifacts it generates', () => {
+    const source = buildChips(node({ ref: { kind: 'GitRepository', name: 'platform', namespace: 'flux-system' }, data: { relationship: 'source', alias: 'repo' } }))
+    expect(source).toContainEqual({ value: 'source @repo' })
+    const generator = buildChips(node({ ref: { kind: 'ArtifactGenerator', name: 'gen', namespace: 'flux-system' }, data: { relationship: 'generator', generatedCount: 143 } }))
+    expect(generator).toContainEqual({ label: 'artifacts', value: '143' })
   })
 })

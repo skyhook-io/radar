@@ -6,7 +6,9 @@ import {
   getExternalArtifactGenerator,
   getExternalArtifactRevision,
   getExternalArtifactStatus,
+  shortArtifactRevision,
 } from './resource-utils-flux'
+import { isColumnSortable } from './ResourcesView'
 
 const ready = (status: string) => ({ conditions: [{ type: 'Ready', status }] })
 
@@ -27,6 +29,17 @@ describe('ExternalArtifact helpers', () => {
 
   it('names no generator for another producer', () => {
     expect(getExternalArtifactGenerator({ ...ea, spec: { sourceRef: { kind: 'Something', name: 'x' } } })).toBe('')
+    expect(getExternalArtifactGenerator({ ...ea, spec: { sourceRef: { apiVersion: 'example.com/v1', kind: 'ArtifactGenerator', name: 'x' } } })).toBe('')
+    expect(getExternalArtifactGenerator({ ...ea, spec: { sourceRef: { kind: 'ArtifactGenerator', name: 'gen' } } })).toBe('gen')
+  })
+
+  it('shortens a digest revision the same way everywhere', () => {
+    expect(shortArtifactRevision('latest@sha256:53884aebf2e5aa11223344')).toBe('latest@53884aebf2e5')
+    expect(shortArtifactRevision('5.5.0')).toBe('5.5.0')
+  })
+
+  it('sorts the artifacts count but leaves size to the kinds that define it', () => {
+    expect(isColumnSortable({ key: 'artifacts', label: 'Artifacts' })).toBe(true)
   })
 })
 

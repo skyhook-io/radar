@@ -11,6 +11,7 @@ import {
   getArtifactGeneratorStatus,
   getArtifactGeneratorSources,
   getArtifactGeneratorCount,
+  shortArtifactRevision,
   getGitRepositoryUrl,
   getGitRepositoryRef,
   getGitRepositoryStatus,
@@ -277,13 +278,6 @@ export function FluxAlertCell({ resource, column }: { resource: any; column: str
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
-}
-
-// Digest revisions ("latest@sha256:…") shorten to the tag and 12 hex chars.
-function shortArtifactRevision(revision: string): string {
-  const at = revision.indexOf('@sha256:')
-  if (at >= 0) return `${revision.slice(0, at)}@${revision.slice(at + 8, at + 20)}`
-  return revision.length > 24 ? revision.slice(0, 24) : revision
 }
 
 export function ExternalArtifactCell({ resource, column }: { resource: any; column: string }) {

@@ -23,7 +23,7 @@ spec:
     branch: master
   ignore: |
     /*
-    !/charts/podinfo
+    !/charts/
 ---
 apiVersion: source.extensions.fluxcd.io/v1beta1
 kind: ArtifactGenerator

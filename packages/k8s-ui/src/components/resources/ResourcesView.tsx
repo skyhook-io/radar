@@ -377,7 +377,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
-  'connectCluster', 'connectorClass', 'connectorTasks',
+  'connectCluster', 'connectorClass', 'connectorTasks', 'artifacts',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -5701,8 +5701,6 @@ export function ResourcesView({
       }
       case 'artifacts':
         return kindLower === 'artifactgenerators' ? getArtifactGeneratorCount(resource) : ''
-      case 'size':
-        return kindLower === 'externalartifacts' && typeof resource.status?.artifact?.size === 'number' ? resource.status.artifact.size : -1
       default:
         return ''
     }

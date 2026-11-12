@@ -156,8 +156,12 @@ install_source_watcher() {
   step "Installing source-watcher (${FLUX_VERSION}) for ArtifactGenerator"
   local tmp
   tmp=$(mktemp -d)
-  if ! curl -fsSL "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/manifests.tar.gz" \
-      | tar -xzf - -C "$tmp" source-watcher.yaml 2>/dev/null; then
+  if ! curl -fsSL -o "$tmp/manifests.tar.gz" "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/manifests.tar.gz"; then
+    warn "couldn't download Flux ${FLUX_VERSION} manifests; skipping source-watcher and the artifact-chain fixture"
+    rm -rf "$tmp"
+    return 0
+  fi
+  if ! tar -xzf "$tmp/manifests.tar.gz" -C "$tmp" source-watcher.yaml 2>/dev/null; then
     warn "no source-watcher in Flux ${FLUX_VERSION} (needs 2.7+); skipping the artifact-chain fixture"
     rm -rf "$tmp"
     return 0
