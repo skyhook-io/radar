@@ -92,6 +92,7 @@
             "externalDns": { "type": "boolean" },
             "externalSecrets": { "type": "boolean" },
             "flagger": { "type": "boolean", "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)." },
+            "k3sHelm": { "type": "boolean", "description": "Opt-in read collection for helm.cattle.io HelmCharts and HelmChartConfigs on k3s/RKE2 (default false); their values can hold credentials." },
             "flux": { "type": "boolean" },
             "gatewayApi": { "type": "boolean" },
             "gcpMonitoring": { "type": "boolean" },

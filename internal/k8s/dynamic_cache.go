@@ -186,6 +186,9 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "opentelemetry.io", Versions: []string{"v1alpha1"}, Resource: "instrumentations", Kind: "Instrumentation", Namespaced: true},
 	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "canaries", Kind: "Canary", Namespaced: true},
 	{Group: "flagger.app", Versions: []string{"v1beta1"}, Resource: "metrictemplates", Kind: "MetricTemplate", Namespaced: true},
+	// k3s / RKE2 Helm controller. HelmChart shares its kind with Flux's source.toolkit.fluxcd.io HelmChart.
+	{Group: "helm.cattle.io", Versions: []string{"v1"}, Resource: "helmcharts", Kind: "HelmChart", Namespaced: true},
+	{Group: "helm.cattle.io", Versions: []string{"v1"}, Resource: "helmchartconfigs", Kind: "HelmChartConfig", Namespaced: true},
 	{Group: "secrets-store.csi.x-k8s.io", Versions: []string{"v1", "v1alpha1"}, Resource: "secretproviderclasses", Kind: "SecretProviderClass", Namespaced: true},
 	{Group: "secrets-store.csi.x-k8s.io", Versions: []string{"v1", "v1alpha1"}, Resource: "secretproviderclasspodstatuses", Kind: "SecretProviderClassPodStatus", Namespaced: true},
 	{Group: "core.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "strimzipodsets", Kind: "StrimziPodSet", Namespaced: true},
