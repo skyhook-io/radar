@@ -273,7 +273,12 @@
           "properties": {
             "userHeader": { "type": "string" },
             "groupsHeader": { "type": "string" },
-            "logoutURL": { "type": "string" }
+            "logoutURL": { "type": "string" },
+            "logoutCookies": {
+              "type": "array",
+              "items": { "type": "string", "pattern": "^[^,;=\"\\\\\\[\\]\\s]+$" },
+              "description": "Names of the auth proxy's session cookies, e.g. _oauth2_proxy* (* matches any characters). Logout deletes every matching cookie the browser sends."
+            }
           }
         },
         "oidc": {

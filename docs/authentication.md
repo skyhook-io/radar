@@ -167,7 +167,14 @@ Groups can arrive as one comma-separated header or as one header per group, as p
 
 The user menu always shows a **Logout** button. Clicking it clears Radar's session cookie. On its own, that isn't enough to switch users: your proxy re-injects the identity header on the next request and signs the same user back in.
 
-To make logout actually switch users, point Radar at your proxy's sign-out URL with `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm) — e.g. oauth2-proxy's `/oauth2/sign_out`. Radar then redirects the browser there after clearing its own cookie, so the upstream session is torn down too. When unset, the menu shows a note that the proxy may re-authenticate automatically.
+To make logout actually switch users, use one or both of these:
+
+- **The proxy's sign-out URL:** `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm), e.g. oauth2-proxy's `/oauth2/sign_out`. Radar redirects the browser there after clearing its own cookie, so the proxy ends its session.
+- **The proxy's session cookies:** `--auth-proxy-logout-cookies` (or `auth.proxy.logoutCookies` in Helm), a list of cookie names where `*` matches any characters, e.g. `_oauth2_proxy*`. Logout deletes every matching cookie the browser sends, whether it was set for Radar's host or a parent domain, at `/` or on a path down to Radar's base path. The next request then goes back through the proxy's sign-in. Use it when the proxy has no sign-out URL, or when its sign-out URL leaves cookies behind on Radar's host. Each matching cookie adds one `Set-Cookie` header per parent domain and path, so list only the proxy's session cookies: behind nginx, a long hostname, a deep base path and many matches can exceed its default 4 KB response header buffer. Radar can only delete cookies the browser sends to Radar's address, and deleting them doesn't revoke them on the proxy: a copy taken from the browser keeps working until it expires.
+
+If the proxy signs people in through a single sign-on provider that remembers them, the next sign-in can still happen without a password. Only that provider's own sign-out changes that.
+
+When neither is set, the menu shows a note that the proxy may sign the user back in automatically.
 
 > **Note:** HTTP Basic Auth has no reliable logout mechanism — browsers cache credentials and resend them. If you need user-switching, prefer a proxy with a real sign-out endpoint (oauth2-proxy, Authelia) over plain Basic Auth.
 
@@ -574,6 +581,7 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | User header (proxy) | `--auth-user-header` | `auth.proxy.userHeader` | `X-Forwarded-User` |
 | Groups header (proxy) | `--auth-groups-header` | `auth.proxy.groupsHeader` | `X-Forwarded-Groups` |
 | Proxy logout URL (proxy) | `--auth-proxy-logout-url` | `auth.proxy.logoutURL` | — |
+| Proxy logout cookies (proxy) | `--auth-proxy-logout-cookies` | `auth.proxy.logoutCookies` | — |
 | OIDC issuer | `--auth-oidc-issuer` | `auth.oidc.issuerURL` | — |
 | OIDC internal issuer | `--auth-oidc-internal-issuer` | `auth.oidc.internalIssuerURL` | — |
 | OIDC authorization URL | `--auth-oidc-authorization-url` | `auth.oidc.authorizationURL` | — |

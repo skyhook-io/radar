@@ -425,6 +425,11 @@ auth:
     # invalidate the session at this URL — Radar only clears its own cookie
     # (Basic Auth has no logout). Empty = clear Radar's cookie only.
     logoutURL: ""
+    # Names of the auth proxy's session cookies, e.g. "_oauth2_proxy*"
+    # (* matches any characters). Logout deletes every matching cookie the
+    # browser sends, so the next request goes back through the proxy's sign-in.
+    # Use it when the proxy has no sign-out URL, or together with logoutURL.
+    logoutCookies: []
   # OIDC mode settings
   oidc:
     issuerURL: ""
