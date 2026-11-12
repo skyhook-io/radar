@@ -8,6 +8,7 @@ import { workloadPodAwaitsScheduling } from '../capacity/podDemandGate'
 import { Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
+  OutsideEditChip,
   EditableYamlView,
   FetchResult,
   Section,
@@ -97,6 +98,7 @@ import {
   useApplications,
   fetchJSON,
   fetchYamlSchemas,
+  useGitOpsFieldWriters,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
@@ -612,6 +614,9 @@ export function WorkloadView({
   } = useResourceWithRelationships<any>(apiKind, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
+  const managerLeadGroup = relationships?.ownership?.manager?.lead?.group
+  const fluxManaged = managerLeadGroup === 'kustomize.toolkit.fluxcd.io' || managerLeadGroup === 'helm.toolkit.fluxcd.io'
+  const fieldWriters = useGitOpsFieldWriters(apiKind, namespace, name, rest.group, fluxManaged)
   useRefreshRevisionsOnNewRollout(
     apiKind.toLowerCase(),
     namespace,
@@ -1415,6 +1420,7 @@ export function WorkloadView({
         gitOpsOwnerPending={gitOpsOwnerPending}
         gitOpsOwnerSource={gitOpsOwnerSource}
         gitOpsOwnerStatus={gitOpsOwnerStatus}
+        gitOpsEditChip={fluxManaged && fieldWriters.data ? <OutsideEditChip changes={fieldWriters.data.changes} /> : undefined}
         helmOwner={helmOwner}
         helmOwnerSource={helmOwnerSource}
         onOpenHelmRelease={handleOpenHelmRelease}

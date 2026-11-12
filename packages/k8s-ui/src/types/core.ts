@@ -188,6 +188,7 @@ export interface FeatureCapabilities {
   cnpgProtectionSetup?: boolean
   gitopsWriteEvidence?: boolean
   gitopsOutsideChanges?: boolean
+  gitopsFieldWriters?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean
   trafficRecords?: boolean
