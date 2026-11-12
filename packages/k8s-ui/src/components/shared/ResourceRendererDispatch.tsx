@@ -40,6 +40,8 @@ import {
   getSealedSecretStatus,
   getPDBStatus,
   getGitRepositoryStatus,
+  getExternalArtifactStatus,
+  getArtifactGeneratorStatus,
   getOCIRepositoryStatus,
   getHelmRepositoryStatus,
   getKustomizationStatus,
@@ -177,6 +179,8 @@ import {
   EndpointSliceRenderer,
   GenericRenderer,
   GitRepositoryRenderer,
+  ExternalArtifactRenderer,
+  ArtifactGeneratorRenderer,
   OCIRepositoryRenderer,
   HelmRepositoryRenderer,
   KustomizationRenderer,
@@ -509,7 +513,7 @@ const KNOWN_KINDS = new Set([
   'clusternetworkpolicies', 'clusternetworkpolicy',
   'poddisruptionbudgets', 'serviceaccounts', 'namespaces',
   'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
-  'events', 'gitrepositories', 'ocirepositories', 'helmrepositories',
+  'events', 'gitrepositories', 'ocirepositories', 'helmrepositories', 'externalartifacts', 'artifactgenerators',
   'kustomizations', 'helmreleases', 'alerts', 'applications',
   'nodepools', 'nodeclaims', 'ec2nodeclasses', 'scaledobjects', 'scaledjobs',
   'triggerauthentications', 'clustertriggerauthentications',
@@ -771,6 +775,7 @@ export function ResourceRendererDispatch({
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
     || kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings'
     || kind === 'certificatesigningrequests'
+    || kind === 'externalartifacts' || kind === 'artifactgenerators'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io')) ||
@@ -813,6 +818,8 @@ export function ResourceRendererDispatch({
     || ((kind === 'validatingadmissionpolicies' || kind === 'validatingadmissionpolicybindings')
       && isApiGroup(data?.apiVersion, 'admissionregistration.k8s.io'))
     || (kind === 'certificatesigningrequests' && isCertificateSigningRequest(data))
+    || (kind === 'externalartifacts' && isApiGroup(data?.apiVersion, 'source.toolkit.fluxcd.io'))
+    || (kind === 'artifactgenerators' && isApiGroup(data?.apiVersion, 'source.extensions.fluxcd.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -965,6 +972,8 @@ export function ResourceRendererDispatch({
         {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'gitrepositories' && isFluxResource && <GitRepositoryRenderer data={data} />}
+        {kind === 'externalartifacts' && isApiGroup(data?.apiVersion, 'source.toolkit.fluxcd.io') && <ExternalArtifactRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'artifactgenerators' && isApiGroup(data?.apiVersion, 'source.extensions.fluxcd.io') && <ArtifactGeneratorRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'ocirepositories' && isFluxResource && <OCIRepositoryRenderer data={data} />}
         {kind === 'helmrepositories' && isFluxResource && <HelmRepositoryRenderer data={data} />}
         {kind === 'kustomizations' && isFluxResource && <KustomizationRenderer data={data} onNavigate={onNavigate} />}
@@ -1313,6 +1322,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'poddisruptionbudgets') return getPDBStatus(data)
   const isFluxResource = getGitOpsTool(k, apiVersionToGroup(data.apiVersion)) === 'flux'
   if (k === 'gitrepositories' && isFluxResource) return getGitRepositoryStatus(data)
+  if (k === 'externalartifacts' && isApiGroup(data.apiVersion, 'source.toolkit.fluxcd.io')) return getExternalArtifactStatus(data)
+  if (k === 'artifactgenerators' && isApiGroup(data.apiVersion, 'source.extensions.fluxcd.io')) return getArtifactGeneratorStatus(data)
   if (k === 'ocirepositories' && isFluxResource) return getOCIRepositoryStatus(data)
   if (k === 'helmrepositories' && isFluxResource) return getHelmRepositoryStatus(data)
   if (k === 'kustomizations' && isFluxResource) return getKustomizationStatus(data)
