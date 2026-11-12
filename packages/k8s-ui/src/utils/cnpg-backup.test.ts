@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { cnpgBackupDeclaration, cnpgBackupDestinationBlocker, cnpgBarmanPlugin, cnpgDestinationPlugin, cnpgHasBackupDestination } from './cnpg-backup'
+import { cnpgArchivesWAL, cnpgBackupDeclaration, cnpgBackupDestinationBlocker, cnpgBarmanPlugin, cnpgDestinationPlugin, cnpgHasBackupDestination } from './cnpg-backup'
 
 const cases: Array<{
   name: string
@@ -8,6 +8,7 @@ const cases: Array<{
   method: string
   plugin: string
   hasDestination: boolean
+  archivesWAL: boolean
   destinationPlugin: string
   blockerCode: string
   barman: { objectStore: string; serverName: string } | null
@@ -17,6 +18,7 @@ describe('CNPG backup declarations shared with Go', () => {
   it.each(cases)('$name', (test) => {
     const declaration = cnpgBackupDeclaration(test.cluster)
     expect(cnpgHasBackupDestination(declaration)).toBe(test.hasDestination)
+    expect(cnpgArchivesWAL(declaration)).toBe(test.archivesWAL)
     expect(cnpgDestinationPlugin(declaration)?.name ?? '').toBe(test.destinationPlugin)
     expect(cnpgBackupDestinationBlocker(declaration, test.method || undefined, test.plugin)?.code ?? '').toBe(test.blockerCode)
     const barman = cnpgBarmanPlugin(declaration)

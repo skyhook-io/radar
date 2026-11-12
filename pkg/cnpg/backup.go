@@ -99,6 +99,20 @@ func (d BackupDeclaration) HasDestination() bool {
 	return d.InTreeDestination != "" || d.SnapshotsConfigured || d.DestinationPlugin() != ""
 }
 
+// ArchivesWAL reports whether the Cluster declares a WAL archiver: an enabled
+// plugin marked isWALArchiver, or an in-tree destinationPath.
+func (d BackupDeclaration) ArchivesWAL() bool {
+	if d.InTreeDestination != "" {
+		return true
+	}
+	for _, p := range d.Plugins {
+		if p.Enabled && p.WALArchiver {
+			return true
+		}
+	}
+	return false
+}
+
 func (d BackupDeclaration) DestinationPlugin() string {
 	for _, p := range d.Plugins {
 		if p.Enabled && (p.Name != BarmanPluginName || p.ObjectStore != "") {

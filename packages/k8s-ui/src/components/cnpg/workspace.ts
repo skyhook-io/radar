@@ -1,4 +1,4 @@
-import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
+import { cnpgArchivesWAL, cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
 // CloudNativePG workspace model: pure derivations over the /api/cnpg/workspace
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
@@ -623,7 +623,7 @@ function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const declaration = cnpgBackupDeclaration(cluster)
   const plugin = cnpgBarmanPlugin(declaration)
   const archivers = declaration.plugins.filter((p) => p.enabled && p.isWALArchiver)
-  const archiveConfigured = archivers.length > 0 || !!declaration.inTreeDestination
+  const archiveConfigured = cnpgArchivesWAL(declaration)
   if (c?.status === 'False' && archiveConfigured) {
     return { state: 'failing', text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
   }

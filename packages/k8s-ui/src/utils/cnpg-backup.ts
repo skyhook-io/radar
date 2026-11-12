@@ -51,6 +51,11 @@ export function cnpgHasBackupDestination(declaration: CNPGBackupDeclaration): bo
   return !!declaration.inTreeDestination || declaration.snapshotsConfigured || !!cnpgDestinationPlugin(declaration)
 }
 
+// Mirrors Go BackupDeclaration.ArchivesWAL: an enabled WAL-archiver plugin or an in-tree destinationPath.
+export function cnpgArchivesWAL(declaration: CNPGBackupDeclaration): boolean {
+  return !!declaration.inTreeDestination || declaration.plugins.some((p) => p.enabled && p.isWALArchiver)
+}
+
 export interface CNPGBackupBlocker {
   code: 'no_destination' | 'method_destination_missing'
   method: string
