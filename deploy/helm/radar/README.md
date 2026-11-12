@@ -41,14 +41,16 @@ to check that the chart came from Skyhook's Helm release workflow. Helm's
 Choose a chart version, then pull and verify it:
 
 ```bash
-set -euo pipefail
 version='<chart-version>'
+(
+set -euo pipefail
 helm pull oci://ghcr.io/skyhook-io/charts/radar --version "$version" 2>&1 | tee radar-pull.log
 digest="$(sed -n 's/^Digest: //p' radar-pull.log)"
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity https://github.com/skyhook-io/helm-charts/.github/workflows/release.yml@refs/heads/main \
   "ghcr.io/skyhook-io/charts/radar@${digest}"
+)
 ```
 
 Continue only if verification succeeds. Install the exact archive you pulled,
