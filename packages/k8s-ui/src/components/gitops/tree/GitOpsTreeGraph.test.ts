@@ -184,6 +184,8 @@ describe('Flux artifact chain cards', () => {
   it('name the alias a generator gives a source and how many artifacts it generates', () => {
     const source = buildChips(node({ ref: { kind: 'GitRepository', name: 'platform', namespace: 'flux-system' }, data: { relationship: 'source', alias: 'repo' } }))
     expect(source).toContainEqual({ value: 'source @repo' })
+    const twice = buildChips(node({ data: { relationship: 'source', alias: 'charts, values' } }))
+    expect(twice).toContainEqual({ value: 'source @charts @values' })
     const generator = buildChips(node({ ref: { kind: 'ArtifactGenerator', name: 'gen', namespace: 'flux-system' }, data: { relationship: 'generator', generatedCount: 143 } }))
     expect(generator).toContainEqual({ label: 'artifacts', value: '143' })
   })

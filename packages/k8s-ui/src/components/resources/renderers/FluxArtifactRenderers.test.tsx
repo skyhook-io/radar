@@ -33,5 +33,7 @@ describe('ArtifactGeneratorRenderer', () => {
     expect(html).toContain('60')
     expect(html).toContain('+10 more')
     expect(html).toContain('Copy rules')
+    const copyRules = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('Copy rules'))
+    expect(copyRules).toContain('aria-expanded="true"')
   })
 })

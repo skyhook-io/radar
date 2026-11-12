@@ -103,6 +103,8 @@ describe('Flux health-check expressions', () => {
     expect(html).toContain('status.phase == &#x27;Cluster in healthy state&#x27;')
     expect(html).toContain('!status.ready')
     expect(html).toContain('Widget')
+    const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('Health checks (expressions)'))
+    expect(section).toContain('aria-expanded="true"')
   })
 
   it('lists a HelmRelease’s expressions', () => {

@@ -261,6 +261,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	for level := 0; level < gitops.MaxFluxSourceLevels && len(frontier) > 0; level++ {
 		var next []relatedResource
 		var refs []ResourceRef
+		// A generator can list one source under several aliases; keep them all
+		// on the one node.
+		position := map[string]int{}
 		for _, related := range frontier {
 			if !gitops.IsUpstreamFluxSource(related.Ref.Group, related.Ref.Kind) || seenUpstream[refKey(related.Ref)] {
 				continue
@@ -276,10 +279,22 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 					omittedDependencies = true
 					continue
 				}
+				key := refKey(related.Ref) + "\x00" + refKey(ref)
+				if i, seen := position[key]; seen {
+					if source.Alias != "" {
+						if prior, _ := next[i].Data["alias"].(string); prior != "" {
+							next[i].Data["alias"] = prior + ", " + source.Alias
+						} else {
+							next[i].Data["alias"] = source.Alias
+						}
+					}
+					continue
+				}
 				data := map[string]any{"relationship": source.Role}
 				if source.Alias != "" {
 					data["alias"] = source.Alias
 				}
+				position[key] = len(next)
 				next = append(next, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: data})
 				refs = append(refs, ref)
 			}

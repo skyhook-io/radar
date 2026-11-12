@@ -727,7 +727,8 @@ export function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value:
   const relationship = stringData(data.relationship)
   // An ArtifactGenerator names each source by the alias its copy rules use.
   const alias = stringData(data.alias)
-  if (relationship) chips.push({ value: alias ? `${relationship} @${alias}` : relationship })
+  const aliases = alias ? alias.split(', ').map((a) => `@${a}`).join(' ') : ''
+  if (relationship) chips.push({ value: aliases ? `${relationship} ${aliases}` : relationship })
   if (typeof data.generatedCount === 'number') chips.push({ label: 'artifacts', value: String(data.generatedCount) })
   if (node.sync === 'OutOfSync') chips.push({ value: 'OutOfSync', tone: 'warning' })
   const health = treeNodeHealth(node)

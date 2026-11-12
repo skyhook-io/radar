@@ -30,7 +30,7 @@ FLUX_VERSION=v2.7.5 FLUX_SOURCE_WATCHER=1 ./scripts/gitops-demo.sh up   # or v2.
 
 `install_source_watcher` takes `source-watcher.yaml` from that release's `manifests.tar.gz`
 (`install.yaml` leaves it out) and applies it into `flux-system`. Without it, or on the default
-Flux version, `15-flux-artifacts.yaml` is skipped and the rest of the demo is unchanged.
+Flux version, `15-flux-artifacts.yaml` is skipped and the rest of the demo is unchanged. With it, a failed download stops the run rather than finishing without source-watcher.
 
 ## What's in the cluster
 

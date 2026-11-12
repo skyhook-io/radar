@@ -1140,3 +1140,30 @@ func TestFluxTreeFollowsArtifactChain(t *testing.T) {
 		}
 	}
 }
+
+func TestFluxTreeKeepsEveryAliasOfASource(t *testing.T) {
+	hr := helmRelease("team", "app")
+	hr.Object["spec"] = map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "app"}}
+	ea := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
+		"metadata": map[string]any{"name": "app", "namespace": "team"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "ArtifactGenerator", "name": "gen"}}}}
+	gen := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"name": "gen", "namespace": "team"},
+		"spec": map[string]any{"sources": []any{
+			map[string]any{"alias": "charts", "kind": "GitRepository", "name": "platform"},
+			map[string]any{"alias": "values", "kind": "GitRepository", "name": "platform"},
+		}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"name": "platform", "namespace": "team"}}}
+	hrr := ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}
+	ear := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "ExternalArtifact", Namespace: "team", Name: "app"}
+	genr := ResourceRef{Group: "source.extensions.fluxcd.io", Kind: "ArtifactGenerator", Namespace: "team", Name: "gen"}
+	repor := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "team", Name: "platform"}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(ear): ea, refKey(genr): gen, refKey(repor): repo}}
+	tree, _, err := newTestBuilder(t, getter, nil).Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findNode(t, tree, repor).Data["alias"]; got != "charts, values" {
+		t.Fatalf("alias = %v", got)
+	}
+}

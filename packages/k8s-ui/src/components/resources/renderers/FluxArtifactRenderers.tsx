@@ -105,7 +105,7 @@ export function ArtifactGeneratorRenderer({ data, onNavigate }: Props) {
         )}
       </Section>
       {artifacts.length > 0 && (
-        <Section title="Copy rules" defaultExpanded={false}>
+        <Section title="Copy rules" defaultExpanded={true}>
           <div className="space-y-2 text-xs">
             {artifacts.slice(0, MAX_COPY_RULES).map((a, i) => (
               <div key={i}>

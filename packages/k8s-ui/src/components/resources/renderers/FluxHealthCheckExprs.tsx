@@ -14,7 +14,7 @@ export interface FluxHealthCheckExpr {
 export function FluxHealthCheckExprs({ exprs }: { exprs?: FluxHealthCheckExpr[] }) {
   if (!exprs || exprs.length === 0) return null
   return (
-    <Section title="Health checks (expressions)" defaultExpanded={false}>
+    <Section title="Health checks (expressions)" defaultExpanded={true}>
       <div className="space-y-2">
         {exprs.map((expr, i) => (
           <div key={i} className="card-inner text-sm">
