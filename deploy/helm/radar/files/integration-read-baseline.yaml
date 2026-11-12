@@ -801,6 +801,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "fluxcd.controlplane.io"
+    resources: ["fluxinstances","fluxreports","resourcesets","resourcesetinputproviders"]
+    scope: Namespaced
+    collection: "fluxOperator"
+    decision: grant
+    reason: "Operational configuration and status. FluxInstance patches and ResourceSet inputs are plain configuration; credentials are referenced by Secret name."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); flux-operator v1 CRD schemas"
   - group: "source.toolkit.fluxcd.io"
     resources: ["gitrepositories","helmrepositories","ocirepositories","helmcharts","buckets","externalartifacts"]
     scope: Namespaced

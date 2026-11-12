@@ -379,6 +379,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.fluxOperator }}
+  - apiGroups: ["fluxcd.controlplane.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.gatewayApi }}
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["*"]

@@ -218,6 +218,10 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "kustomize.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "kustomizations", Kind: "Kustomization", Namespaced: true},
 	{Group: "helm.toolkit.fluxcd.io", Versions: []string{"v2", "v2beta2", "v2beta1"}, Resource: "helmreleases", Kind: "HelmRelease", Namespaced: true},
 	{Group: "notification.toolkit.fluxcd.io", Versions: []string{"v1beta3", "v1beta2"}, Resource: "alerts", Kind: "Alert", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "fluxinstances", Kind: "FluxInstance", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "fluxreports", Kind: "FluxReport", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "resourcesets", Kind: "ResourceSet", Namespaced: true},
+	{Group: "fluxcd.controlplane.io", Versions: []string{"v1"}, Resource: "resourcesetinputproviders", Kind: "ResourceSetInputProvider", Namespaced: true},
 	{Group: "apiregistration.k8s.io", Versions: []string{"v1"}, Resource: "apiservices", Kind: "APIService", Namespaced: false},
 	{Group: "apiextensions.k8s.io", Versions: []string{"v1"}, Resource: "customresourcedefinitions", Kind: "CustomResourceDefinition", Namespaced: false},
 	// Admission webhook configs gate or silently rewrite admission for every
