@@ -2,12 +2,14 @@ package context
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/prune"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // minifyDetail strips metadata noise and per-type status noise, but keeps full spec
@@ -44,6 +46,7 @@ func minifyDetailUnstructured(obj map[string]any) map[string]any {
 // the only value-level pass that reaches arbitrary CRD specs (e.g. a Traefik
 // Middleware basicAuth user) before they go to an LLM.
 func redactUnstructuredSecrets(obj map[string]any) {
+	stripK3sHelmValues(obj)
 	if spec, ok := obj["spec"]; ok {
 		RedactInlineSecrets(spec)
 	}
@@ -51,6 +54,27 @@ func redactUnstructuredSecrets(obj map[string]any) {
 		RedactInlineSecrets(status)
 	}
 	redactSecretFindings(obj)
+}
+
+// stripK3sHelmValues replaces a k3s HelmChart's or HelmChartConfig's inline
+// values with their size: valuesContent and set carry chart values, which can
+// hold credentials in any key, so pattern redaction is not enough.
+func stripK3sHelmValues(obj map[string]any) {
+	apiVersion, _ := obj["apiVersion"].(string)
+	if resourceid.GroupFromAPIVersion(apiVersion) != "helm.cattle.io" {
+		return
+	}
+	spec, _ := obj["spec"].(map[string]any)
+	if values, ok := spec["valuesContent"].(string); ok {
+		spec["valuesContent"] = fmt.Sprintf("[%d lines omitted]", len(strings.Split(strings.TrimRight(values, "\n"), "\n")))
+	}
+	if set, ok := spec["set"].(map[string]any); ok {
+		keys := make(map[string]any, len(set))
+		for k := range set {
+			keys[k] = "[omitted]"
+		}
+		spec["set"] = keys
+	}
 }
 
 // redactSecretFindings blanks the matched text of secret-scan findings (Trivy
