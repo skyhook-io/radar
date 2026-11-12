@@ -118,3 +118,19 @@ func artifactGeneratorSources(gen *unstructured.Unstructured) []FluxSourceRef {
 	}
 	return out
 }
+
+// MaxFluxSourceLevels bounds a walk up a Flux source chain from what a root
+// references (ExternalArtifact → ArtifactGenerator → its sources).
+const MaxFluxSourceLevels = 3
+
+// IsUpstreamFluxSource reports whether a source names further sources, so a
+// walk up the chain continues from it.
+func IsUpstreamFluxSource(group, kind string) bool {
+	switch group {
+	case "source.toolkit.fluxcd.io":
+		return kind == "HelmChart" || kind == "ExternalArtifact"
+	case "source.extensions.fluxcd.io":
+		return kind == "ArtifactGenerator"
+	}
+	return false
+}

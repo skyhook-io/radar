@@ -15,7 +15,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 	for _, root := range roots {
 		for _, ref := range gitops.FluxSourceReferences(root) {
 			refs = append(refs, declaredDependency{Source: resourceid.NewRef(resourceid.GroupFromAPIVersion(root.GetAPIVersion()), root.GetKind(), root.GetNamespace(), root.GetName()), Target: ref.Ref, Label: ref.Role, Configuration: true})
-			if isUpstreamFluxSource(ref.Ref) {
+			if gitops.IsUpstreamFluxSource(ref.Group, ref.Kind) {
 				upstream[ref.Key()] = ref.Ref
 			}
 		}
@@ -30,7 +30,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 	// Get, and only objects already in the graph are followed.
 	listed := map[resourceid.GroupKind][]*unstructured.Unstructured{}
 	followed := map[string]bool{}
-	for level := 0; level < maxFluxSourceLevels && len(upstream) > 0; level++ {
+	for level := 0; level < gitops.MaxFluxSourceLevels && len(upstream) > 0; level++ {
 		present := map[string]bool{}
 		for i := range nodes {
 			for _, key := range nodeResourceKeys(&nodes[i]) {
@@ -76,7 +76,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 				followed[self.Key()] = true
 				for _, ref := range gitops.FluxSourceReferences(obj) {
 					refs = append(refs, declaredDependency{Source: self, Target: ref.Ref, Label: ref.Role, Configuration: true})
-					if isUpstreamFluxSource(ref.Ref) {
+					if gitops.IsUpstreamFluxSource(ref.Group, ref.Kind) {
 						next[ref.Key()] = ref.Ref
 					}
 				}
@@ -88,19 +88,4 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 		upstream = next
 	}
 	return nodes, edges, warnings
-}
-
-// maxFluxSourceLevels bounds the walk up a Flux source chain from what the
-// roots reference (ExternalArtifact → ArtifactGenerator → its sources).
-const maxFluxSourceLevels = 3
-
-// isUpstreamFluxSource: a source that itself names further sources.
-func isUpstreamFluxSource(ref resourceid.Ref) bool {
-	switch ref.Group {
-	case "source.toolkit.fluxcd.io":
-		return ref.Kind == "HelmChart" || ref.Kind == "ExternalArtifact"
-	case "source.extensions.fluxcd.io":
-		return ref.Kind == "ArtifactGenerator"
-	}
-	return false
 }

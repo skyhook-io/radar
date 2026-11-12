@@ -258,11 +258,11 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	// walk stops after a few levels whatever the objects say.
 	seenUpstream := map[string]bool{}
 	frontier := fluxRelated
-	for level := 0; level < maxFluxSourceLevels && len(frontier) > 0; level++ {
+	for level := 0; level < gitops.MaxFluxSourceLevels && len(frontier) > 0; level++ {
 		var next []relatedResource
 		var refs []ResourceRef
 		for _, related := range frontier {
-			if !isUpstreamFluxKind(related.Ref) || seenUpstream[refKey(related.Ref)] {
+			if !gitops.IsUpstreamFluxSource(related.Ref.Group, related.Ref.Kind) || seenUpstream[refKey(related.Ref)] {
 				continue
 			}
 			seenUpstream[refKey(related.Ref)] = true
@@ -689,19 +689,4 @@ func materialize(nodes map[string]Node, edges map[string]Edge) ([]Node, []Edge) 
 		return edgeList[i].Target < edgeList[j].Target
 	})
 	return nodeList, edgeList
-}
-
-// maxFluxSourceLevels bounds the walk up a Flux source chain from what the
-// root references (ExternalArtifact → ArtifactGenerator → its sources).
-const maxFluxSourceLevels = 3
-
-// isUpstreamFluxKind: a source that itself names further sources.
-func isUpstreamFluxKind(ref ResourceRef) bool {
-	switch {
-	case ref.Group == "source.toolkit.fluxcd.io":
-		return ref.Kind == "HelmChart" || ref.Kind == "ExternalArtifact"
-	case ref.Group == "source.extensions.fluxcd.io":
-		return ref.Kind == "ArtifactGenerator"
-	}
-	return false
 }

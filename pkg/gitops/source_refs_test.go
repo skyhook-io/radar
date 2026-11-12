@@ -116,3 +116,20 @@ func TestArtifactGeneratorNamesItsSources(t *testing.T) {
 		t.Fatalf("refs = %+v, want %+v", got, want)
 	}
 }
+
+func TestIsUpstreamFluxSource(t *testing.T) {
+	for _, tc := range []struct {
+		group, kind string
+		want        bool
+	}{
+		{"source.toolkit.fluxcd.io", "HelmChart", true},
+		{"source.toolkit.fluxcd.io", "ExternalArtifact", true},
+		{"source.extensions.fluxcd.io", "ArtifactGenerator", true},
+		{"source.toolkit.fluxcd.io", "GitRepository", false},
+		{"example.com", "ExternalArtifact", false},
+	} {
+		if got := IsUpstreamFluxSource(tc.group, tc.kind); got != tc.want {
+			t.Errorf("IsUpstreamFluxSource(%q, %q) = %v", tc.group, tc.kind, got)
+		}
+	}
+}
