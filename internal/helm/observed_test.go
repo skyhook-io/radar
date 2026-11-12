@@ -269,7 +269,7 @@ func TestParseFluxEvidence(t *testing.T) {
 func TestObservedRowCarriesK3sOwner(t *testing.T) {
 	key := releaseKey{"kube-system", "traefik"}
 	objects := []stampedObject{{chartLabel: "traefik-34.2.1"}}
-	k3s := map[releaseKey]k3sOwner{key: {chart: "kube-system/traefik", config: "kube-system/traefik"}}
+	k3s := map[string]k3sOwner{"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik"}}
 	if row := observedRow(key, objects, nil, k3s); row.ManagedByK3sHelmChart != "kube-system/traefik" || row.K3sHelmChartConfig != "kube-system/traefik" {
 		t.Fatalf("row = %+v", row)
 	}

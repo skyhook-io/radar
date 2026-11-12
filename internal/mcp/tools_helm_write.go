@@ -244,6 +244,9 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 			return nil, nil, fmt.Errorf("release is managed by Flux HelmRelease %s; change its source configuration instead", detail.ManagedByFluxHelmRelease)
 		}
 		if chart := detail.ManagedByK3sHelmChart; chart != "" {
+			if in.Action == "uninstall" {
+				return nil, nil, fmt.Errorf("release is managed by k3s HelmChart %s; delete or disable the HelmChart instead (k3s re-creates the ones it ships from its manifests directory)", chart)
+			}
 			if detail.K3sHelmChartConfig != "" {
 				return nil, nil, fmt.Errorf("release is managed by k3s HelmChart %s; change its values in HelmChartConfig %s instead", chart, detail.K3sHelmChartConfig)
 			}

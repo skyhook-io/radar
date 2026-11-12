@@ -1628,13 +1628,23 @@ func k3sHelmChartKeys(charts, configs []*unstructured.Unstructured) map[string]k
 		configured[c.GetNamespace()+"/"+c.GetName()] = true
 	}
 	out := make(map[string]k3sOwner, len(charts))
+	ambiguous := map[string]bool{}
 	for _, c := range charts {
 		target := k3sTarget(c)
+		key := target.namespace + "/" + target.name
 		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName()}
 		if configured[owner.chart] {
 			owner.config = owner.chart
 		}
-		out[target.namespace+"/"+target.name] = owner
+		// Two HelmCharts installing one release can't be told apart: credit
+		// neither, as for two Flux HelmReleases.
+		if prev, ok := out[key]; ok && prev.chart != owner.chart {
+			ambiguous[key] = true
+		}
+		out[key] = owner
+	}
+	for key := range ambiguous {
+		delete(out, key)
 	}
 	return out
 }

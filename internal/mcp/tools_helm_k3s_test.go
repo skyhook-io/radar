@@ -102,11 +102,14 @@ func TestManageHelmRefusesK3sManagedRelease(t *testing.T) {
 		{Action: "upgrade", Namespace: "kube-system", Name: "demo", Values: map[string]any{"replicas": 2}},
 		{Action: "upgrade", Namespace: "kube-system", Name: "demo", Values: map[string]any{"replicas": 2}, DryRun: true},
 		{Action: "rollback", Namespace: "kube-system", Name: "demo", Revision: 1},
-		{Action: "uninstall", Namespace: "kube-system", Name: "demo"},
 	} {
 		_, _, err := handleManageHelm(ctx, nil, in)
 		if err == nil || !strings.Contains(err.Error(), "k3s HelmChart kube-system/demo") || !strings.Contains(err.Error(), "HelmChartConfig kube-system/demo") {
 			t.Errorf("%s (dry_run=%v): a k3s-owned release must be refused naming its HelmChart and HelmChartConfig: %v", in.Action, in.DryRun, err)
 		}
+	}
+	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "uninstall", Namespace: "kube-system", Name: "demo"})
+	if err == nil || !strings.Contains(err.Error(), "k3s HelmChart kube-system/demo") || !strings.Contains(err.Error(), "delete or disable the HelmChart") {
+		t.Errorf("uninstall must be refused pointing at the HelmChart itself: %v", err)
 	}
 }

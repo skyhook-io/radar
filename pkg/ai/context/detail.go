@@ -65,8 +65,12 @@ func stripK3sHelmValues(obj map[string]any) {
 		return
 	}
 	spec, _ := obj["spec"].(map[string]any)
-	if values, ok := spec["valuesContent"].(string); ok {
+	if values, ok := spec["valuesContent"].(string); ok && strings.TrimSpace(values) != "" {
 		spec["valuesContent"] = fmt.Sprintf("[%d lines omitted]", len(strings.Split(strings.TrimRight(values, "\n"), "\n")))
+	}
+	// An inline chart archive: large, and its default values may hold secrets too.
+	if _, ok := spec["chartContent"].(string); ok {
+		spec["chartContent"] = "[chart archive omitted]"
 	}
 	if set, ok := spec["set"].(map[string]any); ok {
 		keys := make(map[string]any, len(set))

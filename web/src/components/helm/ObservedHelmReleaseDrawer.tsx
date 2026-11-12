@@ -108,7 +108,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
             </Tooltip>
           )}
           {!flux && data?.managedByK3sHelmChart && (
-            <K3sManagedNote owner={{ chart: data.managedByK3sHelmChart, config: data.k3sHelmChartConfig }} onNavigateToResource={onNavigateToResource} />
+            <K3sManagedNote observed owner={{ chart: data.managedByK3sHelmChart, config: data.k3sHelmChartConfig }} onNavigateToResource={onNavigateToResource} />
           )}
         </div>
 

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/search"
 	"helm.sh/helm/v3/pkg/release"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -69,5 +70,40 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", false)
 	if rows[0].ManagedByFluxHelmRelease != "flux-system/traefik" || rows[0].ManagedByK3sHelmChart != "" || rows[0].K3sHelmChartConfig != "" {
 		t.Fatalf("Flux wins, row = %+v", rows[0])
+	}
+}
+
+// Two HelmCharts that install the same release can't be told apart, so the
+// release is credited to neither, as for two Flux HelmReleases.
+func TestK3sHelmChartKeysCreditNeitherOfTwoCharts(t *testing.T) {
+	got := k3sHelmChartKeys([]*unstructured.Unstructured{
+		k3sObj("HelmChart", "kube-system", "app", map[string]any{"targetNamespace": "apps"}),
+		k3sObj("HelmChart", "team", "app", map[string]any{"targetNamespace": "apps"}),
+	}, nil)
+	if _, ok := got["apps/app"]; ok {
+		t.Fatalf("keys = %+v, want apps/app credited to neither", got)
+	}
+}
+
+// The observed scan links a HelmChartConfig to its HelmChart whichever the
+// caller's read returns first; only objects the scan saw count.
+func TestObservedScanLinksK3sChartAndConfigInEitherOrder(t *testing.T) {
+	chart := k3sObj("HelmChart", "kube-system", "app", map[string]any{"targetNamespace": "apps"})
+	config := k3sObj("HelmChartConfig", "kube-system", "app", nil)
+	for name, order := range map[string][]*unstructured.Unstructured{"chart first": {chart, config}, "config first": {config, chart}} {
+		scan := &stampScan{seen: map[string]bool{}}
+		for _, o := range order {
+			scan.add(search.ScannedObject{Kind: o.GetKind(), Group: "helm.cattle.io", Object: o})
+		}
+		scan.finishK3s()
+		if got := scan.k3s["apps/app"]; got != (k3sOwner{chart: "kube-system/app", config: "kube-system/app"}) {
+			t.Errorf("%s: owner = %+v", name, got)
+		}
+	}
+	unread := &stampScan{seen: map[string]bool{}}
+	unread.add(search.ScannedObject{Kind: "HelmChart", Group: "helm.cattle.io", Object: chart})
+	unread.finishK3s()
+	if got := unread.k3s["apps/app"]; got.config != "" {
+		t.Errorf("a HelmChartConfig the scan didn't see is not linked: %+v", got)
 	}
 }

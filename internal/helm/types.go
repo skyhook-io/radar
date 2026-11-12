@@ -38,7 +38,9 @@ type HelmRelease struct {
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
 	// ManagedByK3sHelmChart names the k3s/RKE2 HelmChart ("namespace/name")
 	// whose helm-controller installs this release; a manual upgrade is
-	// reverted at its next reconcile. Empty when Flux owns the release.
+	// reverted at its next reconcile. Empty when Flux owns the release. Like
+	// the Flux field, it comes from Radar's own read of HelmCharts (names
+	// only); observed rows use only what the caller can read.
 	ManagedByK3sHelmChart string `json:"managedByK3sHelmChart,omitempty"`
 	// K3sHelmChartConfig names the HelmChartConfig ("namespace/name") that
 	// overrides that HelmChart's values, when one exists.

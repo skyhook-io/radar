@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { helmControllerOwner, k3sManagedText } from './k3sOwner'
+import { k3sManagedText } from './k3sOwner'
 import { DEFAULT_SHOW_EFFECTIVE_VALUES, effectiveHelmStorageNamespace, isUpgradeSourceIssueActionable, upgradePickerVersions } from './HelmReleaseDrawer'
 
 describe('Helm values view', () => {
@@ -70,14 +70,11 @@ describe('upgradePickerVersions', () => {
 })
 
 describe('helm controller owner', () => {
-  it('lets Flux win over k3s', () => {
-    expect(helmControllerOwner({ managedByFluxHelmRelease: 'flux-system/x', managedByK3sHelmChart: 'kube-system/x' })).toEqual({ tool: 'flux', ref: 'flux-system/x' })
-    expect(helmControllerOwner({ managedByK3sHelmChart: 'kube-system/traefik', k3sHelmChartConfig: 'kube-system/traefik' })).toEqual({ tool: 'k3s', chart: 'kube-system/traefik', config: 'kube-system/traefik' })
-    expect(helmControllerOwner({})).toBeNull()
-  })
-
   it('names the HelmChartConfig or says to create one', () => {
     expect(k3sManagedText({ chart: 'kube-system/traefik', config: 'kube-system/traefik' })).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own chart, so an upgrade or rollback here is reverted. Change values in HelmChartConfig kube-system/traefik.')
     expect(k3sManagedText({ chart: 'kube-system/traefik' })).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own chart, so an upgrade or rollback here is reverted. Create a HelmChartConfig kube-system/traefik to change its values.')
+  })
+  it('does not claim no HelmChartConfig exists when the caller may not see one', () => {
+    expect(k3sManagedText({ chart: 'kube-system/traefik' }, { observed: true })).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own chart, so an upgrade or rollback here is reverted. Change values in HelmChartConfig kube-system/traefik (create it if it does not exist).')
   })
 })

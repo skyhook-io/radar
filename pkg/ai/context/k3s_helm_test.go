@@ -49,3 +49,14 @@ func TestK3sHelmValuesNeverReachAIContext(t *testing.T) {
 		t.Fatalf("a Flux HelmChart is not stripped: %#v", got)
 	}
 }
+
+func TestK3sHelmEmptyValuesAndInlineChart(t *testing.T) {
+	obj := k3sHelmObject("HelmChart")
+	spec := obj.Object["spec"].(map[string]any)
+	spec["valuesContent"] = ""
+	spec["chartContent"] = "H4sIAAAAAAAA-CHART-SENTINEL"
+	raw, _ := json.Marshal(MinifyUnstructured(obj, LevelDetail))
+	if strings.Contains(string(raw), "CHART-SENTINEL") || strings.Contains(string(raw), "lines omitted") {
+		t.Fatalf("detail = %s", raw)
+	}
+}

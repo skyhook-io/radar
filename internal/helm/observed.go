@@ -163,12 +163,14 @@ func skipScanKind(kind, group string) bool {
 
 // stampScan is the object evidence of one read.
 type stampScan struct {
-	stamped  []stampedObject
-	flux     []fluxEvidence
-	k3s      map[releaseKey]k3sOwner
-	k3sConfs map[string]bool
-	coverage resourceapi.SearchCoverage
-	seen     map[string]bool
+	stamped []stampedObject
+	flux    []fluxEvidence
+	// HelmCharts and HelmChartConfigs the caller can read; finishK3s turns
+	// them into k3s, keyed "namespace/name" of the release they install.
+	k3sCharts, k3sConfigs []*unstructured.Unstructured
+	k3s                   map[string]k3sOwner
+	coverage              resourceapi.SearchCoverage
+	seen                  map[string]bool
 }
 
 // add records what one object says about Helm. A controller-owned object is
@@ -177,7 +179,11 @@ type stampScan struct {
 func (s *stampScan) add(o search.ScannedObject) {
 	if o.Group == k3sHelmGroup && (o.Kind == k3sHelmChartKind || o.Kind == k3sHelmChartConfigKind) {
 		if u, ok := o.Object.(*unstructured.Unstructured); ok {
-			s.addK3s(o.Kind, u)
+			if o.Kind == k3sHelmChartKind {
+				s.k3sCharts = append(s.k3sCharts, u)
+			} else {
+				s.k3sConfigs = append(s.k3sConfigs, u)
+			}
 		}
 	}
 	if o.Kind == fluxHelmReleaseKind && o.Group == fluxHelmReleaseGroup {
@@ -208,28 +214,10 @@ func (s *stampScan) add(o search.ScannedObject) {
 	s.stamped = append(s.stamped, stamped)
 }
 
-// addK3s records a HelmChart or HelmChartConfig the caller can read; either
-// may arrive first, so a config is linked to its chart whichever comes second.
-func (s *stampScan) addK3s(kind string, u *unstructured.Unstructured) {
-	if s.k3s == nil {
-		s.k3s, s.k3sConfs = map[releaseKey]k3sOwner{}, map[string]bool{}
-	}
-	ref := u.GetNamespace() + "/" + u.GetName()
-	if kind == k3sHelmChartConfigKind {
-		s.k3sConfs[ref] = true
-		for key, owner := range s.k3s {
-			if owner.chart == ref {
-				owner.config = ref
-				s.k3s[key] = owner
-			}
-		}
-		return
-	}
-	owner := k3sOwner{chart: ref}
-	if s.k3sConfs[ref] {
-		owner.config = ref
-	}
-	s.k3s[k3sTarget(u)] = owner
+// finishK3s links the HelmCharts and HelmChartConfigs the scan read, in
+// whatever order they arrived, with the same rule as the list stamp.
+func (s *stampScan) finishK3s() {
+	s.k3s = k3sHelmChartKeys(s.k3sCharts, s.k3sConfigs)
 }
 
 // scanObservedReleases reads the stamps the caller can see. HelmReleases are
@@ -247,6 +235,7 @@ func scanObservedReleases(ctx context.Context, scope *ObjectScope) (*stampScan, 
 		return nil, err
 	}
 	scan.coverage = coverage
+	scan.finishK3s()
 	return scan, nil
 }
 
@@ -336,7 +325,7 @@ func groupStamped(stamped []stampedObject) map[releaseKey][]stampedObject {
 
 // observedRow builds one release's row. Flux evidence replaces what labels say
 // about its chart, because Flux recorded it from the release itself.
-func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence, k3s map[releaseKey]k3sOwner) ObservedRelease {
+func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence, k3s map[string]k3sOwner) ObservedRelease {
 	row := ObservedRelease{Name: key.name, Namespace: key.namespace, ResourceCount: len(objects)}
 	choice := chooseChart(key.name, objects)
 	row.Chart, row.ChartVersion, row.AppVersion, row.OtherCharts = choice.chart, choice.version, choice.appVersion, choice.others
@@ -356,7 +345,7 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence, k
 		}
 	}
 	if row.ManagedByFluxHelmRelease == "" {
-		if owner, ok := k3s[key]; ok {
+		if owner, ok := k3s[key.namespace+"/"+key.name]; ok {
 			row.ManagedByK3sHelmChart, row.K3sHelmChartConfig = owner.chart, owner.config
 		}
 	}

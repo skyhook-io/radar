@@ -105,7 +105,9 @@ func TestHelmRecentChangesFiltersByNameAndWindow(t *testing.T) {
 	}
 }
 
-func TestHelmRecentChangesSkipsK3sOwnedReleases(t *testing.T) {
+// k3s keeps no change history of its own, so a failed revision of a release
+// a HelmChart installs is still a recent change (unlike a Flux-owned one).
+func TestHelmRecentChangesKeepsK3sOwnedReleases(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	got := helmRecentChanges([]helm.HelmRelease{{
 		Name: "traefik", Namespace: "kube-system", Status: "deployed", Revision: 7,
@@ -113,7 +115,7 @@ func TestHelmRecentChangesSkipsK3sOwnedReleases(t *testing.T) {
 		ManagedByK3sHelmChart: "kube-system/traefik",
 		LastOperation:         &helm.HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 7, Updated: now.Add(-5 * time.Minute)},
 	}}, "", time.Hour, now)
-	if len(got) != 0 {
-		t.Fatalf("k3s-owned Helm release changes = %#v, want none", got)
+	if len(got) != 1 || got[0].Name != "traefik" {
+		t.Fatalf("k3s-owned Helm release changes = %#v, want the failed revision", got)
 	}
 }
