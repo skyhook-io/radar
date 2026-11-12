@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { FluxHealthCheckExprs } from './FluxHealthCheckExprs'
 import { Package, Settings, CheckCircle2, History, FileCode2, GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
@@ -251,6 +252,8 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
           </PropertyList>
         </Section>
       )}
+
+      <FluxHealthCheckExprs exprs={spec.healthCheckExprs} />
 
       {/* Current Release */}
       {lastRelease && (
