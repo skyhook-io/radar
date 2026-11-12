@@ -266,6 +266,10 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		if kind == "Canary" {
 			return detectFlaggerCanaryIssues(gvr, u)
 		}
+	case "upgrade.cattle.io":
+		if kind == "Plan" {
+			return detectUpgradePlanIssues(gvr, u)
+		}
 	case "gateway.networking.k8s.io":
 		return detectGatewayConditionIssues(gvr, kind, u)
 	case "apiregistration.k8s.io":
