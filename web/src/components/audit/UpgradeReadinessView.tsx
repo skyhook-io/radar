@@ -89,6 +89,9 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
   const plansQuery = useResources<any>('plans', undefined, 'upgrade.cattle.io', { enabled: plansServed })
   // An unreadable Plan list shows no notice: absence of Plans is not claimed.
   const upgradePlans = useMemo(() => (plansQuery.error ? [] : distributionUpgradePlans(plansQuery.data)), [plansQuery.error, plansQuery.data])
+  // A caller who could list Plans in some namespaces only sees a lower bound.
+  const plansPartial = plansQuery.coverage?.status === 'partial'
+  const plansNotice = upgradePlans.length > 0 ? <UpgradePlansNotice plans={upgradePlans} partial={plansPartial} onNavigateToResource={onNavigateToResource} /> : null
   const targetOptions = useMemo(
     () => buildTargetOptions(data?.currentVersion, data?.reviewedThrough, requestedTarget ?? data?.targetVersion),
     [data?.currentVersion, data?.reviewedThrough, data?.targetVersion, requestedTarget],
@@ -120,6 +123,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
     return (
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
         <ChecksViewTabs />
+        {plansNotice}
         <div className="flex flex-1 items-center justify-center">
           <UpgradeReadinessError error={error} onResetTarget={resetTarget} />
         </div>
@@ -225,7 +229,7 @@ export function UpgradeReadinessView({ namespaces, onNavigateToResource }: Upgra
       {data.coverage.state === 'partial' && !data.coverage.scopedNamespaces?.length && !data.coverage.unavailableKinds?.length && scopedKinds.length === 0 && (
         <CoverageNotice headline="Some evidence is incomplete" body="Evidence labels on affected rows explain what Radar could not verify." />
       )}
-      {upgradePlans.length > 0 && <UpgradePlansNotice plans={upgradePlans} onNavigateToResource={onNavigateToResource} />}
+      {plansNotice}
       {data.coverage.state === 'no_access' ? (
         <section className="shrink-0">
           <EmptyState
@@ -443,13 +447,13 @@ export function distributionUpgradePlans(plans: any[] | undefined): { namespace:
   }))
 }
 
-export function UpgradePlansNotice({ plans, onNavigateToResource }: { plans: ReturnType<typeof distributionUpgradePlans>; onNavigateToResource: (resource: SelectedResource) => void }) {
+export function UpgradePlansNotice({ plans, partial, onNavigateToResource }: { plans: ReturnType<typeof distributionUpgradePlans>; partial?: boolean; onNavigateToResource: (resource: SelectedResource) => void }) {
   return (
     <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs">
       <FileSearch className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
       <div>
         <span className="font-medium text-theme-text-secondary">
-          {plans.length} upgrade {plans.length === 1 ? 'Plan is' : 'Plans are'} defined for this cluster.
+          {partial ? 'At least ' : ''}{plans.length} upgrade {plans.length === 1 ? 'Plan is' : 'Plans are'} defined for this cluster.
         </span>{' '}
         <span className="text-theme-text-tertiary">system-upgrade-controller upgrades the nodes it selects:</span>
         <ul className="mt-1 space-y-0.5">

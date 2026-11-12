@@ -6,13 +6,14 @@ const CP = 'node-role.kubernetes.io/control-plane'
 const data = {
   apiVersion: 'upgrade.cattle.io/v1', kind: 'Plan', metadata: { name: 'k3s-server', namespace: 'system-upgrade' },
   spec: { version: 'v1.32.1+k3s1', concurrency: 1, nodeSelector: { matchExpressions: [{ key: CP, operator: 'Exists' }] }, secrets: [{ name: 'creds', path: '/host' }],
-    upgrade: { image: 'rancher/k3s-upgrade', envs: [{ name: 'TOKEN', value: 'ENV-SENTINEL' }] } },
+    upgrade: { image: 'rancher/k3s-upgrade', envs: [{ name: 'TOKEN', value: 'ENV-SENTINEL' }], envFrom: [{ secretRef: { name: 'more' } }] },
+    prepare: { image: 'rancher/k3s-upgrade', envs: [{ name: 'P', value: 'ENV-SENTINEL' }] } },
   status: { latestHash: 'h1', applying: ['n2'], conditions: [{ type: 'Validated', status: 'True' }] },
 }
 const nodes = [
-  { name: 'n1', labels: { [CP]: 'true', 'plan.upgrade.cattle.io/k3s-server': 'h1' } },
-  { name: 'n2', labels: { [CP]: 'true' } },
-  { name: 'n3', labels: { [CP]: 'true' } },
+  { name: 'n1', labels: { 'kubernetes.io/hostname': 'n1', [CP]: 'true', 'plan.upgrade.cattle.io/k3s-server': 'h1' } },
+  { name: 'n2', labels: { 'kubernetes.io/hostname': 'n2', [CP]: 'true' } },
+  { name: 'n3', labels: { 'kubernetes.io/hostname': 'n3', [CP]: 'true' } },
 ]
 const text = (h: string) => h.replace(/<!-- -->/g, '')
 
@@ -33,5 +34,6 @@ describe('UpgradePlanRenderer', () => {
     const html = text(renderToString(<UpgradePlanRenderer data={data} nodes={nodes} />))
     expect(html).not.toContain('ENV-SENTINEL')
     expect(html).toContain('creds')
+    expect(html).toContain('2 variables · from 1 source (values not shown)')
   })
 })

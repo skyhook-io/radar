@@ -12,7 +12,7 @@ describe('toPlanNodes', () => {
     expect(toPlanNodes({ data: [node], coverage: { status: 'partial' } as any, error: null, isLoading: false }).nodes).toBeNull()
   })
   it('accepts a list from an older Radar that reports no coverage', () => {
-    expect(toPlanNodes({ data: [node], coverage: undefined, error: null, isLoading: false }).nodes).toHaveLength(1)
+    expect(toPlanNodes({ data: [node], coverage: { status: 'unknown' } as any, error: null, isLoading: false }).nodes).toHaveLength(1)
   })
   it('waits while Nodes load', () => {
     expect(toPlanNodes({ data: undefined, error: null, isLoading: true })).toEqual({ nodes: undefined, loading: true })

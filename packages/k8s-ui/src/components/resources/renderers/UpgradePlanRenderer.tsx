@@ -48,8 +48,13 @@ export function UpgradePlanRenderer({ data, onNavigate, nodes, nodesLoading }: {
   const invalid = (data.status?.conditions ?? []).find((c: any) => c?.type === 'Validated' && c?.status === 'False')
   const operationalIssuesShown = useOperationalIssuesShown()
   const secrets: string[] = (spec.secrets ?? []).map((s: any) => s?.name).filter(Boolean)
-  // Env values can hold credentials: only the number of variables is shown.
-  const envCount = (spec.upgrade?.envs?.length ?? 0) + (spec.upgrade?.envFrom?.length ?? 0)
+  // Env values can hold credentials: only how many are set is shown.
+  const envCount = (spec.upgrade?.envs?.length ?? 0) + (spec.prepare?.envs?.length ?? 0)
+  const envSources = (spec.upgrade?.envFrom?.length ?? 0) + (spec.prepare?.envFrom?.length ?? 0)
+  const envText = [
+    envCount > 0 ? `${envCount} variable${envCount === 1 ? '' : 's'}` : '',
+    envSources > 0 ? `from ${envSources} source${envSources === 1 ? '' : 's'}` : '',
+  ].filter(Boolean).join(' · ')
   return (
     <>
       {invalid && !operationalIssuesShown && <AlertBanner variant="error" title="Plan is not valid" message={invalid.message || 'The system-upgrade-controller rejected this Plan; no Node is upgraded while it is invalid.'} />}
@@ -68,7 +73,7 @@ export function UpgradePlanRenderer({ data, onNavigate, nodes, nodesLoading }: {
           {spec.cordon != null && <Property label="Cordon" value={spec.cordon ? 'yes' : 'no'} />}
           {spec.drain && <Property label="Drain" value="yes" />}
           {secrets.length > 0 && <Property label="Secrets" value={secrets.join(', ')} />}
-          {envCount > 0 && <Property label="Environment" value={`${envCount} variable${envCount === 1 ? '' : 's'} (values not shown)`} />}
+          {envText && <Property label="Environment" value={`${envText} (values not shown)`} />}
         </PropertyList>
       </Section>
       {(nodes !== undefined || nodesLoading) && (

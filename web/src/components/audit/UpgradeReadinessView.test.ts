@@ -182,4 +182,8 @@ describe('upgrade Plans notice', () => {
     expect(html).toContain('k3s-server')
     expect(html).toContain('v1.32.1+k3s1')
   })
+  it('says at least N when the caller could list only some Plans', () => {
+    const html = renderToStaticMarkup(UpgradePlansNotice({ partial: true, plans: [{ namespace: 'system-upgrade', name: 'k3s-server', version: 'v1', state: 'Complete' }], onNavigateToResource: () => {} }))
+    expect(html).toContain('At least 1 upgrade Plan is defined for this cluster')
+  })
 })
