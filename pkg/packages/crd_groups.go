@@ -26,6 +26,7 @@ var crdGroupToChart = map[string]string{
 
 	// Flux v2 (toolkit)
 	"source.toolkit.fluxcd.io":       "flux",
+	"source.extensions.fluxcd.io":    "flux",
 	"helm.toolkit.fluxcd.io":         "flux",
 	"kustomize.toolkit.fluxcd.io":    "flux",
 	"notification.toolkit.fluxcd.io": "flux",

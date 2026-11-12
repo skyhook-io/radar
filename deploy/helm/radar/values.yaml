@@ -206,7 +206,7 @@ rbac:
     inferenceGateway: true  # inference.networking.k8s.io, inference.networking.x-k8s.io, llm-d.ai (Inference Gateway + llm-d routing APIs)
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
-    flux: true              # *.toolkit.fluxcd.io
+    flux: true              # *.toolkit.fluxcd.io, source.extensions.fluxcd.io
     gatewayApi: true        # gateway.networking.k8s.io
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
