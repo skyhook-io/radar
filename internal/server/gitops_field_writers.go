@@ -68,10 +68,6 @@ func fieldWritersFor(ctx context.Context, dyn dynamic.Interface, target *unstruc
 			}
 		}
 	}
-	return fieldWriterChanges(target, lead, ownerObj)
-}
-
-func fieldWriterChanges(target *unstructured.Unstructured, lead *topology.ResourceRef, ownerObj *unstructured.Unstructured) []outsideChange {
 	if lead == nil {
 		return []outsideChange{}
 	}

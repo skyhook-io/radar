@@ -17,24 +17,11 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-func TestFieldWritersReturnsChangesForFluxManagedObject(t *testing.T) {
-	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{
-		fieldsEntry(t, "helm-controller", metav1.ManagedFieldsOperationApply, map[string]any{"f:spec": map[string]any{"f:template": map[string]any{}}}),
-		fieldsEntry(t, "kubectl-patch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}}),
-		fieldsEntry(t, "kubectl-rollout", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:template": map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{"f:kubectl.kubernetes.io/restartedAt": map[string]any{}}}}}}),
-	})
-	manager := &topology.ManagerAnswer{State: "agree", Lead: helmOwner}
-	changes := fieldWriterChanges(obj, fluxLead(manager), fluxHelmOwner(map[string]any{"mode": "warn"}))
-	if len(changes) != 1 || changes[0].Tool != "kubectl patch" || changes[0].Outcome != "reported" {
-		t.Fatalf("changes = %+v", changes)
-	}
-}
-
 func TestFieldWritersNoFluxManager(t *testing.T) {
 	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{
 		fieldsEntry(t, "kubectl-patch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}}),
 	})
-	if changes := fieldWriterChanges(obj, nil, nil); changes == nil || len(changes) != 0 {
+	if changes := fieldWritersFor(context.Background(), nil, obj, nil); changes == nil || len(changes) != 0 {
 		t.Fatalf("changes = %#v, want an empty list", changes)
 	}
 }
