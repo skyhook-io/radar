@@ -434,6 +434,11 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  // SealedSecret controller and sealing keys: host fetches /sealedsecrets/controller.
+  SealedSecretRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   // RoleBinding inline rules preview: host fetches the referenced Role/
   // ClusterRole's rules so the binding view can show what's granted without
   // a navigation step.
@@ -867,6 +872,7 @@ export function ResourceRendererDispatch({
   const kyvernoQueued = KyvernoQueuedComp ? <KyvernoQueuedComp data={data} /> : undefined
   const ServiceAccountComp = rendererOverrides?.ServiceAccountRenderer ?? ServiceAccountRenderer
   const RoleComp = rendererOverrides?.RoleRenderer ?? RoleRenderer
+  const SealedSecretComp = rendererOverrides?.SealedSecretRenderer ?? SealedSecretRenderer
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
   const CAPIClusterComp = rendererOverrides?.CAPIClusterRenderer ?? CAPIClusterRenderer
@@ -951,7 +957,7 @@ export function ResourceRendererDispatch({
         {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
         {kind === 'udproutes' && <SimpleRouteRenderer data={data} kind="UDPRoute" onNavigate={onNavigate} />}
-        {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'sealedsecrets' && <SealedSecretComp data={data} onNavigate={onNavigate} />}
         {(kind === 'workflowtemplates' || kind === 'clusterworkflowtemplates') && <WorkflowTemplateRenderer data={data} />}
         {isCoreNetworkPolicy && <NetworkPolicyRenderer data={data} />}
         {isCalicoStagedKubernetesPolicy && <NetworkPolicyRenderer data={data} staged />}
