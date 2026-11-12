@@ -27,6 +27,7 @@ import { OwnedResources } from './OwnedResources'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
 import { HelmDrawerFrame } from './HelmDrawerFrame'
 import { ObservedHelmReleaseDrawer } from './ObservedHelmReleaseDrawer'
+import { K3sManagedNote, k3sManagedText } from './k3sOwner'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 
@@ -591,6 +592,9 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
                 upgrade check failed
               </span>
               </Tooltip>
+            ) : upgradeInfo?.updateAvailable && releaseDetail?.managedByK3sHelmChart && !releaseDetail?.managedByFluxHelmRelease ? (
+              // k3s reinstalls from its HelmChart; there is no view to route an upgrade to.
+              null
             ) : upgradeInfo?.updateAvailable && releaseDetail?.managedByFluxHelmRelease ? (
               // Route-only for GitOps-managed releases: a direct `helm upgrade`
               // would be reverted at the next reconcile, so surface the available
@@ -622,7 +626,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
               </span>
               </Tooltip>
             ) : upgradeInfo?.error ? (
-              releaseDetail?.managedByFluxHelmRelease ? (
+              releaseDetail?.managedByK3sHelmChart && !releaseDetail?.managedByFluxHelmRelease ? null : releaseDetail?.managedByFluxHelmRelease ? (
                 // Managed by Flux — the "Managed by Flux" badge routes to GitOps,
                 // where the chart source lives. Don't push a Helm source here.
                 <Tooltip content="Chart source is managed by Flux — track upgrades from the GitOps view.">
@@ -661,7 +665,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
             ) : null}
           </div>
           <div className="flex items-center gap-1">
-            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFluxHelmRelease && <Tooltip content="Choose chart source">
+            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFluxHelmRelease && !releaseDetail?.managedByK3sHelmChart && <Tooltip content="Choose chart source">
               <button type="button" aria-label="Choose chart source" disabled={!canHelmWrite} onClick={() => setShowTrackSource(true)} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"><Link2 className="w-4 h-4" /></button>
             </Tooltip>}
             <Tooltip content="Refresh">
@@ -725,6 +729,9 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
             </button>
             </Tooltip>
           )}
+          {!releaseDetail?.managedByFluxHelmRelease && releaseDetail?.managedByK3sHelmChart && (
+            <K3sManagedNote owner={{ chart: releaseDetail.managedByK3sHelmChart, config: releaseDetail.k3sHelmChartConfig }} onNavigateToResource={onNavigateToResource} />
+          )}
         </div>
 
         {/* Tabs */}
@@ -758,6 +765,8 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
               operationInsight={releaseDetail.operationInsight}
               releaseNamespace={releaseDetail.namespace}
               managedByFluxHelmRelease={releaseDetail.managedByFluxHelmRelease}
+              managedByK3sHelmChart={releaseDetail.managedByK3sHelmChart}
+              k3sHelmChartConfig={releaseDetail.k3sHelmChartConfig}
               hookDiagnostics={releaseDetail.hookDiagnostics}
               onCompare={handleCompareRevisions}
               onNavigateToResource={onNavigateToResource}
@@ -1130,6 +1139,8 @@ function HelmOperationBanner({
   operationInsight,
   releaseNamespace,
   managedByFluxHelmRelease,
+  managedByK3sHelmChart,
+  k3sHelmChartConfig,
   hookDiagnostics,
   onCompare,
   onNavigateToResource,
@@ -1138,6 +1149,8 @@ function HelmOperationBanner({
   operationInsight?: HelmOperationInsight
   releaseNamespace: string
   managedByFluxHelmRelease?: string
+  managedByK3sHelmChart?: string
+  k3sHelmChartConfig?: string
   hookDiagnostics?: HookDiagnostic[]
   onCompare?: (rev1: number, rev2: number) => void
   onNavigateToResource?: NavigateToResource
@@ -1217,6 +1230,9 @@ function HelmOperationBanner({
             <p className="mt-1 text-xs text-theme-text-tertiary">
               This release is managed by Flux HelmRelease {managedByFluxHelmRelease}; direct Helm changes may be reconciled back.
             </p>
+          )}
+          {!managedByFluxHelmRelease && managedByK3sHelmChart && (
+            <p className="mt-1 text-xs text-theme-text-tertiary">{k3sManagedText({ chart: managedByK3sHelmChart, config: k3sHelmChartConfig })}</p>
           )}
         </div>
       </div>

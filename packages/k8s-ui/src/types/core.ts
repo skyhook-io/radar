@@ -1032,6 +1032,10 @@ export interface HelmRelease {
   // than helm CLI / Radar's Helm view, since changes here would get
   // reverted at the next reconcile. Format: "namespace/name".
   managedByFluxHelmRelease?: string
+  // Set when a k3s/RKE2 HelmChart installs this release ("namespace/name"); empty when Flux owns it.
+  managedByK3sHelmChart?: string
+  // The same-named HelmChartConfig that overrides its values, when one exists.
+  k3sHelmChartConfig?: string
 }
 
 export interface HelmRevision {
@@ -1110,6 +1114,10 @@ export interface HelmReleaseDetail {
   // When set, this release was installed by Flux's helm-controller — see
   // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
   managedByFluxHelmRelease?: string
+  // Set when a k3s/RKE2 HelmChart installs this release ("namespace/name"); empty when Flux owns it.
+  managedByK3sHelmChart?: string
+  // The same-named HelmChartConfig that overrides its values, when one exists.
+  k3sHelmChartConfig?: string
 }
 
 export interface HelmHook {
@@ -1301,6 +1309,9 @@ export interface ObservedHelmRelease {
   healthSummary?: string
   // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
   managedByFluxHelmRelease?: string
+  // Set only from a HelmChart (and HelmChartConfig) the caller can read.
+  managedByK3sHelmChart?: string
+  k3sHelmChartConfig?: string
 }
 
 // One entry of a Flux HelmRelease's status.history.

@@ -201,6 +201,8 @@ export function adaptHelmRelease(
     "healthIssue",
     "healthSummary",
     "managedByFluxHelmRelease",
+    "managedByK3sHelmChart",
+    "k3sHelmChartConfig",
   ] as const) {
     if (value[field] !== undefined && typeof value[field] !== "string") {
       invalidPayload(builder, source);
@@ -251,6 +253,8 @@ export function adaptHelmRelease(
     healthSummary: value.healthSummary as string | undefined,
     managedByFluxHelmRelease: value.managedByFluxHelmRelease as
       string | undefined,
+    managedByK3sHelmChart: value.managedByK3sHelmChart as string | undefined,
+    k3sHelmChartConfig: value.k3sHelmChartConfig as string | undefined,
     lastOperation,
     resources,
     ...(history ? { history } : {}),

@@ -302,4 +302,22 @@ describe("helm release card detail", () => {
     expect(html).toContain("{ color, message }");
     expect(html).toContain("[2 items]");
   });
+
+  it("carries a k3s owner and names it on the card", () => {
+    const projection = project([
+      tool("helm-k3s", "get_helm_release", { ...helmRelease, managedByK3sHelmChart: "kube-system/shop", k3sHelmChartConfig: "kube-system/shop" }, { summary: JSON.stringify({ namespace: "shop", name: "shop" }) }),
+    ]);
+    const [group] = groupsOf(projection.groups, "helm");
+    const data = group.latest.data;
+    if (data.type !== "helm") throw new Error("expected a helm card");
+    expect(data.release.managedByK3sHelmChart).toBe("kube-system/shop");
+    expect(renderToStaticMarkup(<HelmBody data={data} />)).toContain("Managed by k3s HelmChart kube-system/shop");
+  });
+
+  it("rejects a non-string k3s owner like the Flux field", () => {
+    const projection = project([
+      tool("helm-k3s-bad", "get_helm_release", { ...helmRelease, managedByK3sHelmChart: 7 }, { summary: JSON.stringify({ namespace: "shop", name: "shop" }) }),
+    ]);
+    expect(groupsOf(projection.groups, "helm").every((g) => g.latest.data.type !== "helm" || g.latest.data.release.managedByK3sHelmChart === undefined)).toBe(true);
+  });
 });

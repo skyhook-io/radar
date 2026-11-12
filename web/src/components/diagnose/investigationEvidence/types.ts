@@ -281,6 +281,8 @@ export interface InvestigationHelmRelease {
   healthIssue?: string;
   healthSummary?: string;
   managedByFluxHelmRelease?: string;
+  managedByK3sHelmChart?: string;
+  k3sHelmChartConfig?: string;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];
   /** Newest first; the tool returns the release's stored revisions. */

@@ -12,6 +12,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { formatDate } from './helm-utils'
 import { ObservedHelmDrawerNote } from './ObservedHelmNotice'
 import { OwnedResources } from './OwnedResources'
+import { K3sManagedNote } from './k3sOwner'
 
 type TabId = 'overview' | 'history' | 'resources'
 
@@ -105,6 +106,9 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
                 Managed by Flux · {flux}
               </button>
             </Tooltip>
+          )}
+          {!flux && data?.managedByK3sHelmChart && (
+            <K3sManagedNote owner={{ chart: data.managedByK3sHelmChart, config: data.k3sHelmChartConfig }} onNavigateToResource={onNavigateToResource} />
           )}
         </div>
 

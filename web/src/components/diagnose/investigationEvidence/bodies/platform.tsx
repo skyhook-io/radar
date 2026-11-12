@@ -136,6 +136,11 @@ export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
         <p className="text-xs text-theme-text-tertiary">
           Managed by Flux HelmRelease {release.managedByFluxHelmRelease}
         </p>
+      ) : release.managedByK3sHelmChart ? (
+        <p className="text-xs text-theme-text-tertiary">
+          Managed by k3s HelmChart {release.managedByK3sHelmChart}
+          {release.k3sHelmChartConfig ? ` · values in HelmChartConfig ${release.k3sHelmChartConfig}` : ''}
+        </p>
       ) : null}
       {release.hooks && release.hooks.length > 0 ? (
         <div>

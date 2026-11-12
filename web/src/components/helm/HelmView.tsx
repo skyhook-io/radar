@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock } from 'lucide-react'
+import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight, RotateCcw, Clock, Server } from 'lucide-react'
 import { CertaintyGlyph, PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
@@ -612,7 +612,7 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} observed />
-          {release.managedByFluxHelmRelease && <FluxBadge release={release.managedByFluxHelmRelease} />}
+          {release.managedByFluxHelmRelease ? <FluxBadge release={release.managedByFluxHelmRelease} /> : release.managedByK3sHelmChart && <K3sBadge chart={release.managedByK3sHelmChart} />}
         </div>
         <span className="hidden truncate pl-6 text-xs text-theme-text-tertiary phone:block">{release.namespace}</span>
       </td>
@@ -676,6 +676,17 @@ function FluxBadge({ release }: { release: string }) {
   )
 }
 
+function K3sBadge({ chart }: { chart: string }) {
+  return (
+    <Tooltip content={`Installed by k3s helm-controller via HelmChart ${chart}. An upgrade or rollback here is reverted at the next reconcile — change values in a HelmChartConfig.`}>
+      <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
+        <Server className="w-3 h-3" />
+        k3s
+      </span>
+    </Tooltip>
+  )
+}
+
 const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
   function ReleaseRow({ release, upgradeInfo, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
   const listOperation = getListOperation(release)
@@ -700,7 +711,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} />
           {listOperation && <HelmOperationChip operation={listOperation} />}
-          {release.managedByFluxHelmRelease && <FluxBadge release={release.managedByFluxHelmRelease} />}
+          {release.managedByFluxHelmRelease ? <FluxBadge release={release.managedByFluxHelmRelease} /> : release.managedByK3sHelmChart && <K3sBadge chart={release.managedByK3sHelmChart} />}
           {upgradeInfo?.updateAvailable && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>
