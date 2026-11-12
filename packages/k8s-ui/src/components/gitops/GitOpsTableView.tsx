@@ -833,7 +833,7 @@ export function GitOpsTableView({
         <div className={clsx('min-h-0 min-w-0 flex-1 overflow-auto bg-theme-base', onRowAction && 'pb-20')}>
           {headerSlot}
           {mode !== 'applications' ? (
-            <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">
+            <div className={clsx('flex items-center justify-center text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               {modeLabel(mode)} view is queued behind the application list.
             </div>
           ) : initialLoading ? (
@@ -841,7 +841,7 @@ export function GitOpsTableView({
           ) : error ? (
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary">
+            <div className={clsx('flex flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               <p>{noApplicationsMessage(allRows.length > 0, coverageStatus, hasGlobalNamespaceFilter)}</p>
               {hasGlobalNamespaceFilter && globalNamespaces && (
                 <p className="text-xs text-theme-text-tertiary">

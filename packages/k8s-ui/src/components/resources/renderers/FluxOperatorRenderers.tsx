@@ -159,9 +159,9 @@ export function FluxReportRenderer({ data }: Props) {
             {reconcilers.map((r, i) => (
               <tr key={i} className="border-t border-theme-border/60">
                 <td className="py-1 pr-3 text-theme-text-primary">{r.kind}</td>
-                <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.running ?? 0}</td>
-                <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.failing ?? 0}</td>
-                <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.suspended ?? 0}</td>
+                <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.running ?? '-'}</td>
+                <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.failing ?? '-'}</td>
+                <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.suspended ?? '-'}</td>
                 <td className="py-1 text-theme-text-secondary">{r.stats?.totalSize || '-'}</td>
               </tr>
             ))}

@@ -65,6 +65,10 @@ describe('summarizeFluxReport', () => {
   it('carries the report count', () => {
     const s = summarizeFluxReport(report('v2.7.5', []), 2)
     expect(s.total).toBe(2)
-    expect(s.index).toBe(1)
+  })
+  it('leaves controller and failing counts unknown when the report has none', () => {
+    const s = summarizeFluxReport({ spec: { distribution: { version: 'v2.7.5' } } }, 1)
+    expect(s.controllersReady).toBeUndefined()
+    expect(s.failing).toBeUndefined()
   })
 })

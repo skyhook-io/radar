@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { FluxReportSummary } from '../../utils/flux-report'
 import { formatRelativeAgeTime } from '../../utils/format'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
@@ -29,10 +29,7 @@ export function FluxReportCard({
   onOpenResource?: (ref: { kind: string; namespace: string; name: string; group: string }) => void
   defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(defaultOpen ?? false)
-  useEffect(() => {
-    if (defaultOpen === undefined) setOpen(readOpen())
-  }, [defaultOpen])
+  const [open, setOpen] = useState(() => defaultOpen ?? readOpen())
   const toggle = () => {
     setOpen((was) => {
       try {
@@ -55,20 +52,26 @@ export function FluxReportCard({
       >
         <CollapseChevron open={open} className="h-3.5 w-3.5" />
         <span className="font-medium text-theme-text-primary">
-          Flux {version} · {summary.controllersReady} controllers ready · {summary.failing} failing
+          Flux {version} ·{' '}
+          {summary.controllersReady === undefined ? 'controllers unknown' : `${summary.controllersReady} of ${summary.controllers.length} controllers ready`}
+          {summary.failing !== undefined && ` · ${summary.failing} failing`}
         </span>
         {summary.reportedAt && <span className="text-xs text-theme-text-tertiary">reported {formatRelativeAgeTime(summary.reportedAt)}</span>}
-        {summary.total > 1 && <span className="text-xs text-theme-text-tertiary">{summary.index} of {summary.total}</span>}
+        {summary.total > 1 && <span className="text-xs text-theme-text-tertiary">1 of {summary.total}</span>}
       </button>
       <Collapse open={open} id={disclosure.panelId}>
         <div className="space-y-3 border-t border-theme-border px-3 py-3">
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-theme-text-secondary">
-            {summary.managedBy && <span>installed by {summary.managedBy} {summary.operatorVersion ?? ''}</span>}
+            {summary.managedBy ? (
+              <span>installed by {summary.managedBy} {summary.operatorVersion ?? ''}</span>
+            ) : (
+              summary.operatorVersion && <span>operator {summary.operatorVersion}</span>
+            )}
             {instance && (
               <span>
                 FluxInstance{' '}
                 {onOpenResource ? (
-                  <button type="button" className="text-blue-400 hover:underline" onClick={() => onOpenResource({ kind: 'fluxinstances', namespace: instance.namespace, name: instance.name, group: 'fluxcd.controlplane.io' })}>
+                  <button type="button" className="text-accent hover:underline" onClick={() => onOpenResource({ kind: 'fluxinstances', namespace: instance.namespace, name: instance.name, group: 'fluxcd.controlplane.io' })}>
                     {instance.namespace}/{instance.name}
                   </button>
                 ) : (

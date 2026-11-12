@@ -339,7 +339,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   return (
     <>
       <SharedGitOpsTableView
-        headerSlot={fluxReportsServed ? <FluxOperatorCard available /> : undefined}
+        headerSlot={fluxReportsServed ? <FluxOperatorCard available refetchInterval={GITOPS_ROWS_REFRESH_INTERVAL_MS} /> : undefined}
         rows={rowsQuery.data?.rows ?? []}
         coverageStatus={rowsQuery.data?.coverageStatus ?? 'unknown'}
         loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading || coldRetrying}

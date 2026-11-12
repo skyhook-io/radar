@@ -9,6 +9,17 @@ describe('Flux Operator status', () => {
     expect(getFluxOperatorStatus({ status: ready('False') }).text).toBe('Not Ready')
     expect(getFluxOperatorStatus({}).text).toBe('Unknown')
   })
+  it('reads the reconcile-disabled annotation as suspended, like the drawer', () => {
+    const disabled = { metadata: { annotations: { 'fluxcd.controlplane.io/reconcile': 'disabled' } }, status: ready('True') }
+    expect(getFluxOperatorStatus(disabled).text).toBe('Suspended')
+  })
+  it('shows no failing count for a report without reconcilers', () => {
+    expect(getFluxOperatorColumnValue('fluxreports', { spec: {} }, 'failing')).toBe('')
+  })
+  it('keeps scp-style git URLs readable and hides query tokens', () => {
+    expect(redactUrlCredentials('git@github.com:org/repo.git')).toBe('github.com:org/repo.git')
+    expect(redactUrlCredentials('https://api.example.com/v1?token=abc&page=2')).toBe('https://api.example.com/v1?token=redacted&page=2')
+  })
 })
 
 describe('Flux Operator columns', () => {
@@ -45,5 +56,13 @@ describe('redactUrlCredentials', () => {
   it('never returns credentials it cannot parse', () => {
     expect(redactUrlCredentials('not a url with secret@host')).toBe('')
     expect(redactUrlCredentials('plain-text')).toBe('plain-text')
+  })
+})
+
+describe('Flux Operator table filter', () => {
+  it('filters the status column by the same text the badge shows', async () => {
+    const { getCellFilterValue } = await import('./resource-utils')
+    const r = { apiVersion: 'fluxcd.controlplane.io/v1', kind: 'ResourceSet', metadata: { name: 'a', annotations: { 'fluxcd.controlplane.io/reconcile': 'disabled' } }, status: ready('True') }
+    expect(getCellFilterValue(r, 'status', 'resourcesets')).toBe('Suspended')
   })
 })

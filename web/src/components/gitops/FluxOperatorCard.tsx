@@ -9,9 +9,9 @@ const GROUP = 'fluxcd.controlplane.io'
 // FluxOperatorCard shows Flux Operator's FluxReport above the GitOps table,
 // read as the caller. No readable report means no card: never zeros for
 // "couldn't read".
-export function FluxOperatorCard({ available }: { available: boolean }) {
+export function FluxOperatorCard({ available, refetchInterval }: { available: boolean; refetchInterval?: number }) {
   const navigate = useNavigate()
-  const reports = useResources<any>('fluxreports', undefined, GROUP, { enabled: available })
+  const reports = useResources<any>('fluxreports', undefined, GROUP, { enabled: available, refetchInterval })
   const picked = reports.isSuccess && !reports.error ? pickFluxReport(reports.data ?? []) : null
   const namespace = picked?.report.metadata?.namespace
   const instances = useResources<any>('fluxinstances', namespace, GROUP, { enabled: available && !!namespace })

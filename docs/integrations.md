@@ -785,8 +785,11 @@ When the cluster serves FluxReport and the caller can read one, the GitOps page
 shows a collapsed **Flux** card above the table: the distribution version, the
 operator version, controller readiness and per-kind reconciler counts (running,
 failing, suspended), all read from the report's status. No readable report means
-no card; Radar never shows zeros for a report it could not read. Credentials in
-a ResourceSetInputProvider URL are redacted in its column and drawer.
+no card; Radar never shows zeros for a report it could not read. The status of
+all four kinds reads `Suspended` when the object carries
+`fluxcd.controlplane.io/reconcile: disabled` (they have no `spec.suspend`).
+User info and secret-looking query values in a ResourceSetInputProvider URL are
+redacted in its column and drawer; the YAML view and MCP show the object as stored.
 
 ### ArgoCD
 

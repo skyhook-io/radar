@@ -28,5 +28,7 @@ describe('GitOpsTableView coverage', () => {
     const counts = { 'kustomize.toolkit.fluxcd.io/Kustomization': 1 }
     expect(render({ counts, headerSlot: <div>flux-card-slot</div> })).toContain('flux-card-slot')
     expect(render({ counts })).not.toContain('flux-card-slot')
+    // A full-height empty state under the card would overflow the scroll area.
+    expect(render({ counts, headerSlot: <div>flux-card-slot</div> })).not.toMatch(/class="flex h-full flex-col items-center/)
   })
 })

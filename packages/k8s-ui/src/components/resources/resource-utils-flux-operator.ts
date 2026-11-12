@@ -2,11 +2,19 @@
 // FluxReport describes what is installed and reconciling, ResourceSet and
 // ResourceSetInputProvider template objects from inputs.
 import type { StatusBadge } from './resource-utils'
+import { healthColors } from './resource-utils'
 import { getFluxResourceStatus } from './resource-utils-flux'
 
 export const FLUX_OPERATOR_GROUP = 'fluxcd.controlplane.io'
+export const FLUX_OPERATOR_PLURALS = ['fluxinstances', 'fluxreports', 'resourcesets', 'resourcesetinputproviders']
 
-export const getFluxOperatorStatus = (data: any): StatusBadge => getFluxResourceStatus(data)
+// These kinds have no spec.suspend; Flux Operator pauses them by annotation.
+export function getFluxOperatorStatus(data: any): StatusBadge {
+  if (data?.metadata?.annotations?.['fluxcd.controlplane.io/reconcile'] === 'disabled') {
+    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  }
+  return getFluxResourceStatus(data)
+}
 
 const count = (value: unknown): string => String(Array.isArray(value) ? value.length : 0)
 
@@ -24,8 +32,8 @@ export function getFluxOperatorColumnValue(kind: string, data: any, column: stri
       if (column === 'version') return spec.distribution?.version ?? ''
       if (column === 'operator') return spec.operator?.version ?? ''
       if (column === 'failing') {
-        const reconcilers: any[] = Array.isArray(spec.reconcilers) ? spec.reconcilers : []
-        return String(reconcilers.reduce((n, r) => n + (Number(r?.stats?.failing) || 0), 0))
+        if (!Array.isArray(spec.reconcilers)) return ''
+        return String(spec.reconcilers.reduce((n: number, r: any) => n + (Number(r?.stats?.failing) || 0), 0))
       }
       return undefined
     case 'resourcesets':
@@ -40,17 +48,25 @@ export function getFluxOperatorColumnValue(kind: string, data: any, column: stri
   return undefined
 }
 
-// redactUrlCredentials drops user info ("user:token@") from a URL. Text that
-// doesn't parse is shown only when it can't be hiding credentials.
+const SECRET_PARAM = /token|secret|password|passwd|key|sig|auth/i
+
+// redactUrlCredentials drops user info ("user:token@") and secret-looking
+// query values from a URL. scp-style git URLs keep host and path. Other text
+// that doesn't parse is shown only when it can't be hiding credentials.
 export function redactUrlCredentials(url: string): string {
   if (!url) return ''
+  const scp = /^[^@/:\s]+@([^:/\s]+):(?!\/)(.*)$/.exec(url)
+  if (scp) return `${scp[1]}:${scp[2]}`
+  let parsed: URL
   try {
-    const parsed = new URL(url)
-    if (!parsed.username && !parsed.password) return url
-    parsed.username = ''
-    parsed.password = ''
-    return parsed.toString().replace(/\/$/, url.endsWith('/') ? '/' : '')
+    parsed = new URL(url)
   } catch {
     return url.includes('@') ? '' : url
   }
+  const secretParams = [...parsed.searchParams.keys()].filter((k) => SECRET_PARAM.test(k))
+  if (!parsed.username && !parsed.password && secretParams.length === 0) return url
+  parsed.username = ''
+  parsed.password = ''
+  for (const k of secretParams) parsed.searchParams.set(k, 'redacted')
+  return parsed.toString().replace(/\/$/, url.endsWith('/') ? '/' : '')
 }

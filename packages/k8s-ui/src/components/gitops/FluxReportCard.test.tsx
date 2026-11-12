@@ -9,13 +9,36 @@ const summary = (patch: Partial<FluxReportSummary> = {}): FluxReportSummary => (
   controllersReady: 5, failing: 0,
   rows: [{ kind: 'HelmRelease', running: 143, failing: 0, suspended: 0 }],
   also: [{ kind: 'GitRepository', running: 1 }],
-  reportedAt: '2026-11-12T09:00:00Z', needsInventoryNote: false, index: 1, total: 1, ...patch,
+  reportedAt: '2026-11-12T09:00:00Z', needsInventoryNote: false, total: 1, ...patch,
 })
 const render = (s: FluxReportSummary, open = true) => renderToString(<FluxReportCard summary={s} defaultOpen={open} />).replace(/<!-- -->/g, '')
 
 describe('FluxReportCard', () => {
   it('sums Flux up in one line', () => {
-    expect(render(summary(), false)).toContain('Flux v2.7.5 · 5 controllers ready · 0 failing')
+    expect(render(summary(), false)).toContain('Flux v2.7.5 · 5 of 5 controllers ready · 0 failing')
+    const down = summary({ controllersReady: 4 })
+    expect(render(down, false)).toContain('4 of 5 controllers ready')
+  })
+
+  it('never shows zeros for a report without data', () => {
+    const html = render(summary({ controllers: [], controllersReady: undefined, failing: undefined }), false)
+    expect(html).toContain('controllers unknown')
+    expect(html).not.toContain('0 failing')
+  })
+
+  it('shows the operator version without an installer name', () => {
+    expect(render(summary({ managedBy: undefined }))).toContain('operator v0.62.1')
+  })
+
+  it('opens on first render when the browser kept it open', () => {
+    const g = globalThis as any
+    const had = 'window' in g
+    g.window = { localStorage: { getItem: () => 'true', setItem: () => {} } }
+    try {
+      expect(renderToString(<FluxReportCard summary={summary()} />)).toContain('aria-expanded="true"')
+    } finally {
+      if (!had) delete g.window
+    }
   })
 
   it('names the 2.8 inventory requirement when it applies', () => {

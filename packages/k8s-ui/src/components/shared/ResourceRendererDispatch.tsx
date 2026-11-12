@@ -1,5 +1,5 @@
 import { getCRDStatus } from '../resources/resource-utils-crd'
-import { FLUX_OPERATOR_GROUP, getFluxOperatorStatus } from '../resources/resource-utils-flux-operator'
+import { FLUX_OPERATOR_GROUP, FLUX_OPERATOR_PLURALS, getFluxOperatorStatus } from '../resources/resource-utils-flux-operator'
 import { getStrimziConnectorStatus } from '../resources/resource-utils-strimzi'
 import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnectorRenderer'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
@@ -760,7 +760,7 @@ export function ResourceRendererDispatch({
   // API group can publish either plural without inheriting CAPI presentation.
   const isFluxKind = ['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind)
   const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
-  const isFluxOperatorKind = ['fluxinstances', 'fluxreports', 'resourcesets', 'resourcesetinputproviders'].includes(kind)
+  const isFluxOperatorKind = FLUX_OPERATOR_PLURALS.includes(kind)
   const isFluxOperatorResource = isFluxOperatorKind && isApiGroup(data?.apiVersion, FLUX_OPERATOR_GROUP)
   const isGroupGatedKind =
     kind === 'customresourcedefinitions' ||
@@ -974,7 +974,7 @@ export function ResourceRendererDispatch({
         {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'gitrepositories' && isFluxResource && <GitRepositoryRenderer data={data} />}
-        {kind === 'fluxinstances' && isFluxOperatorResource && <FluxInstanceRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'fluxinstances' && isFluxOperatorResource && <FluxInstanceRenderer data={data} />}
         {kind === 'fluxreports' && isFluxOperatorResource && <FluxReportRenderer data={data} />}
         {kind === 'resourcesets' && isFluxOperatorResource && <ResourceSetRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'resourcesetinputproviders' && isFluxOperatorResource && <ResourceSetInputProviderRenderer data={data} />}
@@ -1326,7 +1326,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'poddisruptionbudgets') return getPDBStatus(data)
   const isFluxResource = getGitOpsTool(k, apiVersionToGroup(data.apiVersion)) === 'flux'
   if (k === 'gitrepositories' && isFluxResource) return getGitRepositoryStatus(data)
-  if (['fluxinstances', 'fluxreports', 'resourcesets', 'resourcesetinputproviders'].includes(k) && isApiGroup(data.apiVersion, FLUX_OPERATOR_GROUP)) return getFluxOperatorStatus(data)
+  if (FLUX_OPERATOR_PLURALS.includes(k) && isApiGroup(data.apiVersion, FLUX_OPERATOR_GROUP)) return getFluxOperatorStatus(data)
   if (k === 'ocirepositories' && isFluxResource) return getOCIRepositoryStatus(data)
   if (k === 'helmrepositories' && isFluxResource) return getHelmRepositoryStatus(data)
   if (k === 'kustomizations' && isFluxResource) return getKustomizationStatus(data)

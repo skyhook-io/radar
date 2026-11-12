@@ -20,13 +20,13 @@ export interface FluxReportSummary {
   operatorVersion?: string
   managedBy?: string
   controllers: Array<{ name: string; tag?: string; ready: boolean }>
-  controllersReady: number
-  failing: number
+  // Undefined when the report lists no components / reconcilers: unknown, not zero.
+  controllersReady?: number
+  failing?: number
   rows: FluxReconcilerRow[]
   also: Array<{ kind: string; running: number }>
   reportedAt?: string
   needsInventoryNote: boolean
-  index: number
   total: number
 }
 
@@ -76,15 +76,14 @@ export function summarizeFluxReport(report: any, total: number): FluxReportSumma
     operatorVersion: spec.operator?.version,
     managedBy: spec.distribution?.managedBy,
     controllers,
-    controllersReady: controllers.filter((c: { ready: boolean }) => c.ready).length,
-    failing: all.reduce((n, r) => n + r.failing, 0),
+    controllersReady: Array.isArray(spec.components) ? controllers.filter((c: { ready: boolean }) => c.ready).length : undefined,
+    failing: Array.isArray(spec.reconcilers) ? all.reduce((n, r) => n + r.failing, 0) : undefined,
     rows,
     also: counted.filter(folded).map((r) => ({ kind: r.kind, running: r.running })),
     reportedAt: ready?.lastTransitionTime,
     needsInventoryNote:
       fluxVersionAtLeast(spec.distribution?.version, 2, 8) === false &&
       !!helmReleases && helmReleases.running + helmReleases.failing + helmReleases.suspended > 0,
-    index: 1,
     total,
   }
 }
