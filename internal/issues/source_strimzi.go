@@ -81,6 +81,30 @@ func StrimziConnectorIssues(gvr schema.GroupVersionResource, u *unstructured.Uns
 	return out
 }
 
+// StrimziClusterIssues reports a Kafka or KafkaNodePool that Strimzi marks
+// NotReady. Strimzi signals failure with NotReady=True and never sets
+// Ready=False, so the generic condition walk cannot see it. Only a status the
+// operator wrote for the current generation is assessed, and the condition's
+// message is left out because it can carry operator exception text.
+func StrimziClusterIssues(gvr schema.GroupVersionResource, u *unstructured.Unstructured) []Issue {
+	kind := u.GetKind()
+	if (kind != "Kafka" && kind != "KafkaNodePool") || !strimziStatusCurrent(u) {
+		return nil
+	}
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, raw := range conds {
+		c, ok := raw.(map[string]any)
+		if !ok || c["type"] != "NotReady" || c["status"] != "True" {
+			continue
+		}
+		reason := "Strimzi" + kind + "NotReady"
+		message := "Strimzi reports this " + kind + " as NotReady; inspect its conditions and the cluster operator logs. This is an operator snapshot; runtime state may have changed."
+		out, _ := filterShapedIssues([]Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, reason, message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}, Filters{})
+		return out
+	}
+	return nil
+}
+
 func strimziStatusCurrent(u *unstructured.Unstructured) bool {
 	if u == nil || u.GetDeletionTimestamp() != nil || strings.EqualFold(u.GetAnnotations()["strimzi.io/pause-reconciliation"], "true") {
 		return false
