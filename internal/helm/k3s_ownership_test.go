@@ -64,12 +64,12 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows = %+v, err %v", rows, err)
 	}
-	if rows[0].ManagedByK3sHelmChart != "kube-system/traefik" || rows[0].K3sHelmChartConfig != "kube-system/traefik" {
-		t.Fatalf("row = %+v", rows[0])
+	if c := rows[0].ManagedBy; c == nil || c.Tool != "k3s" || c.Ref() != "kube-system/traefik" || c.ValuesRef == nil || !c.ValuesRef.Exists {
+		t.Fatalf("row = %+v", rows[0].ManagedBy)
 	}
 	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", false)
-	if rows[0].ManagedByFluxHelmRelease != "flux-system/traefik" || rows[0].ManagedByK3sHelmChart != "" || rows[0].K3sHelmChartConfig != "" {
-		t.Fatalf("Flux wins, row = %+v", rows[0])
+	if c := rows[0].ManagedBy; rows[0].ManagedByFluxHelmRelease != "flux-system/traefik" || c == nil || c.Tool != "flux" || c.Kind != "HelmRelease" || c.Ref() != "flux-system/traefik" {
+		t.Fatalf("Flux wins, row = %+v", rows[0].ManagedBy)
 	}
 }
 
@@ -105,5 +105,23 @@ func TestObservedScanLinksK3sChartAndConfigInEitherOrder(t *testing.T) {
 	unread.finishK3s()
 	if got := unread.k3s["apps/app"]; got.config != "" {
 		t.Errorf("a HelmChartConfig the scan didn't see is not linked: %+v", got)
+	}
+}
+
+func TestReleaseControllerPicksOneOwner(t *testing.T) {
+	if c := releaseController("", k3sOwner{}); c != nil {
+		t.Fatalf("no owner, got %+v", c)
+	}
+	c := releaseController("", k3sOwner{chart: "kube-system/app"})
+	want := &ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "app",
+		ValuesRef: &ControllerValuesRef{Kind: "HelmChartConfig", Group: "helm.cattle.io", Namespace: "kube-system", Name: "app"}}
+	if !reflect.DeepEqual(c, want) {
+		t.Fatalf("k3s without a config = %+v / %+v", c, c.ValuesRef)
+	}
+	if c := releaseController("", k3sOwner{chart: "kube-system/app", config: "kube-system/app"}); !c.ValuesRef.Exists {
+		t.Fatalf("config read, got %+v", c.ValuesRef)
+	}
+	if c := releaseController("flux-system/app", k3sOwner{chart: "kube-system/app"}); c.Tool != "flux" || c.ValuesRef != nil {
+		t.Fatalf("Flux wins, got %+v", c)
 	}
 }

@@ -281,8 +281,7 @@ export interface InvestigationHelmRelease {
   healthIssue?: string;
   healthSummary?: string;
   managedByFluxHelmRelease?: string;
-  managedByK3sHelmChart?: string;
-  k3sHelmChartConfig?: string;
+  managedBy?: InvestigationHelmController;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];
   /** Newest first; the tool returns the release's stored revisions. */
@@ -641,4 +640,11 @@ export interface InvestigationRootCauseEvidenceLink {
 export interface InvestigationRootCauseEvidenceResolution {
   status: "linked" | "missing" | "invalid";
   links: InvestigationRootCauseEvidenceLink[];
+}
+
+export interface InvestigationHelmController {
+  tool: string;
+  kind: string;
+  namespace: string;
+  name: string;
 }

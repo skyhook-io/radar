@@ -654,8 +654,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
 		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
-		k3s := applyK3sOwnership(rel.Name, effectiveStorage, k3sMap, hr.ManagedByFluxHelmRelease != "")
-		hr.ManagedByK3sHelmChart, hr.K3sHelmChartConfig = k3s.chart, k3s.config
+		hr.ManagedBy = releaseController(hr.ManagedByFluxHelmRelease, applyK3sOwnership(rel.Name, effectiveStorage, k3sMap, hr.ManagedByFluxHelmRelease != ""))
 		result = append(result, hr)
 	}
 	return result, nil
@@ -767,8 +766,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		LastOperation:            analysis.LastOperation,
 		Operations:               analysis.Operations,
 		ManagedByFluxHelmRelease: managedByFlux,
-		ManagedByK3sHelmChart:    k3s.chart,
-		K3sHelmChartConfig:       k3s.config,
+		ManagedBy:                releaseController(managedByFlux, k3s),
 	}
 	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {

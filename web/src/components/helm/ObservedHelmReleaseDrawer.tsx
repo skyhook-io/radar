@@ -12,7 +12,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { formatDate } from './helm-utils'
 import { ObservedHelmDrawerNote } from './ObservedHelmNotice'
 import { OwnedResources } from './OwnedResources'
-import { K3sManagedNote } from './k3sOwner'
+import { ReleaseControllerNote, releaseControllerOf } from './releaseController'
 
 type TabId = 'overview' | 'history' | 'resources'
 
@@ -55,6 +55,8 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
   useEffect(() => setActiveTab('overview'), [release.namespace, release.name])
 
   const flux = data?.managedByFluxHelmRelease
+  const controller = data ? releaseControllerOf(data) : undefined
+  const otherController = controller?.tool !== 'flux' ? controller : undefined
   const tabs = TABS.filter((tab) => tab.id !== 'history' || data?.fluxHistory?.length)
   const shownTab = tabs.some((tab) => tab.id === activeTab) ? activeTab : 'overview'
 
@@ -107,9 +109,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
               </button>
             </Tooltip>
           )}
-          {!flux && data?.managedByK3sHelmChart && (
-            <K3sManagedNote observed owner={{ chart: data.managedByK3sHelmChart, config: data.k3sHelmChartConfig }} onNavigateToResource={onNavigateToResource} />
-          )}
+          {otherController && <ReleaseControllerNote observed controller={otherController} onNavigateToResource={onNavigateToResource} />}
         </div>
 
         <div className="flex items-center gap-1 px-4 pb-2 overflow-x-auto">

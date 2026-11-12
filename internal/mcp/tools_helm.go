@@ -249,11 +249,8 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if detail.ManagedByFluxHelmRelease != "" {
 		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease
 	}
-	if detail.ManagedByK3sHelmChart != "" {
-		result["managedByK3sHelmChart"] = detail.ManagedByK3sHelmChart
-		if detail.K3sHelmChartConfig != "" {
-			result["k3sHelmChartConfig"] = detail.K3sHelmChartConfig
-		}
+	if detail.ManagedBy != nil {
+		result["managedBy"] = detail.ManagedBy
 	}
 
 	if len(detail.History) > 0 {

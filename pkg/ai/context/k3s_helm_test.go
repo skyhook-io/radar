@@ -60,3 +60,20 @@ func TestK3sHelmEmptyValuesAndInlineChart(t *testing.T) {
 		t.Fatalf("detail = %s", raw)
 	}
 }
+
+// k3s and wrangler keep a full copy of the applied object in annotations;
+// for these kinds that copy carries the values, so it never reaches context.
+func TestK3sHelmAppliedCopyNeverReachesAIContext(t *testing.T) {
+	obj := k3sHelmObject("HelmChart")
+	obj.SetAnnotations(map[string]string{
+		"objectset.rio.cattle.io/applied":                  "H4sIA-APPLIED-SENTINEL",
+		"kubectl.kubernetes.io/last-applied-configuration": `{"spec":{"valuesContent":"LAST-APPLIED-SENTINEL"}}`,
+		"helmcharts.cattle.io/managed-by":                  "helm-controller",
+	})
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		raw, _ := json.Marshal(MinifyUnstructured(obj, level))
+		if strings.Contains(string(raw), "SENTINEL") {
+			t.Errorf("level %d leaks the applied copy: %s", level, raw)
+		}
+	}
+}

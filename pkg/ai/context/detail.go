@@ -72,6 +72,14 @@ func stripK3sHelmValues(obj map[string]any) {
 	if _, ok := spec["chartContent"].(string); ok {
 		spec["chartContent"] = "[chart archive omitted]"
 	}
+	// k3s (wrangler) and kubectl keep a full copy of the applied object in an
+	// annotation, values included.
+	if meta, ok := obj["metadata"].(map[string]any); ok {
+		if annotations, ok := meta["annotations"].(map[string]any); ok {
+			delete(annotations, "objectset.rio.cattle.io/applied")
+			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		}
+	}
 	if set, ok := spec["set"].(map[string]any); ok {
 		keys := make(map[string]any, len(set))
 		for k := range set {

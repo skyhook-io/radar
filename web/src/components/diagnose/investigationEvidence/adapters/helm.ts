@@ -9,6 +9,7 @@ import { nonEmptyString, record, stringArray } from "../parse";
 import {
   type InvestigationEvidenceRelevance,
   type InvestigationEvidenceSource,
+  type InvestigationHelmController,
   type InvestigationHelmOperation,
   type InvestigationHelmOwnedResource,
   type InvestigationHelmRelease,
@@ -201,8 +202,6 @@ export function adaptHelmRelease(
     "healthIssue",
     "healthSummary",
     "managedByFluxHelmRelease",
-    "managedByK3sHelmChart",
-    "k3sHelmChartConfig",
   ] as const) {
     if (value[field] !== undefined && typeof value[field] !== "string") {
       invalidPayload(builder, source);
@@ -253,8 +252,7 @@ export function adaptHelmRelease(
     healthSummary: value.healthSummary as string | undefined,
     managedByFluxHelmRelease: value.managedByFluxHelmRelease as
       string | undefined,
-    managedByK3sHelmChart: value.managedByK3sHelmChart as string | undefined,
-    k3sHelmChartConfig: value.k3sHelmChartConfig as string | undefined,
+    ...releaseControllerField(value.managedBy),
     lastOperation,
     resources,
     ...(history ? { history } : {}),
@@ -313,4 +311,13 @@ export function adaptHelmRelease(
       builder.limit(source, label, message, "error");
     }
   }
+}
+
+// managedBy is kept only when it names an object; any tool counts.
+function releaseControllerField(value: unknown): { managedBy?: InvestigationHelmController } {
+  const v = record(value);
+  if (!v) return {};
+  const { tool, kind, name, namespace } = v;
+  if (!nonEmptyString(tool) || !nonEmptyString(kind) || !nonEmptyString(name)) return {};
+  return { managedBy: { tool, kind, name, namespace: typeof namespace === "string" ? namespace : "" } };
 }

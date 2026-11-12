@@ -84,11 +84,10 @@ type ObservedRelease struct {
 	// can read that records this release. Empty doesn't mean Flux isn't
 	// managing it: the caller may not be able to read that HelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
-	// ManagedByK3sHelmChart / K3sHelmChartConfig: "namespace/name" of a k3s
-	// HelmChart (and HelmChartConfig) the caller can read that installs this
-	// release. Empty when Flux records it, or when the caller can't read one.
-	ManagedByK3sHelmChart string `json:"managedByK3sHelmChart,omitempty"`
-	K3sHelmChartConfig    string `json:"k3sHelmChartConfig,omitempty"`
+	// ManagedBy is the controller that installs this release, from objects
+	// the caller can read. Absent doesn't mean none: the caller may not be
+	// able to read it. A k3s ValuesRef.Exists false means none was read.
+	ManagedBy *ReleaseController `json:"managedBy,omitempty"`
 }
 
 // FluxRevision is one entry of a Flux HelmRelease's status.history: what Flux
@@ -344,11 +343,7 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence, k
 			})
 		}
 	}
-	if row.ManagedByFluxHelmRelease == "" {
-		if owner, ok := k3s[key.namespace+"/"+key.name]; ok {
-			row.ManagedByK3sHelmChart, row.K3sHelmChartConfig = owner.chart, owner.config
-		}
-	}
+	row.ManagedBy = releaseController(row.ManagedByFluxHelmRelease, k3s[key.namespace+"/"+key.name])
 	return row
 }
 

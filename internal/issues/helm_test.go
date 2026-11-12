@@ -146,7 +146,7 @@ func TestNativeHelmReleaseUninstallStuckIssue(t *testing.T) {
 func TestNativeHelmReleaseIssuesKeepsK3sOwnedReleases(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	got := NativeHelmReleaseIssues([]helm.HelmRelease{{
-		Name: "traefik", Namespace: "kube-system", ManagedByK3sHelmChart: "kube-system/traefik",
+		Name: "traefik", Namespace: "kube-system", ManagedBy: &helm.ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "traefik"},
 		LastOperation: &helm.HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 4, Updated: now.Add(-time.Minute)},
 	}}, now)
 	if len(got) != 1 || got[0].Name != "traefik" {

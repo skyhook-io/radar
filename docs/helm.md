@@ -10,6 +10,7 @@ The Helm list shows:
 - Resource health derived from the current rendered manifest and live Kubernetes status.
 - Helm storage namespace. This matters for controllers such as Flux, which may store the Helm release Secret outside the target namespace.
 - Flux ownership when Radar can match the release to a Flux `HelmRelease`.
+- The controller that installs the release from its own definition, in `managedBy` (`tool`, `kind`, `group`, `namespace`, `name` and an optional `valuesRef` naming where values change). Flux and k3s are detected today; the list badge, the drawer note, operation insight and MCP refusals read only this field, so a new controller needs only a detector. `managedByFluxHelmRelease` stays for older consumers.
 - k3s/RKE2 ownership (a `k3s` badge) when a `helm.cattle.io` `HelmChart` installs the release: same name, and its `spec.targetNamespace` (or its own namespace) is where the release is stored. Flux wins if both match. Like the Flux badge, it comes from Radar's own read of HelmCharts (names only); observed rows use only what the caller can read.
 - `lastOperation` for current failed upgrades, rollback-after-failure patterns, explicit rollbacks, and stuck pending operations (including uninstalls).
 - A capped operation trail for failed upgrades, rollbacks, rollback-after-failure, and stuck pending operations (including uninstalls).
@@ -155,7 +156,7 @@ Use `list_helm_releases` first for broad Helm deployment triage. It returns rele
 
 Use `get_helm_release` for detail:
 
-- The default response includes owned resources, resource health, Flux or k3s ownership (`managedByK3sHelmChart`, `k3sHelmChartConfig`), current operation signal, hooks, and hook diagnostics when present.
+- The default response includes owned resources, resource health, the controller that owns it (`managedBy`: tool, kind, object and, for k3s, the HelmChartConfig to change values in), current operation signal, hooks, and hook diagnostics when present.
 - `include=history,operations` returns the full revision and operation trail.
 - `include=values` returns user-supplied values with key-aware secret redaction.
 - `include=diff` returns manifest diff.

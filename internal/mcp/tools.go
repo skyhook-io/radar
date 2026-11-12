@@ -2779,21 +2779,20 @@ type mcpHelmSummary struct {
 }
 
 type mcpHelmRelease struct {
-	Name                     string              `json:"name"`
-	Namespace                string              `json:"namespace"`
-	StorageNamespace         string              `json:"storageNamespace,omitempty"`
-	Chart                    string              `json:"chart"`
-	ChartVersion             string              `json:"chartVersion"`
-	Status                   string              `json:"status"`
-	Revision                 int                 `json:"revision"`
-	Updated                  time.Time           `json:"updated"`
-	ResourceHealth           string              `json:"resourceHealth,omitempty"`
-	HealthIssue              string              `json:"healthIssue,omitempty"`
-	HealthSummary            string              `json:"healthSummary,omitempty"`
-	LastOperation            *helm.HelmOperation `json:"lastOperation,omitempty"`
-	ManagedByFluxHelmRelease string              `json:"managedByFluxHelmRelease,omitempty"`
-	ManagedByK3sHelmChart    string              `json:"managedByK3sHelmChart,omitempty"`
-	K3sHelmChartConfig       string              `json:"k3sHelmChartConfig,omitempty"`
+	Name                     string                  `json:"name"`
+	Namespace                string                  `json:"namespace"`
+	StorageNamespace         string                  `json:"storageNamespace,omitempty"`
+	Chart                    string                  `json:"chart"`
+	ChartVersion             string                  `json:"chartVersion"`
+	Status                   string                  `json:"status"`
+	Revision                 int                     `json:"revision"`
+	Updated                  time.Time               `json:"updated"`
+	ResourceHealth           string                  `json:"resourceHealth,omitempty"`
+	HealthIssue              string                  `json:"healthIssue,omitempty"`
+	HealthSummary            string                  `json:"healthSummary,omitempty"`
+	LastOperation            *helm.HelmOperation     `json:"lastOperation,omitempty"`
+	ManagedByFluxHelmRelease string                  `json:"managedByFluxHelmRelease,omitempty"`
+	ManagedBy                *helm.ReleaseController `json:"managedBy,omitempty"`
 }
 
 func mcpHelmDashboardPriority(r helm.HelmRelease) int {
@@ -3163,8 +3162,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 						HealthSummary:            r.HealthSummary,
 						LastOperation:            r.LastOperation,
 						ManagedByFluxHelmRelease: r.ManagedByFluxHelmRelease,
-						ManagedByK3sHelmChart:    r.ManagedByK3sHelmChart,
-						K3sHelmChartConfig:       r.K3sHelmChartConfig,
+						ManagedBy:                r.ManagedBy,
 					})
 				}
 			}
