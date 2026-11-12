@@ -1,0 +1,57 @@
+# Flux 2.7+ artifact chain: GitRepository → ArtifactGenerator →
+# ExternalArtifact → HelmRelease (chartRef). ArtifactGenerator is served by
+# source-watcher, an opt-in Flux component: gitops-demo.sh applies this file
+# only when FLUX_SOURCE_WATCHER=1 installed it (the CRD exists).
+#
+# A separate GitRepository keeps the chart directory, which the shared
+# `podinfo` source ignores (it only keeps /kustomize).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-flux-artifacts
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: podinfo-charts
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: https://github.com/stefanprodan/podinfo
+  ref:
+    branch: master
+  ignore: |
+    /*
+    !/charts/podinfo
+---
+apiVersion: source.extensions.fluxcd.io/v1beta1
+kind: ArtifactGenerator
+metadata:
+  name: podinfo-artifacts
+  namespace: flux-system
+spec:
+  sources:
+    - alias: podinfo
+      kind: GitRepository
+      name: podinfo-charts
+  artifacts:
+    - name: podinfo-chart
+      copy:
+        - from: "@podinfo/charts/podinfo/**"
+          to: "@artifact/"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: podinfo-from-artifact
+  namespace: flux-system
+spec:
+  interval: 10m
+  targetNamespace: demo-flux-artifacts
+  releaseName: podinfo-from-artifact
+  chartRef:
+    kind: ExternalArtifact
+    name: podinfo-chart
+  values:
+    replicaCount: 1
