@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ApiError } from '../../api/client'
 import { RadarFeatureUnsupportedError } from '../../api/radarFeatures'
-import { UPGRADE_IMPACT_DOCS_URL, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary, upgradeEvidenceCoverageLabel, upgradeUnavailableKindsMessage } from './UpgradeReadinessView'
+import { UPGRADE_IMPACT_DOCS_URL, UpgradePlansNotice, distributionUpgradePlans, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary, upgradeEvidenceCoverageLabel, upgradeUnavailableKindsMessage } from './UpgradeReadinessView'
 
 describe('UpgradeReadinessError', () => {
   it('maps an unsupported-feature error to the v1.9 upgrade message', () => {
@@ -158,5 +158,28 @@ describe('issueSpecificReferences', () => {
     ]
 
     expect(issueSpecificReferences(checkReferences, findingReferences)).toEqual([findingReferences[1]])
+  })
+})
+
+describe('upgrade Plans notice', () => {
+  const plan = (name: string, image: string, conditions: any[] = []) => ({
+    apiVersion: 'upgrade.cattle.io/v1', kind: 'Plan', metadata: { name, namespace: 'system-upgrade' },
+    spec: { version: 'v1.32.1+k3s1', upgrade: { image } }, status: { conditions },
+  })
+  it('lists only k3s and rke2 upgrade Plans', () => {
+    expect(distributionUpgradePlans([
+      plan('k3s-server', 'rancher/k3s-upgrade', [{ type: 'Complete', status: 'True' }]),
+      plan('system-agent-upgrader', 'rancher/system-agent:v0.3.13-suc'),
+    ])).toEqual([{ namespace: 'system-upgrade', name: 'k3s-server', version: 'v1.32.1+k3s1', state: 'Complete' }])
+  })
+  it('returns nothing for no Plans or an unread list', () => {
+    expect(distributionUpgradePlans(undefined)).toEqual([])
+    expect(distributionUpgradePlans([])).toEqual([])
+  })
+  it('renders the notice with a link per Plan', () => {
+    const html = renderToStaticMarkup(UpgradePlansNotice({ plans: [{ namespace: 'system-upgrade', name: 'k3s-server', version: 'v1.32.1+k3s1', state: 'Complete' }], onNavigateToResource: () => {} }))
+    expect(html).toContain('1 upgrade Plan is defined for this cluster')
+    expect(html).toContain('k3s-server')
+    expect(html).toContain('v1.32.1+k3s1')
   })
 })
