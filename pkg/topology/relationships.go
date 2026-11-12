@@ -984,6 +984,8 @@ func isConfigurationDependency(ref *ResourceRef) bool {
 		return ref.Group == "keda.sh"
 	case "GitRepository", "OCIRepository", "Bucket", "HelmRepository", "HelmChart", "ExternalArtifact":
 		return ref.Group == "source.toolkit.fluxcd.io"
+	case "ArtifactGenerator":
+		return ref.Group == "source.extensions.fluxcd.io"
 	default:
 		return false
 	}

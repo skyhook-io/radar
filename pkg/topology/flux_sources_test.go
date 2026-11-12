@@ -88,3 +88,47 @@ func TestFluxSourceGraphFollowsReferencedChart(t *testing.T) {
 		})
 	}
 }
+
+func TestFluxSourceGraphFollowsArtifactChain(t *testing.T) {
+	obj := func(apiVersion, kind, name string, spec map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"namespace": "team", "name": name}, "spec": spec}}
+	}
+	genRef := map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}
+	hr := obj("helm.toolkit.fluxcd.io/v2", "HelmRelease", "app", map[string]any{"chartRef": map[string]any{"kind": "ExternalArtifact", "name": "app"}})
+	ea := obj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "app", map[string]any{"sourceRef": genRef})
+	sibling := obj("source.toolkit.fluxcd.io/v1", "ExternalArtifact", "other", map[string]any{"sourceRef": genRef})
+	gen := obj("source.extensions.fluxcd.io/v1beta1", "ArtifactGenerator", "gen", map[string]any{"sources": []any{map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"}}})
+	repo := obj("source.toolkit.fluxcd.io/v1", "GitRepository", "platform", nil)
+	gvrs := map[string]schema.GroupVersionResource{
+		"ExternalArtifact":  {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "externalartifacts"},
+		"ArtifactGenerator": {Group: "source.extensions.fluxcd.io", Version: "v1beta1", Resource: "artifactgenerators"},
+		"GitRepository":     {Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"},
+	}
+	p := &issuerTestProvider{monitorDynamicProvider: monitorDynamicProvider{gvrs: gvrs, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		gvrs["ExternalArtifact"]: {ea, sibling}, gvrs["ArtifactGenerator"]: {gen}, gvrs["GitRepository"]: {repo},
+	}}, listCalls: map[string]int{}}
+	nodes := []Node{{ID: "helmrelease/team/app", Kind: KindHelmRelease, Name: "app", Data: map[string]any{"namespace": "team", "apiVersion": hr.GetAPIVersion()}}}
+	nodes, edges, warnings := addFluxSourceEdges(nodes, nil, []*unstructured.Unstructured{hr}, p, DefaultBuildOptions())
+	if len(warnings) != 0 || len(nodes) != 4 || len(edges) != 3 {
+		t.Fatalf("chain: nodes=%+v edges=%+v warnings=%v", nodes, edges, warnings)
+	}
+	for _, n := range nodes {
+		if n.Name == "other" {
+			t.Fatalf("a sibling artifact joined the graph: %+v", n)
+		}
+	}
+	for _, e := range edges {
+		if e.Type != EdgeConfigures {
+			t.Fatalf("source edge must configure: %+v", e)
+		}
+	}
+	for resource, n := range p.listCalls {
+		if n > 2 {
+			t.Fatalf("%s listed %d times: %v", resource, n, p.listCalls)
+		}
+	}
+	rel := GetRelationships("ArtifactGenerator", "team", "gen", &Topology{Nodes: nodes, Edges: edges}, nil, p)
+	if rel == nil || len(rel.Dependents) != 1 || rel.Dependents[0].Kind != "ExternalArtifact" || len(rel.Dependencies) != 1 || rel.Dependencies[0].Kind != "GitRepository" {
+		t.Fatalf("generator relationships: %+v", rel)
+	}
+}
