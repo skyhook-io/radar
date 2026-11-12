@@ -455,7 +455,7 @@ var CheckRegistry = map[string]CheckMeta{
 		ID:          checkCNPGNoWALArchiving,
 		Title:       "PostgreSQL cluster has backups but no WAL archiving",
 		Category:    CategoryReliability,
-		Description: "The CloudNativePG cluster has a backup destination, but nothing CNPG runs archives its WAL: only volume snapshots are configured, or the backup plugin is not marked isWALArchiver. Without archived WAL the cluster can be restored only to a backup, not to a point in time between backups.",
+		Description: "The CloudNativePG cluster has a backup destination, but nothing CNPG runs archives its WAL: only volume snapshots are configured, or the backup plugin is not marked isWALArchiver. Without archived WAL the cluster can be restored only to a backup, not to a point in time between backups. CNPG may still report ContinuousArchiving as working: with no archiver it accepts each WAL file without keeping it.",
 		Remediation: "Set isWALArchiver: true on the barman-cloud plugin entry in spec.plugins (it needs an ObjectStore), or configure an in-tree destination while you still use it.",
 		References:  []Reference{refCNPGBackup, refCNPGBarmanPlugin},
 	},
