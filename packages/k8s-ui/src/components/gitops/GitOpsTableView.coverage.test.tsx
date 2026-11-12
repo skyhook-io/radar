@@ -24,4 +24,9 @@ describe('GitOpsTableView coverage', () => {
     expect(html).not.toContain('No GitOps resources detected')
     expect(html).toContain('Partial results')
   })
+  it('renders a host header slot above the table, and nothing without one', () => {
+    const counts = { 'kustomize.toolkit.fluxcd.io/Kustomization': 1 }
+    expect(render({ counts, headerSlot: <div>flux-card-slot</div> })).toContain('flux-card-slot')
+    expect(render({ counts })).not.toContain('flux-card-slot')
+  })
 })
