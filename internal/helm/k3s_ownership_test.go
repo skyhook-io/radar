@@ -20,7 +20,7 @@ func k3sObj(kind, ns, name string, spec map[string]any) *unstructured.Unstructur
 }
 
 func TestK3sHelmChartKeys(t *testing.T) {
-	got := k3sHelmChartKeys(
+	got := k3sHelmChartKeys(true,
 		[]*unstructured.Unstructured{
 			k3sObj("HelmChart", "kube-system", "traefik", map[string]any{"chart": "traefik"}),
 			k3sObj("HelmChart", "kube-system", "app", map[string]any{"targetNamespace": "apps"}),
@@ -28,8 +28,8 @@ func TestK3sHelmChartKeys(t *testing.T) {
 		[]*unstructured.Unstructured{k3sObj("HelmChartConfig", "kube-system", "traefik", nil)},
 	)
 	want := map[string]k3sOwner{
-		"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik"},
-		"apps/app":            {chart: "kube-system/app"},
+		"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik", configKnown: true},
+		"apps/app":            {chart: "kube-system/app", configKnown: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %+v, want %+v", got, want)
@@ -49,7 +49,7 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows = %+v, err %v", rows, err)
 	}
-	if c := rows[0].Controller; c == nil || c.Tool != "k3s" || c.Ref() != "kube-system/traefik" || c.ValuesRef == nil || !c.ValuesRef.Exists {
+	if c := rows[0].Controller; c == nil || c.Tool != "k3s" || c.Ref() != "kube-system/traefik" || c.ValuesRef == nil || c.ValuesRef.Exists == nil || !*c.ValuesRef.Exists {
 		t.Fatalf("row = %+v", rows[0].Controller)
 	}
 	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", false)
@@ -61,7 +61,7 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 // Two HelmCharts that install the same release can't be told apart, so the
 // release is credited to neither, as for two Flux HelmReleases.
 func TestK3sHelmChartKeysCreditNeitherOfTwoCharts(t *testing.T) {
-	got := k3sHelmChartKeys([]*unstructured.Unstructured{
+	got := k3sHelmChartKeys(true, []*unstructured.Unstructured{
 		k3sObj("HelmChart", "kube-system", "app", map[string]any{"targetNamespace": "apps"}),
 		k3sObj("HelmChart", "team", "app", map[string]any{"targetNamespace": "apps"}),
 	}, nil)
@@ -103,7 +103,7 @@ func TestReleaseControllerPicksOneOwner(t *testing.T) {
 	if !reflect.DeepEqual(c, want) {
 		t.Fatalf("k3s without a config = %+v / %+v", c, c.ValuesRef)
 	}
-	if c := releaseController("", k3sOwner{chart: "kube-system/app", config: "kube-system/app"}); !c.ValuesRef.Exists {
+	if c := releaseController("", k3sOwner{chart: "kube-system/app", config: "kube-system/app", configKnown: true}); c.ValuesRef.Exists == nil || !*c.ValuesRef.Exists {
 		t.Fatalf("config read, got %+v", c.ValuesRef)
 	}
 	if c := releaseController("flux-system/app", k3sOwner{chart: "kube-system/app"}); c.Tool != "flux" || c.ValuesRef != nil {
@@ -124,7 +124,7 @@ func TestReleaseControllerReportsOwnHistory(t *testing.T) {
 
 // The Diagnose card and MCP clients read these keys; renaming a tag breaks them.
 func TestReleaseControllerWireKeys(t *testing.T) {
-	raw, err := json.Marshal(releaseController("", k3sOwner{chart: "kube-system/app", config: "kube-system/app"}))
+	raw, err := json.Marshal(releaseController("", k3sOwner{chart: "kube-system/app", config: "kube-system/app", configKnown: true}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,5 +138,24 @@ func TestReleaseControllerWireKeys(t *testing.T) {
 	f, _ := reflect.TypeOf(HelmRelease{}).FieldByName("Controller")
 	if f.Tag.Get("json") != "controller,omitempty" {
 		t.Fatalf("HelmRelease.Controller tag = %q", f.Tag.Get("json"))
+	}
+}
+
+// Whether a values object exists is unknown, not false, when Radar couldn't
+// read the configs (or reads as a caller who may not see them).
+func TestValuesRefExistsIsTriState(t *testing.T) {
+	exists := func(o k3sOwner) *bool { return releaseController("", o).ValuesRef.Exists }
+	if e := exists(k3sOwner{chart: "kube-system/a", config: "kube-system/a", configKnown: true}); e == nil || !*e {
+		t.Errorf("read and found: %v", e)
+	}
+	if e := exists(k3sOwner{chart: "kube-system/a", configKnown: true}); e == nil || *e {
+		t.Errorf("read, none: %v", e)
+	}
+	if e := exists(k3sOwner{chart: "kube-system/a"}); e != nil {
+		t.Errorf("unknown: %v", *e)
+	}
+	unknown := k3sHelmChartKeys(false, []*unstructured.Unstructured{k3sObj("HelmChart", "kube-system", "a", nil)}, nil)
+	if unknown["kube-system/a"].configKnown {
+		t.Error("configs not read: existence unknown")
 	}
 }

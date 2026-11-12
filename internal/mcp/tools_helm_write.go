@@ -467,10 +467,12 @@ func controllerRefusal(action string, c *helm.ReleaseController) error {
 	switch {
 	case action == "uninstall":
 		return fmt.Errorf("%s; delete or disable the %s instead (it would reinstall the release)", owner, c.Kind)
-	case c.ValuesRef != nil && c.ValuesRef.Exists:
+	case c.ValuesRef != nil && c.ValuesRef.Exists != nil && *c.ValuesRef.Exists:
 		return fmt.Errorf("%s; change its values in %s %s/%s instead", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
-	case c.ValuesRef != nil:
+	case c.ValuesRef != nil && c.ValuesRef.Exists != nil:
 		return fmt.Errorf("%s; create a %s %s/%s to change its values instead", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
+	case c.ValuesRef != nil:
+		return fmt.Errorf("%s; change its values in %s %s/%s instead (create it if it does not exist)", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
 	}
 	return fmt.Errorf("%s; change it through that %s instead", owner, c.Kind)
 }

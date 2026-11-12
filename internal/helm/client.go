@@ -1602,7 +1602,12 @@ const (
 
 // k3sOwner is the k3s/RKE2 HelmChart that installs a release and, when one
 // exists, the HelmChartConfig that overrides its values ("namespace/name").
-type k3sOwner struct{ chart, config string }
+// configKnown: the configs were read completely, so an empty config means
+// none exists rather than none was seen.
+type k3sOwner struct {
+	chart, config string
+	configKnown   bool
+}
 
 // k3sTarget is the release a HelmChart installs: its own name, in
 // spec.targetNamespace or else the HelmChart's namespace. helm-controller
@@ -1617,7 +1622,7 @@ func k3sTarget(u *unstructured.Unstructured) releaseKey {
 
 // k3sHelmChartKeys maps "targetNamespace/name" to the HelmChart (and its
 // same-named HelmChartConfig) that installs that release.
-func k3sHelmChartKeys(charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
+func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
 	if len(charts) == 0 {
 		return nil
 	}
@@ -1630,7 +1635,7 @@ func k3sHelmChartKeys(charts, configs []*unstructured.Unstructured) map[string]k
 	for _, c := range charts {
 		target := k3sTarget(c)
 		key := target.namespace + "/" + target.name
-		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName()}
+		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), configKnown: configsKnown}
 		if configured[owner.chart] {
 			owner.config = owner.chart
 		}
@@ -1659,8 +1664,8 @@ func k3sHelmChartMap(ctx context.Context) map[string]k3sOwner {
 	if err != nil || len(charts) == 0 {
 		return nil
 	}
-	configs, _ := cache.ListDynamicWithGroup(ctx, k3sHelmChartConfigKind, "", k3sHelmGroup)
-	return k3sHelmChartKeys(charts, configs)
+	configs, err := cache.ListDynamicWithGroup(ctx, k3sHelmChartConfigKind, "", k3sHelmGroup)
+	return k3sHelmChartKeys(err == nil, charts, configs)
 }
 
 type helmReleaseStorageSnapshot struct {

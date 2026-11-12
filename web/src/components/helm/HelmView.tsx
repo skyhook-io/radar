@@ -614,7 +614,7 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} observed />
-          <ControllerBadge release={release} observed />
+          <ControllerBadge release={release} />
         </div>
         <span className="hidden truncate pl-6 text-xs text-theme-text-tertiary phone:block">{release.namespace}</span>
       </td>
@@ -667,9 +667,9 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
   )
 })
 
-function ControllerBadge({ release, observed }: { release: { controller?: HelmReleaseController; managedByFluxHelmRelease?: string }; observed?: boolean }) {
+function ControllerBadge({ release }: { release: { controller?: HelmReleaseController; managedByFluxHelmRelease?: string } }) {
   const controller = releaseControllerOf(release)
-  return controller ? <ReleaseControllerBadge controller={controller} observed={observed} /> : null
+  return controller ? <ReleaseControllerBadge controller={controller} /> : null
 }
 
 const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(

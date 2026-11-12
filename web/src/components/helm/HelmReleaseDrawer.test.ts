@@ -70,7 +70,7 @@ describe('upgradePickerVersions', () => {
 })
 
 describe('release controller', () => {
-  const k3s = (exists: boolean) => ({ tool: 'k3s', kind: 'HelmChart', group: 'helm.cattle.io', namespace: 'kube-system', name: 'traefik', valuesRef: { kind: 'HelmChartConfig', group: 'helm.cattle.io', namespace: 'kube-system', name: 'traefik', exists } })
+  const k3s = (exists?: boolean) => ({ tool: 'k3s', kind: 'HelmChart', group: 'helm.cattle.io', namespace: 'kube-system', name: 'traefik', valuesRef: { kind: 'HelmChartConfig', group: 'helm.cattle.io', namespace: 'kube-system', name: 'traefik', exists } })
 
   it('reads the generic field, and the Flux field from an older Radar', () => {
     expect(releaseControllerOf({ controller: k3s(true) })).toEqual(k3s(true))
@@ -81,7 +81,7 @@ describe('release controller', () => {
   it('words any controller, naming where values change', () => {
     expect(controllerManagedText(k3s(true))).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Change values in HelmChartConfig kube-system/traefik.')
     expect(controllerManagedText(k3s(false))).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Create a HelmChartConfig kube-system/traefik to change its values.')
-    expect(controllerManagedText(k3s(false), { observed: true })).toContain('(create it if it does not exist)')
+    expect(controllerManagedText(k3s(undefined))).toContain('(create it if it does not exist)')
     const fleet = { tool: 'fleet', kind: 'Bundle', group: 'fleet.cattle.io', namespace: 'fleet-local', name: 'app' }
     expect(controllerManagedText(fleet)).toBe('Managed by fleet. Bundle fleet-local/app reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Change it through that Bundle.')
   })

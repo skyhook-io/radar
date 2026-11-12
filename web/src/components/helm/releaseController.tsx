@@ -27,22 +27,21 @@ function controllerLabel(c: HelmReleaseController): string {
 
 const refOf = (o: { namespace: string; name: string }) => `${o.namespace}/${o.name}`
 
-// observed: the caller may be unable to read a values object that exists, so
-// an absent one is not stated as missing.
-export function controllerManagedText(c: HelmReleaseController, opts: { observed?: boolean } = {}): string {
+export function controllerManagedText(c: HelmReleaseController): string {
   const head = `Managed by ${controllerLabel(c)}. ${c.kind} ${refOf(c)} reinstalls this release from its own definition, so an upgrade or rollback here is reverted.`
   const v = c.valuesRef
   if (!v) return `${head} Change it through that ${c.kind}.`
-  if (v.exists) return `${head} Change values in ${v.kind} ${refOf(v)}.`
-  if (opts.observed) return `${head} Change values in ${v.kind} ${refOf(v)} (create it if it does not exist).`
-  return `${head} Create a ${v.kind} ${refOf(v)} to change its values.`
+  if (v.exists === true) return `${head} Change values in ${v.kind} ${refOf(v)}.`
+  if (v.exists === false) return `${head} Create a ${v.kind} ${refOf(v)} to change its values.`
+  // Unknown: the read failed, or the caller may not see it.
+  return `${head} Change values in ${v.kind} ${refOf(v)} (create it if it does not exist).`
 }
 
-export function ReleaseControllerBadge({ controller, observed }: { controller: HelmReleaseController; observed?: boolean }) {
+export function ReleaseControllerBadge({ controller }: { controller: HelmReleaseController }) {
   const flux = controller.tool === 'flux'
   const tip = flux
     ? `Installed by Flux helm-controller via HelmRelease ${refOf(controller)}. Changes here will be reverted at the next reconcile — manage via the GitOps tab.`
-    : controllerManagedText(controller, { observed })
+    : controllerManagedText(controller)
   return (
     <Tooltip content={tip}>
       <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
@@ -58,15 +57,15 @@ function target(o: { kind: string; group: string; namespace: string; name: strin
 }
 
 // The drawer note for a controller other than Flux (Flux keeps its GitOps link).
-export function ReleaseControllerNote({ controller, observed, onNavigateToResource }: { controller: HelmReleaseController; observed?: boolean; onNavigateToResource?: NavigateToResource }) {
+export function ReleaseControllerNote({ controller, onNavigateToResource }: { controller: HelmReleaseController; onNavigateToResource?: NavigateToResource }) {
   const v = controller.valuesRef
   return (
-    <Tooltip content={controllerManagedText(controller, { observed })} wrapperClassName="mt-1">
+    <Tooltip content={controllerManagedText(controller)} wrapperClassName="mt-1">
       <span className="inline-flex flex-wrap items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-700 dark:text-amber-400">
         <Server className="w-3 h-3" />
         Managed by {controllerLabel(controller)} ·
         <button type="button" className="hover:underline" onClick={() => onNavigateToResource?.(target(controller))}>{controller.kind} {refOf(controller)}</button>
-        {v?.exists && <>
+        {v?.exists === true && <>
           ·
           <button type="button" className="hover:underline" onClick={() => onNavigateToResource?.(target(v))}>{v.kind} {refOf(v)}</button>
         </>}

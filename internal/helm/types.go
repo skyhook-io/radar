@@ -60,15 +60,16 @@ type ReleaseController struct {
 	ValuesRef *ControllerValuesRef `json:"valuesRef,omitempty"`
 }
 
-// ControllerValuesRef is an object values are changed in. Exists is false
-// when it would have to be created (k3s reads a HelmChartConfig only if one
-// exists).
+// ControllerValuesRef is an object values are changed in. Exists is true when
+// it was read, false when a complete read found none (it would have to be
+// created), and absent when that is unknown (the read failed, or it was made
+// as a caller who may not see it).
 type ControllerValuesRef struct {
 	Kind      string `json:"kind"`
 	Group     string `json:"group"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-	Exists    bool   `json:"exists"`
+	Exists    *bool  `json:"exists,omitempty"`
 }
 
 // Ref is "namespace/name" of the controller object.
@@ -95,7 +96,7 @@ func releaseController(fluxRef string, k3s k3sOwner) *ReleaseController {
 	ns, name, _ := strings.Cut(k3s.chart, "/")
 	return &ReleaseController{
 		Tool: "k3s", Kind: k3sHelmChartKind, Group: k3sHelmGroup, Namespace: ns, Name: name,
-		ValuesRef: &ControllerValuesRef{Kind: k3sHelmChartConfigKind, Group: k3sHelmGroup, Namespace: ns, Name: name, Exists: k3s.config != ""},
+		ValuesRef: &ControllerValuesRef{Kind: k3sHelmChartConfigKind, Group: k3sHelmGroup, Namespace: ns, Name: name, Exists: k3s.configExists()},
 	}
 }
 
@@ -651,3 +652,15 @@ func ReleasePriority(r HelmRelease) int {
 	}
 	return 6
 }
+
+func (o k3sOwner) configExists() *bool {
+	switch {
+	case o.config != "":
+		return boolRef(true)
+	case o.configKnown:
+		return boolRef(false)
+	}
+	return nil
+}
+
+func boolRef(v bool) *bool { return &v }

@@ -270,7 +270,7 @@ func TestObservedRowCarriesK3sOwner(t *testing.T) {
 	key := releaseKey{"kube-system", "traefik"}
 	objects := []stampedObject{{chartLabel: "traefik-34.2.1"}}
 	k3s := map[string]k3sOwner{"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik"}}
-	if row := observedRow(key, objects, nil, k3s); row.Controller == nil || row.Controller.Tool != "k3s" || row.Controller.Ref() != "kube-system/traefik" || !row.Controller.ValuesRef.Exists {
+	if row := observedRow(key, objects, nil, k3s); row.Controller == nil || row.Controller.Tool != "k3s" || row.Controller.Ref() != "kube-system/traefik" || row.Controller.ValuesRef.Exists == nil || !*row.Controller.ValuesRef.Exists {
 		t.Fatalf("row = %+v", row)
 	}
 	flux := []fluxEvidence{{ref: "flux-system/traefik", releaseName: "traefik", releaseNamespace: "kube-system", storageNamespace: "kube-system"}}

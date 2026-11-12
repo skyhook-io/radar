@@ -599,9 +599,9 @@ export interface HelmReleaseController {
   group: string
   namespace: string
   name: string
-  // Where values are changed when that is a separate object; exists false
-  // means it would have to be created.
-  valuesRef?: { kind: string; group: string; namespace: string; name: string; exists: boolean }
+  // Where values are changed when that is a separate object. exists: true
+  // it was read, false a complete read found none (create it), absent unknown.
+  valuesRef?: { kind: string; group: string; namespace: string; name: string; exists?: boolean }
 }
 
 export interface SelectedResource {

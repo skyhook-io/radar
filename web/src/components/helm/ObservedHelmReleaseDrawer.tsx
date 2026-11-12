@@ -108,7 +108,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
               </button>
             </Tooltip>
           )}
-          {otherController && <ReleaseControllerNote observed controller={otherController} onNavigateToResource={onNavigateToResource} />}
+          {otherController && <ReleaseControllerNote controller={otherController} onNavigateToResource={onNavigateToResource} />}
         </div>
 
         <div className="flex items-center gap-1 px-4 pb-2 overflow-x-auto">
