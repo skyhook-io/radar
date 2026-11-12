@@ -64,6 +64,8 @@ func runCloudSubcommand() {
 	sub := os.Args[2]
 	rest := os.Args[3:]
 	switch sub {
+	case "enrollment-keygen":
+		os.Exit(cloudEnrollmentKeygen(rest, os.Stdout, os.Stderr))
 	case "connect":
 		os.Exit(cloudConnect(rest, os.Stderr))
 	case "install":
@@ -87,6 +89,7 @@ func cloudUsage(w *os.File) {
 Usage:
   radar cloud install [--context NAME] [-y|--yes] [--namespace NS] [--release NAME] [--adopt-existing] [--hub-url URL] [--name NAME] [--dry-run]
   radar cloud status [--context NAME] [--namespace NS --release NAME]
+  radar cloud enrollment-keygen --out FILE
 
 install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
          or offers a safe native-Helm adoption / GitOps handoff when detected.
@@ -96,6 +99,10 @@ install  Connect one kubeconfig cluster to Radar. Installs Radar when absent,
 status   Inspect the Radar installation in one kubeconfig cluster. Reports
          ownership, Cloud configuration, agent readiness, and Hub-reported
          tunnel health without changing Kubernetes.
+
+enrollment-keygen  Create an Ed25519 private key and FILE.pub locally for Hub
+                  enrollment. Does not contact Kubernetes or Hub. Files must
+                  not already exist. Register only FILE.pub with Hub.
 
 Flags (install):
   --context NAME   Kubernetes context to install into (default: current context)

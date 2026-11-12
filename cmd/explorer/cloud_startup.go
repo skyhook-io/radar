@@ -26,15 +26,17 @@ const (
 )
 
 type cloudStartupFlags struct {
-	CloudURL           string
-	Token              string
-	ClusterName        string
-	InsecureSkipVerify bool
-	HubURL             string
-	EnrollmentKeyFile  string
-	CAFile             string
-	NamePrefix         string
-	NameSuffix         string
+	CloudURL                 string
+	Token                    string
+	ClusterName              string
+	InsecureSkipVerify       bool
+	HubURL                   string
+	EnrollmentKeyFile        string
+	EnrollmentPrivateKeyFile string
+	EnrollmentOrganization   string
+	CAFile                   string
+	NamePrefix               string
+	NameSuffix               string
 	// From the chart's downward-API env.
 	PodNamespace string
 	HelmRelease  string
@@ -52,6 +54,16 @@ type cloudStartup struct {
 // anything starts, so a configuration that can never work fails at once.
 func resolveCloudStartup(f cloudStartupFlags) (cloudStartup, error) {
 	var out cloudStartup
+	if f.EnrollmentPrivateKeyFile != "" {
+		if f.EnrollmentKeyFile != "" || f.Token != "" || f.CloudURL != "" {
+			return out, errors.New("private-key enrollment cannot be combined with --cloud-token, --cloud-url or --cloud-enrollment-key-file")
+		}
+		if err := cloud.ValidateEnrollmentOrganization(f.EnrollmentOrganization); err != nil {
+			return out, fmt.Errorf("--cloud-enrollment-organization: %w", err)
+		}
+	} else if f.EnrollmentOrganization != "" {
+		return out, errors.New("--cloud-enrollment-organization requires --cloud-enrollment-private-key-file")
+	}
 	switch {
 	case f.Token != "":
 		if f.EnrollmentKeyFile != "" {
@@ -67,16 +79,19 @@ func resolveCloudStartup(f cloudStartupFlags) (cloudStartup, error) {
 			return out, errors.New("--cloud-url requires --cloud-token and --cluster-name")
 		}
 		out.mode = cloudTokenMode
-	case f.EnrollmentKeyFile != "":
+	case f.EnrollmentKeyFile != "" || f.EnrollmentPrivateKeyFile != "":
 		origin, err := cloud.NormalizeHubOrigin(strings.TrimSpace(f.HubURL))
+		if f.EnrollmentPrivateKeyFile != "" {
+			origin, err = cloud.NormalizeEnrollmentOrigin(f.HubURL)
+		}
 		if err != nil {
 			if f.HubURL == "" {
-				return out, errors.New("--cloud-enrollment-key-file needs --cloud-hub-url, the Hub's https:// address")
+				return out, errors.New("enrollment needs --cloud-hub-url, the Hub's https:// address")
 			}
 			return out, fmt.Errorf("--cloud-hub-url: %w", err)
 		}
 		if f.InsecureSkipVerify {
-			return out, errors.New("--cloud-insecure-skip-verify cannot be used with an enrollment key: the key would be sent to an unverified server. Pass the Hub's CA with --cloud-ca-file instead")
+			return out, errors.New("--cloud-insecure-skip-verify cannot be used with enrollment: pass the Hub's CA with --cloud-ca-file instead")
 		}
 		if f.PodNamespace == "" || f.HelmRelease == "" {
 			return out, errors.New("joining with an enrollment key needs MY_POD_NAMESPACE and RADAR_HELM_RELEASE, which the Radar Helm chart sets")

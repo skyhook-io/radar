@@ -25,13 +25,15 @@ type ClusterFacts struct {
 // The token the Hub hands back lives in memory only: every start joins again
 // and gets a new one.
 type EnrollmentConfig struct {
-	HubOrigin string
-	KeyFile   string
-	CA        *x509.CertPool
-	Client    kubernetes.Interface
-	Namespace string // where Radar runs
-	Release   string
-	Names     NameOptions
+	HubOrigin      string
+	KeyFile        string
+	PrivateKeyFile string
+	Organization   string
+	CA             *x509.CertPool
+	Client         kubernetes.Interface
+	Namespace      string // where Radar runs
+	Release        string
+	Names          NameOptions
 	// Facts is called before each enroll call; nil sends none.
 	Facts func(context.Context) ClusterFacts
 
@@ -46,8 +48,10 @@ func (c EnrollmentConfig) validate() error {
 		return fmt.Errorf("cloud: Hub URL: %w", err)
 	}
 	switch {
-	case c.KeyFile == "":
+	case c.KeyFile == "" && c.PrivateKeyFile == "":
 		return errors.New("cloud: enrollment key file is required")
+	case c.KeyFile != "" && c.PrivateKeyFile != "":
+		return errors.New("cloud: private-key enrollment cannot also use an enrollment secret")
 	case c.Client == nil:
 		return errors.New("cloud: Kubernetes client is required")
 	case c.Namespace == "":
@@ -56,6 +60,14 @@ func (c EnrollmentConfig) validate() error {
 		return errors.New("cloud: the Helm release name is required (RADAR_HELM_RELEASE)")
 	case c.Tunnel.Handler == nil:
 		return errors.New("cloud: Handler is required")
+	}
+	if c.PrivateKeyFile != "" {
+		if err := ValidateEnrollmentOrganization(c.Organization); err != nil {
+			return err
+		}
+		if c.Tunnel.InsecureSkipVerify {
+			return errors.New("cloud: private-key enrollment requires verified Hub TLS")
+		}
 	}
 	return c.Names.Validate()
 }
@@ -113,6 +125,9 @@ func newEnroller(cfg EnrollmentConfig) (*enroller, error) {
 	origin = enrollmentHubOrigin(origin)
 	cfg.HubOrigin = origin
 	client, err := NewEnrollClient(origin, cfg.KeyFile, cfg.CA)
+	if cfg.PrivateKeyFile != "" {
+		client, err = NewSignedEnrollClient(origin, cfg.PrivateKeyFile, cfg.Organization, cfg.CA)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +224,9 @@ func (e *enroller) attempt(ctx context.Context) (*EnrollResult, time.Duration) {
 	if err == nil {
 		e.lastReason = ""
 		log.Printf("[cloud] joined %s as cluster %s (%q)", e.cfg.HubOrigin, res.ClusterID, e.name)
+		if res.OrganizationID != "" {
+			log.Printf("[cloud] enrolled in organization %s (%q)", res.OrganizationID, res.OrganizationName)
+		}
 		return res, 0
 	}
 

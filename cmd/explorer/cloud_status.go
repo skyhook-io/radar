@@ -266,7 +266,14 @@ func printCloudStatusWithStyle(out io.Writer, target cloudinstall.RadarTarget, s
 	}
 	if runtime.UsesEnrollment() {
 		if runtime.HubURL != "" {
-			fmt.Fprintf(out, "Hub: %s (joins with an enrollment key)\n", runtime.HubURL)
+			if runtime.EnrollmentPrivateKeyConfigured {
+				fmt.Fprintf(out, "Hub: %s (public-key enrollment)\n", runtime.HubURL)
+				if runtime.EnrollmentOrganization != "" {
+					fmt.Fprintf(out, "Enrollment organization: %s\n", runtime.EnrollmentOrganization)
+				}
+			} else {
+				fmt.Fprintf(out, "Hub: %s (joins with an enrollment key)\n", runtime.HubURL)
+			}
 		} else if runtime.HubURLUnresolved {
 			fmt.Fprintln(out, "Hub: configured from a referenced value (value not inspected)")
 		}
@@ -465,8 +472,12 @@ func checkHubTunnelStatus(ctx context.Context, kc kubernetes.Interface, target c
 	if runtime.UsesEnrollment() {
 		// Radar holds the token it got by joining in memory only, so there
 		// is nothing here to ask the Hub with.
+		summary := "not checked - this Radar joins the Hub with an enrollment key"
+		if runtime.EnrollmentPrivateKeyConfigured {
+			summary = "not checked - this Radar uses public-key enrollment and keeps its cluster token in memory"
+		}
 		return hubTunnelResult{
-			summary: "not checked - this Radar joins the Hub with an enrollment key",
+			summary: summary,
 			next:    fmt.Sprintf("check its log, which says whether it joined and, if not, why: kubectl -n %s logs deploy/%s", target.Namespace, target.DeploymentName),
 		}
 	}
@@ -663,6 +674,9 @@ func cloudOwnershipLabel(target cloudinstall.RadarTarget) string {
 
 func missingEnrollmentConfiguration(runtime cloudinstall.DeploymentRuntime) []string {
 	var missing []string
+	if runtime.EnrollmentPrivateKeyConfigured && (!runtime.EnrollmentOrganizationConfigured || (runtime.EnrollmentOrganization == "" && !runtime.EnrollmentOrganizationUnresolved)) {
+		missing = append(missing, "enrollment organization")
+	}
 	if !runtime.HubURLConfigured || (runtime.HubURL == "" && !runtime.HubURLUnresolved) {
 		missing = append(missing, "Hub URL")
 	}
