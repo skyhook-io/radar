@@ -120,6 +120,16 @@ export function isCNPGWorkspaceKind(kind: string, group: string | undefined): bo
 
 export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations' | 'pooling'
 
+// Workspace titles and categories for the Checks rules about CNPG Clusters;
+// an id not listed here shows its message, under protection.
+export const CNPG_AUDIT_CHECKS: Record<string, { title: string; category: CNPGProblemCategory }> = {
+  cnpgNoDeclarativeBackup: { title: 'No declarative backup schedule', category: 'protection' },
+  cnpgNoBackupDestination: { title: 'No backup destination', category: 'protection' },
+  cnpgNoWALArchiving: { title: 'No WAL archiving', category: 'protection' },
+  cnpgSingleInstance: { title: 'Single instance', category: 'availability' },
+  cnpgInTreeBackupDeprecated: { title: 'Deprecated in-tree Barman backup', category: 'declarations' },
+}
+
 export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }[] = [
   { id: 'availability', label: 'Availability' },
   { id: 'protection', label: 'Backups' },
@@ -881,8 +891,8 @@ function problemsFor(
     out.push({
       id: `audit:${f.checkId}:${ns}/${name}`,
       severity: 'posture',
-      category: 'protection',
-      title: f.checkId === 'cnpgNoDeclarativeBackup' ? 'No declarative backup schedule' : f.message,
+      category: CNPG_AUDIT_CHECKS[f.checkId]?.category ?? 'protection',
+      title: CNPG_AUDIT_CHECKS[f.checkId]?.title ?? f.message,
       detail: f.message,
       subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: ns, name },
       source: 'audit',

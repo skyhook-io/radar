@@ -135,6 +135,27 @@ describe('buildCNPGFleet', () => {
     expect(row.protection.schedule.text).toBe('No declarative schedule')
   })
 
+  it('titles and files each CNPG check by its id, as posture', () => {
+    const ids = ['cnpgNoDeclarativeBackup', 'cnpgNoBackupDestination', 'cnpgNoWALArchiving', 'cnpgSingleInstance', 'cnpgInTreeBackupDeprecated', 'cnpgFutureCheck']
+    const fleet = buildCNPGFleet(
+      resp({ clusters: [cluster('pg-a', 'db')] }, {
+        audit: ids.map((checkId) => ({ checkId, severity: 'warning', kind: 'Cluster', namespace: 'db', name: 'pg-a', message: `message of ${checkId}` })),
+      }),
+    )
+    const row = fleet.rows[0]
+    const byId = Object.fromEntries(row.problems.filter((p) => p.source === 'audit').map((p) => [p.id.split(':')[1], p]))
+    expect(Object.fromEntries(Object.entries(byId).map(([id, p]) => [id, [p.title, p.category, p.severity]]))).toEqual({
+      cnpgNoDeclarativeBackup: ['No declarative backup schedule', 'protection', 'posture'],
+      cnpgNoBackupDestination: ['No backup destination', 'protection', 'posture'],
+      cnpgNoWALArchiving: ['No WAL archiving', 'protection', 'posture'],
+      cnpgSingleInstance: ['Single instance', 'availability', 'posture'],
+      cnpgInTreeBackupDeprecated: ['Deprecated in-tree Barman backup', 'declarations', 'posture'],
+      cnpgFutureCheck: ['message of cnpgFutureCheck', 'protection', 'posture'],
+    })
+    expect(row.attention).toBe(false)
+    expect(row.categories.size).toBe(0)
+  })
+
   it('says "no access" rather than "none" when a kind is not readable', () => {
     const fleet = buildCNPGFleet(
       resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'denied' }, scheduledBackups: { state: 'partial', deniedNamespaces: ['db'] } } }),
