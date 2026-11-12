@@ -1043,6 +1043,19 @@ func newFieldsTree(node map[string]any) *fieldsTree {
 	return t
 }
 
+func intersectTrees(a, b []*fieldsTree) []*fieldsTree {
+	var out []*fieldsTree
+	for _, x := range a {
+		for _, y := range b {
+			if x == y {
+				out = append(out, x)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // owns reports whether the set covers the path. Exact when the set names the
 // path itself as a leaf; approximate when it only names an ancestor as a leaf
 // (an atomic value such as an atomic list), names the path with a
@@ -1064,6 +1077,9 @@ func (t *fieldsTree) ownsAt(segs []fieldPathSegment, depth int) (bool, bool) {
 		}
 	case segMatch:
 		children = t.byKey[seg.key][seg.value]
+		for _, kv := range seg.also {
+			children = intersectTrees(children, t.byKey[kv[0]][kv[1]])
+		}
 	case segAny:
 		children = t.keyed
 	case segIndex:

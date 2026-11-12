@@ -340,3 +340,17 @@ func TestOutsideListGroupsSayAKustomizationHasNoInventory(t *testing.T) {
 		t.Fatalf("readable inventory reported missing: %+v", cov)
 	}
 }
+
+func TestFieldsTreeMatchesEveryKeyOfAMultiKeySelector(t *testing.T) {
+	tree := newFieldsTree(map[string]any{"f:spec": map[string]any{"f:ports": map[string]any{
+		`k:{"port":80,"protocol":"UDP"}`: map[string]any{"f:name": map[string]any{}},
+		`k:{"port":80,"protocol":"TCP"}`: map[string]any{".": map[string]any{}, "f:port": map[string]any{}},
+	}}})
+	segs, err := parseWriteFieldPath("spec.ports[port=80,protocol=TCP].name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned, _ := tree.owns(segs); owned {
+		t.Fatal("the UDP element's name answered for the TCP element")
+	}
+}
