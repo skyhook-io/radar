@@ -121,3 +121,46 @@ func TestTraefikRuleRefsCantTell(t *testing.T) {
 		allCantTell(t, "legacy", a.RuleRefs(legacy))
 	})
 }
+
+// A present chain answers for its members too, so its reads include theirs.
+func TestTraefikRuleRefsPresentChainCarriesMemberReads(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, traefikArgs...),
+		traefikObject("Middleware", "edge", "edge-chain", map[string]any{"chain": map[string]any{"middlewares": []any{map[string]any{"name": "strip", "namespace": "shop"}}}}))
+	refs := traefikAssessor(t).RuleRefs(ingressRoute("edge", "uses-chain", nil, svcRef("web"), mwRef("edge-chain")))
+	v := refs[0].Middlewares[0]
+	if v.Missing == nil || *v.Missing {
+		t.Fatalf("edge-chain should be present: %+v", v)
+	}
+	if !hasRead(v.Reads, issuesapi.EvidenceRead{Group: "traefik.io", Resource: "middlewares", Namespace: "shop", Verb: "list"}) {
+		t.Errorf("reads must cover the member in shop: %+v", v.Reads)
+	}
+}
+
+func TestParseTraefikRuleRefs(t *testing.T) {
+	route := ingressRoute("shop", "p", nil, []any{map[string]any{"name": "web", "port": int64(8080)}, map[string]any{"name": "w", "kind": "TraefikService", "namespace": "edge"}}, mwRef("strip"))
+	refs := ParseTraefikRuleRefs(route)
+	if len(refs) != 1 || len(refs[0].Services) != 2 || len(refs[0].Middlewares) != 1 {
+		t.Fatalf("refs = %+v", refs)
+	}
+	if s := refs[0].Services[0]; s.Kind != "Service" || s.Namespace != "shop" || s.Port != "8080" || s.Missing != nil {
+		t.Errorf("service = %+v", s)
+	}
+	if s := refs[0].Services[1]; s.Kind != "TraefikService" || s.Namespace != "edge" {
+		t.Errorf("traefik service = %+v", s)
+	}
+	if m := refs[0].Middlewares[0]; m.Namespace != "shop" || m.Name != "strip" {
+		t.Errorf("middleware = %+v", m)
+	}
+}
+
+func TestTraefikRuleRefsRefusedCrossNamespace(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, traefikArgs[:len(traefikArgs)-1]...))
+	refs := traefikAssessor(t).RuleRefs(ingressRoute("edge", "cross", nil, []any{map[string]any{"name": "web", "namespace": "shop", "port": int64(80)}}, nil))
+	if !refs[0].Services[0].Refused {
+		t.Errorf("a cross-namespace ref Traefik refuses must say so: %+v", refs[0].Services[0])
+	}
+}

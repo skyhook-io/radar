@@ -13,7 +13,8 @@ interface TraefikMiddlewareRendererProps {
 }
 
 export interface TraefikMiddlewareUsers {
-  routes: { namespace: string; name: string }[]
+  /** group is the route's API group; absent means the Middleware's own. */
+  routes: { group?: string; namespace: string; name: string }[]
   /** The answer stopped at its cap: the count is a lower bound. */
   truncated: boolean
   /** The caller could list IngressRoutes in some namespaces only. */
@@ -39,7 +40,7 @@ function UsedBy({ usedBy, group, onNavigate }: { usedBy: TraefikMiddlewareUsers 
   let headline: React.ReactNode
   if (routes.length === 0) {
     // With partial coverage an empty list proves nothing.
-    headline = usedBy.partial ? `No route found${scope}` : 'No IngressRoute uses this Middleware'
+    headline = usedBy.partial ? `No route found${scope}` : 'No IngressRoute references this Middleware directly'
   } else {
     headline = (
       <span className="inline-flex items-center gap-1">
@@ -55,11 +56,12 @@ function UsedBy({ usedBy, group, onNavigate }: { usedBy: TraefikMiddlewareUsers 
         <ul className="space-y-0.5 text-sm">
           {routes.map((r) => (
             <li key={`${r.namespace}/${r.name}`}>
-              <RefLink refTo={{ kind: 'ingressroutes', group, namespace: r.namespace, name: r.name }} onNavigate={onNavigate}>{r.namespace}/{r.name}</RefLink>
+              <RefLink refTo={{ kind: 'ingressroutes', group: r.group || group, namespace: r.namespace, name: r.name }} onNavigate={onNavigate}>{r.namespace}/{r.name}</RefLink>
             </li>
           ))}
         </ul>
       )}
+      <div className="mt-1 text-xs text-theme-text-tertiary">Routes that reach it through chain Middlewares or a provider-qualified name (name@provider) aren't counted.</div>
     </Section>
   )
 }

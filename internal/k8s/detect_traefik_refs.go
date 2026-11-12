@@ -459,6 +459,9 @@ func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, a
 		}, true
 	}
 	unsure := false
+	// A present Middleware answers for its chain members and errors Service
+	// too, so its reads include theirs.
+	presentReads := []issuesapi.EvidenceRead{mwRead}
 	if chain, _, _ := unstructured.NestedSlice(mw.Object, "spec", "chain", "middlewares"); len(chain) > 0 {
 		for _, raw := range chain {
 			member, ok := raw.(map[string]any)
@@ -474,6 +477,7 @@ func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, a
 				return true, missingRef, true
 			}
 			unsure = unsure || !v
+			presentReads = append(presentReads, missingRef.reads...)
 		}
 	}
 	if errSvc, found, _ := unstructured.NestedMap(mw.Object, "spec", "errors", "service"); found {
@@ -494,11 +498,12 @@ func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, a
 			}, true
 		}
 		unsure = unsure || !v
+		presentReads = append(presentReads, read)
 	}
 	if unsure {
 		return false, traefikMissingRef{}, false
 	}
-	return true, traefikMissingRef{reads: []issuesapi.EvidenceRead{mwRead}}, false
+	return true, traefikMissingRef{reads: presentReads}, false
 }
 
 func (inv *traefikInventory) ruleMissingRefs(r map[string]any, ns string, allowCrossNamespace bool) []traefikMissingRef {

@@ -68,7 +68,7 @@ export function TraefikRequestPath({ facts, middlewareUse, onNavigate }: { facts
                   <Arrow />
                   <RefLink refTo={{ kind: 'middlewares', group, namespace: m.namespace, name: m.name }} onNavigate={onNavigate}>{m.name}</RefLink>
                   <Presence exists={m.exists} />
-                  {shared && shared > 1 && <span className="text-theme-text-tertiary">shared with {shared} routes</span>}
+                  {shared && shared > 1 && <span className="text-theme-text-tertiary">used by {shared} routes</span>}
                 </span>
               )
             })}

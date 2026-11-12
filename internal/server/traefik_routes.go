@@ -90,7 +90,11 @@ type traefikMiddlewareUse struct {
 // traefikRoutesInput is everything the builder reads, as functions so the
 // handler can bind them to the caller's access and the caches.
 type traefikRoutesInput struct {
-	Routes    []*unstructured.Unstructured
+	// Routes is every IngressRoute the caller can see; usedBy and
+	// duplicate_host are computed over all of them.
+	Routes []*unstructured.Unstructured
+	// Select picks the routes that get full rows; nil selects all.
+	Select    func(*unstructured.Unstructured) bool
 	Refs      func(*unstructured.Unstructured) []k8s.TraefikRuleRefs
 	CanRead   func(issuesapi.EvidenceRead) bool
 	NSVisible func(ns string) bool
@@ -98,12 +102,14 @@ type traefikRoutesInput struct {
 	Pods      func(ns string, sel labels.Selector) ([]*corev1.Pod, error)
 	Cert      func(ns, name string) (state string, notAfter *time.Time)
 	Now       time.Time
-	Limit     int
+	// Limit caps the full rows; 0 is no cap.
+	Limit int
 }
 
-// buildTraefikRoutes composes one row per IngressRoute rule from the caches,
-// with no per-route API call. Problems: backend_missing, backend_not_ready,
-// middleware_missing, cert_expired, cert_expiring, duplicate_host.
+// buildTraefikRoutes composes one row per rule of the selected IngressRoutes
+// from the caches, with no per-route API call. Problems: backend_missing,
+// backend_not_ready, middleware_missing, cert_expired, cert_expiring,
+// duplicate_host. usedBy counts distinct routes.
 func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []traefikMiddlewareUse, truncated bool) {
 	routes := append([]*unstructured.Unstructured(nil), in.Routes...)
 	sort.Slice(routes, func(i, j int) bool {
@@ -112,72 +118,81 @@ func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []t
 		}
 		return routes[i].GetName() < routes[j].GetName()
 	})
-	useCount := map[[2]string]int{}
+	refsOf := in.Refs
+	if refsOf == nil {
+		refsOf = k8s.ParseTraefikRuleRefs
+	}
+	users := map[[2]string]map[traefikRouteRef]bool{}
+	counts := map[[2]string]traefikPodCounts{}
+	// all holds a light row for every rule (for duplicate_host); full marks
+	// the ones that were enriched.
+	var all []traefikRouteRow
+	var full []int
 	for _, route := range routes {
-		ns := route.GetNamespace()
-		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "routes")
-		var refs []k8s.TraefikRuleRefs
-		if in.Refs != nil {
-			refs = in.Refs(route)
+		ref := traefikRouteRef{Group: resourceid.GroupFromAPIVersion(route.GetAPIVersion()), Namespace: route.GetNamespace(), Name: route.GetName()}
+		for _, rule := range k8s.ParseTraefikRuleRefs(route) {
+			for _, m := range rule.Middlewares {
+				if m.Name == "" || strings.Contains(m.Name, "@") {
+					continue
+				}
+				key := [2]string{m.Namespace, m.Name}
+				if users[key] == nil {
+					users[key] = map[traefikRouteRef]bool{}
+				}
+				users[key][ref] = true
+			}
 		}
+		selected := !truncated && (in.Select == nil || in.Select(route))
+		var refs []k8s.TraefikRuleRefs
+		var tls traefikTLSFact
+		if selected {
+			refs = refsOf(route)
+			tls = traefikTLS(route, in)
+		}
+		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "routes")
 		entryPoints, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "entryPoints")
-		tls := traefikTLS(route, in)
 		for i, raw := range rules {
 			r, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
-			if in.Limit > 0 && len(rows) >= in.Limit {
-				truncated = true
-				break
-			}
-			var ruleRefs k8s.TraefikRuleRefs
-			if i < len(refs) {
-				ruleRefs = refs[i]
-			}
 			match, _ := r["match"].(string)
-			row := traefikRouteRow{
-				Ref:         traefikRouteRef{Group: resourceid.GroupFromAPIVersion(route.GetAPIVersion()), Namespace: ns, Name: route.GetName()},
-				Rule:        i,
-				Match:       match,
-				Hosts:       traefik.RuleHosts(match),
-				EntryPoints: entryPoints,
-				Priority:    traefikPriority(r["priority"]),
-				TLS:         tls,
-				Middlewares: []traefikRefFact{},
-				Services:    []traefikBackendFact{},
+			row := traefikRouteRow{Ref: ref, Rule: i, Match: match, Hosts: traefik.RuleHosts(match), EntryPoints: entryPoints}
+			if selected && in.Limit > 0 && len(full) >= in.Limit {
+				truncated, selected = true, false
 			}
-			for j, mw := range traefikRefMaps(r, "middlewares") {
-				name, _ := mw["name"].(string)
-				mwNs := ns
-				if refNs, _ := mw["namespace"].(string); refNs != "" {
-					mwNs = refNs
+			if selected {
+				var ruleRefs k8s.TraefikRuleRefs
+				if i < len(refs) {
+					ruleRefs = refs[i]
 				}
-				fact := traefikRefFact{Namespace: mwNs, Name: name}
-				if j < len(ruleRefs.Middlewares) {
-					fact.Exists = traefikVerdictExists(ruleRefs.Middlewares[j], mwNs, in)
+				row.Priority = traefikPriority(r["priority"])
+				row.TLS = tls
+				row.Middlewares = []traefikRefFact{}
+				row.Services = []traefikBackendFact{}
+				for _, v := range ruleRefs.Middlewares {
+					fact := traefikRefFact{Namespace: v.Namespace, Name: v.Name, Exists: traefikVerdictExists(v, in)}
 					if fact.Exists != nil && !*fact.Exists {
-						fact.Via = ruleRefs.Middlewares[j].Via
+						fact.Via = v.Via
 					}
+					row.Middlewares = append(row.Middlewares, fact)
 				}
-				if name != "" && !strings.Contains(name, "@") {
-					useCount[[2]string{mwNs, name}]++
+				for _, v := range ruleRefs.Services {
+					row.Services = append(row.Services, traefikBackend(v, in, counts))
 				}
-				row.Middlewares = append(row.Middlewares, fact)
+				row.Problems = traefikRowProblems(row, in.Now)
+				full = append(full, len(all))
 			}
-			for j, svc := range traefikRefMaps(r, "services") {
-				row.Services = append(row.Services, traefikBackend(svc, ns, ruleRefs, j, in))
-			}
-			row.Problems = traefikRowProblems(row, in.Now)
-			rows = append(rows, row)
-		}
-		if truncated {
-			break
+			all = append(all, row)
 		}
 	}
-	markDuplicateHosts(rows)
-	for key, n := range useCount {
-		uses = append(uses, traefikMiddlewareUse{Namespace: key[0], Name: key[1], UsedBy: n})
+	markDuplicateHosts(all)
+	rows = make([]traefikRouteRow, 0, len(full))
+	for _, i := range full {
+		rows = append(rows, all[i])
+	}
+	for key, refs := range users {
+		uses = append(uses, traefikMiddlewareUse{Namespace: key[0], Name: key[1], UsedBy: len(refs)})
 	}
 	sort.Slice(uses, func(i, j int) bool {
 		if uses[i].Namespace != uses[j].Namespace {
@@ -188,35 +203,17 @@ func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []t
 	return rows, uses, truncated
 }
 
-func traefikRefMaps(r map[string]any, key string) []map[string]any {
-	raw, _ := r[key].([]any)
-	out := make([]map[string]any, 0, len(raw))
-	for _, item := range raw {
-		if m, ok := item.(map[string]any); ok {
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
 func traefikPriority(v any) *int64 {
-	switch p := v.(type) {
-	case int64:
+	if p, ok := v.(int64); ok {
 		return &p
-	case float64:
-		n := int64(p)
-		return &n
-	case int:
-		n := int64(p)
-		return &n
 	}
 	return nil
 }
 
 // traefikVerdictExists keeps the detector's answer only when the caller may
 // see every read behind it and the target's namespace.
-func traefikVerdictExists(v k8s.TraefikRefVerdict, ns string, in traefikRoutesInput) *bool {
-	if v.Missing == nil || (in.NSVisible != nil && !in.NSVisible(ns)) {
+func traefikVerdictExists(v k8s.TraefikRefVerdict, in traefikRoutesInput) *bool {
+	if v.Missing == nil || (in.NSVisible != nil && !in.NSVisible(v.Namespace)) {
 		return nil
 	}
 	for _, read := range v.Reads {
@@ -228,36 +225,30 @@ func traefikVerdictExists(v k8s.TraefikRefVerdict, ns string, in traefikRoutesIn
 	return &exists
 }
 
-func traefikBackend(svc map[string]any, routeNs string, refs k8s.TraefikRuleRefs, j int, in traefikRoutesInput) traefikBackendFact {
-	name, _ := svc["name"].(string)
-	kind, _ := svc["kind"].(string)
-	if kind == "" {
-		kind = "Service"
-	}
-	ns := routeNs
-	if refNs, _ := svc["namespace"].(string); refNs != "" {
-		ns = refNs
-	}
-	fact := traefikBackendFact{Namespace: ns, Name: name, Kind: kind}
-	if port, ok := svc["port"]; ok && port != nil {
-		fact.Port = fmt.Sprint(port)
-	}
-	if j < len(refs.Services) {
-		fact.Exists = traefikVerdictExists(refs.Services[j], ns, in)
-	}
-	if kind != "Service" || (in.NSVisible != nil && !in.NSVisible(ns)) || in.Service == nil || in.Pods == nil {
+type traefikPodCounts struct{ ready, total *int }
+
+// traefikBackend counts ready pods only for a Service Traefik routes to and
+// the caller may read, once per Service per request.
+func traefikBackend(v k8s.TraefikRefVerdict, in traefikRoutesInput, counts map[[2]string]traefikPodCounts) traefikBackendFact {
+	fact := traefikBackendFact{Namespace: v.Namespace, Name: v.Name, Port: v.Port, Kind: v.Kind, Exists: traefikVerdictExists(v, in)}
+	ns := v.Namespace
+	if v.Kind != "Service" || v.Refused || in.Service == nil || in.Pods == nil ||
+		(in.NSVisible != nil && !in.NSVisible(ns)) ||
+		(in.CanRead != nil && !in.CanRead(issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"})) {
 		return fact
 	}
-	s, ok := in.Service(ns, name)
-	if !ok || len(s.Spec.Selector) == 0 || s.Spec.Type == corev1.ServiceTypeExternalName {
-		return fact
+	key := [2]string{ns, v.Name}
+	c, seen := counts[key]
+	if !seen {
+		if s, ok := in.Service(ns, v.Name); ok && len(s.Spec.Selector) > 0 && s.Spec.Type != corev1.ServiceTypeExternalName {
+			if pods, err := in.Pods(ns, labels.SelectorFromSet(s.Spec.Selector)); err == nil {
+				ready, total := trace.EndpointPodCounts(s, pods)
+				c = traefikPodCounts{&ready, &total}
+			}
+		}
+		counts[key] = c
 	}
-	pods, err := in.Pods(ns, labels.SelectorFromSet(s.Spec.Selector))
-	if err != nil {
-		return fact
-	}
-	ready, total := trace.EndpointPodCounts(s, pods)
-	fact.ReadyPods, fact.TotalPods = &ready, &total
+	fact.ReadyPods, fact.TotalPods = c.ready, c.total
 	return fact
 }
 
@@ -358,9 +349,11 @@ var (
 	traefikMiddlewareKind   = integration.WorkspaceKind{Key: "middlewares", Group: "traefik.io", Kind: "Middleware", Resource: "middlewares"}
 )
 
-const (
-	traefikRouteRowLimit      = 5000
-	traefikMiddlewareRowLimit = 200
+// traefikRouteRowLimit caps the list; traefikMiddlewareRouteLimit caps the
+// distinct routes a Middleware's "used by" returns.
+var (
+	traefikRouteRowLimit        = 5000
+	traefikMiddlewareRouteLimit = 200
 )
 
 // handleTraefikRoutes serves one row per IngressRoute rule (match, hosts,
@@ -377,9 +370,10 @@ const (
 //
 // ?namespace=&name= returns one IngressRoute's rows, with usedBy for its
 // middlewares counted over every route the caller can see; ?middleware=ns/name
-// the rows that use a Middleware (at most 200). On a shared listener without
-// auth it reads as Radar's identity; a cross-site request is refused by
-// requireSameOrigin.
+// the rows that use a Middleware (at most 200 routes). Only the routes a mode
+// returns get full rows; the plain list stops at traefikRouteRowLimit rows.
+// On a shared listener without auth it reads as Radar's identity; a
+// cross-site request is refused by requireSameOrigin.
 func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	routeNs, routeName, middleware := q.Get("namespace"), q.Get("name"), q.Get("middleware")
@@ -429,6 +423,7 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	resp.Coverage["secrets"] = traefikSecretsCoverage(s.secretReadableNamespaces(r, namespaces), namespaces)
 
 	assessor := k8s.NewTraefikRouteAssessor(cache, k8s.GetDynamicResourceCache(), discovery)
+	certMemo := map[[2]string]traefikCertAnswer{}
 	in := traefikRoutesInput{
 		Routes:    routes,
 		Refs:      assessor.RuleRefs,
@@ -450,62 +445,73 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 			return lister.Pods(ns).List(sel)
 		},
 		Cert: func(ns, name string) (string, *time.Time) {
-			if allowed := s.secretReadableNamespaces(r, []string{ns}); len(allowed) == 0 {
-				return "denied", nil
+			key := [2]string{ns, name}
+			a, ok := certMemo[key]
+			if !ok {
+				a = readTraefikCert(s, r, cache, ns, name)
+				certMemo[key] = a
 			}
-			obj, found, ok := cache.ReadableObject("secrets", ns, name)
-			switch {
-			case !ok:
-				return "notLoaded", nil
-			case !found:
-				return "notFound", nil
-			}
-			sec, isSecret := obj.(*corev1.Secret)
-			if !isSecret {
-				return "notTLS", nil
-			}
-			cert, isTLS := certs.FromTLSSecret(sec)
-			if !isTLS || cert.NotAfter == nil {
-				return "notTLS", nil
-			}
-			return "read", cert.NotAfter
+			return a.state, a.notAfter
 		},
-		Now:   time.Now(),
-		Limit: traefikRouteRowLimit,
+		Now: time.Now(),
+	}
+	switch {
+	case routeName != "":
+		in.Select = func(u *unstructured.Unstructured) bool {
+			return u.GetNamespace() == routeNs && u.GetName() == routeName
+		}
+	case middleware != "":
+		in.Select = func(u *unstructured.Unstructured) bool {
+			for _, rule := range k8s.ParseTraefikRuleRefs(u) {
+				for _, m := range rule.Middlewares {
+					if m.Namespace == mwNs && m.Name == mwName {
+						return true
+					}
+				}
+			}
+			return false
+		}
+	default:
+		in.Limit = traefikRouteRowLimit
 	}
 	rows, uses, truncated := buildTraefikRoutes(in)
 	switch {
 	case routeName != "":
 		used := map[[2]string]bool{}
 		for _, row := range rows {
-			if row.Ref.Namespace == routeNs && row.Ref.Name == routeName {
-				resp.Routes = append(resp.Routes, row)
-				for _, m := range row.Middlewares {
-					used[[2]string{m.Namespace, m.Name}] = true
-				}
+			for _, m := range row.Middlewares {
+				used[[2]string{m.Namespace, m.Name}] = true
 			}
 		}
+		resp.Routes = rows
 		for _, u := range uses {
 			if used[[2]string{u.Namespace, u.Name}] {
 				resp.Middlewares = append(resp.Middlewares, u)
 			}
 		}
 	case middleware != "":
+		seen := map[traefikRouteRef]bool{}
 		for _, row := range rows {
-			for _, m := range row.Middlewares {
-				if m.Namespace == mwNs && m.Name == mwName {
-					if len(resp.Routes) >= traefikMiddlewareRowLimit {
-						truncated = true
-						break
-					}
-					resp.Routes = append(resp.Routes, row)
-					break
-				}
+			if !rowUsesMiddleware(row, mwNs, mwName) {
+				continue
 			}
+			if !seen[row.Ref] && len(seen) >= traefikMiddlewareRouteLimit {
+				truncated = true
+				continue
+			}
+			seen[row.Ref] = true
+			resp.Routes = append(resp.Routes, row)
 		}
 		for _, u := range uses {
 			if u.Namespace == mwNs && u.Name == mwName {
 				resp.Middlewares = append(resp.Middlewares, u)
+			}
+		}
+		// "Used by" asks about the whole cluster: a caller who sees only
+		// some namespaces can't be told that nothing else uses it.
+		if cov := resp.Coverage["ingressroutes"]; cov.State == integration.KindCoverageFull {
+			if visible := s.getUserNamespaces(r, nil); visible != nil {
+				resp.Coverage["ingressroutes"] = integration.KindCoverage{State: integration.KindCoveragePartial, AllowedNamespaces: visible}
 			}
 		}
 	default:
@@ -519,6 +525,44 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Truncated = truncated
 	s.writeJSON(w, resp)
+}
+
+func rowUsesMiddleware(row traefikRouteRow, ns, name string) bool {
+	for _, m := range row.Middlewares {
+		if m.Namespace == ns && m.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+type traefikCertAnswer struct {
+	state    string
+	notAfter *time.Time
+}
+
+// readTraefikCert reads only a TLS Secret's expiry, where the caller may
+// list Secrets in its namespace.
+func readTraefikCert(s *Server, r *http.Request, cache *k8s.ResourceCache, ns, name string) traefikCertAnswer {
+	if allowed := s.secretReadableNamespaces(r, []string{ns}); len(allowed) == 0 {
+		return traefikCertAnswer{state: "denied"}
+	}
+	obj, found, ok := cache.ReadableObject("secrets", ns, name)
+	switch {
+	case !ok:
+		return traefikCertAnswer{state: "notLoaded"}
+	case !found:
+		return traefikCertAnswer{state: "notFound"}
+	}
+	sec, isSecret := obj.(*corev1.Secret)
+	if !isSecret {
+		return traefikCertAnswer{state: "notTLS"}
+	}
+	cert, isTLS := certs.FromTLSSecret(sec)
+	if !isTLS || cert.NotAfter == nil {
+		return traefikCertAnswer{state: "notTLS"}
+	}
+	return traefikCertAnswer{state: "read", notAfter: cert.NotAfter}
 }
 
 // traefikSecretsCoverage reads secretReadableNamespaces' answer: nil is every

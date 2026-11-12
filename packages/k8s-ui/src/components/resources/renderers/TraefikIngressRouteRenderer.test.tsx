@@ -25,7 +25,7 @@ describe('TraefikIngressRouteRenderer request path', () => {
     expect(html).toContain('missing')
     expect(html).toContain('2 of 2 pods ready')
     expect(html).toContain('Radar can&#x27;t confirm this reference')
-    expect(html).toContain('shared with 212 routes')
+    expect(html).toContain('used by 212 routes')
     expect(html).not.toContain('0 of 0')
   })
   it('never shows 0 of 0 for unknown pod counts', () => {

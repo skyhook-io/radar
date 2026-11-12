@@ -9,7 +9,7 @@ export function middlewareUsers(query: { data?: TraefikRoutesResponse; isError: 
   if (query.isError) return null
   if (!query.data) return undefined
   return {
-    routes: query.data.routes.map((r) => ({ namespace: r.ref.namespace, name: r.ref.name })),
+    routes: query.data.routes.map((r) => ({ group: r.ref.group, namespace: r.ref.namespace, name: r.ref.name })),
     truncated: query.data.truncated,
     partial: query.data.coverage?.ingressroutes?.state !== 'full',
   }

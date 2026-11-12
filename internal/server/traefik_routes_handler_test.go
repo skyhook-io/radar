@@ -168,3 +168,37 @@ func TestTraefikRoutesWithoutAuthReadsAsRadar(t *testing.T) {
 		t.Fatalf("plain GET = %+v", got)
 	}
 }
+
+// The row cap applies to the list only: a drawer's route sorted after the
+// cap still gets its rows, and usedBy counts every route.
+func TestTraefikRoutesDrawerModesIgnoreTheListCap(t *testing.T) {
+	seedTraefikFixture(t)
+	old := traefikRouteRowLimit
+	traefikRouteRowLimit = 1
+	t.Cleanup(func() { traefikRouteRowLimit = old })
+	resp, _ := http.Get(testServer.URL + "/api/traefik/routes?namespace=shop&name=ui")
+	one, _ := decodeTraefik(t, resp)
+	if len(one.Routes) != 1 || one.Truncated {
+		t.Fatalf("route sorted last = %+v truncated=%v", one.Routes, one.Truncated)
+	}
+	resp, _ = http.Get(testServer.URL + "/api/traefik/routes?middleware=shop/redirect")
+	used, _ := decodeTraefik(t, resp)
+	if len(used.Routes) != 1 || used.Middlewares[0].UsedBy != 1 {
+		t.Fatalf("middleware mode = %+v %+v", used.Routes, used.Middlewares)
+	}
+	resp, _ = http.Get(testServer.URL + "/api/traefik/routes")
+	all, _ := decodeTraefik(t, resp)
+	if len(all.Routes) != 1 || !all.Truncated {
+		t.Fatalf("list mode keeps the cap: %d rows truncated=%v", len(all.Routes), all.Truncated)
+	}
+}
+
+// "Used by" asks about the whole cluster, so a caller limited to some
+// namespaces gets partial coverage there.
+func TestTraefikRoutesMiddlewareModePartialForLimitedCaller(t *testing.T) {
+	seedTraefikFixture(t)
+	got, _ := decodeTraefik(t, aliceTraefik(t, false).authGet(t, "/api/traefik/routes?middleware=shop/redirect", "alice", ""))
+	if got.Coverage["ingressroutes"].State != "partial" {
+		t.Errorf("coverage = %+v", got.Coverage["ingressroutes"])
+	}
+}

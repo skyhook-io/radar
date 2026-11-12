@@ -67,7 +67,7 @@ func (f tFixture) input(routes ...*unstructured.Unstructured) traefikRoutesInput
 			if r, ok := f.refs[u.GetNamespace()+"/"+u.GetName()]; ok {
 				return r
 			}
-			return nil
+			return k8s.ParseTraefikRuleRefs(u)
 		},
 		CanRead:   func(issuesapi.EvidenceRead) bool { return !f.denyRead },
 		NSVisible: func(ns string) bool { return !f.hidden[ns] },
@@ -248,5 +248,49 @@ func TestBuildTraefikRoutesTruncates(t *testing.T) {
 	rows, _, truncated := buildTraefikRoutes(in)
 	if len(rows) != 2 || !truncated {
 		t.Fatalf("rows=%d truncated=%v", len(rows), truncated)
+	}
+}
+
+// Only selected routes are enriched, while use counts and duplicate hosts
+// still come from every route the caller can see.
+func TestBuildTraefikRoutesSelectEnrichesOnlySelected(t *testing.T) {
+	podLists := 0
+	f := tFixture{services: map[string]*corev1.Service{"shop/ui": selService("shop", "ui")}, pods: map[string][]*corev1.Pod{"shop": {readyPod(true)}}}
+	in := f.input(
+		tRoute("shop", "a", nil, nil, tRule("Host(`a`)", []string{"ui"}, "auth")),
+		tRoute("shop", "b", nil, nil, tRule("Host(`a`)", []string{"ui"}, "auth"), tRule("Host(`b`)", []string{"ui"}, "auth")),
+		tRoute("shop", "c", nil, nil, tRule("Host(`c`)", []string{"ui"})),
+	)
+	pods := in.Pods
+	in.Pods = func(ns string, sel labels.Selector) ([]*corev1.Pod, error) { podLists++; return pods(ns, sel) }
+	in.Select = func(u *unstructured.Unstructured) bool { return u.GetName() == "b" }
+	rows, uses, _ := buildTraefikRoutes(in)
+	if len(rows) != 2 || rows[0].Ref.Name != "b" || rows[1].Ref.Name != "b" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if !hasProblem(rows[0], "duplicate_host") {
+		t.Errorf("duplicate with an unselected route must be marked: %+v", rows[0])
+	}
+	if len(uses) != 1 || uses[0].UsedBy != 2 {
+		t.Errorf("usedBy counts distinct routes over all: %+v", uses)
+	}
+	if podLists != 1 {
+		t.Errorf("pods listed %d times, want once per backend", podLists)
+	}
+}
+
+func TestBuildTraefikRoutesCountsGatedOnServicesAndRefusal(t *testing.T) {
+	f := tFixture{services: map[string]*corev1.Service{"shop/ui": selService("shop", "ui")}, pods: map[string][]*corev1.Pod{"shop": {readyPod(true)}}}
+	route := tRoute("shop", "a", nil, nil, tRule("Host(`a`)", []string{"ui"}))
+	f.denyRead = true
+	rows, _, _ := buildTraefikRoutes(f.input(route))
+	if b := rows[0].Services[0]; b.ReadyPods != nil {
+		t.Errorf("no counts without reading Services: %+v", b)
+	}
+	f.denyRead = false
+	f.refs = map[string][]k8s.TraefikRuleRefs{"shop/a": {{Services: []k8s.TraefikRefVerdict{{Kind: "Service", Namespace: "shop", Name: "ui", Refused: true}}}}}
+	rows, _, _ = buildTraefikRoutes(f.input(route))
+	if b := rows[0].Services[0]; b.ReadyPods != nil {
+		t.Errorf("no counts for a backend Traefik refuses: %+v", b)
 	}
 }
