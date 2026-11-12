@@ -140,6 +140,25 @@ Issues reports missing declared Flagger targets, analysis MetricTemplates and pr
 Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
 
 
+## k3s Helm controller
+
+k3s and RKE2 install add-ons (Traefik, CoreDNS and whatever the admin adds) through their Helm controller: a `HelmChart` renders into a `helm-install-<name>` Job that installs a normal Helm release, and a `HelmChartConfig` of the same name and namespace overrides its values.
+
+**Helm view.** Such a release carries a `k3s` badge, and its drawer says it is managed by k3s and names the `HelmChart` and the `HelmChartConfig` (or says to create one), with links to each. An upgrade or rollback from Radar would be reverted at the next reconcile, so the upgrade-available hint and "Choose chart source" are hidden; MCP `manage_helm` refuses writes to it. Flux wins if a Flux `HelmRelease` also matches. Issues still report a failed k3s release.
+
+**Detail views.** The `HelmChart` drawer shows what helm-controller reports (`JobCreated` / `Failed`), the chart (a chart served by k3s itself reads "Bundled with k3s"), the target namespace and release with a link to it in the Helm view, the install Job, and who manages the object. The `HelmChartConfig` drawer links its `HelmChart`. **Values are never shown**: `spec.valuesContent` and `spec.set` can carry credentials, so drawers, table cells and AI context show only a line count and the `set` keys.
+
+`HelmChart` shares its kind and plural with Flux's `source.toolkit.fluxcd.io` HelmChart; every view is gated on the `helm.cattle.io` group, and a Flux HelmChart keeps its generic drawer and printer columns.
+
+**In-cluster.** The chart toggle `rbac.crdGroups.k3sHelm` is **off by default** (read-baseline decision `withhold`, because the values can carry credentials). Local runs use your own kubeconfig and are unaffected.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|----------|-------|----------|-------------|------------|
+| HelmChart | `helm.cattle.io/v1` | — | Yes | Values omitted |
+| HelmChartConfig | `helm.cattle.io/v1` | — | Yes | Values omitted |
+
+---
+
 ## ConfigMap and Secret reflection (Reflector)
 
 [EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
