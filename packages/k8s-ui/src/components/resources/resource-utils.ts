@@ -2,6 +2,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getUpgradePlanColumnValue } from './resource-utils-upgrade-plan'
 // Utility functions for resource display in tables
 
 import { getNodeLifecycle } from '../../utils/node-lifecycle'
@@ -2521,6 +2522,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const planValue = getUpgradePlanColumnValue(resource, column)
+  if (planValue !== undefined) return planValue
   const crdValue = getCRDColumnValue(resource, column)
   if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()

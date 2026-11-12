@@ -1261,3 +1261,28 @@ describe('Gateway API route plural collision', () => {
     }
   })
 })
+
+describe('Plan kind collision (upgrade.cattle.io vs other plans CRDs)', () => {
+  const planData = (apiVersion: string) => ({
+    apiVersion, kind: 'Plan', metadata: { name: 'p', namespace: 'system-upgrade' },
+    spec: { version: 'v1', collisionProbe: COLLISION_PROBE }, status: { conditions: [{ type: 'Complete', status: 'True' }] },
+  })
+  const draw = (apiVersion: string) => renderToString(
+    <ResourceRendererDispatch resource={{ kind: 'plans', namespace: 'system-upgrade', name: 'p' }} data={planData(apiVersion)} onCopy={() => {}} copied={null} showCommonSections={false} />,
+  ).replace(/<!-- -->/g, '')
+
+  it('routes upgrade.cattle.io Plan to the Plan renderer and a foreign plans CRD to the generic one', () => {
+    const ours = draw('upgrade.cattle.io/v1')
+    expect(ours).toContain('Target')
+    expect(ours).not.toContain(COLLISION_PROBE)
+    expect(draw('example.com/v1')).toContain(COLLISION_PROBE)
+  })
+
+  it('gives a foreign plans CRD no Plan status', () => {
+    // A Plan applying to a Node is in progress even when Complete=True is still set.
+    const applying = (apiVersion: string) => ({ ...planData(apiVersion), status: { applying: ['n1'], conditions: [{ type: 'Complete', status: 'True' }] } })
+    expect(getResourceStatus('plans', applying('upgrade.cattle.io/v1'))?.text).toBe('In progress')
+    expect(getResourceStatus('plans', applying('example.com/v1'))?.text).not.toBe('In progress')
+  })
+})
+
