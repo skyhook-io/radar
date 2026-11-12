@@ -342,32 +342,54 @@ func (inv *traefikInventory) load(kind string) *traefikKindInventory {
 // serviceMissing reports a Service or TraefikService reference known to be
 // absent, with the inventory a caller must read to see that.
 func (inv *traefikInventory) serviceMissing(ref map[string]any, ns string) (string, issuesapi.EvidenceRead, bool) {
+	verifiable, missing, target, read := inv.servicePresence(ref, ns)
+	if !verifiable || !missing {
+		return "", issuesapi.EvidenceRead{}, false
+	}
+	return target, read, true
+}
+
+// servicePresence is the three-way answer behind serviceMissing: verifiable
+// is false when the inventory can't say (a provider-qualified name, an
+// errors-page configuration name, an unsynced informer), and read is the
+// inventory a caller must be able to list to see the answer either way.
+func (inv *traefikInventory) servicePresence(ref map[string]any, ns string) (verifiable, missing bool, target string, read issuesapi.EvidenceRead) {
 	name, _ := ref["name"].(string)
 	if name == "" || strings.Contains(name, "@") {
-		return "", issuesapi.EvidenceRead{}, false
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
 	if kind, _ := ref["kind"].(string); kind == "TraefikService" {
 		// Errors Middlewares can populate this configuration name without
 		// any TraefikService object, including through normalized aliases.
 		if strings.HasSuffix(traefikGeneratedName(ns, name), "-errorpage-service") {
-			return "", issuesapi.EvidenceRead{}, false
+			return false, false, "", issuesapi.EvidenceRead{}
 		}
 		services := inv.load("TraefikService")
-		if services == nil || services.objects[ns+"/"+name] != nil || services.generatedNames[traefikGeneratedName(ns, name)] > 0 {
-			return "", issuesapi.EvidenceRead{}, false
+		if services == nil {
+			return false, false, "", issuesapi.EvidenceRead{}
 		}
-		return fmt.Sprintf("TraefikService %q", traefikRefLabel(ns, name)), issuesapi.EvidenceRead{Group: inv.group, Resource: "traefikservices", Namespace: ns, Verb: "list"}, true
+		read = issuesapi.EvidenceRead{Group: inv.group, Resource: "traefikservices", Namespace: ns, Verb: "list"}
+		if services.objects[ns+"/"+name] != nil || services.generatedNames[traefikGeneratedName(ns, name)] > 0 {
+			return true, false, "", read
+		}
+		return true, true, fmt.Sprintf("TraefikService %q", traefikRefLabel(ns, name)), read
 	} else if kind != "" && kind != "Service" {
-		return "", issuesapi.EvidenceRead{}, false
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
 	svcLister := inv.cache.Services()
 	if svcLister == nil || !inv.cache.IsKindReady("services") {
-		return "", issuesapi.EvidenceRead{}, false
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
-	if _, err := svcLister.Services(ns).Get(name); !refKnownMissing(inv.cache, "services", ns, name, err) {
-		return "", issuesapi.EvidenceRead{}, false
+	_, err := svcLister.Services(ns).Get(name)
+	known, exists := refLookupResult(inv.cache, "services", ns, name, err)
+	if !known {
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
-	return fmt.Sprintf("Service %q", traefikRefLabel(ns, name)), issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}, true
+	read = issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}
+	if exists {
+		return true, false, "", read
+	}
+	return true, true, fmt.Sprintf("Service %q", traefikRefLabel(ns, name)), read
 }
 
 // traefikMissingRef is a missing target; via names the Middleware the route
@@ -383,79 +405,100 @@ type traefikMissingRef struct {
 // Middleware, or a chain member or errors-page Service missing under one it
 // uses, fails the router the same way.
 func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]bool) (traefikMissingRef, bool) {
+	verifiable, m, missing := inv.middlewarePresence(ref, ns, allowCrossNamespace, visited)
+	if !verifiable || !missing {
+		return traefikMissingRef{}, false
+	}
+	return m, true
+}
+
+// middlewarePresence is the three-way answer behind middlewareMissing. A
+// Middleware that exists is verifiable only when every chain member and its
+// errors-page Service are too; the first missing target found wins, as in
+// the detector.
+func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]bool) (verifiable bool, m traefikMissingRef, missing bool) {
 	name, _ := ref["name"].(string)
 	// A name with a provider suffix is a generated Traefik identifier, not
 	// an object name, so it can't be looked up directly.
 	if name == "" || strings.Contains(name, "@") {
-		return traefikMissingRef{}, false
+		return false, traefikMissingRef{}, false
 	}
 	if refNs, _ := ref["namespace"].(string); refNs != "" {
 		if refNs != ns && !allowCrossNamespace {
-			return traefikMissingRef{}, false
+			return false, traefikMissingRef{}, false
 		}
 		ns = refNs
 	}
 	middlewares := inv.load("Middleware")
 	if middlewares == nil {
-		return traefikMissingRef{}, false
+		return false, traefikMissingRef{}, false
 	}
 	identifier := traefikGeneratedName(ns, name)
 	// A failing Middleware may be skipped before collision handling, so
 	// its object's spec does not prove which configuration Traefik uses.
 	if middlewares.generatedNames[identifier] > 1 {
-		return traefikMissingRef{}, false
+		return false, traefikMissingRef{}, false
 	}
 	key := ns + "/" + name
 	if visited[key] {
-		return traefikMissingRef{}, false
+		return false, traefikMissingRef{}, false
 	}
 	visited[key] = true
+	mwRead := issuesapi.EvidenceRead{Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"}
 	mw, ok := middlewares.objects[key]
 	if !ok {
 		// Legacy Traefik names flatten namespace and name with a dash, so
 		// another object's configuration can satisfy this reference.
 		if middlewares.generatedNames[identifier] > 0 {
-			return traefikMissingRef{}, false
+			return false, traefikMissingRef{}, false
 		}
-		return traefikMissingRef{
+		return true, traefikMissingRef{
 			reason: TraefikRouterMissingMiddlewareReason,
 			target: fmt.Sprintf("Middleware %q", traefikRefLabel(ns, name)),
-			reads:  []issuesapi.EvidenceRead{{Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"}},
+			reads:  []issuesapi.EvidenceRead{mwRead},
 		}, true
 	}
+	unsure := false
 	if chain, _, _ := unstructured.NestedSlice(mw.Object, "spec", "chain", "middlewares"); len(chain) > 0 {
 		for _, raw := range chain {
 			member, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
-			if missing, ok := inv.middlewareMissing(member, ns, allowCrossNamespace, visited); ok {
-				if missing.via == "" {
-					missing.via = fmt.Sprintf("chain Middleware %q", traefikRefLabel(ns, name))
+			v, missingRef, isMissing := inv.middlewarePresence(member, ns, allowCrossNamespace, visited)
+			if v && isMissing {
+				if missingRef.via == "" {
+					missingRef.via = fmt.Sprintf("chain Middleware %q", traefikRefLabel(ns, name))
 				}
-				missing.reads = append(missing.reads, issuesapi.EvidenceRead{Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"})
-				return missing, true
+				missingRef.reads = append(missingRef.reads, mwRead)
+				return true, missingRef, true
 			}
+			unsure = unsure || !v
 		}
 	}
 	if errSvc, found, _ := unstructured.NestedMap(mw.Object, "spec", "errors", "service"); found {
 		svcNs := ns
 		if refNs, _ := errSvc["namespace"].(string); refNs != "" {
 			if refNs != ns && !allowCrossNamespace {
-				return traefikMissingRef{}, false
+				return false, traefikMissingRef{}, false
 			}
 			svcNs = refNs
 		}
-		if target, read, ok := inv.serviceMissing(errSvc, svcNs); ok {
-			return traefikMissingRef{
+		v, isMissing, target, read := inv.servicePresence(errSvc, svcNs)
+		if v && isMissing {
+			return true, traefikMissingRef{
 				reason: TraefikRouterMissingServiceReason,
 				target: target,
 				via:    fmt.Sprintf("errors Middleware %q", traefikRefLabel(ns, name)),
-				reads:  []issuesapi.EvidenceRead{read, {Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"}},
+				reads:  []issuesapi.EvidenceRead{read, mwRead},
 			}, true
 		}
+		unsure = unsure || !v
 	}
-	return traefikMissingRef{}, false
+	if unsure {
+		return false, traefikMissingRef{}, false
+	}
+	return true, traefikMissingRef{reads: []issuesapi.EvidenceRead{mwRead}}, false
 }
 
 func (inv *traefikInventory) ruleMissingRefs(r map[string]any, ns string, allowCrossNamespace bool) []traefikMissingRef {
