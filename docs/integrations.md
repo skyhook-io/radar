@@ -754,7 +754,9 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 | GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | OCIRepository | `source.toolkit.fluxcd.io/v1beta2` | Yes | Yes | — |
 | HelmRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
-| Bucket / HelmChart / ExternalArtifact | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| Bucket / HelmChart | `source.toolkit.fluxcd.io` | When referenced | Generic | — |
+| ExternalArtifact | `source.toolkit.fluxcd.io/v1` | When referenced | Yes | — |
+| ArtifactGenerator | `source.extensions.fluxcd.io/v1beta1` (source-watcher) | When referenced | Yes | — |
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
 | HelmRelease | `helm.toolkit.fluxcd.io/v2` | Yes | Yes | Yes |
 | Alert | `notification.toolkit.fluxcd.io/v1beta3` | — | Yes | — |
@@ -766,6 +768,11 @@ observed Flux sources in both directions within Radar's namespace scope.
 Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef`
 or `spec.chartRef`. Inline releases also link the generated HelmChart named by
 `status.helmChart`; an observed HelmChart links its source in its own namespace.
+An ExternalArtifact links the ArtifactGenerator named by its `spec.sourceRef`, and a
+generator links the GitRepository / OCIRepository / Bucket in its `spec.sources`
+(with their aliases). These upstream hops follow only objects already reached
+from a root, at most three levels, so a release that consumes one of a
+generator's artifacts never pulls in the generator's other artifacts.
 These are dependencies, not owners: topology draws each source upstream, with
 the edge pointing into the object that reads it. A link does not prove that Flux
 permits the reference or has produced an artifact.
