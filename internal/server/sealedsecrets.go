@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -125,6 +126,15 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 	return out
 }
 
+// unreadKeysState tells a Secret store still syncing (Radar just started or
+// switched context) from one Radar does not hold for the namespace.
+func unreadKeysState(a k8score.KindReadAssessment) string {
+	if len(a.Loading) > 0 || (a.Read == nil && a.Readiness == k8score.KindPending) {
+		return "loading"
+	}
+	return "notCollected"
+}
+
 type sealedSecretCounts struct {
 	Total     int  `json:"total"`
 	Synced    int  `json:"synced"`
@@ -193,7 +203,7 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 		if !s.canRead(r, "", "secrets", ns, "list") {
 			resp.KeysState = "denied"
 		} else if objs, ok := cache.ReadableObjects("secrets", []string{ns}); !ok {
-			resp.KeysState = "notCollected"
+			resp.KeysState = unreadKeysState(cache.AssessKindRead("secrets", []string{ns}))
 		} else {
 			resp.Keys, resp.KeysState = sealingKeysFromSecrets(objs), "ok"
 		}

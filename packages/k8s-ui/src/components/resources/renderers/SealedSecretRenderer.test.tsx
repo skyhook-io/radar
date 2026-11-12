@@ -66,3 +66,9 @@ describe('SealedSecretRenderer controller section', () => {
     expect(html).not.toContain('ompromised')
   })
 })
+
+it('says the sealing keys are still loading rather than not collected', () => {
+  const html = renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ keys: undefined, keysState: 'loading' })} />)
+  expect(html).toContain('still loading')
+  expect(html).not.toContain('does not collect')
+})

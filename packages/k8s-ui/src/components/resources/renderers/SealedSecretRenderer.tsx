@@ -8,7 +8,7 @@ export interface SealedSecretsController {
   controller?: { kind: string; namespace: string; name: string; ready: boolean }
   controllerState: 'ok' | 'denied' | 'notFound' | 'notCollected'
   keys?: { name: string; createdAt: string; notBefore?: string; notAfter?: string; active: boolean; notUsed?: boolean }[]
-  keysState: 'ok' | 'denied' | 'notCollected' | 'unknown'
+  keysState: 'ok' | 'denied' | 'notCollected' | 'loading' | 'unknown'
   counts?: { total: number; synced: number; notSynced: number; partial: boolean }
 }
 
@@ -84,6 +84,7 @@ function ControllerSection({ controller, isSynced, onNavigate }: { controller: S
         </table>
       )}
       {controller.keysState === 'denied' && <div className="mt-2 text-sm text-theme-text-tertiary">No access to Secrets{where}, so the sealing keys are not shown.</div>}
+      {controller.keysState === 'loading' && <div className="mt-2 text-sm text-theme-text-tertiary">Sealing keys are still loading; reopen the drawer in a moment.</div>}
       {controller.keysState === 'notCollected' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar does not collect Secrets{where}, so the sealing keys are not shown.</div>}
       {!isSynced && (
         <div className="mt-3 text-xs text-theme-text-secondary">

@@ -261,3 +261,21 @@ func TestSealedSecretsControllerNotInstalled(t *testing.T) {
 		t.Fatalf("got %+v, want not installed, keys unknown, no counts", got)
 	}
 }
+
+func TestUnreadKeysState(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a    k8score.KindReadAssessment
+		want string
+	}{
+		{"one informer still syncing", k8score.KindReadAssessment{Readiness: k8score.KindPending, AllNamespaces: true}, "loading"},
+		{"namespace informer still syncing", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Loading: []string{"kube-system"}}, "loading"},
+		{"not watched", k8score.KindReadAssessment{Readiness: k8score.KindUnavailable}, "notCollected"},
+		{"namespace not covered", k8score.KindReadAssessment{Readiness: k8score.KindReady, Read: []string{}, Uncovered: []string{"kube-system"}}, "notCollected"},
+		{"load failed", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Failed: []string{"kube-system"}}, "notCollected"},
+	} {
+		if got := unreadKeysState(tc.a); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
