@@ -134,7 +134,8 @@ cloud.existingSecret wins, so a token install renders exactly as before.
 {{- define "radar.cloudEnrollmentMode" -}}
 {{- $c := .Values.cloud -}}
 {{- $e := $c.enrollment | default dict -}}
-{{- if and $c.enabled $c.hubURL (or $e.key $e.existingSecret) (not (or $c.token $c.existingSecret)) -}}
+{{- $p := $e.publicKey | default dict -}}
+{{- if and $c.enabled $c.hubURL (or $e.key $e.existingSecret $p.existingSecret) (not (or $c.token $c.existingSecret)) -}}
 true
 {{- else -}}
 false

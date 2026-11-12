@@ -369,7 +369,16 @@
           "properties": {
             "key": { "type": "string" },
             "existingSecret": { "type": "string" },
-            "existingSecretKey": { "type": "string" }
+            "existingSecretKey": { "type": "string" },
+            "organization": { "type": "string", "pattern": "^([A-Za-z0-9_-]{1,128})?$" },
+            "publicKey": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "existingSecret": { "type": "string" },
+                "existingSecretKey": { "type": "string" }
+              }
+            }
           }
         },
         "clusterNamePrefix": { "type": "string" },

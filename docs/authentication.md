@@ -315,6 +315,10 @@ When using `caCert` in Kubernetes, mount the CA certificate into the pod via a C
 
 ### Radar Cloud mode
 
+To enroll using a customer-owned Ed25519 key pair instead of a shared enrollment
+secret, follow [public-key enrollment](public-key-enrollment.md). Hub receives
+the public half only; Radar keeps the private half in a mounted Secret.
+
 If you see `RADAR_CLOUD_MODE` or `cloud.*` values in the chart, they control a specialized deployment mode used by [Radar Cloud](https://radarhq.io) — a hosted SaaS that lets a single Cloud frontend manage many in-cluster Radar instances over an outbound tunnel. You don't need to use it to run Radar standalone; leave `cloud.enabled: false` (the default).
 
 Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `cloud.enabled=true`), Radar:
