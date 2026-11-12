@@ -788,8 +788,8 @@ failing, suspended), all read from the report's status. No readable report means
 no card; Radar never shows zeros for a report it could not read. The status of
 all four kinds reads `Suspended` when the object carries
 `fluxcd.controlplane.io/reconcile: disabled` (they have no `spec.suspend`).
-User info and secret-looking query values in a ResourceSetInputProvider URL are
-redacted in its column and drawer; the YAML view and MCP show the object as stored.
+In a ResourceSetInputProvider URL, user info, every query value and the fragment
+are redacted in its column and drawer; the YAML view and MCP show the object as stored.
 
 ### ArgoCD
 

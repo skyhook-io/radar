@@ -48,10 +48,9 @@ export function getFluxOperatorColumnValue(kind: string, data: any, column: stri
   return undefined
 }
 
-const SECRET_PARAM = /token|secret|password|passwd|key|sig|auth/i
-
-// redactUrlCredentials drops user info ("user:token@") and secret-looking
-// query values from a URL. scp-style git URLs keep host and path. Other text
+// redactUrlCredentials keeps what identifies a provider (scheme, host, path,
+// query names) and drops what can carry a credential: user info, every query
+// value and the fragment. scp-style git URLs keep host and path. Other text
 // that doesn't parse is shown only when it can't be hiding credentials.
 export function redactUrlCredentials(url: string): string {
   if (!url) return ''
@@ -63,10 +62,10 @@ export function redactUrlCredentials(url: string): string {
   } catch {
     return url.includes('@') ? '' : url
   }
-  const secretParams = [...parsed.searchParams.keys()].filter((k) => SECRET_PARAM.test(k))
-  if (!parsed.username && !parsed.password && secretParams.length === 0) return url
+  if (!parsed.username && !parsed.password && !parsed.search && !parsed.hash) return url
   parsed.username = ''
   parsed.password = ''
-  for (const k of secretParams) parsed.searchParams.set(k, 'redacted')
+  parsed.hash = ''
+  for (const k of new Set(parsed.searchParams.keys())) parsed.searchParams.set(k, 'redacted')
   return parsed.toString().replace(/\/$/, url.endsWith('/') ? '/' : '')
 }

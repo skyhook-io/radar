@@ -20,7 +20,7 @@ export interface FluxReportSummary {
   operatorVersion?: string
   managedBy?: string
   controllers: Array<{ name: string; tag?: string; ready: boolean }>
-  // Undefined when the report lists no components / reconcilers: unknown, not zero.
+  // Undefined when the report lists no components / reconcilers (missing or empty): unknown, not zero.
   controllersReady?: number
   failing?: number
   rows: FluxReconcilerRow[]
@@ -76,8 +76,8 @@ export function summarizeFluxReport(report: any, total: number): FluxReportSumma
     operatorVersion: spec.operator?.version,
     managedBy: spec.distribution?.managedBy,
     controllers,
-    controllersReady: Array.isArray(spec.components) ? controllers.filter((c: { ready: boolean }) => c.ready).length : undefined,
-    failing: Array.isArray(spec.reconcilers) ? all.reduce((n, r) => n + r.failing, 0) : undefined,
+    controllersReady: controllers.length > 0 ? controllers.filter((c: { ready: boolean }) => c.ready).length : undefined,
+    failing: all.length > 0 ? all.reduce((n, r) => n + r.failing, 0) : undefined,
     rows,
     also: counted.filter(folded).map((r) => ({ kind: r.kind, running: r.running })),
     reportedAt: ready?.lastTransitionTime,

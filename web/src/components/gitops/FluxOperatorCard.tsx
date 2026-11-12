@@ -14,7 +14,7 @@ export function FluxOperatorCard({ available, refetchInterval }: { available: bo
   const reports = useResources<any>('fluxreports', undefined, GROUP, { enabled: available, refetchInterval })
   const picked = reports.isSuccess && !reports.error ? pickFluxReport(reports.data ?? []) : null
   const namespace = picked?.report.metadata?.namespace
-  const instances = useResources<any>('fluxinstances', namespace, GROUP, { enabled: available && !!namespace })
+  const instances = useResources<any>('fluxinstances', namespace, GROUP, { enabled: available && !!namespace, refetchInterval })
   if (!picked) return null
   const instance = instances.isSuccess ? instances.data?.[0] : undefined
   return (

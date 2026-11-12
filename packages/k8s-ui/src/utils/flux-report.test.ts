@@ -70,5 +70,8 @@ describe('summarizeFluxReport', () => {
     const s = summarizeFluxReport({ spec: { distribution: { version: 'v2.7.5' } } }, 1)
     expect(s.controllersReady).toBeUndefined()
     expect(s.failing).toBeUndefined()
+    const empty = summarizeFluxReport({ spec: { components: [], reconcilers: [] } }, 1)
+    expect(empty.controllersReady).toBeUndefined()
+    expect(empty.failing).toBeUndefined()
   })
 })

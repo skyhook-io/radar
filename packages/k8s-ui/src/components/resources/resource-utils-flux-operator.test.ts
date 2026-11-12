@@ -18,7 +18,9 @@ describe('Flux Operator status', () => {
   })
   it('keeps scp-style git URLs readable and hides query tokens', () => {
     expect(redactUrlCredentials('git@github.com:org/repo.git')).toBe('github.com:org/repo.git')
-    expect(redactUrlCredentials('https://api.example.com/v1?token=abc&page=2')).toBe('https://api.example.com/v1?token=redacted&page=2')
+    expect(redactUrlCredentials('https://api.example.com/v1?token=abc&page=2')).toBe('https://api.example.com/v1?token=redacted&page=redacted')
+    expect(redactUrlCredentials('https://git.example/repo?credential=TOPSECRET#k=SECRET')).toBe('https://git.example/repo?credential=redacted')
+    expect(redactUrlCredentials('https://git.example/repo')).toBe('https://git.example/repo')
   })
 })
 

@@ -23,7 +23,7 @@ function OperatorStatus({ data }: { data: any }) {
   return (
     <>
       <ProblemAlerts problems={problems} />
-      <Section title="Status">
+      <Section title="Status" defaultExpanded={true}>
         <GitOpsStatusBadge status={status} showHealth={false} />
       </Section>
     </>
@@ -46,7 +46,7 @@ export function FluxInstanceRenderer({ data }: Props) {
   return (
     <>
       <OperatorStatus data={data} />
-      <Section title="Distribution" icon={Layers}>
+      <Section title="Distribution" icon={Layers} defaultExpanded={true}>
         <PropertyList>
           <Property label="Version" value={spec.distribution?.version} />
           <Property label="Registry" value={spec.distribution?.registry} />
@@ -57,7 +57,7 @@ export function FluxInstanceRenderer({ data }: Props) {
         </PropertyList>
       </Section>
       {components.length > 0 && (
-        <Section title={`Components (${components.length})`} icon={Boxes}>
+        <Section title={`Components (${components.length})`} icon={Boxes} defaultExpanded={true}>
           <div className="space-y-1 text-sm">
             {components.map((c, i) => (
               <div key={i} className="flex justify-between gap-3">
@@ -69,7 +69,7 @@ export function FluxInstanceRenderer({ data }: Props) {
         </Section>
       )}
       {spec.cluster && (
-        <Section title="Cluster" icon={Server}>
+        <Section title="Cluster" icon={Server} defaultExpanded={true}>
           <PropertyList>
             <Property label="Type" value={spec.cluster.type} />
             <Property label="Multitenant" value={yesNo(spec.cluster.multitenant)} />
@@ -79,7 +79,7 @@ export function FluxInstanceRenderer({ data }: Props) {
         </Section>
       )}
       {spec.storage && (
-        <Section title="Storage">
+        <Section title="Storage" defaultExpanded={true}>
           <PropertyList>
             <Property label="Class" value={spec.storage.class} />
             <Property label="Size" value={spec.storage.size} />
@@ -87,7 +87,7 @@ export function FluxInstanceRenderer({ data }: Props) {
         </Section>
       )}
       {history.length > 0 && (
-        <Section title="History" icon={History}>
+        <Section title="History" icon={History} defaultExpanded={true}>
           <div className="space-y-1 text-sm">
             {history.map((h, i) => (
               <div key={i} className="flex flex-wrap items-baseline gap-x-3 text-theme-text-secondary">
@@ -112,7 +112,8 @@ export function FluxReportRenderer({ data }: Props) {
   const reconcilers: any[] = spec.reconcilers || []
   return (
     <>
-      <Section title="Distribution" icon={Layers}>
+      <OperatorStatus data={data} />
+      <Section title="Distribution" icon={Layers} defaultExpanded={true}>
         <PropertyList>
           <Property label="Flux" value={spec.distribution?.version} />
           <Property label="Status" value={spec.distribution?.status} />
@@ -121,7 +122,7 @@ export function FluxReportRenderer({ data }: Props) {
         </PropertyList>
       </Section>
       {spec.cluster && (
-        <Section title="Cluster" icon={Server}>
+        <Section title="Cluster" icon={Server} defaultExpanded={true}>
           <PropertyList>
             <Property label="Server" value={spec.cluster.serverVersion} />
             <Property label="Platform" value={spec.cluster.platform} />
@@ -130,7 +131,7 @@ export function FluxReportRenderer({ data }: Props) {
         </Section>
       )}
       {components.length > 0 && (
-        <Section title={`Components (${components.length})`} icon={Boxes}>
+        <Section title={`Components (${components.length})`} icon={Boxes} defaultExpanded={true}>
           <table className="w-full text-sm">
             <tbody>
               {components.map((c, i) => (
@@ -144,7 +145,7 @@ export function FluxReportRenderer({ data }: Props) {
           </table>
         </Section>
       )}
-      <Section title={`Reconcilers (${reconcilers.length})`} icon={Workflow}>
+      <Section title={`Reconcilers (${reconcilers.length})`} icon={Workflow} defaultExpanded={true}>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-theme-text-tertiary">
@@ -182,7 +183,7 @@ export function ResourceSetRenderer({ data, onNavigate }: Props) {
   return (
     <>
       <OperatorStatus data={data} />
-      <Section title="Inputs">
+      <Section title="Inputs" defaultExpanded={true}>
         <div className="space-y-1 text-sm text-theme-text-secondary">
           <div>{inputs.length} inline</div>
           {inputsFrom.map((p, i) => (
@@ -198,7 +199,7 @@ export function ResourceSetRenderer({ data, onNavigate }: Props) {
         </div>
       </Section>
       {dependsOn.length > 0 && (
-        <Section title={`Depends on (${dependsOn.length})`}>
+        <Section title={`Depends on (${dependsOn.length})`} defaultExpanded={true}>
           <div className="space-y-1 text-sm text-theme-text-secondary">
             {dependsOn.map((d, i) => (
               <div key={i}>
@@ -220,7 +221,7 @@ export function ResourceSetInputProviderRenderer({ data }: Props) {
   return (
     <>
       <OperatorStatus data={data} />
-      <Section title="Provider">
+      <Section title="Provider" defaultExpanded={true}>
         <PropertyList>
           <Property label="Type" value={spec.type} />
           <Property label="URL" value={spec.url ? redactUrlCredentials(spec.url) : undefined} />

@@ -47,4 +47,12 @@ describe('Flux Operator drawers', () => {
     expect(html).toContain('https://github.com/org/repo')
     expect(html).not.toContain('token')
   })
+  it('FluxReport: shows Suspended when reconciliation is disabled', () => {
+    const html = text(renderToString(<FluxReportRenderer data={{
+      apiVersion: 'fluxcd.controlplane.io/v1', kind: 'FluxReport', metadata: { name: 'flux', namespace: 'flux-system', annotations: { 'fluxcd.controlplane.io/reconcile': 'disabled' } },
+      spec: { distribution: { version: 'v2.7.5' } }, status: ready,
+    }} />))
+    expect(html).toContain('Status')
+    expect(html).toContain('Suspended')
+  })
 })
