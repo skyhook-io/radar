@@ -2,6 +2,7 @@ package helm
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -35,22 +36,6 @@ func TestK3sHelmChartKeys(t *testing.T) {
 	}
 }
 
-func TestApplyK3sOwnershipYieldsToFlux(t *testing.T) {
-	m := map[string]k3sOwner{"apps/app": {chart: "kube-system/app"}}
-	if got := applyK3sOwnership("app", "apps", m, false); got.chart != "kube-system/app" {
-		t.Fatalf("owner = %+v", got)
-	}
-	if got := applyK3sOwnership("app", "apps", m, true); got != (k3sOwner{}) {
-		t.Fatalf("Flux wins, got %+v", got)
-	}
-	if got := applyK3sOwnership("app", "kube-system", m, false); got != (k3sOwner{}) {
-		t.Fatalf("a HelmChart targeting apps doesn't own the release stored in kube-system, got %+v", got)
-	}
-	if got := applyK3sOwnership("app", "apps", nil, false); got != (k3sOwner{}) {
-		t.Fatalf("nil map, got %+v", got)
-	}
-}
-
 func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	snapshot := func() *helmReleaseStorageSnapshot {
 		return &helmReleaseStorageSnapshot{
@@ -64,12 +49,12 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows = %+v, err %v", rows, err)
 	}
-	if c := rows[0].ManagedBy; c == nil || c.Tool != "k3s" || c.Ref() != "kube-system/traefik" || c.ValuesRef == nil || !c.ValuesRef.Exists {
-		t.Fatalf("row = %+v", rows[0].ManagedBy)
+	if c := rows[0].Controller; c == nil || c.Tool != "k3s" || c.Ref() != "kube-system/traefik" || c.ValuesRef == nil || !c.ValuesRef.Exists {
+		t.Fatalf("row = %+v", rows[0].Controller)
 	}
 	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", false)
-	if c := rows[0].ManagedBy; rows[0].ManagedByFluxHelmRelease != "flux-system/traefik" || c == nil || c.Tool != "flux" || c.Kind != "HelmRelease" || c.Ref() != "flux-system/traefik" {
-		t.Fatalf("Flux wins, row = %+v", rows[0].ManagedBy)
+	if c := rows[0].Controller; rows[0].ManagedByFluxHelmRelease != "flux-system/traefik" || c == nil || c.Tool != "flux" || c.Kind != "HelmRelease" || c.Ref() != "flux-system/traefik" {
+		t.Fatalf("Flux wins, row = %+v", rows[0].Controller)
 	}
 }
 
@@ -123,5 +108,35 @@ func TestReleaseControllerPicksOneOwner(t *testing.T) {
 	}
 	if c := releaseController("flux-system/app", k3sOwner{chart: "kube-system/app"}); c.Tool != "flux" || c.ValuesRef != nil {
 		t.Fatalf("Flux wins, got %+v", c)
+	}
+}
+
+// Whether Radar's own Helm issues and changes defer to the controller is a
+// property of the controller, so a new detector decides it in one place.
+func TestReleaseControllerReportsOwnHistory(t *testing.T) {
+	if !(&ReleaseController{Tool: "flux"}).ReportsOwnHistory() {
+		t.Error("Flux records its own failures and revisions")
+	}
+	if (&ReleaseController{Tool: "k3s"}).ReportsOwnHistory() || (*ReleaseController)(nil).ReportsOwnHistory() {
+		t.Error("k3s and no controller keep nothing of their own")
+	}
+}
+
+// The Diagnose card and MCP clients read these keys; renaming a tag breaks them.
+func TestReleaseControllerWireKeys(t *testing.T) {
+	raw, err := json.Marshal(releaseController("", k3sOwner{chart: "kube-system/app", config: "kube-system/app"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"tool":"k3s","kind":"HelmChart","group":"helm.cattle.io","namespace":"kube-system","name":"app","valuesRef":{"kind":"HelmChartConfig","group":"helm.cattle.io","namespace":"kube-system","name":"app","exists":true}}`
+	if string(raw) != want {
+		t.Fatalf("wire = %s\nwant   %s", raw, want)
+	}
+	if _, ok := reflect.TypeOf(HelmRelease{}).FieldByName("Controller"); !ok {
+		t.Fatal("HelmRelease.Controller missing")
+	}
+	f, _ := reflect.TypeOf(HelmRelease{}).FieldByName("Controller")
+	if f.Tag.Get("json") != "controller,omitempty" {
+		t.Fatalf("HelmRelease.Controller tag = %q", f.Tag.Get("json"))
 	}
 }

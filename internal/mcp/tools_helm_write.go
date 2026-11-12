@@ -243,7 +243,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if detail.ManagedByFluxHelmRelease != "" {
 			return nil, nil, fmt.Errorf("release is managed by Flux HelmRelease %s; change its source configuration instead", detail.ManagedByFluxHelmRelease)
 		}
-		if c := detail.ManagedBy; c != nil && c.Tool != "flux" {
+		if c := detail.Controller; c != nil && c.Tool != "flux" {
 			return nil, nil, controllerRefusal(in.Action, c)
 		}
 		if in.Action == "uninstall" {

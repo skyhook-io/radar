@@ -19,7 +19,7 @@ func buildOperationInsight(detail *HelmReleaseDetail) *HelmOperationInsight {
 	if detail == nil || detail.LastOperation == nil {
 		return nil
 	}
-	if detail.ManagedByFluxHelmRelease != "" || detail.ManagedBy != nil {
+	if detail.ManagedByFluxHelmRelease != "" || detail.Controller != nil {
 		return nil
 	}
 

@@ -136,9 +136,10 @@ export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
         <p className="text-xs text-theme-text-tertiary">
           Managed by Flux HelmRelease {release.managedByFluxHelmRelease}
         </p>
-      ) : release.managedBy ? (
+      ) : release.controller ? (
         <p className="text-xs text-theme-text-tertiary">
-          Managed by {release.managedBy.tool} {release.managedBy.kind} {release.managedBy.namespace}/{release.managedBy.name}
+          Managed by {release.controller.tool} {release.controller.kind} {release.controller.namespace}/{release.controller.name}
+          {release.controller.values ? ` · values in ${release.controller.values}` : ''}
         </p>
       ) : null}
       {release.hooks && release.hooks.length > 0 ? (

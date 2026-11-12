@@ -281,7 +281,7 @@ export interface InvestigationHelmRelease {
   healthIssue?: string;
   healthSummary?: string;
   managedByFluxHelmRelease?: string;
-  managedBy?: InvestigationHelmController;
+  controller?: InvestigationHelmController;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];
   /** Newest first; the tool returns the release's stored revisions. */
@@ -647,4 +647,6 @@ export interface InvestigationHelmController {
   kind: string;
   namespace: string;
   name: string;
+  /** "Kind namespace/name" of the object values are changed in, when one exists. */
+  values?: string;
 }

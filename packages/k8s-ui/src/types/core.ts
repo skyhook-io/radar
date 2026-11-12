@@ -1048,7 +1048,7 @@ export interface HelmRelease {
   // The controller that installs this release from its own definition (Flux,
   // k3s, …); a Helm change made here is reverted. Older Radar sends only
   // managedByFluxHelmRelease.
-  managedBy?: HelmReleaseController
+  controller?: HelmReleaseController
 }
 
 export interface HelmRevision {
@@ -1130,7 +1130,7 @@ export interface HelmReleaseDetail {
   // The controller that installs this release from its own definition (Flux,
   // k3s, …); a Helm change made here is reverted. Older Radar sends only
   // managedByFluxHelmRelease.
-  managedBy?: HelmReleaseController
+  controller?: HelmReleaseController
 }
 
 export interface HelmHook {
@@ -1323,7 +1323,7 @@ export interface ObservedHelmRelease {
   // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
   managedByFluxHelmRelease?: string
   // From objects the caller can read; absent doesn't mean none.
-  managedBy?: HelmReleaseController
+  controller?: HelmReleaseController
 }
 
 // One entry of a Flux HelmRelease's status.history.

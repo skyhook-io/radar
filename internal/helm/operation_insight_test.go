@@ -347,7 +347,7 @@ func TestBuildOperationInsightUninstallHasNoSuggestedCompare(t *testing.T) {
 
 func TestBuildOperationInsightSuppressesK3sOwnedReleases(t *testing.T) {
 	detail := &HelmReleaseDetail{
-		ManagedBy:     &ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "traefik"},
+		Controller:    &ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "traefik"},
 		LastOperation: &HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 2},
 		History:       []HelmRevision{{Revision: 2, Status: "failed"}, {Revision: 1, Status: "deployed"}},
 	}

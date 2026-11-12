@@ -112,7 +112,7 @@ func TestHelmRecentChangesKeepsK3sOwnedReleases(t *testing.T) {
 	got := helmRecentChanges([]helm.HelmRelease{{
 		Name: "traefik", Namespace: "kube-system", Status: "deployed", Revision: 7,
 		Updated:       now.Add(-5 * time.Minute),
-		ManagedBy:     &helm.ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "traefik"},
+		Controller:    &helm.ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "traefik"},
 		LastOperation: &helm.HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 7, Updated: now.Add(-5 * time.Minute)},
 	}}, "", time.Hour, now)
 	if len(got) != 1 || got[0].Name != "traefik" {

@@ -654,7 +654,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
 		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
-		hr.ManagedBy = releaseController(hr.ManagedByFluxHelmRelease, applyK3sOwnership(rel.Name, effectiveStorage, k3sMap, hr.ManagedByFluxHelmRelease != ""))
+		hr.Controller = releaseController(hr.ManagedByFluxHelmRelease, k3sMap[effectiveStorage+"/"+rel.Name])
 		result = append(result, hr)
 	}
 	return result, nil
@@ -740,7 +740,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	dependencies := extractDependencies(rel)
 
 	managedByFlux := applyFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()))
-	k3s := applyK3sOwnership(rel.Name, effectiveStorage, k3sHelmChartMap(context.Background()), managedByFlux != "")
+	k3s := k3sHelmChartMap(context.Background())[effectiveStorage+"/"+rel.Name]
 
 	detail := &HelmReleaseDetail{
 		Name:                     rel.Name,
@@ -766,7 +766,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		LastOperation:            analysis.LastOperation,
 		Operations:               analysis.Operations,
 		ManagedByFluxHelmRelease: managedByFlux,
-		ManagedBy:                releaseController(managedByFlux, k3s),
+		Controller:               releaseController(managedByFlux, k3s),
 	}
 	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {
@@ -1661,15 +1661,6 @@ func k3sHelmChartMap(ctx context.Context) map[string]k3sOwner {
 	}
 	configs, _ := cache.ListDynamicWithGroup(ctx, k3sHelmChartConfigKind, "", k3sHelmGroup)
 	return k3sHelmChartKeys(charts, configs)
-}
-
-// applyK3sOwnership looks a release up in the k3s map. Flux wins: a release
-// Flux owns gets no k3s owner, so the UI never shows two contradicting notes.
-func applyK3sOwnership(name, storageNamespace string, m map[string]k3sOwner, fluxOwned bool) k3sOwner {
-	if fluxOwned || m == nil {
-		return k3sOwner{}
-	}
-	return m[storageNamespace+"/"+name]
 }
 
 type helmReleaseStorageSnapshot struct {

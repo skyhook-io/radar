@@ -4,23 +4,25 @@ import { Tooltip } from '../ui/Tooltip'
 import { kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 
 // The controller of a release. An older Radar sends only the Flux field.
-export function releaseControllerOf(r: { managedBy?: HelmReleaseController; managedByFluxHelmRelease?: string }): HelmReleaseController | undefined {
-  if (r.managedBy) return r.managedBy
+export function releaseControllerOf(r: { controller?: HelmReleaseController; managedByFluxHelmRelease?: string }): HelmReleaseController | undefined {
+  if (r.controller) return r.controller
   if (!r.managedByFluxHelmRelease) return undefined
   const [namespace = '', name = ''] = r.managedByFluxHelmRelease.split('/')
   return { tool: 'flux', kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace, name }
 }
 
-// Flux keeps a route-only upgrade hint (upgrade through GitOps); any other
-// controller has no Radar view to route an upgrade to, so the hint is hidden.
-export function controllerHidesUpgrade(c: HelmReleaseController | undefined): boolean {
-  return !!c && c.tool !== 'flux'
+// A controller other than Flux. Flux keeps its own routing (GitOps link,
+// route-only upgrade hint); any other gets the generic note, and its upgrade
+// hints are hidden because Radar has no view to route an upgrade to.
+export function otherController(r: { controller?: HelmReleaseController; managedByFluxHelmRelease?: string }): HelmReleaseController | undefined {
+  const c = releaseControllerOf(r)
+  return c && c.tool !== 'flux' ? c : undefined
 }
 
 const TOOL_LABELS: Record<string, string> = { flux: 'Flux', k3s: 'k3s' }
 
-export function controllerLabel(c: HelmReleaseController): string {
-  return TOOL_LABELS[c.tool] ?? c.kind
+function controllerLabel(c: HelmReleaseController): string {
+  return TOOL_LABELS[c.tool] ?? c.tool
 }
 
 const refOf = (o: { namespace: string; name: string }) => `${o.namespace}/${o.name}`
@@ -36,11 +38,11 @@ export function controllerManagedText(c: HelmReleaseController, opts: { observed
   return `${head} Create a ${v.kind} ${refOf(v)} to change its values.`
 }
 
-export function ReleaseControllerBadge({ controller }: { controller: HelmReleaseController }) {
+export function ReleaseControllerBadge({ controller, observed }: { controller: HelmReleaseController; observed?: boolean }) {
   const flux = controller.tool === 'flux'
   const tip = flux
     ? `Installed by Flux helm-controller via HelmRelease ${refOf(controller)}. Changes here will be reverted at the next reconcile — manage via the GitOps tab.`
-    : controllerManagedText(controller)
+    : controllerManagedText(controller, { observed })
   return (
     <Tooltip content={tip}>
       <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">

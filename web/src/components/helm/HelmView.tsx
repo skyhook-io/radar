@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
-import { ReleaseControllerBadge, controllerHidesUpgrade, releaseControllerOf } from './releaseController'
+import { ReleaseControllerBadge, otherController, releaseControllerOf } from './releaseController'
 import type { HelmReleaseController } from '@skyhook-io/k8s-ui'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, ChevronRight, RotateCcw, Clock } from 'lucide-react'
@@ -614,7 +614,7 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} observed />
-          <ControllerBadge release={release} />
+          <ControllerBadge release={release} observed />
         </div>
         <span className="hidden truncate pl-6 text-xs text-theme-text-tertiary phone:block">{release.namespace}</span>
       </td>
@@ -667,9 +667,9 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
   )
 })
 
-function ControllerBadge({ release }: { release: { managedBy?: HelmReleaseController; managedByFluxHelmRelease?: string } }) {
+function ControllerBadge({ release, observed }: { release: { controller?: HelmReleaseController; managedByFluxHelmRelease?: string }; observed?: boolean }) {
   const controller = releaseControllerOf(release)
-  return controller ? <ReleaseControllerBadge controller={controller} /> : null
+  return controller ? <ReleaseControllerBadge controller={controller} observed={observed} /> : null
 }
 
 const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
@@ -697,7 +697,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <ReleaseHealthBadge release={release} />
           {listOperation && <HelmOperationChip operation={listOperation} />}
           <ControllerBadge release={release} />
-          {upgradeInfo?.updateAvailable && !controllerHidesUpgrade(releaseControllerOf(release)) && (
+          {upgradeInfo?.updateAvailable && !otherController(release) && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>
                 <ArrowUpCircle className="w-3 h-3" />

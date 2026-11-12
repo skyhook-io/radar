@@ -37,13 +37,13 @@ type HelmRelease struct {
 	// values via `helm upgrade` here would get reverted on the next
 	// reconciliation). Format: "namespace/name".
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
-	// ManagedBy is the controller that installs this release from its own
+	// Controller is the controller that installs this release from its own
 	// definition (a Flux HelmRelease, a k3s HelmChart, …), so a Helm change
 	// made here is reverted at its next reconcile. Set for Flux alongside
 	// ManagedByFluxHelmRelease, which older consumers read. Like that field it
 	// comes from Radar's own read (names only); observed rows use only what
 	// the caller can read.
-	ManagedBy *ReleaseController `json:"managedBy,omitempty"`
+	Controller *ReleaseController `json:"controller,omitempty"`
 }
 
 // ReleaseController names what installs and reconciles a Helm release. A new
@@ -73,6 +73,13 @@ type ControllerValuesRef struct {
 
 // Ref is "namespace/name" of the controller object.
 func (c *ReleaseController) Ref() string { return c.Namespace + "/" + c.Name }
+
+// ReportsOwnHistory is true for a controller that records a release's
+// failures and revisions itself (Flux), so Radar's native Helm issues and
+// recent changes defer to it. A new controller is decided here, once.
+func (c *ReleaseController) ReportsOwnHistory() bool {
+	return c != nil && c.Tool == "flux"
+}
 
 // releaseController picks the controller of a release from what the detectors
 // found. Flux wins: a release can't be reconciled by two controllers, and the
@@ -131,8 +138,8 @@ type HelmReleaseDetail struct {
 	OperationInsight *HelmOperationInsight `json:"operationInsight,omitempty"`
 	// See HelmRelease.ManagedByFluxHelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
-	// See HelmRelease.ManagedBy.
-	ManagedBy *ReleaseController `json:"managedBy,omitempty"`
+	// See HelmRelease.Controller.
+	Controller *ReleaseController `json:"controller,omitempty"`
 }
 
 type HelmOperationInsight struct {

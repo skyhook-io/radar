@@ -27,7 +27,7 @@ import { OwnedResources } from './OwnedResources'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
 import { HelmDrawerFrame } from './HelmDrawerFrame'
 import { ObservedHelmReleaseDrawer } from './ObservedHelmReleaseDrawer'
-import { ReleaseControllerNote, controllerManagedText, releaseControllerOf } from './releaseController'
+import { ReleaseControllerNote, controllerManagedText, otherController as otherControllerOf } from './releaseController'
 import type { HelmReleaseController } from '@skyhook-io/k8s-ui'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
@@ -204,8 +204,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
   )
   const [refetch, isRefreshAnimating] = useRefreshAnimation(refetchRelease)
   // A controller other than Flux (Flux keeps its own GitOps routing below).
-  const controller = releaseDetail ? releaseControllerOf(releaseDetail) : undefined
-  const otherController = controller?.tool !== 'flux' ? controller : undefined
+  const otherController = releaseDetail ? otherControllerOf(releaseDetail) : undefined
 
   // Fetch manifest for selected revision (or latest)
   const { data: manifest, isLoading: manifestLoading } = useHelmManifest(

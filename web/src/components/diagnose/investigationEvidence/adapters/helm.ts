@@ -252,7 +252,7 @@ export function adaptHelmRelease(
     healthSummary: value.healthSummary as string | undefined,
     managedByFluxHelmRelease: value.managedByFluxHelmRelease as
       string | undefined,
-    ...releaseControllerField(value.managedBy),
+    ...releaseControllerField(value.controller),
     lastOperation,
     resources,
     ...(history ? { history } : {}),
@@ -313,11 +313,16 @@ export function adaptHelmRelease(
   }
 }
 
-// managedBy is kept only when it names an object; any tool counts.
-function releaseControllerField(value: unknown): { managedBy?: InvestigationHelmController } {
+// controller is kept only when it names an object; any tool counts.
+function releaseControllerField(value: unknown): { controller?: InvestigationHelmController } {
   const v = record(value);
   if (!v) return {};
   const { tool, kind, name, namespace } = v;
   if (!nonEmptyString(tool) || !nonEmptyString(kind) || !nonEmptyString(name)) return {};
-  return { managedBy: { tool, kind, name, namespace: typeof namespace === "string" ? namespace : "" } };
+  const ref = record(v.valuesRef);
+  const values =
+    ref && ref.exists === true && nonEmptyString(ref.kind) && nonEmptyString(ref.name)
+      ? `${ref.kind} ${typeof ref.namespace === "string" ? ref.namespace : ""}/${ref.name}`
+      : undefined;
+  return { controller: { tool, kind, name, namespace: typeof namespace === "string" ? namespace : "", ...(values ? { values } : {}) } };
 }
