@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"sort"
 	"strings"
 	"testing"
 
@@ -27,9 +28,16 @@ func cnpgScheduledBackup(ns, name, clusterName, method string) *unstructured.Uns
 	})
 }
 
+// cnpgInTree is a Cluster spec with an in-tree backup destination, so the
+// schedule check evaluates it (a Cluster with no destination is the
+// destination rule's finding, not the schedule's).
+func cnpgInTree() map[string]any {
+	return map[string]any{"backup": map[string]any{"barmanObjectStore": map[string]any{"destinationPath": "s3://b"}}}
+}
+
 func TestCNPGDeclarativeBackup_FlagsClusterWithNoSchedule(t *testing.T) {
 	input := &CheckInput{
-		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "unprotected", nil)},
+		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "unprotected", cnpgInTree())},
 		CNPGScheduledBackups:              nil,
 		CNPGScheduledBackupsAuthoritative: true,
 	}
@@ -66,7 +74,7 @@ func TestCNPGDeclarativeBackup_ScheduleSatisfiesCheck(t *testing.T) {
 	for _, method := range []string{"barmanObjectStore", "volumeSnapshot", "plugin"} {
 		t.Run(method, func(t *testing.T) {
 			input := &CheckInput{
-				CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "protected", nil)},
+				CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "protected", cnpgInTree())},
 				CNPGScheduledBackups:              []*unstructured.Unstructured{cnpgScheduledBackup("pg", "nightly", "protected", method)},
 				CNPGScheduledBackupsAuthoritative: true,
 			}
@@ -98,7 +106,7 @@ func TestCNPGDeclarativeBackup_SuspendedScheduleStillCounts(t *testing.T) {
 
 func TestCNPGDeclarativeBackup_ScheduleInOtherNamespaceDoesNotCount(t *testing.T) {
 	input := &CheckInput{
-		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "app", nil)},
+		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "app", cnpgInTree())},
 		CNPGScheduledBackups:              []*unstructured.Unstructured{cnpgScheduledBackup("other", "nightly", "app", "barmanObjectStore")},
 		CNPGScheduledBackupsAuthoritative: true,
 	}
@@ -142,23 +150,13 @@ func TestCNPGDeclarativeBackup_MessageNamesTheBackupMode(t *testing.T) {
 	}{
 		{
 			name: "plugin",
-			spec: map[string]any{"plugins": []any{map[string]any{"name": cnpgBarmanPluginName}}},
+			spec: map[string]any{"plugins": []any{map[string]any{"name": cnpgBarmanPluginName, "parameters": map[string]any{"barmanObjectName": "store"}}}},
 			want: "spec.method: plugin",
 		},
 		{
 			name: "in-tree",
 			spec: map[string]any{"backup": map[string]any{"barmanObjectStore": map[string]any{"destinationPath": "s3://b"}}},
 			want: "spec.backup.barmanObjectStore",
-		},
-		{
-			name: "nothing configured",
-			spec: map[string]any{},
-			want: "No backup destination is configured",
-		},
-		{
-			name: "explicitly disabled plugin reads as unconfigured",
-			spec: map[string]any{"plugins": []any{map[string]any{"name": cnpgBarmanPluginName, "enabled": false}}},
-			want: "No backup destination is configured",
 		},
 	}
 	for _, tc := range cases {
@@ -185,8 +183,8 @@ func TestCNPGDeclarativeBackup_MessageNamesTheBackupMode(t *testing.T) {
 func TestCNPGDeclarativeBackup_CountsRollupAndRegistry(t *testing.T) {
 	input := &CheckInput{
 		CNPGClusters: []*unstructured.Unstructured{
-			cnpgObj("Cluster", "pg", "protected", nil),
-			cnpgObj("Cluster", "pg", "unprotected", nil),
+			cnpgObj("Cluster", "pg", "protected", cnpgInTree()),
+			cnpgObj("Cluster", "pg", "unprotected", cnpgInTree()),
 		},
 		CNPGScheduledBackups:              []*unstructured.Unstructured{cnpgScheduledBackup("pg", "nightly", "protected", "plugin")},
 		CNPGScheduledBackupsAuthoritative: true,
@@ -206,6 +204,153 @@ func TestCNPGDeclarativeBackup_CountsRollupAndRegistry(t *testing.T) {
 	for _, in := range results.MissingInputs {
 		if strings.Contains(strings.ToLower(in), "cnpg") {
 			t.Errorf("a self-gated check must not report a missing input, got %q", in)
+		}
+	}
+}
+
+// A schedule can't run without a destination, so a Cluster with none gets the
+// destination finding only, and the schedule check doesn't evaluate it.
+func TestCNPGDeclarativeBackup_SkipsClusterWithNoDestination(t *testing.T) {
+	for name, spec := range map[string]map[string]any{
+		"nothing":         nil,
+		"disabled plugin": {"plugins": []any{map[string]any{"name": cnpgBarmanPluginName, "enabled": false}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tr := newEvalTracker()
+			input := &CheckInput{CNPGClusters: []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "c", spec)}, CNPGScheduledBackupsAuthoritative: true}
+			if findings := checkCNPGDeclarativeBackup(tr, input); len(findings) != 0 {
+				t.Fatalf("expected no schedule finding, got %+v", findings)
+			}
+			if tr.counts[checkCNPGNoDeclarativeBackup]["pg"] != 0 {
+				t.Errorf("a Cluster the check skipped must not count as evaluated")
+			}
+		})
+	}
+}
+
+func cnpgPostureIDs(findings []Finding, name string) []string {
+	var ids []string
+	for _, f := range findings {
+		if f.Name == name && strings.HasPrefix(f.CheckID, "cnpg") {
+			ids = append(ids, f.CheckID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func barmanPlugin(store string, archiver bool) map[string]any {
+	p := map[string]any{"name": cnpgBarmanPluginName}
+	if store != "" {
+		p["parameters"] = map[string]any{"barmanObjectName": store}
+	}
+	if archiver {
+		p["isWALArchiver"] = true
+	}
+	return p
+}
+
+func TestCNPGClusterPosture_NoDestinationIsOneFinding(t *testing.T) {
+	results := RunChecks(&CheckInput{
+		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "c", map[string]any{"instances": int64(3)})},
+		CNPGScheduledBackupsAuthoritative: true,
+	})
+	if got := cnpgPostureIDs(results.Findings, "c"); len(got) != 1 || got[0] != checkCNPGNoBackupDestination {
+		t.Fatalf("findings = %v, want only %s", got, checkCNPGNoBackupDestination)
+	}
+	for _, id := range []string{checkCNPGNoDeclarativeBackup, checkCNPGNoWALArchiving} {
+		if c, ok := results.CheckCounts[id]; ok && c.Evaluated != 0 {
+			t.Errorf("%s evaluated a Cluster with no destination: %+v", id, c)
+		}
+	}
+}
+
+func TestCNPGClusterPosture_Matrix(t *testing.T) {
+	inTree := map[string]any{"barmanObjectStore": map[string]any{"destinationPath": "s3://b"}}
+	cases := []struct {
+		name string
+		spec map[string]any
+		want []string
+	}{
+		{"empty spec", map[string]any{}, []string{checkCNPGNoBackupDestination, checkCNPGSingleInstance}},
+		{"archiver plugin without a store", map[string]any{"instances": int64(2), "plugins": []any{barmanPlugin("", true)}}, []string{checkCNPGNoBackupDestination}},
+		{"snapshots only", map[string]any{"instances": int64(2), "backup": map[string]any{"volumeSnapshot": map[string]any{}}}, []string{checkCNPGNoWALArchiving}},
+		{"in-tree", map[string]any{"instances": int64(2), "backup": inTree}, []string{checkCNPGInTreeBackupDeprecated}},
+		{"in-tree beside the plugin", map[string]any{"instances": int64(2), "backup": inTree, "plugins": []any{barmanPlugin("store", true)}}, nil},
+		{"plugin that does not archive WAL", map[string]any{"instances": int64(2), "plugins": []any{barmanPlugin("store", false)}}, []string{checkCNPGNoWALArchiving}},
+		{"one instance", map[string]any{"instances": int64(1), "plugins": []any{barmanPlugin("store", true)}}, []string{checkCNPGSingleInstance}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			findings := checkCNPGClusterPosture(newEvalTracker(), &CheckInput{CNPGClusters: []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "c", tc.spec)}})
+			want := append([]string(nil), tc.want...)
+			sort.Strings(want)
+			if got := cnpgPostureIDs(findings, "c"); strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("findings = %v, want %v", got, want)
+			}
+			for _, f := range findings {
+				if f.Kind != "Cluster" || f.Group != "postgresql.cnpg.io" || f.Category != CategoryReliability || f.Severity != SeverityWarning {
+					t.Errorf("finding shape: %+v", f)
+				}
+			}
+		})
+	}
+}
+
+func TestCNPGClusterPosture_MessagesStateWhatIsDeclared(t *testing.T) {
+	specs := []map[string]any{
+		{},
+		{"instances": int64(2), "backup": map[string]any{"volumeSnapshot": map[string]any{}}},
+		{"instances": int64(2), "backup": map[string]any{"barmanObjectStore": map[string]any{"destinationPath": "s3://b"}}},
+	}
+	seen := map[string]bool{}
+	for i, spec := range specs {
+		for _, f := range checkCNPGClusterPosture(newEvalTracker(), &CheckInput{CNPGClusters: []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "c", spec)}}) {
+			seen[f.CheckID] = true
+			if !strings.Contains(f.Message, "CNPG") {
+				t.Errorf("case %d %s: message should say what CNPG is configured to do: %q", i, f.CheckID, f.Message)
+			}
+			for _, bad := range []string{"no backups", "unprotected", "not protected", "is not backed up"} {
+				if strings.Contains(f.Message, bad) {
+					t.Errorf("%s message overclaims (%q): %q", f.CheckID, bad, f.Message)
+				}
+			}
+			if f.CheckID == checkCNPGNoBackupDestination && !strings.Contains(f.Message, "outside CNPG") {
+				t.Errorf("destination message should name what Radar can't see: %q", f.Message)
+			}
+		}
+	}
+	if len(seen) != 4 {
+		t.Fatalf("expected all four rules covered, saw %v", seen)
+	}
+}
+
+func TestCNPGClusterPosture_RegistryAndCounts(t *testing.T) {
+	for _, id := range []string{checkCNPGNoBackupDestination, checkCNPGNoWALArchiving, checkCNPGSingleInstance, checkCNPGInTreeBackupDeprecated} {
+		meta, ok := CheckRegistry[id]
+		if !ok {
+			t.Fatalf("%s has no CheckRegistry entry", id)
+		}
+		if meta.Category != CategoryReliability || meta.DefaultSeverity != sevMedium || meta.BadgeWorthy {
+			t.Errorf("%s registry = %+v", id, meta)
+		}
+	}
+	healthy := cnpgObj("Cluster", "pg", "healthy", map[string]any{
+		"instances": int64(2),
+		"backup":    map[string]any{"barmanObjectStore": map[string]any{"destinationPath": "s3://b"}},
+		"plugins":   []any{barmanPlugin("store", true)},
+	})
+	bare := cnpgObj("Cluster", "pg", "bare", nil)
+	results := RunChecks(&CheckInput{CNPGClusters: []*unstructured.Unstructured{healthy, bare}})
+	if got := results.CheckCounts[checkCNPGSingleInstance]; got.Evaluated != 2 || got.Passed != 1 {
+		t.Errorf("single-instance counts = %+v, want Evaluated 2 / Passed 1", got)
+	}
+
+	bare.SetAnnotations(map[string]string{IgnoreChecksAnnotation: checkCNPGSingleInstance})
+	results = RunChecks(&CheckInput{CNPGClusters: []*unstructured.Unstructured{healthy, bare}})
+	for _, f := range results.Findings {
+		if f.Name == "bare" && f.CheckID == checkCNPGSingleInstance {
+			t.Fatalf("the ignore-checks annotation should withdraw %s", f.CheckID)
 		}
 	}
 }
