@@ -8,15 +8,22 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func sealingKeyPEM(t *testing.T, notBefore time.Time) []byte {
@@ -134,5 +141,123 @@ func TestFindSealedSecretsController(t *testing.T) {
 		if ref.Ready != tc.want || ref.Kind != "Deployment" || ref.Namespace != "a" || ref.Name != "x" {
 			t.Errorf("ref = %+v, want ready %v", ref, tc.want)
 		}
+	}
+}
+
+var sealedSecretKinds = []k8s.APIResource{{Group: "bitnami.com", Version: "v1alpha1", Name: "sealedsecrets", Kind: "SealedSecret", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}
+
+func sealedSecret(ns, name, synced string) *unstructured.Unstructured {
+	return cnpgObj("bitnami.com/v1alpha1", "SealedSecret", ns, name, map[string]any{}, map[string]any{
+		"conditions": []any{map[string]any{"type": "Synced", "status": synced}},
+	})
+}
+
+// seedSealedSecretsFixture: a ready controller in kube-system, two sealing
+// keys, and SealedSecrets team/a (synced) and other/b (not synced).
+func seedSealedSecretsFixture(t *testing.T, scopes map[string]k8score.ResourceScope) {
+	t.Helper()
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	now := time.Now().UTC()
+	one := int32(1)
+	client := fake.NewClientset(
+		deploy("kube-system", "sealed-secrets-controller", map[string]string{"app.kubernetes.io/name": "sealed-secrets"}, &one, 1),
+		sealingKeySecret("sealed-secrets-keyold", "kube-system", "active", sealingKeyPEM(t, now.Add(-400*24*time.Hour)), now.Add(-400*24*time.Hour)),
+		sealingKeySecret("sealed-secrets-keynew", "kube-system", "active", sealingKeyPEM(t, now.Add(-2*24*time.Hour)), now.Add(-2*24*time.Hour)),
+	)
+	var err error
+	if scopes == nil {
+		err = k8s.InitTestResourceCache(client)
+	} else {
+		err = k8s.InitScopedTestResourceCache(client, scopes)
+	}
+	if err != nil {
+		t.Fatalf("init cache: %v", err)
+	}
+	seedCNPGWorkspace(t, sealedSecretKinds, sealedSecret("team", "a", "True"), sealedSecret("other", "b", "False"))
+}
+
+func getSealedSecretsController(t *testing.T, resp *http.Response) (sealedSecretsControllerResponse, string) {
+	t.Helper()
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, raw)
+	}
+	var out sealedSecretsControllerResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode: %v (%s)", err, raw)
+	}
+	return out, string(raw)
+}
+
+func TestSealedSecretsControllerWithoutAuth(t *testing.T) {
+	seedSealedSecretsFixture(t, nil)
+	resp, err := http.Get(testServer.URL + "/api/sealedsecrets/controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, raw := getSealedSecretsController(t, resp)
+	if !got.Installed || got.ControllerState != "ok" || got.Controller == nil ||
+		got.Controller.Namespace != "kube-system" || got.Controller.Name != "sealed-secrets-controller" || !got.Controller.Ready {
+		t.Fatalf("controller = %+v (%s)", got, raw)
+	}
+	if got.KeysState != "ok" || len(got.Keys) != 2 || !got.Keys[0].Active || got.Keys[0].Name != "sealed-secrets-keynew" || got.Keys[1].Active {
+		t.Fatalf("keys = %+v (%s)", got.Keys, got.KeysState)
+	}
+	if got.Counts == nil || *got.Counts != (sealedSecretCounts{Total: 2, Synced: 1, NotSynced: 1}) {
+		t.Fatalf("counts = %+v", got.Counts)
+	}
+	for _, bad := range []string{"SENTINEL", "BEGIN", "tls.key", "sealedsecrets.bitnami.com", "annotations", "labels"} {
+		if strings.Contains(raw, bad) {
+			t.Errorf("response leaks %q: %s", bad, raw)
+		}
+	}
+}
+
+func TestSealedSecretsControllerPerUser(t *testing.T) {
+	seedSealedSecretsFixture(t, nil)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	allow(perms, "bitnami.com", "sealedsecrets", "", false)
+	allow(perms, "bitnami.com", "sealedsecrets", "team", true)
+	allow(perms, "", "secrets", "kube-system", false)
+	perms.SetCanI("get", "apps", "deployments", "kube-system", false)
+	env.srv.permCache.Set("dana", nil, perms)
+
+	got, raw := getSealedSecretsController(t, env.authGet(t, "/api/sealedsecrets/controller", "dana", ""))
+	if got.ControllerState != "denied" || got.Controller != nil {
+		t.Errorf("controller = %q %+v, want denied and omitted", got.ControllerState, got.Controller)
+	}
+	if got.KeysState != "denied" || len(got.Keys) != 0 || strings.Contains(raw, "sealed-secrets-key") {
+		t.Errorf("keys = %q %+v, want denied and omitted", got.KeysState, got.Keys)
+	}
+	if got.Counts == nil || *got.Counts != (sealedSecretCounts{Total: 1, Synced: 1, Partial: true}) {
+		t.Errorf("counts = %+v, want team only and partial", got.Counts)
+	}
+}
+
+func TestSealedSecretsControllerKeysNotCollected(t *testing.T) {
+	seedSealedSecretsFixture(t, map[string]k8score.ResourceScope{"deployments": {Enabled: true}, "secrets": {Enabled: false}})
+	resp, err := http.Get(testServer.URL + "/api/sealedsecrets/controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := getSealedSecretsController(t, resp)
+	if got.KeysState != "notCollected" || got.ControllerState != "ok" || len(got.Keys) != 0 {
+		t.Fatalf("got keys %q controller %q, want notCollected / ok", got.KeysState, got.ControllerState)
+	}
+}
+
+func TestSealedSecretsControllerNotInstalled(t *testing.T) {
+	restoreFixtureCache(t)
+	seedCNPGWorkspace(t, nil)
+	resp, err := http.Get(testServer.URL + "/api/sealedsecrets/controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := getSealedSecretsController(t, resp)
+	if got.Installed || got.KeysState != "unknown" || got.Counts != nil {
+		t.Fatalf("got %+v, want not installed, keys unknown, no counts", got)
 	}
 }
