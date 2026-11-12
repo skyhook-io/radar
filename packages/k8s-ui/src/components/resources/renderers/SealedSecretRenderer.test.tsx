@@ -83,3 +83,19 @@ it('counts SealedSecrets without a Synced condition instead of dropping them', (
   const html = renderToString(<SealedSecretRenderer data={sealed('False')} controller={controller({ counts: { total: 5, synced: 3, notSynced: 1, partial: false } })} />).replace(/<!-- -->/g, '')
   expect(html).toContain('3 synced · 1 not synced · 1 without a Synced condition')
 })
+
+it('keeps the re-seal hint when the controller status could not be loaded', () => {
+  const html = render('False', null)
+  expect(html).toContain('could not be loaded')
+  expect(html).toContain('kubeseal --fetch-cert')
+  expect(render('True', null)).not.toContain('--fetch-cert')
+})
+
+it('names a controller lookup that is still loading or failed', () => {
+  expect(render('False', controller({ controller: undefined, controllerState: 'loading', keys: undefined, keysState: 'unknown' }))).toContain('Deployments are still loading')
+  expect(render('False', controller({ controller: undefined, controllerState: 'failed', keys: undefined, keysState: 'unknown' }))).toContain('could not load Deployments')
+})
+
+it('opens the section on a synced SealedSecret too', () => {
+  expect(render('True', controller())).not.toContain('aria-expanded="false"')
+})

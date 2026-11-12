@@ -6,7 +6,7 @@ import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList, 
 export interface SealedSecretsController {
   installed: boolean
   controller?: { kind: string; namespace: string; name: string; ready: boolean }
-  controllerState: 'ok' | 'denied' | 'notFound' | 'notCollected'
+  controllerState: 'ok' | 'denied' | 'notFound' | 'notCollected' | 'loading' | 'failed'
   keys?: { name: string; createdAt: string; notBefore?: string; notAfter?: string; active: boolean; notUsed?: boolean }[]
   keysState: 'ok' | 'denied' | 'notCollected' | 'loading' | 'failed' | 'unknown'
   counts?: { total: number; synced: number; notSynced: number; partial: boolean }
@@ -24,14 +24,24 @@ const day = (value?: string) => (value ? value.slice(0, 10) : '-')
 // The Secrets namespace the keys live in: the controller's. A denied
 // controller hides its name, so the key messages fall back to generic text.
 function ControllerSection({ controller, isSynced, onNavigate }: { controller: SealedSecretsController | null; isSynced: boolean; onNavigate?: SealedSecretRendererProps['onNavigate'] }) {
+  const ref = controller?.controller
+  const fetchCert = ref
+    ? `kubeseal --controller-namespace ${ref.namespace} --controller-name ${ref.name} --fetch-cert`
+    : 'kubeseal --fetch-cert'
+  const hint = !isSynced && (
+    <div className="mt-3 text-xs text-theme-text-secondary">
+      To re-seal for this cluster, <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono">{fetchCert}</code> prints its current certificate.
+    </div>
+  )
   if (!controller) {
     return (
-      <Section title="Controller and sealing keys" icon={Server} defaultExpanded={!isSynced}>
+      <Section title="Controller and sealing keys" icon={Server} defaultExpanded={true}>
         <div className="text-sm text-theme-text-tertiary">Controller status could not be loaded.</div>
+        {hint}
       </Section>
     )
   }
-  const ref = controller.controller
+  // The key messages name the namespace only when the controller is visible.
   const ns = ref?.namespace
   const where = ns ? ` in ${ns}` : " in the controller's namespace"
   const controllerValue =
@@ -41,14 +51,13 @@ function ControllerSection({ controller, isSynced, onNavigate }: { controller: S
         <Badge severity={ref.ready ? 'success' : 'error'} size="sm">{ref.ready ? 'Ready' : 'Not ready'}</Badge>
       </span>
     ) : controller.controllerState === 'denied' ? "No access to the controller's Deployment"
-      : controller.controllerState === 'notCollected' ? 'Radar does not collect Deployments'
+      : controller.controllerState === 'notCollected' ? 'Radar does not collect Deployments where the controller may run'
+      : controller.controllerState === 'loading' ? 'Deployments are still loading'
+      : controller.controllerState === 'failed' ? 'Radar could not load Deployments'
       : 'No sealed-secrets controller found'
   const counts = controller.counts
-  const fetchCert = ref
-    ? `kubeseal --controller-namespace ${ref.namespace} --controller-name ${ref.name} --fetch-cert`
-    : 'kubeseal --fetch-cert'
   return (
-    <Section title="Controller and sealing keys" icon={Server} defaultExpanded={!isSynced}>
+    <Section title="Controller and sealing keys" icon={Server} defaultExpanded={true}>
       <PropertyList>
         <Property label="Controller" value={controllerValue} />
         {counts && (
@@ -83,16 +92,12 @@ function ControllerSection({ controller, isSynced, onNavigate }: { controller: S
           </tbody>
         </table>
       )}
-      {controller.keysState === 'denied' && <div className="mt-2 text-sm text-theme-text-tertiary">No access to Secrets{where}, so the sealing keys are not shown.</div>}
       {controller.keysState === 'ok' && controller.keys?.length === 0 && <div className="mt-2 text-sm text-theme-text-tertiary">No sealing keys found{where}.</div>}
+      {controller.keysState === 'denied' && <div className="mt-2 text-sm text-theme-text-tertiary">No access to Secrets{where}, so the sealing keys are not shown.</div>}
       {controller.keysState === 'loading' && <div className="mt-2 text-sm text-theme-text-tertiary">Sealing keys are still loading.</div>}
       {controller.keysState === 'failed' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar could not load Secrets{where}, so the sealing keys are not shown.</div>}
       {controller.keysState === 'notCollected' && <div className="mt-2 text-sm text-theme-text-tertiary">Radar does not collect Secrets{where}, so the sealing keys are not shown.</div>}
-      {!isSynced && (
-        <div className="mt-3 text-xs text-theme-text-secondary">
-          To re-seal for this cluster, <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono">{fetchCert}</code> prints its current certificate.
-        </div>
-      )}
+      {hint}
     </Section>
   )
 }

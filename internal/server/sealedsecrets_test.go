@@ -326,3 +326,42 @@ func TestSealedSecretsControllerNamespaceScopedDeployments(t *testing.T) {
 		t.Fatalf("got controller %q keys %q, want notCollected / unknown", got.ControllerState, got.KeysState)
 	}
 }
+
+// The first certificate in tls.crt is the key's; a malformed one is not
+// replaced by a later block's dates.
+func TestSealingKeysUseOnlyTheFirstCertificate(t *testing.T) {
+	now := time.Now().UTC()
+	later := sealingKeyPEM(t, now.Add(-time.Hour))
+	malformedFirst := append([]byte("-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydA==\n-----END CERTIFICATE-----\n"), later...)
+	got := sealingKeysFromSecrets([]runtime.Object{
+		sealingKeySecret("malformed", "kube-system", "active", malformedFirst, now.Add(-2*time.Hour)),
+		sealingKeySecret("old", "kube-system", "active", sealingKeyPEM(t, now.Add(-400*24*time.Hour)), now.Add(-400*24*time.Hour)),
+	})
+	for _, k := range got {
+		if k.Name == "malformed" && (k.NotBefore != "" || k.Active) {
+			t.Errorf("malformed key took a later certificate: %+v", k)
+		}
+		if k.Name == "old" && !k.Active {
+			t.Errorf("old should be the sealing key: %+v", k)
+		}
+	}
+}
+
+func TestAbsentControllerState(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		a      k8score.KindReadAssessment
+		scoped bool
+		want   string
+	}{
+		{"syncing", k8score.KindReadAssessment{Readiness: k8score.KindPending, AllNamespaces: true}, false, "loading"},
+		{"namespace informer syncing", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Loading: []string{"a"}}, true, "loading"},
+		{"load failed", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Failed: []string{"a"}}, true, "failed"},
+		{"namespace-scoped and complete", k8score.KindReadAssessment{Readiness: k8score.KindReady, Read: []string{"a"}, Complete: true}, true, "notCollected"},
+		{"cluster-wide and complete", k8score.KindReadAssessment{Readiness: k8score.KindReady, AllNamespaces: true}, false, "notFound"},
+	} {
+		if got := absentControllerState(tc.a, tc.scoped); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

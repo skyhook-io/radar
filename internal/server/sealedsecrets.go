@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/pem"
 	"log"
 	"net/http"
 	"sort"
@@ -102,7 +103,11 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 		}
 		k := sealingKey{Name: sec.Name, CreatedAt: sec.CreationTimestamp.Time, NotUsed: value != "active"}
 		when, parsed := k.CreatedAt, false
-		if certs := topology.ParsePEMCertificates(sec.Data["tls.crt"]); len(certs) > 0 {
+		// Only the first block is the key's certificate: a malformed one must
+		// not hand the key a later block's dates.
+		if block, _ := pem.Decode(sec.Data["tls.crt"]); block == nil || block.Type != "CERTIFICATE" {
+			// no usable certificate
+		} else if certs := topology.ParsePEMCertificates(pem.EncodeToMemory(block)); len(certs) > 0 {
 			k.NotBefore, k.NotAfter, parsed = certs[0].NotBefore, certs[0].NotAfter, true
 			if t, err := time.Parse(time.RFC3339, k.NotBefore); err == nil {
 				when = t
@@ -139,6 +144,22 @@ func unreadKeysState(a k8score.KindReadAssessment) string {
 		return "failed"
 	}
 	return "notCollected"
+}
+
+// absentControllerState says why no controller Deployment was found: the
+// Deployment cache is still syncing or failed to load, or Radar watches
+// Deployments in some namespaces only (the controller may be in another).
+// Only a complete cluster-wide read means there is none.
+func absentControllerState(a k8score.KindReadAssessment, namespaceScoped bool) string {
+	switch {
+	case a.Readiness == k8score.KindPending && len(a.Failed) == 0 || len(a.Loading) > 0:
+		return "loading"
+	case len(a.Failed) > 0:
+		return "failed"
+	case namespaceScoped:
+		return "notCollected"
+	}
+	return "notFound"
 }
 
 type sealedSecretCounts struct {
@@ -200,11 +221,7 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 		log.Printf("[sealedsecrets] Failed to list Deployments: %v", err)
 		resp.ControllerState = "notCollected"
 	} else if d := findSealedSecretsController(deployments); d == nil {
-		// Deployments cached for some namespaces only: the controller may be
-		// in one Radar doesn't watch, so it is unread rather than missing.
-		if cache.KindNamespaces("deployments") != nil {
-			resp.ControllerState = "notCollected"
-		}
+		resp.ControllerState = absentControllerState(cache.AssessKindRead("deployments", nil), cache.KindNamespaces("deployments") != nil)
 	} else {
 		ns := d.Namespace
 		if s.canRead(r, "apps", "deployments", ns, "get") {
