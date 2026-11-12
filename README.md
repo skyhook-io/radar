@@ -420,7 +420,7 @@ Hop-ordered diagnosis for Service, Ingress, HTTPRoute, GRPCRoute, and Gateway �
 
 ### Kubernetes Upgrade Impact
 
-Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics.
+Open **Checks → Upgrade impact** before upgrading the control plane. Radar compares the current cluster with a target Kubernetes minor and orders evidenced compatibility, health, admission, drain, runtime, and configuration checks by required action — APIs removed in the target release, kubelet and kube-proxy skew, overlapping PodDisruptionBudgets, removed feature gates — using live resources, Helm release manifests, last-applied configuration, and API server metrics. On k3s and RKE2 it also lists the system-upgrade-controller Plans that upgrade the distribution, with their version and state.
 
 See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
 
@@ -479,6 +479,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Knative Networking** | Ingress, Certificate, ServerlessService |
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **OpenTelemetry Operator** | [OpenTelemetryCollector and Instrumentation](docs/integrations.md#opentelemetry-operator): reconciliation, configured pipelines and injection settings |
+| **System Upgrade Controller** | [Plan](docs/integrations.md#system-upgrade-controller): per-node upgrade progress, an Issue for an invalid Plan, and k3s/RKE2 upgrade Plans on the Upgrade impact page |
 | **Flagger** | [Canary and MetricTemplate](docs/integrations.md#flagger): recorded rollout state, target/autoscaler/template links and failed-rollout Issues |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |
