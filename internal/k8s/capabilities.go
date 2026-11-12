@@ -199,6 +199,7 @@ type FeatureCapabilities struct {
 	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
 	GitOpsWriteEvidence   bool `json:"gitopsWriteEvidence"`   // POST /api/gitops/write-evidence
 	GitOpsOutsideChanges  bool `json:"gitopsOutsideChanges"`  // GET /api/gitops/outside-changes/{kind}/{namespace}/{name}
+	GitOpsFieldWriters    bool `json:"gitopsFieldWriters"`    // GET /api/gitops/field-writers/{kind}/{namespace}/{name}
 	AgentSigninCheck      bool `json:"agentSigninCheck"`      // GET /api/agents/signin
 	// POST /api/argo/applications/{namespace}/{name}/rollback starts a sync to
 	// the history entry (id 0 included), and .../resume also clears

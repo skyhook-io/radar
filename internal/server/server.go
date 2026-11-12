@@ -635,6 +635,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/gitops/destination/{kind}/{namespace}/{name}", s.handleGitOpsDestination)
 			r.Get("/gitops/insights/{kind}/{namespace}/{name}", s.handleGitOpsInsights)
 			r.Get("/gitops/outside-changes/{kind}/{namespace}/{name}", s.handleGitOpsOutsideChanges)
+			r.Get("/gitops/field-writers/{kind}/{namespace}/{name}", s.handleGitOpsFieldWriters)
 			r.Get("/gitops/managed-resources", s.handleGitOpsManagedResources)
 			r.Post("/gitops/write-evidence", s.handleGitOpsWriteEvidence)
 
@@ -1511,6 +1512,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,
 		GitOpsOutsideChanges:     true,
+		GitOpsFieldWriters:       true,
 		ArgoRollbackSync:         true,
 		ArgoSyncInheritance:      true,
 		ArgoEnableSelfHealOff:    true,
