@@ -200,6 +200,8 @@ chmod +x radar-desktop_*_linux_amd64.AppImage
 ```
 The AppImage doesn't update itself. When a new version is out, Radar links to the download.
 
+If the Linux desktop app flashes black, shows black icons or crashes on NVIDIA, see [Linux desktop rendering](docs/configuration.md#linux-desktop-rendering).
+
 Kubeconfig login plugins (`exec`) run from inside the AppImage, not from the folder you started it in. If a plugin's `args` name a file by a relative path, such as `--token-file token.json`, the plugin can't find it and Radar shows "Authentication Failed". Give the full path instead, such as `--token-file /home/you/.kube/token.json`. A relative `command`, such as `./token.sh`, works: it's looked up next to the kubeconfig file.
 
 **Scoop (Windows):**

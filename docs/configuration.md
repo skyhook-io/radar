@@ -269,6 +269,24 @@ On Linux and Windows, closing the window always quits. Neither gives Radar
 anything to reopen from — no Dock, and Wails v2 ships no tray icon — so hiding
 there would leave a running process with no way to reach it.
 
+## Linux desktop rendering
+
+On some NVIDIA systems, the desktop app may flash black when switching views or show black icons. To fix it, quit the app and launch it with this setting:
+
+```bash
+WEBKIT_DMABUF_RENDERER_FORCE_SHM=0 radar-desktop
+```
+
+For an AppImage:
+
+```bash
+WEBKIT_DMABUF_RENDERER_FORCE_SHM=0 ./radar-desktop_*_linux_amd64.AppImage
+```
+
+This setting applies only to that launch. If the window opens black or the app closes, launch normally to return to the default.
+
+For the separate [upstream NVIDIA crash](https://bugs.webkit.org/show_bug.cgi?id=327542), run `kubectl radar` and open the printed URL in your browser.
+
 ## AI Investigations Agent CLI
 
 Built-in AI investigations run an agent CLI installed on the machine Radar runs
