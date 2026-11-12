@@ -84,6 +84,11 @@ type ObservedRelease struct {
 	// can read that records this release. Empty doesn't mean Flux isn't
 	// managing it: the caller may not be able to read that HelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	// ManagedByK3sHelmChart / K3sHelmChartConfig: "namespace/name" of a k3s
+	// HelmChart (and HelmChartConfig) the caller can read that installs this
+	// release. Empty when Flux records it, or when the caller can't read one.
+	ManagedByK3sHelmChart string `json:"managedByK3sHelmChart,omitempty"`
+	K3sHelmChartConfig    string `json:"k3sHelmChartConfig,omitempty"`
 }
 
 // FluxRevision is one entry of a Flux HelmRelease's status.history: what Flux
@@ -160,6 +165,8 @@ func skipScanKind(kind, group string) bool {
 type stampScan struct {
 	stamped  []stampedObject
 	flux     []fluxEvidence
+	k3s      map[releaseKey]k3sOwner
+	k3sConfs map[string]bool
 	coverage resourceapi.SearchCoverage
 	seen     map[string]bool
 }
@@ -168,6 +175,11 @@ type stampScan struct {
 // skipped because controllers copy their parent's annotations onto what they
 // create, as a Deployment does to its ReplicaSets, and Helm didn't deploy those.
 func (s *stampScan) add(o search.ScannedObject) {
+	if o.Group == k3sHelmGroup && (o.Kind == k3sHelmChartKind || o.Kind == k3sHelmChartConfigKind) {
+		if u, ok := o.Object.(*unstructured.Unstructured); ok {
+			s.addK3s(o.Kind, u)
+		}
+	}
 	if o.Kind == fluxHelmReleaseKind && o.Group == fluxHelmReleaseGroup {
 		if u, ok := o.Object.(*unstructured.Unstructured); ok {
 			if evidence, ok := parseFluxEvidence(u); ok {
@@ -196,11 +208,35 @@ func (s *stampScan) add(o search.ScannedObject) {
 	s.stamped = append(s.stamped, stamped)
 }
 
+// addK3s records a HelmChart or HelmChartConfig the caller can read; either
+// may arrive first, so a config is linked to its chart whichever comes second.
+func (s *stampScan) addK3s(kind string, u *unstructured.Unstructured) {
+	if s.k3s == nil {
+		s.k3s, s.k3sConfs = map[releaseKey]k3sOwner{}, map[string]bool{}
+	}
+	ref := u.GetNamespace() + "/" + u.GetName()
+	if kind == k3sHelmChartConfigKind {
+		s.k3sConfs[ref] = true
+		for key, owner := range s.k3s {
+			if owner.chart == ref {
+				owner.config = ref
+				s.k3s[key] = owner
+			}
+		}
+		return
+	}
+	owner := k3sOwner{chart: ref}
+	if s.k3sConfs[ref] {
+		owner.config = ref
+	}
+	s.k3s[k3sTarget(u)] = owner
+}
+
 // scanObservedReleases reads the stamps the caller can see. HelmReleases are
 // warmed because the scan reads only watched kinds and Radar may not have
 // started this one; the scan still decides whether this caller may read them.
 func scanObservedReleases(ctx context.Context, scope *ObjectScope) (*stampScan, error) {
-	warmFluxHelmReleases(ctx, scope.Provider)
+	warmHelmControllerKinds(ctx, scope.Provider)
 
 	scan := &stampScan{seen: map[string]bool{}}
 	coverage, err := search.Scan(ctx, scope.Provider, scope.Access, skipScanKind, scan.add)
@@ -214,13 +250,17 @@ func scanObservedReleases(ctx context.Context, scope *ObjectScope) (*stampScan, 
 	return scan, nil
 }
 
-func warmFluxHelmReleases(ctx context.Context, provider search.Provider) {
+// warmHelmControllerKinds starts the watches for the kinds that say who
+// installs a release: Flux HelmReleases and k3s HelmCharts/HelmChartConfigs.
+func warmHelmControllerKinds(ctx context.Context, provider search.Provider) {
 	discovery := k8s.GetResourceDiscovery()
 	if discovery == nil {
 		return
 	}
-	if gvr, ok := discovery.GetGVRWithGroup(fluxHelmReleaseKind, fluxHelmReleaseGroup); ok {
-		_ = provider.WarmDynamic(ctx, gvr, "")
+	for _, k := range [][2]string{{fluxHelmReleaseKind, fluxHelmReleaseGroup}, {k3sHelmChartKind, k3sHelmGroup}, {k3sHelmChartConfigKind, k3sHelmGroup}} {
+		if gvr, ok := discovery.GetGVRWithGroup(k[0], k[1]); ok {
+			_ = provider.WarmDynamic(ctx, gvr, "")
+		}
 	}
 }
 
@@ -296,7 +336,7 @@ func groupStamped(stamped []stampedObject) map[releaseKey][]stampedObject {
 
 // observedRow builds one release's row. Flux evidence replaces what labels say
 // about its chart, because Flux recorded it from the release itself.
-func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) ObservedRelease {
+func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence, k3s map[releaseKey]k3sOwner) ObservedRelease {
 	row := ObservedRelease{Name: key.name, Namespace: key.namespace, ResourceCount: len(objects)}
 	choice := chooseChart(key.name, objects)
 	row.Chart, row.ChartVersion, row.AppVersion, row.OtherCharts = choice.chart, choice.version, choice.appVersion, choice.others
@@ -313,6 +353,11 @@ func observedRow(key releaseKey, objects []stampedObject, flux []fluxEvidence) O
 				name, _ := parseChartLabel(label)
 				return name == f.historyChart
 			})
+		}
+	}
+	if row.ManagedByFluxHelmRelease == "" {
+		if owner, ok := k3s[key]; ok {
+			row.ManagedByK3sHelmChart, row.K3sHelmChartConfig = owner.chart, owner.config
 		}
 	}
 	return row
@@ -602,7 +647,7 @@ func observedDetail(scope *ObjectScope, scan *stampScan, key releaseKey, flux []
 		}
 		return objects[i].name < objects[j].name
 	})
-	detail := &ObservedReleaseDetail{ObservedRelease: observedRow(key, objects, flux), ObjectCoverage: scan.coverage}
+	detail := &ObservedReleaseDetail{ObservedRelease: observedRow(key, objects, flux, scan.k3s), ObjectCoverage: scan.coverage}
 	detail.Resources = addObservedHealth(&detail.ObservedRelease, objects, scan.coverage.Status != resourceapi.CoverageComplete)
 	// Health reads the current cache, so this has to come after it.
 	if !scope.Provider.Current() {

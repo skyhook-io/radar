@@ -36,6 +36,13 @@ type HelmRelease struct {
 	// values via `helm upgrade` here would get reverted on the next
 	// reconciliation). Format: "namespace/name".
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	// ManagedByK3sHelmChart names the k3s/RKE2 HelmChart ("namespace/name")
+	// whose helm-controller installs this release; a manual upgrade is
+	// reverted at its next reconcile. Empty when Flux owns the release.
+	ManagedByK3sHelmChart string `json:"managedByK3sHelmChart,omitempty"`
+	// K3sHelmChartConfig names the HelmChartConfig ("namespace/name") that
+	// overrides that HelmChart's values, when one exists.
+	K3sHelmChartConfig string `json:"k3sHelmChartConfig,omitempty"`
 }
 
 // HelmRevision represents a single revision in the release history
@@ -77,6 +84,9 @@ type HelmReleaseDetail struct {
 	OperationInsight *HelmOperationInsight `json:"operationInsight,omitempty"`
 	// See HelmRelease.ManagedByFluxHelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	// See HelmRelease.ManagedByK3sHelmChart and K3sHelmChartConfig.
+	ManagedByK3sHelmChart string `json:"managedByK3sHelmChart,omitempty"`
+	K3sHelmChartConfig    string `json:"k3sHelmChartConfig,omitempty"`
 }
 
 type HelmOperationInsight struct {

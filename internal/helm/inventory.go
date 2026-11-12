@@ -284,7 +284,7 @@ func observedOutsideStorage(scan *stampScan, read, requested []string, releases 
 	rows := []ObservedRelease{}
 	partial := scan.coverage.Status != resourceapi.CoverageComplete
 	for key, objects := range groupStamped(scan.stamped) {
-		row := observedRow(key, objects, scan.flux)
+		row := observedRow(key, objects, scan.flux, scan.k3s)
 		if known[key] || storageWasRead(key, scan.flux, read) || (requested != nil && !slices.Contains(requested, row.Namespace)) {
 			continue
 		}
