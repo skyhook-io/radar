@@ -76,6 +76,7 @@ import type {
   PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
+import type { GitOpsOutsideChange, GitOpsOutsideChanges } from '@skyhook-io/k8s-ui/types/gitops-outside'
 import { apiUrl, automaticRequestHeaders, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
@@ -2808,6 +2809,38 @@ export function useGitOpsInsights(
     staleTime: 5000,
     refetchInterval: gitopsInsightsRefetchInterval,
   });
+}
+
+// Hand edits on one object Radar names a Flux manager for (the resource
+// header's "Edited outside Flux" chip). The caller enables it only then.
+export function useGitOpsFieldWriters(kind: string, namespace: string, name: string, group: string | undefined, enabled: boolean) {
+  const { guard, gatedKey, support } = useRadarFeature("gitopsFieldWriters");
+  const params = group ? `?group=${encodeURIComponent(group)}` : "";
+  return useQuery<{ changes: GitOpsOutsideChange[] }>({
+    queryKey: ["gitops-field-writers", kind, namespace, name, group ?? "", ...gatedKey],
+    queryFn: ({ signal }) =>
+      guard(() => fetchJSON<{ changes: GitOpsOutsideChange[] }>(`/gitops/field-writers/${kind}/${namespace || "_"}/${name}${params}`, signal)),
+    staleTime: 30000,
+    retry: shouldRetryRadarQuery,
+    enabled: enabled && Boolean(kind && name) && support !== "unsupported",
+  });
+}
+
+// Fields of a Flux root's managed objects last written by a person's tool.
+// The server lists the members live (bounded) and caches per user for 30s,
+// so no polling: the header count and the tab share this one query.
+export function useGitOpsOutsideChanges(kind: string, namespace: string, name: string, group: string | undefined, enabled: boolean) {
+  const { guard, gatedKey, support } = useRadarFeature("gitopsOutsideChanges");
+  const params = group ? `?group=${encodeURIComponent(group)}` : "";
+  const query = useQuery<GitOpsOutsideChanges>({
+    queryKey: ["gitops-outside-changes", kind, namespace, name, group ?? "", ...gatedKey],
+    queryFn: ({ signal }) =>
+      guard(() => fetchJSON<GitOpsOutsideChanges>(`/gitops/outside-changes/${kind}/${namespace || "_"}/${name}${params}`, signal)),
+    staleTime: 30000,
+    retry: shouldRetryRadarQuery,
+    enabled: enabled && Boolean(kind && name) && support !== "unsupported",
+  });
+  return { ...query, support };
 }
 
 // Field-level evidence behind the GitOps write guard: whether each path is in
@@ -7345,6 +7378,8 @@ const fluxInvalidateKeys = (v: FluxResourceVars) => [
   ["resource", v.kind, v.namespace, v.name],
   ["gitops-tree", v.kind, v.namespace, v.name],
   ["gitops-insights", v.kind, v.namespace, v.name],
+  // Suspend and resume change what the tab says Flux does about each edit.
+  ["gitops-outside-changes", v.kind, v.namespace, v.name],
 ];
 const argoInvalidateKeys = (v: ArgoAppVars) => [
   ["resources", "applications"],

@@ -8,6 +8,7 @@ import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hook
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
+  GitOpsOutsideChangesView,
   GitOpsDetailLayout,
   GitOpsGraphFilterRail,
   GitOpsTableView as SharedGitOpsTableView,
@@ -80,6 +81,7 @@ import {
   useFluxSuspend,
   useFluxSyncWithSource,
   useGitOpsInsights,
+  useGitOpsOutsideChanges,
   useGitOpsTree,
   useRadarFeature,
   useResource,
@@ -613,6 +615,12 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const isRunning = resourceQ.data?.status?.operationState?.phase === 'Running'
   const operationInProgress = isArgoOperationInProgress(resourceQ.data)
   const isFluxWorkload = tool === 'flux' && (kind === 'kustomizations' || kind === 'helmreleases')
+  const outsideQ = useGitOpsOutsideChanges(kind, namespace, name, effectiveGroup, isFluxWorkload)
+  const outsideAvailable = isFluxWorkload && outsideQ.support === 'supported'
+  // The tab state outlives navigation to a root that has no Outside Flux tab.
+  useEffect(() => {
+    if (appView === 'outside' && !outsideAvailable) setAppView('topology')
+  }, [appView, outsideAvailable])
   const isFlux = tool === 'flux'
   const notGitOpsError = resourceQ.data && tool === null
     ? new Error(notGitOpsMessage(resourceQ.data.kind ?? apiKind?.kind ?? kind, effectiveGroup, namespace, name))
@@ -822,6 +830,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       isFluxWorkload={isFluxWorkload}
       argo={argoHandlers}
       flux={fluxHandlers}
+      outsideChanges={outsideAvailable ? { count: outsideQ.data?.count } : undefined}
       activeTab={appView}
       onTabChange={(tab) => setAppView(tab)}
       fullscreen={graphFullscreen}
@@ -871,6 +880,16 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
               } : undefined}
               rollbackUpgrade={argoRollbackUpgrade}
               rollbackBlockedReason={argoRollbackBlockedReason}
+            />
+          )
+        }
+        if (tab === 'outside') {
+          return (
+            <GitOpsOutsideChangesView
+              data={outsideQ.data}
+              error={outsideQ.error as Error | null}
+              loading={outsideQ.isLoading}
+              onOpenResource={(ref) => openResourceFromTree({ group: ref.group, kind: ref.kind, namespace: ref.namespace ?? '', name: ref.name })}
             />
           )
         }
