@@ -109,3 +109,27 @@ it('keeps learning a gone pod\'s containers as the window widens', async () => {
   await act(async () => { await new Promise(r => setTimeout(r, 150)) })
   expect([...element.querySelectorAll('option')].map(o => o.textContent)).toContain('sidecar')
 })
+
+it('shows whole-pod lines when Loki has no container label, even with a container selected', async () => {
+  const fetchHistory = vi.fn(async () => result({ containers: ['(all containers)'], logs: { '(all containers)': '2026-11-13T09:00:00Z whole pod\n' } }))
+  await render({ fetchHistory, initialMode: 'history' })
+  expect(fetchHistory).toHaveBeenCalledWith({ container: 'web', since: '6h' })
+  expect(element.textContent).toContain('OTHER 1')
+  expect(element.textContent).toContain('all containers (Loki has no container label)')
+})
+
+it('streams when the user turns a History tab to Live, but not before History is ready', async () => {
+  const createStream = vi.fn(() => ({ close() {}, addEventListener() {}, removeEventListener() {} }) as unknown as EventSource)
+  await render({ autoStream: true, createStream, initialMode: 'history' })
+  expect(createStream).not.toHaveBeenCalled() // waiting for the host to be able to read History
+  await act(async () => {
+    root!.render(
+      <ToastProvider>
+        <LogsViewer namespace="team" podName="app-1" containers={['web']} fetchLogs={async () => ({})} createStream={createStream} autoStream initialMode="history" fetchHistory={async () => result()} />
+      </ToastProvider>,
+    )
+  })
+  await act(async () => { button('Live')!.click() })
+  await act(async () => { await new Promise(r => setTimeout(r, 150)) })
+  expect(createStream).toHaveBeenCalled()
+})

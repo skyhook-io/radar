@@ -12,6 +12,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // fakeLoki answers /loki/api/v1/labels; status other than 200 answers body.
@@ -300,5 +301,183 @@ func TestShortHeaderValuesKeepErrorsReadable(t *testing.T) {
 	err := EnsureConnected(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+// A gateway Service maps port 80 to its pod's own port; a port-forward goes
+// to the pod, so it must use that port, numeric or named.
+func TestForwardUsesThePodPort(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target intstr.IntOrString
+	}{{"numeric", intstr.FromInt32(8080)}, {"named", intstr.FromString("http")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			reset(t)
+			srv := fakeLoki(t, 200, labelsOK, nil)
+			gw := svc("loki", "loki-gateway", nil, corev1.ServicePort{Name: "http", Port: 80, TargetPort: tc.target})
+			gw.Spec.Selector = map[string]string{"app": "gw"}
+			listServices = func() []corev1.Service { return []corev1.Service{gw} }
+			savedNamed := namedPodPort
+			t.Cleanup(func() { namedPodPort = savedNamed })
+			namedPodPort = func(ns string, sel map[string]string, name string) int {
+				if ns == "loki" && sel["app"] == "gw" && name == "http" {
+					return 8080
+				}
+				return 0
+			}
+			var got atomic.Int32
+			startForward = func(_ context.Context, _, _ string, p int, _ string) (string, error) {
+				got.Store(int32(p))
+				return srv.URL, nil
+			}
+			Configure("", nil)
+			if err := EnsureConnected(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got.Load() != 8080 {
+				t.Fatalf("forwarded to pod port %d, want 8080", got.Load())
+			}
+		})
+	}
+}
+
+// discoveredAt connects through a "forward" to srv, as discovery does.
+func discoveredAt(t *testing.T, srv *httptest.Server) {
+	t.Helper()
+	listServices = func() []corev1.Service {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	}
+	startForward = func(context.Context, string, string, int, string) (string, error) { return srv.URL, nil }
+	Configure("", nil)
+	if err := EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A read answered after a context switch carries the old cluster's data.
+func TestGetDropsAnAnswerFromAnOldContext(t *testing.T) {
+	reset(t)
+	var ctxName atomic.Value
+	ctxName.Store("old")
+	currentContext = func() string { return ctxName.Load().(string) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/read" {
+			ctxName.Store("new")
+		}
+		_, _ = w.Write([]byte(labelsOK))
+	}))
+	t.Cleanup(srv.Close)
+	Configure(srv.URL, nil)
+	if _, err := Get(context.Background(), "/read", nil); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("error = %v, want the answer dropped", err)
+	}
+}
+
+// A read cancelled by its caller, or timed out, says nothing about Loki.
+func TestCancelledReadKeepsTheConnection(t *testing.T) {
+	reset(t)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/slow" {
+			<-r.Context().Done()
+			return
+		}
+		_, _ = w.Write([]byte(labelsOK))
+	}))
+	t.Cleanup(slow.Close)
+	discoveredAt(t, slow)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if _, err := Get(ctx, "/slow", nil); err == nil {
+		t.Fatal("want an error")
+	}
+	if _, ok := Labels(); !ok {
+		t.Fatal("a cancelled read dropped the connection")
+	}
+}
+
+// A read that fails after Loki was found again must not drop the new
+// connection, even when it reuses the same local address.
+func TestOldFailedReadKeepsANewConnection(t *testing.T) {
+	reset(t)
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/read" {
+			client.mu.Lock()
+			client.baseURL = "" // the forward was lost ...
+			client.mu.Unlock()
+			if err := EnsureConnected(context.Background()); err != nil { // ... and found again
+				t.Error(err)
+			}
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			_, _ = conn.Write([]byte("not http\r\n\r\n")) // then the old read fails
+			_ = conn.Close()
+			return
+		}
+		_, _ = w.Write([]byte(labelsOK))
+	}))
+	t.Cleanup(srv.Close)
+	discoveredAt(t, srv)
+	if _, err := Get(context.Background(), "/read", nil); err == nil {
+		t.Fatal("want an error")
+	}
+	if _, ok := Labels(); !ok {
+		t.Fatal("the old read dropped the new connection")
+	}
+}
+
+// New settings don't wait for a slow attempt made with the old ones.
+func TestConfigureCancelsARunningAttempt(t *testing.T) {
+	reset(t)
+	srv := fakeLoki(t, 200, labelsOK, nil)
+	listServices = func() []corev1.Service {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	}
+	started := make(chan struct{})
+	startForward = func(ctx context.Context, _, _ string, _ int, _ string) (string, error) {
+		close(started)
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	Configure("", nil)
+	first := make(chan struct{})
+	go func() { _ = EnsureConnected(context.Background()); close(first) }()
+	<-started
+	Configure(srv.URL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := EnsureConnected(ctx); err != nil {
+		t.Fatalf("the new URL waited for the old attempt: %v", err)
+	}
+	<-first
+}
+
+// After a failure, status polls don't start discovery again until the
+// cooldown has passed.
+func TestKickBacksOffAfterAFailure(t *testing.T) {
+	reset(t)
+	var lists atomic.Int32
+	listServices = func() []corev1.Service { lists.Add(1); return nil }
+	Configure("", nil)
+	_ = EnsureConnected(context.Background())
+	for range 5 {
+		Kick()
+		time.Sleep(5 * time.Millisecond)
+	}
+	for CurrentStatus().Discovering {
+		time.Sleep(time.Millisecond)
+	}
+	if n := lists.Load(); n != 1 {
+		t.Fatalf("discovery ran %d times, want 1", n)
+	}
+}
+
+// Retiring forgets the old settings, so status shows no stale address.
+func TestRetireForgetsTheAddress(t *testing.T) {
+	reset(t)
+	Configure("http://loki.example.com:3100", map[string]string{"Authorization": "Bearer secret-token"})
+	Retire(errors.New("bad header Bearer secret-token"))
+	st := CurrentStatus()
+	if st.Address != "" || strings.Contains(st.Error, "secret-token") {
+		t.Fatalf("status = %+v", st)
 	}
 }

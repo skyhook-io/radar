@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -16,6 +17,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -64,13 +66,15 @@ var (
 		}
 		return info.Address, nil
 	}
-	stopForward = func() { portforward.Stop(portforward.OwnerLoki) }
+	stopForward  = func() { portforward.Stop(portforward.OwnerLoki) }
+	namedPodPort = cachedNamedPodPort
 )
 
 const (
 	directProbeTimeout = 2 * time.Second
 	discoveryTimeout   = 30 * time.Second
 	requestTimeout     = 30 * time.Second
+	retryAfter         = 30 * time.Second
 	maxResponseBytes   = 32 << 20
 )
 
@@ -85,8 +89,11 @@ var client struct {
 	contextName string
 	labels      *StreamLabels
 	lastErr     string
-	inflight    chan struct{} // closed when the running attempt ends
-	generation  int           // bumped by Configure and Retire
+	inflight    chan struct{}      // closed when the running attempt ends
+	cancel      context.CancelFunc // cancels the running attempt
+	failedAt    time.Time          // when the last attempt failed
+	attemptGen  int                // the generation the running attempt connects for
+	generation  int                // bumped by Configure, Retire and each new connection
 }
 
 // Configure replaces the connection: rawURL set means that Loki, empty means
@@ -109,12 +116,19 @@ func Retire(err error) {
 	if err != nil {
 		text = scrubLocked(err.Error())
 	}
+	client.manualURL, client.headers = "", nil
 	dropLocked(text)
 }
 
+// dropLocked forgets the connection and cancels a running attempt, which
+// still ends before a new one starts: only one may own the forward.
 func dropLocked(lastErr string) {
 	client.generation++
 	client.baseURL, client.source, client.contextName, client.labels, client.lastErr = "", "", "", nil, lastErr
+	client.failedAt = time.Time{}
+	if client.cancel != nil {
+		client.cancel()
+	}
 	stopForward()
 }
 
@@ -141,6 +155,25 @@ func connectedLocked() bool {
 	return client.enabled && client.baseURL != "" && client.contextName == currentContext()
 }
 
+// Kick starts a connection attempt in the background when Loki is
+// configured but not connected, at most once per retryAfter after a failure,
+// so polling the status never turns into repeated discovery.
+func Kick() {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.enabled && !connectedLocked() && client.inflight == nil && time.Since(client.failedAt) >= retryAfter {
+		startAttemptLocked()
+	}
+}
+
+func startAttemptLocked() chan struct{} {
+	done := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+	client.inflight, client.cancel, client.attemptGen = done, cancel, client.generation
+	go attempt(ctx, done, client.generation, client.manualURL, maps.Clone(client.headers), currentContext())
+	return done
+}
+
 // EnsureConnected finds and probes Loki unless a connection for the current
 // context is already known. Concurrent callers share one attempt, which runs
 // on its own and outlives a caller whose ctx ends first.
@@ -156,10 +189,9 @@ func EnsureConnected(ctx context.Context) error {
 			return nil
 		}
 		wait, generation, contextName := client.inflight, client.generation, currentContext()
+		stale := wait != nil && client.attemptGen != generation // cancelled; a new one starts once it ends
 		if wait == nil {
-			wait = make(chan struct{})
-			client.inflight = wait
-			go attempt(wait, generation, client.manualURL, maps.Clone(client.headers), contextName)
+			wait = startAttemptLocked()
 		}
 		client.mu.Unlock()
 		select {
@@ -176,7 +208,7 @@ func EnsureConnected(ctx context.Context) error {
 			return nil
 		case !enabled:
 			return ErrNotConfigured
-		case changed:
+		case changed, stale:
 			continue // reconfigured, or the context switched: try again for what is current now
 		}
 		return fmt.Errorf("%w: %s", ErrUnavailable, lastErr)
@@ -187,13 +219,12 @@ func EnsureConnected(ctx context.Context) error {
 // Configure, Retire or context switch during it wins: its result is dropped,
 // and a forward it opened is stopped (no newer attempt can own one while this
 // one is in flight).
-func attempt(done chan struct{}, generation int, manual string, headers map[string]string, contextName string) {
-	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+func attempt(ctx context.Context, done chan struct{}, generation int, manual string, headers map[string]string, contextName string) {
 	base, source, found, err := connect(ctx, manual, headers, contextName)
-	cancel()
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	client.inflight = nil
+	client.cancel()
+	client.inflight, client.cancel = nil, nil
 	close(done)
 	switch {
 	case client.generation != generation || currentContext() != contextName:
@@ -201,9 +232,10 @@ func attempt(done chan struct{}, generation int, manual string, headers map[stri
 			stopForward()
 		}
 	case err == nil:
+		client.generation++ // a read through an older connection can't drop this one
 		client.baseURL, client.source, client.contextName, client.labels, client.lastErr = base, source, contextName, &found, ""
 	default:
-		client.lastErr = scrubLocked(err.Error())
+		client.lastErr, client.failedAt = scrubLocked(err.Error()), time.Now()
 	}
 }
 
@@ -228,7 +260,7 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 		if err == nil {
 			return direct, "discovered", found, nil
 		}
-		address, ferr := startForward(ctx, c.Namespace, c.Name, c.Port, contextName)
+		address, ferr := startForward(ctx, c.Namespace, c.Name, podPort(c), contextName)
 		if ferr != nil {
 			lastErr = fmt.Errorf("%s/%s: %w", c.Namespace, c.Name, ferr)
 			continue
@@ -266,9 +298,13 @@ func transport(base string, headers map[string]string) *prom.HTTPTransport {
 	return t
 }
 
+var errConnectionChanged = fmt.Errorf("%w: the connection changed; try again", ErrUnavailable)
+
 // Get runs one read against Loki. A Loki error status comes back as
 // *UpstreamError; an unreachable Loki as ErrUnavailable, and a discovered
-// address is dropped so the next read finds Loki again.
+// address is dropped so the next read finds Loki again. An answer that
+// arrives after the connection changed (a context switch, new settings)
+// belongs to the old one and is dropped.
 func Get(ctx context.Context, path string, params url.Values) ([]byte, error) {
 	if err := EnsureConnected(ctx); err != nil {
 		return nil, err
@@ -276,28 +312,37 @@ func Get(ctx context.Context, path string, params url.Values) ([]byte, error) {
 	client.mu.Lock()
 	if !connectedLocked() { // changed since EnsureConnected returned
 		client.mu.Unlock()
-		return nil, fmt.Errorf("%w: the connection changed; try again", ErrUnavailable)
+		return nil, errConnectionChanged
 	}
-	base, headers := client.baseURL, maps.Clone(client.headers)
+	base, headers, generation := client.baseURL, maps.Clone(client.headers), client.generation
 	client.mu.Unlock()
 	body, err := transport(base, headers).Do(ctx, http.MethodGet, path, params)
-	if err == nil {
-		return body, nil
-	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
+	current := connectedLocked() && client.generation == generation
 	var httpErr *prom.HTTPError
-	if errors.As(err, &httpErr) {
+	var respErr *prom.ResponseError
+	switch {
+	case !current:
+		return nil, errConnectionChanged
+	case err == nil:
+		return body, nil
+	case errors.As(err, &httpErr):
 		return nil, &UpstreamError{StatusCode: httpErr.StatusCode, Message: scrubLocked(httpErr.Error())}
-	}
-	if errors.Is(err, prom.ErrResponseTooLarge) {
+	case errors.Is(err, prom.ErrResponseTooLarge):
 		// Loki answered; the answer is just too big. Keep the connection.
 		return nil, &UpstreamError{Message: "the answer is larger than Radar reads; choose a shorter window or fewer lines"}
-	}
-	if client.source == "discovered" && client.baseURL == base {
+	case ctx.Err() == nil && !isTimeout(err) && !errors.As(err, &respErr) && client.source == "discovered":
+		// Loki didn't answer at all: find it again on the next read. A
+		// cancelled or slow read, or a bad body, says nothing about that.
 		client.baseURL = ""
 	}
 	return nil, fmt.Errorf("%w: %s", ErrUnavailable, scrubLocked(err.Error()))
+}
+
+func isTimeout(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || (errors.As(err, &netErr) && netErr.Timeout())
 }
 
 // Labels is the detected stream labelling, once connected.
@@ -422,4 +467,39 @@ func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Win
 	sort.SliceStable(out.Items, func(i, j int) bool { return out.Items[i].Time.Before(out.Items[j].Time) })
 	out.Truncated = len(out.Items) >= limit
 	return out, nil
+}
+
+// podPort is the port a forward to the Service's pod must use: the Service
+// port's target, which may be named (Loki's gateway maps 80 to a named port).
+func podPort(c Candidate) int {
+	switch {
+	case c.Target.Type == intstr.String:
+		if p := namedPodPort(c.Namespace, c.Selector, c.Target.StrVal); p > 0 {
+			return p
+		}
+	case c.Target.IntVal > 0:
+		return int(c.Target.IntVal)
+	}
+	return c.Port
+}
+
+func cachedNamedPodPort(namespace string, selector map[string]string, name string) int {
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Pods() == nil || len(selector) == 0 {
+		return 0
+	}
+	pods, err := cache.Pods().Pods(namespace).List(labels.SelectorFromSet(selector))
+	if err != nil {
+		return 0
+	}
+	for _, pod := range pods {
+		for _, c := range pod.Spec.Containers {
+			for _, p := range c.Ports {
+				if p.Name == name {
+					return int(p.ContainerPort)
+				}
+			}
+		}
+	}
+	return 0
 }

@@ -65,3 +65,8 @@ export function prometheusHeadersFromRows(
   }
   return entries.length ? Object.fromEntries(entries) : undefined
 }
+
+/** Queries whose answer depends on the saved integration connections. */
+export function isConnectionQuery(queryKey: readonly unknown[]): boolean {
+  return typeof queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo|loki)/.test(queryKey[0])
+}
