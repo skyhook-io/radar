@@ -2,8 +2,8 @@ import type { ReactNode } from 'react'
 import { Package, Settings, CheckCircle2, History, FileCode2, GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
-import { GitOpsStatusBadge, SyncCountdown } from '../../gitops'
-import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
+import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
+import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
 import { getFluxDeployedRelease, getFluxHandledRequestToken, getFluxReleaseAttemptTime } from '../../../utils/flux-history'
 import { Tooltip } from '../../ui/Tooltip'
@@ -28,6 +28,7 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
   const conditions = (status.conditions || []) as FluxCondition[]
   const history = status.history || []
   const handledRequest = getFluxHandledRequestToken(status)
+  const managedResources = parseFluxInventory(status.inventory?.entries || [])
 
   // Convert to unified GitOps status
   const gitOpsStatus = fluxConditionsToGitOpsStatus(conditions, spec.suspend === true, {
@@ -274,6 +275,13 @@ export function FluxHelmReleaseRenderer({ data, onNavigate, renderValuesReferenc
             )}
           </PropertyList>
         </Section>
+      )}
+
+      {managedResources.length > 0 && (
+        <ManagedResourcesList
+          resources={managedResources}
+          title="Inventory"
+        />
       )}
 
       {/* History is low priority when the deployed release is shown above. */}

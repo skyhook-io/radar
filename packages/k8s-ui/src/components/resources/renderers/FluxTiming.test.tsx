@@ -37,6 +37,17 @@ describe('Flux drawer and resource timing', () => {
     expect(html).toContain('10m')
   })
 
+  it('lists a Flux inventory with its count shown once', () => {
+    const entries = [{ id: 'shop_checkout_apps_Deployment', v: 'v1' }, { id: 'shop_checkout__Service', v: 'v1' }]
+    const text = (html: string) => html.replaceAll('<!-- -->', '')
+    const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, inventory: { entries } } }} />))
+    expect(html).toContain('Inventory (2)<')
+    expect(html).toContain('checkout')
+    expect(text(renderToString(<FluxHelmReleaseRenderer data={helm} />))).not.toContain('Inventory (')
+    const kustomization = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, inventory: { entries } } }} />))
+    expect(kustomization).toContain('Inventory (2)<')
+  })
+
   it('shows the deployed snapshot in the drawer and resource cells after a failed upgrade', () => {
     const drawer = renderToString(<FluxHelmReleaseRenderer data={helm} />)
     const current = drawer.slice(drawer.indexOf('Current Release'), drawer.indexOf('History ('))
