@@ -79,7 +79,9 @@ export function UpgradePlanRenderer({ data, onNavigate, nodes, nodesLoading }: {
       </Section>
       {(nodes !== undefined || nodesLoading) && (
         <Section title="Progress" defaultExpanded={true}>
-          {nodesLoading && nodes === undefined ? <div className="text-sm text-theme-text-tertiary">Reading Nodes…</div> : <Progress data={data} nodes={nodes ?? null} onNavigate={onNavigate} />}
+          {invalid
+            ? <div className="text-sm text-theme-text-secondary">No Node is upgraded while this Plan is not valid.</div>
+            : nodesLoading && nodes === undefined ? <div className="text-sm text-theme-text-tertiary">Reading Nodes…</div> : <Progress data={data} nodes={nodes ?? null} onNavigate={onNavigate} />}
         </Section>
       )}
       <ConditionsSection conditions={data.status?.conditions} />

@@ -24,6 +24,14 @@ describe('UpgradePlanRenderer', () => {
     expect(html).toContain('n2')
     expect(html).toContain('Upgrading')
   })
+  it('shows no per-node progress for a Plan the controller rejected', () => {
+    const invalid = { ...data, status: { conditions: [{ type: 'Validated', status: 'False', message: 'bad drain' }] } }
+    const html = text(renderToString(<UpgradePlanRenderer data={invalid} nodes={nodes} />))
+    expect(html).toContain('No Node is upgraded while this Plan is not valid')
+    expect(html).not.toContain('Pending')
+    expect(html).not.toContain('nodes upgraded')
+  })
+
   it('shows no progress bar when nodes could not be read', () => {
     const html = text(renderToString(<UpgradePlanRenderer data={data} nodes={null} />))
     expect(html).toContain('could not be read')
