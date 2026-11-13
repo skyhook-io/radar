@@ -38,7 +38,10 @@ spec:
   artifacts:
     - name: podinfo-chart
       copy:
-        - from: "@podinfo/charts/podinfo/**"
+        # The directory form copies the chart with its .helmignore at the
+        # artifact root; a /** glob makes helm-controller reject the chart
+        # ("content outside the base directory").
+        - from: "@podinfo/charts/podinfo/"
           to: "@artifact/"
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2

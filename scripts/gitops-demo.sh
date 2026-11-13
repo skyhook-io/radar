@@ -169,6 +169,14 @@ install_source_watcher() {
   kubectl --context "${KUBECTL_CTX}" -n flux-system apply -f "$tmp/source-watcher.yaml" >/dev/null
   rm -rf "$tmp"
   kubectl --context "${KUBECTL_CTX}" -n flux-system rollout status deployment/source-watcher --timeout=180s >/dev/null
+  # On Flux 2.7 helm-controller refuses chartRef ExternalArtifact
+  # ("AccessDenied: ExternalArtifact feature gate is disabled") unless the
+  # gate is on.
+  if ! kubectl --context "${KUBECTL_CTX}" -n flux-system get deployment helm-controller -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q 'ExternalArtifact=true'; then
+    kubectl --context "${KUBECTL_CTX}" -n flux-system patch deployment helm-controller --type=json \
+      -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExternalArtifact=true"}]' >/dev/null
+    kubectl --context "${KUBECTL_CTX}" -n flux-system rollout status deployment/helm-controller --timeout=180s >/dev/null
+  fi
   ok "source-watcher healthy"
 }
 
