@@ -38,11 +38,14 @@ type logInstance struct {
 }
 
 type logPipelineRoute struct {
-	Provider     string           `json:"provider"`
-	Kind         string           `json:"kind"`
-	Group        string           `json:"group"`
-	Namespace    string           `json:"namespace"`
-	Name         string           `json:"name"`
+	Provider  string `json:"provider"`
+	Kind      string `json:"kind"`
+	Group     string `json:"group"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// Instance names the Logging whose loggingRef the route carries; empty when
+	// no Logging has it.
+	Instance     string           `json:"instance"`
 	Ignored      bool             `json:"ignored"`
 	HasFilters   bool             `json:"hasFilters"`
 	Active       *bool            `json:"active,omitempty"`
@@ -170,8 +173,10 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(loggings, func(i, j int) bool { return loggings[i].Name < loggings[j].Name })
 	controlNamespace := map[string]string{}
+	instanceOf := map[string]string{}
 	for _, l := range loggings {
 		controlNamespace[l.LoggingRef] = l.ControlNamespace
+		instanceOf[l.LoggingRef] = l.Name
 	}
 	var agents []logging.Agent
 	if _, ok := discovery.GetGVRWithGroup("fluentbitagents", logging.Group); ok {
@@ -226,7 +231,7 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 			cands = append(cands, c)
 			provider.Routes = append(provider.Routes, logPipelineRoute{
 				Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
-				Ignored: c.Ignored, HasFilters: f.HasFilters, Active: flowActive(u), Destinations: flowDestinations(f, outputs, controlNamespace),
+				Instance: instanceOf[f.LoggingRef], Ignored: c.Ignored, HasFilters: f.HasFilters, Active: flowActive(u), Destinations: flowDestinations(f, outputs, controlNamespace),
 			})
 		}
 	}

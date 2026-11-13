@@ -97,7 +97,7 @@ func TestLoggingPipeline(t *testing.T) {
 		len(p.Instances[0].Aggregators) != 1 || p.Instances[0].Aggregators[0].Name != "default-fluentd" {
 		t.Errorf("instances = %+v", p.Instances)
 	}
-	if len(p.Routes) != 1 || p.Routes[0].Name != "optin" || p.Routes[0].SelectedPods != (logPodCount{Count: 3}) || len(p.Routes[0].Destinations) != 1 || !p.Routes[0].Destinations[0].Found {
+	if len(p.Routes) != 1 || p.Routes[0].Name != "optin" || p.Routes[0].Instance != "default" || p.Routes[0].SelectedPods != (logPodCount{Count: 3}) || len(p.Routes[0].Destinations) != 1 || !p.Routes[0].Destinations[0].Found {
 		t.Errorf("routes = %+v", p.Routes)
 	}
 	if len(p.Destinations) != 1 || p.Destinations[0].Address != "https://loki.example/push" || p.Destinations[0].Type != "loki" {

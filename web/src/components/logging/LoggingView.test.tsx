@@ -1,0 +1,50 @@
+import { describe, expect, it, vi } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { LogPipeline } from '@skyhook-io/k8s-ui/types/core'
+import { RadarFeatureUnsupportedError } from '../../api/radarFeatures'
+
+const state = vi.hoisted(() => ({ data: undefined as unknown, error: null as unknown, isLoading: false }))
+vi.mock('../../api/loggingPipeline', () => ({ useLoggingPipeline: () => ({ ...state, support: 'supported' }) }))
+
+import { LoggingView } from './LoggingView'
+
+const pipeline = (patch: Partial<LogPipeline> = {}): LogPipeline => ({
+  providers: [{
+    provider: 'logging-operator',
+    instances: [{ name: 'default', controlNamespace: 'logging', collectors: [{ kind: 'DaemonSet', namespace: 'logging', name: 'default-fluentbit', ready: 2, desired: 3 }], aggregators: [{ kind: 'StatefulSet', namespace: 'logging', name: 'default-fluentd', ready: 1, desired: 1 }] }],
+    routes: [{ provider: 'logging-operator', kind: 'ClusterFlow', group: 'logging.banzaicloud.io', namespace: 'logging', name: 'optin', instance: 'default', ignored: false, hasFilters: false, active: true,
+      destinations: [{ kind: 'ClusterOutput', namespace: 'logging', name: 'loki', type: 'loki', found: true, active: true }], selectedPods: { count: 12, lowerBound: false } }],
+    destinations: [{ kind: 'ClusterOutput', namespace: 'logging', name: 'loki', type: 'loki', address: 'https://loki.example.com', active: true, problems: [] }],
+  }],
+  unrouted: { count: 1, lowerBound: false, pods: [{ namespace: 'jobs', name: 'cron-1' }], truncated: false },
+  coverage: { gaps: [], namespaces: null },
+  ...patch,
+})
+
+const render = () => renderToStaticMarkup(<LoggingView namespaces={[]} selectedResource={null} onOpenResource={() => {}} onCloseResource={() => {}} onClearNamespaces={() => {}} />)
+
+describe('LoggingView', () => {
+  it('draws collectors → aggregator → routes → destinations and the unrouted pods', () => {
+    Object.assign(state, { data: pipeline(), error: null })
+    const html = render()
+    for (const text of ['default-fluentbit', '2/3', 'default-fluentd', 'ClusterFlow optin', '12', 'loki', 'https://loki.example.com', 'cron-1']) {
+      expect(html).toContain(text)
+    }
+    expect(html.indexOf('default-fluentbit')).toBeLessThan(html.indexOf('default-fluentd'))
+    expect(html.indexOf('default-fluentd')).toBeLessThan(html.indexOf('optin'))
+  })
+  it('says what it could not read, and shows lower bounds', () => {
+    Object.assign(state, { data: pipeline({ coverage: { gaps: [{ group: 'logging.banzaicloud.io', resource: 'flows' }], namespaces: null }, unrouted: { count: 0, lowerBound: true, pods: [], truncated: false } }), error: null })
+    const html = render()
+    expect(html).toContain('Radar could not read Flows')
+    expect(html).toContain('Unknown: some data was not readable or not evaluated.')
+  })
+  it('says when no shipper Radar understands is installed', () => {
+    Object.assign(state, { data: pipeline({ providers: [] }), error: null })
+    expect(render()).toContain('No log shipper Radar understands is installed')
+  })
+  it('shows an older Radar as an upgrade note, not an error', () => {
+    Object.assign(state, { data: undefined, error: new RadarFeatureUnsupportedError('loggingPipeline', {}) })
+    expect(render()).toContain('need a newer Radar')
+  })
+})

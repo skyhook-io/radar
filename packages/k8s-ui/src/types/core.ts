@@ -203,6 +203,7 @@ export interface FeatureCapabilities {
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
   loggingPodShipping?: boolean
+  loggingPipeline?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -2003,4 +2004,33 @@ export interface LogShipping {
   shipped: boolean
   uncertain: boolean
   readErrors: LogReadError[]
+}
+
+// GET /api/logging/pipeline: per installed shipper, collectors → aggregators →
+// routes (with the running pods each selects) → destinations, and the running
+// pods nothing routes. Counts with lowerBound may be higher.
+export interface LogPodCount { count: number; lowerBound: boolean }
+export interface LogWorkload { kind: string; namespace: string; name: string; ready: number; desired: number }
+export interface LogInstance { name: string; controlNamespace: string; collectors: LogWorkload[]; aggregators: LogWorkload[] }
+export interface LogPipelineRoute {
+  provider: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  /** The Logging whose loggingRef the route carries; empty when none has it. */
+  instance: string
+  ignored: boolean
+  hasFilters: boolean
+  active?: boolean
+  destinations: LogDestination[]
+  selectedPods: LogPodCount
+}
+export interface LogPipelineDestination { kind: string; namespace: string; name: string; type?: string; address?: string; active?: boolean; problems: string[] }
+export interface LogPipelineProvider { provider: string; instances: LogInstance[]; routes: LogPipelineRoute[]; destinations: LogPipelineDestination[] }
+export interface LogPipeline {
+  providers: LogPipelineProvider[]
+  unrouted: LogPodCount & { pods: { namespace: string; name: string }[]; truncated: boolean }
+  /** gaps: kinds unread or not listable; namespaces: what pod counts cover, null = all. */
+  coverage: { gaps: LogReadError[]; namespaces: string[] | null }
 }
