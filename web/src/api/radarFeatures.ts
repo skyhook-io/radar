@@ -49,6 +49,7 @@ export const RADAR_FEATURES = {
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
+  gitopsOutsideChanges: { label: 'Changes made outside Flux', flag: 'gitopsOutsideChanges', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },
   kueuePendingPosition: { label: 'Kueue queue positions', flag: 'kueuePendingPosition', flagShippedWithEndpoint: true },
