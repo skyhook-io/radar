@@ -105,7 +105,10 @@ function LogsViewerModes(props: LogsViewerProps) {
   if (mode === 'history' && fetchHistory) {
     return <LogsHistoryViewer {...props} fetchHistory={fetchHistory} toolbarLead={toolbarLead} />
   }
-  return <PodLogsViewer {...props} toolbarLead={toolbarLead} />
+  // Asked to open on History but the host can't read it yet: don't stream a
+  // pod that is likely gone. Once the user picks Live, stream as usual.
+  const waitingForHistory = props.initialMode === 'history' && !chosen.current
+  return <PodLogsViewer {...props} autoStream={props.autoStream && !waitingForHistory} toolbarLead={toolbarLead} />
 }
 
 function PodLogsViewer({

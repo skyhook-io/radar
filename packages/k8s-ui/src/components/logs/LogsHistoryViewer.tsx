@@ -24,6 +24,9 @@ export type FetchHistory = (p: { container?: string; since: LogsHistoryWindow })
 
 type ToolbarLead = (ctx: { isDark: boolean; palette: LogPalette }) => ReactNode
 
+// The key Radar's history endpoints use when Loki has no container label.
+const ALL_CONTAINERS = '(all containers)'
+
 /**
  * Logs read from the log store (Loki) for a window, instead of from
  * Kubernetes: no stream and no previous instance. For a pod that is gone the
@@ -45,7 +48,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
   const [knownContainers, setKnownContainers] = useState(containers)
   // A gone pod's containers are unknown until the first read: read them all.
   const [container, setContainer] = useState(initialContainer || containers[0] || '')
-  const [result, setResult] = useState<LogsHistoryResult | null>(null)
+  const [result, setResult] = useState<(LogsHistoryResult & { wholePod: boolean }) | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { entries, isFollowing, pendingLineCount, retainedLineCount, missingLineCount, getRetainedEntries, setFollowing, set, clear } = useLogBuffer()
@@ -59,10 +62,12 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
     try {
       const r = await fetchHistory({ container: container || undefined, since })
       if (n !== seq.current) return
-      setResult(r)
+      // Without a container label Loki answers for the whole pod, under one key.
+      const wholePod = !!container && r.logs[container] === undefined && r.logs[ALL_CONTAINERS] !== undefined
+      setResult({ ...r, wholePod })
       // A wider window can show containers an earlier read didn't.
-      setKnownContainers(known => [...new Set([...known, ...r.containers])].sort())
-      const keys = container ? [container] : Object.keys(r.logs)
+      if (!wholePod) setKnownContainers(known => [...new Set([...known, ...r.containers])].sort())
+      const keys = wholePod ? [ALL_CONTAINERS] : container ? [container] : Object.keys(r.logs)
       const lines = keys.flatMap(c => (r.logs[c] ?? '').split('\n').filter(Boolean).map(line => ({ ...parseLogLine(line), container: c })))
       lines.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
       set(lines)
@@ -94,6 +99,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
       {result && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-1.5 text-xs text-theme-text-secondary">
           From Loki, {windowLabel}
+          {result.wholePod && ', all containers (Loki has no container label)'}
           {result.truncated && `, the newest ${result.limit.toLocaleString()} lines (the limit; older lines in this window may be missing)`}.
         </div>
       )}

@@ -51,7 +51,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer, a
       // light theme only sets where it starts and leaves the toggle available.
       forceDark={theme === 'dark' ? true : undefined}
       defaultDark={false}
-      autoStream={autoStream && !history}
+      autoStream={autoStream}
       fetchHistory={fetchHistory}
       initialMode={history ? 'history' : 'live'}
       // A pod opened on History is usually gone, and its lines are its last:
