@@ -33,7 +33,9 @@ func helmRecentChanges(releases []helm.HelmRelease, name string, since time.Dura
 	cutoff := now.Add(-since)
 	var out []issuesapi.RecentChange
 	for _, rel := range releases {
-		if rel.ManagedByFluxHelmRelease != "" {
+		// A controller that keeps its own history (Flux) reports these; others
+		// (k3s) keep none, so their releases stay in.
+		if rel.ManagedByFluxHelmRelease != "" || rel.Controller.ReportsOwnHistory() {
 			continue
 		}
 		if name != "" && rel.Name != name {

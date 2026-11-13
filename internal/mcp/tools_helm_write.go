@@ -243,6 +243,9 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if detail.ManagedByFluxHelmRelease != "" {
 			return nil, nil, fmt.Errorf("release is managed by Flux HelmRelease %s; change its source configuration instead", detail.ManagedByFluxHelmRelease)
 		}
+		if c := detail.Controller; c != nil && c.Tool != "flux" {
+			return nil, nil, controllerRefusal(in.Action, c)
+		}
 		if in.Action == "uninstall" {
 			bindingBytes, err := json.Marshal(struct {
 				Namespace, Name string
@@ -456,4 +459,20 @@ func helmUninstallPreviewResult(in manageHelmInput, status, token string, previe
 	addCappedList(result, "resources", preview.Delete)
 	addCappedList(result, "kept", preview.Kept)
 	return toJSONResult(result)
+}
+
+// controllerRefusal says where a release's controller wants the change made.
+func controllerRefusal(action string, c *helm.ReleaseController) error {
+	owner := fmt.Sprintf("release is managed by %s %s %s", c.Tool, c.Kind, c.Ref())
+	switch {
+	case action == "uninstall":
+		return fmt.Errorf("%s; delete or disable the %s instead (it would reinstall the release)", owner, c.Kind)
+	case c.ValuesRef != nil && c.ValuesRef.Exists != nil && *c.ValuesRef.Exists:
+		return fmt.Errorf("%s; change its values in %s %s/%s instead", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
+	case c.ValuesRef != nil && c.ValuesRef.Exists != nil:
+		return fmt.Errorf("%s; create a %s %s/%s to change its values instead", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
+	case c.ValuesRef != nil:
+		return fmt.Errorf("%s; change its values in %s %s/%s instead (create it if it does not exist)", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
+	}
+	return fmt.Errorf("%s; change it through that %s instead", owner, c.Kind)
 }

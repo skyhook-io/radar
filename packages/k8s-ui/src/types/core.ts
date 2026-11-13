@@ -591,6 +591,19 @@ export interface TopologyGroup {
 }
 
 // Selected resource (for resources view drawer)
+// What installs and reconciles a Helm release. Tool is "flux", "k3s", or a
+// tool a newer Radar knows; consumers show Kind and the object for any tool.
+export interface HelmReleaseController {
+  tool: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  // Where values are changed when that is a separate object. exists: true
+  // it was read, false a complete read found none (create it), absent unknown.
+  valuesRef?: { kind: string; group: string; namespace: string; name: string; exists?: boolean }
+}
+
 export interface SelectedResource {
   kind: string
   namespace: string
@@ -1032,6 +1045,10 @@ export interface HelmRelease {
   // than helm CLI / Radar's Helm view, since changes here would get
   // reverted at the next reconcile. Format: "namespace/name".
   managedByFluxHelmRelease?: string
+  // The controller that installs this release from its own definition (Flux,
+  // k3s, …); a Helm change made here is reverted. Older Radar sends only
+  // managedByFluxHelmRelease.
+  controller?: HelmReleaseController
 }
 
 export interface HelmRevision {
@@ -1110,6 +1127,10 @@ export interface HelmReleaseDetail {
   // When set, this release was installed by Flux's helm-controller — see
   // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
   managedByFluxHelmRelease?: string
+  // The controller that installs this release from its own definition (Flux,
+  // k3s, …); a Helm change made here is reverted. Older Radar sends only
+  // managedByFluxHelmRelease.
+  controller?: HelmReleaseController
 }
 
 export interface HelmHook {
@@ -1301,6 +1322,8 @@ export interface ObservedHelmRelease {
   healthSummary?: string
   // Absent doesn't mean Flux isn't managing it: its HelmRelease may be unreadable.
   managedByFluxHelmRelease?: string
+  // From objects the caller can read; absent doesn't mean none.
+  controller?: HelmReleaseController
 }
 
 // One entry of a Flux HelmRelease's status.history.

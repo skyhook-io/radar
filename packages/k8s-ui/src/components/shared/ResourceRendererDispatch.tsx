@@ -4,6 +4,8 @@ import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnecto
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
+import { K3sHelmChartConfigRenderer, K3sHelmChartRenderer } from '../resources/renderers/K3sHelmRenderers'
+import { K3S_HELM_GROUP, getK3sHelmChartStatus } from '../resources/resource-utils-k3s'
 import { SecretProviderClassRenderer, type SecretProviderClassRendererProps } from '../resources/renderers/SecretsStoreRenderers'
 import { SECRETS_STORE_GROUP } from '../resources/resource-utils-secrets-store'
 import { getFlaggerCanaryStatus } from '../resources/resource-utils-flagger'
@@ -397,6 +399,11 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  /** Host-injected: wires the HelmChart drawer's "Open Helm release" link. */
+  K3sHelmChartRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   /** Host-injected: adds the Pods that mount this class and their mount state. */
   SecretProviderClassRenderer?: React.ComponentType<Pick<SecretProviderClassRendererProps, 'data' | 'onNavigate'>>
   /** Host-injected: adds the Backups-stored-here lookup to a storage location. */
@@ -490,6 +497,7 @@ const KNOWN_KINDS = new Set([
   'kafkaconnectors',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
+  'helmcharts', 'helmchartconfigs',
   'secretproviderclasses',
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
@@ -760,6 +768,7 @@ export function ResourceRendererDispatch({
     kind === 'kafkaconnectors' ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
+    ['helmcharts', 'helmchartconfigs'].includes(kind) ||
     kind === 'secretproviderclasses' ||
     isFluxKind || kind === 'applications' || kind === 'services' || kind === 'ingresses' || kind === 'certificates' || kind === 'gateways'
     || kind === 'httproutes' || kind === 'grpcroutes'
@@ -777,6 +786,7 @@ export function ResourceRendererDispatch({
     (kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io')) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
+    (['helmcharts', 'helmchartconfigs'].includes(kind) && isApiGroup(data?.apiVersion, K3S_HELM_GROUP)) ||
     (kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP)) ||
     (isFluxKind && isFluxResource)
     || (kind === 'applications' && isApiGroup(data?.apiVersion, 'argoproj.io'))
@@ -857,6 +867,7 @@ export function ResourceRendererDispatch({
   const CNPGObjectStoreComp = rendererOverrides?.CNPGObjectStoreRenderer ?? CNPGObjectStoreRenderer
   const VeleroBSLComp = rendererOverrides?.VeleroBSLRenderer ?? VeleroBSLRenderer
   const SecretProviderClassComp = rendererOverrides?.SecretProviderClassRenderer ?? SecretProviderClassRenderer
+  const K3sHelmChartComp = rendererOverrides?.K3sHelmChartRenderer ?? K3sHelmChartRenderer
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
   const VeleroRestoreComp = rendererOverrides?.VeleroRestoreRenderer ?? VeleroRestoreRenderer
   const KyvernoCoverageComp = rendererOverrides?.KyvernoPolicyCoverage
@@ -1134,6 +1145,8 @@ export function ResourceRendererDispatch({
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP) && <SecretProviderClassComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmcharts' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartComp data={data} onNavigate={onNavigate} />}
+        {kind === 'helmchartconfigs' && isApiGroup(data?.apiVersion, K3S_HELM_GROUP) && <K3sHelmChartConfigRenderer data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires
             for known-plural collisions where no apiVersion-gated renderer
@@ -1203,6 +1216,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     if (k === 'instrumentations') return getOpenTelemetryInstrumentationStatus(data)
   }
   if (k === 'canaries' && isApiGroup(data.apiVersion, 'flagger.app')) return getFlaggerCanaryStatus(data)
+  if (k === 'helmcharts' && isApiGroup(data.apiVersion, K3S_HELM_GROUP)) return getK3sHelmChartStatus(data)
   // A SecretProviderClass is configuration with no status of its own; mount
   // state belongs to each Pod and is shown in the Pod drawer.
   if (k === 'secretproviderclasses' && isApiGroup(data.apiVersion, SECRETS_STORE_GROUP)) return null

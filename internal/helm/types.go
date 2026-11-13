@@ -1,6 +1,7 @@
 package helm
 
 import (
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -36,6 +37,67 @@ type HelmRelease struct {
 	// values via `helm upgrade` here would get reverted on the next
 	// reconciliation). Format: "namespace/name".
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	// Controller is the controller that installs this release from its own
+	// definition (a Flux HelmRelease, a k3s HelmChart, …), so a Helm change
+	// made here is reverted at its next reconcile. Set for Flux alongside
+	// ManagedByFluxHelmRelease, which older consumers read. Like that field it
+	// comes from Radar's own read (names only); observed rows use only what
+	// the caller can read.
+	Controller *ReleaseController `json:"controller,omitempty"`
+}
+
+// ReleaseController names what installs and reconciles a Helm release. A new
+// kind of controller only needs a detector that fills one in; consumers read
+// Tool, the object, and ValuesRef, not per-tool fields.
+type ReleaseController struct {
+	Tool      string `json:"tool"` // "flux", "k3s"
+	Kind      string `json:"kind"`
+	Group     string `json:"group"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	// ValuesRef is where the release's values are changed when that is not
+	// the controller object itself (k3s: the same-named HelmChartConfig).
+	ValuesRef *ControllerValuesRef `json:"valuesRef,omitempty"`
+}
+
+// ControllerValuesRef is an object values are changed in. Exists is true when
+// it was read, false when a complete read found none (it would have to be
+// created), and absent when that is unknown (the read failed, or it was made
+// as a caller who may not see it).
+type ControllerValuesRef struct {
+	Kind      string `json:"kind"`
+	Group     string `json:"group"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Exists    *bool  `json:"exists,omitempty"`
+}
+
+// Ref is "namespace/name" of the controller object.
+func (c *ReleaseController) Ref() string { return c.Namespace + "/" + c.Name }
+
+// ReportsOwnHistory is true for a controller that records a release's
+// failures and revisions itself (Flux), so Radar's native Helm issues and
+// recent changes defer to it. A new controller is decided here, once.
+func (c *ReleaseController) ReportsOwnHistory() bool {
+	return c != nil && c.Tool == "flux"
+}
+
+// releaseController picks the controller of a release from what the detectors
+// found. Flux wins: a release can't be reconciled by two controllers, and the
+// UI must not show two contradicting notes.
+func releaseController(fluxRef string, k3s k3sOwner) *ReleaseController {
+	if fluxRef != "" {
+		ns, name, _ := strings.Cut(fluxRef, "/")
+		return &ReleaseController{Tool: "flux", Kind: fluxHelmReleaseKind, Group: fluxHelmReleaseGroup, Namespace: ns, Name: name}
+	}
+	if k3s.chart == "" {
+		return nil
+	}
+	ns, name, _ := strings.Cut(k3s.chart, "/")
+	return &ReleaseController{
+		Tool: "k3s", Kind: k3sHelmChartKind, Group: k3sHelmGroup, Namespace: ns, Name: name,
+		ValuesRef: &ControllerValuesRef{Kind: k3sHelmChartConfigKind, Group: k3sHelmGroup, Namespace: ns, Name: name, Exists: k3s.configExists()},
+	}
 }
 
 // HelmRevision represents a single revision in the release history
@@ -77,6 +139,8 @@ type HelmReleaseDetail struct {
 	OperationInsight *HelmOperationInsight `json:"operationInsight,omitempty"`
 	// See HelmRelease.ManagedByFluxHelmRelease.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	// See HelmRelease.Controller.
+	Controller *ReleaseController `json:"controller,omitempty"`
 }
 
 type HelmOperationInsight struct {
@@ -588,3 +652,15 @@ func ReleasePriority(r HelmRelease) int {
 	}
 	return 6
 }
+
+func (o k3sOwner) configExists() *bool {
+	switch {
+	case o.config != "":
+		return boolRef(true)
+	case o.configKnown:
+		return boolRef(false)
+	}
+	return nil
+}
+
+func boolRef(v bool) *bool { return &v }

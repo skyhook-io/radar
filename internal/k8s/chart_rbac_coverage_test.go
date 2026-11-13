@@ -163,8 +163,9 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 // not valid YAML), skipping comments and {{ }} directives so groups named in prose
 // don't count, and reading both inline (apiGroups: ["a","b"]) and block-style
 // (apiGroups:\n  - "a") rules. Conditional per-group rules are counted as available
-// collection grants; most default to true. Flagger is an explicitly documented
-// opt-in, with default-off/opt-in chart regression tests. This guard checks that
+// collection grants; most default to true. Flagger and the k3s Helm controller
+// (helm.cattle.io) are explicitly documented opt-ins, with default-off/opt-in
+// chart regression tests. This guard checks that
 // each catalog group has a focused grant path, not that every path is enabled; the wildcard "*" is excluded on purpose.
 func chartGrantedAPIGroups(t *testing.T) map[string]bool {
 	t.Helper()

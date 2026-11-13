@@ -447,6 +447,7 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		scopes = []string{""}
 	}
 	fluxMap := fluxHelmReleaseMap(ctx)
+	k3sMap := k3sHelmChartMap(ctx)
 	all := make([]HelmRelease, 0)
 	var lastForbidden, firstFailure error
 	var failed, deniedScopes []string
@@ -467,7 +468,7 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		snapshot, err := read(ctx, ns)
 		if err == nil {
 			var rows []HelmRelease
-			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, includeResourceHealth)
+			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, k3sMap, contextName, includeResourceHealth)
 			if err == nil {
 				authorized = true
 				all = append(all, rows...)
@@ -627,7 +628,7 @@ func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Conf
 	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true)
 }
 
-func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string, includeResourceHealth bool) ([]HelmRelease, error) {
+func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, k3sMap map[string]k3sOwner, contextName string, includeResourceHealth bool) ([]HelmRelease, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -653,6 +654,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
 		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
+		hr.Controller = releaseController(hr.ManagedByFluxHelmRelease, k3sMap[effectiveStorage+"/"+rel.Name])
 		result = append(result, hr)
 	}
 	return result, nil
@@ -738,6 +740,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	dependencies := extractDependencies(rel)
 
 	managedByFlux := applyFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()))
+	k3s := k3sHelmChartMap(context.Background())[effectiveStorage+"/"+rel.Name]
 
 	detail := &HelmReleaseDetail{
 		Name:                     rel.Name,
@@ -763,6 +766,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		LastOperation:            analysis.LastOperation,
 		Operations:               analysis.Operations,
 		ManagedByFluxHelmRelease: managedByFlux,
+		Controller:               releaseController(managedByFlux, k3s),
 	}
 	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {
@@ -1588,6 +1592,80 @@ func applyFluxOwnership(name, storageNamespace string, fluxMap map[string]string
 		return ""
 	}
 	return fluxMap[storageNamespace+"/"+name]
+}
+
+const (
+	k3sHelmGroup           = "helm.cattle.io"
+	k3sHelmChartKind       = "HelmChart"
+	k3sHelmChartConfigKind = "HelmChartConfig"
+)
+
+// k3sOwner is the k3s/RKE2 HelmChart that installs a release and, when one
+// exists, the HelmChartConfig that overrides its values ("namespace/name").
+// configKnown: the configs were read completely, so an empty config means
+// none exists rather than none was seen.
+type k3sOwner struct {
+	chart, config string
+	configKnown   bool
+}
+
+// k3sTarget is the release a HelmChart installs: its own name, in
+// spec.targetNamespace or else the HelmChart's namespace. helm-controller
+// runs helm with that namespace, so the release Secret is stored there.
+func k3sTarget(u *unstructured.Unstructured) releaseKey {
+	ns, _, _ := unstructured.NestedString(u.Object, "spec", "targetNamespace")
+	if ns == "" {
+		ns = u.GetNamespace()
+	}
+	return releaseKey{namespace: ns, name: u.GetName()}
+}
+
+// k3sHelmChartKeys maps "targetNamespace/name" to the HelmChart (and its
+// same-named HelmChartConfig) that installs that release.
+func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
+	if len(charts) == 0 {
+		return nil
+	}
+	configured := map[string]bool{}
+	for _, c := range configs {
+		configured[c.GetNamespace()+"/"+c.GetName()] = true
+	}
+	out := make(map[string]k3sOwner, len(charts))
+	ambiguous := map[string]bool{}
+	for _, c := range charts {
+		target := k3sTarget(c)
+		key := target.namespace + "/" + target.name
+		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), configKnown: configsKnown}
+		if configured[owner.chart] {
+			owner.config = owner.chart
+		}
+		// Two HelmCharts installing one release can't be told apart: credit
+		// neither, as for two Flux HelmReleases.
+		if prev, ok := out[key]; ok && prev.chart != owner.chart {
+			ambiguous[key] = true
+		}
+		out[key] = owner
+	}
+	for key := range ambiguous {
+		delete(out, key)
+	}
+	return out
+}
+
+// k3sHelmChartMap is fluxHelmReleaseMap for k3s: best effort, read from
+// Radar's cache, nil when the cluster has no helm.cattle.io kinds or the read
+// fails. The observed path reads only what the caller can see (stampScan).
+func k3sHelmChartMap(ctx context.Context) map[string]k3sOwner {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil
+	}
+	charts, err := cache.ListDynamicWithGroup(ctx, k3sHelmChartKind, "", k3sHelmGroup)
+	if err != nil || len(charts) == 0 {
+		return nil
+	}
+	configs, err := cache.ListDynamicWithGroup(ctx, k3sHelmChartConfigKind, "", k3sHelmGroup)
+	return k3sHelmChartKeys(err == nil, charts, configs)
 }
 
 type helmReleaseStorageSnapshot struct {

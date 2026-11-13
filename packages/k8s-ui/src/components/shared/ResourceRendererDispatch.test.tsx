@@ -1261,3 +1261,28 @@ describe('Gateway API route plural collision', () => {
     }
   })
 })
+
+describe('HelmChart kind collision (helm.cattle.io vs source.toolkit.fluxcd.io)', () => {
+  const helmChart = (apiVersion: string) => ({
+    apiVersion, kind: 'HelmChart', metadata: { name: 'traefik', namespace: 'kube-system' },
+    spec: { chart: 'traefik', collisionProbe: COLLISION_PROBE },
+    status: { jobName: 'helm-install-traefik', conditions: [{ type: 'JobCreated', status: 'True' }] },
+  })
+  const draw = (apiVersion: string) => renderToString(
+    <ResourceRendererDispatch resource={{ kind: 'helmcharts', namespace: 'kube-system', name: 'traefik' }} data={helmChart(apiVersion)} onCopy={() => {}} copied={null} showCommonSections={false} />,
+  ).replace(/<!-- -->/g, '')
+
+  it('routes helm.cattle.io HelmChart to the k3s renderer', () => {
+    const html = draw('helm.cattle.io/v1')
+    expect(html).toContain('Install job')
+    expect(html).not.toContain(COLLISION_PROBE)
+    expect(getResourceStatus('helmcharts', helmChart('helm.cattle.io/v1'))?.text).toBe('Job created')
+  })
+
+  it('keeps a Flux HelmChart on the generic renderer and status', () => {
+    const html = draw('source.toolkit.fluxcd.io/v1')
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('Install job')
+    expect(getResourceStatus('helmcharts', helmChart('source.toolkit.fluxcd.io/v1'))?.text).not.toBe('Job created')
+  })
+})

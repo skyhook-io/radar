@@ -266,10 +266,26 @@ func TestParseFluxEvidence(t *testing.T) {
 	}
 }
 
+func TestObservedRowCarriesK3sOwner(t *testing.T) {
+	key := releaseKey{"kube-system", "traefik"}
+	objects := []stampedObject{{chartLabel: "traefik-34.2.1"}}
+	k3s := map[string]k3sOwner{"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik"}}
+	if row := observedRow(key, objects, nil, k3s); row.Controller == nil || row.Controller.Tool != "k3s" || row.Controller.Ref() != "kube-system/traefik" || row.Controller.ValuesRef.Exists == nil || !*row.Controller.ValuesRef.Exists {
+		t.Fatalf("row = %+v", row)
+	}
+	flux := []fluxEvidence{{ref: "flux-system/traefik", releaseName: "traefik", releaseNamespace: "kube-system", storageNamespace: "kube-system"}}
+	if row := observedRow(key, objects, flux, k3s); row.Controller == nil || row.Controller.Tool != "flux" {
+		t.Fatalf("Flux wins, row = %+v", row)
+	}
+	if row := observedRow(key, objects, nil, nil); row.Controller != nil {
+		t.Fatalf("no readable HelmChart, row = %+v", row)
+	}
+}
+
 func TestObservedRowUsesFluxRecordOverLabels(t *testing.T) {
 	key := releaseKey{"apps", "web"}
 	objects := []stampedObject{{chartLabel: "grafana-6.0.0", appVersion: "9"}, {chartLabel: "wrapper-1.0.0", appVersion: "1"}}
-	row := observedRow(key, objects, []fluxEvidence{{ref: "flux-system/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "flux-system", historyChart: "wrapper", historyVersion: "1.0.1", historyAppVersion: "1.1"}})
+	row := observedRow(key, objects, []fluxEvidence{{ref: "flux-system/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "flux-system", historyChart: "wrapper", historyVersion: "1.0.1", historyAppVersion: "1.1"}}, nil)
 	if row.Chart != "wrapper" || row.ChartVersion != "1.0.1" || row.AppVersion != "1.1" {
 		t.Fatalf("chart = %+v", row)
 	}
@@ -280,7 +296,7 @@ func TestObservedRowUsesFluxRecordOverLabels(t *testing.T) {
 		t.Fatalf("others = %v", row.OtherCharts)
 	}
 
-	unread := observedRow(key, objects, nil)
+	unread := observedRow(key, objects, nil, nil)
 	if unread.ManagedByFluxHelmRelease != "" || unread.StorageNamespace != "" {
 		t.Fatalf("a HelmRelease the caller can't read contributes nothing: %+v", unread)
 	}
@@ -294,7 +310,7 @@ func TestObservedRowCreditsNeitherOfTwoHelmReleases(t *testing.T) {
 	row := observedRow(key, objects, []fluxEvidence{
 		{ref: "team-a/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "team-a", historyChart: "web", historyVersion: "1.0.0"},
 		{ref: "team-b/web", releaseName: "web", releaseNamespace: "apps", storageNamespace: "team-b", historyChart: "web", historyVersion: "2.0.0"},
-	})
+	}, nil)
 	if row.ManagedByFluxHelmRelease != "" || row.StorageNamespace != "" || row.ChartVersion != "1.0.0" {
 		t.Fatalf("row = %+v, want labels only", row)
 	}

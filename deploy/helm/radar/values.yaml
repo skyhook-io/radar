@@ -234,6 +234,7 @@ rbac:
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
+    k3sHelm: false         # Opt in to get/list/watch helm.cattle.io HelmCharts and HelmChartConfigs (k3s/RKE2). Values can hold credentials.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
     reflector: true         # reflector.v1.k8s.emberstack.com

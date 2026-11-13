@@ -12,6 +12,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { formatDate } from './helm-utils'
 import { ObservedHelmDrawerNote } from './ObservedHelmNotice'
 import { OwnedResources } from './OwnedResources'
+import { ReleaseControllerNote, otherController as otherControllerOf } from './releaseController'
 
 type TabId = 'overview' | 'history' | 'resources'
 
@@ -54,6 +55,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
   useEffect(() => setActiveTab('overview'), [release.namespace, release.name])
 
   const flux = data?.managedByFluxHelmRelease
+  const otherController = data ? otherControllerOf(data) : undefined
   const tabs = TABS.filter((tab) => tab.id !== 'history' || data?.fluxHistory?.length)
   const shownTab = tabs.some((tab) => tab.id === activeTab) ? activeTab : 'overview'
 
@@ -106,6 +108,7 @@ export function ObservedHelmReleaseDrawer({ release, onClose, onNavigateToResour
               </button>
             </Tooltip>
           )}
+          {otherController && <ReleaseControllerNote controller={otherController} onNavigateToResource={onNavigateToResource} />}
         </div>
 
         <div className="flex items-center gap-1 px-4 pb-2 overflow-x-auto">

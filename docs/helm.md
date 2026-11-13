@@ -10,6 +10,8 @@ The Helm list shows:
 - Resource health derived from the current rendered manifest and live Kubernetes status.
 - Helm storage namespace. This matters for controllers such as Flux, which may store the Helm release Secret outside the target namespace.
 - Flux ownership when Radar can match the release to a Flux `HelmRelease`.
+- The controller that installs the release from its own definition, in `controller` (`tool`, `kind`, `group`, `namespace`, `name` and an optional `valuesRef` naming where values change, whose `exists` is true, false after a complete read found none, or absent when unknown). Flux and k3s are detected today; the list badge, the drawer note, operation insight, MCP refusals and the Diagnose card read only this field, and whether Radar's own Helm issues and recent changes defer to the controller is decided once per tool (`ReportsOwnHistory`), so a new controller needs only a detector. `managedByFluxHelmRelease` stays for older consumers.
+- k3s/RKE2 ownership (a `k3s` badge) when a `helm.cattle.io` `HelmChart` installs the release: same name, and its `spec.targetNamespace` (or its own namespace) is where the release is stored. Flux wins if both match. Like the Flux badge, it comes from Radar's own read of HelmCharts (names only); observed rows use only what the caller can read. On observed rows, two HelmCharts that install one release credit neither only when the caller can read both; one the caller can read alone is credited.
 - `lastOperation` for current failed upgrades, rollback-after-failure patterns, explicit rollbacks, and stuck pending operations (including uninstalls).
 - A capped operation trail for failed upgrades, rollbacks, rollback-after-failure, and stuck pending operations (including uninstalls).
 
@@ -28,6 +30,7 @@ Helm stamps what it deploys with the `meta.helm.sh/release-name` and `meta.helm.
 | App version | The `app.kubernetes.io/version` on objects of the chosen chart. Unknown if none has it. When they disagree it is unknown and `appVersions` lists the values: a majority would hide the object still on another version, and voting on the two labels separately could pair values no object carries |
 | Resources, object health | Live objects the caller can read, which can be fewer than the release has. Secrets are never read, and only kinds Radar is already watching are included. With gaps in the read, health is `unknown` rather than `healthy`, and `healthSummary` still counts what was read. The list shows healthy objects in a neutral label, since they say nothing about Helm's status |
 | Flux ownership, history | From a Flux `HelmRelease` the caller can read: its `status.history` supplies the chart, the versions and the history shown in the drawer. Flux's recorded status is shown as Flux's, in the drawer, and never as the release's status |
+| k3s ownership | From a k3s `HelmChart` (and same-named `HelmChartConfig`) the caller can read; never from Radar's own read |
 | Status, revision, last updated | Unknown. Observed rows have no such fields, so nothing can default to "deployed". When the chart or app versions disagree, the list adds a "versions differ" marker beside the status, with the versions in its tooltip |
 | Helm history, compare, values, manifest, notes, hooks | Not available: these routes stay denied, and the drawer has no tabs for them. It shows History only where Flux recorded one |
 | Install, upgrade, rollback, uninstall | Not available |
@@ -87,7 +90,7 @@ For recovered operations, Radar suggests the revision comparison most likely to 
 - Restored revision to failed upgrade revision for rollback-after-failure.
 - Previous completed revision to rollback revision for explicit rollbacks.
 
-Flux-owned Helm releases defer to Flux. Radar shows the owning `HelmRelease` and does not synthesize native Helm operation insight for releases managed by Flux's helm-controller, because the GitOps controller is the authoritative reconciler.
+Flux-owned Helm releases defer to Flux, and k3s-owned ones to their `HelmChart` the same way (Radar has no view to send a k3s change to, so it shows the note and no operation insight). Radar shows the owning `HelmRelease` and does not synthesize native Helm operation insight for releases managed by Flux's helm-controller, because the GitOps controller is the authoritative reconciler.
 
 Active native Helm failures and stuck pending operations (including uninstalls) also appear in the global Issues stream as `kind=HelmRelease`, `group=helm.sh`. Recovered rollbacks are deployment history, not live issues; use Helm detail or `get_changes` for those.
 
@@ -153,7 +156,7 @@ Use `list_helm_releases` first for broad Helm deployment triage. It returns rele
 
 Use `get_helm_release` for detail:
 
-- The default response includes owned resources, resource health, Flux ownership, current operation signal, hooks, and hook diagnostics when present.
+- The default response includes owned resources, resource health, the controller that owns it (`controller`: tool, kind, object and, for k3s, the HelmChartConfig to change values in), current operation signal, hooks, and hook diagnostics when present.
 - `include=history,operations` returns the full revision and operation trail.
 - `include=values` returns user-supplied values with key-aware secret redaction.
 - `include=diff` returns manifest diff.
@@ -170,6 +173,7 @@ Use `issues` for currently broken native Helm releases: active failed and stuck 
 - When rendered object identities do not overlap, Radar reports added/removed context instead of guessing a rename.
 - Hook evidence can disappear after Helm records the failure. Radar reports the absence and likely reasons, but cannot reconstruct deleted Job/Pod logs unless Kubernetes or Helm retained them.
 - Flux-managed releases should be changed through Flux. Radar links them to the owning `HelmRelease` and warns that direct `helm upgrade` changes may be reconciled back.
+- k3s/RKE2-managed releases (installed by a `HelmChart`) should be changed through a `HelmChartConfig` of the same name and namespace. The drawer names both and links them; an upgrade or rollback from Radar would be reverted when helm-controller reinstalls the chart. MCP `manage_helm` refuses every write to such a release, naming the HelmChart and the HelmChartConfig (an uninstall is pointed at deleting or disabling the HelmChart). Issues still report a failed k3s release, and `get_changes` keeps its Helm revisions, since k3s reports no failures and keeps no history of its own. The drawer's rollback and uninstall stay available with the note, as for Flux.
 - Without sign-in, Radar asks on each read whether it can list Secrets cluster-wide. When it can't, it skips the namespaces where its permission probe saw Secrets refused and reads the rest, including any the probe didn't answer. On a default install that is one cluster-wide list, whose denial covers every namespace, instead of one denied list per namespace on every load. A Secrets grant in a single namespace made after the probe isn't seen until Radar probes again, on a context switch or restart.
 - Upgrade source detection depends on source data available to the running Radar environment. Local OSS can use local Helm repo/OCI configuration; Radar Cloud should not assume that local repo config exists, so unresolved source states are reported explicitly.
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { controllerManagedText, otherController, releaseControllerOf } from './releaseController'
 import { DEFAULT_SHOW_EFFECTIVE_VALUES, effectiveHelmStorageNamespace, isUpgradeSourceIssueActionable, upgradePickerVersions } from './HelmReleaseDrawer'
 
 describe('Helm values view', () => {
@@ -65,5 +66,31 @@ describe('upgradePickerVersions', () => {
   it('has nothing to pick with a single published version that is the installed one', () => {
     expect(upgradePickerVersions(['1.5.0'], '1.5.0')).toBeNull()
     expect(upgradePickerVersions(undefined, '1.5.0')).toBeNull()
+  })
+})
+
+describe('release controller', () => {
+  const k3s = (exists?: boolean) => ({ tool: 'k3s', kind: 'HelmChart', group: 'helm.cattle.io', namespace: 'kube-system', name: 'traefik', valuesRef: { kind: 'HelmChartConfig', group: 'helm.cattle.io', namespace: 'kube-system', name: 'traefik', exists } })
+
+  it('reads the generic field, and the Flux field from an older Radar', () => {
+    expect(releaseControllerOf({ controller: k3s(true) })).toEqual(k3s(true))
+    expect(releaseControllerOf({ managedByFluxHelmRelease: 'flux-system/app' })).toEqual({ tool: 'flux', kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', namespace: 'flux-system', name: 'app' })
+    expect(releaseControllerOf({})).toBeUndefined()
+  })
+
+  it('words any controller, naming where values change', () => {
+    expect(controllerManagedText(k3s(true))).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Change values in HelmChartConfig kube-system/traefik.')
+    expect(controllerManagedText(k3s(false))).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Create a HelmChartConfig kube-system/traefik to change its values.')
+    expect(controllerManagedText(k3s(undefined))).toContain('(create it if it does not exist)')
+    const fleet = { tool: 'fleet', kind: 'Bundle', group: 'fleet.cattle.io', namespace: 'fleet-local', name: 'app' }
+    expect(controllerManagedText(fleet)).toBe('Managed by fleet. Bundle fleet-local/app reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Change it through that Bundle.')
+  })
+})
+
+describe('controllers other than Flux', () => {
+  it('are the ones that hide upgrade hints and get the generic note; Flux keeps its own routing', () => {
+    expect(otherController({ controller: { tool: 'k3s', kind: 'HelmChart', group: 'helm.cattle.io', namespace: 'kube-system', name: 'traefik' } })?.tool).toBe('k3s')
+    expect(otherController({ managedByFluxHelmRelease: 'flux-system/x' })).toBeUndefined()
+    expect(otherController({})).toBeUndefined()
   })
 })

@@ -554,6 +554,11 @@ rules:
     resources: ["canaries", "metrictemplates"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.k3sHelm }}
+  - apiGroups: ["helm.cattle.io"]
+    resources: ["helmcharts", "helmchartconfigs"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.opentelemetry }}
   - apiGroups: ["opentelemetry.io"]
     resources: ["*"]
