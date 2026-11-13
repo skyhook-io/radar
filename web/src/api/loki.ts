@@ -1,4 +1,6 @@
+import { useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import type { FetchHistory, LogsHistoryResult } from '@skyhook-io/k8s-ui'
 import { fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
@@ -41,4 +43,23 @@ export function useLokiStatus(enabled = true) {
 /** "namespace, pod, container, job job_name": the stream labels Radar reads. */
 export function describeLokiLabels(l: LokiStreamLabels): string {
   return [l.namespace, l.pod, l.container, l.job && `job ${l.job}`].filter(Boolean).join(', ')
+}
+
+interface LokiPodLogs { containers: string[]; logs: Record<string, string>; truncated: boolean; limit: number; window: { start: string; end: string } }
+
+/**
+ * The History reader for one pod, or undefined when the connected Radar can't
+ * serve it or Loki isn't connected with namespace and pod stream labels.
+ */
+export function usePodHistory(namespace: string, podName: string): FetchHistory | undefined {
+  const { support, guard } = useRadarFeature('lokiPodHistory')
+  const status = useLokiStatus(support === 'supported')
+  const ready = support === 'supported' && !!status.data?.connected && !status.data.historyReason
+  const fetchHistory = useCallback<FetchHistory>(async ({ container, since }) => {
+    const query = new URLSearchParams({ since })
+    if (container) query.set('container', container)
+    const data = await guard(() => fetchJSON<LokiPodLogs>(`/loki/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/logs?${query}`))
+    return { containers: data.containers, logs: data.logs, truncated: data.truncated, limit: data.limit, window: data.window } satisfies LogsHistoryResult
+  }, [guard, namespace, podName])
+  return ready ? fetchHistory : undefined
 }

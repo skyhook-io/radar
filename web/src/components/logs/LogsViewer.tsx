@@ -4,6 +4,7 @@ import { LogsViewer as SharedLogsViewer } from '@skyhook-io/k8s-ui'
 import type { LogsFetchParams } from '@skyhook-io/k8s-ui'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useTheme } from '../../context/ThemeContext'
+import { usePodHistory } from '../../api/loki'
 
 interface LogsViewerProps {
   namespace: string
@@ -12,9 +13,12 @@ interface LogsViewerProps {
   initialContainer?: string
   /** Start streaming on mount. Default true — callers pass false for terminal (completed/failed) pods. */
   autoStream?: boolean
+  /** Open on History (logs from Loki), e.g. for a pod that is gone. */
+  history?: boolean
 }
 
-export function LogsViewer({ namespace, podName, containers, initialContainer, autoStream = true }: LogsViewerProps) {
+export function LogsViewer({ namespace, podName, containers, initialContainer, autoStream = true, history = false }: LogsViewerProps) {
+  const fetchHistory = usePodHistory(namespace, podName)
   const desktopDownload = useDesktopDownload()
   const { theme } = useTheme()
 
@@ -47,7 +51,9 @@ export function LogsViewer({ namespace, podName, containers, initialContainer, a
       // light theme only sets where it starts and leaves the toggle available.
       forceDark={theme === 'dark' ? true : undefined}
       defaultDark={false}
-      autoStream={autoStream}
+      autoStream={autoStream && !history}
+      fetchHistory={fetchHistory}
+      initialMode={history ? 'history' : 'live'}
     />
   )
 }

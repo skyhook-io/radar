@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { parseLogLine, parseLogRange } from '../../utils/log-format'
 import { triggerDownload } from '../../utils/download'
 import { useLogBuffer } from './useLogBuffer'
@@ -9,6 +9,9 @@ import type { LogExportPayload } from '../../utils/log-export'
 import type { LogPalette } from './log-palette'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
+import { LogsHistoryViewer, type FetchHistory } from './LogsHistoryViewer'
+
+export type { LogsHistoryResult, LogsHistoryWindow, FetchHistory } from './LogsHistoryViewer'
 
 export interface LogsFetchParams {
   container: string
@@ -38,7 +41,15 @@ export interface LogsViewerProps {
    * re-armed. Requires `createStream`. Default: false.
    */
   autoStream?: boolean
+  /** Reads the pod's logs from a log store (Loki). When given, a Live | History switch appears. */
+  fetchHistory?: FetchHistory
+  /** Open in History; needs `fetchHistory`. Default 'live'. */
+  initialMode?: 'live' | 'history'
+  /** Extra line under an empty History answer, e.g. a link to why logs aren't shipped. */
+  historyEmptyHint?: ReactNode
 }
+
+type ToolbarLead = (ctx: { isDark: boolean; palette: LogPalette }) => ReactNode
 
 // Kubernetes' answers that there are no logs to show, such as "no earlier run".
 // They describe the pod, not a failure in Radar, so they are shown like an
@@ -60,7 +71,39 @@ function clusterAnswerOf(err: unknown): string | null {
 // auto-start latch, a manual Stop) belongs to one pod, and a host that swaps
 // the pod without remounting would carry it over to the next one.
 export function LogsViewer(props: LogsViewerProps) {
-  return <PodLogsViewer key={`${props.namespace}/${props.podName}`} {...props} />
+  return <LogsViewerModes key={`${props.namespace}/${props.podName}`} {...props} />
+}
+
+function LogsViewerModes(props: LogsViewerProps) {
+  const { fetchHistory } = props
+  const [mode, setMode] = useState<'live' | 'history'>(fetchHistory && props.initialMode === 'history' ? 'history' : 'live')
+  // A host may learn only after mounting that it can read History; open it
+  // then, unless the user has already chosen.
+  const chosen = useRef(false)
+  const historyReady = !!fetchHistory
+  useEffect(() => {
+    if (historyReady && props.initialMode === 'history' && !chosen.current) setMode('history')
+  }, [historyReady, props.initialMode])
+  const choose = (m: 'live' | 'history') => {
+    chosen.current = true
+    setMode(m)
+  }
+  const toolbarLead: ToolbarLead | undefined = fetchHistory
+    ? ({ palette }) => (
+      <div role="group" aria-label="Log source" className={`flex rounded border ${palette.borderLight} text-xs`}>
+        {(['live', 'history'] as const).map(m => (
+          <button key={m} type="button" aria-pressed={mode === m} onClick={() => choose(m)}
+            className={`px-2 py-1 ${mode === m ? `${palette.elevatedBg} ${palette.textPrimary}` : palette.textSecondary}`}>
+            {m === 'live' ? 'Live' : 'History'}
+          </button>
+        ))}
+      </div>
+    )
+    : undefined
+  if (mode === 'history' && fetchHistory) {
+    return <LogsHistoryViewer {...props} fetchHistory={fetchHistory} toolbarLead={toolbarLead} />
+  }
+  return <PodLogsViewer {...props} toolbarLead={toolbarLead} />
 }
 
 function PodLogsViewer({
@@ -74,7 +117,8 @@ function PodLogsViewer({
   forceDark,
   defaultDark,
   autoStream = false,
-}: LogsViewerProps) {
+  toolbarLead,
+}: LogsViewerProps & { toolbarLead?: ToolbarLead }) {
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
@@ -242,6 +286,7 @@ function PodLogsViewer({
 
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
+      {toolbarLead?.({ isDark, palette })}
       <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} />
 
       <Tooltip content={streamBusy ? 'Stop streaming to view the previous instance' : "Show logs from the pod's previous instance (if it was restarted). Useful for troubleshooting crashed containers."} position="bottom">
