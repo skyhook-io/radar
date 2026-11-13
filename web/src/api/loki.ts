@@ -51,10 +51,16 @@ interface LokiPodLogs { containers: string[]; logs: Record<string, string>; trun
  * The History reader for one pod, or undefined when the connected Radar can't
  * serve it or Loki isn't connected with namespace and pod stream labels.
  */
-export function usePodHistory(namespace: string, podName: string): FetchHistory | undefined {
-  const { support, guard } = useRadarFeature('lokiPodHistory')
+/** Whether this Radar can read pod History from Loki now. */
+export function useLokiHistoryReady(): boolean {
+  const { support } = useRadarFeature('lokiPodHistory')
   const status = useLokiStatus(support === 'supported')
-  const ready = support === 'supported' && !!status.data?.connected && !status.data.historyReason
+  return support === 'supported' && !!status.data?.connected && !status.data.historyReason
+}
+
+export function usePodHistory(namespace: string, podName: string): FetchHistory | undefined {
+  const { guard } = useRadarFeature('lokiPodHistory')
+  const ready = useLokiHistoryReady()
   const fetchHistory = useCallback<FetchHistory>(async ({ container, since }) => {
     const query = new URLSearchParams({ since })
     if (container) query.set('container', container)
