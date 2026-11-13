@@ -1,5 +1,6 @@
 import { useOpenCostSummary, usePrometheusStatus, type useArgoStatus } from '../../api/client'
 import { costIntegrationUnavailableMessage, costSourceLabel } from '../cost/source'
+import { describeLokiLabels, useLokiStatus } from '../../api/loki'
 import type { IntegrationKind, IntegrationProfile } from './LocalConnectionSettings'
 import { Badge, Collapse } from '@skyhook-io/k8s-ui'
 import { useRef } from 'react'
@@ -13,7 +14,8 @@ export function LocalIntegrationStatus({ kind, profile, argo, busy, changedAt }:
 }) {
   const prom = usePrometheusStatus(kind === 'metrics')
   const cost = useOpenCostSummary(kind === 'cost')
-  const query = kind === 'metrics' ? prom : kind === 'cost' ? cost : argo
+  const loki = useLokiStatus(kind === 'loki')
+  const query = kind === 'metrics' ? prom : kind === 'cost' ? cost : kind === 'loki' ? loki : argo
   // Background polls keep the last status; only the first load, or a result
   // older than the latest saved integration change, reads as "Checking…".
   const checking = busy || query.isPlaceholderData || (query.isFetching && !query.data) ||
@@ -32,6 +34,12 @@ export function LocalIntegrationStatus({ kind, profile, argo, busy, changedAt }:
       status = cost.data.available ? `Available · ${costSourceLabel(cost.data.source)}`
         : ['no_prometheus', 'no_cost_source', 'no_metrics'].includes(cost.data.reason ?? '') ? 'No cost data' : 'Unavailable'
       detail = cost.data.reason ? costIntegrationUnavailableMessage(cost.data.reason) : undefined
+    } else if (kind === 'loki' && loki.data) {
+      const d = loki.data
+      status = d.connected ? 'Connected' : d.discovering ? 'Discovering…' : 'Not connected'
+      detail = d.connected
+        ? [d.source === 'discovered' && `Discovered: ${d.address}`, d.labels && `Stream labels: ${describeLokiLabels(d.labels)}`, d.historyReason].filter(Boolean).join('. ')
+        : d.error
     }
   }
   const lastDetail = useRef({ text: detail, visible: !!detail })

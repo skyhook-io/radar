@@ -1003,6 +1003,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 			r.Get("/integrations/connections", s.handleLocalConnections)
+			r.Get("/loki/status", s.handleLokiStatus)
 			r.Put("/integrations/connections", s.handleUpdateLocalConnection)
 
 			// Desktop routes
@@ -1519,6 +1520,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
+		LokiConnection:           true,
 	}
 }
 

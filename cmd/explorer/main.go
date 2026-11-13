@@ -146,6 +146,9 @@ func main() {
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
+	lokiURL := flag.String("loki-url", "", "Loki URL for pod log history (skips auto-discovery)")
+	lokiHeaders := newHeaderFlag(nil)
+	flag.Var(lokiHeaders, "loki-header", "HTTP header to send with Loki requests, e.g. 'X-Scope-OrgID=tenant' (repeatable)")
 	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL matcher fragment for Beyla Live Traffic, e.g. 'job=~"my-beyla.*"' (empty = *beyla* or *alloy* jobs). Workload charts use this override only with an explicit Prometheus scope flag and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it.`)
 	// MCP server
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
@@ -349,6 +352,7 @@ func main() {
 	namespacesFlagSet := false
 	openCostCurrencyFlagSet := false
 	prometheusURLFlagSet := false
+	lokiURLFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "kubeconfig":
@@ -363,6 +367,8 @@ func main() {
 			openCostCurrencyFlagSet = true
 		case "prometheus-url":
 			prometheusURLFlagSet = true
+		case "loki-url":
+			lokiURLFlagSet = true
 		}
 	})
 	enablePprof, err := config.PprofOverrideFromEnv()
@@ -470,6 +476,10 @@ func main() {
 		PrometheusHeadersFromEnv:    promHeadersFromEnv.value(),
 		PrometheusURLFlag:           prometheusURLFlagSet,
 		PrometheusHeaderFlags:       promHeaders.overrides || promHeadersFromEnv.overrides,
+		LokiURL:                     *lokiURL,
+		LokiHeaders:                 lokiHeaders.value(),
+		LokiURLFlag:                 lokiURLFlagSet,
+		LokiHeaderFlag:              lokiHeaders.overrides,
 		BeylaJobSelector:            *beylaJobSelector,
 		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:                  mcpEnabled,

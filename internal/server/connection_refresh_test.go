@@ -57,7 +57,7 @@ func TestIntegrationOperationsRefreshExternalChangesWithoutSettings(t *testing.T
 	other := connections.NewResolver(s.localConnections.Store, target, nil)
 	for _, kind := range config.IntegrationKinds {
 		req := connections.Update{Target: target, Revision: other.Resolve(target, kind, false).View.Revision, Kind: kind, Action: "save", URL: &backend.URL}
-		if kind == config.IntegrationMetrics {
+		if kind == config.IntegrationMetrics || kind == config.IntegrationLoki {
 			req.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "rotated"}}
 		} else {
 			req.Secret = &connections.SecretEdit{Action: "set", Value: "rotated"}
