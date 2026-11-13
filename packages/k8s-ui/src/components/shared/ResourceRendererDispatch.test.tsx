@@ -72,6 +72,22 @@ describe('ResourceRendererDispatch', () => {
     })
   })
 
+  it('gates Logging operator drawers and status on the exact API group', () => {
+    const own = renderKind('flows', {
+      apiVersion: 'logging.banzaicloud.io/v1beta1', kind: 'Flow', metadata: { name: 'app', namespace: 'team' },
+      spec: { match: [{ select: { labels: { app: 'web' } } }] }, status: { active: true },
+    })
+    expect(own).toContain('Selection rules')
+    for (const kind of ['flows', 'outputs']) {
+      const foreign = { apiVersion: 'example.com/v1', kind: 'Foreign', metadata: { name: 'foreign' }, spec: { collisionProbe: COLLISION_PROBE }, status: { active: true } }
+      const html = renderKind(kind, foreign)
+      expect(html).toContain(COLLISION_PROBE)
+      expect(html).not.toContain('Selection rules')
+      expect(html).not.toContain('Other output settings')
+      expect(getResourceStatus(kind, foreign)?.text).not.toBe('Active')
+    }
+  })
+
   it('does not block manual replica scaling for VPA-only relationships', () => {
     const html = renderWithScalers([
       { kind: 'VerticalPodAutoscaler', namespace: 'prod', name: 'api-vpa' },

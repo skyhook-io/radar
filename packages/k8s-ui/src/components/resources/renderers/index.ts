@@ -205,3 +205,4 @@ export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
 
 export { CRDSchemaBrowser, type CRDSchemaBrowserProps } from './CRDSchemaBrowser'
+export { LoggingRenderer, LoggingFlowRenderer, LoggingOutputRenderer, FluentbitAgentRenderer } from './LoggingRenderers'
