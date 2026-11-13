@@ -50,6 +50,7 @@ export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, s
       forceDark={theme === 'dark' ? true : undefined}
       defaultDark={false}
       autoStream={autoStream}
+      readSnapshotWhenPodsGone={lokiRuns && ['job', 'jobs'].includes(kind.toLowerCase()) && !snapshotOnly}
     />
   )
 }
