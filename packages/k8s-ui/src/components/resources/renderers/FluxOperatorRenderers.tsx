@@ -33,7 +33,7 @@ function OperatorStatus({ data }: { data: any }) {
 function Inventory({ entries }: { entries?: Array<{ id: string; v: string }> }) {
   const resources = parseFluxInventory(entries || [])
   if (resources.length === 0) return null
-  return <ManagedResourcesList resources={resources} title={`Inventory (${resources.length} resources)`} />
+  return <ManagedResourcesList resources={resources} title="Inventory" />
 }
 
 const yesNo = (v: unknown) => (v === undefined ? undefined : v ? 'Yes' : 'No')
@@ -94,7 +94,7 @@ export function FluxInstanceRenderer({ data }: Props) {
                 <span className="font-mono text-theme-text-primary">{h.metadata?.flux || String(h.digest || '').slice(0, 19)}</span>
                 <span>{h.lastReconciledStatus === 'ReconciliationSucceeded' ? 'Applied' : h.lastReconciledStatus}</span>
                 {h.lastReconciled && <span className="text-theme-text-tertiary">{formatRelativeAgeTime(h.lastReconciled)}</span>}
-                {typeof h.totalReconciliations === 'number' && <span className="text-theme-text-tertiary">{h.totalReconciliations} runs</span>}
+                {typeof h.totalReconciliations === 'number' && <span className="text-theme-text-tertiary">{h.totalReconciliations} {h.totalReconciliations === 1 ? 'run' : 'runs'}</span>}
               </div>
             ))}
           </div>

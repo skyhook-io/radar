@@ -35,7 +35,18 @@ describe('Flux Operator drawers', () => {
       spec: { inputs: [{ tenant: 'a' }, { tenant: 'b' }], inputsFrom: [{ kind: 'ResourceSetInputProvider', name: 'prs' }], dependsOn: [{ kind: 'Kustomization', name: 'infra' }] },
       status: { ...ready, inventory: { entries: [{ id: 'team_app_apps_Deployment', v: 'v1' }] } },
     }} />))
-    for (const want of ['Inputs', '2 inline', 'prs', 'infra', 'Inventory']) expect(html).toContain(want)
+    for (const want of ['Inputs', '2 inline', 'prs', 'infra', 'Inventory (1)']) expect(html).toContain(want)
+    expect(html).not.toContain('resources) (')
+  })
+
+  it('FluxInstance history says 1 run, not 1 runs', () => {
+    const html = text(renderToString(<FluxInstanceRenderer onNavigate={() => {}} data={{
+      apiVersion: 'fluxcd.controlplane.io/v1', kind: 'FluxInstance', metadata: { name: 'flux', namespace: 'flux-system' },
+      spec: { distribution: { version: '2.7.x' } },
+      status: { ...ready, history: [{ digest: 'sha256:1', lastReconciledStatus: 'ReconciliationSucceeded', totalReconciliations: 1, metadata: { flux: 'v2.7.5' } }] },
+    }} />))
+    expect(html).toContain('1 run<')
+    expect(html).not.toContain('1 runs')
   })
 
   it('ResourceSetInputProvider: type and a URL without credentials', () => {
