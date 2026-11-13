@@ -2,6 +2,7 @@ package loki
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -34,12 +35,22 @@ func TestJobSelector(t *testing.T) {
 	if got, notice, _ := JobSelector(withJob, "team", "nightly.sync"); got != `{namespace="team", job_name="nightly.sync"}` || notice != "" {
 		t.Errorf("job label: %s / %q", got, notice)
 	}
-	if got, notice, _ := JobSelector(plain, "team", "nightly.sync"); got != `{namespace="team", pod=~"^nightly\\.sync-([0-9]+-)?[a-z0-9]{5}$"}` || notice != "" {
+	if got, notice, _ := JobSelector(plain, "team", "nightly.sync"); got != `{namespace="team", pod=~"^nightly\\.sync-([0-9]+-?)?[a-z0-9]{5}$"}` || notice != "" {
 		t.Errorf("pod regex: %s / %q", got, notice)
+	}
+	// An Indexed Job's whole "<job>-<index>-" prefix is cut to 58 characters,
+	// so the cut can end inside the index.
+	name56 := strings.Repeat("b", 56)
+	sel, _, _ := JobSelector(plain, "team", name56)
+	re := regexp.MustCompile(strings.ReplaceAll(strings.TrimSuffix(strings.SplitN(sel, `pod=~"`, 2)[1], `"}`), `\\`, `\`))
+	for _, pod := range []string{name56 + "-0abcde", name56 + "-abcde"} {
+		if !re.MatchString(pod) {
+			t.Errorf("%s does not match %s", pod, re)
+		}
 	}
 	long := strings.Repeat("a", 60)
 	got, notice, _ := JobSelector(plain, "team", long)
-	if !strings.Contains(got, `"^`+strings.Repeat("a", 58)+`([0-9]+-)?`) || !strings.Contains(notice, "shortened") {
+	if !strings.Contains(got, `"^`+strings.Repeat("a", 58)+`([0-9]+-?)?`) || !strings.Contains(notice, "shortened") {
 		t.Errorf("long name: %s / %q", got, notice)
 	}
 }

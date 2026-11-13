@@ -39,3 +39,16 @@ it('keeps the stream\'s answer otherwise', async () => {
   expect(fetchAll).not.toHaveBeenCalled()
   expect(text).toContain('no longer present')
 })
+
+it('keeps lines the stream already showed when the pods then go', async () => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const fetchAll = vi.fn(async () => ({ pods: [], logs: [], emptyReason: 'pods-gone' }))
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} createStream={() => new FakeEventSource() as unknown as EventSource} autoStream readSnapshotWhenPodsGone />))
+  await act(async () => FakeEventSource.last?.emit('connected', {}))
+  await act(async () => FakeEventSource.last?.emit('log', { pod: 'run-1-abcde', container: 'job', timestamp: '2026-11-13T02:00:00Z', content: 'last words' }))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  await act(async () => FakeEventSource.last?.emit('end', { reason: 'pods-gone', emptyReason: 'pods-gone' }))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  expect(fetchAll).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+})

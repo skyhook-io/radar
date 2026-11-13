@@ -86,6 +86,6 @@ func JobSelector(l StreamLabels, namespace, job string) (selector, notice string
 		prefix = prefix[:jobPodPrefixLimit]
 		notice = "Job names this long are shortened in pod names; lines from another Job with the same prefix may be included."
 	}
-	re := "^" + regexp.QuoteMeta(prefix) + "([0-9]+-)?[a-z0-9]{5}$"
+	re := "^" + regexp.QuoteMeta(prefix) + "([0-9]+-?)?[a-z0-9]{5}$"
 	return fmt.Sprintf("{%s, %s=~%s}", ns, l.Pod, quoteLogQL(re)), notice, nil
 }
