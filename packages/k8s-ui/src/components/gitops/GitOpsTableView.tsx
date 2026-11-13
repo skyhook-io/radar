@@ -96,6 +96,11 @@ function isGitOpsCountKey(key: string): boolean {
   return GITOPS_COUNT_GROUP_PREFIXES.some((prefix) => key.startsWith(prefix))
 }
 
+/** Whether objects of this API group count toward the GitOps table's totals. */
+export function isGitOpsCountGroup(group: string | undefined): boolean {
+  return GITOPS_COUNT_GROUP_PREFIXES.includes(`${group ?? ''}/`)
+}
+
 // Row-level actions surfaced from the table's three-dot menu. The set
 // mirrors what the detail page exposes today; callers wire the mutations
 // + dialogs and dispatch via `onRowAction`. Argo-only actions (refresh,
