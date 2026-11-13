@@ -288,7 +288,7 @@ func (c *Client) onForwardLost(owner, address string) {
 // client and resource cache are current when a signal fires.
 func RegisterRediscoverySignals() {
 	k8s.OnResourceObserved(observeResourceChange)
-	portforward.SetOnForwardLost(func(owner portforward.Owner, address string) {
+	portforward.SetOnForwardLost(portforward.OwnerPrometheus, func(owner portforward.Owner, address string) {
 		if c := GetClient(); c != nil {
 			c.onForwardLost(owner, address)
 		}
