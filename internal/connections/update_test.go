@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func TestPreviousNoticeDismissalKeepsOffersAndDrafts(t *testing.T) {
 	}
 	restarted := NewResolver(r.Store, target, nil)
 	for _, binding := range []k8s.ProfileTarget{target, other} {
-		for _, kind := range config.IntegrationKinds {
+		for _, kind := range legacyKinds() {
 			offer := restarted.Resolve(binding, kind, true).View.Legacy
 			if offer == nil || !offer.NoticeDismissed {
 				t.Fatalf("%s offer on %s lost or still reminding: %+v", kind, binding.Binding, offer)
@@ -349,7 +350,7 @@ func TestLegacyCostAdoptionPreservesSource(t *testing.T) {
 }
 
 func TestLegacyAdoptionAppliesDraftWithoutLeakingCredentials(t *testing.T) {
-	for _, kind := range config.IntegrationKinds {
+	for _, kind := range legacyKinds() {
 		t.Run(string(kind), func(t *testing.T) {
 			r, target, other := setupResolver(t)
 			t.Setenv("RADAR_TEST_IMPORT_TOKEN", "env-secret")
@@ -388,7 +389,7 @@ func TestLegacyAdoptionAppliesDraftWithoutLeakingCredentials(t *testing.T) {
 			if kind == config.IntegrationCost && (offer.Mode != "kubecost" || offer.ClusterID != "development-cost") {
 				t.Fatal("missing cost settings")
 			}
-			if kind == config.IntegrationMetrics && (len(offer.HeaderKeys) != 2 || len(offer.EnvHeaderKeys) != 1) {
+			if usesHeaders(kind) && (len(offer.HeaderKeys) != 2 || len(offer.EnvHeaderKeys) != 1) {
 				t.Fatal("missing header metadata")
 			}
 			request := Update{Target: target, Kind: kind, Action: "adopt", Revision: r.Resolve(target, kind, false).View.Revision, LegacyRevision: offer.Revision, URL: stringPtr("https://different.example")}
@@ -401,7 +402,7 @@ func TestLegacyAdoptionAppliesDraftWithoutLeakingCredentials(t *testing.T) {
 				t.Fatalf("stale import accepted: %v", err)
 			}
 			request.LegacyRevision = offer.Revision
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				request.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "rotated"}}
 			} else {
 				request.Secret = &SecretEdit{Action: "set", Value: "rotated"}
@@ -510,14 +511,14 @@ func TestIntegrationRevisionRejectsInvisibleCredentialRotation(t *testing.T) {
 		t.Run(string(kind), func(t *testing.T) {
 			r, target, _ := setupResolver(t)
 			req := Update{Kind: kind, Action: "save", URL: stringPtr("https://backend.example"), Secret: &SecretEdit{Action: "set", Value: "before"}}
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				req.Secret = nil
 				req.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "before"}}
 			}
 			before := apply(t, r, target, req)
 			originalRevision := before.View.Revision
 			external := NewResolver(r.Store, target, nil)
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				req.Headers[0].Value = "rotated"
 			} else {
 				req.Secret.Value = "rotated"
@@ -608,7 +609,7 @@ func TestCopyRejectsChangedSourceAndDoesNotExposeSecrets(t *testing.T) {
 			first := apply(t, r, a, Update{Kind: kind, Action: "save", URL: stringPtr("https://backend.example")})
 			request := Update{Target: b, Kind: kind, Action: "copy", Binding: a.Binding, SourceRevision: first.View.Revision, Revision: r.Resolve(b, kind, false).View.Revision}
 			edit := Update{Kind: kind, Action: "save", Secret: &SecretEdit{Action: "set", Value: "synthetic-rotated"}}
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				edit.Secret = nil
 				edit.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "synthetic-rotated"}}
 			}
@@ -703,7 +704,7 @@ func TestCopyDraftEditsAreAtomicAndKeepSourceIndependent(t *testing.T) {
 		t.Run(string(kind), func(t *testing.T) {
 			r, sourceTarget, destinationTarget := setupResolver(t)
 			sourceRequest := Update{Kind: kind, Action: "save", URL: stringPtr("https://source.example")}
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				sourceRequest.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "source-secret"}, {Key: "X-Scope-OrgID", Action: "set", Value: "source-tenant"}}
 			} else {
 				sourceRequest.Secret = &SecretEdit{Action: "set", Value: "source-secret"}
@@ -718,7 +719,7 @@ func TestCopyDraftEditsAreAtomicAndKeepSourceIndependent(t *testing.T) {
 			}
 			destination := apply(t, r, destinationTarget, destinationRequest)
 			req := Update{Target: destinationTarget, Kind: kind, Action: "copy", Binding: sourceTarget.Binding, SourceRevision: source.View.Revision, Revision: destination.View.Revision, ConfirmRemoval: true, URL: stringPtr("https://source.example/custom")}
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				req.Headers = []prom.HeaderOperation{{Key: "X-Scope-OrgID", Action: "set", Value: "destination-tenant"}}
 			} else {
 				req.Secret = &SecretEdit{Action: "set", Value: "destination-secret"}
@@ -768,7 +769,7 @@ func TestCopyDraftRejectsCredentialForwardingAndRaces(t *testing.T) {
 		t.Run(string(kind), func(t *testing.T) {
 			r, a, b := setupResolver(t)
 			create := Update{Kind: kind, Action: "save", URL: stringPtr("https://source.example")}
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				create.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "source-secret"}}
 			} else {
 				create.Secret = &SecretEdit{Action: "set", Value: "source-secret"}
@@ -781,7 +782,7 @@ func TestCopyDraftRejectsCredentialForwardingAndRaces(t *testing.T) {
 			if r.Resolve(b, kind, false).View.State != "auto" {
 				t.Fatal("failed copy wrote destination")
 			}
-			if kind == config.IntegrationMetrics {
+			if usesHeaders(kind) {
 				req.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "clear"}}
 			} else {
 				req.Secret = &SecretEdit{Action: "clear"}
@@ -799,4 +800,74 @@ func TestCopyDraftRejectsCredentialForwardingAndRaces(t *testing.T) {
 			}
 		})
 	}
+}
+
+func lokiHeaders(value string) []prom.HeaderOperation {
+	return []prom.HeaderOperation{{Key: "X-Scope-OrgID", Action: "set", Value: value}}
+}
+
+func TestLokiSaveWithHeaders(t *testing.T) {
+	r, a, _ := setupResolver(t)
+	got := apply(t, r, a, Update{Kind: config.IntegrationLoki, Action: "save", URL: stringPtr("http://loki.example:3100"), Headers: lokiHeaders("tenant-a")})
+	if got.View.URL != "http://loki.example:3100" || !slices.Equal(got.View.HeaderKeys, []string{"X-Scope-Orgid"}) {
+		t.Fatalf("view = %+v", got.View)
+	}
+	if got.Settings.Loki == nil || got.Settings.Loki.Headers["X-Scope-Orgid"] != "tenant-a" {
+		t.Fatalf("resolved headers = %+v", got.Settings.Loki)
+	}
+	if r.Resolve(a, config.IntegrationMetrics, false).Settings.Prometheus.URL != "" {
+		t.Fatal("a Loki save touched metrics")
+	}
+}
+
+func TestLokiURLChangeKeepingHeadersRefused(t *testing.T) {
+	r, a, _ := setupResolver(t)
+	apply(t, r, a, Update{Kind: config.IntegrationLoki, Action: "save", URL: stringPtr("http://loki.example:3100"), Headers: lokiHeaders("tenant-a")})
+	before, _, _ := r.Store.Read()
+	_, err := r.Prepare(a, Update{Target: a, Kind: config.IntegrationLoki, Action: "save", Revision: r.Resolve(a, config.IntegrationLoki, false).View.Revision, URL: stringPtr("http://other.example:3100")})
+	if err == nil {
+		t.Fatal("a URL change that keeps saved headers was accepted")
+	}
+	after, _, _ := r.Store.Read()
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("refused change altered the file")
+	}
+}
+
+func TestLokiAutoClearsConnection(t *testing.T) {
+	r, a, _ := setupResolver(t)
+	apply(t, r, a, Update{Kind: config.IntegrationLoki, Action: "save", URL: stringPtr("http://loki.example:3100")})
+	apply(t, r, a, Update{Kind: config.IntegrationLoki, Action: "auto", ConfirmRemoval: true})
+	file, _, _ := r.Store.Read()
+	if s, ok := file.Profiles[a.Binding].Integrations[config.IntegrationLoki]; ok && s.Loki != nil {
+		t.Fatalf("auto kept a Loki connection: %+v", s)
+	}
+}
+
+func TestLokiCatalogHidesHeaderValues(t *testing.T) {
+	r, a, _ := setupResolver(t)
+	got := apply(t, r, a, Update{Kind: config.IntegrationLoki, Action: "save", URL: stringPtr("http://loki.example:3100"), Headers: lokiHeaders("tenant-a")})
+	data, _ := json.Marshal(got.View)
+	if !strings.Contains(string(data), "X-Scope-Orgid") || strings.Contains(string(data), "tenant-a") {
+		t.Fatalf("view = %s", data)
+	}
+}
+
+func usesHeaders(kind config.Integration) bool {
+	return kind == config.IntegrationMetrics || kind == config.IntegrationLoki
+}
+
+// A Loki connection's errors name Loki, not the Prometheus code it shares.
+func TestLokiErrorsNameLoki(t *testing.T) {
+	r, a, _ := setupResolver(t)
+	_, err := r.Prepare(a, Update{Target: a, Kind: config.IntegrationLoki, Action: "save", Revision: r.Resolve(a, config.IntegrationLoki, false).View.Revision, URL: stringPtr("http://user:pw@loki.example:3100")})
+	if err == nil || strings.Contains(err.Error(), "Prometheus") || !strings.Contains(err.Error(), "Loki") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// legacyKinds are the integrations that had pre-profile global settings; Loki
+// never did, so it has nothing to import.
+func legacyKinds() []config.Integration {
+	return slices.DeleteFunc(slices.Clone(config.IntegrationKinds), func(k config.Integration) bool { return k == config.IntegrationLoki })
 }

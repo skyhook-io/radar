@@ -19,9 +19,10 @@ const (
 	IntegrationMetrics Integration = "metrics"
 	IntegrationArgoCD  Integration = "argocd"
 	IntegrationCost    Integration = "cost"
+	IntegrationLoki    Integration = "loki"
 )
 
-var IntegrationKinds = []Integration{IntegrationMetrics, IntegrationArgoCD, IntegrationCost}
+var IntegrationKinds = []Integration{IntegrationMetrics, IntegrationArgoCD, IntegrationCost, IntegrationLoki}
 
 type TargetIdentity struct {
 	Server      string `json:"server"`
@@ -40,6 +41,17 @@ type IntegrationSettings struct {
 	ArgoCD     *argoapi.Connection  `json:"argocd,omitempty"`
 	Kubecost   *opencost.Connection `json:"kubecost,omitempty"`
 	ClusterID  string               `json:"clusterId,omitempty"`
+	// Loki is a URL with optional headers, the same shape as a metrics connection.
+	Loki *prom.Connection `json:"loki,omitempty"`
+}
+
+// HeaderConnection is the connection that carries header operations: metrics'
+// Prometheus or Loki. nil for kinds that use a token instead.
+func (s IntegrationSettings) HeaderConnection() *prom.Connection {
+	if s.Prometheus != nil {
+		return s.Prometheus
+	}
+	return s.Loki
 }
 
 func (s IntegrationSettings) URL() string {
@@ -50,6 +62,8 @@ func (s IntegrationSettings) URL() string {
 		return s.ArgoCD.URL
 	case s.Kubecost != nil:
 		return s.Kubecost.URL
+	case s.Loki != nil:
+		return s.Loki.URL
 	}
 	return ""
 }
@@ -71,6 +85,12 @@ func (s IntegrationSettings) Clone() IntegrationSettings {
 		p.Headers = maps.Clone(p.Headers)
 		p.HeadersFromEnv = maps.Clone(p.HeadersFromEnv)
 		s.Prometheus = &p
+	}
+	if s.Loki != nil {
+		l := *s.Loki
+		l.Headers = maps.Clone(l.Headers)
+		l.HeadersFromEnv = maps.Clone(l.HeadersFromEnv)
+		s.Loki = &l
 	}
 	if s.ArgoCD != nil {
 		a := *s.ArgoCD
@@ -97,21 +117,21 @@ func (s IntegrationSettings) Validate(kind Integration) error {
 	}
 	switch kind {
 	case IntegrationMetrics:
-		if s.ArgoCD != nil || s.Kubecost != nil || s.ClusterID != "" || s.Mode != "" {
+		if s.ArgoCD != nil || s.Kubecost != nil || s.Loki != nil || s.ClusterID != "" || s.Mode != "" {
 			return errors.New("metrics settings use only a URL and optional headers")
 		}
 		if s.Prometheus != nil {
 			return s.Prometheus.Validate()
 		}
 	case IntegrationArgoCD:
-		if s.Prometheus != nil || s.Kubecost != nil || s.ClusterID != "" || s.Mode != "" {
+		if s.Prometheus != nil || s.Kubecost != nil || s.Loki != nil || s.ClusterID != "" || s.Mode != "" {
 			return errors.New("Argo CD settings use only a URL, token and TLS option")
 		}
 		if s.ArgoCD != nil {
 			return s.ArgoCD.Validate()
 		}
 	case IntegrationCost:
-		if s.Prometheus != nil || s.ArgoCD != nil || (s.Mode != "" && s.Mode != "auto" && s.Mode != "prometheus" && s.Mode != "kubecost") {
+		if s.Prometheus != nil || s.ArgoCD != nil || s.Loki != nil || (s.Mode != "" && s.Mode != "auto" && s.Mode != "prometheus" && s.Mode != "kubecost") {
 			return errors.New("cost source must be auto, prometheus, or kubecost")
 		}
 		if s.Mode == "prometheus" && (s.Kubecost != nil || s.ClusterID != "") {
@@ -122,6 +142,13 @@ func (s IntegrationSettings) Validate(kind Integration) error {
 		}
 		if s.Kubecost != nil {
 			return s.Kubecost.Validate()
+		}
+	case IntegrationLoki:
+		if s.Prometheus != nil || s.ArgoCD != nil || s.Kubecost != nil || s.ClusterID != "" || s.Mode != "" {
+			return errors.New("Loki settings use only a URL and optional headers")
+		}
+		if s.Loki != nil {
+			return LokiError(s.Loki.Validate())
 		}
 	default:
 		return errors.New("unknown integration type")
@@ -203,4 +230,19 @@ func (p ClusterProfiles) ValidateStructure() error {
 		}
 	}
 	return nil
+}
+
+// lokiError is a pkg/prom error reworded for a Loki connection, which shares
+// pkg/prom's URL and header rules: users read "Loki", not "Prometheus".
+type lokiError struct{ err error }
+
+func (e lokiError) Error() string { return strings.ReplaceAll(e.err.Error(), "Prometheus", "Loki") }
+func (e lokiError) Unwrap() error { return e.err }
+
+// LokiError rewords err from pkg/prom for a Loki connection; nil stays nil.
+func LokiError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return lokiError{err}
 }

@@ -197,8 +197,11 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			if err := editSettings(&a, req); err != nil {
 				return pending, err
 			}
-			if a.Prometheus != nil {
-				if _, err := prom.ResolveHeaders(a.Prometheus.Headers, a.Prometheus.HeadersFromEnv); err != nil {
+			if c := a.HeaderConnection(); c != nil {
+				if _, err := prom.ResolveHeaders(c.Headers, c.HeadersFromEnv); err != nil {
+					if a.Loki != nil {
+						return pending, config.LokiError(err)
+					}
 					return pending, err
 				}
 			}
@@ -274,6 +277,9 @@ func normalizeSettings(a config.IntegrationSettings) config.IntegrationSettings 
 	if a.Prometheus != nil && a.Prometheus.URL == "" && len(a.Prometheus.Headers) == 0 && len(a.Prometheus.HeadersFromEnv) == 0 {
 		a.Prometheus = nil
 	}
+	if a.Loki != nil && a.Loki.URL == "" && len(a.Loki.Headers) == 0 && len(a.Loki.HeadersFromEnv) == 0 {
+		a.Loki = nil
+	}
 	if a.ArgoCD != nil && *a.ArgoCD == (argoapi.Connection{}) {
 		a.ArgoCD = nil
 	}
@@ -305,18 +311,21 @@ func editSettings(c *config.IntegrationSettings, req Update) error {
 	if req.URL != nil {
 		newURL = strings.TrimSpace(*req.URL)
 	}
-	if c.Prometheus != nil {
+	if conn := c.HeaderConnection(); conn != nil {
 		if req.Secret != nil || req.InsecureTLS != nil || req.UseCLIToken {
-			return errors.New("metrics uses header operations, not a token or TLS override")
+			return errors.New("metrics and Loki use header operations, not a token or TLS override")
 		}
-		updated, err := prom.ApplyHeaderOperations(*c.Prometheus, newURL, req.Headers)
+		updated, err := prom.ApplyHeaderOperations(*conn, newURL, req.Headers)
 		if err != nil {
+			if c.Loki != nil {
+				return config.LokiError(err)
+			}
 			return err
 		}
-		c.Prometheus = &updated
+		*conn = updated
 	} else {
 		if len(req.Headers) > 0 {
-			return errors.New("header operations are only available for metrics")
+			return errors.New("header operations are only available for metrics and Loki")
 		}
 		token := ""
 		if c.ArgoCD != nil {
