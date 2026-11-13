@@ -1839,7 +1839,7 @@ function HistoryRows({
             </div>
             <div className="min-w-0 text-sm">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="font-mono text-xs text-theme-text-primary">{(item.kind === 'event' ? item.id : item.revision) || item.phase || '-'}</span>
+                <span className="font-mono text-xs text-theme-text-primary">{(item.kind === 'event' ? item.id : item.kind === 'condition' && item.id ? `${item.id} condition` : item.revision) || item.phase || '-'}</span>
                 <PhaseChip phase={item.phase} message={item.message} />
                 <span className="text-[11px] text-theme-text-tertiary">{formatRelativeAgeTime(item.deployedAt)}</span>
                 {item.duration && <span className="text-[11px] text-theme-text-tertiary">took {formatFluxDuration(item.duration)}</span>}

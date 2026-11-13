@@ -74,3 +74,14 @@ describe('Flux Activity rows', () => {
     expect(html).toContain('timeout waiting for app')
   })
 })
+
+describe('GitOpsActivityInsightView condition rows', () => {
+  it('titles a failing condition by its type, not by the phase its chip repeats', () => {
+    const html = render({
+      summary: { tool: 'fluxcd', kind: 'Kustomization', namespace: 'flux-system', name: 'apps' },
+      history: [{ kind: 'condition', id: 'Ready', phase: 'Failed', message: 'kustomize build failed' }],
+    } as GitOpsInsight)
+    expect(html).toContain('Ready condition')
+    expect(html).not.toMatch(/>Failed<\/span>\s*<[^>]*>[^<]*Failed/)
+  })
+})
