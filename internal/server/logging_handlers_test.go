@@ -22,6 +22,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/logging"
 )
 
 func loggingKinds(skip ...string) []k8s.APIResource {
@@ -85,38 +86,42 @@ func seedLoggingFixture(t *testing.T, kinds []k8s.APIResource, podLabels map[str
 	seedCNPGWorkspace(t, kinds, keep...)
 }
 
-func getLoggingPod(t *testing.T, resp *http.Response) (loggingPodResponse, string) {
+func getLoggingPod(t *testing.T, resp *http.Response) (logShippingResponse, string) {
 	t.Helper()
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d: %s", resp.StatusCode, raw)
 	}
-	var out loggingPodResponse
+	var out logShippingResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatal(err)
 	}
 	return out, string(raw)
 }
 
-func flowByName(r loggingPodResponse, name string) loggingPodFlow {
-	for _, f := range r.Flows {
+func installed(r logShippingResponse) bool {
+	return len(r.Providers) == 1 && r.Providers[0] == "logging-operator"
+}
+
+func flowByName(r logShippingResponse, name string) logRoute {
+	for _, f := range r.Routes {
 		if f.Name == name {
 			return f
 		}
 	}
-	return loggingPodFlow{}
+	return logRoute{}
 }
 
 func TestLoggingPodShipping(t *testing.T) {
 	seedLoggingFixture(t, loggingKinds(), map[string]string{"example.com/loki-logs": "true"})
 	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
 	got, raw := getLoggingPod(t, resp)
-	if !got.Installed || !got.Shipped || got.Uncertain || len(got.ReadErrors) != 0 {
+	if !installed(got) || !got.Shipped || got.Uncertain || len(got.ReadErrors) != 0 {
 		t.Fatalf("response = %+v", got)
 	}
 	optin := flowByName(got, "optin")
-	if !optin.Selected || !optin.HasFilters || len(optin.Outputs) != 1 || optin.Outputs[0].Name != "loki" || optin.Outputs[0].Type != "loki" || optin.Outputs[0].Active == nil || !*optin.Outputs[0].Active {
+	if !optin.Selected || !optin.HasFilters || len(optin.Destinations) != 1 || optin.Destinations[0].Name != "loki" || optin.Destinations[0].Type != "loki" || optin.Destinations[0].Active == nil || !*optin.Destinations[0].Active {
 		t.Errorf("optin = %+v", optin)
 	}
 	if pg := flowByName(got, "pg"); pg.Selected || len(pg.Unmet) != 1 || pg.Unmet[0] != "container in [postgres]" {
@@ -128,8 +133,24 @@ func TestLoggingPodShipping(t *testing.T) {
 	if second := flowByName(got, "second-flow"); !second.Selected || second.Ignored {
 		t.Errorf("second-flow = %+v", second)
 	}
-	if got.Flows[0].Selected != true || got.Flows[len(got.Flows)-1].Name != "stray" {
-		t.Errorf("order = %+v", got.Flows)
+	for _, r := range got.Routes {
+		if r.Provider != "logging-operator" || r.Group != logging.Group {
+			t.Errorf("route %s tags = %q %q", r.Name, r.Provider, r.Group)
+		}
+	}
+	// The wire names a route and a destination, never an operator's words.
+	for _, field := range []string{`"routes"`, `"destinations"`, `"providers"`} {
+		if !strings.Contains(raw, field) {
+			t.Errorf("body lacks %s", field)
+		}
+	}
+	for _, field := range []string{`"flows"`, `"outputs"`, `"installed"`} {
+		if strings.Contains(raw, field) {
+			t.Errorf("body still has %s", field)
+		}
+	}
+	if got.Routes[0].Selected != true || got.Routes[len(got.Routes)-1].Name != "stray" {
+		t.Errorf("order = %+v", got.Routes)
 	}
 	for _, leak := range []string{"s3cret", "user:pw", "https://"} {
 		if strings.Contains(raw, leak) {
@@ -159,7 +180,7 @@ func TestLoggingPodShippingReadErrors(t *testing.T) {
 	seedLoggingFixture(t, loggingKinds("clusterflows"), map[string]string{"example.com/loki-logs": "true"})
 	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
 	got, _ := getLoggingPod(t, resp)
-	if len(got.ReadErrors) != 1 || got.ReadErrors[0] != "clusterflows" {
+	if len(got.ReadErrors) != 1 || got.ReadErrors[0] != (logReadError{Group: logging.Group, Resource: "clusterflows"}) {
 		t.Fatalf("readErrors = %v", got.ReadErrors)
 	}
 }
@@ -167,8 +188,8 @@ func TestLoggingPodShippingReadErrors(t *testing.T) {
 func TestLoggingPodShippingNotInstalled(t *testing.T) {
 	seedLoggingFixture(t, nil, nil)
 	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
-	got, _ := getLoggingPod(t, resp)
-	if got.Installed || got.Flows == nil || len(got.Flows) != 0 {
+	got, raw := getLoggingPod(t, resp)
+	if installed(got) || got.Routes == nil || len(got.Routes) != 0 || !strings.Contains(raw, `"providers":[]`) {
 		t.Fatalf("response = %+v", got)
 	}
 }
@@ -239,7 +260,7 @@ func TestLoggingPodShippingUnsyncedKindIsAReadError(t *testing.T) {
 	}
 	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
 	got, _ := getLoggingPod(t, resp)
-	if !slices.Contains(got.ReadErrors, "clusterflows") {
+	if !slices.Contains(got.ReadErrors, logReadError{Group: logging.Group, Resource: "clusterflows"}) {
 		t.Fatalf("an unsynced ClusterFlow read must be a read error: %+v", got)
 	}
 }
@@ -337,8 +358,8 @@ func TestLoggingPodShippingExcludedAndOutputNamespace(t *testing.T) {
 	if f := flowByName(got, "no-debug"); !f.Excluded || f.Selected {
 		t.Errorf("no-debug = %+v", f)
 	}
-	if f := flowByName(got, "all"); len(f.Outputs) != 1 || f.Outputs[0].Namespace != "logging-system" {
-		t.Errorf("all outputs = %+v", f.Outputs)
+	if f := flowByName(got, "all"); len(f.Destinations) != 1 || f.Destinations[0].Namespace != "logging-system" {
+		t.Errorf("all outputs = %+v", f.Destinations)
 	}
 }
 

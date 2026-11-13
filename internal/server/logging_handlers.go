@@ -15,7 +15,12 @@ import (
 	"github.com/skyhook-io/radar/pkg/logging"
 )
 
-type loggingOutputRef struct {
+// The log shipping wire is provider-neutral: a provider's own words (Flow,
+// ClusterOutput, …) appear only as a row's kind, so another shipper adds rows,
+// not fields.
+const providerLoggingOperator = "logging-operator"
+
+type logDestination struct {
 	Kind      string `json:"kind"` // Output | ClusterOutput
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
@@ -24,35 +29,43 @@ type loggingOutputRef struct {
 	Active    *bool  `json:"active,omitempty"` // nil: not found, or no state reported
 }
 
-type loggingPodFlow struct {
+type logRoute struct {
+	Provider  string `json:"provider"`
 	Kind      string `json:"kind"`
+	Group     string `json:"group"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Selected  bool   `json:"selected"`
 	Uncertain bool   `json:"uncertain"`
 	Ignored   bool   `json:"ignored"`
-	// Excluded: an exclude rule decided the pod; such a Flow is not a near miss.
+	// Excluded: an exclude rule decided the pod; such a route is not a near miss.
 	Excluded bool `json:"excluded"`
-	// Delivers says whether a selecting Flow gets logs anywhere: it isn't
-	// reported inactive and an output it names exists and is active. nil: an
-	// output's state is unknown or its kind couldn't be read.
-	Delivers   *bool              `json:"delivers,omitempty"`
-	Unmet      []string           `json:"unmet"`
-	HasFilters bool               `json:"hasFilters"`
-	Active     *bool              `json:"active,omitempty"`
-	Outputs    []loggingOutputRef `json:"outputs"`
+	// Delivers says whether a selecting route gets logs anywhere: it isn't
+	// reported inactive and a destination it names exists and is active. nil: a
+	// destination's state is unknown or its kind couldn't be read.
+	Delivers     *bool            `json:"delivers,omitempty"`
+	Unmet        []string         `json:"unmet"`
+	HasFilters   bool             `json:"hasFilters"`
+	Active       *bool            `json:"active,omitempty"`
+	Destinations []logDestination `json:"destinations"`
 }
 
-type loggingPodResponse struct {
-	Installed bool             `json:"installed"`
-	Flows     []loggingPodFlow `json:"flows"`
-	// Shipped: a counted Flow selects the pod for certain and delivers.
+type logReadError struct {
+	Group    string `json:"group"`
+	Resource string `json:"resource"`
+}
+
+type logShippingResponse struct {
+	// Providers lists the installed shippers Radar understands; empty hides the section.
+	Providers []string   `json:"providers"`
+	Routes    []logRoute `json:"routes"`
+	// Shipped: a counted route selects the pod for certain and delivers.
 	Shipped bool `json:"shipped"`
-	// Uncertain: nothing selects it for certain, but a Flow may.
+	// Uncertain: nothing selects it for certain, but a route may.
 	Uncertain bool `json:"uncertain"`
 	// ReadErrors names the kinds Radar could not read; the UI never says
 	// "not shipped" while it is non-empty.
-	ReadErrors []string `json:"readErrors"`
+	ReadErrors []logReadError `json:"readErrors"`
 }
 
 // handleLoggingPod answers which Logging operator Flows forward one pod's
@@ -73,7 +86,7 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "no access to pod "+ns+"/"+name)
 		return
 	}
-	resp := loggingPodResponse{Flows: []loggingPodFlow{}, ReadErrors: []string{}}
+	resp := logShippingResponse{Providers: []string{}, Routes: []logRoute{}, ReadErrors: []logReadError{}}
 	discovery := k8s.GetResourceDiscovery()
 	if discovery == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "API discovery not ready")
@@ -83,7 +96,7 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, resp)
 		return
 	}
-	resp.Installed = true
+	resp.Providers = append(resp.Providers, providerLoggingOperator)
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Pods() == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
@@ -111,7 +124,7 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 	read := func(plural, namespace string) []*unstructured.Unstructured {
 		items, err := listDynamicSyncedWithin(r.Context(), cache, plural, logging.Group, namespace, budget)
 		if err != nil {
-			resp.ReadErrors = append(resp.ReadErrors, plural)
+			resp.ReadErrors = append(resp.ReadErrors, logReadError{logging.Group, plural})
 			return nil
 		}
 		return items
@@ -126,7 +139,10 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		o := logging.OutputFrom(u)
 		outputs[[3]string{u.GetKind(), o.Namespace, o.Name}] = o
 	}
-	outputsUnread := map[string]bool{"ClusterOutput": slices.Contains(resp.ReadErrors, "clusteroutputs"), "Output": slices.Contains(resp.ReadErrors, "outputs")}
+	outputsUnread := map[string]bool{
+		"ClusterOutput": slices.Contains(resp.ReadErrors, logReadError{logging.Group, "clusteroutputs"}),
+		"Output":        slices.Contains(resp.ReadErrors, logReadError{logging.Group, "outputs"}),
+	}
 	controlNamespace := map[string]string{}
 	for _, l := range loggings {
 		controlNamespace[l.LoggingRef] = l.ControlNamespace
@@ -139,10 +155,10 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		}
 		d := logging.Selects(f, facts)
 		watched, watchKnown := logging.Watched(f, loggings)
-		row := loggingPodFlow{
-			Kind: u.GetKind(), Namespace: f.Namespace, Name: f.Name,
+		row := logRoute{
+			Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
 			Ignored: !logging.Counted(f, loggings) || (!watched && watchKnown), Unmet: d.Unmet, HasFilters: f.HasFilters,
-			Outputs: []loggingOutputRef{},
+			Destinations: []logDestination{},
 		}
 		if row.Unmet == nil {
 			row.Unmet = []string{}
@@ -157,10 +173,10 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			row.Active = &active
 		}
 		for _, ref := range f.GlobalOutputs {
-			row.Outputs = append(row.Outputs, outputRef(outputs, "ClusterOutput", controlNamespace[f.LoggingRef], ref))
+			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", controlNamespace[f.LoggingRef], ref))
 		}
 		for _, ref := range f.LocalOutputs {
-			row.Outputs = append(row.Outputs, outputRef(outputs, "Output", f.Namespace, ref))
+			row.Destinations = append(row.Destinations, outputRef(outputs, "Output", f.Namespace, ref))
 		}
 		row.Excluded = !row.Ignored && d.Rule >= 0 && !d.Selected && !d.Uncertain
 		if row.Selected {
@@ -170,23 +186,23 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			resp.Shipped = resp.Shipped || (row.Delivers != nil && *row.Delivers)
 			resp.Uncertain = resp.Uncertain || row.Uncertain || (row.Selected && row.Delivers == nil)
 		}
-		resp.Flows = append(resp.Flows, row)
+		resp.Routes = append(resp.Routes, row)
 	}
 	if resp.Shipped {
 		resp.Uncertain = false
 	}
-	sort.SliceStable(resp.Flows, func(i, j int) bool {
-		a, b := loggingFlowRank(resp.Flows[i]), loggingFlowRank(resp.Flows[j])
+	sort.SliceStable(resp.Routes, func(i, j int) bool {
+		a, b := loggingFlowRank(resp.Routes[i]), loggingFlowRank(resp.Routes[j])
 		if a != b {
 			return a < b
 		}
-		return resp.Flows[i].Name < resp.Flows[j].Name
+		return resp.Routes[i].Name < resp.Routes[j].Name
 	})
 	s.writeJSON(w, resp)
 }
 
-func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, name string) loggingOutputRef {
-	ref := loggingOutputRef{Kind: kind, Namespace: namespace, Name: name}
+func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, name string) logDestination {
+	ref := logDestination{Kind: kind, Namespace: namespace, Name: name}
 	if o, ok := outputs[[3]string{kind, namespace, name}]; ok {
 		ref.Type, ref.Found, ref.Active = o.Type, true, o.Active
 	}
@@ -197,13 +213,13 @@ func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, nam
 // false when the operator reports the Flow inactive or no named output is
 // found and active; nil when an output's state is unknown or its kind wasn't
 // read, so "missing" can't be told from "unread".
-func loggingDelivers(row loggingPodFlow, outputsUnread map[string]bool) *bool {
+func loggingDelivers(row logRoute, outputsUnread map[string]bool) *bool {
 	yes, no := true, false
 	if row.Active != nil && !*row.Active {
 		return &no
 	}
 	unknown := false
-	for _, o := range row.Outputs {
+	for _, o := range row.Destinations {
 		switch {
 		case o.Found && o.Active != nil && *o.Active:
 			return &yes
@@ -217,7 +233,7 @@ func loggingDelivers(row loggingPodFlow, outputsUnread map[string]bool) *bool {
 	return &no
 }
 
-func loggingFlowRank(f loggingPodFlow) int {
+func loggingFlowRank(f logRoute) int {
 	switch {
 	case f.Ignored:
 		return 3
