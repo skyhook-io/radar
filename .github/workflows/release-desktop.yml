@@ -267,7 +267,17 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
       - name: Install nfpm
-        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+        env:
+          NFPM_VERSION: '2.49.0'
+          NFPM_SHA256: '2afaa5ffb5e3493402e31e7c67a5a1fb42133e3f66fc315ca0051934125561c7'
+        run: |
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/nfpm.tar.gz" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          echo "${NFPM_SHA256}  $RUNNER_TEMP/nfpm.tar.gz" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/nfpm-bin"
+          tar -xzf "$RUNNER_TEMP/nfpm.tar.gz" -C "$RUNNER_TEMP/nfpm-bin" nfpm
+          echo "$RUNNER_TEMP/nfpm-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/nfpm-bin/nfpm" --version
 
       - name: Build frontend
         run: make frontend embed
