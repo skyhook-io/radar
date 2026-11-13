@@ -62,16 +62,17 @@ func Minify(obj runtime.Object, level VerbosityLevel) (any, error) {
 
 // MinifyUnstructured minifies a CRD/dynamic resource at the requested level.
 func MinifyUnstructured(obj *unstructured.Unstructured, level VerbosityLevel) any {
-	switch level {
-	case LevelSummary:
+	if level == LevelSummary {
 		return summarizeUnstructured(obj)
-	case LevelDetail:
-		return minifyDetailUnstructured(obj.DeepCopy().Object)
-	case LevelCompact:
-		return minifyCompactUnstructured(obj.DeepCopy().Object)
-	default:
-		return minifyCompactUnstructured(obj.DeepCopy().Object)
 	}
+	copied := obj.DeepCopy().Object
+	if isLoggingOutput(obj) {
+		projectLoggingOutput(copied)
+	}
+	if level == LevelDetail {
+		return minifyDetailUnstructured(copied)
+	}
+	return minifyCompactUnstructured(copied)
 }
 
 // MinifyList minifies a slice of resources at the requested level.

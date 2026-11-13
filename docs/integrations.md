@@ -72,6 +72,27 @@ permissions already granted by other roles.
 
 The neutral “Upgrade block recorded” status describes `status.upgradeBlockedVersions`, written during an operator startup upgrade pass. A record can remain after a manual image change; it is not a current compatibility or runtime-health verdict. The drawer shows at most ten recorded languages, with shortened labels and a link to full YAML for remaining entries. Compact agent summaries retain their bounded language preview; detail reads retain native status without a duplicate context block.
 
+## Logging operator
+
+Radar provides native details for the Logging operator's (`logging.banzaicloud.io`, formerly Banzai Cloud, now kube-logging) **Logging**, **Flow**, **ClusterFlow**, **Output**, **ClusterOutput** and **FluentbitAgent** resources, and tells on every Pod whether its logs are shipped. Syslog-ng kinds, `LoggingRoute`, `HostTailer`, `EventTailer` and `NodeAgent` keep the generic view. Collection is opt-in in the Helm chart (`rbac.crdGroups.logging`).
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|---|---|---|---|---|
+| Logging | `logging.banzaicloud.io` | No dedicated nodes | Control namespace, aggregator, configuration check results, operator problems | Generic |
+| Flow, ClusterFlow | `logging.banzaicloud.io` | No dedicated nodes | Scope, selection rules in order, filters, outputs, operator status and problems | Generic |
+| Output, ClusterOutput | `logging.banzaicloud.io` | No dedicated nodes | Output type and redacted address only, operator status and problems | Type and status only |
+| FluentbitAgent | `logging.banzaicloud.io` | No dedicated nodes | Logging ref, operator problems | Generic |
+
+**Flow drawer:** the scope (the Flow's namespace, or every namespace for a ClusterFlow), its `match` rules in order (`select`/`exclude` with labels, container names, hosts, namespaces), filters, and the outputs it sends to. A ClusterFlow outside every Logging's control namespace is marked "Not counted": the operator ignores it.
+
+**Output drawer:** only the output type (`loki`, `s3`, `elasticsearch`, …) and, for types with a `url`, `endpoint` or `host`, that address without userinfo, query or fragment. Other output settings are never rendered; the YAML tab shows them to people allowed to read the object. AI context replaces the output block with the same two facts at every verbosity level.
+
+**Log shipping on the Pod drawer:** which Flows ship the pod's logs and where; "Selected, but its logs go nowhere" when a selecting Flow is reported inactive, names no output, or none of its outputs exists and is active (an output with no reported state, or an output kind Radar couldn't read, makes it "may be shipped"); or "Not shipped: nothing routes this pod's logs" with the Flows that excluded it and the closest Flow and what it lacks (for example `label app.example.com/logs=true`). Matching follows the operator: a namespaced Flow sees only its own namespace; per container, the first rule whose conditions all hold decides, and no matching rule means not selected; an empty `match` selects everything in scope; the deprecated `selectors` are used only when `match` is empty. A rule using `namespace_labels` is not evaluated and reads "may be selected", never shipped. Flows of a Logging that doesn't exist and ClusterFlows outside their Logging's control namespace are listed as ignored and never decide. When Radar couldn't read a kind, the section says so and never says "Not shipped". A selecting Flow with filters adds that some lines may be dropped.
+
+The section reads `GET /api/logging/pods/{namespace}/{name}`. Its answer is provider-neutral: `providers` lists the installed shippers Radar understands (today `logging-operator`), each row of `routes` carries its `provider`, its own `kind` and `group` (Flow, ClusterFlow) and its `destinations` (Output, ClusterOutput), and `readErrors` names unread kinds by group and resource, so another shipper would add rows rather than fields. The read is gated on the caller being able to get the pod. Flows, Loggings and outputs are read with Radar's identity and projected to names, the selection decision and each output's kind, name, type and active state: the answer is about the caller's own pod, so the names that decide it are shown to a caller who can't list Flows, and no output configuration leaves the server. A namespaced Flow in a namespace its Logging's `watchNamespaces` leaves out is ignored; when only `watchNamespaceSelector` could admit it (Radar doesn't evaluate the selector), it reads "may be selected".
+
+**Issues:** an Output, ClusterOutput, Flow or ClusterFlow whose `status.problemsCount` is above zero raises a warning (`LoggingOutputProblem` / `LoggingFlowProblem`) with the operator's first problem; a Flow or ClusterFlow with `status.active: false` and no problems raises `LoggingFlowInactive`. A missing `status.active` is unknown, not inactive. These kinds carry no conditions, so the generic condition pass doesn't see them.
+
 ## Flagger
 
 Radar provides native details and concise REST/MCP summaries for `flagger.app`

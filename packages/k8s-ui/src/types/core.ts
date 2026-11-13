@@ -202,6 +202,7 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  loggingPodShipping?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -1975,4 +1976,36 @@ export interface WorkloadLogStreamEvent {
   reason?: string
   // error event
   message?: string
+}
+
+// GET /api/logging/pods/{namespace}/{name}: which routes forward a pod's logs,
+// per installed shipper. The wire is provider-neutral; a provider's own words
+// (Flow, ClusterOutput) appear only as kind. readErrors non-empty means
+// "can't tell", never "not shipped".
+export interface LogDestination { kind: string; namespace?: string; name: string; type?: string; found: boolean; active?: boolean }
+export interface LogReadError { group: string; resource: string }
+export interface LogRoute {
+  provider: string
+  kind: string
+  group: string
+  namespace: string
+  name: string
+  selected: boolean
+  uncertain: boolean
+  ignored: boolean
+  excluded: boolean
+  /** For a selecting route: whether its logs reach a destination; undefined = unknown. */
+  delivers?: boolean
+  unmet: string[]
+  hasFilters: boolean
+  active?: boolean
+  destinations: LogDestination[]
+}
+export interface LogShipping {
+  /** Installed shippers Radar understands; empty hides the section. */
+  providers: string[]
+  routes: LogRoute[]
+  shipped: boolean
+  uncertain: boolean
+  readErrors: LogReadError[]
 }

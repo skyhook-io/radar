@@ -91,6 +91,7 @@
             "envoyGateway": { "type": "boolean" },
             "externalDns": { "type": "boolean" },
             "externalSecrets": { "type": "boolean" },
+            "logging": { "type": "boolean", "description": "Opt-in read collection for logging.banzaicloud.io Loggings, Flows, ClusterFlows, Outputs, ClusterOutputs and FluentbitAgents (default false)." },
             "flagger": { "type": "boolean", "description": "Opt-in read collection for flagger.app Canaries and MetricTemplates (default false)." },
             "flux": { "type": "boolean" },
             "gatewayApi": { "type": "boolean" },

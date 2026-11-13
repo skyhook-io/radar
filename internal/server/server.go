@@ -706,6 +706,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// carry its own coverage state: an empty list here means one of four
 			// things and the response says which.
 			r.Get("/policy/resource/{kind}/{namespace}/{name}", s.handlePolicyResource)
+			r.Get("/logging/pods/{namespace}/{name}", s.handleLoggingPod)
 			// The inverse: every resource one policy recorded an outcome for.
 			r.Get("/policy/policies/{policy}", s.handlePolicyCoverage)
 			r.Get("/policy/policies/{policy}/queued", s.handlePolicyQueued)
@@ -1519,6 +1520,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
+		LoggingPodShipping:       true,
 	}
 }
 
