@@ -8,12 +8,15 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // Candidate is a Service that looks like Loki's read path.
 type Candidate struct {
 	Namespace, Name string
 	Port            int
+	Target          intstr.IntOrString // the port's targetPort, for a forward to the pod
+	Selector        map[string]string
 	Score           int
 }
 
@@ -38,7 +41,8 @@ func Candidates(services []corev1.Service) []Candidate {
 		if score == 0 {
 			continue
 		}
-		c := Candidate{Namespace: s.Namespace, Name: name, Port: lokiPort(s, score >= 40), Score: score}
+		p := lokiPort(s, score >= 40)
+		c := Candidate{Namespace: s.Namespace, Name: name, Port: int(p.Port), Target: p.TargetPort, Selector: s.Spec.Selector, Score: score}
 		if isHeadless {
 			headless = append(headless, c)
 		} else {
@@ -63,20 +67,20 @@ func Candidates(services []corev1.Service) []Candidate {
 
 // lokiPort: the port named http-metrics or http, a gateway's port 80, else
 // Loki's default 3100.
-func lokiPort(s corev1.Service, gateway bool) int {
+func lokiPort(s corev1.Service, gateway bool) corev1.ServicePort {
 	for _, want := range []string{"http-metrics", "http"} {
 		for _, p := range s.Spec.Ports {
 			if p.Name == want {
-				return int(p.Port)
+				return p
 			}
 		}
 	}
 	if gateway {
 		for _, p := range s.Spec.Ports {
 			if p.Port == 80 {
-				return 80
+				return p
 			}
 		}
 	}
-	return 3100
+	return corev1.ServicePort{Port: 3100}
 }

@@ -236,7 +236,9 @@ func (p ClusterProfiles) ValidateStructure() error {
 // pkg/prom's URL and header rules: users read "Loki", not "Prometheus".
 type lokiError struct{ err error }
 
-func (e lokiError) Error() string { return strings.ReplaceAll(e.err.Error(), "Prometheus", "Loki") }
+func (e lokiError) Error() string {
+	return strings.NewReplacer("Prometheus", "Loki", "prometheus", "Loki").Replace(e.err.Error())
+}
 func (e lokiError) Unwrap() error { return e.err }
 
 // LokiError rewords err from pkg/prom for a Loki connection; nil stays nil.

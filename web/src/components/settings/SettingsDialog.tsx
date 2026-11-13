@@ -34,7 +34,7 @@ import {
   costSourcePreferenceLabel,
   COST_SOURCE_OPTIONS,
 } from '../cost/source'
-import { costSourceApplyLabel, pendingSectionLabels, pendingSections, shouldShowSettingsFooter } from './settings-state'
+import { costSourceApplyLabel, isConnectionQuery, pendingSectionLabels, pendingSections, shouldShowSettingsFooter } from './settings-state'
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
@@ -184,7 +184,7 @@ export function SettingsDialog({
     setConnectionsChangedAt(Date.now())
     setConfigData(value => value ? { ...value, integrationProfiles: profiles } : value)
     void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
-    void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo)/.test(query.queryKey[0]) })
+    void queryClient.invalidateQueries({ predicate: query => isConnectionQuery(query.queryKey) })
   }, [queryClient])
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
@@ -764,6 +764,7 @@ export function SettingsDialog({
               caption={configData?.integrationProfiles ? localIntegrationCaption : 'Set by this installation’s operator.'}
               live
               locked={!canEditConfig}
+              managed={operatorManaged ? <LokiStatusCard active={section === 'loki'} /> : undefined}
             >
               {configData?.integrationProfiles?.loki ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.loki.target)}`} kind="loki" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={lokiDirtyChange} onBusyChange={lokiBusyChange}
                 status={showLocalStatus && section === 'loki' && !['error', 'target_changed'].includes(configData.integrationProfiles.loki.state) ? <LocalIntegrationStatus kind="loki" profile={configData.integrationProfiles.loki} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : <LokiStatusCard active={section === 'loki'} />}
