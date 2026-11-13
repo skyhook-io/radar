@@ -15,6 +15,7 @@ The hard part of GitOps tooling isn't sync — it's diagnosis. Radar surfaces dr
 |------|-------|
 | **FluxCD** | `GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert` |
 | **ArgoCD** | `Application`, `ApplicationSet`, `AppProject` |
+| **Flux Operator** | `FluxInstance`, `FluxReport`, `ResourceSet`, `ResourceSetInputProvider` (resource views and the Flux card; not GitOps rows) |
 
 ## Fleet view
 
@@ -23,6 +24,8 @@ Open the **GitOps** tab in the sidebar. Argo + Flux rows mix in the same table o
 - **Filters**: Sync, Health, Project, Namespace, Labels, Automation (auto-sync / manual / suspended), Lifecycle (active / terminating), Kind (Applications / ApplicationSets — Argo only, shown once a cluster has ApplicationSets)
 - **Modes**: Applications / Sources / Projects / Alerts
 - **Default sort**: smart-tiered by urgency — Failed > Terminating > Degraded > Missing > OutOfSync > Suspended > Progressing > Synced
+
+**Flux card.** With [Flux Operator](https://fluxcd.control-plane.io/operator/) installed, a collapsed card above the table summarizes its FluxReport (read as the caller, cluster-wide within their access): `Flux <version> · <ready> of <total> controllers ready · <m> failing`; a report that lists no controllers or reconcilers says `controllers unknown` and leaves the failing count out rather than showing zeros. It refreshes with the table. Opened, it shows who installed Flux, a link to the FluxInstance, each controller's readiness, and the reconciler counts per kind; kinds that are all running with fewer than three objects fold into an **Also** line. If several reports are readable, the first by namespace and name is shown with `1 of N`. On Flux older than 2.8, which has no HelmRelease inventory, the card says that Radar attributes HelmRelease resources by Flux labels and shows "Tracked by". The open/closed state is kept in the browser. A host that passes no `headerSlot` to `GitOpsTableView` (k8s-ui) shows no card.
 
 The **Activity** column and cards name the event beside its age: a Flux apply (**Applied** when it succeeded, **Apply attempt** when it did not), a Helm deployment, an Argo sync attempt or deployment, or a status change. When Flux apply or deployment timing is unavailable, they show the latest recorded condition transition as **Status changed**. If neither event date is available, they show the resource's creation date with a **Created** label. An old deployment date does not make a healthy application stale.
 

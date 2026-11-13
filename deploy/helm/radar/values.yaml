@@ -207,6 +207,7 @@ rbac:
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
     flux: true              # *.toolkit.fluxcd.io
+    fluxOperator: true      # fluxcd.controlplane.io (FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider)
     gatewayApi: true        # gateway.networking.k8s.io
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org

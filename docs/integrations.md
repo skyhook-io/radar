@@ -772,6 +772,25 @@ permits the reference or has produced an artifact.
 
 **Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
 
+### Flux Operator
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| FluxInstance | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| FluxReport | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| ResourceSet | `fluxcd.controlplane.io/v1` | — | Yes | — |
+| ResourceSetInputProvider | `fluxcd.controlplane.io/v1` | — | Yes | — |
+
+When the cluster serves FluxReport and the caller can read one, the GitOps page
+shows a collapsed **Flux** card above the table: the distribution version, the
+operator version, controller readiness and per-kind reconciler counts (running,
+failing, suspended), all read from the report's status. No readable report means
+no card; Radar never shows zeros for a report it could not read. The status of
+all four kinds reads `Suspended` when the object carries
+`fluxcd.controlplane.io/reconcile: disabled` (they have no `spec.suspend`).
+In a ResourceSetInputProvider URL, user info, every query value and the fragment
+are redacted in its column and drawer; the YAML view and MCP show the object as stored.
+
 ### ArgoCD
 
 | CRD | Group | Topology | Detail View | AI Summary |

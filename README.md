@@ -364,6 +364,7 @@ Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
 </p>
 
 - Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
+- **Flux Operator** — a Flux card on the GitOps page (version, controllers, reconciler counts from `FluxReport`) and views for `FluxInstance`, `FluxReport`, `ResourceSet`, `ResourceSetInputProvider`
 - **Diagnosis** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation failures, one-click remediation
 - Sync, suspend, resume, reconcile, and rollback from the UI or through MCP
 
@@ -463,6 +464,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
 | **Other Kubernetes APIs** | CertificateSigningRequests; Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, ClusterTrustBundles (only when served by the cluster) |
 | **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert |
+| **GitOps (Flux Operator)** | FluxInstance, FluxReport, ResourceSet, ResourceSetInputProvider |
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
 | **Argo Workflows** | Workflow, WorkflowTemplate |

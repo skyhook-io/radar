@@ -221,6 +221,9 @@ export interface GitOpsTableViewProps {
   // rendered leading the header actions. The host owns the mode + data, so this
   // shared table makes no assumption about whether the view auto-updates.
   freshnessSlot?: ReactNode
+  // Optional host content shown inside the scrolling table area above the
+  // rows (Radar's Flux Operator card). Hosts that don't pass it are unchanged.
+  headerSlot?: ReactNode
   // Row click — caller routes to its own detail page. When the host also
   // passes `rowHrefFor`, the callback receives the MouseEvent so it can
   // `preventDefault()` for same-tree nav (e.g. react-router) or skip the
@@ -323,6 +326,7 @@ export function GitOpsTableView({
   countsPartial,
   coverageStatus = 'unknown',
   freshnessSlot,
+  headerSlot,
   onRowClick,
   rowHrefFor,
   onDestinationClick,
@@ -827,8 +831,9 @@ export function GitOpsTableView({
             once the list fills the viewport. Only needed when the actions column
             is present — consumers without onRowAction (e.g. Hub) skip the slack. */}
         <div className={clsx('min-h-0 min-w-0 flex-1 overflow-auto bg-theme-base', onRowAction && 'pb-20')}>
+          {headerSlot}
           {mode !== 'applications' ? (
-            <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">
+            <div className={clsx('flex items-center justify-center text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               {modeLabel(mode)} view is queued behind the application list.
             </div>
           ) : initialLoading ? (
@@ -836,7 +841,7 @@ export function GitOpsTableView({
           ) : error ? (
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary">
+            <div className={clsx('flex flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary', headerSlot ? 'py-12' : 'h-full')}>
               <p>{noApplicationsMessage(allRows.length > 0, coverageStatus, hasGlobalNamespaceFilter)}</p>
               {hasGlobalNamespaceFilter && globalNamespaces && (
                 <p className="text-xs text-theme-text-tertiary">
