@@ -5,6 +5,7 @@ import "slices"
 // StreamLabels names the Loki stream labels that carry a pod's namespace, pod,
 // container and (when the shipper adds one) Job name. Setups differ:
 // Promtail and Alloy use "namespace"/"pod", Fluent Bit "kubernetes_*_name",
+// the Logging operator's fluentd output "namespace_name"/"pod_name",
 // OpenTelemetry "k8s_*_name".
 type StreamLabels struct {
 	Namespace string `json:"namespace"`
@@ -14,7 +15,7 @@ type StreamLabels struct {
 }
 
 var (
-	namespaceLabels = []string{"namespace", "kubernetes_namespace_name", "k8s_namespace_name"}
+	namespaceLabels = []string{"namespace", "kubernetes_namespace_name", "namespace_name", "k8s_namespace_name"}
 	podLabels       = []string{"pod", "kubernetes_pod_name", "pod_name", "k8s_pod_name"}
 	containerLabels = []string{"container", "kubernetes_container_name", "container_name", "k8s_container_name"}
 	jobLabels       = []string{"job_name", "job-name", "batch_kubernetes_io_job_name"}

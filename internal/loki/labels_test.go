@@ -9,6 +9,10 @@ func TestDetectLabels(t *testing.T) {
 	if got := DetectLabels([]string{"kubernetes_namespace_name", "kubernetes_pod_name", "kubernetes_container_name"}); got != (StreamLabels{Namespace: "kubernetes_namespace_name", Pod: "kubernetes_pod_name", Container: "kubernetes_container_name"}) {
 		t.Errorf("fluent-bit names: %+v", got)
 	}
+	// The Logging operator's fluentd Loki output.
+	if got := DetectLabels([]string{"app", "container_image", "container_name", "host", "namespace_name", "pod_name"}); got != (StreamLabels{Namespace: "namespace_name", Pod: "pod_name", Container: "container_name"}) {
+		t.Errorf("Logging operator names: %+v", got)
+	}
 	if got := DetectLabels([]string{"pod", "namespace", "job_name"}); got.Job != "job_name" {
 		t.Errorf("job label: %+v", got)
 	}

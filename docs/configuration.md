@@ -680,7 +680,8 @@ Services are skipped unless nothing else matches.
 
 On connecting, Radar reads Loki's label names and picks the stream labels that
 carry the namespace, pod, container and Job name (`namespace`/`pod`/`container`
-for Promtail and Alloy, `kubernetes_*_name` for Fluent Bit, `k8s_*_name` for
+for Promtail and Alloy, `kubernetes_*_name` for Fluent Bit, `namespace_name`/`pod_name` for
+the Logging operator's fluentd output, `k8s_*_name` for
 OpenTelemetry). Settings shows what it found. Loki without a namespace or pod
 label can be connected, but pod log history needs both. Only
 `/loki/api/v1/labels` is read in this release.
