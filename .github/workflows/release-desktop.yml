@@ -267,7 +267,7 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
       - name: Install nfpm
-        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
 
       - name: Build frontend
         run: make frontend embed
