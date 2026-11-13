@@ -4,6 +4,7 @@ import type { SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 
 const cnpg = vi.hoisted(() => ({ value: undefined as Record<string, unknown> | undefined }))
 vi.mock('../components/cnpg/useCNPGSidebarWorkspace', () => ({ useCNPGSidebarWorkspace: () => cnpg.value }))
+vi.mock('../components/logging/useLoggingSidebarWorkspace', () => ({ useLoggingSidebarWorkspace: () => undefined }))
 
 import { mergeSidebarWorkspaces, useSidebarCategoryWorkspaces } from './sidebarWorkspaces'
 

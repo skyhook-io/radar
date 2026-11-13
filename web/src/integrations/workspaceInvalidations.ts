@@ -8,6 +8,8 @@ export interface WorkspaceInvalidation {
 
 export const workspaceInvalidations: WorkspaceInvalidation[] = [
   { id: 'cnpg', matches: e => !!e.group?.endsWith('.cnpg.io'), queryKey: ['cnpg', 'workspace'] },
+  // Pod changes move the pipeline's counts; only a mounted pipeline query refetches.
+  { id: 'logging', matches: e => e.group === 'logging.banzaicloud.io' || (e.kind === 'Pod' && !e.group), queryKey: ['logging', 'pipeline'] },
 ]
 
 export function pendingInvalidations(events: { kind: string; group?: string }[]): WorkspaceInvalidation[] {

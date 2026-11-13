@@ -16,4 +16,12 @@ describe('workspace invalidations', () => {
       { kind: 'Backup', group: 'postgresql.cnpg.io' },
     ]).map(d => d.id)).toEqual(['cnpg'])
   })
+  it('refreshes the logging pipeline on Logging operator and pod changes', () => {
+    expect(pendingInvalidations([{ kind: 'ClusterFlow', group: 'logging.banzaicloud.io' }]).map(d => d.id)).toEqual(['logging'])
+    expect(pendingInvalidations([{ kind: 'Pod', group: '' }]).map(d => d.id)).toEqual(['logging'])
+    expect(pendingInvalidations([{ kind: 'Pod', group: '' }])[0].queryKey).toEqual(['logging', 'pipeline'])
+  })
+  it('lists two workspaces changed in one batch', () => {
+    expect(pendingInvalidations([{ kind: 'Pod' }, { kind: 'Cluster', group: 'postgresql.cnpg.io' }]).map(d => d.id)).toEqual(['cnpg', 'logging'])
+  })
 })

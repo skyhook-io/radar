@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import type { SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../types'
 import { useCNPGSidebarWorkspace } from '../components/cnpg/useCNPGSidebarWorkspace'
+import { useLoggingSidebarWorkspace } from '../components/logging/useLoggingSidebarWorkspace'
 
 export interface SidebarWorkspaceArgs {
   apiResources: APIResource[] | undefined
@@ -23,5 +24,6 @@ export function mergeSidebarWorkspaces(parts: Workspaces[]): Workspaces {
  */
 export function useSidebarCategoryWorkspaces({ apiResources, namespaces, selectedKind }: SidebarWorkspaceArgs): Workspaces {
   const cnpg = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
-  return useMemo(() => mergeSidebarWorkspaces([cnpg]), [cnpg])
+  const logging = useLoggingSidebarWorkspace({ apiResources, namespaces, selectedKind })
+  return useMemo(() => mergeSidebarWorkspaces([cnpg, logging]), [cnpg, logging])
 }

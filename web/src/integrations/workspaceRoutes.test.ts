@@ -24,6 +24,8 @@ describe('workspace route ownership', () => {
     expect(workspaceForPath('/cnpg/')).toBeDefined()
     expect(workspaceForPath('/cnpg-other')).toBeUndefined()
     expect(workspaceForPath('/capacity-other')).toBeUndefined()
+    expect(workspaceForPath('/logging')?.id).toBe('logging')
+    expect(workspaceForPath('/logging-other')).toBeUndefined()
     expect(workspaceForPath('/workload/clusters/db/pg')).toBeUndefined()
     // React Router supplies basename-relative locations to the application.
     expect(workspaceForPath('/c/demo/cnpg')).toBeUndefined()
