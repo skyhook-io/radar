@@ -10,6 +10,27 @@ entries:
     decision: withhold
     reason: "Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no caller grants."
     source: "https://github.com/open-telemetry/opentelemetry-operator/tree/989089bf5c75d78fdc6004147f97d972fc436bd4/apis"
+  - group: "logging.banzaicloud.io"
+    resources: ["loggings", "fluentbitagents"]
+    scope: Cluster
+    collection: "logging"
+    decision: grant
+    reason: "Logging pipeline topology and operator status; no credential-bearing fields."
+    source: "https://github.com/kube-logging/logging-operator/tree/4.10.0/pkg/sdk/logging/api/v1beta1"
+  - group: "logging.banzaicloud.io"
+    resources: ["flows", "clusterflows"]
+    scope: Namespaced
+    collection: "logging"
+    decision: grant
+    reason: "Log selection rules, output names and operator status; no credential-bearing fields."
+    source: "https://github.com/kube-logging/logging-operator/tree/4.10.0/pkg/sdk/logging/api/v1beta1"
+  - group: "logging.banzaicloud.io"
+    resources: ["outputs", "clusteroutputs"]
+    scope: Namespaced
+    collection: "logging"
+    decision: withhold
+    reason: "Output specs can carry inline credentials and endpoints. Native visibility adds no caller grants."
+    source: "https://github.com/kube-logging/logging-operator/tree/4.10.0/pkg/sdk/logging/api/v1beta1"
   - group: "flagger.app"
     resources: ["canaries", "metrictemplates"]
     scope: Namespaced

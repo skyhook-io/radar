@@ -554,6 +554,11 @@ rules:
     resources: ["canaries", "metrictemplates"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.logging }}
+  - apiGroups: ["logging.banzaicloud.io"]
+    resources: ["loggings", "flows", "clusterflows", "outputs", "clusteroutputs", "fluentbitagents"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.opentelemetry }}
   - apiGroups: ["opentelemetry.io"]
     resources: ["*"]
