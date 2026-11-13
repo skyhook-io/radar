@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useCNPGNavigate } from '../useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
 import { cnpgDetailPath } from '../routes'
 import { ActionConfirmDialog, CNPGSchedulePreviewFacts, FactGrid, Tooltip, useDebouncedValue } from '@skyhook-io/k8s-ui'
 import { useCNPGAction, useCNPGScheduleCapabilities, useCNPGSchedulePreview, type CNPGScheduleActionName } from '../../../api/cnpg'
@@ -17,7 +17,7 @@ const BUTTON =
 /** Suspend, resume, run a ScheduledBackup's settings once, or change its schedule. */
 export function CNPGScheduleActions({ namespace, name }: { namespace: string; name: string }) {
   const caps = useCNPGScheduleCapabilities(namespace, name)
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const [open, setOpen] = useState<CNPGScheduleActionName | null>(null)
   const data = caps.data
   if (!data) return null

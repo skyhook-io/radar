@@ -1,14 +1,14 @@
 import { useCallback } from 'react'
 import { useLocation, useNavigate, type NavigateOptions, type To } from 'react-router-dom'
-import { withCrossViewParams } from '../../utils/navigation'
+import { withCrossViewParams } from '../utils/navigation'
 
 /**
- * navigate() for the CloudNativePG screens: a string path keeps the current
+ * navigate() for workspace screens: a string path keeps the current
  * cross-view params (the namespace filter, an open investigation), as the
  * app's own navigation does. Without them the app reads the missing
  * ?namespaces= as "All namespaces" and saves that as the user's choice.
  */
-export function useCNPGNavigate() {
+export function useWorkspaceNavigate() {
   const navigate = useNavigate()
   const { search } = useLocation()
   return useCallback(

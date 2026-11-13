@@ -21,7 +21,7 @@ import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { Card, ProxyDenied, SourceState } from './runtimeParts'
 import { cnpgRuntimeMeasured } from './runtimeModel'
 import { buildWorkloadPath } from '../../utils/navigation'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { Notice, RefreshFailedNotice } from '../workspace/layout'
 
 /**
@@ -43,7 +43,7 @@ export function CNPGReplicationTab({
   onOpenHistory?: () => void
   onNavigate?: NavigateToRef
 }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const runtime = useCNPGRuntime(namespace, name)
   const ha = useCNPGClusterHA(namespace, name)
   const { fleet } = useCNPGFleet([namespace])

@@ -2,6 +2,7 @@ import { useState, type ReactNode, type JSX } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
+import { PodLogShippingSection, type PodLogShippingProps } from './PodLogShippingSection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown, PodAggregateResources } from '../../ui/drawer-components'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName, getExecContainerNames } from '../resource-utils'
@@ -118,6 +119,9 @@ interface PodRendererProps {
   policyData?: PolicyResourceResponse | null
   policyLoading?: boolean
   policyError?: Error | null
+  /** Which Logging operator Flows ship this pod's logs. Undefined: the host
+   *  didn't wire it (or the operator isn't installed); the section is omitted. */
+  logShipping?: Omit<PodLogShippingProps, 'onNavigate'>
   /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
    *  is pending or unreadable, which leaves the contextual link unrendered. */
   namespaceLimitRangeNames?: string[] | null
@@ -316,6 +320,7 @@ export function PodRenderer({
   policyData,
   policyLoading,
   policyError,
+  logShipping,
   namespaceLimitRangeNames,
   networkAttachmentLookups,
   secretsStore,
@@ -678,6 +683,7 @@ export function PodRenderer({
       {policyData !== undefined && (
         <PolicySection data={policyData} loading={policyLoading} error={policyError} />
       )}
+      {logShipping && <PodLogShippingSection {...logShipping} onNavigate={onNavigate} />}
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>
         <div className="space-y-3">

@@ -6,7 +6,7 @@ import { expect, it, vi } from 'vitest'
 import { CNPGScheduleActions } from './CNPGScheduleActions'
 const navigate = vi.hoisted(() => vi.fn())
 const schedule = vi.hoisted(() => ({ cluster: 'payments', reason: 'Configure a backup destination on payments first', backupBlockedReason: 'Configure a backup destination on payments first', clusterState: 'ok', reasonCode: 'backup_destination' }))
-vi.mock('../useCNPGNavigate', () => ({ useCNPGNavigate: () => navigate }))
+vi.mock('../../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => navigate }))
 vi.mock('../../../api/cnpg', () => ({ useCNPGScheduleCapabilities: () => ({ data: { actions: { run: { allowed: false, reason: schedule.reason, reasonCode: schedule.reasonCode }, suspend: { allowed: true }, setSchedule: { allowed: true } }, context: 'viewer', facts: { cluster: schedule.cluster, clusterState: schedule.clusterState, backupBlockedReason: schedule.backupBlockedReason, suspended: false } } }) }))
 it('shows the server destination blocker beneath the disabled Run now control', () => {
   const html = renderToStaticMarkup(<CNPGScheduleActions namespace="prod" name="payments-nightly" />)

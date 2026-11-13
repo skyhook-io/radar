@@ -123,7 +123,22 @@ importing integration screens.
 
 `workspaceRoutes.ts` owns route metadata (title, navigation placement, namespace
 view scope and context-switch query policy); `workspaceScreens.tsx` mounts the
-integration screen. Capacity remains cluster-wide. Shared workspace notices, empty
+integration screen. Two more registries keep `ResourcesView` and `App.tsx` free of
+per-integration code:
+
+- `sidebarWorkspaces.ts` calls each integration's sidebar hook (a fixed list, so
+  hook order is stable) and merges their `categoryWorkspaces`. A hook lives in its
+  integration's folder, returns `undefined` when the integration isn't discovered,
+  and keeps partial and denied counts honest (a lower-bound zero is unknown, not
+  none). A count that needs an expensive read should load only while its
+  category is open; the sidebar renders on every Resources page.
+- `workspaceInvalidations.ts` maps live resource changes (by group or kind) to the
+  query keys they make stale; `App.tsx` invalidates each due key once per fast
+  batch, and only mounted queries refetch.
+
+Adding a workspace is one folder plus one line in each registry: route, screen,
+sidebar hook, invalidation entry (and the view name in `App.tsx`'s
+`ExtendedMainView`). CNPG and Logging are the worked examples. Capacity remains cluster-wide. Shared workspace notices, empty
 states and table styles live in `web/src/components/workspace/`; certainty glyphs
 live in k8s-ui's `components/facts/certainty.tsx`.
 
@@ -400,13 +415,6 @@ integration contributions. A kind-list replacement uses one `table / wait / view
 decision for both fetching and rendering, keyed by exact API group and plural.
 Keep data hooks in mounted integration components and gate new contracts with
 capabilities.
-
-Two host seams need another concrete consumer before choosing a common shape:
-
-| Seam | Location | Constraint |
-|---|---|---|
-| Category-workspace counts and coverage | `ResourcesView.tsx`'s `useCNPGSidebarWorkspace` and `sidebarCategoryWorkspaces` | Reuse the sidebar props and preserve partial/denied coverage; mount data hooks in integration-owned components. |
-| Event-driven workspace invalidation | `App.tsx`'s CNPG pending flag and batched invalidation | Contribute query keys to the existing batches and connection lifetime. |
 
 Operation tracking, fixed-path proxy reads, integration-specific log streaming,
 report bundles and operator diagnosis remain integration-owned. Read CNPG's

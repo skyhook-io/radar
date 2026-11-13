@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
 import { toneTextClass } from '@skyhook-io/k8s-ui'
 import { useLocation } from 'react-router-dom'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
 
@@ -43,7 +43,7 @@ export function Denied({ title, grant, children }: { title: string; grant: strin
 }
 
 export function PrimaryPrerequisite({ namespace, cluster }: { namespace: string; cluster: string }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const location = useLocation()
   const overviewPath = `${cnpgClusterProblemsPath(namespace, cluster, new URLSearchParams(location.search).get('ctx') ?? undefined)}&tab=overview`
   const inPlace = cnpgWithinDetail(location.pathname, location.search, overviewPath)

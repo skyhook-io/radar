@@ -5,7 +5,7 @@ import { buildCNPGFleet, CNPG_WORKSPACE_KEYS, type CNPGWorkspaceResponse, type C
 import { CNPGProtection } from './CNPGProtection'
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => vi.fn() }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 afterEach(() => vi.useRealTimers())
 const now = Date.parse('2026-10-05T12:00:00Z')
 const backup = (name: string, phase: string, ageDays: number) => ({ apiVersion: 'postgresql.cnpg.io/v1', kind: 'Backup', metadata: { namespace: 'pg', name }, spec: { cluster: { name: 'pg' } }, status: { phase, startedAt: new Date(now - ageDays * 86400000).toISOString() } })

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({ data: { pod: 'pg-1', state: 'denied', permission: { exec: 'denied', grant: { verb: 'create', resource: 'pods', subresource: 'exec', namespace: 'db' } }, instances: [] } as any, navigate: vi.fn() }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => state.navigate }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => state.navigate }))
 vi.mock('react-router-dom', async (original) => ({ ...await original<typeof import('react-router-dom')>(), useLocation: () => ({ pathname: '/cnpg/clusters/db/pg', search: '?ctx=test&tab=performance&drawer=x', state: { returnLabel: 'Clusters' } }) }))
 vi.mock('@tanstack/react-query', async (original) => ({ ...await original<typeof import('@tanstack/react-query')>(), useQueries: () => [{ data: { containers: [] } }] }))
 vi.mock('../../api/client', () => ({ podMetricsQuery: () => ({}), usePodMetrics: () => ({ data: { containers: [{ name: 'postgres', usage: { cpu: '30000000n', memory: '59Mi' } }] } }) }))

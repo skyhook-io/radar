@@ -7,7 +7,7 @@ vi.mock('@skyhook-io/k8s-ui', async (original) => ({ ...await original<typeof im
 vi.mock('../../api/client', () => ({ useCapabilities: () => ({ isPending: false }), useRadarFeature: () => ({ guard: (fn: () => unknown) => fn(), support: 'supported' }), fetchJSON: vi.fn() }))
 vi.mock('../../hooks/useDesktopDownload', () => ({ useDesktopDownload: () => undefined }))
 vi.mock('../../context/ThemeContext', () => ({ useTheme: () => ({ theme: 'light' }) }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => state.navigate }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => state.navigate }))
 vi.mock('./useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ fleet: { rows: [{ namespace: 'db', name: 'analytics', problems: state.problems }] } }) }))
 vi.mock('./CNPGTrends', () => ({ useCNPGIntervalParams: () => null }))
 it('supplies the first-instance problem and Overview link from the CNPG host', () => {

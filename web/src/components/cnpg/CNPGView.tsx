@@ -17,7 +17,7 @@ import { CNPGDetailPage } from './CNPGDetailPage'
 import { parseCNPGRoute } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
 import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { useCNPGScreenParams } from './useCNPGScreenParams'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 
@@ -39,7 +39,7 @@ interface CNPGViewProps {
  */
 export function CNPGView({ namespaces, selectedResource, onOpenResource, onCloseResource, onClearNamespaces }: CNPGViewProps) {
   const location = useLocation()
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const route = parseCNPGRoute(location.pathname)
   const laptop = useMediaQuery('(max-width: 1300px)')

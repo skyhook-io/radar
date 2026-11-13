@@ -13,7 +13,7 @@ vi.mock('../../api/client', () => ({ fetchJSON: vi.fn(async () => ({ pods: [], l
 } }))
 vi.mock('../../hooks/useDesktopDownload', () => ({ useDesktopDownload: () => undefined }))
 vi.mock('../../context/ThemeContext', () => ({ useTheme: () => ({ theme: 'light' }) }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => vi.fn() }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 vi.mock('./useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ fleet: null }) }))
 vi.mock('./CNPGTrends', () => ({ useCNPGIntervalParams: () => state.interval, CNPGIntervalBanner: ({ note }: { note: string }) => <div>{note}</div> }))
 beforeEach(() => { state.props = undefined; state.capabilities = { features: { resourceIssues: true } }; state.capabilitiesPending = false; state.fetchStatus = 'idle'; state.interval = null; vi.clearAllMocks(); vi.unstubAllGlobals() })

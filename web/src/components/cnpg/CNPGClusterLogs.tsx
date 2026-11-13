@@ -7,7 +7,7 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useTheme } from '../../context/ThemeContext'
 import { CNPGIntervalBanner, useCNPGIntervalParams } from './CNPGTrends'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
 
 function logsPath(namespace: string, name: string) {
@@ -41,7 +41,7 @@ export function intervalQuery(params: WorkloadLogsFetchParams, since: string, un
  */
 export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: string }) {
   const [searchParams] = useSearchParams()
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const location = useLocation()
   const { fleet } = useCNPGFleet([namespace])
   const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)

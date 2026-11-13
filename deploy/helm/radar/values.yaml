@@ -233,6 +233,7 @@ rbac:
     nimOperator: true       # apps.nvidia.com (NVIDIA NIM: NIMServices, NIMCaches, NIMPipelines)
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
+    logging: false         # Opt in to get/list/watch logging.banzaicloud.io Loggings, Flows, ClusterFlows, Outputs, ClusterOutputs and FluentbitAgents. Outputs can hold inline credentials.
     flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com

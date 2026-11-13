@@ -736,6 +736,7 @@ retain their finite grants.
 | `envoyGateway` | `gateway.envoyproxy.io` |
 | `externalDns` | `externaldns.k8s.io` |
 | `externalSecrets` | `external-secrets.io` |
+| `logging` | `logging.banzaicloud.io` (`loggings`, `flows`, `clusterflows`, `outputs`, `clusteroutputs`, `fluentbitagents` only); **off by default**. Enable `rbac.crdGroups.logging=true` for native drawers, the Pod "Log shipping" section and Flow/Output problem Issues. |
 | `flagger` | `flagger.app` (`canaries`, `metrictemplates` only); **off by default**. Enable `rbac.crdGroups.flagger=true` for native browsing and failed-rollout Issues. |
 | `flux` | `*.toolkit.fluxcd.io` |
 | `gatewayApi` | `gateway.networking.k8s.io` |

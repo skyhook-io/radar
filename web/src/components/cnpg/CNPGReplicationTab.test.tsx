@@ -6,7 +6,7 @@ vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: state.runtime 
 vi.mock('../../api/cnpg-ha', () => ({ useCNPGClusterHA: () => ({ data: state.ha }), cnpgInstanceLive: () => undefined, cnpgInstanceLiveUnavailable: () => 'not read' }))
 vi.mock('./useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ fleet: { rows: [{ name: 'pg', namespace: 'db', cluster: { status: { currentPrimary: 'pg-1' } } }] } }) }))
 vi.mock('./actions/CNPGInstanceActions', () => ({ CNPGInstanceActions: () => null }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => state.navigate }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => state.navigate }))
 vi.mock('./CNPGClusterTabs', () => ({ CNPGTabVerdict: ({ id, alwaysShow }: { id: string; alwaysShow?: boolean }) => <span>verdict: {id}{alwaysShow ? " always" : ""}</span> }))
 vi.mock('@skyhook-io/k8s-ui', async (original) => ({ ...(await original<typeof import('@skyhook-io/k8s-ui')>()), CNPGClusterHASection: (props: any) => { state.haProps = props; return null } }))
 it('explains Serving on Replication and connects endpoint evidence to Reachability', () => {

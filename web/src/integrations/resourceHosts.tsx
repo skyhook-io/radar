@@ -20,6 +20,7 @@ import { RayServiceRenderer } from '../components/resources/renderers/RayService
 import { KueueWorkloadRenderer } from '../components/resources/renderers/KueueWorkloadRenderer'
 import { ClusterQueueRenderer, LocalQueueRenderer, LocalQueueStatusBadge } from '../components/resources/renderers/KueueQueueRenderers'
 import { PodRenderer } from '../components/resources/renderers/PodRenderer'
+import { LoggingFlowHostRenderer } from '../components/resources/renderers/LoggingFlowHostRenderer'
 import { KarpenterNodePoolRenderer } from '../components/resources/renderers/KarpenterNodePoolRenderer'
 import { NodeRenderer } from '../components/resources/renderers/NodeRenderer'
 import { ServiceRenderer } from '../components/resources/renderers/ServiceRenderer'
@@ -68,6 +69,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
+  { id: 'logging', renderers: { LoggingFlowHostRenderer } },
   { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },
   cnpgResourceHost,
   crdResourceHost,

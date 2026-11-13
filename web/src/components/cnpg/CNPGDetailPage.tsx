@@ -20,7 +20,7 @@ import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { ScreenEmptyState } from '../workspace/layout'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 
 // Set by drill-downs; Esc then goes back to that page instead of the home view.
 interface ReturnState {
@@ -47,7 +47,7 @@ export function CNPGDetailPage({
   onOpenResource: (resource: SelectedResource) => void
 }) {
   const location = useLocation()
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { connection } = useConnection()
   const queryClient = useQueryClient()
@@ -256,7 +256,7 @@ function NotInContext({
   homeLabel: string
   homePath: string
 }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const { data: contexts } = useContexts()
   const { requestSwitch, confirmDialog } = useContextSwitchFlow()
   const pinned = contexts?.find((c) => c.name === pinnedContext)
