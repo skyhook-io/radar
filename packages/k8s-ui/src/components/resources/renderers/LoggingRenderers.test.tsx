@@ -35,6 +35,11 @@ describe('Logging operator drawers', () => {
     expect(html).toContain('Not counted: outside the Logging control namespace')
     expect(text(renderToString(<LoggingFlowRenderer data={flow} controlNamespaces={['logging-system']} />))).not.toContain('Not counted')
   })
+  it('says when Loggings could not be read', () => {
+    const html = text(renderToString(<LoggingFlowRenderer data={flow} loggingsUnreadable />))
+    expect(html).toContain('Could not read Loggings')
+    expect(html).not.toContain('Not counted')
+  })
   it('Logging drawer shows the control namespace', () => {
     const html = text(renderToString(<LoggingRenderer data={{ apiVersion: 'logging.banzaicloud.io/v1beta1', kind: 'Logging', metadata: { name: 'root' }, spec: { controlNamespace: 'logging-system', fluentd: {} } }} />))
     expect(html).toContain('logging-system')

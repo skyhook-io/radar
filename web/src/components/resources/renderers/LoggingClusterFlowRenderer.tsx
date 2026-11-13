@@ -16,5 +16,5 @@ export function LoggingClusterFlowRenderer({ data, onNavigate }: { data: any; on
   const loggings = useResources<any>('loggings', '', LOGGING_GROUP)
   const partial = loggings.coverage?.status === 'partial'
   const controlNamespaces = useMemo(() => controlNamespacesOf(loggings.data, loggings.isError || partial), [loggings.data, loggings.isError, partial])
-  return <LoggingFlowRenderer data={data} onNavigate={onNavigate} controlNamespaces={controlNamespaces} />
+  return <LoggingFlowRenderer data={data} onNavigate={onNavigate} controlNamespaces={controlNamespaces} loggingsUnreadable={!!loggings.error || partial} />
 }

@@ -50,7 +50,7 @@ export function FluentbitAgentRenderer({ data }: Props) {
 
 // controlNamespaces is where the host found Loggings; a ClusterFlow outside
 // all of them is ignored by the operator. Undefined: the host couldn't tell.
-export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces }: Props & { controlNamespaces?: string[] }) {
+export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggingsUnreadable }: Props & { controlNamespaces?: string[]; loggingsUnreadable?: boolean }) {
   const cluster = data.kind === 'ClusterFlow'
   const ns = data.metadata?.namespace ?? ''
   const rules = getLoggingFlowRules(data)
@@ -59,6 +59,7 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces }: Pro
   const localRefs: string[] = [...(data.spec?.localOutputRefs ?? []), ...(data.spec?.outputRefs ?? [])]
   const notCounted = cluster && controlNamespaces !== undefined && !controlNamespaces.includes(ns)
   return <>
+    {cluster && loggingsUnreadable && <AlertBanner variant="info" title="Could not read Loggings" message="Radar can't tell whether this ClusterFlow is in a Logging's control namespace, so whether the operator counts it is unknown." />}
     {notCounted && <AlertBanner variant="warning" title="Not counted: outside the Logging control namespace" message="The Logging operator only processes ClusterFlows in a Logging's control namespace; this one forwards nothing." />}
     <Problems data={data} />
     <Section title={cluster ? 'Cluster flow' : 'Flow'} defaultExpanded>

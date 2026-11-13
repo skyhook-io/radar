@@ -14,15 +14,15 @@ entries:
     resources: ["loggings", "fluentbitagents"]
     scope: Cluster
     collection: "logging"
-    decision: grant
-    reason: "Logging pipeline topology and operator status; no credential-bearing fields."
+    decision: withhold
+    reason: "Logging pipeline topology and operator status; collection is opt-in, so native visibility adds no caller grants."
     source: "https://github.com/kube-logging/logging-operator/tree/4.10.0/pkg/sdk/logging/api/v1beta1"
   - group: "logging.banzaicloud.io"
     resources: ["flows", "clusterflows"]
     scope: Namespaced
     collection: "logging"
-    decision: grant
-    reason: "Log selection rules, output names and operator status; no credential-bearing fields."
+    decision: withhold
+    reason: "Log selection rules, output names and operator status; collection is opt-in, so native visibility adds no caller grants."
     source: "https://github.com/kube-logging/logging-operator/tree/4.10.0/pkg/sdk/logging/api/v1beta1"
   - group: "logging.banzaicloud.io"
     resources: ["outputs", "clusteroutputs"]
