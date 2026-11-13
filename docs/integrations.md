@@ -692,6 +692,19 @@ resource, including core Secrets and these excluded kinds. See the
 
 ---
 
+## Loki
+
+Kubernetes keeps a container's logs only while the pod exists. When the cluster ships logs to Loki, Radar reads a pod's past logs from there: the pod logs viewer gets a **Live | History** switch, and History reads the same pod and container over the last 1 hour, 6 hours, 24 hours or 7 days. A pod that is gone (a finished CronJob run, a pod replaced by a rollout) opens on History from **Logs (Loki)** on its Timeline card.
+
+Connect Loki in **Settings → Logs (Loki)**, or with `--loki-url`; see [configuration](configuration.md#loki) for discovery, headers and stream labels.
+
+The viewer reads `GET /api/loki/pods/{namespace}/{name}/logs?container=&since=1h|6h|24h|7d` (or `start`/`end`, at most 7 days; `limit` up to 5,000 lines).
+- **Gate:** namespace access plus `get pods/log`, the same as live logs, checked before Loki is contacted. The pod need not exist any more.
+- **Fixed queries:** Radar writes the LogQL from the namespace, pod and container only, with values escaped; no other parameter reaches Loki and there is no free-form query, search or live tail.
+- **Limits:** Loki returns the newest lines first; when it returns the limit, the answer says it was cut and the oldest lines in the window are missing.
+- **Errors:** 503 when Loki is not connected or has no namespace or pod stream label; 502 with Loki's own message (redacted) when it answers an error, such as its per-query line limit.
+- An empty answer means Loki holds nothing for that pod in the window: the pod's logs may never have been shipped.
+
 ## Trivy Operator
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.
