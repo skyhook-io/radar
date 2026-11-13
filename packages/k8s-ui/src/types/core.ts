@@ -1973,28 +1973,34 @@ export interface WorkloadLogStreamEvent {
   message?: string
 }
 
-// GET /api/logging/pods/{namespace}/{name}: which Logging operator Flows
-// forward a pod's logs. readErrors non-empty means "can't tell", never "not shipped".
-export interface LoggingOutputRef { kind: string; namespace?: string; name: string; type?: string; found: boolean; active?: boolean }
-export interface LoggingPodFlow {
+// GET /api/logging/pods/{namespace}/{name}: which routes forward a pod's logs,
+// per installed shipper. The wire is provider-neutral; a provider's own words
+// (Flow, ClusterOutput) appear only as kind. readErrors non-empty means
+// "can't tell", never "not shipped".
+export interface LogDestination { kind: string; namespace?: string; name: string; type?: string; found: boolean; active?: boolean }
+export interface LogReadError { group: string; resource: string }
+export interface LogRoute {
+  provider: string
   kind: string
+  group: string
   namespace: string
   name: string
   selected: boolean
   uncertain: boolean
   ignored: boolean
   excluded: boolean
-  /** For a selecting Flow: whether its logs reach an output; undefined = unknown. */
+  /** For a selecting route: whether its logs reach a destination; undefined = unknown. */
   delivers?: boolean
   unmet: string[]
   hasFilters: boolean
   active?: boolean
-  outputs: LoggingOutputRef[]
+  destinations: LogDestination[]
 }
-export interface LoggingPodShipping {
-  installed: boolean
-  flows: LoggingPodFlow[]
+export interface LogShipping {
+  /** Installed shippers Radar understands; empty hides the section. */
+  providers: string[]
+  routes: LogRoute[]
   shipped: boolean
   uncertain: boolean
-  readErrors: string[]
+  readErrors: LogReadError[]
 }
