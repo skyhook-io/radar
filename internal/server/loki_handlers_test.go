@@ -2,11 +2,16 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -118,4 +123,165 @@ func jsonEqual(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+
+// fakeLokiWithLogs answers labels and query_range, recording every query.
+type lokiRecorder struct {
+	srv     *httptest.Server
+	queries []url.Values
+	mu      sync.Mutex
+	status  int
+	body    string
+}
+
+func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
+	t.Helper()
+	rec := &lokiRecorder{status: 200, body: streams}
+	rec.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/loki/api/v1/labels":
+			_, _ = w.Write([]byte(`{"status":"success","data":["namespace","pod","container"]}`))
+		case "/loki/api/v1/query_range":
+			rec.mu.Lock()
+			rec.queries = append(rec.queries, r.URL.Query())
+			status, body := rec.status, rec.body
+			rec.mu.Unlock()
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(rec.srv.Close)
+	t.Cleanup(func() { loki.Retire(nil) })
+	loki.Configure(rec.srv.URL, map[string]string{"X-Scope-OrgID": "tenant-secret"})
+	if err := loki.EnsureConnected(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	return rec
+}
+
+func (r *lokiRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.queries)
+}
+
+const twoContainers = `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1","container":"web"},"values":[["1763035200000000002","second"],["1763035200000000001","first"]]},
+ {"stream":{"namespace":"team","pod":"app-1","container":"sidecar"},"values":[["1763035200000000003","side"]]}]}}`
+
+func lokiPodLogs(t *testing.T, query string) (*http.Response, string) {
+	t.Helper()
+	resp, err := http.Get(testServer.URL + "/api/loki/pods/team/app-1/logs" + query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	return resp, string(raw)
+}
+
+func TestLokiPodLogsHappyPath(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	resp, raw := lokiPodLogs(t, "?since=1h")
+	if resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if got.Source != "loki" || !slices.Equal(got.Containers, []string{"sidecar", "web"}) || got.Truncated {
+		t.Fatalf("response = %+v", got)
+	}
+	web := strings.Split(strings.TrimSpace(got.Logs["web"]), "\n")
+	if len(web) != 2 || !strings.HasSuffix(web[0], " first") || !strings.HasSuffix(web[1], " second") || !strings.HasPrefix(web[0], "2025-") {
+		t.Fatalf("web lines = %q", web)
+	}
+	q := rec.queries[0]
+	if q.Get("query") != `{namespace="team", pod="app-1"}` || q.Get("direction") != "backward" || q.Get("limit") != "5000" {
+		t.Fatalf("query = %v", q)
+	}
+	if strings.Contains(raw, "tenant-secret") {
+		t.Fatal("response leaks a header value")
+	}
+}
+
+func TestLokiPodLogsContainerAndTruncated(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	resp, raw := lokiPodLogs(t, "?container=web&limit=3")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	if resp.StatusCode != 200 || !got.Truncated || got.Limit != 3 {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0]; q.Get("query") != `{namespace="team", pod="app-1", container="web"}` || q.Get("limit") != "3" {
+		t.Fatalf("query = %v", q)
+	}
+}
+
+func TestLokiPodLogsDeniedBeforeQuery(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	resp := env.authGet(t, "/api/loki/pods/team/app-1/logs", "alice", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || rec.count() != 0 {
+		t.Fatalf("status %d, %d Loki queries", resp.StatusCode, rec.count())
+	}
+}
+
+func TestLokiPodLogsWindowRejected(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	if resp, raw := lokiPodLogs(t, "?since=30d"); resp.StatusCode != http.StatusBadRequest || rec.count() != 0 {
+		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
+	}
+}
+
+func TestLokiPodLogsNotConnected(t *testing.T) {
+	loki.Retire(nil)
+	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestLokiPodLogsUpstreamError(t *testing.T) {
+	rec := newLokiRecorder(t, "")
+	rec.status, rec.body = 400, "max entries limit per query exceeded (tenant-secret)"
+	resp, raw := lokiPodLogs(t, "")
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(raw, "max entries limit per query exceeded") || strings.Contains(raw, "tenant-secret") {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+}
+
+// The pod need not exist: History reads pods Kubernetes no longer holds.
+func TestLokiPodLogsGonePod(t *testing.T) {
+	newLokiRecorder(t, twoContainers)
+	resp, err := http.Get(testServer.URL + "/api/loki/pods/team/long-gone/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+}
+
+func TestLokiPodLogsSharedListener(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	req, _ := http.NewRequest(http.MethodGet, testServer.URL+"/api/loki/pods/team/app-1/logs?since=1h&query=%7Bx%3D%22y%22%7D", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || rec.count() != 0 {
+		t.Fatalf("cross-site: %d, %d queries", resp.StatusCode, rec.count())
+	}
+	if resp, raw := lokiPodLogs(t, "?since=1h&query=%7Bx%3D%22y%22%7D&direction=forward"); resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if rec.count() != 1 || rec.queries[0].Get("query") != `{namespace="team", pod="app-1"}` || rec.queries[0].Get("direction") != "backward" {
+		t.Fatalf("a caller's parameter reached Loki: %v", rec.queries)
+	}
 }

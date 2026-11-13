@@ -8,6 +8,8 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -352,4 +354,71 @@ func cachedServices() []corev1.Service {
 		out = append(out, *s)
 	}
 	return out
+}
+
+// DefaultLimit is the most lines one read returns.
+const DefaultLimit = 5000
+
+// Line is one log line with the pod and container it came from.
+type Line struct {
+	Time           time.Time
+	Pod, Container string
+	Text           string
+}
+
+// Lines is a read's result, oldest first. Truncated: Loki returned the limit,
+// so older lines in the window were left out.
+type Lines struct {
+	Items     []Line
+	Truncated bool
+}
+
+// QueryRange reads the newest lines of selector in w, up to limit, and
+// returns them oldest first. selector must come from PodSelector or
+// JobSelector: nothing else reaches the query.
+func QueryRange(ctx context.Context, selector string, w Window, limit int) (Lines, error) {
+	labels, ok := Labels()
+	if !ok {
+		if err := EnsureConnected(ctx); err != nil {
+			return Lines{}, err
+		}
+		labels, _ = Labels()
+	}
+	params := url.Values{
+		"query":     {selector},
+		"start":     {strconv.FormatInt(w.Start.UnixNano(), 10)},
+		"end":       {strconv.FormatInt(w.End.UnixNano(), 10)},
+		"limit":     {strconv.Itoa(limit)},
+		"direction": {"backward"},
+	}
+	body, err := Get(ctx, "/loki/api/v1/query_range", params)
+	if err != nil {
+		return Lines{}, err
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Data   struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Stream map[string]string `json:"stream"`
+				Values [][2]string       `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil || resp.Status != "success" || resp.Data.ResultType != "streams" {
+		return Lines{}, fmt.Errorf("%w: Loki's answer was not a list of streams", ErrUnavailable)
+	}
+	var out Lines
+	for _, stream := range resp.Data.Result {
+		for _, v := range stream.Values {
+			ns, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				continue
+			}
+			out.Items = append(out.Items, Line{Time: time.Unix(0, ns).UTC(), Pod: stream.Stream[labels.Pod], Container: stream.Stream[labels.Container], Text: v[1]})
+		}
+	}
+	sort.SliceStable(out.Items, func(i, j int) bool { return out.Items[i].Time.Before(out.Items[j].Time) })
+	out.Truncated = len(out.Items) >= limit
+	return out, nil
 }
