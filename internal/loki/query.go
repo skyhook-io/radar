@@ -65,15 +65,21 @@ func PodSelector(l StreamLabels, namespace, pod, container string) (string, erro
 	return "{" + strings.Join(parts, ", ") + "}", nil
 }
 
-// jobPodPrefixLimit: the Job controller names pods generateName "<job>-",
-// which the API server cuts to 58 characters before the 5-character suffix.
-const jobPodPrefixLimit = 58
+// generatedNameLimit: Kubernetes cuts a generateName prefix to 58 characters
+// before adding the 5-character random suffix.
+const generatedNameLimit = 58
+
+// maxIndexDigits bounds an Indexed Job's completion index (Kubernetes allows
+// up to 100000 completions for Indexed Jobs).
+const maxIndexDigits = 6
 
 // JobSelector selects a Job's pods: by the Job stream label when the shipper
-// adds one, else by pod name ("<job>-", Indexed Jobs add "<index>-", then the
-// random suffix). notice is set when a long Job name was cut, so pods of
-// another Job with the same prefix may be included.
-func JobSelector(l StreamLabels, namespace, job string) (selector, notice string, err error) {
+// adds one, else by the names Kubernetes gives them. A Job's pods are
+// "<job>-<random>" with "<job>-" cut to 58 characters; an Indexed Job's
+// controller keeps "-<index>-" whole and cuts the Job name instead. notice is
+// set when a long name may be cut, so another Job with the same prefix may be
+// included.
+func JobSelector(l StreamLabels, namespace, job string, indexed bool) (selector, notice string, err error) {
 	if reason := l.HistoryReason(); reason != "" {
 		return "", "", errors.New(reason)
 	}
@@ -81,11 +87,35 @@ func JobSelector(l StreamLabels, namespace, job string) (selector, notice string
 	if l.Job != "" {
 		return fmt.Sprintf("{%s, %s=%s}", ns, l.Job, quoteLogQL(job)), "", nil
 	}
-	prefix := job + "-"
-	if len(prefix) > jobPodPrefixLimit {
-		prefix = prefix[:jobPodPrefixLimit]
+	var alternatives []string
+	cut := false
+	if !indexed {
+		prefix := job + "-"
+		if len(prefix) > generatedNameLimit {
+			prefix, cut = prefix[:generatedNameLimit], true
+		}
+		alternatives = append(alternatives, regexp.QuoteMeta(prefix))
+	} else {
+		seen := map[string]bool{}
+		for d := 1; d <= maxIndexDigits; d++ {
+			name := job
+			if keep := generatedNameLimit - 2 - d; len(name) > keep {
+				name, cut = name[:keep], true
+			}
+			alt := regexp.QuoteMeta(name) + fmt.Sprintf("-[0-9]{%d}-", d)
+			if !seen[alt] {
+				seen[alt] = true
+				alternatives = append(alternatives, alt)
+			}
+		}
+	}
+	if cut {
 		notice = "Job names this long are shortened in pod names; lines from another Job with the same prefix may be included."
 	}
-	re := "^" + regexp.QuoteMeta(prefix) + "([0-9]+-?)?[a-z0-9]{5}$"
+	body := alternatives[0]
+	if len(alternatives) > 1 {
+		body = "(?:" + strings.Join(alternatives, "|") + ")"
+	}
+	re := "^" + body + "[a-z0-9]{5}$"
 	return fmt.Sprintf("{%s, %s=~%s}", ns, l.Pod, quoteLogQL(re)), notice, nil
 }

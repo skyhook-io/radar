@@ -52,3 +52,17 @@ it('keeps lines the stream already showed when the pods then go', async () => {
   expect(fetchAll).not.toHaveBeenCalled()
   await act(async () => root.unmount())
 })
+
+it('reads the snapshot when the host becomes able to after the stream ended', async () => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const fetchAll = vi.fn(async () => loki)
+  const view = (ready: boolean) => <WorkloadLogsViewer name="run-1" fetchAll={fetchAll} createStream={() => new FakeEventSource() as unknown as EventSource} autoStream readSnapshotWhenPodsGone={ready} />
+  await act(async () => root.render(view(false)))
+  await act(async () => FakeEventSource.last?.emit('connected', {}))
+  await act(async () => FakeEventSource.last?.emit('end', { reason: 'pods-gone', emptyReason: 'pods-gone' }))
+  expect(fetchAll).not.toHaveBeenCalled()
+  await act(async () => root.render(view(true)))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  expect(fetchAll).toHaveBeenCalledTimes(1)
+  await act(async () => root.unmount())
+})

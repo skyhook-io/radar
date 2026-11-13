@@ -89,23 +89,26 @@ interface LokiJobLogs {
 const timeOf = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
 
 /**
- * A Job run whose pods are gone reads from Loki instead, when it can (`ready`).
- * Anything else, or a Loki without the run's lines, keeps Kubernetes' answer.
+ * A Job run whose pods are gone reads from Loki instead, when it can (`ready`),
+ * keeping to `container` when one is chosen. Anything else, or a Loki without
+ * the run's lines, keeps Kubernetes' answer; a Loki that failed says so.
  */
-export async function withLokiRunFallback(kind: string, namespace: string, name: string, data: WorkloadLogsResult, ready: boolean, signal?: AbortSignal): Promise<WorkloadLogsResult> {
+export async function withLokiRunFallback(kind: string, namespace: string, name: string, data: WorkloadLogsResult, ready: boolean, signal?: AbortSignal, container?: string): Promise<WorkloadLogsResult> {
   if (!ready || data.emptyReason !== 'pods-gone' || !['job', 'jobs'].includes(kind.toLowerCase())) return data
   let run: LokiJobLogs
   try {
     run = await fetchJSON<LokiJobLogs>(`/loki/jobs/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`, signal)
   } catch (err) {
     if (signal?.aborted) throw err
-    return data // Loki failing must not hide what Kubernetes said about the run
+    // Loki is the logging system the message points to: say why it didn't answer.
+    return { ...data, notice: `Couldn't read this run from Loki: ${err instanceof Error ? err.message : String(err)}` }
   }
-  if (run.logs.length === 0) return data
+  const logs = container ? run.logs.filter(l => l.container === container) : run.logs
+  if (logs.length === 0) return data
   const notice = [
     `From Loki, ${timeOf(run.window.start)}–${timeOf(run.window.end)}`,
     run.truncated && `the newest ${run.limit.toLocaleString()} lines (the limit; older lines may be missing)`,
     run.notice,
   ].filter(Boolean).join('. ')
-  return { pods: run.pods, logs: run.logs, notice }
+  return { pods: run.pods, logs, notice }
 }

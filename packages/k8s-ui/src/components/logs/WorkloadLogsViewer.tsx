@@ -194,6 +194,15 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const loadLogsRef = useRef(loadLogs)
   const readSnapshotWhenPodsGoneRef = useRef(readSnapshotWhenPodsGone)
   const streamShowedLinesRef = useRef(false)
+  // A stream that ended with its pods gone and nothing shown, before the host
+  // could read the snapshot: read it once the host can.
+  const [endedPodsGone, setEndedPodsGone] = useState(false)
+  useEffect(() => {
+    if (endedPodsGone && readSnapshotWhenPodsGone) {
+      setEndedPodsGone(false)
+      void loadLogs()
+    }
+  }, [endedPodsGone, readSnapshotWhenPodsGone, loadLogs])
   useEffect(() => {
     loadLogsRef.current = loadLogs
     readSnapshotWhenPodsGoneRef.current = readSnapshotWhenPodsGone
@@ -230,6 +239,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setFetchError(null)
     clear()
     streamShowedLinesRef.current = false
+    setEndedPodsGone(false)
     startStreaming(
       () => createStream({ container: selectedContainer || undefined, tailLines: 50, sinceSeconds }),
       {
@@ -316,9 +326,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         onEnd: (data: any) => {
           // Only a stream that showed nothing: a snapshot would replace lines
           // the user just watched, possibly with fewer.
-          if (data?.emptyReason === 'pods-gone' && readSnapshotWhenPodsGoneRef.current && !streamShowedLinesRef.current) {
-            void loadLogsRef.current()
-            return
+          if (data?.emptyReason === 'pods-gone' && !streamShowedLinesRef.current) {
+            if (readSnapshotWhenPodsGoneRef.current) {
+              void loadLogsRef.current()
+              return
+            }
+            setEndedPodsGone(true)
           }
           setNotice('')
           // The stream ends when the workload has no Pods left.

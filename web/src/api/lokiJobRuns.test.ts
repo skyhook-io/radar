@@ -41,12 +41,18 @@ describe('withLokiRunFallback', () => {
     expect(await withLokiRunFallback('deployment', 'team', 'web', gone, true)).toBe(gone)
     expect(calls.urls).toEqual([])
   })
-  it('keeps the original answer when Loki fails', async () => {
+  it('keeps the original answer when Loki fails, and says so', async () => {
     calls.fail = true
     try {
-      expect(await withLokiRunFallback('job', 'team', 'nightly-1', gone, true)).toBe(gone)
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true)
+      expect(got.emptyMessage).toBe(gone.emptyMessage)
+      expect(got.notice).toBe("Couldn't read this run from Loki: Loki is not connected")
     } finally {
       calls.fail = false
     }
+  })
+  it('keeps to the chosen container', async () => {
+    const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'sidecar')
+    expect(got.logs).toEqual([])
   })
 })

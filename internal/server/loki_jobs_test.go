@@ -66,7 +66,7 @@ func TestLokiJobLogsGroupsByPod(t *testing.T) {
 	if got.Logs[0].Content != "a" || got.Logs[1].Content != "b" || got.Logs[2].Content != "c" || got.Logs[0].Pod != "nightly-29905990-aaaaa" {
 		t.Fatalf("logs = %+v", got.Logs)
 	}
-	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod=~"^nightly-29905990-([0-9]+-?)?[a-z0-9]{5}$"}` {
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod=~"^nightly-29905990-[a-z0-9]{5}$"}` {
 		t.Fatalf("query = %s", q)
 	}
 }

@@ -32,7 +32,7 @@ export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, s
       `${snapshotOnly ? `/jobsets/${namespace}/${name}` : `/workloads/${kind}/${namespace}/${name}`}/logs${qs ? `?${qs}` : ''}`, { signal: params.signal }
     )
     // A finished run whose pods are gone may still be in Loki.
-    return snapshotOnly ? data : withLokiRunFallback(kind, namespace, name, data, lokiRuns, params.signal)
+    return snapshotOnly ? data : withLokiRunFallback(kind, namespace, name, data, lokiRuns, params.signal, params.container)
   }, [kind, namespace, name, snapshotOnly, role, lokiRuns])
 
   const makeStream = useCallback((params: WorkloadLogsFetchParams) => {

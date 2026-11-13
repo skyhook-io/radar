@@ -252,7 +252,8 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 		s.writeLokiError(w, err)
 		return
 	}
-	selector, notice, err := loki.JobSelector(labels, namespace, name)
+	indexed := job.Spec.CompletionMode != nil && *job.Spec.CompletionMode == batchv1.IndexedCompletion
+	selector, notice, err := loki.JobSelector(labels, namespace, name, indexed)
 	if err != nil {
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
