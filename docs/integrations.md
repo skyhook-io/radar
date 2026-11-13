@@ -707,6 +707,12 @@ The viewer reads `GET /api/loki/pods/{namespace}/{name}/logs?container=&since=1h
 - **Errors:** 503 when Loki is not connected or has no namespace or pod stream label; 502 with Loki's own message (redacted) when it answers an error, such as its per-query line limit.
 - An empty answer means Loki holds nothing for that pod in the window: the pod's logs may never have been shipped.
 
+**Finished Job runs.** Where a Job's or CronJob run's logs say its pods are no longer present, Radar reads that run from Loki and says so ("From Loki, <start>–<end>"). It reads `GET /api/loki/jobs/{namespace}/{name}/logs`:
+- **Only Jobs Kubernetes still holds:** the run's own time bounds the window, from its start to its completion or last failure (or now) with a minute on each side, at most 7 days; `start`/`end` override it. A Job that is gone returns 404.
+- **Gate:** the workload logs gate (namespace access, `get jobs`, `list pods`, `get pods/log`), plus the same limits without authentication and under `--namespace-scope` as pod History, before Loki is contacted.
+- **Selecting the run's pods:** by a Job stream label when Loki has one (`job_name`, `batch_kubernetes_io_job_name`), else by the Job controller's pod names (`<job>-`, an Indexed Job's `<index>-`, then the random suffix). Kubernetes shortens a long Job name in its pods' names; then lines from another Job with the same prefix may be included, and the answer says so.
+- If Loki fails or holds nothing for the run, the viewer keeps Kubernetes' message.
+
 ## Trivy Operator
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.
