@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -31,7 +32,19 @@ type traefikInstance struct {
 	entryPoints         map[string]bool // HTTP-capable entry points
 	defaultEntryPoints  map[string]bool
 	allowCrossNamespace bool
+	classSource         traefikClassSource
 }
+
+// traefikClassSource is where a Traefik version reads an IngressRoute's
+// class: from 3.7 spec.ingressClassName when set (even empty), else the
+// kubernetes.io/ingress.class annotation; before 3.7 only the annotation.
+type traefikClassSource int
+
+const (
+	traefikClassUnknown traefikClassSource = iota // the image tag names no minor version
+	traefikClassAnnotation
+	traefikClassField
+)
 
 // DetectLiveTraefikMissingRefs reports traefik.io IngressRoutes a running
 // Traefik v3 loads
@@ -119,7 +132,8 @@ func runningTraefikInstances(cache *ResourceCache) []traefikInstance {
 }
 
 func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
-	if traefikMajorVersion(c.Image) != 3 || len(c.EnvFrom) > 0 {
+	major, minor := traefikVersion(c.Image)
+	if major != 3 || len(c.EnvFrom) > 0 {
 		return traefikInstance{}, false
 	}
 	configDirs := []string{"/etc/traefik"}
@@ -151,6 +165,12 @@ func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
 		}
 	}
 	inst := traefikInstance{entryPoints: map[string]bool{}}
+	switch {
+	case minor >= 7:
+		inst.classSource = traefikClassField
+	case minor >= 0:
+		inst.classSource = traefikClassAnnotation
+	}
 	asDefault := map[string]bool{}
 	enabled, disabled := false, false
 	entryPointsConfigured := false
@@ -233,24 +253,33 @@ var traefikValuedFlags = map[string]bool{
 	"providers.kubernetescrd.labelselector": true,
 }
 
-// traefikMajorVersion reads the major version from an image tag, or 0.
-func traefikMajorVersion(image string) int {
+// traefikVersion reads major and minor from an image tag: 0 when the tag
+// names no version, minor -1 when it names none.
+func traefikVersion(image string) (major, minor int) {
 	if at := strings.Index(image, "@"); at >= 0 {
 		image = image[:at]
 	}
 	slash := strings.LastIndex(image, "/")
 	colon := strings.LastIndex(image, ":")
 	if colon <= slash {
-		return 0
+		return 0, -1
 	}
-	tag := strings.TrimPrefix(image[colon+1:], "v")
-	switch {
-	case strings.HasPrefix(tag, "2."), tag == "2":
-		return 2
-	case strings.HasPrefix(tag, "3."), tag == "3":
-		return 3
+	parts := strings.SplitN(strings.TrimPrefix(image[colon+1:], "v"), ".", 3)
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, -1
 	}
-	return 0
+	minor = -1
+	if len(parts) > 1 {
+		digits := parts[1]
+		if i := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+			digits = digits[:i]
+		}
+		if n, err := strconv.Atoi(digits); err == nil {
+			minor = n
+		}
+	}
+	return major, minor
 }
 
 // traefikLoaders returns the instances that load route, applying the CRD
@@ -258,24 +287,29 @@ func traefikMajorVersion(image string) int {
 // unconfigured provider takes routes with no class or class "traefik"), and
 // entry points the route names.
 func traefikLoaders(instances []traefikInstance, route *unstructured.Unstructured) []traefikInstance {
-	class, hasClass, _ := unstructured.NestedString(route.Object, "spec", "ingressClassName")
-	legacyClass, hasLegacyClass := route.GetAnnotations()["kubernetes.io/ingress.class"]
-	// Traefik versions disagree on which class source wins.
-	if hasClass && hasLegacyClass && class != legacyClass {
-		return nil
-	}
-	if !hasClass {
-		class = legacyClass
+	annotationClass := route.GetAnnotations()["kubernetes.io/ingress.class"]
+	fieldClass := annotationClass
+	if class, hasClass, _ := unstructured.NestedString(route.Object, "spec", "ingressClassName"); hasClass {
+		fieldClass = class
 	}
 	var out []traefikInstance
 	for _, inst := range instances {
+		var admitted bool
+		switch inst.classSource {
+		case traefikClassField:
+			admitted = inst.admitsClass(fieldClass)
+		case traefikClassAnnotation:
+			admitted = inst.admitsClass(annotationClass)
+		default:
+			admitted = inst.admitsClass(fieldClass) && inst.admitsClass(annotationClass)
+		}
+		if !admitted {
+			continue
+		}
 		if inst.namespaces != nil && !inst.namespaces[route.GetNamespace()] {
 			continue
 		}
 		if inst.labelSelector != nil && !inst.labelSelector.Matches(labels.Set(route.GetLabels())) {
-			continue
-		}
-		if class != inst.ingressClass && (inst.ingressClass != "" || class != "traefik") {
 			continue
 		}
 		if len(inst.routeEntryPoints(route)) > 0 {
@@ -283,6 +317,12 @@ func traefikLoaders(instances []traefikInstance, route *unstructured.Unstructure
 		}
 	}
 	return out
+}
+
+// admitsClass is Traefik's shouldProcessIngress: the configured class, or
+// "traefik" when none is configured.
+func (inst traefikInstance) admitsClass(class string) bool {
+	return class == inst.ingressClass || (inst.ingressClass == "" && class == "traefik")
 }
 
 func (inst traefikInstance) routeEntryPoints(route *unstructured.Unstructured) map[string]bool {
