@@ -204,6 +204,7 @@ export interface FeatureCapabilities {
   podFileUpload?: boolean
   lokiConnection?: boolean
   lokiPodHistory?: boolean
+  lokiJobRuns?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

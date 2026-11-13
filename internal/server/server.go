@@ -760,6 +760,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Pod logs (non-streaming)
 			r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
 			r.Get("/loki/pods/{namespace}/{name}/logs", s.handleLokiPodLogs)
+			r.Get("/loki/jobs/{namespace}/{name}/logs", s.handleLokiJobLogs)
 			r.Get("/pods/{namespace}/{name}/environment", s.handlePodEnvironment)
 			r.Post("/pods/{namespace}/{name}/environment/reveal", s.handleRevealPodEnvironment)
 
@@ -1523,6 +1524,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodFileUpload:            true,
 		LokiConnection:           true,
 		LokiPodHistory:           true,
+		LokiJobRuns:              true,
 	}
 }
 

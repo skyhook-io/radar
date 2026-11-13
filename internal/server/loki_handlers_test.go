@@ -137,11 +137,16 @@ type lokiRecorder struct {
 
 func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
 	t.Helper()
+	return newLokiRecorderWithLabels(t, `["namespace","pod","container"]`, streams)
+}
+
+func newLokiRecorderWithLabels(t *testing.T, labelNames, streams string) *lokiRecorder {
+	t.Helper()
 	rec := &lokiRecorder{status: 200, body: streams}
 	rec.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/loki/api/v1/labels":
-			_, _ = w.Write([]byte(`{"status":"success","data":["namespace","pod","container"]}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":` + labelNames + `}`))
 		case "/loki/api/v1/query_range":
 			rec.mu.Lock()
 			rec.queries = append(rec.queries, r.URL.Query())
