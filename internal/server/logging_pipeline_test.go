@@ -135,6 +135,7 @@ func allowPipeline(namespaces []string, deny ...string) *auth.UserPermissions {
 		perms.SetCanI("list", group, resource, ns, !denied[resource+"@"+ns])
 	}
 	set(logging.Group, "loggings", "")
+	set(logging.Group, "fluentbitagents", "")
 	for _, r := range []string{"clusterflows", "clusteroutputs", "flows", "outputs"} {
 		set(logging.Group, r, "logging-system")
 		for _, ns := range namespaces {
@@ -143,6 +144,9 @@ func allowPipeline(namespaces []string, deny ...string) *auth.UserPermissions {
 	}
 	set("apps", "daemonsets", "logging-system")
 	set("apps", "statefulsets", "logging-system")
+	for _, ns := range namespaces {
+		set("", "pods", ns)
+	}
 	return perms
 }
 
@@ -207,6 +211,42 @@ func TestLoggingPipelineSharedListener(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-site GET = %d, want 403", resp.StatusCode)
+	}
+}
+
+// Namespace access can come from a deployments sentinel; pod names still need
+// list pods in that namespace.
+func TestLoggingPipelineNeedsListPods(t *testing.T) {
+	seedPipelineFixture(t, pipelinePods()...)
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("dave", nil, allowPipeline([]string{"team", "ops"}, "pods@ops"))
+	got, raw := readPipeline(t, env.authGet(t, "/api/logging/pipeline", "dave", ""))
+	if strings.Contains(raw, `"o1"`) || !hasGap(got, "pods") {
+		t.Fatalf("pods the caller can't list leaked or went unreported: %s", raw)
+	}
+	if r := got.Providers[0].Routes; len(r) != 1 || r[0].SelectedPods != (logPodCount{Count: 2, LowerBound: true}) {
+		t.Fatalf("routes = %+v", r)
+	}
+}
+
+// A collector the caller can't list is a gap, never "None found".
+func TestLoggingPipelineUnlistableWorkloadsAreAGap(t *testing.T) {
+	seedPipelineFixture(t, pipelinePods()...)
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("erin", nil, allowPipeline([]string{"team", "ops"}, "daemonsets@logging-system"))
+	got, raw := readPipeline(t, env.authGet(t, "/api/logging/pipeline", "erin", ""))
+	if !hasGap(got, "daemonsets") || strings.Contains(raw, "default-fluentbit") {
+		t.Fatalf("response = %s", raw)
+	}
+}
+
+func TestPipelineCandidateWithoutLoggings(t *testing.T) {
+	f := logging.Flow{Namespace: "logging-system", Name: "optin", Cluster: true}
+	if c := pipelineCandidate(f, nil, false); !c.Ignored {
+		t.Errorf("read, no Logging counts it: %+v, want ignored", c)
+	}
+	if c := pipelineCandidate(f, nil, true); c.Ignored || !c.OnlyMaybe {
+		t.Errorf("Loggings unread: %+v, want not ignored and only maybe", c)
 	}
 }
 

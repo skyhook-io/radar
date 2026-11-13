@@ -47,4 +47,24 @@ describe('LoggingView', () => {
     Object.assign(state, { data: undefined, error: new RadarFeatureUnsupportedError('loggingPipeline', {}) })
     expect(render()).toContain('need a newer Radar')
   })
+  it('shows a destination a route names but nothing backs, instead of hiding it', () => {
+    const base = pipeline()
+    base.providers[0].routes[0].destinations.push({ kind: 'ClusterOutput', namespace: 'logging', name: 'gone', found: false })
+    Object.assign(state, { data: base, error: null })
+    expect(render()).toMatch(/gone(<[^>]+>)*[^<]*(<[^>]+>)*not found/)
+    const unread = pipeline({ coverage: { gaps: [{ group: 'logging.banzaicloud.io', resource: 'clusteroutputs' }], namespaces: null } })
+    unread.providers[0].routes[0].destinations.push({ kind: 'ClusterOutput', namespace: 'logging', name: 'gone', found: false })
+    Object.assign(state, { data: unread, error: null })
+    expect(render()).toMatch(/gone(<[^>]+>)*[^<]*(<[^>]+>)*not read/)
+  })
+  it('does not call routes unprocessed when the Loggings were not read', () => {
+    const data = pipeline({ coverage: { gaps: [{ group: 'logging.banzaicloud.io', resource: 'loggings' }], namespaces: null } })
+    data.providers[0].instances = []
+    data.providers[0].routes[0].instance = ''
+    Object.assign(state, { data, error: null })
+    const html = render()
+    expect(html).not.toContain('Not processed')
+    expect(html).toContain('Loggings could not be read')
+    expect(html).toContain('ClusterFlow optin')
+  })
 })

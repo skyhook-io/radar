@@ -12,7 +12,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/logging"
 )
 
@@ -112,7 +111,11 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "no access to list Loggings")
 		return
 	}
-	namespaces, _ := s.parseNamespacesForUserWithStatus(r)
+	namespaces, discoveryFailed := s.parseNamespacesForUserWithStatus(r)
+	if discoveryFailed {
+		s.writeError(w, http.StatusServiceUnavailable, "could not determine namespace access")
+		return
+	}
 	resp := logPipelineResponse{
 		Providers: []logPipelineProvider{},
 		Unrouted:  logUnrouted{Pods: []logPodRef{}},
@@ -141,23 +144,18 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Coverage.Gaps = append(resp.Coverage.Gaps, logReadError{group, resource})
 	}
-	// allowed memoizes the caller's list access per (resource, namespace).
-	seen := map[[2]string]bool{}
-	allowed := func(group, resource, ns string) bool {
-		key := [2]string{group + "/" + resource, ns}
-		ok, done := seen[key]
-		if !done {
-			ok = s.canRead(r, group, resource, ns, "list")
-			seen[key] = ok
-		}
-		if !ok {
+	// typed reads a typed kind as far as the caller may list it and Radar's
+	// informer holds it (typedKindScope); short of that is a gap. read is the
+	// namespaces to take objects from, nil for all.
+	typed := func(group, resource string, within []string) (read []string, partial bool) {
+		acc, read := s.typedKindScope(r, cache, within, group, resource)
+		if acc.State != integration.KindCoverageFull {
 			gap(group, resource)
+			return read, true
 		}
-		return ok
+		return read, false
 	}
-	inView := func(ns string) bool {
-		return namespaces == nil || (!readscope.NoNamespaceAccess(namespaces) && slices.Contains(namespaces, ns))
-	}
+	in := func(read []string, ns string) bool { return read == nil || slices.Contains(read, ns) }
 	budget := newSyncBudget(r.Context())
 	// read lists a Logging kind as far as the caller may list it (per
 	// namespace for namespaced kinds) and Radar has it; anything short of a
@@ -177,6 +175,7 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		loggings = append(loggings, logging.LoggingFrom(u))
 	}
 	sort.Slice(loggings, func(i, j int) bool { return loggings[i].Name < loggings[j].Name })
+	loggingsUnread := slices.Contains(resp.Coverage.Gaps, logReadError{logging.Group, "loggings"})
 	controlNamespace := map[string]string{}
 	instanceOf := map[string]string{}
 	for _, l := range loggings {
@@ -217,7 +216,7 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	}{{"ClusterFlow", "clusterflows", nil}, {"Flow", "flows", namespaces}} {
 		for _, u := range read(src.kind, src.plural, false, src.within) {
 			f := logging.FlowFrom(u)
-			c := loggingCandidate(f, loggings)
+			c := pipelineCandidate(f, loggings, loggingsUnread)
 			cands = append(cands, c)
 			provider.Routes = append(provider.Routes, logPipelineRoute{
 				Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
@@ -235,13 +234,13 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	for _, l := range loggings {
 		var ws []logging.Workload
 		ns := l.ControlNamespace
-		if allowed("apps", "daemonsets", ns) && cache.DaemonSets() != nil {
+		if read, _ := typed("apps", "daemonsets", []string{ns}); in(read, ns) && cache.DaemonSets() != nil {
 			list, _ := cache.DaemonSets().DaemonSets(ns).List(labels.Everything())
 			for _, d := range list {
 				ws = append(ws, ownedWorkload("DaemonSet", d.Namespace, d.Name, d.OwnerReferences, int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled)))
 			}
 		}
-		if allowed("apps", "statefulsets", ns) && cache.StatefulSets() != nil {
+		if read, _ := typed("apps", "statefulsets", []string{ns}); in(read, ns) && cache.StatefulSets() != nil {
 			list, _ := cache.StatefulSets().StatefulSets(ns).List(labels.Everything())
 			for _, st := range list {
 				desired := 1
@@ -260,16 +259,18 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	// shortcut: one pass over every running pod in view per request; fine for
 	// thousands of pods, cache the counts if the page is polled on huge fleets.
 	var pods []logging.PodFacts
-	if !readscope.NoNamespaceAccess(namespaces) {
+	podNamespaces, podsPartial := typed("", "pods", namespaces)
+	// A view narrower than every namespace leaves pods out of every count.
+	podsPartial = podsPartial || namespaces != nil
+	resp.Coverage.Namespaces = podNamespaces
+	if podNamespaces == nil || len(podNamespaces) > 0 {
 		all, _ := cache.Pods().List(labels.Everything())
 		for _, p := range all {
-			if p.Status.Phase == corev1.PodRunning && inView(p.Namespace) {
+			if p.Status.Phase == corev1.PodRunning && in(podNamespaces, p.Namespace) {
 				pods = append(pods, loggingPodFacts(p))
 			}
 		}
 	}
-	// Namespaces narrower than "all" leave pods out of every count.
-	podsPartial := namespaces != nil
 	counts, unrouted, uncertain := logging.CountPods(cands, pods)
 	for i := range provider.Routes {
 		provider.Routes[i].SelectedPods = logPodCount{Count: counts[i].Count, LowerBound: counts[i].LowerBound || podsPartial}
@@ -313,4 +314,14 @@ func wireWorkloads(ws []logging.Workload) []logWorkload {
 		out = append(out, logWorkload{Kind: w.Kind, Namespace: w.Namespace, Name: w.Name, Ready: w.Ready, Desired: w.Desired})
 	}
 	return out
+}
+
+// pipelineCandidate is loggingCandidate when the Loggings could be read. When
+// they couldn't, whether the operator processes a Flow is unknown: it is
+// neither ignored nor certain, so its pods count only as "may be selected".
+func pipelineCandidate(f logging.Flow, loggings []logging.Logging, loggingsUnread bool) logging.Candidate {
+	if loggingsUnread {
+		return logging.Candidate{Flow: f, OnlyMaybe: true}
+	}
+	return loggingCandidate(f, loggings)
 }
