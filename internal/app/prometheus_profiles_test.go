@@ -220,3 +220,42 @@ func TestPrepareSharedPrometheusKeepsExistingConfiguration(t *testing.T) {
 		}
 	}
 }
+
+func TestLaunchLokiOverride(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+	got, err := preparePrometheusConfiguration(AppConfig{LokiURL: "http://loki.example:3100", LokiURLFlag: true, LokiHeaders: map[string]string{"X-Scope-OrgID": "tenant"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := got.LocalConnections.Resolve(target, config.IntegrationLoki, false)
+	if s.View.State != "launch" || s.Settings.Loki == nil || s.Settings.Loki.URL != "http://loki.example:3100" || s.Settings.Loki.Headers["X-Scope-OrgID"] != "tenant" {
+		t.Fatalf("selection = %+v / %+v", s.View, s.Settings.Loki)
+	}
+	if _, err := preparePrometheusConfiguration(AppConfig{LokiURL: "ftp://loki", LokiURLFlag: true}); err == nil {
+		t.Fatal("accepted a non-HTTP --loki-url")
+	}
+}
+
+func TestLokiHeaderFlagNeedsURL(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+	_, err := preparePrometheusConfiguration(AppConfig{LokiHeaderFlag: true, LokiHeaders: map[string]string{"X-Scope-OrgID": "tenant"}})
+	if err == nil || err.Error() != "local Loki header flags require --loki-url in the same launch" {
+		t.Fatalf("err = %v", err)
+	}
+}
