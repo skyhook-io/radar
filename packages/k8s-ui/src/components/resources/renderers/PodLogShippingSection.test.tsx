@@ -75,4 +75,9 @@ describe('PodLogShippingSection', () => {
     expect(html).toContain('boom')
     expect(html).not.toContain('Not shipped')
   })
+  it('says an output of a kind Radar could not read is not read, not missing', () => {
+    const html = render(answer({ readErrors: [{ group: 'logging.banzaicloud.io', resource: 'clusteroutputs' }], routes: [flow({ selected: true, destinations: [{ kind: 'ClusterOutput', namespace: 'logging-system', name: 'loki', found: false }] })] }))
+    expect(html).toContain('not read')
+    expect(html).not.toContain('not found')
+  })
 })

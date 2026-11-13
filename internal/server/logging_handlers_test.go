@@ -364,3 +364,51 @@ func TestLoggingPodShippingExcludedAndOutputNamespace(t *testing.T) {
 }
 
 func boolp(b bool) *bool { return &b }
+
+// Loggings that couldn't be read can't make a Flow "ignored": whether the
+// operator counts it is unknown, so a matching Flow may select the pod.
+func TestLoggingPodShippingUnreadLoggings(t *testing.T) {
+	seedLoggingFixture(t, loggingKinds(), map[string]string{"example.com/loki-logs": "true"})
+	kinds := loggingKinds()
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, k := range kinds {
+		listKinds[schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}] = k.Kind + "List"
+	}
+	optin := lgObj("ClusterFlow", "logging-system", "optin", map[string]any{
+		"match":            []any{map[string]any{"select": map[string]any{"labels": map[string]any{"example.com/loki-logs": "true"}}}},
+		"globalOutputRefs": []any{"loki"},
+	}, map[string]any{"active": true})
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, optin)
+	dyn.PrependReactor("list", "loggings", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "logging.banzaicloud.io", Resource: "loggings"}, "", nil)
+	})
+	oldWait := dynamicSyncWait
+	dynamicSyncWait = 300 * time.Millisecond
+	t.Cleanup(func() { dynamicSyncWait = oldWait })
+	k8s.ResetTestDynamicState()
+	if err := k8s.InitTestDynamicResourceCache(dyn, kinds); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
+	got, _ := getLoggingPod(t, resp)
+	if !slices.Contains(got.ReadErrors, logReadError{Group: logging.Group, Resource: "loggings"}) {
+		t.Fatalf("readErrors = %v", got.ReadErrors)
+	}
+	route := flowByName(got, "optin")
+	if route.Ignored || route.Selected || !route.Uncertain || got.Shipped || !got.Uncertain {
+		t.Fatalf("optin = %+v, answer = %+v", route, got)
+	}
+}
+
+// Ephemeral containers write logs to the node like any other container, so
+// a container_names rule can select one.
+func TestLoggingPodFactsIncludeEphemeralContainers(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{
+		InitContainers:      []corev1.Container{{Name: "init"}},
+		Containers:          []corev1.Container{{Name: "app"}},
+		EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debugger"}}},
+	}}
+	if got := loggingPodFacts(pod).Containers; !slices.Equal(got, []string{"init", "app", "debugger"}) {
+		t.Fatalf("containers = %v", got)
+	}
+}
