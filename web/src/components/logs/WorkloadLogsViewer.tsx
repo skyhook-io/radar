@@ -4,6 +4,7 @@ import { WorkloadLogsViewer as SharedWorkloadLogsViewer } from '@skyhook-io/k8s-
 import type { WorkloadLogsFetchParams, WorkloadLogsResult } from '@skyhook-io/k8s-ui'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useTheme } from '../../context/ThemeContext'
+import { useLokiJobRunsReady, withLokiRunFallback } from '../../api/loki'
 
 interface WorkloadLogsViewerProps {
   kind: string
@@ -18,6 +19,7 @@ interface WorkloadLogsViewerProps {
 export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, snapshotOnly = false, role }: WorkloadLogsViewerProps) {
   const desktopDownload = useDesktopDownload()
   const { theme } = useTheme()
+  const lokiRuns = useLokiJobRunsReady()
 
   const fetchAll = useCallback(async (params: WorkloadLogsFetchParams): Promise<WorkloadLogsResult> => {
     const query = new URLSearchParams()
@@ -29,8 +31,9 @@ export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, s
     const data = await fetchJSON<WorkloadLogsResult>(
       `${snapshotOnly ? `/jobsets/${namespace}/${name}` : `/workloads/${kind}/${namespace}/${name}`}/logs${qs ? `?${qs}` : ''}`, { signal: params.signal }
     )
-    return data
-  }, [kind, namespace, name, snapshotOnly, role])
+    // A finished run whose pods are gone may still be in Loki.
+    return snapshotOnly ? data : withLokiRunFallback(kind, namespace, name, data, lokiRuns, params.signal)
+  }, [kind, namespace, name, snapshotOnly, role, lokiRuns])
 
   const makeStream = useCallback((params: WorkloadLogsFetchParams) => {
     return createWorkloadLogStream(kind, namespace, name, params)
