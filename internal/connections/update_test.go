@@ -871,3 +871,19 @@ func TestLokiErrorsNameLoki(t *testing.T) {
 func legacyKinds() []config.Integration {
 	return slices.DeleteFunc(slices.Clone(config.IntegrationKinds), func(k config.Integration) bool { return k == config.IntegrationLoki })
 }
+
+// A saved Loki header from an unset variable says Loki, not prometheus.
+func TestLokiEnvHeaderErrorNamesLoki(t *testing.T) {
+	r, a, _ := setupResolver(t)
+	_, err := r.Store.Update(context.Background(), r.Resolve(a, config.IntegrationLoki, false).fileRevision, func(file *config.ClusterProfiles) error {
+		file.Profiles[a.Binding] = config.ClusterProfile{Context: a.Context, Integrations: map[config.Integration]config.IntegrationSettings{config.IntegrationLoki: {Loki: &prom.Connection{URL: "http://loki.example:3100", HeadersFromEnv: map[string]string{"X-Scope-OrgID": "RADAR_TEST_UNSET_LOKI_TENANT"}}, Target: a.Fingerprint}}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := r.Resolve(a, config.IntegrationLoki, false)
+	if got.Err == nil || strings.Contains(strings.ToLower(got.View.Error), "prometheus") || !strings.Contains(got.View.Error, "Loki") {
+		t.Fatalf("error = %q", got.View.Error)
+	}
+}

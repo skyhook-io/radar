@@ -285,6 +285,9 @@ func (p *Resolver) resolve(file config.ClusterProfiles, revision string, err err
 	s.View.InsecureTLS = v.InsecureTLS
 	if c := s.Settings.HeaderConnection(); s.Err == nil && c != nil {
 		headers, err := prom.ResolveHeaders(c.Headers, c.HeadersFromEnv)
+		if err != nil && s.Settings.Loki != nil {
+			err = config.LokiError(err)
+		}
 		if err != nil {
 			s.Err = err
 		} else {

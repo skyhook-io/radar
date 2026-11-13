@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isConnectionQuery,
   costSourceApplyLabel,
   prometheusHeadersFromRows,
   pendingSections,
@@ -63,5 +64,15 @@ describe("Integration settings state", () => {
     expect(costSourceApplyLabel("auto")).toBe("Test & apply source");
     expect(costSourceApplyLabel("kubecost")).toBe("Test & apply source");
     expect(costSourceApplyLabel("prometheus")).toBe("Apply source");
+  });
+});
+
+describe("isConnectionQuery", () => {
+  it("refreshes every integration's status after a connection save, Loki included", () => {
+    for (const key of ["prometheus-status", "opencost-summary", "gitops-tree", "argo-status", "loki-status"]) {
+      expect(isConnectionQuery([key]), key).toBe(true);
+    }
+    expect(isConnectionQuery(["resources"])).toBe(false);
+    expect(isConnectionQuery([1])).toBe(false);
   });
 });
