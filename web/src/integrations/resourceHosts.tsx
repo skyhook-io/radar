@@ -41,6 +41,8 @@ import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBa
 import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
+import { TraefikIngressRouteRenderer } from '../components/resources/renderers/TraefikIngressRouteRenderer'
+import { TraefikMiddlewareRenderer } from '../components/resources/renderers/TraefikMiddlewareRenderer'
 import {
   ValidatingAdmissionPolicyBindingRenderer,
   ValidatingAdmissionPolicyRenderer,
@@ -50,6 +52,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'kubernetes', renderers: { PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer, HPARenderer, PVCRenderer } },
   { id: 'gateway-api', renderers: { HTTPRouteRenderer } },
   { id: 'rbac', renderers: { ServiceAccountRenderer, RoleRenderer, RoleBindingRenderer, NamespaceRenderer } },
+  { id: 'traefik', renderers: { TraefikIngressRouteRenderer, TraefikMiddlewareRenderer } },
   { id: 'batch-and-admission', renderers: { JobRenderer, JobSetRenderer, KueueWorkloadRenderer } },
   {
     id: 'kueue-queues',

@@ -470,7 +470,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **cert-manager** | Certificate, CertificateRequest, Order, Challenge, Issuer, ClusterIssuer |
 | **Gateway API** | Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |
 | **Istio** | VirtualService, DestinationRule, Gateway, ServiceEntry, PeerAuthentication, AuthorizationPolicy |
-| **Traefik** | IngressRoute, IngressRouteTCP, IngressRouteUDP, Middleware, MiddlewareTCP, TraefikService, ServersTransport, ServersTransportTCP, TLSOption, TLSStore |
+| **Traefik** | IngressRoute (with each rule's request path, backend readiness and certificate expiry), IngressRouteTCP, IngressRouteUDP, Middleware (with the routes that use it), MiddlewareTCP, TraefikService, ServersTransport, ServersTransportTCP, TLSOption, TLSStore |
 | **Contour** | HTTPProxy |
 | **Knative Serving** | Service, Configuration, Revision, Route, DomainMapping |
 | **Knative Eventing** | Broker, Trigger, EventType, Channel, InMemoryChannel, Subscription |

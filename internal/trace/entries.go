@@ -419,10 +419,7 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable
 	// counting only kubelet-ready pods there would render a by-design 0-ready
 	// state (StatefulSet peer discovery, bootstrap ordering) as an outage.
 	// Per-pod kubelet readiness stays visible in Config.Pods.
-	readyEndpoints := readyCount(pods)
-	if pnr {
-		readyEndpoints = publishedEndpointCount(pods)
-	}
+	readyEndpoints, _ := EndpointPodCounts(svc, pods)
 	meta := map[string]any{
 		"selected": len(pods),
 		"ready":    readyEndpoints,
@@ -1088,6 +1085,17 @@ func publishedEndpointCount(pods []*corev1.Pod) int {
 		n++
 	}
 	return n
+}
+
+// EndpointPodCounts is a Service's backend count as the trace reads it from
+// its selected pods: total is every selected pod, ready the endpoints the
+// dataplane routes to (kubelet-ready pods, or every published pod for a
+// publishNotReadyAddresses Service).
+func EndpointPodCounts(svc *corev1.Service, pods []*corev1.Pod) (ready, total int) {
+	if svc != nil && svc.Spec.PublishNotReadyAddresses {
+		return publishedEndpointCount(pods), len(pods)
+	}
+	return readyCount(pods), len(pods)
 }
 
 func readyCount(pods []*corev1.Pod) int {

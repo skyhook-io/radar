@@ -469,36 +469,50 @@ func TestTraefikLoadersEntryPoints(t *testing.T) {
 	}
 }
 
+// Traefik 3.7 reads spec.ingressClassName when it is set (even empty) and
+// falls back to the annotation; earlier 3.x reads only the annotation. With
+// an image tag that doesn't name the minor version, a route is admitted only
+// when both rules agree.
 func TestTraefikLoadersClassPresence(t *testing.T) {
+	ann := func(v string) map[string]string { return map[string]string{"kubernetes.io/ingress.class": v} }
 	for _, tt := range []struct {
-		name            string
-		class           any
-		annotations     map[string]string
-		controllerClass string
-		want            bool
+		name               string
+		class              any
+		annotations        map[string]string
+		controllerClass    string
+		v36, v37, vUnknown bool
 	}{
-		{name: "neither", want: true},
-		{name: "field only", class: "internal", controllerClass: "internal", want: true},
-		{name: "annotation only", annotations: map[string]string{"kubernetes.io/ingress.class": "internal"}, controllerClass: "internal", want: true},
-		{name: "agree", class: "internal", annotations: map[string]string{"kubernetes.io/ingress.class": "internal"}, controllerClass: "internal", want: true},
-		{name: "disagree", class: "internal", annotations: map[string]string{"kubernetes.io/ingress.class": "traefik"}, controllerClass: "internal"},
-		{name: "empty field disagrees", class: "", annotations: map[string]string{"kubernetes.io/ingress.class": "traefik"}},
-		{name: "empty annotation disagrees", class: "internal", annotations: map[string]string{"kubernetes.io/ingress.class": ""}, controllerClass: "internal"},
-		{name: "empty field only", class: "", want: true},
-		{name: "empty classes agree", class: "", annotations: map[string]string{"kubernetes.io/ingress.class": ""}, want: true},
+		{name: "neither", v36: true, v37: true, vUnknown: true},
+		{name: "field only", class: "internal", controllerClass: "internal", v37: true},
+		{name: "field only, default controller", class: "internal", v36: true},
+		{name: "annotation only", annotations: ann("internal"), controllerClass: "internal", v36: true, v37: true, vUnknown: true},
+		{name: "agree", class: "internal", annotations: ann("internal"), controllerClass: "internal", v36: true, v37: true, vUnknown: true},
+		{name: "field wins on 3.7", class: "internal", annotations: ann("traefik"), controllerClass: "internal", v37: true},
+		{name: "annotation wins before 3.7", class: "internal", annotations: ann("traefik"), v36: true},
+		{name: "empty field is set", class: "", annotations: ann("traefik"), v36: true, v37: true, vUnknown: true},
+		{name: "empty field hides annotation", class: "", annotations: ann("internal"), controllerClass: "internal", v36: true},
+		{name: "empty annotation", class: "internal", annotations: ann(""), controllerClass: "internal", v37: true},
+		{name: "empty field only", class: "", v36: true, v37: true, vUnknown: true},
+		{name: "empty classes agree", class: "", annotations: ann(""), v36: true, v37: true, vUnknown: true},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			extra := map[string]any{}
-			if tt.class != nil {
-				extra["ingressClassName"] = tt.class
-			}
-			route := ingressRoute("shop", "test", extra, svcRef("gone"), nil)
-			route.SetAnnotations(tt.annotations)
-			inst := traefikInstance{ingressClass: tt.controllerClass, entryPoints: map[string]bool{"http": true}, defaultEntryPoints: map[string]bool{"http": true}}
-			if got := len(traefikLoaders([]traefikInstance{inst}, route)) > 0; got != tt.want {
-				t.Fatalf("route admitted = %v, want %v", got, tt.want)
-			}
-		})
+		for _, v := range []struct {
+			label  string
+			source traefikClassSource
+			want   bool
+		}{{"3.6", traefikClassAnnotation, tt.v36}, {"3.7", traefikClassField, tt.v37}, {"unknown minor", traefikClassUnknown, tt.vUnknown}} {
+			t.Run(tt.name+"/"+v.label, func(t *testing.T) {
+				extra := map[string]any{}
+				if tt.class != nil {
+					extra["ingressClassName"] = tt.class
+				}
+				route := ingressRoute("shop", "test", extra, svcRef("gone"), nil)
+				route.SetAnnotations(tt.annotations)
+				inst := traefikInstance{ingressClass: tt.controllerClass, classSource: v.source, entryPoints: map[string]bool{"http": true}, defaultEntryPoints: map[string]bool{"http": true}}
+				if got := len(traefikLoaders([]traefikInstance{inst}, route)) > 0; got != v.want {
+					t.Fatalf("route admitted = %v, want %v", got, v.want)
+				}
+			})
+		}
 	}
 }
 
@@ -646,17 +660,53 @@ func TestTraefikInventoryLoadsLazilyPerScope(t *testing.T) {
 	}
 }
 
-func TestTraefikMajorVersion(t *testing.T) {
-	for image, want := range map[string]int{
-		"traefik:v3.7.14":                         3,
-		"docker.io/traefik:v2.11.0":               2,
-		"rancher/mirrored-library-traefik:2.10.5": 2,
-		"registry:5000/traefik:3.1@sha256:abc":    3,
-		"traefik":                                 0,
-		"registry:5000/traefik":                   0,
+func TestTraefikVersion(t *testing.T) {
+	for image, want := range map[string][2]int{
+		"traefik:v3.7.14":           {3, 7},
+		"traefik:v3.6.5":            {3, 6},
+		"traefik:3.7":               {3, 7},
+		"traefik:v3":                {3, -1},
+		"traefik:3.10.0-rc1":        {3, 10},
+		"docker.io/traefik:v2.11.0": {2, 11},
+		"rancher/mirrored-library-traefik:2.10.5": {2, 10},
+		"rancher/mirrored-library-traefik:3.3.6":  {3, 3},
+		"registry:5000/traefik:3.1@sha256:abc":    {3, 1},
+		"traefik:latest":                          {0, -1},
+		"traefik":                                 {0, -1},
+		"registry:5000/traefik":                   {0, -1},
 	} {
-		if got := traefikMajorVersion(image); got != want {
-			t.Errorf("traefikMajorVersion(%q) = %d, want %d", image, got, want)
+		if major, minor := traefikVersion(image); major != want[0] || minor != want[1] {
+			t.Errorf("traefikVersion(%q) = %d.%d, want %d.%d", image, major, minor, want[0], want[1])
+		}
+	}
+}
+
+// The class source follows the image: field-first from 3.7, annotation-only
+// before, unknown when the tag names no minor version.
+func TestParseTraefikFlagsClassSource(t *testing.T) {
+	for image, want := range map[string]traefikClassSource{
+		"traefik:v3.7.14": traefikClassField,
+		"traefik:v3.6.5":  traefikClassAnnotation,
+		"traefik:v3":      traefikClassUnknown,
+	} {
+		inst, ok := parseTraefikFlags(corev1.Container{Image: image, Args: []string{"--providers.kubernetescrd"}})
+		if !ok || inst.classSource != want {
+			t.Errorf("%s: ok=%v classSource=%v, want %v", image, ok, inst.classSource, want)
+		}
+	}
+}
+
+// A Traefik 3.6 that loads class "internal" ignores spec.ingressClassName,
+// so a route that names it only there isn't loaded and nothing is reported.
+func TestDetectLiveTraefikMissingRefsClassFieldBefore37(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	pod := traefikPod("traefik", true, append(append([]string{}, traefikArgs...), "--providers.kubernetescrd.ingressclass=internal")...)
+	pod.Spec.Containers[0].Image = "traefik:v3.6.5"
+	initTraefikFixture(t, pod, ingressRoute("shop", "field-class", map[string]any{"ingressClassName": "internal"}, svcRef("gone"), nil))
+	for _, d := range DetectLiveTraefikMissingRefs(GetResourceCache(), GetDynamicResourceCache(), GetResourceDiscovery(), "", nil) {
+		if d.Name == "field-class" {
+			t.Errorf("Traefik 3.6 doesn't load a route classed only by the field: %+v", d)
 		}
 	}
 }

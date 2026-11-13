@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -31,7 +32,19 @@ type traefikInstance struct {
 	entryPoints         map[string]bool // HTTP-capable entry points
 	defaultEntryPoints  map[string]bool
 	allowCrossNamespace bool
+	classSource         traefikClassSource
 }
+
+// traefikClassSource is where a Traefik version reads an IngressRoute's
+// class: from 3.7 spec.ingressClassName when set (even empty), else the
+// kubernetes.io/ingress.class annotation; before 3.7 only the annotation.
+type traefikClassSource int
+
+const (
+	traefikClassUnknown traefikClassSource = iota // the image tag names no minor version
+	traefikClassAnnotation
+	traefikClassField
+)
 
 // DetectLiveTraefikMissingRefs reports traefik.io IngressRoutes a running
 // Traefik v3 loads
@@ -119,7 +132,8 @@ func runningTraefikInstances(cache *ResourceCache) []traefikInstance {
 }
 
 func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
-	if traefikMajorVersion(c.Image) != 3 || len(c.EnvFrom) > 0 {
+	major, minor := traefikVersion(c.Image)
+	if major != 3 || len(c.EnvFrom) > 0 {
 		return traefikInstance{}, false
 	}
 	configDirs := []string{"/etc/traefik"}
@@ -151,6 +165,12 @@ func parseTraefikFlags(c corev1.Container) (traefikInstance, bool) {
 		}
 	}
 	inst := traefikInstance{entryPoints: map[string]bool{}}
+	switch {
+	case minor >= 7:
+		inst.classSource = traefikClassField
+	case minor >= 0:
+		inst.classSource = traefikClassAnnotation
+	}
 	asDefault := map[string]bool{}
 	enabled, disabled := false, false
 	entryPointsConfigured := false
@@ -233,24 +253,33 @@ var traefikValuedFlags = map[string]bool{
 	"providers.kubernetescrd.labelselector": true,
 }
 
-// traefikMajorVersion reads the major version from an image tag, or 0.
-func traefikMajorVersion(image string) int {
+// traefikVersion reads major and minor from an image tag: 0 when the tag
+// names no version, minor -1 when it names none.
+func traefikVersion(image string) (major, minor int) {
 	if at := strings.Index(image, "@"); at >= 0 {
 		image = image[:at]
 	}
 	slash := strings.LastIndex(image, "/")
 	colon := strings.LastIndex(image, ":")
 	if colon <= slash {
-		return 0
+		return 0, -1
 	}
-	tag := strings.TrimPrefix(image[colon+1:], "v")
-	switch {
-	case strings.HasPrefix(tag, "2."), tag == "2":
-		return 2
-	case strings.HasPrefix(tag, "3."), tag == "3":
-		return 3
+	parts := strings.SplitN(strings.TrimPrefix(image[colon+1:], "v"), ".", 3)
+	major, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, -1
 	}
-	return 0
+	minor = -1
+	if len(parts) > 1 {
+		digits := parts[1]
+		if i := strings.IndexFunc(digits, func(r rune) bool { return r < '0' || r > '9' }); i >= 0 {
+			digits = digits[:i]
+		}
+		if n, err := strconv.Atoi(digits); err == nil {
+			minor = n
+		}
+	}
+	return major, minor
 }
 
 // traefikLoaders returns the instances that load route, applying the CRD
@@ -258,24 +287,29 @@ func traefikMajorVersion(image string) int {
 // unconfigured provider takes routes with no class or class "traefik"), and
 // entry points the route names.
 func traefikLoaders(instances []traefikInstance, route *unstructured.Unstructured) []traefikInstance {
-	class, hasClass, _ := unstructured.NestedString(route.Object, "spec", "ingressClassName")
-	legacyClass, hasLegacyClass := route.GetAnnotations()["kubernetes.io/ingress.class"]
-	// Traefik versions disagree on which class source wins.
-	if hasClass && hasLegacyClass && class != legacyClass {
-		return nil
-	}
-	if !hasClass {
-		class = legacyClass
+	annotationClass := route.GetAnnotations()["kubernetes.io/ingress.class"]
+	fieldClass := annotationClass
+	if class, hasClass, _ := unstructured.NestedString(route.Object, "spec", "ingressClassName"); hasClass {
+		fieldClass = class
 	}
 	var out []traefikInstance
 	for _, inst := range instances {
+		var admitted bool
+		switch inst.classSource {
+		case traefikClassField:
+			admitted = inst.admitsClass(fieldClass)
+		case traefikClassAnnotation:
+			admitted = inst.admitsClass(annotationClass)
+		default:
+			admitted = inst.admitsClass(fieldClass) && inst.admitsClass(annotationClass)
+		}
+		if !admitted {
+			continue
+		}
 		if inst.namespaces != nil && !inst.namespaces[route.GetNamespace()] {
 			continue
 		}
 		if inst.labelSelector != nil && !inst.labelSelector.Matches(labels.Set(route.GetLabels())) {
-			continue
-		}
-		if class != inst.ingressClass && (inst.ingressClass != "" || class != "traefik") {
 			continue
 		}
 		if len(inst.routeEntryPoints(route)) > 0 {
@@ -283,6 +317,12 @@ func traefikLoaders(instances []traefikInstance, route *unstructured.Unstructure
 		}
 	}
 	return out
+}
+
+// admitsClass is Traefik's shouldProcessIngress: the configured class, or
+// "traefik" when none is configured.
+func (inst traefikInstance) admitsClass(class string) bool {
+	return class == inst.ingressClass || (inst.ingressClass == "" && class == "traefik")
 }
 
 func (inst traefikInstance) routeEntryPoints(route *unstructured.Unstructured) map[string]bool {
@@ -342,36 +382,66 @@ func (inv *traefikInventory) load(kind string) *traefikKindInventory {
 // serviceMissing reports a Service or TraefikService reference known to be
 // absent, with the inventory a caller must read to see that.
 func (inv *traefikInventory) serviceMissing(ref map[string]any, ns string) (string, issuesapi.EvidenceRead, bool) {
+	verifiable, missing, target, read := inv.servicePresence(ref, ns)
+	if !verifiable || !missing {
+		return "", issuesapi.EvidenceRead{}, false
+	}
+	return target, read, true
+}
+
+// servicePresence is the three-way answer behind serviceMissing: verifiable
+// is false when the inventory can't say (a provider-qualified name, an
+// errors-page configuration name, an unsynced informer), and read is the
+// inventory a caller must be able to list to see the answer either way.
+func (inv *traefikInventory) servicePresence(ref map[string]any, ns string) (verifiable, missing bool, target string, read issuesapi.EvidenceRead) {
 	name, _ := ref["name"].(string)
 	if name == "" || strings.Contains(name, "@") {
-		return "", issuesapi.EvidenceRead{}, false
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
 	if kind, _ := ref["kind"].(string); kind == "TraefikService" {
 		// Errors Middlewares can populate this configuration name without
 		// any TraefikService object, including through normalized aliases.
 		if strings.HasSuffix(traefikGeneratedName(ns, name), "-errorpage-service") {
-			return "", issuesapi.EvidenceRead{}, false
+			return false, false, "", issuesapi.EvidenceRead{}
 		}
 		services := inv.load("TraefikService")
-		if services == nil || services.objects[ns+"/"+name] != nil || services.generatedNames[traefikGeneratedName(ns, name)] > 0 {
-			return "", issuesapi.EvidenceRead{}, false
+		if services == nil {
+			return false, false, "", issuesapi.EvidenceRead{}
 		}
-		return fmt.Sprintf("TraefikService %q", traefikRefLabel(ns, name)), issuesapi.EvidenceRead{Group: inv.group, Resource: "traefikservices", Namespace: ns, Verb: "list"}, true
+		read = issuesapi.EvidenceRead{Group: inv.group, Resource: "traefikservices", Namespace: ns, Verb: "list"}
+		if services.objects[ns+"/"+name] != nil || services.generatedNames[traefikGeneratedName(ns, name)] > 0 {
+			return true, false, "", read
+		}
+		return true, true, fmt.Sprintf("TraefikService %q", traefikRefLabel(ns, name)), read
 	} else if kind != "" && kind != "Service" {
-		return "", issuesapi.EvidenceRead{}, false
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
 	svcLister := inv.cache.Services()
 	if svcLister == nil || !inv.cache.IsKindReady("services") {
-		return "", issuesapi.EvidenceRead{}, false
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
-	if _, err := svcLister.Services(ns).Get(name); !refKnownMissing(inv.cache, "services", ns, name, err) {
-		return "", issuesapi.EvidenceRead{}, false
+	_, err := svcLister.Services(ns).Get(name)
+	known, exists := refLookupResult(inv.cache, "services", ns, name, err)
+	if !known {
+		return false, false, "", issuesapi.EvidenceRead{}
 	}
-	return fmt.Sprintf("Service %q", traefikRefLabel(ns, name)), issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}, true
+	read = issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}
+	if exists {
+		return true, false, "", read
+	}
+	return true, true, fmt.Sprintf("Service %q", traefikRefLabel(ns, name)), read
 }
 
 // traefikMissingRef is a missing target; via names the Middleware the route
 // uses that leads to it, when the route doesn't name it directly.
+// traefikVisit memoizes one Middleware's answer within a walk; done is false
+// while its chain is still being walked.
+type traefikVisit struct {
+	done                bool
+	verifiable, missing bool
+	m                   traefikMissingRef
+}
+
 type traefikMissingRef struct {
 	reason, target, via string
 	// reads are the inventories that show the target missing and the spec
@@ -382,80 +452,113 @@ type traefikMissingRef struct {
 // middlewareMissing walks a route's Middleware reference: a missing
 // Middleware, or a chain member or errors-page Service missing under one it
 // uses, fails the router the same way.
-func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]bool) (traefikMissingRef, bool) {
+func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]*traefikVisit) (traefikMissingRef, bool) {
+	verifiable, m, missing := inv.middlewarePresence(ref, ns, allowCrossNamespace, visited)
+	if !verifiable || !missing {
+		return traefikMissingRef{}, false
+	}
+	return m, true
+}
+
+// middlewarePresence is the three-way answer behind middlewareMissing. A
+// Middleware that exists is verifiable only when every chain member and its
+// errors-page Service are too; the first missing target found wins, as in
+// the detector.
+func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]*traefikVisit) (verifiable bool, m traefikMissingRef, missing bool) {
 	name, _ := ref["name"].(string)
 	// A name with a provider suffix is a generated Traefik identifier, not
 	// an object name, so it can't be looked up directly.
 	if name == "" || strings.Contains(name, "@") {
-		return traefikMissingRef{}, false
+		return false, traefikMissingRef{}, false
 	}
 	if refNs, _ := ref["namespace"].(string); refNs != "" {
 		if refNs != ns && !allowCrossNamespace {
-			return traefikMissingRef{}, false
+			return false, traefikMissingRef{}, false
 		}
 		ns = refNs
 	}
 	middlewares := inv.load("Middleware")
 	if middlewares == nil {
-		return traefikMissingRef{}, false
+		return false, traefikMissingRef{}, false
 	}
 	identifier := traefikGeneratedName(ns, name)
 	// A failing Middleware may be skipped before collision handling, so
 	// its object's spec does not prove which configuration Traefik uses.
 	if middlewares.generatedNames[identifier] > 1 {
-		return traefikMissingRef{}, false
+		return false, traefikMissingRef{}, false
 	}
 	key := ns + "/" + name
-	if visited[key] {
-		return traefikMissingRef{}, false
+	if seen, ok := visited[key]; ok {
+		// Still being walked: a cycle, which can't be decided. Otherwise
+		// another chain member already answered for it.
+		if !seen.done {
+			return false, traefikMissingRef{}, false
+		}
+		return seen.verifiable, seen.m, seen.missing
 	}
-	visited[key] = true
+	visit := &traefikVisit{}
+	visited[key] = visit
+	defer func() { *visit = traefikVisit{done: true, verifiable: verifiable, m: m, missing: missing} }()
+	mwRead := issuesapi.EvidenceRead{Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"}
 	mw, ok := middlewares.objects[key]
 	if !ok {
 		// Legacy Traefik names flatten namespace and name with a dash, so
 		// another object's configuration can satisfy this reference.
 		if middlewares.generatedNames[identifier] > 0 {
-			return traefikMissingRef{}, false
+			return false, traefikMissingRef{}, false
 		}
-		return traefikMissingRef{
+		return true, traefikMissingRef{
 			reason: TraefikRouterMissingMiddlewareReason,
 			target: fmt.Sprintf("Middleware %q", traefikRefLabel(ns, name)),
-			reads:  []issuesapi.EvidenceRead{{Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"}},
+			reads:  []issuesapi.EvidenceRead{mwRead},
 		}, true
 	}
+	unsure := false
+	// A present Middleware answers for its chain members and errors Service
+	// too, so its reads include theirs.
+	presentReads := []issuesapi.EvidenceRead{mwRead}
 	if chain, _, _ := unstructured.NestedSlice(mw.Object, "spec", "chain", "middlewares"); len(chain) > 0 {
 		for _, raw := range chain {
 			member, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
-			if missing, ok := inv.middlewareMissing(member, ns, allowCrossNamespace, visited); ok {
-				if missing.via == "" {
-					missing.via = fmt.Sprintf("chain Middleware %q", traefikRefLabel(ns, name))
+			v, missingRef, isMissing := inv.middlewarePresence(member, ns, allowCrossNamespace, visited)
+			if v && isMissing {
+				if missingRef.via == "" {
+					missingRef.via = fmt.Sprintf("chain Middleware %q", traefikRefLabel(ns, name))
 				}
-				missing.reads = append(missing.reads, issuesapi.EvidenceRead{Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"})
-				return missing, true
+				missingRef.reads = append(missingRef.reads, mwRead)
+				return true, missingRef, true
 			}
+			unsure = unsure || !v
+			presentReads = append(presentReads, missingRef.reads...)
 		}
 	}
 	if errSvc, found, _ := unstructured.NestedMap(mw.Object, "spec", "errors", "service"); found {
 		svcNs := ns
 		if refNs, _ := errSvc["namespace"].(string); refNs != "" {
 			if refNs != ns && !allowCrossNamespace {
-				return traefikMissingRef{}, false
+				return false, traefikMissingRef{}, false
 			}
 			svcNs = refNs
 		}
-		if target, read, ok := inv.serviceMissing(errSvc, svcNs); ok {
-			return traefikMissingRef{
+		v, isMissing, target, read := inv.servicePresence(errSvc, svcNs)
+		if v && isMissing {
+			return true, traefikMissingRef{
 				reason: TraefikRouterMissingServiceReason,
 				target: target,
 				via:    fmt.Sprintf("errors Middleware %q", traefikRefLabel(ns, name)),
-				reads:  []issuesapi.EvidenceRead{read, {Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"}},
+				reads:  []issuesapi.EvidenceRead{read, mwRead},
 			}, true
 		}
+		unsure = unsure || !v
+		presentReads = append(presentReads, read)
 	}
-	return traefikMissingRef{}, false
+	if unsure {
+		return false, traefikMissingRef{}, false
+	}
+	return true, traefikMissingRef{reads: presentReads}, false
 }
 
 func (inv *traefikInventory) ruleMissingRefs(r map[string]any, ns string, allowCrossNamespace bool) []traefikMissingRef {
@@ -473,7 +576,7 @@ func (inv *traefikInventory) ruleMissingRefs(r map[string]any, ns string, allowC
 		}
 	}
 	for _, mw := range nestedMaps(r, "middlewares") {
-		if m, ok := inv.middlewareMissing(mw, ns, allowCrossNamespace, map[string]bool{}); ok {
+		if m, ok := inv.middlewareMissing(mw, ns, allowCrossNamespace, map[string]*traefikVisit{}); ok {
 			missing = append(missing, m)
 		}
 	}

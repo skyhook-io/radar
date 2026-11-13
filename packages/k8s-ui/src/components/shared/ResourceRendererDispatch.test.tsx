@@ -1261,3 +1261,22 @@ describe('Gateway API route plural collision', () => {
     }
   })
 })
+
+describe('Traefik kind collisions', () => {
+  const draw = (kind: string, apiVersion: string, overrides?: RendererOverrides) => renderToString(
+    <ResourceRendererDispatch resource={{ kind, namespace: 'shop', name: 'x' }} rendererOverrides={overrides}
+      data={{ apiVersion, kind: 'Middleware', metadata: { name: 'x', namespace: 'shop' }, spec: { collisionProbe: COLLISION_PROBE, routes: [] } }}
+      onCopy={() => {}} copied={null} showCommonSections={false} />,
+  ).replace(/<!-- -->/g, '')
+  it('renders a foreign middlewares CRD generically', () => {
+    expect(draw('middlewares', 'example.com/v1')).toContain(COLLISION_PROBE)
+  })
+  it('uses the Traefik renderer for the legacy traefik.containo.us group', () => {
+    expect(draw('middlewares', 'traefik.containo.us/v1alpha1')).not.toContain(COLLISION_PROBE)
+  })
+  it('lets an override replace the IngressRoute renderer', () => {
+    const html = draw('ingressroutes', 'traefik.io/v1alpha1', { TraefikIngressRouteRenderer: () => <div>override-probe</div> })
+    expect(html).toContain('override-probe')
+  })
+})
+
