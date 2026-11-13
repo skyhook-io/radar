@@ -1972,3 +1972,26 @@ export interface WorkloadLogStreamEvent {
   // error event
   message?: string
 }
+
+// GET /api/logging/pods/{namespace}/{name}: which Logging operator Flows
+// forward a pod's logs. readErrors non-empty means "can't tell", never "not shipped".
+export interface LoggingOutputRef { kind: string; name: string; type?: string; active?: boolean }
+export interface LoggingPodFlow {
+  kind: string
+  namespace: string
+  name: string
+  selected: boolean
+  uncertain: boolean
+  ignored: boolean
+  unmet: string[]
+  hasFilters: boolean
+  active?: boolean
+  outputs: LoggingOutputRef[]
+}
+export interface LoggingPodShipping {
+  installed: boolean
+  flows: LoggingPodFlow[]
+  shipped: boolean
+  uncertain: boolean
+  readErrors: string[]
+}
