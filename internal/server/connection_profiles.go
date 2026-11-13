@@ -222,7 +222,10 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		defer cancel()
 		err := loki.EnsureConnected(ctx)
 		response.Connected = err == nil
-		if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Discovery is still running; Settings' status shows how it ends.
+			response.Checked = false
+		} else if err != nil {
 			log.Printf("[connections] Saved Loki connection check failed: %s", sanitizeForLog(err.Error()))
 			response.Error = "Saved, but Loki could not be reached. Check its URL, headers and network access."
 		}

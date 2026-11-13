@@ -670,6 +670,9 @@ context or merged with a concurrent file edit.
 It stores a URL and optional headers per context, like Metrics: `X-Scope-OrgID`
 for a multi-tenant Loki, `Authorization` for a gateway that requires it. Header
 values are sent only to the server they were saved for and never returned.
+Headers need a URL: Radar never sends them to a Loki it discovered, and a
+shared installation started with `--loki-header` but no `--loki-url` refuses
+to start.
 
 Without a URL Radar finds Loki in the cluster: a Service named `loki-gateway`,
 `loki-query-frontend`, `loki-read` or `loki`, or labelled

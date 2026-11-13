@@ -23,6 +23,10 @@ import (
 // ErrNotConfigured: Loki is turned off for this context, or was retired.
 var ErrNotConfigured = errors.New("Loki is not connected")
 
+// ErrHeadersRequireURL: credentials are never sent to an auto-discovered
+// endpoint, where anyone who can create a Service could receive them.
+var ErrHeadersRequireURL = errors.New("Loki headers are set but no Loki URL; set the URL, or remove the headers to discover Loki")
+
 // ErrUnavailable: Loki could not be found or reached.
 var ErrUnavailable = errors.New("Loki is unavailable")
 
@@ -58,6 +62,7 @@ var (
 		}
 		return info.Address, nil
 	}
+	stopForward = func() { portforward.Stop(portforward.OwnerLoki) }
 )
 
 const (
@@ -78,7 +83,8 @@ var client struct {
 	contextName string
 	labels      *StreamLabels
 	lastErr     string
-	inflight    chan struct{} // closed when the running connect ends
+	inflight    chan struct{} // closed when the running attempt ends
+	generation  int           // bumped by Configure and Retire
 }
 
 // Configure replaces the connection: rawURL set means that Loki, empty means
@@ -105,8 +111,9 @@ func Retire(err error) {
 }
 
 func dropLocked(lastErr string) {
+	client.generation++
 	client.baseURL, client.source, client.contextName, client.labels, client.lastErr = "", "", "", nil, lastErr
-	portforward.Stop(portforward.OwnerLoki)
+	stopForward()
 }
 
 // CurrentStatus describes the connection for the status endpoint.
@@ -133,7 +140,8 @@ func connectedLocked() bool {
 }
 
 // EnsureConnected finds and probes Loki unless a connection for the current
-// context is already known. Concurrent callers share one attempt.
+// context is already known. Concurrent callers share one attempt, which runs
+// on its own and outlives a caller whose ctx ends first.
 func EnsureConnected(ctx context.Context) error {
 	for {
 		client.mu.Lock()
@@ -145,50 +153,55 @@ func EnsureConnected(ctx context.Context) error {
 			client.mu.Unlock()
 			return nil
 		}
-		if wait := client.inflight; wait != nil {
-			client.mu.Unlock()
-			select {
-			case <-wait:
-				client.mu.Lock()
-				ok, lastErr := connectedLocked(), client.lastErr
-				client.mu.Unlock()
-				if ok {
-					return nil
-				}
-				return fmt.Errorf("%w: %s", ErrUnavailable, lastErr)
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+		wait, generation, contextName := client.inflight, client.generation, currentContext()
+		if wait == nil {
+			wait = make(chan struct{})
+			client.inflight = wait
+			go attempt(wait, generation, client.manualURL, maps.Clone(client.headers), contextName)
 		}
-		done := make(chan struct{})
-		client.inflight = done
-		manual, headers, contextName := client.manualURL, maps.Clone(client.headers), currentContext()
 		client.mu.Unlock()
-
-		// The attempt outlives a cancelled caller: others may be waiting on it.
-		attemptCtx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
-		base, source, found, err := connect(attemptCtx, manual, headers, contextName)
-		cancel()
-
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		client.mu.Lock()
-		client.inflight = nil
-		close(done)
-		// A Configure or Retire during the attempt wins over its result.
-		stale := !client.enabled || client.manualURL != manual || !maps.Equal(client.headers, headers)
-		if err == nil && !stale {
-			client.baseURL, client.source, client.contextName, client.labels, client.lastErr = base, source, contextName, &found, ""
-		} else if err != nil && !stale {
-			client.lastErr = scrubLocked(err.Error())
-		}
-		lastErr := client.lastErr
+		ok, enabled, lastErr := connectedLocked(), client.enabled, client.lastErr
+		changed := client.generation != generation || currentContext() != contextName
 		client.mu.Unlock()
-		if stale {
-			continue
+		switch {
+		case ok:
+			return nil
+		case !enabled:
+			return ErrNotConfigured
+		case changed:
+			continue // reconfigured, or the context switched: try again for what is current now
 		}
-		if err != nil {
-			return fmt.Errorf("%w: %s", ErrUnavailable, lastErr)
+		return fmt.Errorf("%w: %s", ErrUnavailable, lastErr)
+	}
+}
+
+// attempt connects with the settings of one generation on one context. A
+// Configure, Retire or context switch during it wins: its result is dropped,
+// and a forward it opened is stopped (no newer attempt can own one while this
+// one is in flight).
+func attempt(done chan struct{}, generation int, manual string, headers map[string]string, contextName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
+	base, source, found, err := connect(ctx, manual, headers, contextName)
+	cancel()
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.inflight = nil
+	close(done)
+	switch {
+	case client.generation != generation || currentContext() != contextName:
+		if err == nil && source == "discovered" {
+			stopForward()
 		}
-		return nil
+	case err == nil:
+		client.baseURL, client.source, client.contextName, client.labels, client.lastErr = base, source, contextName, &found, ""
+	default:
+		client.lastErr = scrubLocked(err.Error())
 	}
 }
 
@@ -196,6 +209,9 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 	if manual != "" {
 		found, err = probe(ctx, manual, headers)
 		return manual, "manual", found, err
+	}
+	if len(headers) > 0 {
+		return "", "", found, ErrHeadersRequireURL
 	}
 	candidates := Candidates(listServices())
 	if len(candidates) == 0 {
@@ -218,7 +234,7 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 		if found, err = probe(ctx, address, headers); err == nil {
 			return address, "discovered", found, nil
 		}
-		portforward.Stop(portforward.OwnerLoki)
+		stopForward()
 		lastErr = fmt.Errorf("%s/%s: %w", c.Namespace, c.Name, err)
 	}
 	return "", "", found, lastErr
@@ -256,6 +272,10 @@ func Get(ctx context.Context, path string, params url.Values) ([]byte, error) {
 		return nil, err
 	}
 	client.mu.Lock()
+	if !connectedLocked() { // changed since EnsureConnected returned
+		client.mu.Unlock()
+		return nil, fmt.Errorf("%w: the connection changed; try again", ErrUnavailable)
+	}
 	base, headers := client.baseURL, maps.Clone(client.headers)
 	client.mu.Unlock()
 	body, err := transport(base, headers).Do(ctx, http.MethodGet, path, params)
@@ -284,10 +304,14 @@ func Labels() (StreamLabels, bool) {
 	return *client.labels, true
 }
 
+// minScrubbedLength: shorter header values (a numeric tenant ID) aren't
+// credentials, and replacing them would garble every number in a message.
+const minScrubbedLength = 4
+
 // scrubLocked removes every configured header value and URL from text.
 func scrubLocked(text string) string {
 	for _, v := range client.headers {
-		if v != "" {
+		if len(v) >= minScrubbedLength {
 			text = strings.ReplaceAll(text, v, "<redacted>")
 		}
 	}
@@ -302,6 +326,11 @@ func RegisterSignals() {
 // forwardLost drops a discovered address the lost forward served (address is
 // the forward's URL); every subscriber hears every loss, so it matches on it.
 func forwardLost(_ portforward.Owner, address string) {
+	// A replacement forward may already serve the same local port; the loss
+	// then describes the old tunnel only, as for Prometheus.
+	if portforward.IsActiveAddress(address) {
+		return
+	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if client.source == "discovered" && address != "" && client.baseURL == address {

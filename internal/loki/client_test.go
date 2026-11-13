@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 )
@@ -166,6 +167,138 @@ func TestNoLokiFound(t *testing.T) {
 	reset(t)
 	Configure("", nil)
 	if err := EnsureConnected(context.Background()); err == nil || !strings.Contains(err.Error(), "no Loki Service") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// Credentials never go to an endpoint nobody named: with headers and no URL,
+// discovery doesn't run.
+func TestDiscoveryNeverSendsHeaders(t *testing.T) {
+	reset(t)
+	listServices = func() []corev1.Service {
+		t.Error("discovery ran with credentials and no URL")
+		return nil
+	}
+	Configure("", map[string]string{"Authorization": "Bearer zzz"})
+	if err := EnsureConnected(context.Background()); err == nil || !strings.Contains(err.Error(), "URL") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// A slow attempt doesn't hold its caller past the caller's own deadline.
+func TestEnsureConnectedHonoursCallerDeadline(t *testing.T) {
+	reset(t)
+	release := make(chan struct{})
+	// Let the background attempt finish before the seams are restored.
+	t.Cleanup(func() {
+		close(release)
+		for CurrentStatus().Discovering {
+			time.Sleep(time.Millisecond)
+		}
+	})
+	listServices = func() []corev1.Service {
+		<-release
+		return nil
+	}
+	Configure("", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := EnsureConnected(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v", err)
+	}
+	if !CurrentStatus().Discovering {
+		t.Fatal("the attempt should still be running")
+	}
+}
+
+// Turning Loki off during discovery stops the forward that attempt opened.
+func TestRetireDuringDiscoveryStopsItsForward(t *testing.T) {
+	reset(t)
+	srv := fakeLoki(t, 200, labelsOK, nil)
+	listServices = func() []corev1.Service {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	}
+	var stops atomic.Int32
+	savedStop := stopForward
+	t.Cleanup(func() { stopForward = savedStop })
+	stopForward = func() { stops.Add(1) }
+	startForward = func(context.Context, string, string, int, string) (string, error) {
+		Retire(nil) // turned off while this attempt runs
+		before := stops.Load()
+		t.Cleanup(func() {
+			if stops.Load() <= before {
+				t.Error("the stale attempt's forward was left running")
+			}
+		})
+		return srv.URL, nil
+	}
+	Configure("", nil)
+	_ = EnsureConnected(context.Background())
+}
+
+// A connection found while the context switched belongs to the old cluster:
+// it is dropped, and the caller gets a connection for the current one.
+func TestContextSwitchDuringAttemptIsNotKept(t *testing.T) {
+	reset(t)
+	var ctxName atomic.Value
+	ctxName.Store("old")
+	currentContext = func() string { return ctxName.Load().(string) }
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			ctxName.Store("new") // the switch lands while the first probe is answered
+		}
+		_, _ = w.Write([]byte(labelsOK))
+	}))
+	t.Cleanup(srv.Close)
+	Configure(srv.URL, nil)
+	if err := EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests.Load() < 2 {
+		t.Fatal("the attempt from the old context was kept instead of probing again")
+	}
+	client.mu.Lock()
+	got := client.contextName
+	client.mu.Unlock()
+	if got != "new" {
+		t.Fatalf("connection context = %q", got)
+	}
+}
+
+// Get never reads through a connection made for another context.
+func TestGetRechecksTheContext(t *testing.T) {
+	reset(t)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(labelsOK))
+	}))
+	t.Cleanup(srv.Close)
+	Configure(srv.URL, nil)
+	if err := EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	currentContext = func() string { return "other" }
+	if _, err := Get(context.Background(), "/loki/api/v1/labels", nil); err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	got := client.contextName
+	client.mu.Unlock()
+	if got != "other" || hits.Load() < 3 {
+		t.Fatalf("Get used the old context's connection (context %q, %d requests)", got, hits.Load())
+	}
+}
+
+// A short header value (a numeric tenant) is not a secret worth scrubbing,
+// and replacing it would garble every number in an error.
+func TestShortHeaderValuesKeepErrorsReadable(t *testing.T) {
+	reset(t)
+	srv := fakeLoki(t, 401, "no org id 1 for tenant", nil)
+	Configure(srv.URL, map[string]string{"X-Scope-OrgID": "1", "Authorization": "Bearer zzzz"})
+	err := EnsureConnected(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("error = %v", err)
 	}
 }

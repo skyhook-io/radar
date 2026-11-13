@@ -370,6 +370,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			if err := validateStartupPrometheusURL(cfg.LokiURL); err != nil {
 				log.Fatalf("Invalid --loki-url: %v", err)
 			}
+		} else if len(cfg.LokiHeaders) > 0 {
+			log.Fatalf("Invalid Loki configuration: %v", loki.ErrHeadersRequireURL)
 		}
 		loki.Configure(cfg.LokiURL, cfg.LokiHeaders)
 	}
