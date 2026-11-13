@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { AlertBanner, Badge, RadarUpgradeNote, countLabel } from '@skyhook-io/k8s-ui'
+import { AlertBanner, Badge, RadarUpgradeNote, Tooltip, countLabel } from '@skyhook-io/k8s-ui'
 import type { LogInstance, LogPipelineProvider, LogPodCount, LogWorkload } from '@skyhook-io/k8s-ui/types/core'
 import { useLoggingPipeline } from '../../api/loggingPipeline'
 import { RadarFeatureUnsupportedError } from '../../api/radarFeatures'
@@ -13,7 +13,7 @@ const PLURALS: Record<string, string> = { ClusterFlow: 'clusterflows', Flow: 'fl
 
 function Count({ value, what }: { value: LogPodCount; what: string }) {
   const { text, title } = countLabel(value, what)
-  return <span title={title} className="tabular-nums">{text}</span>
+  return <Tooltip content={title}><span className="tabular-nums">{text}</span></Tooltip>
 }
 
 function Step({ title, children }: { title: string; children: ReactNode }) {

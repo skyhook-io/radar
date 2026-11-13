@@ -37,7 +37,7 @@ describe('LoggingView', () => {
     Object.assign(state, { data: pipeline({ coverage: { gaps: [{ group: 'logging.banzaicloud.io', resource: 'flows' }], namespaces: null }, unrouted: { count: 0, lowerBound: true, pods: [], truncated: false } }), error: null })
     const html = render()
     expect(html).toContain('Radar could not read Flows')
-    expect(html).toContain('Unknown: some data was not readable or not evaluated.')
+    expect(html).toMatch(/Running pods nothing routes: (<[^>]+>)*\?</)
   })
   it('says when no shipper Radar understands is installed', () => {
     Object.assign(state, { data: pipeline({ providers: [] }), error: null })
