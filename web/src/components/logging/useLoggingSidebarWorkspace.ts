@@ -3,7 +3,7 @@ import { Workflow } from 'lucide-react'
 import { countLabel, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import { useLoggingPipeline } from '../../api/loggingPipeline'
 import type { SidebarWorkspaceArgs } from '../../integrations/sidebarWorkspaces'
-import { useCNPGNavigate } from '../cnpg/useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 
 const LOGGING_GROUP = 'logging.banzaicloud.io'
 // The sidebar category api-resources assigns to the Logging operator's group.
@@ -16,7 +16,7 @@ export const LOGGING_SIDEBAR_CATEGORY = 'Logging'
  * open; elsewhere the destination shows no badge.
  */
 export function useLoggingSidebarWorkspace({ apiResources, namespaces, selectedKind }: SidebarWorkspaceArgs): Record<string, SidebarCategoryWorkspace> | undefined {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const available = !!apiResources?.some((r) => r.group === LOGGING_GROUP)
   const counting = available && selectedKind?.group === LOGGING_GROUP
   const { data } = useLoggingPipeline(namespaces, counting)

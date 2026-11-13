@@ -32,7 +32,7 @@ import {
   type RestoreSource,
   type RestoreTarget,
 } from './restoreModel'
-import { useCNPGNavigate } from '../useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
 
 /** Where the restore was started from; decides the default source. */
 export type CNPGRestoreEntry = { kind: 'cluster'; name: string } | { kind: 'backup'; name: string } | { kind: 'objectStore'; name: string }
@@ -44,7 +44,7 @@ export type CNPGRestoreEntry = { kind: 'cluster'; name: string } | { kind: 'back
  * user is offered the new Cluster's page, which follows the restore.
  */
 export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: string; entry: CNPGRestoreEntry; onClose: () => void }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const { connection } = useConnection()
   const [context] = useState(connection.context)
   const { showSuccess } = useToast()

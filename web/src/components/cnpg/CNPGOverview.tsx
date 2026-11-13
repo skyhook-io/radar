@@ -25,7 +25,7 @@ import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetSt
 import { BreakText, FilterChips, ScreenEmptyState } from '../workspace/layout'
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
 import { sameSelectedResource } from '../../utils/drawer-trail'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { useCNPGOperations } from './operations/store'
 import { latestCNPGOperation } from './operations/presentation'
 import { CNPGFleetOperation } from './operations/CNPGFleetOperation'
@@ -200,7 +200,7 @@ export function CNPGOverview({
   onClearNamespaces,
   onCreate,
 }: CNPGScreenProps) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const { connection } = useConnection()
   const operations = useCNPGOperations()
   const apiBase = getApiBase()

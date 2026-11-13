@@ -24,7 +24,7 @@ import {
   type StandbyChoice,
 } from './actionModel'
 import { cnpgDetailPath } from '../routes'
-import { useCNPGNavigate } from '../useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../../hooks/useWorkspaceNavigate'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 import { RefreshFailedNotice } from '../../workspace/layout'
 import { assessRestoreSources } from '../recovery/restoreModel'
@@ -373,7 +373,7 @@ export function ClusterActionDialog({
   onClose: () => void
   initialPod?: string
 }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const facts = caps.facts
   const cap = caps.actions[kind]
   const mutation = useCNPGAction('clusters', namespace, name, caps.context)

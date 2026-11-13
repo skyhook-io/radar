@@ -11,7 +11,7 @@ import type { SelectedResource } from '../../types'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { RefreshFailedNotice } from '../workspace/layout'
 import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { CNPGParametersInEffect } from './CNPGParametersInEffect'
 import { preflightFacts } from './recovery/restoreModel'
 import { cnpgScreenPath } from './routes'
@@ -26,7 +26,7 @@ export function CNPGConfiguration({ namespace, name, onNavigate, onSelectTab }: 
   const kubeconfigContext = useCNPGKubectlContext()
   const object = useResource<any>('clusters', namespace, name, CNPG_GROUP)
   const { query, row, ha } = useCNPGClusterAssessment(namespace, name)
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const { connection } = useConnection()
   const go: NavigateToRef = (ref) => onNavigate(refToSelectedResource(ref))
   const cluster = object.data

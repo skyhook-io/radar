@@ -40,7 +40,7 @@ import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExp
 import { formatBytes } from './lsn'
 import { cnpgDimensionPath, cnpgWithinDetail } from './paths'
 import type { CNPGRestoreSourceState } from './recovery/restoreModel'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { useLocation } from 'react-router-dom'
 import { GrantText, Notice, RefreshFailedNotice } from '../workspace/layout'
 
@@ -494,7 +494,7 @@ function expansionVerdict(vols: CNPGStorageVolume[], restoreState: CNPGRestoreSo
 }
 
 function ExpansionCard({ restoreState, notStarted, namespace, name, data, volumes, onResize, canResize, resizeReason, grant, onRetry }: { restoreState: CNPGRestoreSourceState; notStarted: boolean; namespace: string; name: string; data: CNPGClusterStorageResponse; volumes: CNPGStorageVolume[]; onResize: (t: CNPGStorageTarget) => void; canResize: boolean; resizeReason?: string; grant?: Grant; onRetry: () => void }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const location = useLocation()
   const inUse = data.expansion.resizeInUseVolumes
   return (

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import { buildCNPGFleet, CNPG_WORKSPACE_KEYS, type CNPGWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import { CNPGOperator, ConfigBlock } from './CNPGOperator'
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => vi.fn() }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 const operator = vi.hoisted(() => ({ partial: false }))
 vi.mock('../../api/cnpg', () => ({ useCNPGOperator: () => ({ data: { coverage: { deployments: { state: operator.partial ? 'partial' : 'full' }, services: { state: operator.partial ? 'partial' : 'full' } }, components: operator.partial ? [] : [{ role: 'operator', namespace: 'operator', deployment: 'cnpg', readyReplicas: 1, replicas: 1 }], config: [], diagnosis: [] }, isRefetchError: true, error: new Error('Operator timeout'), dataUpdatedAt: Date.now() - 240_000 }) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))

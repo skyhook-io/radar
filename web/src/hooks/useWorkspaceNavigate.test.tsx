@@ -3,7 +3,7 @@ import { act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it } from 'vitest'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from './useWorkspaceNavigate'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -16,7 +16,7 @@ afterEach(() => {
 })
 
 function Probe({ to, onLocation }: { to: string; onLocation: (path: string) => void }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const location = useLocation()
   useEffect(() => {
     onLocation(location.pathname + location.search)
@@ -44,7 +44,7 @@ function landAt(start: string, to: string): string {
   return at
 }
 
-describe('useCNPGNavigate', () => {
+describe('useWorkspaceNavigate', () => {
   it('keeps the namespace filter, which the app would otherwise reset to All namespaces', () => {
     expect(landAt('/cnpg?namespaces=pg', '/cnpg/operator')).toBe('/cnpg/operator?namespaces=pg')
     expect(landAt('/cnpg?namespaces=pg', '/workload/services/pg/pg-rw?tab=reachability')).toBe('/workload/services/pg/pg-rw?tab=reachability&namespaces=pg')

@@ -8,7 +8,7 @@ vi.mock('../../../api/client', () => ({ useResources: () => ({ data: [] }) }))
 vi.mock('../../../api/cnpg-recovery', () => ({ useCNPGRestoreCapability: () => ({ data: { allowed: true } }) }))
 vi.mock('../../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
 vi.mock('../../ui/Toast', () => ({ useToast: () => ({ showSuccess: vi.fn() }) }))
-vi.mock('../useCNPGNavigate', () => ({ useCNPGNavigate: () => vi.fn() }))
+vi.mock('../../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 vi.mock('@skyhook-io/k8s-ui', async (original) => ({ ...(await original<typeof import('@skyhook-io/k8s-ui')>()), ActionConfirmDialog: ({ disabledReason, warnings, children }: { disabledReason?: string; warnings?: string[]; children: ReactNode }) => <div>{disabledReason}{warnings?.join(' · ')}{children}</div> }))
 it('says sources could not be read instead of claiming no completed Backup', () => {
   const render = () => renderToStaticMarkup(<CNPGRestoreDialog namespace="db" entry={{ kind: 'cluster', name: 'pg' }} onClose={() => {}} />)

@@ -30,7 +30,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, coverageEmpty, cnpgResource, type CNPGScreenProps } from './shared'
 import { BreakText, FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Segments, Sub } from '../workspace/layout'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { cnpgClusterFullPath } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 
@@ -154,7 +154,7 @@ export function CNPGProtection({
   scopeCluster,
 }: CNPGScreenProps & { scopeCluster?: { namespace: string; name: string } }) {
   const evidenceTitleId = useId()
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const [evidenceKey, setEvidenceKey] = useState<string | null>(null)
   const evidence = fleet.rows.find((row) => row.key === evidenceKey)
   const clusterFilter = scopeCluster ? `${scopeCluster.namespace}/${scopeCluster.name}` : searchParams.get('cluster')

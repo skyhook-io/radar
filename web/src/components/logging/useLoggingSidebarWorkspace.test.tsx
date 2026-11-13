@@ -6,7 +6,7 @@ const pipeline = vi.hoisted(() => ({ enabled: false as boolean, data: undefined 
 vi.mock('../../api/loggingPipeline', () => ({
   useLoggingPipeline: (_ns: string[], enabled: boolean) => { pipeline.enabled = enabled; return { data: enabled ? pipeline.data : undefined, support: 'supported' } },
 }))
-vi.mock('../cnpg/useCNPGNavigate', () => ({ useCNPGNavigate: () => () => {} }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => () => {} }))
 
 import { useLoggingSidebarWorkspace } from './useLoggingSidebarWorkspace'
 

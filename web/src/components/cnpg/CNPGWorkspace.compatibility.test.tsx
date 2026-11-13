@@ -12,7 +12,7 @@ vi.mock('../../api/cnpg', () => ({ useCNPGWorkspace: () => ({ data: state.worksp
 vi.mock('../../api/cnpg-storage', () => ({ useCNPGFleetDisk: (_ns: string[], enabled: boolean) => { state.diskEnabled.push(enabled); return { error: new Error('Live disk needs a newer Radar') } } }))
 vi.mock('../../api/cnpg-history', () => ({ useCNPGFleetMetrics: (_ns: string[], enabled: boolean) => { state.metricsEnabled.push(enabled); return {} } }))
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: radarFeatureSupport('cnpgWorkspace', state.capabilities, 'v1.16.0') }) }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => vi.fn() }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 beforeEach(() => { state.capabilities = { features: { resourceIssues: true } }; state.diskEnabled = []; state.metricsEnabled = []; state.workspace = undefined })
 function Host() {
   const { fleet } = useCNPGFleet(['db'])

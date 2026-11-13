@@ -6,7 +6,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
 import { CNPGPerformance } from './CNPGPerformance'
 const state = vi.hoisted(() => ({ denied: false, execDenied: false, navigate: vi.fn() }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => state.navigate }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => state.navigate }))
 vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: { permission: { proxy: state.denied ? 'denied' : 'allowed', grant: { verb: 'get', resource: 'pods', subresource: 'proxy', namespace: 'db' } }, instances: [] } }), useCNPGClusterCapabilities: () => ({}) }))
 vi.mock('../../api/cnpg-sessions', () => ({ useCNPGSessions: () => ({ data: { pod: '', state: state.denied || state.execDenied ? 'denied' : 'unavailable', permission: { exec: state.denied || state.execDenied ? 'denied' : 'unknown', grant: { verb: 'create', resource: 'pods', subresource: 'exec', namespace: 'db' } }, instances: [] } }) }))
 vi.mock('../../api/cnpg-history', () => ({ useCNPGClusterHistory: () => ({}) }))

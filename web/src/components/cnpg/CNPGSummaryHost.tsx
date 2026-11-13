@@ -47,7 +47,7 @@ import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RefreshFailedNotice } from '../workspace/layout'
-import { useCNPGNavigate } from './useCNPGNavigate'
+import { useWorkspaceNavigate } from '../../hooks/useWorkspaceNavigate'
 import { CNPGOperatorConditions } from './CNPGOperatorConditions'
 
 interface SummaryContext {
@@ -80,7 +80,7 @@ function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined 
 }
 
 function ClusterSummaryHost({ namespace, name, resource, context, onNavigate }: SummaryContext) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const location = useLocation()
   const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
@@ -303,7 +303,7 @@ export function renderCNPGSummary(ctx: SummaryContext): ReactNode {
 // problem's subject (it has no link to a single issue). Omitted where the host
 // takes Issues over, since its page does not read the subject.
 function IssueLinks({ children }: { children: ReactNode }) {
-  const navigate = useCNPGNavigate()
+  const navigate = useWorkspaceNavigate()
   const [searchParams] = useSearchParams()
   const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
   return (

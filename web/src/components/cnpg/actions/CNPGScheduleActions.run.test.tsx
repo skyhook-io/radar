@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest'
 import { CNPGScheduleActions } from './CNPGScheduleActions'
 
 const mocks = vi.hoisted(() => ({ track: vi.fn(), mutate: vi.fn(), success: vi.fn() }))
-vi.mock('../useCNPGNavigate', () => ({ useCNPGNavigate: () => vi.fn() }))
+vi.mock('../../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 vi.mock('../../ui/Toast', () => ({ useToast: () => ({ showSuccess: mocks.success }) }))
 vi.mock('./useCNPGWriteGuard', () => ({ useCNPGWriteGuard: () => ({ node: null, satisfied: true }) }))
 vi.mock('../operations/store', () => ({ trackCNPGOperation: mocks.track }))

@@ -15,7 +15,7 @@ vi.mock('../../api/client', () => ({ useResource: (kind: string, ns: string, nam
 vi.mock('../../api/cnpg-inspect', () => ({ useCNPGParameters: () => state.params }))
 vi.mock('./useCNPGClusterAssessment', () => ({ useCNPGClusterAssessment: () => ({ query: state.workspace, row: state.row, ha: state.ha }) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
-vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => state.navigate }))
+vi.mock('../../hooks/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => state.navigate }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
