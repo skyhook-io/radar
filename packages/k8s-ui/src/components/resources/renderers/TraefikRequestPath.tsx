@@ -8,6 +8,7 @@ import type { ResourceRef } from '../../../types/core'
 import type { TraefikBackendFact, TraefikRouteFacts, TraefikTLSFact } from '../traefik-route-facts'
 
 const CANT_TELL = "Radar can't confirm this reference"
+const EXPIRING_WITHIN = 14 * 864e5
 const DAY = 864e5
 
 function Arrow() {
@@ -26,25 +27,31 @@ function podsFact(s: TraefikBackendFact): Fact {
   return { text: `${s.readyPods} of ${s.totalPods} pods ready`, tone }
 }
 
-// tlsLine words a route's TLS: the certificate's expiry only when it was read.
+// tlsLine words a route's TLS: the certificate's expiry only when it was
+// read. Severity uses the exact time left, as the server's cert problems do;
+// the day count is only for display.
 export function tlsLine(tls: TraefikTLSFact, now = Date.now()): { text: string; severity?: 'warning' | 'error' } {
   switch (tls.mode) {
     case 'none': return { text: 'No TLS on this route' }
     case 'resolver': return { text: `Certificate issued by Traefik (ACME resolver ${tls.resolver})` }
     case 'default': return { text: "TLS with Traefik's default certificate" }
+    case 'secret': break
   }
   const secret = `Secret ${tls.secret}`
   switch (tls.certificate) {
     case 'read': {
       if (!tls.notAfter) return { text: `${secret}: certificate read, no expiry` }
-      const days = Math.floor((new Date(tls.notAfter).getTime() - now) / DAY)
-      if (days < 0) return { text: `${secret}: certificate expired ${-days}d ago`, severity: 'error' }
-      return { text: `${secret}: certificate expires in ${days}d`, severity: days <= 14 ? 'warning' : undefined }
+      const left = new Date(tls.notAfter).getTime() - now
+      if (left < 0) {
+        const ago = Math.floor(-left / DAY)
+        return { text: `${secret}: certificate expired ${ago === 0 ? 'today' : `${ago}d ago`}`, severity: 'error' }
+      }
+      return { text: `${secret}: certificate expires in ${Math.floor(left / DAY)}d`, severity: left <= EXPIRING_WITHIN ? 'warning' : undefined }
     }
     case 'denied': return { text: `${secret}: no access to Secrets in this namespace` }
     case 'notFound': return { text: `${secret}: not found` }
     case 'notTLS': return { text: `${secret}: no TLS certificate in it` }
-    default: return { text: `${secret}: not loaded yet` }
+    case 'notLoaded': return { text: `${secret}: not loaded yet` }
   }
 }
 

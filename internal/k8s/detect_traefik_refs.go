@@ -394,6 +394,14 @@ func (inv *traefikInventory) servicePresence(ref map[string]any, ns string) (ver
 
 // traefikMissingRef is a missing target; via names the Middleware the route
 // uses that leads to it, when the route doesn't name it directly.
+// traefikVisit memoizes one Middleware's answer within a walk; done is false
+// while its chain is still being walked.
+type traefikVisit struct {
+	done                bool
+	verifiable, missing bool
+	m                   traefikMissingRef
+}
+
 type traefikMissingRef struct {
 	reason, target, via string
 	// reads are the inventories that show the target missing and the spec
@@ -404,7 +412,7 @@ type traefikMissingRef struct {
 // middlewareMissing walks a route's Middleware reference: a missing
 // Middleware, or a chain member or errors-page Service missing under one it
 // uses, fails the router the same way.
-func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]bool) (traefikMissingRef, bool) {
+func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]*traefikVisit) (traefikMissingRef, bool) {
 	verifiable, m, missing := inv.middlewarePresence(ref, ns, allowCrossNamespace, visited)
 	if !verifiable || !missing {
 		return traefikMissingRef{}, false
@@ -416,7 +424,7 @@ func (inv *traefikInventory) middlewareMissing(ref map[string]any, ns string, al
 // Middleware that exists is verifiable only when every chain member and its
 // errors-page Service are too; the first missing target found wins, as in
 // the detector.
-func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]bool) (verifiable bool, m traefikMissingRef, missing bool) {
+func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, allowCrossNamespace bool, visited map[string]*traefikVisit) (verifiable bool, m traefikMissingRef, missing bool) {
 	name, _ := ref["name"].(string)
 	// A name with a provider suffix is a generated Traefik identifier, not
 	// an object name, so it can't be looked up directly.
@@ -440,10 +448,17 @@ func (inv *traefikInventory) middlewarePresence(ref map[string]any, ns string, a
 		return false, traefikMissingRef{}, false
 	}
 	key := ns + "/" + name
-	if visited[key] {
-		return false, traefikMissingRef{}, false
+	if seen, ok := visited[key]; ok {
+		// Still being walked: a cycle, which can't be decided. Otherwise
+		// another chain member already answered for it.
+		if !seen.done {
+			return false, traefikMissingRef{}, false
+		}
+		return seen.verifiable, seen.m, seen.missing
 	}
-	visited[key] = true
+	visit := &traefikVisit{}
+	visited[key] = visit
+	defer func() { *visit = traefikVisit{done: true, verifiable: verifiable, m: m, missing: missing} }()
 	mwRead := issuesapi.EvidenceRead{Group: inv.group, Resource: "middlewares", Namespace: ns, Verb: "list"}
 	mw, ok := middlewares.objects[key]
 	if !ok {
@@ -521,7 +536,7 @@ func (inv *traefikInventory) ruleMissingRefs(r map[string]any, ns string, allowC
 		}
 	}
 	for _, mw := range nestedMaps(r, "middlewares") {
-		if m, ok := inv.middlewareMissing(mw, ns, allowCrossNamespace, map[string]bool{}); ok {
+		if m, ok := inv.middlewareMissing(mw, ns, allowCrossNamespace, map[string]*traefikVisit{}); ok {
 			missing = append(missing, m)
 		}
 	}

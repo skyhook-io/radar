@@ -21,6 +21,8 @@ func TestRuleHosts(t *testing.T) {
 		{"Host(`unterminated", nil},
 		{"Host(`A.Example.com`) || Host(`a.example.com`)", []string{"a.example.com"}},
 		{"HostSNI(`tcp.example.com`)", nil},
+		{"Host(\t`tab.example.com`\t)", []string{"tab.example.com"}},
+		{"Host(\n  `a.example.com`,\n  `b.example.com`\n)", []string{"a.example.com", "b.example.com"}},
 	} {
 		if got := RuleHosts(tc.match); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("RuleHosts(%q) = %#v, want %#v", tc.match, got, tc.want)

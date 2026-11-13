@@ -136,7 +136,7 @@ func (a *TraefikRouteAssessor) RuleRefs(route *unstructured.Unstructured) []Trae
 		for j, mw := range nestedMaps(r, "middlewares") {
 			v := &out[i].Middlewares[j]
 			v.Refused = v.Namespace != ns && !allowCross
-			known, m, missing := a.inv.middlewarePresence(mw, ns, allowCross, map[string]bool{})
+			known, m, missing := a.inv.middlewarePresence(mw, ns, allowCross, map[string]*traefikVisit{})
 			v.Via = m.via
 			decide(v, known, missing, m.reads)
 		}

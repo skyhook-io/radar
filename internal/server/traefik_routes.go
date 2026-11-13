@@ -227,14 +227,15 @@ func traefikVerdictExists(v k8s.TraefikRefVerdict, in traefikRoutesInput) *bool 
 
 type traefikPodCounts struct{ ready, total *int }
 
-// traefikBackend counts ready pods only for a Service Traefik routes to and
-// the caller may read, once per Service per request.
+// traefikBackend counts ready pods only for a Service Traefik routes to,
+// where the caller may list Services and Pods, once per Service per request.
 func traefikBackend(v k8s.TraefikRefVerdict, in traefikRoutesInput, counts map[[2]string]traefikPodCounts) traefikBackendFact {
 	fact := traefikBackendFact{Namespace: v.Namespace, Name: v.Name, Port: v.Port, Kind: v.Kind, Exists: traefikVerdictExists(v, in)}
 	ns := v.Namespace
 	if v.Kind != "Service" || v.Refused || in.Service == nil || in.Pods == nil ||
 		(in.NSVisible != nil && !in.NSVisible(ns)) ||
-		(in.CanRead != nil && !in.CanRead(issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"})) {
+		(in.CanRead != nil && (!in.CanRead(issuesapi.EvidenceRead{Resource: "services", Namespace: ns, Verb: "list"}) ||
+			!in.CanRead(issuesapi.EvidenceRead{Resource: "pods", Namespace: ns, Verb: "list"}))) {
 		return fact
 	}
 	key := [2]string{ns, v.Name}
@@ -304,43 +305,56 @@ func traefikRowProblems(row traefikRouteRow, now time.Time) []string {
 // default, which overlaps everything). It's a hint: "matched by more than
 // one route".
 func markDuplicateHosts(rows []traefikRouteRow) {
-	byMatch := map[string][]int{}
-	for i, r := range rows {
+	// Per normalized match, which routes listed each entry point (and which
+	// listed none), keeping only whether more than one route did: enough to
+	// tell whether a route other than this one overlaps it.
+	type owners struct {
+		first traefikRouteRef
+		many  bool
+	}
+	add := func(m map[string]*owners, key string, ref traefikRouteRef) {
+		if o := m[key]; o == nil {
+			m[key] = &owners{first: ref}
+		} else if o.first != ref {
+			o.many = true
+		}
+	}
+	other := func(o *owners, ref traefikRouteRef) bool { return o != nil && (o.many || o.first != ref) }
+	const anyEntryPoint = "\x00any"
+	const noEntryPoints = "\x00none"
+	groups := map[string]map[string]*owners{}
+	for _, r := range rows {
 		if len(r.Hosts) == 0 {
 			continue
 		}
 		key := traefik.NormalizeMatch(r.Match)
-		byMatch[key] = append(byMatch[key], i)
-	}
-	for _, idx := range byMatch {
-		for a := 0; a < len(idx); a++ {
-			for b := a + 1; b < len(idx); b++ {
-				ra, rb := &rows[idx[a]], &rows[idx[b]]
-				if ra.Ref == rb.Ref || !entryPointsOverlap(ra.EntryPoints, rb.EntryPoints) {
-					continue
-				}
-				for _, r := range []*traefikRouteRow{ra, rb} {
-					if !slices.Contains(r.Problems, "duplicate_host") {
-						r.Problems = append(r.Problems, "duplicate_host")
-					}
-				}
-			}
+		g := groups[key]
+		if g == nil {
+			g = map[string]*owners{}
+			groups[key] = g
+		}
+		add(g, anyEntryPoint, r.Ref)
+		if len(r.EntryPoints) == 0 {
+			add(g, noEntryPoints, r.Ref)
+		}
+		for _, ep := range r.EntryPoints {
+			add(g, strings.ToLower(ep), r.Ref)
 		}
 	}
-}
-
-func entryPointsOverlap(a, b []string) bool {
-	if len(a) == 0 || len(b) == 0 {
-		return true
-	}
-	for _, x := range a {
-		for _, y := range b {
-			if strings.EqualFold(x, y) {
-				return true
-			}
+	for i := range rows {
+		r := &rows[i]
+		if len(r.Hosts) == 0 {
+			continue
+		}
+		g := groups[traefik.NormalizeMatch(r.Match)]
+		dup := other(g[noEntryPoints], r.Ref) || (len(r.EntryPoints) == 0 && other(g[anyEntryPoint], r.Ref))
+		for _, ep := range r.EntryPoints {
+			dup = dup || other(g[strings.ToLower(ep)], r.Ref)
+		}
+		if dup && !slices.Contains(r.Problems, "duplicate_host") {
+			r.Problems = append(r.Problems, "duplicate_host")
 		}
 	}
-	return false
 }
 
 var (
@@ -363,12 +377,13 @@ var (
 //     only where the caller can list IngressRoutes, with per-kind coverage;
 //   - whether a Service or Middleware exists comes from the live
 //     missing-reference detector, kept only where the caller may see every
-//     read behind it (issueEvidenceAccess) and the target's namespace, else
+//     read behind it, by kind and namespace (traefikReadGate), and the target's namespace, else
 //     null ("can't tell"), never "missing";
 //   - a certificate's expiry only where the caller may list Secrets in the
 //     route's namespace; only notAfter leaves the server, never Secret data.
 //
-// ?namespace=&name= returns one IngressRoute's rows, with usedBy for its
+// ?namespace=&name=[&group=] returns one IngressRoute's rows (?namespace
+// names the route; only ?namespaces narrows the read), with usedBy for its
 // middlewares counted over every route the caller can see; ?middleware=ns/name
 // the rows that use a Middleware (at most 200 routes). Only the routes a mode
 // returns get full rows; the plain list stops at traefikRouteRowLimit rows.
@@ -376,7 +391,7 @@ var (
 // cross-site request is refused by requireSameOrigin.
 func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	routeNs, routeName, middleware := q.Get("namespace"), q.Get("name"), q.Get("middleware")
+	routeNs, routeName, routeGroup, middleware := q.Get("namespace"), q.Get("name"), q.Get("group"), q.Get("middleware")
 	if middleware != "" && (routeNs != "" || routeName != "") {
 		s.writeError(w, http.StatusBadRequest, "namespace/name and middleware can't be combined")
 		return
@@ -400,23 +415,31 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := traefikRoutesResponse{Coverage: map[string]integration.KindCoverage{}, Routes: []traefikRouteRow{}, Middlewares: []traefikMiddlewareUse{}}
 	discovery := k8s.GetResourceDiscovery()
+	var groups []string
 	if discovery != nil {
 		for _, g := range traefikRouteGroups {
 			if _, ok := discovery.GetGVRWithGroup("IngressRoute", g); ok {
-				resp.Installed = true
+				groups = append(groups, g)
 			}
 		}
 	}
+	resp.Installed = len(groups) > 0
 	if !resp.Installed {
 		s.writeJSON(w, resp)
 		return
 	}
 
-	namespaces := s.parseNamespacesForUser(r)
+	// ?namespace= names the drawer's route; only ?namespaces narrows the
+	// read, so usedBy and duplicate_host see every namespace.
+	scoped := r.Clone(r.Context())
+	sq := scoped.URL.Query()
+	sq.Del("namespace")
+	scoped.URL.RawQuery = sq.Encode()
+	namespaces := s.parseNamespacesForUser(scoped)
 	budget := newSyncBudget(r.Context())
-	routeAccess, routes := s.readWorkspaceKind(r, cache, traefikIngressRouteKind, namespaces, traefikRouteGroups, budget)
-	mwAccess, _ := s.readWorkspaceKind(r, cache, traefikMiddlewareKind, namespaces, traefikRouteGroups, budget)
-	svcAccess, _ := s.typedKindScope(r, cache, namespaces, "", "services")
+	routeAccess, routes := s.readTraefikKind(scoped, cache, traefikIngressRouteKind, groups, namespaces, budget)
+	mwAccess, _ := s.readTraefikKind(scoped, cache, traefikMiddlewareKind, groups, namespaces, budget)
+	svcAccess, _ := s.typedKindScope(scoped, cache, namespaces, "", "services")
 	resp.Coverage["ingressroutes"] = routeAccess.Coverage()
 	resp.Coverage["middlewares"] = mwAccess.Coverage()
 	resp.Coverage["services"] = svcAccess.Coverage()
@@ -425,9 +448,11 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	assessor := k8s.NewTraefikRouteAssessor(cache, k8s.GetDynamicResourceCache(), discovery)
 	certMemo := map[[2]string]traefikCertAnswer{}
 	in := traefikRoutesInput{
-		Routes:    routes,
-		Refs:      assessor.RuleRefs,
-		CanRead:   s.issueEvidenceAccess(r),
+		Routes: routes,
+		Refs:   assessor.RuleRefs,
+		CanRead: traefikReadGate(s.issueEvidenceAccess(r), func(group, resource, ns, verb string) bool {
+			return s.canRead(r, group, resource, ns, verb)
+		}),
 		NSVisible: s.callerNamespaces(r),
 		Service: func(ns, name string) (*corev1.Service, bool) {
 			lister := cache.Services()
@@ -455,16 +480,25 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 		},
 		Now: time.Now(),
 	}
+	mwTruncated := false
 	switch {
 	case routeName != "":
 		in.Select = func(u *unstructured.Unstructured) bool {
-			return u.GetNamespace() == routeNs && u.GetName() == routeName
+			return u.GetNamespace() == routeNs && u.GetName() == routeName &&
+				(routeGroup == "" || resourceid.GroupFromAPIVersion(u.GetAPIVersion()) == routeGroup)
 		}
 	case middleware != "":
+		// Selection stops at the cap so routes past it aren't enriched.
+		selected := 0
 		in.Select = func(u *unstructured.Unstructured) bool {
 			for _, rule := range k8s.ParseTraefikRuleRefs(u) {
 				for _, m := range rule.Middlewares {
 					if m.Namespace == mwNs && m.Name == mwName {
+						if selected >= traefikMiddlewareRouteLimit {
+							mwTruncated = true
+							return false
+						}
+						selected++
 						return true
 					}
 				}
@@ -490,17 +524,11 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case middleware != "":
-		seen := map[traefikRouteRef]bool{}
+		truncated = truncated || mwTruncated
 		for _, row := range rows {
-			if !rowUsesMiddleware(row, mwNs, mwName) {
-				continue
+			if rowUsesMiddleware(row, mwNs, mwName) {
+				resp.Routes = append(resp.Routes, row)
 			}
-			if !seen[row.Ref] && len(seen) >= traefikMiddlewareRouteLimit {
-				truncated = true
-				continue
-			}
-			seen[row.Ref] = true
-			resp.Routes = append(resp.Routes, row)
 		}
 		for _, u := range uses {
 			if u.Namespace == mwNs && u.Name == mwName {
@@ -565,6 +593,23 @@ func readTraefikCert(s *Server, r *http.Request, cache *k8s.ResourceCache, ns, n
 	return traefikCertAnswer{state: "read", notAfter: cert.NotAfter}
 }
 
+// readTraefikKind reads one Traefik kind in each installed API group as the
+// caller; coverage is the first group's that isn't full.
+func (s *Server) readTraefikKind(r *http.Request, cache *k8s.ResourceCache, k integration.WorkspaceKind, groups, namespaces []string, budget *syncBudget) (integration.KindAccess, []*unstructured.Unstructured) {
+	var access integration.KindAccess
+	var out []*unstructured.Unstructured
+	for i, g := range groups {
+		kg := k
+		kg.Group = g
+		acc, list := s.readWorkspaceKind(r, cache, kg, namespaces, []string{g}, budget)
+		if i == 0 || (access.State == integration.KindCoverageFull && acc.State != integration.KindCoverageFull) {
+			access = acc
+		}
+		out = append(out, list...)
+	}
+	return access, out
+}
+
 // traefikSecretsCoverage reads secretReadableNamespaces' answer: nil is every
 // namespace, empty none.
 func traefikSecretsCoverage(readable, requested []string) integration.KindCoverage {
@@ -577,4 +622,17 @@ func traefikSecretsCoverage(readable, requested []string) integration.KindCovera
 		return integration.KindCoverage{State: integration.KindCoverageFull}
 	}
 	return integration.KindCoverage{State: integration.KindCoveragePartial, AllowedNamespaces: readable}
+}
+
+// traefikReadGate requires, beyond the issue evidence gate (which takes a
+// visible namespace as access to its ordinary kinds), the caller's own
+// permission for the exact kind in each namespace, since a verdict or a
+// count here answers about one named object.
+func traefikReadGate(evidence func(issuesapi.EvidenceRead) bool, canRead func(group, resource, ns, verb string) bool) func(issuesapi.EvidenceRead) bool {
+	return func(read issuesapi.EvidenceRead) bool {
+		if !evidence(read) {
+			return false
+		}
+		return read.Namespace == "" || canRead(read.Group, read.Resource, read.Namespace, read.Verb)
+	}
 }

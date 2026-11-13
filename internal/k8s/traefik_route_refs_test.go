@@ -164,3 +164,31 @@ func TestTraefikRuleRefsRefusedCrossNamespace(t *testing.T) {
 		t.Errorf("a cross-namespace ref Traefik refuses must say so: %+v", refs[0].Services[0])
 	}
 }
+
+// Two chain members reaching the same present Middleware don't turn the
+// chain into can't-tell.
+func TestTraefikRuleRefsDiamondChainIsPresent(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, traefikArgs...),
+		traefikObject("Middleware", "shop", "left", map[string]any{"chain": map[string]any{"middlewares": mwRef("strip")}}),
+		traefikObject("Middleware", "shop", "right", map[string]any{"chain": map[string]any{"middlewares": mwRef("strip")}}),
+		traefikObject("Middleware", "shop", "diamond", map[string]any{"chain": map[string]any{"middlewares": mwRef("left", "right")}}))
+	refs := traefikAssessor(t).RuleRefs(ingressRoute("shop", "uses-diamond", nil, svcRef("web"), mwRef("diamond")))
+	if v := refs[0].Middlewares[0]; v.Missing == nil || *v.Missing {
+		t.Errorf("diamond chain should be present: %+v", v)
+	}
+}
+
+// A real cycle stays can't-tell.
+func TestTraefikRuleRefsChainCycleCantTell(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+	initTraefikFixture(t, traefikPod("traefik", true, traefikArgs...),
+		traefikObject("Middleware", "shop", "loop-a", map[string]any{"chain": map[string]any{"middlewares": mwRef("loop-b")}}),
+		traefikObject("Middleware", "shop", "loop-b", map[string]any{"chain": map[string]any{"middlewares": mwRef("loop-a")}}))
+	refs := traefikAssessor(t).RuleRefs(ingressRoute("shop", "uses-loop", nil, svcRef("web"), mwRef("loop-a")))
+	if v := refs[0].Middlewares[0]; v.Missing != nil {
+		t.Errorf("a cycle can't be decided: %+v", v)
+	}
+}

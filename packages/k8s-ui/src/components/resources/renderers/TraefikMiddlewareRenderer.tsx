@@ -25,7 +25,7 @@ function UsedBy({ usedBy, group, onNavigate }: { usedBy: TraefikMiddlewareUsers 
   if (!usedBy) {
     return (
       <Section title="Used by" defaultExpanded={true}>
-        <div className="text-sm text-theme-text-tertiary">Could not read which routes use this Middleware.</div>
+        <AlertBanner variant="warning" title="Could not read which routes use this Middleware" className="mb-0" />
       </Section>
     )
   }

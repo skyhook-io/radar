@@ -202,3 +202,62 @@ func TestTraefikRoutesMiddlewareModePartialForLimitedCaller(t *testing.T) {
 		t.Errorf("coverage = %+v", got.Coverage["ingressroutes"])
 	}
 }
+
+var traefikLegacyKinds = []k8s.APIResource{
+	{Group: "traefik.containo.us", Version: "v1alpha1", Name: "ingressroutes", Kind: "IngressRoute", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
+	{Group: "traefik.containo.us", Version: "v1alpha1", Name: "middlewares", Kind: "Middleware", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
+}
+
+// The drawer's ?namespace= names the route, not a namespace filter: usedBy
+// and duplicate_host still read every namespace.
+func TestTraefikRoutesDrawerCountsAcrossNamespaces(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	cross := traefikIR("edge", "front", "Host(`ui.example.com`)", "", "", nil)
+	rules, _, _ := unstructured.NestedSlice(cross.Object, "spec", "routes")
+	rules[0].(map[string]any)["middlewares"] = []any{map[string]any{"name": "redirect", "namespace": "shop"}}
+	_ = unstructured.SetNestedSlice(cross.Object, rules, "spec", "routes")
+	seedCNPGWorkspace(t, traefikKinds,
+		traefikIR("shop", "ui", "Host(`ui.example.com`)", "", "redirect", nil),
+		cross,
+	)
+	resp, _ := http.Get(testServer.URL + "/api/traefik/routes?namespace=shop&name=ui")
+	got, _ := decodeTraefik(t, resp)
+	if len(got.Routes) != 1 || len(got.Middlewares) != 1 || got.Middlewares[0].UsedBy != 2 {
+		t.Fatalf("routes=%+v middlewares=%+v", got.Routes, got.Middlewares)
+	}
+	if !hasProblem(got.Routes[0], "duplicate_host") {
+		t.Errorf("the same host in another namespace must be flagged: %+v", got.Routes[0])
+	}
+}
+
+func TestTraefikRoutesLegacyGroup(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	legacy := traefikIR("shop", "old", "Host(`old.example.com`)", "", "", nil)
+	legacy.SetAPIVersion("traefik.containo.us/v1alpha1")
+	seedCNPGWorkspace(t, append(append([]k8s.APIResource{}, traefikKinds...), traefikLegacyKinds...),
+		traefikIR("shop", "old", "Host(`new.example.com`)", "", "", nil),
+		legacy,
+	)
+	resp, _ := http.Get(testServer.URL + "/api/traefik/routes")
+	all, _ := decodeTraefik(t, resp)
+	groups := map[string]bool{}
+	for _, r := range all.Routes {
+		groups[r.Ref.Group] = true
+	}
+	if !groups["traefik.io"] || !groups["traefik.containo.us"] {
+		t.Fatalf("both groups must be read: %+v", all.Routes)
+	}
+	resp, _ = http.Get(testServer.URL + "/api/traefik/routes?namespace=shop&name=old&group=traefik.containo.us")
+	one, _ := decodeTraefik(t, resp)
+	if len(one.Routes) != 1 || one.Routes[0].Match != "Host(`old.example.com`)" {
+		t.Fatalf("group picks the route: %+v", one.Routes)
+	}
+}

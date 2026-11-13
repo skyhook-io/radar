@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -292,5 +293,62 @@ func TestBuildTraefikRoutesCountsGatedOnServicesAndRefusal(t *testing.T) {
 	rows, _, _ = buildTraefikRoutes(f.input(route))
 	if b := rows[0].Services[0]; b.ReadyPods != nil {
 		t.Errorf("no counts for a backend Traefik refuses: %+v", b)
+	}
+}
+
+func TestTraefikReadGateChecksTheKindInTheNamespace(t *testing.T) {
+	gate := traefikReadGate(func(issuesapi.EvidenceRead) bool { return true }, func(group, resource, ns, verb string) bool {
+		return resource != "services" || ns != "shop"
+	})
+	if gate(issuesapi.EvidenceRead{Resource: "services", Namespace: "shop", Verb: "list"}) {
+		t.Error("a visible namespace must not stand in for listing Services there")
+	}
+	if !gate(issuesapi.EvidenceRead{Group: "traefik.io", Resource: "middlewares", Namespace: "shop", Verb: "list"}) {
+		t.Error("an allowed read was refused")
+	}
+	denyAll := traefikReadGate(func(issuesapi.EvidenceRead) bool { return false }, func(string, string, string, string) bool { return true })
+	if denyAll(issuesapi.EvidenceRead{Resource: "pods", Namespace: "shop", Verb: "list"}) {
+		t.Error("the evidence gate still applies")
+	}
+}
+
+func TestBuildTraefikRoutesCountsNeedPodAccess(t *testing.T) {
+	f := tFixture{services: map[string]*corev1.Service{"shop/ui": selService("shop", "ui")}, pods: map[string][]*corev1.Pod{"shop": {readyPod(true)}}}
+	in := f.input(tRoute("shop", "a", nil, nil, tRule("Host(`a`)", []string{"ui"})))
+	in.CanRead = func(r issuesapi.EvidenceRead) bool { return r.Resource != "pods" }
+	rows, _, _ := buildTraefikRoutes(in)
+	if b := rows[0].Services[0]; b.ReadyPods != nil || b.TotalPods != nil {
+		t.Errorf("no counts without listing pods: %+v", b)
+	}
+}
+
+// Duplicates are found against routes past the cap, an empty entry-point
+// list overlaps every entry point, and two rules of one route never count.
+func TestMarkDuplicateHostsGroups(t *testing.T) {
+	rows := []traefikRouteRow{
+		{Ref: traefikRouteRef{Name: "a"}, Match: "Host(`x`)", Hosts: []string{"x"}, EntryPoints: []string{"web"}},
+		{Ref: traefikRouteRef{Name: "a"}, Match: "Host(`x`)", Hosts: []string{"x"}, EntryPoints: []string{"web"}},
+		{Ref: traefikRouteRef{Name: "b"}, Match: "Host(`x`)", Hosts: []string{"x"}, EntryPoints: []string{"websecure"}},
+		{Ref: traefikRouteRef{Name: "c"}, Match: "Host(`y`)", Hosts: []string{"y"}, EntryPoints: []string{"WEB"}},
+		{Ref: traefikRouteRef{Name: "d"}, Match: "Host(`y`)", Hosts: []string{"y"}},
+		{Ref: traefikRouteRef{Name: "e"}, Match: "Host(`z`)", Hosts: []string{"z"}},
+		{Ref: traefikRouteRef{Name: "e"}, Match: "Host(`z`)", Hosts: []string{"z"}},
+	}
+	markDuplicateHosts(rows)
+	want := []bool{false, false, false, true, true, false, false}
+	for i, w := range want {
+		if hasProblem(rows[i], "duplicate_host") != w {
+			t.Errorf("row %d (%s %v) duplicate=%v, want %v", i, rows[i].Ref.Name, rows[i].EntryPoints, !w, w)
+		}
+	}
+	var many []*unstructured.Unstructured
+	for i := 0; i < 50; i++ {
+		many = append(many, tRoute("shop", fmt.Sprintf("r%02d", i), []any{"websecure"}, nil, tRule("Host(`same`)", nil)))
+	}
+	in := tFixture{}.input(many...)
+	in.Limit = 1
+	got, _, _ := buildTraefikRoutes(in)
+	if len(got) != 1 || !hasProblem(got[0], "duplicate_host") {
+		t.Errorf("a duplicate past the cap must still mark the returned row: %+v", got)
 	}
 }

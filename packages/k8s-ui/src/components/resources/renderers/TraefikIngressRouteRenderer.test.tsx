@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { TraefikIngressRouteRenderer } from './TraefikIngressRouteRenderer'
+import { tlsLine } from './TraefikRequestPath'
 import type { TraefikRouteFacts } from '../traefik-route-facts'
 
 const data = {
@@ -42,5 +43,26 @@ describe('TraefikIngressRouteRenderer request path', () => {
     expect(denied).toContain('no access')
     expect(render([facts()])).toMatch(/certificate expires in \d+d/)
     expect(render([facts({ tls: { mode: 'default' } })])).toContain('default certificate')
+  })
+  it('shows a failed load as an alert', () => {
+    const html = render(null)
+    expect(html).toContain('Route facts could not be loaded')
+    expect(html).toContain('bg-amber-50')
+  })
+})
+
+describe('tlsLine expiry boundary', () => {
+  const now = Date.UTC(2026, 10, 12)
+  const at = (days: number) => ({ mode: 'secret' as const, secret: 's', certificate: 'read' as const, notAfter: new Date(now + days * 864e5).toISOString() })
+  it('turns amber only within 14 days, like the server', () => {
+    expect(tlsLine(at(14.5), now).severity).toBeUndefined()
+    expect(tlsLine(at(14.5), now).text).toContain('expires in 14d')
+    expect(tlsLine(at(13.9), now).severity).toBe('warning')
+  })
+  it('says a certificate that just expired expired today', () => {
+    const line = tlsLine(at(-0.2), now)
+    expect(line.severity).toBe('error')
+    expect(line.text).toContain('expired today')
+    expect(tlsLine(at(-2.5), now).text).toContain('expired 2d ago')
   })
 })

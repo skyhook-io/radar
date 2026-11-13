@@ -34,6 +34,11 @@ describe('TraefikMiddlewareRenderer used by', () => {
     expect(onNavigate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'ingressroutes', group: 'traefik.containo.us', name: 'old' }))
     act(() => root.unmount())
   })
+  it('shows a failed load as an alert', () => {
+    const html = render(null)
+    expect(html).toContain('Could not read which routes use this Middleware')
+    expect(html).toContain('bg-amber-50')
+  })
   it('keeps the drawer unchanged without the prop', () => {
     expect(render(undefined)).not.toContain('Used by')
   })

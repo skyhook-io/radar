@@ -78,7 +78,7 @@ func nextHostCall(s string, i int) (name string, args []string, next int, ok boo
 func readArgs(s string, j int) ([]string, int, bool) {
 	var args []string
 	for {
-		for j < len(s) && s[j] == ' ' {
+		for j < len(s) && unicode.IsSpace(rune(s[j])) {
 			j++
 		}
 		if j >= len(s) || (s[j] != '`' && s[j] != '"') {
@@ -91,7 +91,7 @@ func readArgs(s string, j int) ([]string, int, bool) {
 		}
 		args = append(args, s[j+1:j+1+end])
 		j += end + 2
-		for j < len(s) && s[j] == ' ' {
+		for j < len(s) && unicode.IsSpace(rune(s[j])) {
 			j++
 		}
 		if j < len(s) && s[j] == ',' {

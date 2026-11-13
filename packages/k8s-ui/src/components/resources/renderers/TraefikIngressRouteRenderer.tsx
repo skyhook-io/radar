@@ -53,7 +53,7 @@ export function TraefikIngressRouteRenderer({ data, onNavigate, routeFacts, midd
     <>
       {routeFacts === null && (
         <Section title="Request path" defaultExpanded={true}>
-          <div className="text-sm text-theme-text-tertiary">Route facts could not be loaded.</div>
+          <AlertBanner variant="warning" title="Route facts could not be loaded" className="mb-0" />
         </Section>
       )}
       {routeFacts && routeFacts.length > 0 && <TraefikRequestPath facts={routeFacts} middlewareUse={middlewareUse} onNavigate={onNavigate} />}

@@ -13,13 +13,15 @@ export interface TraefikBackendFact {
   totalPods: number | null
 }
 
-export interface TraefikTLSFact {
-  mode: 'secret' | 'resolver' | 'default' | 'none'
-  secret?: string
-  resolver?: string
-  certificate?: 'read' | 'denied' | 'notLoaded' | 'notFound' | 'notTLS'
-  notAfter?: string
-}
+export type TraefikCertificateState = 'read' | 'denied' | 'notLoaded' | 'notFound' | 'notTLS'
+
+/** One variant per TLS mode; a secret's notAfter is present only when its certificate was read. */
+export type TraefikTLSFact =
+  | { mode: 'secret'; secret: string; certificate: Exclude<TraefikCertificateState, 'read'> }
+  | { mode: 'secret'; secret: string; certificate: 'read'; notAfter?: string }
+  | { mode: 'resolver'; resolver: string }
+  | { mode: 'default' }
+  | { mode: 'none' }
 
 export type TraefikRouteProblem = 'backend_missing' | 'backend_not_ready' | 'middleware_missing' | 'cert_expired' | 'cert_expiring' | 'duplicate_host'
 
