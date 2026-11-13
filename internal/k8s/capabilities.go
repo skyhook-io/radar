@@ -227,7 +227,8 @@ type FeatureCapabilities struct {
 	// GET /api/kueue/clusterqueues/{name}/workloads and
 	// /api/kueue/localqueues/{namespace}/{name}/workloads
 	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
-	PodFileUpload       bool `json:"podFileUpload"` // POST /api/pods/{namespace}/{name}/files/upload
+	PodFileUpload       bool `json:"podFileUpload"`  // POST /api/pods/{namespace}/{name}/files/upload
+	LokiConnection      bool `json:"lokiConnection"` // GET /api/loki/status
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

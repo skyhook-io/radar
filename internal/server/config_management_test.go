@@ -154,6 +154,10 @@ func TestSavedConnectionRoutesRequireLocalInstallation(t *testing.T) {
 			s.handleLocalConnections(read, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
 			target, _ := k8s.CurrentProfileTarget()
 			write := updateProfile(t, s, s.localConnections.Resolve(target, config.IntegrationMetrics, false).View, "save", "http://replacement.example", nil)
+			lokiWrite, _ := putLoki(t, s, "http://loki.example:3100", nil)
+			if lokiWrite.Code != http.StatusForbidden {
+				t.Fatalf("loki write %d %s", lokiWrite.Code, lokiWrite.Body.String())
+			}
 			if read.Code != http.StatusForbidden || write.Code != http.StatusForbidden {
 				t.Fatalf("read %d %s, write %d %s", read.Code, read.Body.String(), write.Code, write.Body.String())
 			}

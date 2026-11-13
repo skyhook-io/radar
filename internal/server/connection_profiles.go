@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/connectionruntime"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/loki"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -162,6 +163,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 	}
 	var selection connections.Selection
 	var probeClient *prometheuspkg.Client
+	probeLoki := false
 	commit := func() error {
 		target, targetErr := k8s.CurrentProfileTarget()
 		if !metadata && (targetErr != nil || !target.Same(pending.Target)) {
@@ -176,6 +178,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 			if pending.Probe && request.Kind == config.IntegrationMetrics {
 				probeClient = prometheuspkg.GetClient()
 			}
+			probeLoki = pending.Probe && request.Kind == config.IntegrationLoki
 		}
 		return nil
 	}
@@ -210,6 +213,20 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 			response.Error = "Saved, but the metrics backend could not be reached. Check its URL, authentication, network access and TLS configuration."
 		}
 		if prometheuspkg.GetClient() != probeClient || s.localRuntime.CheckCurrent(selection.View.Target, selection) != nil {
+			response.Connected = false
+			response.Error = "Settings changed during the connection check; reload Settings for the current connection"
+		}
+	} else if probeLoki && selection.Err == nil {
+		response.Checked = true
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		err := loki.EnsureConnected(ctx)
+		response.Connected = err == nil
+		if err != nil {
+			log.Printf("[connections] Saved Loki connection check failed: %s", sanitizeForLog(err.Error()))
+			response.Error = "Saved, but Loki could not be reached. Check its URL, headers and network access."
+		}
+		if s.localRuntime.CheckCurrent(selection.View.Target, selection) != nil {
 			response.Connected = false
 			response.Error = "Settings changed during the connection check; reload Settings for the current connection"
 		}
