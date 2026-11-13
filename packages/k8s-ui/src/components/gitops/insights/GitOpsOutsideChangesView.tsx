@@ -86,14 +86,17 @@ export function GitOpsOutsideChangesView({
                     {i === 0 && <ObjectLink objRef={obj.ref} onOpen={onOpenResource} />}
                   </td>
                   <td className="py-1.5 pr-3 font-mono text-theme-text-primary">
-                    {change.paths.map((path) => (
-                      <Tooltip key={path} content={path} delay={400} wrapperClassName="block max-w-full">
-                        <div className="truncate">
-                          {path}
-                          {change.values?.[path] !== undefined && <span className="text-theme-text-secondary"> = <span>{change.values[path]}</span></span>}
-                        </div>
-                      </Tooltip>
-                    ))}
+                    {change.paths.map((path) => {
+                      const value = change.values?.[path]
+                      return (
+                        <Tooltip key={path} content={value !== undefined ? `${path} = ${value}` : path} delay={400} wrapperClassName="block max-w-full">
+                          <div className="flex min-w-0">
+                            <span className="truncate">{path}</span>
+                            {value !== undefined && <span className="shrink-0 whitespace-pre text-theme-text-secondary"> = {value}</span>}
+                          </div>
+                        </Tooltip>
+                      )
+                    })}
                     {change.morePaths > 0 && <div className="text-theme-text-tertiary">+{change.morePaths} more</div>}
                   </td>
                   <td className="py-1.5 pr-3 text-theme-text-secondary">
