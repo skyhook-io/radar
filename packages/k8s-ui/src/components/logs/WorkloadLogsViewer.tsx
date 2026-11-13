@@ -138,6 +138,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   }, [podColorIndex])
 
   const previousSnapshotPods = useRef<string[] | null>(null)
+  // Every pod the current stream listed, even ones it later removed.
+  const streamPodNamesRef = useRef<string[]>([])
 
   const loadLogs = useCallback(async () => {
     fetchController.current?.abort()
@@ -239,6 +241,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setFetchError(null)
     clear()
     streamShowedLinesRef.current = false
+    streamPodNamesRef.current = []
     setEndedPodsGone(false)
     startStreaming(
       () => createStream({ container: selectedContainer || undefined, tailLines: 50, sinceSeconds }),
@@ -246,6 +249,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         onConnected: (data: any) => {
           if (data?.pods) {
             const nextPods = data.pods as WorkloadPodInfo[]
+            streamPodNamesRef.current = nextPods.map(p => p.name)
             podColorIndexRef.current = new Map(nextPods.map((pod, i) => [pod.name, i]))
             podsRef.current = nextPods
             setPods(nextPods)
@@ -276,6 +280,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           if (data?.pods) {
             const newPods = data.pods as WorkloadPodInfo[]
             const added = new Set(newPods.map(p => p.name))
+            streamPodNamesRef.current = [...new Set([...streamPodNamesRef.current, ...added])]
             setOutputKeys(prev => withoutPods(prev, added))
             const known = new Set(podsRef.current.map(p => p.name))
             podsRef.current = [...podsRef.current, ...newPods.filter(p => !known.has(p.name))]
@@ -328,6 +333,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           // the user just watched, possibly with fewer.
           if (data?.emptyReason === 'pods-gone' && !streamShowedLinesRef.current) {
             if (readSnapshotWhenPodsGoneRef.current) {
+              // The snapshot follows the selection made on the stream's pods.
+              if (streamPodNamesRef.current.length > 0) previousSnapshotPods.current = streamPodNamesRef.current
               void loadLogsRef.current()
               return
             }

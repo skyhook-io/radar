@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false }))
+const calls = vi.hoisted(() => ({ urls: [] as string[], fail: false, container: 'job' }))
 vi.mock('./client', async (orig) => ({
   ...(await orig<typeof import('./client')>()),
   fetchJSON: async (url: string) => {
@@ -8,7 +8,7 @@ vi.mock('./client', async (orig) => ({
     if (calls.fail) throw new Error('Loki is not connected')
     return {
       pods: [{ name: 'nightly-1-aaaaa', containers: ['job'], ready: false }],
-      logs: [{ pod: 'nightly-1-aaaaa', container: 'job', timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }],
+      logs: [{ pod: 'nightly-1-aaaaa', container: calls.container, timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }],
       notice: '', source: 'loki', truncated: true, limit: 5000,
       window: { start: '2026-11-13T01:59:00Z', end: '2026-11-13T02:11:00Z' },
     }
@@ -54,5 +54,15 @@ describe('withLokiRunFallback', () => {
   it('keeps to the chosen container', async () => {
     const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'sidecar')
     expect(got.logs).toEqual([])
+  })
+  it('shows a run Loki can\'t split by container, whatever container is chosen', async () => {
+    calls.container = '(all containers)'
+    try {
+      const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'job')
+      expect(got.logs.map(l => l.content)).toEqual(['done'])
+      expect(got.notice).toContain('all containers (Loki has no container label)')
+    } finally {
+      calls.container = 'job'
+    }
   })
 })

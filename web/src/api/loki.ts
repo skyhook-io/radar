@@ -86,6 +86,9 @@ interface LokiJobLogs {
   window: { start: string; end: string }
 }
 
+// The key Radar's history endpoints use when Loki has no container label.
+const ALL_CONTAINERS = '(all containers)'
+
 const timeOf = (iso: string) => new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
 
 /**
@@ -103,10 +106,13 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
     // Loki is the logging system the message points to: say why it didn't answer.
     return { ...data, notice: `Couldn't read this run from Loki: ${err instanceof Error ? err.message : String(err)}` }
   }
-  const logs = container ? run.logs.filter(l => l.container === container) : run.logs
+  // Without a container label every line is the whole pod's: keep them all.
+  const wholePod = run.logs.length > 0 && run.logs.every(l => l.container === ALL_CONTAINERS)
+  const logs = container && !wholePod ? run.logs.filter(l => l.container === container) : run.logs
   if (logs.length === 0) return data
   const notice = [
     `From Loki, ${timeOf(run.window.start)}–${timeOf(run.window.end)}`,
+    container && wholePod && 'all containers (Loki has no container label)',
     run.truncated && `the newest ${run.limit.toLocaleString()} lines (the limit; older lines may be missing)`,
     run.notice,
   ].filter(Boolean).join('. ')
