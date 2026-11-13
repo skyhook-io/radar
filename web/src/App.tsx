@@ -30,6 +30,7 @@ import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
+import { TerminalPreferencesProvider } from '@skyhook-io/k8s-ui'
 import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
@@ -2662,7 +2663,14 @@ function DockSpacer() {
 
 // Main App component wrapped with providers
 function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
+  const { data: authMe, isPending: authMePending, isError: authMeFailed } = useAuthMe()
+  const terminalPreferenceScope = authMe?.authEnabled === false
+    ? 'standalone'
+    : authMe?.username ? `account:${authMe.username}` : undefined
   return (
+    <TerminalPreferencesProvider scope={terminalPreferenceScope} unavailableReason={authMePending
+      ? 'Waiting for account information'
+      : authMeFailed ? 'Could not load account information. Reload to try again.' : undefined}>
     <ConnectionProvider>
       <CapabilitiesProvider>
         <RadarUpgradeProvider>
@@ -2680,6 +2688,7 @@ function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadSt
         </RadarUpgradeProvider>
       </CapabilitiesProvider>
     </ConnectionProvider>
+    </TerminalPreferencesProvider>
   )
 }
 

@@ -13,12 +13,19 @@ export interface TerminalClipboardOptions {
   confirmPaste?: PasteConfirmer
   /** Notified when the selection changes; drives the toolbar Copy button's enabled state. */
   onSelectionChange?: (hasSelection: boolean) => void
+  copyOnSelect?: () => boolean
+  onCopyError?: () => void
 }
 
 /** Copies the terminal's current selection to the clipboard. No-op if nothing is selected. */
-export function copyTerminalSelection(xterm: XTerm): void {
+export function copyTerminalSelection(xterm: XTerm, onError?: () => void): void {
   const selection = xterm.getSelection()
-  if (selection) navigator.clipboard.writeText(selection).catch(() => {})
+  if (!selection) return
+  if (!navigator.clipboard?.writeText) {
+    onError?.()
+    return
+  }
+  navigator.clipboard.writeText(selection).catch(() => onError?.())
 }
 
 function pasteLineCount(text: string): number {
@@ -39,13 +46,9 @@ function isRiskyMultilinePaste(xterm: XTerm, text: string): boolean {
 /**
  * Wires terminal clipboard behavior onto an xterm instance.
  *
- * Copy is explicit — the host's toolbar Copy button (via copyTerminalSelection)
- * and ⌘C on macOS (Ctrl+C stays SIGINT; the key lives in attachTerminalKeys,
- * which owns xterm's single custom key handler). We deliberately do NOT copy on
- * selection: a browser terminal has a single system clipboard with no separate
- * PRIMARY buffer, so copy-on-select would clobber the clipboard on every
- * incidental drag. `onSelectionChange` just reports selection presence so the
- * host can enable/disable its Copy button.
+ * Copy uses the toolbar button or macOS ⌘C. Optional copy-on-select only
+ * copies after a primary-button selection gesture, so Find and right-click
+ * selection changes cannot overwrite the clipboard before a paste.
  *
  * Paste: right-click on Windows/Linux (PuTTY/VS Code convention); macOS keeps its
  * native menu. A risky multi-line paste is confirmed first via `confirmPaste`;
@@ -65,10 +68,54 @@ export function setupTerminalClipboard(
   // builds a new one. Pasting into the disposed instance silently misses the
   // visible session, so we gate the deferred paste on this flag.
   let disposed = false
+  let selecting = false
+  let moved = false
+  let startX = 0
+  let startY = 0
+  let copyErrorReported = false
+  const document = element.ownerDocument
 
   const selectionListener = xterm.onSelectionChange(() => {
     onSelectionChange?.(xterm.hasSelection())
   })
+
+  const handleMouseDown = (event: MouseEvent) => {
+    const forceSelection = mac
+      ? event.altKey && xterm.options.macOptionClickForcesSelection
+      : event.shiftKey
+    const terminal = element.querySelector('.xterm')
+    selecting = event.button === 0 && !(mac && event.ctrlKey) && !!options.copyOnSelect?.() &&
+      event.target instanceof Element && !!terminal?.contains(event.target) && !event.target.closest('.scrollbar') &&
+      (xterm.modes.mouseTrackingMode === 'none' || !!forceSelection)
+    moved = false
+    startX = event.clientX
+    startY = event.clientY
+  }
+  const handleMouseMove = (event: MouseEvent) => {
+    if (!selecting) return
+    if (!(event.buttons & 1)) selecting = false
+    else if (event.clientX !== startX || event.clientY !== startY) moved = true
+  }
+  const cancelSelection = () => {
+    selecting = false
+  }
+  const handleMouseUp = (event: MouseEvent) => {
+    const primary = selecting && event.button === 0 &&
+      (moved || event.detail >= 2 || event.shiftKey || (mac && event.altKey))
+    selecting = false
+    if (!primary) return
+    // xterm updates the selection model during mousedown and mousemove.
+    // Read it on release, including when the same text is selected again.
+    if (!disposed && options.copyOnSelect?.()) copyTerminalSelection(xterm, () => {
+      if (disposed || copyErrorReported) return
+      copyErrorReported = true
+      options.onCopyError?.()
+    })
+  }
+  document.addEventListener('mousedown', handleMouseDown, true)
+  document.addEventListener('mousemove', handleMouseMove, true)
+  document.addEventListener('mouseup', handleMouseUp, true)
+  document.defaultView?.addEventListener('blur', cancelSelection)
 
   const handlePaste = (e: ClipboardEvent) => {
     const text = e.clipboardData?.getData('text') ?? ''
@@ -84,6 +131,7 @@ export function setupTerminalClipboard(
   let handleContextMenu: ((e: MouseEvent) => void) | undefined
   if (!mac) {
     handleContextMenu = (e: MouseEvent) => {
+      if (!navigator.clipboard?.readText) return
       e.preventDefault()
       navigator.clipboard.readText().then(async (text) => {
         if (!text || disposed) return
@@ -100,6 +148,10 @@ export function setupTerminalClipboard(
   return () => {
     disposed = true
     selectionListener.dispose()
+    document.removeEventListener('mousedown', handleMouseDown, true)
+    document.removeEventListener('mousemove', handleMouseMove, true)
+    document.removeEventListener('mouseup', handleMouseUp, true)
+    document.defaultView?.removeEventListener('blur', cancelSelection)
     element.removeEventListener('paste', handlePaste, true)
     if (handleContextMenu) element.removeEventListener('contextmenu', handleContextMenu)
   }

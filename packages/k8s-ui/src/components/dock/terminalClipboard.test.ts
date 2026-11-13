@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
 
@@ -16,17 +17,35 @@ function makeXterm(opts: { selection?: string; bracketed?: boolean } = {}) {
     getSelection: vi.fn(() => selection),
     hasSelection: vi.fn(() => selection.length > 0),
     paste: vi.fn(),
-    modes: { bracketedPasteMode: opts.bracketed ?? false },
+    modes: { bracketedPasteMode: opts.bracketed ?? false, mouseTrackingMode: 'none' },
+    options: { macOptionClickForcesSelection: false },
   }
 }
 
 function makeElement() {
   const handlers: Record<string, EventListener> = {}
-  return {
-    handlers,
-    addEventListener: vi.fn((type: string, fn: EventListener) => { handlers[type] = fn }),
-    removeEventListener: vi.fn((type: string) => { delete handlers[type] }),
+  const doc = document.implementation.createHTMLDocument()
+  const element = doc.createElement('div')
+  const terminal = doc.createElement('div')
+  terminal.className = 'xterm'
+  const screen = doc.createElement('div')
+  screen.className = 'xterm-screen'
+  terminal.append(screen)
+  element.append(terminal)
+  doc.body.append(element)
+  for (const target of [element, doc]) {
+    const add = target.addEventListener.bind(target)
+    const remove = target.removeEventListener.bind(target)
+    vi.spyOn(target, 'addEventListener').mockImplementation((type, fn, options) => {
+      if (typeof fn === 'function') handlers[type] = fn
+      add(type, fn, options)
+    })
+    vi.spyOn(target, 'removeEventListener').mockImplementation((type, fn, options) => {
+      delete handlers[type]
+      remove(type, fn, options)
+    })
   }
+  return Object.assign(element, { handlers, screen, terminal })
 }
 
 function makePasteEvent(text: string) {
@@ -81,6 +100,181 @@ describe('setupTerminalClipboard — selection reporting (no copy-on-select)', (
   })
 })
 
+describe('optional copy on select', () => {
+  it.each(['plain click', 'mouse tracking', 'scrollbar', 'abandoned gesture'])('does not copy an old Find selection on %s', (scenario) => {
+    const xterm = makeXterm({ selection: 'Find match' })
+    const el = makeElement()
+    const outside = el.ownerDocument.createElement('button')
+    el.ownerDocument.body.append(outside)
+    const scrollbar = el.ownerDocument.createElement('div')
+    scrollbar.className = 'scrollbar'
+    el.terminal.append(scrollbar)
+    if (scenario === 'mouse tracking') xterm.modes.mouseTrackingMode = 'vt200'
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    const target = scenario === 'scrollbar' ? scrollbar : el.screen
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1 }))
+    if (scenario !== 'plain click') {
+      target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: 30 }))
+    }
+    if (scenario === 'abandoned gesture') {
+      outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+    }
+    outside.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+  })
+
+  it('captures a selection release even when its target stops propagation', () => {
+    const xterm = makeXterm({ selection: 'selected output' })
+    const el = makeElement()
+    const outside = el.ownerDocument.createElement('button')
+    el.ownerDocument.body.append(outside)
+    outside.addEventListener('mouseup', event => event.stopPropagation())
+    const dispose = setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1 }))
+    el.screen.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: 30 }))
+    outside.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
+    outside.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(1)
+    dispose()
+    expect(el.ownerDocument.removeEventListener).toHaveBeenCalledWith('mouseup', expect.any(Function), true)
+  })
+
+  it.each([2, 3])('copies a %s-click selection without mouse movement', (detail) => {
+    const xterm = makeXterm({ selection: 'selected output' })
+    const el = makeElement()
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail }))
+    el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail }))
+    expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
+  })
+
+  it('allows shift selection while a terminal app handles ordinary mouse events', () => {
+    const xterm = makeXterm({ selection: 'selected output' })
+    xterm.modes.mouseTrackingMode = 'vt200'
+    const el = makeElement()
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, shiftKey: true }))
+    el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, shiftKey: true }))
+    expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
+  })
+
+  it('copies a drag starting in xterm padding', () => {
+    const xterm = makeXterm({ selection: 'selected output' })
+    const el = makeElement()
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    el.terminal.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1 }))
+    el.screen.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: 30 }))
+    el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
+  })
+
+  it('reports automatic copy rejection once per terminal and ignores a late rejection after disposal', async () => {
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValue(new Error('denied'))
+    const xterm = makeXterm({ selection: 'selected output' })
+    const el = makeElement()
+    const onCopyError = vi.fn()
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true, onCopyError })
+    for (let i = 0; i < 2; i++) {
+      el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 2 }))
+      el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 2 }))
+      await flush()
+    }
+    expect(onCopyError).toHaveBeenCalledOnce()
+    const late = makeElement()
+    const onLateError = vi.fn()
+    const dispose = setupTerminalClipboard(xterm as never, late, { copyOnSelect: () => true, onCopyError: onLateError })
+    late.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 2 }))
+    late.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 2 }))
+    dispose()
+    await flush()
+    expect(onLateError).not.toHaveBeenCalled()
+  })
+
+  it('copies only at the end of a deliberate selection and reads the live preference', async () => {
+    const xterm = makeXterm({ selection: 'selected output' })
+    const el = makeElement()
+    let enabled = false
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => enabled })
+    const select = () => {
+      el.handlers.mousedown({ button: 0, target: el.screen } as never)
+      xterm._fireSelection()
+      expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+      el.handlers.mouseup({ button: 0, detail: 2 } as never)
+    }
+    select()
+    await flush()
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+    enabled = true
+    select()
+    await flush()
+    expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
+  })
+
+  it.each(['MacIntel', 'Linux x86_64'])('never copies programmatic Find selection or right-click selection on %s', async (platform) => {
+    setPlatform(platform)
+    const xterm = makeXterm({ selection: 'output' })
+    const el = makeElement()
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => true })
+    xterm._fireSelection()
+    el.handlers.mousedown({ button: 2 } as never)
+    xterm._fireSelection()
+    el.handlers.mouseup({ button: 2 } as never)
+    if (el.handlers.contextmenu) el.handlers.contextmenu({ preventDefault: vi.fn() } as never)
+    await flush()
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+    expect(xterm.paste).toHaveBeenCalledTimes(platform === 'MacIntel' ? 0 : 1)
+  })
+
+  it('treats macOS ctrl-click as a context-menu gesture', async () => {
+    setPlatform('MacIntel')
+    const xterm = makeXterm({ selection: 'output' })
+    const el = makeElement()
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => true })
+    el.handlers.mousedown({ button: 0, ctrlKey: true } as never)
+    xterm._fireSelection()
+    el.handlers.mouseup({ button: 0, ctrlKey: true } as never)
+    await flush()
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+  })
+
+  it.each(['empty', 'disposed', 'disabled before release'])('does not copy a %s selection', async (scenario) => {
+    const xterm = makeXterm({ selection: scenario === 'empty' ? '' : 'output' })
+    const el = makeElement()
+    let enabled = true
+    const dispose = setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => enabled })
+    el.handlers.mousedown({ button: 0, target: el.screen } as never)
+    xterm._fireSelection()
+    const mouseup = el.handlers.mouseup
+    if (scenario === 'disposed') dispose()
+    if (scenario === 'disabled before release') enabled = false
+    mouseup({ button: 0, detail: 2 } as never)
+    await flush()
+    expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+  })
+
+  it('copies repeated selection even when xterm reports selection change after release', () => {
+    const xterm = makeXterm({ selection: 'same output' })
+    const el = makeElement()
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => true })
+    for (let i = 0; i < 2; i++) {
+      el.handlers.mousedown({ button: 0, target: el.screen } as never)
+      el.handlers.mouseup({ button: 0, detail: 2 } as never)
+      xterm._fireSelection()
+    }
+    expect(navigator.clipboard.writeText).toHaveBeenCalledTimes(2)
+  })
+
+  it('handles clipboard denial and browsers without a clipboard API', async () => {
+    vi.mocked(navigator.clipboard.writeText).mockRejectedValue(new Error('permission denied'))
+    const xterm = makeXterm({ selection: 'output' })
+    copyTerminalSelection(xterm as never)
+    await flush()
+    Object.defineProperty(navigator, 'clipboard', { value: undefined })
+    expect(() => copyTerminalSelection(xterm as never)).not.toThrow()
+  })
+})
+
 describe('setupTerminalClipboard - key handler', () => {
   // xterm keeps one custom key handler; attachTerminalKeys owns it, so a second
   // registration here would silently replace the find and ⌘C keys.
@@ -93,6 +287,14 @@ describe('setupTerminalClipboard - key handler', () => {
 })
 
 describe('setupTerminalClipboard — right-click paste (non-mac)', () => {
+  it('keeps the native context menu available when the clipboard API is missing', () => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined })
+    const el = makeElement()
+    setupTerminalClipboard(makeXterm() as never, el)
+    const event = { preventDefault: vi.fn() }
+    el.handlers.contextmenu(event as never)
+    expect(event.preventDefault).not.toHaveBeenCalled()
+  })
   it('pastes via xterm.paste on right-click', async () => {
     const xterm = makeXterm()
     const el = makeElement()
