@@ -169,8 +169,10 @@ func TestLoggingPipelineWithholdsUnlistableFlows(t *testing.T) {
 	if len(got.Providers) != 1 || len(got.Providers[0].Routes) != 0 || strings.Contains(raw, "optin") {
 		t.Fatalf("routes the caller can't list leaked: %s", raw)
 	}
-	if !hasGap(got, "clusterflows") || !got.Unrouted.LowerBound {
-		t.Fatalf("withheld ClusterFlows must be a gap and make unrouted a lower bound: %+v", got)
+	// A withheld ClusterFlow may route any pod: which pods are unrouted is
+	// unknown, so no count or pod is offered as unrouted.
+	if !hasGap(got, "clusterflows") || !got.Unrouted.LowerBound || got.Unrouted.Count != 0 || len(got.Unrouted.Pods) != 0 {
+		t.Fatalf("withheld ClusterFlows must leave unrouted unknown: %+v", got.Unrouted)
 	}
 }
 
@@ -266,4 +268,34 @@ func mustGet(t *testing.T, url string) *http.Response {
 		t.Fatal(err)
 	}
 	return resp
+}
+
+// An unread Flow only hides its own namespace's pods: those can't be called
+// unrouted, while pods elsewhere still are.
+func TestLoggingPipelineUnreadFlowsHideOnlyTheirNamespace(t *testing.T) {
+	seedPipelineFixture(t, append(pipelinePods(), runningPod("ops", "o2", nil))...)
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("dave", nil, allowPipeline([]string{"team", "ops"}, "flows@ops"))
+	got, _ := readPipeline(t, env.authGet(t, "/api/logging/pipeline", "dave", ""))
+	if !got.Unrouted.LowerBound || got.Unrouted.Count == 0 {
+		t.Fatalf("unrouted = %+v", got.Unrouted)
+	}
+	for _, p := range got.Unrouted.Pods {
+		if p.Namespace == "ops" {
+			t.Fatalf("a pod an unread Flow may route was listed as unrouted: %+v", got.Unrouted)
+		}
+	}
+}
+
+// Whether a Logging's collectors were read is told per Logging: an unread
+// namespace of another Logging doesn't make this one's empty list "not read".
+func TestLoggingPipelineInstanceSaysWhatItRead(t *testing.T) {
+	seedPipelineFixture(t, pipelinePods()...)
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("erin", nil, allowPipeline([]string{"team"}, "daemonsets@logging-system"))
+	got, _ := readPipeline(t, env.authGet(t, "/api/logging/pipeline", "erin", ""))
+	in := got.Providers[0].Instances[0]
+	if !in.CollectorsUnread || in.AggregatorsUnread {
+		t.Fatalf("instance = %+v", in)
+	}
 }

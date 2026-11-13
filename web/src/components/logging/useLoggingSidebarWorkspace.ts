@@ -12,8 +12,8 @@ export const LOGGING_SIDEBAR_CATEGORY = 'Logging'
 /**
  * The Logging workspace entry for the Resources sidebar: a Pipeline
  * destination counting running pods nothing routes. The count reads every
- * running pod in view, so it is fetched only while the Logging category is
- * open; elsewhere the destination shows no badge.
+ * running pod in view, so it is fetched only while a Logging kind is open
+ * (as CNPG's sidebar metrics are); elsewhere the destination shows no badge.
  */
 export function useLoggingSidebarWorkspace({ apiResources, namespaces, selectedKind }: SidebarWorkspaceArgs): Record<string, SidebarCategoryWorkspace> | undefined {
   const navigate = useWorkspaceNavigate()

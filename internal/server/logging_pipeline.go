@@ -35,6 +35,11 @@ type logInstance struct {
 	ControlNamespace string        `json:"controlNamespace"`
 	Collectors       []logWorkload `json:"collectors"`
 	Aggregators      []logWorkload `json:"aggregators"`
+	// Unread: the caller or Radar couldn't read that kind in this Logging's
+	// control namespace (or FluentbitAgents, for collectors), so an empty
+	// list means unknown, not none.
+	CollectorsUnread  bool `json:"collectorsUnread"`
+	AggregatorsUnread bool `json:"aggregatorsUnread"`
 }
 
 type logPipelineRoute struct {
@@ -161,9 +166,11 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	// namespace for namespaced kinds) and Radar has it; anything short of a
 	// full read is a gap. Namespaced Flows and Outputs only matter within the
 	// view; ClusterFlows and ClusterOutputs live in control namespaces.
+	access := map[string]integration.KindAccess{}
 	read := func(kind, plural string, cluster bool, within []string) []*unstructured.Unstructured {
 		k := integration.WorkspaceKind{Key: plural, Group: logging.Group, Kind: kind, Resource: plural, ClusterScoped: cluster}
 		acc, items := s.readWorkspaceKind(r, cache, k, within, []string{logging.Group}, budget)
+		access[plural] = acc
 		if acc.State != integration.KindCoverageFull {
 			gap(logging.Group, plural)
 		}
@@ -224,23 +231,31 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	routesPartial := false
-	for _, g := range resp.Coverage.Gaps {
-		if g.Group == logging.Group && (g.Resource == "loggings" || g.Resource == "clusterflows" || g.Resource == "flows") {
-			routesPartial = true
+	// An unread Flow may route a pod of its namespace, and an unread ClusterFlow
+	// in a control namespace (the only place the operator counts one) any pod:
+	// such pods aren't known to be unrouted. Outside the control namespaces an
+	// unread ClusterFlow routes nothing.
+	clusterFlowsKnown := !loggingsUnread
+	for _, l := range loggings {
+		if !access["clusterflows"].Covers(l.ControlNamespace) {
+			clusterFlowsKnown = false
 		}
 	}
+	flowsKnownIn := func(ns string) bool { return access["flows"].Covers(ns) }
 
+	agentsUnread := slices.Contains(resp.Coverage.Gaps, logReadError{logging.Group, "fluentbitagents"})
 	for _, l := range loggings {
 		var ws []logging.Workload
 		ns := l.ControlNamespace
-		if read, _ := typed("apps", "daemonsets", []string{ns}); in(read, ns) && cache.DaemonSets() != nil {
+		dsRead, _ := typed("apps", "daemonsets", []string{ns})
+		stsRead, _ := typed("apps", "statefulsets", []string{ns})
+		if in(dsRead, ns) && cache.DaemonSets() != nil {
 			list, _ := cache.DaemonSets().DaemonSets(ns).List(labels.Everything())
 			for _, d := range list {
 				ws = append(ws, ownedWorkload("DaemonSet", d.Namespace, d.Name, d.OwnerReferences, int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled)))
 			}
 		}
-		if read, _ := typed("apps", "statefulsets", []string{ns}); in(read, ns) && cache.StatefulSets() != nil {
+		if in(stsRead, ns) && cache.StatefulSets() != nil {
 			list, _ := cache.StatefulSets().StatefulSets(ns).List(labels.Everything())
 			for _, st := range list {
 				desired := 1
@@ -253,6 +268,7 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		collectors, aggregators := logging.InstanceWorkloads(l, agents, ws)
 		provider.Instances = append(provider.Instances, logInstance{
 			Name: l.Name, ControlNamespace: ns, Collectors: wireWorkloads(collectors), Aggregators: wireWorkloads(aggregators),
+			CollectorsUnread: !in(dsRead, ns) || agentsUnread, AggregatorsUnread: !in(stsRead, ns),
 		})
 	}
 
@@ -285,6 +301,20 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(unrouted, func(i, j int) bool {
 		return unrouted[i].Namespace+"/"+unrouted[i].Name < unrouted[j].Namespace+"/"+unrouted[j].Name
 	})
+	routesPartial := !clusterFlowsKnown
+	if clusterFlowsKnown {
+		known := unrouted[:0]
+		for _, p := range unrouted {
+			if flowsKnownIn(p.Namespace) {
+				known = append(known, p)
+			} else {
+				routesPartial = true
+			}
+		}
+		unrouted = known
+	} else {
+		unrouted = nil
+	}
 	resp.Unrouted.Count = len(unrouted)
 	resp.Unrouted.LowerBound = podsPartial || routesPartial || uncertain
 	for i, p := range unrouted {

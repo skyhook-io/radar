@@ -2011,7 +2011,15 @@ export interface LogShipping {
 // pods nothing routes. Counts with lowerBound may be higher.
 export interface LogPodCount { count: number; lowerBound: boolean }
 export interface LogWorkload { kind: string; namespace: string; name: string; ready: number; desired: number }
-export interface LogInstance { name: string; controlNamespace: string; collectors: LogWorkload[]; aggregators: LogWorkload[] }
+export interface LogInstance {
+  name: string
+  controlNamespace: string
+  collectors: LogWorkload[]
+  aggregators: LogWorkload[]
+  /** The kind wasn't read in this Logging's control namespace: an empty list is unknown, not none. */
+  collectorsUnread: boolean
+  aggregatorsUnread: boolean
+}
 export interface LogPipelineRoute {
   provider: string
   kind: string

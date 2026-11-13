@@ -11,7 +11,7 @@ import { LoggingView } from './LoggingView'
 const pipeline = (patch: Partial<LogPipeline> = {}): LogPipeline => ({
   providers: [{
     provider: 'logging-operator',
-    instances: [{ name: 'default', controlNamespace: 'logging', collectors: [{ kind: 'DaemonSet', namespace: 'logging', name: 'default-fluentbit', ready: 2, desired: 3 }], aggregators: [{ kind: 'StatefulSet', namespace: 'logging', name: 'default-fluentd', ready: 1, desired: 1 }] }],
+    instances: [{ name: 'default', controlNamespace: 'logging', collectorsUnread: false, aggregatorsUnread: false, collectors: [{ kind: 'DaemonSet', namespace: 'logging', name: 'default-fluentbit', ready: 2, desired: 3 }], aggregators: [{ kind: 'StatefulSet', namespace: 'logging', name: 'default-fluentd', ready: 1, desired: 1 }] }],
     routes: [{ provider: 'logging-operator', kind: 'ClusterFlow', group: 'logging.banzaicloud.io', namespace: 'logging', name: 'optin', instance: 'default', ignored: false, hasFilters: false, active: true,
       destinations: [{ kind: 'ClusterOutput', namespace: 'logging', name: 'loki', type: 'loki', found: true, active: true }], selectedPods: { count: 12, lowerBound: false } }],
     destinations: [{ kind: 'ClusterOutput', namespace: 'logging', name: 'loki', type: 'loki', address: 'https://loki.example.com', active: true, problems: [] }],
@@ -70,8 +70,17 @@ describe('LoggingView', () => {
   it('does not claim no collectors when FluentbitAgents were not read', () => {
     const data = pipeline({ coverage: { gaps: [{ group: 'logging.banzaicloud.io', resource: 'fluentbitagents' }], namespaces: null } })
     data.providers[0].instances[0].collectors = []
+    data.providers[0].instances[0].collectorsUnread = true // the server marks it, FluentbitAgents being unread
     Object.assign(state, { data, error: null })
     const html = render()
     expect(html).toMatch(/Collectors(<[^>]+>)*Not read/)
+  })
+  it('says not read per Logging, not because another Logging\'s namespace was unread', () => {
+    const base = pipeline({ coverage: { gaps: [{ group: 'apps', resource: 'daemonsets' }], namespaces: null } })
+    base.providers[0].instances[0].collectors = []
+    Object.assign(state, { data: base, error: null })
+    expect(render()).toContain('None found')
+    base.providers[0].instances[0].collectorsUnread = true
+    expect(render()).toContain('Not read')
   })
 })
