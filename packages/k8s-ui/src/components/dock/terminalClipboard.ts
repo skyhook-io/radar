@@ -8,24 +8,26 @@ export interface PasteConfirmInfo {
 
 /** Asks the host to confirm a risky paste; resolves true to proceed. */
 export type PasteConfirmer = (info: PasteConfirmInfo) => Promise<boolean>
+export type TerminalCopyOnSelectState = 'on' | 'off' | 'pending'
 
 export interface TerminalClipboardOptions {
   confirmPaste?: PasteConfirmer
   /** Notified when the selection changes; drives the toolbar Copy button's enabled state. */
   onSelectionChange?: (hasSelection: boolean) => void
-  copyOnSelect?: () => boolean
+  copyOnSelect?: () => TerminalCopyOnSelectState
   onCopyError?: () => void
+  onCopyPending?: () => void
 }
 
 /** Copies the terminal's current selection to the clipboard. No-op if nothing is selected. */
-export function copyTerminalSelection(xterm: XTerm, onError?: () => void): void {
+export function copyTerminalSelection(xterm: XTerm, onError?: () => void, onSuccess?: () => void): void {
   const selection = xterm.getSelection()
   if (!selection) return
   if (!navigator.clipboard?.writeText) {
     onError?.()
     return
   }
-  navigator.clipboard.writeText(selection).catch(() => onError?.())
+  navigator.clipboard.writeText(selection).then(() => onSuccess?.(), () => onError?.())
 }
 
 function pasteLineCount(text: string): number {
@@ -84,7 +86,7 @@ export function setupTerminalClipboard(
       ? event.altKey && xterm.options.macOptionClickForcesSelection
       : event.shiftKey
     const terminal = element.querySelector('.xterm')
-    selecting = event.button === 0 && !(mac && event.ctrlKey) && !!options.copyOnSelect?.() &&
+    selecting = event.button === 0 && !(mac && event.ctrlKey) &&
       event.target instanceof Element && !!terminal?.contains(event.target) && !event.target.closest('.scrollbar') &&
       (xterm.modes.mouseTrackingMode === 'none' || !!forceSelection)
     moved = false
@@ -103,13 +105,18 @@ export function setupTerminalClipboard(
     const primary = selecting && event.button === 0 &&
       (moved || event.detail >= 2 || event.shiftKey || (mac && event.altKey))
     selecting = false
-    if (!primary) return
+    if (!primary || disposed) return
+    const choice = options.copyOnSelect?.() ?? 'off'
+    if (choice === 'pending' && xterm.hasSelection()) options.onCopyPending?.()
+    if (choice !== 'on') return
     // xterm updates the selection model during mousedown and mousemove.
     // Read it on release, including when the same text is selected again.
-    if (!disposed && options.copyOnSelect?.()) copyTerminalSelection(xterm, () => {
+    copyTerminalSelection(xterm, () => {
       if (disposed || copyErrorReported) return
       copyErrorReported = true
       options.onCopyError?.()
+    }, () => {
+      if (!disposed) copyErrorReported = false
     })
   }
   document.addEventListener('mousedown', handleMouseDown, true)

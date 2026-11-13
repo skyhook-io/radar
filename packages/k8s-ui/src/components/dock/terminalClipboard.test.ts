@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
+import { setupTerminalClipboard, copyTerminalSelection, type TerminalCopyOnSelectState } from './terminalClipboard'
 
 // Minimal fakes — the helper touches onSelectionChange/getSelection/hasSelection/
 // paste/modes/attachCustomKeyEventHandler on the terminal and add/removeEventListener
@@ -101,6 +101,37 @@ describe('setupTerminalClipboard — selection reporting (no copy-on-select)', (
 })
 
 describe('optional copy on select', () => {
+  it.each(['new account on', 'new account off', 'still pending'])('checks the current choice at release when a selection began pending: %s', (scenario) => {
+    const xterm = makeXterm({ selection: 'selected output' })
+    const el = makeElement()
+    let currentChoice: TerminalCopyOnSelectState = 'pending'
+    const onCopyPending = vi.fn()
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => currentChoice, onCopyPending })
+    el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1 }))
+    el.screen.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: 30 }))
+    expect(xterm.getSelection).not.toHaveBeenCalled()
+    currentChoice = scenario === 'new account on' ? 'on' : scenario === 'new account off' ? 'off' : 'pending'
+    el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+    if (scenario === 'new account on') {
+      expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
+    } else {
+      expect(xterm.getSelection).not.toHaveBeenCalled()
+      expect(navigator.clipboard.writeText).not.toHaveBeenCalled()
+    }
+    expect(onCopyPending).toHaveBeenCalledTimes(scenario === 'still pending' ? 1 : 0)
+  })
+
+  it('does not report pending copy when there is no selected text', () => {
+    const xterm = makeXterm()
+    const el = makeElement()
+    const onCopyPending = vi.fn()
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'pending', onCopyPending })
+    el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 2 }))
+    el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 2 }))
+    expect(onCopyPending).not.toHaveBeenCalled()
+    expect(xterm.getSelection).not.toHaveBeenCalled()
+  })
+
   it.each(['plain click', 'mouse tracking', 'scrollbar', 'abandoned gesture'])('does not copy an old Find selection on %s', (scenario) => {
     const xterm = makeXterm({ selection: 'Find match' })
     const el = makeElement()
@@ -110,7 +141,7 @@ describe('optional copy on select', () => {
     scrollbar.className = 'scrollbar'
     el.terminal.append(scrollbar)
     if (scenario === 'mouse tracking') xterm.modes.mouseTrackingMode = 'vt200'
-    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'on' })
     const target = scenario === 'scrollbar' ? scrollbar : el.screen
     target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1 }))
     if (scenario !== 'plain click') {
@@ -129,7 +160,7 @@ describe('optional copy on select', () => {
     const outside = el.ownerDocument.createElement('button')
     el.ownerDocument.body.append(outside)
     outside.addEventListener('mouseup', event => event.stopPropagation())
-    const dispose = setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    const dispose = setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'on' })
     el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1 }))
     el.screen.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: 30 }))
     outside.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
@@ -143,7 +174,7 @@ describe('optional copy on select', () => {
   it.each([2, 3])('copies a %s-click selection without mouse movement', (detail) => {
     const xterm = makeXterm({ selection: 'selected output' })
     const el = makeElement()
-    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'on' })
     el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail }))
     el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail }))
     expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
@@ -153,7 +184,7 @@ describe('optional copy on select', () => {
     const xterm = makeXterm({ selection: 'selected output' })
     xterm.modes.mouseTrackingMode = 'vt200'
     const el = makeElement()
-    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'on' })
     el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, shiftKey: true }))
     el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, shiftKey: true }))
     expect(navigator.clipboard.writeText).toHaveBeenCalledExactlyOnceWith('selected output')
@@ -162,7 +193,7 @@ describe('optional copy on select', () => {
   it('copies a drag starting in xterm padding', () => {
     const xterm = makeXterm({ selection: 'selected output' })
     const el = makeElement()
-    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true })
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'on' })
     el.terminal.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1 }))
     el.screen.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1, clientX: 30 }))
     el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
@@ -174,7 +205,7 @@ describe('optional copy on select', () => {
     const xterm = makeXterm({ selection: 'selected output' })
     const el = makeElement()
     const onCopyError = vi.fn()
-    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => true, onCopyError })
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'on', onCopyError })
     for (let i = 0; i < 2; i++) {
       el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 2 }))
       el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 2 }))
@@ -183,7 +214,7 @@ describe('optional copy on select', () => {
     expect(onCopyError).toHaveBeenCalledOnce()
     const late = makeElement()
     const onLateError = vi.fn()
-    const dispose = setupTerminalClipboard(xterm as never, late, { copyOnSelect: () => true, onCopyError: onLateError })
+    const dispose = setupTerminalClipboard(xterm as never, late, { copyOnSelect: () => 'on', onCopyError: onLateError })
     late.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 2 }))
     late.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 2 }))
     dispose()
@@ -191,11 +222,28 @@ describe('optional copy on select', () => {
     expect(onLateError).not.toHaveBeenCalled()
   })
 
+  it('allows a new failure notice after an automatic copy succeeds', async () => {
+    vi.mocked(navigator.clipboard.writeText)
+      .mockRejectedValueOnce(new Error('denied'))
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('denied again'))
+    const xterm = makeXterm({ selection: 'selected output' })
+    const el = makeElement()
+    const onCopyError = vi.fn()
+    setupTerminalClipboard(xterm as never, el, { copyOnSelect: () => 'on', onCopyError })
+    for (let i = 0; i < 3; i++) {
+      el.screen.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 2 }))
+      el.screen.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, detail: 2 }))
+      await flush()
+    }
+    expect(onCopyError).toHaveBeenCalledTimes(2)
+  })
+
   it('copies only at the end of a deliberate selection and reads the live preference', async () => {
     const xterm = makeXterm({ selection: 'selected output' })
     const el = makeElement()
     let enabled = false
-    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => enabled })
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => enabled ? 'on' : 'off' })
     const select = () => {
       el.handlers.mousedown({ button: 0, target: el.screen } as never)
       xterm._fireSelection()
@@ -215,7 +263,7 @@ describe('optional copy on select', () => {
     setPlatform(platform)
     const xterm = makeXterm({ selection: 'output' })
     const el = makeElement()
-    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => true })
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => 'on' })
     xterm._fireSelection()
     el.handlers.mousedown({ button: 2 } as never)
     xterm._fireSelection()
@@ -230,7 +278,7 @@ describe('optional copy on select', () => {
     setPlatform('MacIntel')
     const xterm = makeXterm({ selection: 'output' })
     const el = makeElement()
-    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => true })
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => 'on' })
     el.handlers.mousedown({ button: 0, ctrlKey: true } as never)
     xterm._fireSelection()
     el.handlers.mouseup({ button: 0, ctrlKey: true } as never)
@@ -242,7 +290,7 @@ describe('optional copy on select', () => {
     const xterm = makeXterm({ selection: scenario === 'empty' ? '' : 'output' })
     const el = makeElement()
     let enabled = true
-    const dispose = setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => enabled })
+    const dispose = setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => enabled ? 'on' : 'off' })
     el.handlers.mousedown({ button: 0, target: el.screen } as never)
     xterm._fireSelection()
     const mouseup = el.handlers.mouseup
@@ -256,7 +304,7 @@ describe('optional copy on select', () => {
   it('copies repeated selection even when xterm reports selection change after release', () => {
     const xterm = makeXterm({ selection: 'same output' })
     const el = makeElement()
-    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => true })
+    setupTerminalClipboard(xterm as never, el as never, { copyOnSelect: () => 'on' })
     for (let i = 0; i < 2; i++) {
       el.handlers.mousedown({ button: 0, target: el.screen } as never)
       el.handlers.mouseup({ button: 0, detail: 2 } as never)

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode } from 'react'
+import type { TerminalCopyOnSelectState } from './terminalClipboard'
 
 interface Preference {
   enabled: boolean
@@ -7,7 +8,7 @@ interface Preference {
 }
 
 const preferences = new Map<string | undefined, Preference>()
-const PreferenceScope = createContext<{ scope?: string; unavailableReason?: string } | null>(null)
+const PreferenceScope = createContext<{ scope?: string; unavailableReason?: string; scopePending?: boolean; isScopeCurrent?: () => boolean } | null>(null)
 
 function preference(scope: string | undefined): Preference {
   let value = preferences.get(scope)
@@ -23,7 +24,7 @@ function preference(scope: string | undefined): Preference {
 }
 
 /** Omit the scope until the host has confirmed the account identity. */
-export function TerminalPreferencesProvider({ scope, unavailableReason, children }: { scope?: string; unavailableReason?: string; children: ReactNode }) {
+export function TerminalPreferencesProvider({ scope, unavailableReason, scopePending, isScopeCurrent, children }: { scope?: string; unavailableReason?: string; scopePending?: boolean; isScopeCurrent?: () => boolean; children: ReactNode }) {
   useEffect(() => {
     if (scope === undefined) return
     const key = `radar:terminal:copy-on-select:${scope}`
@@ -42,7 +43,7 @@ export function TerminalPreferencesProvider({ scope, unavailableReason, children
     window.addEventListener('storage', handleStorage)
     return () => window.removeEventListener('storage', handleStorage)
   }, [scope])
-  return <PreferenceScope.Provider value={{ scope, unavailableReason }}>{children}</PreferenceScope.Provider>
+  return <PreferenceScope.Provider value={{ scope, unavailableReason, scopePending, isScopeCurrent }}>{children}</PreferenceScope.Provider>
 }
 
 export function useTerminalCopyOnSelect() {
@@ -50,8 +51,12 @@ export function useTerminalCopyOnSelect() {
   const { scope, unavailableReason } = context ?? {}
   const state = preference(scope)
   const current = useRef(state)
-  useLayoutEffect(() => { current.current = state }, [state])
-  const isEnabled = useCallback(() => current.current.enabled, [])
+  const scopeCurrent = useRef(context?.isScopeCurrent)
+  useLayoutEffect(() => { current.current = state; scopeCurrent.current = context?.isScopeCurrent }, [state, context?.isScopeCurrent])
+  const getState = useCallback((): TerminalCopyOnSelectState => {
+    if (!current.current.enabled) return 'off'
+    return scopeCurrent.current?.() === false ? 'pending' : 'on'
+  }, [])
   const enabled = useSyncExternalStore(
     (notify) => { state.listeners.add(notify); return () => { state.listeners.delete(notify) } },
     () => state.enabled,
@@ -59,11 +64,12 @@ export function useTerminalCopyOnSelect() {
   )
   return {
     enabled,
-    available: scope !== undefined,
+    available: scope !== undefined && !context?.scopePending,
     hasProvider: context !== null,
     unavailableReason: unavailableReason ?? 'Account information unavailable',
-    isEnabled,
+    getState,
     setEnabled: (next: boolean) => {
+      if (scopeCurrent.current?.() === false) return
       state.enabled = next
       if (scope !== undefined) {
         try {
