@@ -160,6 +160,9 @@ import {
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
   healthColors,
+  getLogContainerNames,
+  getDefaultLogContainerName,
+  getInitContainerNames,
 } from './resource-utils'
 import { TRIVY_GROUP, searchTrivyFindings, type TrivyFindingMatch, type TrivyFindingsSearch } from './resource-utils-trivy'
 import { getGenericResourceStatus } from './generic-status'
@@ -3473,7 +3476,7 @@ interface ResourcesViewData {
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
-  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
 }
 
@@ -3553,7 +3556,7 @@ interface ResourcesViewProps {
   /** URL prefix for this view (default: '/resources'). Must match the route path. */
   basePath?: string
   // Dock actions
-  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   // Callback when selected kind changes — used by parent to fetch data for the selected kind
   onSelectedKindChange?: (kind: { name: string; kind: string; group: string }) => void
@@ -4755,9 +4758,9 @@ export function ResourcesView({
         const name = res.metadata?.name || ''
         if (kindLower === 'pods') {
           // For pods, use openLogs directly (not workload logs)
-          const containers = (res.spec?.containers || []).map((c: { name: string }) => c.name)
+          const containers = getLogContainerNames(res)
           if (containers.length > 0) {
-            openLogs?.({ namespace: ns, podName: name, containers })
+            openLogs?.({ namespace: ns, podName: name, containers, containerName: getDefaultLogContainerName(res), initContainers: getInitContainerNames(res) })
           }
         } else if (['deployments', 'statefulsets', 'daemonsets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })

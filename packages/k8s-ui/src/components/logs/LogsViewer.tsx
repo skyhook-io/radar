@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { parseLogLine, parseLogRange } from '../../utils/log-format'
 import { triggerDownload } from '../../utils/download'
 import { useLogBuffer } from './useLogBuffer'
@@ -22,6 +22,8 @@ export interface LogsViewerProps {
   podName: string
   containers: string[]
   initialContainer?: string
+  /** Which of `containers` are init containers, labelled in the selector. */
+  initContainers?: string[]
   /** Called to fetch logs. Return value is { [containerName]: rawLogText } */
   fetchLogs: (params: LogsFetchParams) => Promise<{ [container: string]: string }>
   /** If provided, the stream button is enabled. Called to open an SSE connection. */
@@ -68,6 +70,7 @@ function PodLogsViewer({
   podName,
   containers,
   initialContainer,
+  initContainers,
   fetchLogs,
   createStream,
   overrideDownload,
@@ -76,6 +79,13 @@ function PodLogsViewer({
   autoStream = false,
 }: LogsViewerProps) {
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
+  // When the list arrives after mount (the pod was still loading) or no longer
+  // has the selected container, open the preferred one, else the first.
+  useEffect(() => {
+    if (containers.length === 0 || containers.includes(selectedContainer)) return
+    setSelectedContainer(initialContainer && containers.includes(initialContainer) ? initialContainer : containers[0])
+  }, [containers, initialContainer, selectedContainer])
+  const initContainerSet = useMemo(() => new Set(initContainers), [initContainers])
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
@@ -242,7 +252,7 @@ function PodLogsViewer({
 
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
-      <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} />
+      <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} initContainers={initContainerSet} />
 
       <Tooltip content={streamBusy ? 'Stop streaming to view the previous instance' : "Show logs from the pod's previous instance (if it was restarted). Useful for troubleshooting crashed containers."} position="bottom">
         <label className={`flex items-center gap-1.5 text-xs ${palette.textSecondary} ${streamBusy ? 'opacity-50 cursor-not-allowed' : ''}`}>
