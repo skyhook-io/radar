@@ -89,7 +89,7 @@ export function SyncCountdown({ interval, lastSyncTime, suspended, compact = fal
 /**
  * Parses a Kubernetes duration string (e.g., "5m", "1h30m", "30s") into seconds
  */
-function parseInterval(interval: string): number | null {
+export function parseInterval(interval: string): number | null {
   if (!interval) return null
 
   let totalSeconds = 0

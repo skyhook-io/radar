@@ -56,7 +56,16 @@ type Summary struct {
 	LastApplied      string `json:"lastApplied,omitempty"`
 	LastApplyAttempt string `json:"lastApplyAttempt,omitempty"`
 	LastDeployed     string `json:"lastDeployed,omitempty"`
-	PartialReason    string `json:"partialReason,omitempty"`
+	// Flux revision chain. Pending is nil when either side is unknown or the
+	// caller can't read the source; it never means "up to date".
+	SourceRevision  string `json:"sourceRevision,omitempty"`
+	SourceFetchedAt string `json:"sourceFetchedAt,omitempty"`
+	AppliedRevision string `json:"appliedRevision,omitempty"`
+	Pending         *bool  `json:"pending,omitempty"`
+	Interval        string `json:"interval,omitempty"`
+	RetryInterval   string `json:"retryInterval,omitempty"`
+	Objects         int    `json:"objects,omitempty"`
+	PartialReason   string `json:"partialReason,omitempty"`
 	// AutoSyncMode is the human-readable syncPolicy chip label, e.g.
 	// "Manual", "Auto", "Auto · prune", "Auto · self-heal",
 	// "Auto · prune · self-heal", "Suspended" (Flux), or "".
@@ -308,6 +317,12 @@ type HistoryItem struct {
 	Rollbackable *bool `json:"rollbackable,omitempty"`
 	// RollbackMultiSourceWarning warns when either the current spec or this entry uses plural sources.
 	RollbackMultiSourceWarning bool `json:"rollbackMultiSourceWarning,omitempty"`
+	// Flux Activity fields. DeployedAt stays the last time; Kind is
+	// "revision", "event" or "condition".
+	FirstAt  string `json:"firstAt,omitempty"`
+	Runs     int64  `json:"runs,omitempty"`
+	Duration string `json:"duration,omitempty"`
+	Kind     string `json:"kind,omitempty"`
 }
 
 type Capabilities struct {
@@ -428,9 +443,14 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 		Issues:       buildIssues(root, resourceTree, tool, resolver),
 		Changes:      buildChanges(root, resourceTree, tool, resolver),
 		Plan:         buildPlan(root, resourceTree, tool),
-		History:      BuildHistory(root),
 		Capabilities: buildCapabilities(root, tool),
 		Partial:      true,
+	}
+	if tool == gitops.ToolFluxCD {
+		applyFluxChain(&out.Summary, root, resourceTree)
+		out.History = BuildFluxActivity(root, resolver)
+	} else {
+		out.History = buildHistory(root, tool)
 	}
 	out.Summary.PartialReason = "Radar shows the controller's drift assessment plus a per-resource field diff and recent events (when available). For the canonical line-by-line diff against Git, use the Argo CD UI or `argocd app diff`."
 	if resourceTree != nil {

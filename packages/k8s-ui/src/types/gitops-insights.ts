@@ -63,6 +63,15 @@ export interface GitOpsInsightSummary {
   lastApplied?: string
   lastApplyAttempt?: string
   lastDeployed?: string
+  // Flux revision chain. pending is absent when either side is unknown or the
+  // source is unreadable; absence never means "up to date".
+  sourceRevision?: string
+  sourceFetchedAt?: string
+  appliedRevision?: string
+  pending?: boolean
+  interval?: string
+  retryInterval?: string
+  objects?: number
   partialReason?: string
   // Human-readable sync mode for the chip in the status strip.
   // Argo: "Manual" | "Auto" | "Auto · prune" | "Auto · self-heal" | "Auto · prune · self-heal"
@@ -254,6 +263,11 @@ export interface GitOpsHistoryItem {
   rollbackable?: boolean
   // Compatibility warning: the current Application or history entry uses plural sources.
   rollbackMultiSourceWarning?: boolean
+  // Flux Activity: deployedAt is the last time, firstAt the first.
+  firstAt?: string
+  runs?: number
+  duration?: string
+  kind?: 'revision' | 'event' | 'condition'
 }
 
 export interface GitOpsCapabilities {

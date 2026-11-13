@@ -3,12 +3,14 @@ import { IssueGuidance } from '../../issues/IssueGuidance'
 import { PaneLoader } from '../../ui/PaneLoader'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { GitOpsChange, GitOpsDrift, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
+import type { GitOpsChange, GitOpsDrift, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightSummary, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { radarHealthNote } from '../health-provenance'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
+import { Badge } from '../../ui/Badge'
+import { parseInterval } from '../SyncCountdown'
 import { RadarUpgradeNote, radarUpgradeNoteText } from '../../ui/RadarUpgradeNote'
 import type { RadarUpgradeRequirement } from '../../../types/fetch-error'
 import { SearchBox } from '../../ui/SearchBox'
@@ -87,6 +89,7 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
     (i) => i.severity === 'critical' && i.scope === 'operation' && i.stuck,
   )
   const operationTooltipMessage = summary.rawOperationMessage || summary.operationMessage
+  const fluxChain = summary.tool === 'fluxcd' && !!(summary.appliedRevision || summary.sourceRevision)
   return (
     <div className="border-b border-theme-border bg-theme-base px-4 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
@@ -125,7 +128,8 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
           </Tooltip>
         )}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
-          {shortRev && (
+          {fluxChain && <FluxRevisionChain summary={summary} renderRevisionMeta={renderRevisionMeta} />}
+          {shortRev && !fluxChain && (
             <span className="inline-flex items-baseline gap-1">
               <span className="shrink-0">Revision:</span>
               {commitUrl ? (
@@ -157,6 +161,86 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
       </div>
     </div>
   )
+}
+
+// FluxRevisionChain reads source → applied → objects. Without a readable
+// source it shows the applied step alone and says nothing about freshness.
+function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsInsightSummary; renderRevisionMeta?: (revision: string) => ReactNode }) {
+  const applied = summary.appliedRevision || ''
+  const nextRun = fluxNextRunMinutes(summary)
+  return (
+    <span className="inline-flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+      {summary.sourceRevision && (
+        <>
+          <span className="shrink-0">Source</span>
+          <Tooltip content={summary.sourceRevision} delay={400}>
+            <span className="font-mono font-medium text-theme-text-primary">{shortFluxRevision(summary.sourceRevision)}</span>
+          </Tooltip>
+          {summary.sourceFetchedAt && <span>· fetched {formatRelativeAgeTime(summary.sourceFetchedAt)}</span>}
+        </>
+      )}
+      {applied && (
+        <>
+          {summary.sourceRevision && <span aria-hidden>→</span>}
+          <span className="shrink-0">Applied</span>
+          <Tooltip content={applied} delay={400}>
+            <span className={clsx('font-mono font-medium', summary.pending ? SEVERITY_TEXT.warning : 'text-theme-text-primary')}>{appliedLabel(summary)}</span>
+          </Tooltip>
+          {renderRevisionMeta?.(applied)}
+          {nextRun !== null && <span>· next run in ~{nextRun}m</span>}
+        </>
+      )}
+      {summary.objects ? (
+        <>
+          <span aria-hidden>→</span>
+          <span>{summary.objects} objects</span>
+        </>
+      ) : null}
+      {summary.pending && <Badge severity="warning" size="sm">Pending: source is ahead of what is applied</Badge>}
+    </span>
+  )
+}
+
+// Flux records OCI artifacts as "<tag>@sha256:<digest>"; the chain shows
+// the digest's first 7 hex chars, like a Git short SHA.
+function shortFluxRevision(revision: string): string {
+  const digest = revision.match(/sha256:([0-9a-f]{7,64})/i)
+  return digest ? digest[1].slice(0, 7) : shortRevisionForCommit(revision)
+}
+
+// A HelmRelease is compared by digest, but people read the chart version.
+function appliedLabel(summary: GitOpsInsightSummary): string {
+  const applied = summary.appliedRevision || ''
+  const short = shortFluxRevision(applied)
+  if (summary.kind === 'HelmRelease' && summary.lastRevision && summary.lastRevision !== applied) {
+    return `${summary.lastRevision} (${short})`
+  }
+  return short
+}
+
+// fluxNextRunMinutes estimates a Kustomization's next run from its last run
+// and interval; after a failed apply Flux retries on retryInterval, which
+// defaults to interval. HelmRelease history records deploys, not runs.
+function fluxNextRunMinutes(summary: GitOpsInsightSummary): number | null {
+  if (summary.kind !== 'Kustomization' || summary.autoSyncMode === 'Suspended') return null
+  const applied = Date.parse(summary.lastApplied || '')
+  const attempt = Date.parse(summary.lastApplyAttempt || '')
+  const failedLast = Number.isFinite(attempt) && !(applied >= attempt)
+  const last = failedLast ? attempt : applied
+  const interval = (failedLast && summary.retryInterval) || summary.interval
+  const seconds = interval ? parseInterval(interval) : null
+  if (!Number.isFinite(last) || !seconds) return null
+  const remaining = last + seconds * 1000 - Date.now()
+  return remaining > 0 ? Math.ceil(remaining / 60000) : null
+}
+
+// formatFluxDuration rounds the Go duration Flux records ("984.729484ms",
+// "1.102930992s") for display; anything else passes through.
+function formatFluxDuration(duration: string): string {
+  const match = duration.match(/^(\d+(?:\.\d+)?)(ms|s)$/)
+  if (!match) return duration
+  const value = Number(match[1])
+  return match[2] === 'ms' ? `${Math.round(value)}ms` : `${value.toFixed(1)}s`
 }
 
 // shortRevisionForCommit normalizes a controller-reported revision to a
@@ -1755,9 +1839,12 @@ function HistoryRows({
             </div>
             <div className="min-w-0 text-sm">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <span className="font-mono text-xs text-theme-text-primary">{item.revision || item.phase || '-'}</span>
+                <span className="font-mono text-xs text-theme-text-primary">{(item.kind === 'event' ? item.id : item.kind === 'condition' && item.id ? `${item.id} condition` : item.revision) || item.phase || '-'}</span>
                 <PhaseChip phase={item.phase} message={item.message} />
                 <span className="text-[11px] text-theme-text-tertiary">{formatRelativeAgeTime(item.deployedAt)}</span>
+                {item.duration && <span className="text-[11px] text-theme-text-tertiary">took {formatFluxDuration(item.duration)}</span>}
+                {item.kind === 'revision' && item.runs ? <span className="text-[11px] text-theme-text-tertiary">{item.runs} {item.runs === 1 ? 'run' : 'runs'}</span> : null}
+                {item.firstAt && item.firstAt !== item.deployedAt && <span className="text-[11px] text-theme-text-tertiary">first {formatRelativeAgeTime(item.firstAt)}</span>}
                 {item.initiatedBy && (
                   <span className="text-[11px] text-theme-text-tertiary">by {item.initiatedBy}</span>
                 )}

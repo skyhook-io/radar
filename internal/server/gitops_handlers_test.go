@@ -14,7 +14,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -425,5 +427,41 @@ func TestWriteGitOpsBuildErrorRefusesNonGitOpsRoot(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Application.app.k8s.io shop/wordpress is not a supported Argo CD or Flux resource") {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestFluxChainHidesUnreadableSource(t *testing.T) {
+	fd := &fakediscovery.FakeDiscovery{Fake: &k8stesting.Fake{}}
+	fd.Resources = []*metav1.APIResourceList{{GroupVersion: "source.toolkit.fluxcd.io/v1", APIResources: []metav1.APIResource{
+		{Name: "gitrepositories", Kind: "GitRepository", Namespaced: true, Verbs: metav1.Verbs{"get", "list", "watch"}},
+	}}}
+	restore, err := k8s.SetTestResourceDiscovery(fd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(restore)
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("chain-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	s.permCache.Get("chain-user", nil).SetCanI("get", "source.toolkit.fluxcd.io", "gitrepositories", "team", false)
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
+		"metadata": map[string]any{"namespace": "team", "name": "app"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}},
+		"status":   map[string]any{"lastAppliedRevision": "main@sha1:aaa"},
+	}}
+	tree := &gitopstree.ResourceTree{
+		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot},
+		Nodes: []gitopstree.Node{
+			{ID: "root", Role: gitopstree.RoleRoot},
+			{ID: "repo", Role: gitopstree.RoleDeclared, Dependency: true, Ref: gitopstree.ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "team", Name: "repo"}, Data: map[string]any{"artifactRevision": "main@sha1:bbb"}},
+		},
+		Edges: []gitopstree.Edge{{Source: "repo", Target: "root", Type: gitopstree.EdgeSource}},
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "chain-user"}))
+	summary := gitopsinsights.Build(root, s.filterGitOpsTreeForUser(r, req, tree), nil).Summary
+	if summary.SourceRevision != "" || summary.Pending != nil || summary.AppliedRevision != "main@sha1:aaa" {
+		t.Fatalf("hidden source fed the chain: %+v", summary)
 	}
 }
