@@ -41,6 +41,7 @@ import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
 import { resourceExpandedPath, resourceKindListTitle } from './integrations/resourceHosts'
 import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
 import { WorkspaceScreen } from './integrations/workspaceScreens'
+import { pendingInvalidations, type WorkspaceInvalidation } from './integrations/workspaceInvalidations'
 import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
@@ -1125,7 +1126,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     secretsChanged: boolean
     timer: number | null
   }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
-  const cnpgInvalidationPendingRef = useRef(false)
+  const workspaceInvalidationPendingRef = useRef(new Set<WorkspaceInvalidation>())
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1157,7 +1158,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const structural = event.operation === 'add' || event.operation === 'delete'
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
-    if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
+    for (const due of pendingInvalidations([event])) workspaceInvalidationPendingRef.current.add(due)
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1208,10 +1209,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
-        if (cnpgInvalidationPendingRef.current) {
-          cnpgInvalidationPendingRef.current = false
-          queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
+        for (const due of workspaceInvalidationPendingRef.current) {
+          queryClient.invalidateQueries({ queryKey: due.queryKey })
         }
+        workspaceInvalidationPendingRef.current.clear()
         fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
     }
