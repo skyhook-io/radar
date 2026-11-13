@@ -1027,10 +1027,11 @@ export interface HelmRelease {
   resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
   healthIssue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
   healthSummary?: string  // Brief summary like "2/3 pods ready"
-  // When set, this release was installed by Flux's helm-controller — the
-  // user should manage it via the named HelmRelease CR (GitOps tab) rather
-  // than helm CLI / Radar's Helm view, since changes here would get
-  // reverted at the next reconcile. Format: "namespace/name".
+  /** Workloads and Pods whose live status wasn't read; other unread objects keep per-resource markers. */
+  statusUnreadCount?: number
+  // Flux ownership remains visible when the controller reference is withheld.
+  managedByFlux?: boolean
+  // Readable controller reference, in namespace/name form.
   managedByFluxHelmRelease?: string
 }
 
@@ -1100,6 +1101,8 @@ export interface HelmReleaseDetail {
   resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown'
   healthIssue?: string
   healthSummary?: string
+  /** See HelmRelease.statusUnreadCount. */
+  statusUnreadCount?: number
   hooks?: HelmHook[]
   hookDiagnostics?: HookDiagnostic[]
   readme?: string
@@ -1107,8 +1110,8 @@ export interface HelmReleaseDetail {
   lastOperation?: HelmOperation
   operations?: HelmOperation[]
   operationInsight?: HelmOperationInsight
-  // When set, this release was installed by Flux's helm-controller — see
-  // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
+  // Ownership is retained even when the controller reference is withheld.
+  managedByFlux?: boolean
   managedByFluxHelmRelease?: string
 }
 
@@ -1207,6 +1210,8 @@ export interface HelmOwnedResource {
   message?: string  // Status message or reason
   summary?: string  // Brief status like "0/3 OOMKilled"
   issue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
+  /** Why the caller isn't shown this object's live status (a read code such as user_forbidden); release health doesn't count it. */
+  statusUnread?: string
 }
 
 export interface HelmValues {

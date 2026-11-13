@@ -5,12 +5,6 @@ import (
 	"encoding/json"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-
-	"github.com/skyhook-io/radar/internal/k8s"
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
-	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
 func registerResources(server *mcp.Server) {
@@ -18,7 +12,7 @@ func registerResources(server *mcp.Server) {
 		&mcp.Resource{
 			URI:         "cluster://health",
 			Name:        "Cluster Health",
-			Description: "Cluster health summary including resource counts, problems, and warning events",
+			Description: "Cluster health summary: resource counts, problems, warning events and Helm status, as get_dashboard with no namespace. With authentication, requires cluster-wide list pods permission. If you lack that permission, call get_dashboard with an accessible namespace",
 			MIMEType:    "application/json",
 		},
 		handleResourceHealth,
@@ -28,7 +22,7 @@ func registerResources(server *mcp.Server) {
 		&mcp.Resource{
 			URI:         "cluster://topology",
 			Name:        "Cluster Topology",
-			Description: "Current topology graph showing relationships between Kubernetes resources",
+			Description: "Topology graph of the cluster's resources and how they connect, the same as get_topology with no namespace. For a caller limited to some namespaces it covers only those, and partialScope plus scopeNamespaces say which",
 			MIMEType:    "application/json",
 		},
 		handleResourceTopology,
@@ -38,7 +32,7 @@ func registerResources(server *mcp.Server) {
 		&mcp.Resource{
 			URI:         "cluster://events",
 			Name:        "Recent Events",
-			Description: "Recent Kubernetes warning events, deduplicated and sorted by recency. Capped at 50 groups — a full 50 may be truncated; use the get_events tool to narrow by namespace/kind/name or control the limit",
+			Description: "Recent Warning events, deduplicated and sorted by recency, as {\"events\": [...]}: the same as get_events with type=Warning and limit=50. For a caller limited to some namespaces it covers only those, and partialScope plus scopeNamespaces say which. narrowHint appears when more than 50 groups exist; call get_events to narrow by namespace, kind or name",
 			MIMEType:    "application/json",
 		},
 		handleResourceEvents,
@@ -58,85 +52,59 @@ func jsonErrorResource(uri, message string) *mcp.ReadResourceResult {
 	return textResource(uri, string(body))
 }
 
-// requireClusterAdminAccess refuses MCP resource reads (cluster://*) unless
-// the caller can list namespaces cluster-wide — these resources have no
-// namespace input, so anything less risks leaking cluster-scoped objects
-// (events, nodes, topology edges) the user has no right to see. Restricted
-// users are redirected to the equivalent tools, which take an explicit
-// namespace and apply per-user filtering.
-func requireClusterAdminAccess(ctx context.Context, uri string) (*mcp.ReadResourceResult, bool) {
-	if !canReadClusterScopedKind(ctx, "namespaces", "", "list") {
-		return jsonErrorResource(uri, "forbidden: this resource requires cluster-wide list-namespaces permission; use the equivalent MCP tool with an explicit namespace"), true
-	}
-	return nil, false
-}
+// The cluster:// resources take no input, so each one answers through the
+// tool that asks the same question with no namespace. That keeps one set of
+// access rules: a caller who reads only some namespaces gets the same answer,
+// marker or refusal from the resource as from the tool.
 
 func handleResourceHealth(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-	if blocked, ok := requireClusterAdminAccess(ctx, "cluster://health"); ok {
-		return blocked, nil
-	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return jsonErrorResource("cluster://health", errNotConnected().Error()), nil
-	}
-
-	dashboard := buildDashboard(ctx, cache, "", canReadClusterScopedKind(ctx, "nodes", "", "list"), canReadClusterScopedKind(ctx, "namespaces", "", "list"))
-	data, _ := json.Marshal(dashboard)
-
-	return textResource("cluster://health", string(data)), nil
+	result, _, err := handleGetDashboard(ctx, nil, dashboardInput{})
+	return resourceFromTool("cluster://health", result, err), nil
 }
 
 func handleResourceTopology(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-	if blocked, ok := requireClusterAdminAccess(ctx, "cluster://topology"); ok {
-		return blocked, nil
-	}
-	opts := topology.DefaultBuildOptions()
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-	topo, err := builder.Build(opts)
-	if err != nil {
-		return jsonErrorResource("cluster://topology", err.Error()), nil
-	}
-	applyClusterScopedTopologyRBAC(ctx, topo)
-
-	data, _ := json.Marshal(topo)
-	return textResource("cluster://topology", string(data)), nil
+	result, _, err := handleGetTopology(ctx, nil, topologyInput{})
+	return resourceFromTool("cluster://topology", result, err), nil
 }
 
+// clusterEventsResourceLimit is how many deduplicated Warning groups
+// cluster://events returns; get_events caps its own limit at 100.
+const clusterEventsResourceLimit = 50
+
 func handleResourceEvents(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-	if blocked, ok := requireClusterAdminAccess(ctx, "cluster://events"); ok {
-		return blocked, nil
-	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return jsonErrorResource("cluster://events", errNotConnected().Error()), nil
-	}
+	result, _, err := handleGetEvents(ctx, nil, eventsInput{Type: "Warning", Limit: clusterEventsResourceLimit})
+	return resourceFromTool("cluster://events", result, err), nil
+}
 
-	eventLister := cache.Events()
-	if eventLister == nil {
-		return jsonErrorResource("cluster://events", "insufficient permissions"), nil
-	}
-
-	events, err := eventLister.List(labels.Everything())
+// resourceFromTool turns a tool handler's answer into resource contents. A
+// coded read error keeps the body tools send (error, error_code, next), so a
+// client tells "Radar couldn't check your access" from a denial the same way
+// on both; any other error becomes {"error": "..."}.
+func resourceFromTool(uri string, result *mcp.CallToolResult, err error) *mcp.ReadResourceResult {
 	if err != nil {
-		return jsonErrorResource("cluster://events", err.Error()), nil
-	}
-
-	// Filter to warning events only
-	var warnings []corev1.Event
-	for _, e := range events {
-		if e.Type == "Warning" {
-			warnings = append(warnings, *e)
+		if structured, ok := readErrorResult(err); ok {
+			if text, ok := singleText(structured); ok {
+				return textResource(uri, text)
+			}
 		}
+		return jsonErrorResource(uri, err.Error())
 	}
+	text, ok := singleText(result)
+	if !ok {
+		return jsonErrorResource(uri, "internal error")
+	}
+	return textResource(uri, text)
+}
 
-	// 50 is this resource's real cap (the dedup helper used to truncate to
-	// 20 internally, making this a dead branch). The bare-array wire shape
-	// cannot carry a truncation marker — the resource description points
-	// consumers at get_events for narrowing; a full 50 may be truncated.
-	deduplicated, _ := aicontext.DeduplicateEventsN(warnings, 50)
-
-	data, _ := json.Marshal(deduplicated)
-	return textResource("cluster://events", string(data)), nil
+func singleText(result *mcp.CallToolResult) (string, bool) {
+	if result == nil || len(result.Content) != 1 {
+		return "", false
+	}
+	content, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		return "", false
+	}
+	return content.Text, true
 }
 
 func textResource(uri, text string) *mcp.ReadResourceResult {

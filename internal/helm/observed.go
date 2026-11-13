@@ -15,7 +15,6 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/pkg/gitops"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
@@ -444,13 +443,9 @@ func addObservedHealth(row *ObservedRelease, objects []stampedObject, partial bo
 	resources := make([]OwnedResource, 0, len(objects))
 	for _, o := range objects {
 		resource := OwnedResource{Kind: o.kind, APIVersion: objectAPIVersion(o), Name: o.name, Namespace: o.namespace}
-		if k8score.IsBuiltInAPIGroup(o.group) {
-			one := []OwnedResource{resource}
-			enrichResourcesWithStatus(one)
-			resource = one[0]
-		}
 		resources = append(resources, resource)
 	}
+	enrichResourcesWithStatus(resources, scannedObjects{})
 	row.ResourceHealth, row.HealthIssue, row.HealthSummary = computeResourceHealth(resources)
 	if partial && row.ResourceHealth == "healthy" {
 		row.ResourceHealth = "unknown"

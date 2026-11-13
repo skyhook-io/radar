@@ -35,7 +35,7 @@ func TestListReleasesRecordingAccess(t *testing.T) {
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "apps", helmTestRelease("api", "apps", 1, release.StatusDeployed, "Install complete"), false))
 	client.PrependReactor("list", "secrets", denySecrets("team-b"))
 
-	rows, read, denied, err := listReleasesRecordingAccess(context.Background(), client, "", []string{"apps", "team-b"})
+	rows, read, denied, err := listReleasesRecordingAccess(context.Background(), client, "", []string{"apps", "team-b"}, scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestListReleasesRecordingAccessTreatsACompleteDenialAsAResult(t *testing.T)
 	client := fake.NewSimpleClientset()
 	client.PrependReactor("list", "secrets", denySecrets(""))
 
-	rows, read, denied, err := listReleasesRecordingAccess(context.Background(), client, "", nil)
+	rows, read, denied, err := listReleasesRecordingAccess(context.Background(), client, "", nil, scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestListReleasesRecordingAccessKeepsOtherFailures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			client := fake.NewSimpleClientset()
 			client.PrependReactor("list", "secrets", func(ktesting.Action) (bool, runtime.Object, error) { return true, nil, failure })
-			if _, _, _, err := listReleasesRecordingAccess(context.Background(), client, "", nil); err == nil {
+			if _, _, _, err := listReleasesRecordingAccess(context.Background(), client, "", nil, scannedObjects{}); err == nil {
 				t.Fatal("a failure that isn't the caller's denial must not read as one")
 			}
 		})

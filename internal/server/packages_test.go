@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/packages"
 )
@@ -92,8 +93,8 @@ func TestIsMissingCRDErr_PinsK8scoreErrorString(t *testing.T) {
 
 func TestPackagesCacheKey_DistinguishesNamespaces(t *testing.T) {
 	// Different namespace sets → different keys.
-	a := packagesCacheKeyFor(0, []string{"prod"})
-	b := packagesCacheKeyFor(0, []string{"staging"})
+	a := packagesCacheKeyFor(0, []string{"prod"}, helm.NamespaceStatusScope{})
+	b := packagesCacheKeyFor(0, []string{"staging"}, helm.NamespaceStatusScope{})
 	if a == b {
 		t.Errorf("expected different keys for different namespaces, got %q", a)
 	}
@@ -101,19 +102,19 @@ func TestPackagesCacheKey_DistinguishesNamespaces(t *testing.T) {
 	// reads run via the SA so two users with the same namespace scope
 	// share the entry. (See packagesCacheKeyFor godoc.)
 	// nil namespaces vs empty slice must differ (empty = no access).
-	all := packagesCacheKeyFor(0, nil)
-	none := packagesCacheKeyFor(0, []string{})
+	all := packagesCacheKeyFor(0, nil, helm.NamespaceStatusScope{})
+	none := packagesCacheKeyFor(0, []string{}, helm.NamespaceStatusScope{})
 	if all == none {
 		t.Errorf("nil (all namespaces) and empty slice (no access) must differ; both = %q", all)
 	}
 	// Order independence: same set in different orders → same key.
-	x := packagesCacheKeyFor(0, []string{"a", "b"})
-	y := packagesCacheKeyFor(0, []string{"b", "a"})
+	x := packagesCacheKeyFor(0, []string{"a", "b"}, helm.NamespaceStatusScope{})
+	y := packagesCacheKeyFor(0, []string{"b", "a"}, helm.NamespaceStatusScope{})
 	if x != y {
 		t.Errorf("namespace order should not affect key: %q vs %q", x, y)
 	}
 	// Caches from different clusters never share an entry.
-	if packagesCacheKeyFor(1, []string{"prod"}) == packagesCacheKeyFor(2, []string{"prod"}) {
+	if packagesCacheKeyFor(1, []string{"prod"}, helm.NamespaceStatusScope{}) == packagesCacheKeyFor(2, []string{"prod"}, helm.NamespaceStatusScope{}) {
 		t.Error("expected different keys for different resource-cache generations")
 	}
 }
@@ -212,7 +213,7 @@ func TestFilterByChartSubstring_CaseInsensitive(t *testing.T) {
 // computePackagesInternal).
 func TestListPackages_SharedCacheAcrossUsers(t *testing.T) {
 	withCleanCache(t, func() {
-		key := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), []string{"prod"})
+		key := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), []string{"prod"}, helm.NamespaceStatusScope{})
 		shared := packagesCacheEntry{
 			at: time.Now(),
 			rows: []packages.PackageRow{{
@@ -247,7 +248,7 @@ func TestListPackages_EmptyNamespacesShortCircuits(t *testing.T) {
 	withCleanCache(t, func() {
 		// Pre-populate "all namespaces" cache to make sure the
 		// short-circuit doesn't accidentally read it.
-		nilKey := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), nil)
+		nilKey := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), nil, helm.NamespaceStatusScope{})
 		packagesCacheMu.Lock()
 		packagesCache[nilKey] = packagesCacheEntry{
 			at: time.Now(),
@@ -273,7 +274,7 @@ func TestListPackages_EmptyNamespacesShortCircuits(t *testing.T) {
 			t.Errorf("want empty SourcesErrored, got %v", resp.SourcesErrored)
 		}
 		// Verify the empty-slice path didn't write a cache entry.
-		emptyKey := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), []string{})
+		emptyKey := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), []string{}, helm.NamespaceStatusScope{})
 		packagesCacheMu.Lock()
 		_, hit := packagesCache[emptyKey]
 		packagesCacheMu.Unlock()
@@ -290,7 +291,7 @@ func TestListPackages_EmptyNamespacesShortCircuits(t *testing.T) {
 func TestListPackages_CachedResponseUsesEntryTimestamp(t *testing.T) {
 	withCleanCache(t, func() {
 		entryAt := time.Now().Add(-30 * time.Second)
-		key := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), []string{"prod"})
+		key := packagesCacheKeyFor(k8s.GetResourceCache().Generation(), []string{"prod"}, helm.NamespaceStatusScope{})
 		packagesCacheMu.Lock()
 		packagesCache[key] = packagesCacheEntry{
 			at:   entryAt,
@@ -344,10 +345,10 @@ func TestListPackages_CacheCapEnforcedAtInsert(t *testing.T) {
 		// Pre-fill cache to cap with stale-but-valid entries.
 		base := time.Now().Add(-30 * time.Second) // still fresh for TTL
 		packagesCacheMu.Lock()
-		oldestKey := packagesCacheKeyFor(0, []string{"ns0"})
+		oldestKey := packagesCacheKeyFor(0, []string{"ns0"}, helm.NamespaceStatusScope{})
 		packagesCache[oldestKey] = packagesCacheEntry{at: base.Add(-time.Minute)}
 		for i := 1; i < packagesCacheMaxEntries; i++ {
-			k := packagesCacheKeyFor(0, []string{fmt.Sprintf("ns%d", i)})
+			k := packagesCacheKeyFor(0, []string{fmt.Sprintf("ns%d", i)}, helm.NamespaceStatusScope{})
 			packagesCache[k] = packagesCacheEntry{at: base.Add(time.Duration(i) * time.Second)}
 		}
 		if len(packagesCache) != packagesCacheMaxEntries {
@@ -364,7 +365,7 @@ func TestListPackages_CacheCapEnforcedAtInsert(t *testing.T) {
 		if len(packagesCache) >= packagesCacheMaxEntries {
 			evictOldestPackagesCacheEntry()
 		}
-		packagesCache[packagesCacheKeyFor(0, []string{"new-ns"})] = packagesCacheEntry{at: time.Now()}
+		packagesCache[packagesCacheKeyFor(0, []string{"new-ns"}, helm.NamespaceStatusScope{})] = packagesCacheEntry{at: time.Now()}
 		packagesCacheMu.Unlock()
 
 		// The oldest entry must have been evicted; cap respected.

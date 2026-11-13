@@ -7,7 +7,7 @@ Radar treats Helm as a release system, not just a set of Kubernetes objects. The
 The Helm list shows:
 
 - Release status, chart version, app version, revision, and update time.
-- Resource health derived from the current rendered manifest and live Kubernetes status.
+- Resource health derived from the current rendered manifest and live Kubernetes status, counting only objects the caller can read. A release can place objects in namespaces the caller can't read, or create cluster-scoped kinds they can't list: those objects get no live status, health doesn't count them, and it reads `unknown` rather than `healthy` when a workload or Pod is among them. `statusUnreadCount` counts only unchecked workloads and Pods, because those affect release health. Other unread objects keep their own `statusUnread` markers in Resources.
 - Helm storage namespace. This matters for controllers such as Flux, which may store the Helm release Secret outside the target namespace.
 - Flux ownership when Radar can match the release to a Flux `HelmRelease`.
 - `lastOperation` for current failed upgrades, rollback-after-failure patterns, explicit rollbacks, and stuck pending operations (including uninstalls).
@@ -65,7 +65,7 @@ The drawer includes:
 - Overview: chart metadata, status, resource health, notes, dependencies, Flux ownership, and operation insight when available.
 - History: revision status, description, update time, and operation classification.
 - Manifest and values: rendered output and values for the selected release, with values redacted in MCP responses.
-- Resources: live status for resources rendered by the current release.
+- Resources: live status for resources rendered by the current release. An object the caller can't read shows "No access" instead of a status, carries `statusUnread` with the read code, and doesn't open. When Radar couldn't check the caller's access it shows "Unknown" instead, since that isn't a denial.
 - Hooks: hook events, path, weight, status, run times, delete policies, output-log policies, and diagnostics for failed/running hooks.
 
 Compare opens as a full page instead of rendering inside the drawer. The drawer links to Compare from history rows and operation banners when Radar can identify a useful revision pair.
@@ -87,7 +87,7 @@ For recovered operations, Radar suggests the revision comparison most likely to 
 - Restored revision to failed upgrade revision for rollback-after-failure.
 - Previous completed revision to rollback revision for explicit rollbacks.
 
-Flux-owned Helm releases defer to Flux. Radar shows the owning `HelmRelease` and does not synthesize native Helm operation insight for releases managed by Flux's helm-controller, because the GitOps controller is the authoritative reconciler.
+Flux-owned Helm releases defer to Flux. Radar shows the owning `HelmRelease` only when the caller can read its namespace; otherwise it shows a generic Managed by Flux label without the controller name or link. It does not synthesize native Helm operation insight for releases managed by Flux's helm-controller, because the GitOps controller is the authoritative reconciler.
 
 Active native Helm failures and stuck pending operations (including uninstalls) also appear in the global Issues stream as `kind=HelmRelease`, `group=helm.sh`. Recovered rollbacks are deployment history, not live issues; use Helm detail or `get_changes` for those.
 
@@ -153,7 +153,7 @@ Use `list_helm_releases` first for broad Helm deployment triage. It returns rele
 
 Use `get_helm_release` for detail:
 
-- The default response includes owned resources, resource health, Flux ownership, current operation signal, hooks, and hook diagnostics when present.
+- The default response includes owned resources, resource health, Flux ownership, current operation signal, hooks, and hook diagnostics when present. Flux ownership uses `managedByFlux: true`; `managedByFluxHelmRelease` is included only when the controller namespace is readable. Resources the caller can't read have no status and a `statusUnread` code, and `statusUnreadCount` counts only unread workloads and Pods; health covers the readable workloads and Pods, as in the list.
 - `include=history,operations` returns the full revision and operation trail.
 - `include=values` returns user-supplied values with key-aware secret redaction.
 - `include=diff` returns manifest diff.
@@ -169,7 +169,7 @@ Use `issues` for currently broken native Helm releases: active failed and stuck 
 - Rendered resource diff is a compact summary. It can show field-level changes for known Kubernetes kinds, but the manifest diff remains the exact source of truth.
 - When rendered object identities do not overlap, Radar reports added/removed context instead of guessing a rename.
 - Hook evidence can disappear after Helm records the failure. Radar reports the absence and likely reasons, but cannot reconstruct deleted Job/Pod logs unless Kubernetes or Helm retained them.
-- Flux-managed releases should be changed through Flux. Radar links them to the owning `HelmRelease` and warns that direct `helm upgrade` changes may be reconciled back.
+- Flux-managed releases should be changed through Flux. Radar links them to the owning `HelmRelease` only when its namespace is readable. Otherwise it shows Managed by Flux without a controller name or link. Direct MCP Helm writes are refused in either case. This filters the derived controller reference and UI link, not Flux metadata already present in a release manifest the caller can read.
 - Without sign-in, Radar asks on each read whether it can list Secrets cluster-wide. When it can't, it skips the namespaces where its permission probe saw Secrets refused and reads the rest, including any the probe didn't answer. On a default install that is one cluster-wide list, whose denial covers every namespace, instead of one denied list per namespace on every load. A Secrets grant in a single namespace made after the probe isn't seen until Radar probes again, on a context switch or restart.
 - Upgrade source detection depends on source data available to the running Radar environment. Local OSS can use local Helm repo/OCI configuration; Radar Cloud should not assume that local repo config exists, so unresolved source states are reported explicitly.
 

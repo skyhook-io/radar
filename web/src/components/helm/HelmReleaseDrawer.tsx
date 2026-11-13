@@ -591,11 +591,12 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
                 upgrade check failed
               </span>
               </Tooltip>
-            ) : upgradeInfo?.updateAvailable && releaseDetail?.managedByFluxHelmRelease ? (
+            ) : upgradeInfo?.updateAvailable && (releaseDetail?.managedByFlux || releaseDetail?.managedByFluxHelmRelease) ? (
               // Route-only for GitOps-managed releases: a direct `helm upgrade`
-              // would be reverted at the next reconcile, so surface the available
-              // version as info and point at GitOps rather than offer the upgrade.
-              <Tooltip content={`${upgradeInfo.latestVersion} available — managed by Flux, upgrade via the GitOps view (a direct upgrade would be reverted at the next reconcile).`}>
+              // may be reconciled back, so surface the available version as info.
+              <Tooltip content={releaseDetail?.managedByFluxHelmRelease
+                ? `${upgradeInfo.latestVersion} available - managed by Flux. Upgrade its HelmRelease from the GitOps view; direct Helm changes may be reconciled back.`
+                : `${upgradeInfo.latestVersion} available - managed by Flux. Ask the HelmRelease owner to upgrade it; Radar cannot show you the owning HelmRelease.`}>
               <span className={clsx('badge', SEVERITY_BADGE.warning, 'opacity-90')}>
                 <ArrowUpCircle className="w-3 h-3" />
                 {upgradeInfo.latestVersion}
@@ -622,10 +623,11 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
               </span>
               </Tooltip>
             ) : upgradeInfo?.error ? (
-              releaseDetail?.managedByFluxHelmRelease ? (
-                // Managed by Flux — the "Managed by Flux" badge routes to GitOps,
-                // where the chart source lives. Don't push a Helm source here.
-                <Tooltip content="Chart source is managed by Flux — track upgrades from the GitOps view.">
+              (releaseDetail?.managedByFlux || releaseDetail?.managedByFluxHelmRelease) ? (
+                // Keep source changes with Flux even when its controller link is hidden.
+                <Tooltip content={releaseDetail?.managedByFluxHelmRelease
+                  ? "Chart source is managed by Flux. Track upgrades from its HelmRelease in the GitOps view."
+                  : "Chart source is managed by Flux. Ask the HelmRelease owner to manage upgrades; Radar cannot show you the owning HelmRelease."}>
                 <span className="badge bg-theme-hover/50 text-theme-text-secondary">
                   source via GitOps
                 </span>
@@ -661,7 +663,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
             ) : null}
           </div>
           <div className="flex items-center gap-1">
-            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFluxHelmRelease && <Tooltip content="Choose chart source">
+            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFlux && !releaseDetail?.managedByFluxHelmRelease && <Tooltip content="Choose chart source">
               <button type="button" aria-label="Choose chart source" disabled={!canHelmWrite} onClick={() => setShowTrackSource(true)} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"><Link2 className="w-4 h-4" /></button>
             </Tooltip>}
             <Tooltip content="Refresh">
@@ -710,8 +712,15 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
             </Tooltip>
           </div>
           <p className="text-sm text-theme-text-tertiary">{release.namespace}</p>
+          {releaseDetail?.managedByFlux && !releaseDetail.managedByFluxHelmRelease && (
+            <Tooltip content="The owning Flux HelmRelease's namespace isn't available in this view, or Radar couldn't check your access. Manage this release through Flux; direct Helm changes may be reconciled back." wrapperClassName="mt-1">
+            <span className="inline-flex items-center gap-1 mt-1 text-xs text-theme-text-secondary">
+              <GitBranch className="w-3 h-3" />Managed by Flux
+            </span>
+            </Tooltip>
+          )}
           {releaseDetail?.managedByFluxHelmRelease && (
-            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Changes here would be reverted at the next reconcile.`} wrapperClassName="mt-1">
+            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Direct Helm changes may be reconciled back.`} wrapperClassName="mt-1">
             <button
               type="button"
               onClick={() => {
@@ -757,6 +766,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
               operation={releaseDetail.lastOperation}
               operationInsight={releaseDetail.operationInsight}
               releaseNamespace={releaseDetail.namespace}
+              managedByFlux={releaseDetail.managedByFlux}
               managedByFluxHelmRelease={releaseDetail.managedByFluxHelmRelease}
               hookDiagnostics={releaseDetail.hookDiagnostics}
               onCompare={handleCompareRevisions}
@@ -1129,6 +1139,7 @@ function HelmOperationBanner({
   operation,
   operationInsight,
   releaseNamespace,
+  managedByFlux,
   managedByFluxHelmRelease,
   hookDiagnostics,
   onCompare,
@@ -1137,6 +1148,7 @@ function HelmOperationBanner({
   operation?: HelmOperation
   operationInsight?: HelmOperationInsight
   releaseNamespace: string
+  managedByFlux?: boolean
   managedByFluxHelmRelease?: string
   hookDiagnostics?: HookDiagnostic[]
   onCompare?: (rev1: number, rev2: number) => void
@@ -1213,9 +1225,9 @@ function HelmOperationBanner({
             onNavigateToResource={onNavigateToResource}
           />
           {primaryHookDiagnostic && <HookSignal diagnostic={primaryHookDiagnostic} />}
-          {managedByFluxHelmRelease && (
+          {(managedByFlux || managedByFluxHelmRelease) && (
             <p className="mt-1 text-xs text-theme-text-tertiary">
-              This release is managed by Flux HelmRelease {managedByFluxHelmRelease}; direct Helm changes may be reconciled back.
+              Managed by Flux{managedByFluxHelmRelease ? ` HelmRelease ${managedByFluxHelmRelease}` : ''}. Direct Helm changes may be reconciled back.
             </p>
           )}
         </div>

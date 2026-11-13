@@ -842,13 +842,26 @@ func handleGetDashboard(ctx context.Context, req *mcp.CallToolRequest, input das
 	// Dashboard summary doesn't currently take a multi-namespace input, so we
 	// gate on the requested namespace, or on cluster-wide namespaced access
 	// when the caller doesn't pin a namespace. Cluster-scoped dashboard fields
-	// are still gated per kind below.
+	// are still gated per kind below. cluster://health answers through this
+	// handler, so these refusals are worded for both.
 	if input.Namespace != "" {
-		if !checkNamespaceAccess(ctx, input.Namespace) {
+		allowed, failed := filterNamespacesForUserWithStatus(ctx, []string{input.Namespace})
+		if failed {
+			return nil, nil, errNamespaceCheckFailed()
+		}
+		if allowed != nil && !slices.Contains(allowed, input.Namespace) {
 			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
 		}
-	} else if filterNamespacesForUser(ctx, nil) != nil {
-		return nil, nil, fmt.Errorf("forbidden: dashboard summary requires cluster-wide namespace access — pass a specific namespace you have access to")
+	} else {
+		allowed, failed := filterNamespacesForUserWithStatus(ctx, nil)
+		switch {
+		case failed:
+			return nil, nil, errNamespaceCheckFailed()
+		case allowed != nil && len(allowed) == 0:
+			return nil, nil, fmt.Errorf("forbidden: you can't access any namespace in this cluster, so there is no summary to show %s", namespaceAccessRule)
+		case allowed != nil:
+			return nil, nil, fmt.Errorf("forbidden: the cluster-wide summary requires cluster-wide list pods permission. Namespace-by-namespace grants don't satisfy this check. Call get_dashboard with namespace set to one of yours: %s", namespaceForError(slices.Sorted(slices.Values(allowed))))
+		}
 	}
 
 	dashboard := buildDashboard(ctx, cache, input.Namespace, canReadClusterScopedKind(ctx, "nodes", "", "list"), canReadClusterScopedKind(ctx, "namespaces", "", "list"))
@@ -1861,12 +1874,21 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
-	allowed := filterNamespacesForUser(ctx, requested)
+	allowed, failed := filterNamespacesForUserWithStatus(ctx, requested)
+	if failed {
+		return nil, nil, errNamespaceCheckFailed()
+	}
 	if allowed != nil && len(allowed) == 0 {
 		if input.Namespace != "" {
 			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
 		}
 		return nil, nil, fmt.Errorf("forbidden: topology requires either a namespace you can access or cluster-wide access")
+	}
+	// A cluster-wide request narrowed to the caller's namespaces says so, the
+	// same way get_events does, so the graph isn't read as the whole cluster.
+	var scope topologyScopeMCP
+	if input.Namespace == "" && allowed != nil {
+		scope = topologyScopeMCP{PartialScope: true, ScopeNamespaces: slices.Sorted(slices.Values(allowed))}
 	}
 
 	opts := topology.DefaultBuildOptions()
@@ -1895,7 +1917,9 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 	applyClusterScopedTopologyRBAC(ctx, topo)
 
 	if strings.ToLower(input.Format) == "summary" {
-		return toJSONResult(buildTopologySummary(topo))
+		summary := buildTopologySummary(topo)
+		summary.topologyScopeMCP = scope
+		return toJSONResult(summary)
 	}
 
 	// Steering for oversized graph responses — reuses the topology Warnings
@@ -1907,7 +1931,48 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 			len(topo.Nodes),
 		))
 	}
-	return toJSONResult(topo)
+	if !scope.PartialScope {
+		return toJSONResult(topo)
+	}
+	return toJSONResult(topologyWithScope{topo: topo, scope: scope})
+}
+
+// topologyScopeMCP marks a cluster-wide topology request that was narrowed to
+// the namespaces the caller may read, with the same fields and meaning as
+// get_events: without it a narrowed graph reads as the whole cluster.
+type topologyScopeMCP struct {
+	PartialScope    bool     `json:"partialScope,omitempty"`
+	ScopeNamespaces []string `json:"scopeNamespaces,omitempty"`
+}
+
+// topologyWithScope is a graph plus its scope marker. topology.Topology has
+// its own MarshalJSON, which an embedding struct would promote and so drop
+// the marker; the marker's fields are appended to the graph's object instead.
+// The pkg type stays as REST and Radar Hub use it.
+type topologyWithScope struct {
+	topo  *topology.Topology
+	scope topologyScopeMCP
+}
+
+func (t topologyWithScope) MarshalJSON() ([]byte, error) {
+	graph, err := json.Marshal(t.topo)
+	if err != nil {
+		return nil, err
+	}
+	marker, err := json.Marshal(t.scope)
+	if err != nil {
+		return nil, err
+	}
+	if len(graph) < 2 || graph[0] != '{' || graph[len(graph)-1] != '}' || len(marker) <= 2 {
+		return nil, fmt.Errorf("topology scope: unexpected JSON shape")
+	}
+	if len(graph) == 2 {
+		return marker, nil
+	}
+	out := make([]byte, 0, len(graph)+len(marker))
+	out = append(out, graph[:len(graph)-1]...)
+	out = append(out, ',')
+	return append(out, marker[1:]...), nil
 }
 
 // deniedClusterScopedTopoKinds returns the set of cluster-scoped topology
@@ -2002,6 +2067,7 @@ type topologySummary struct {
 	CRDDiscoveryStatus      string        `json:"crdDiscoveryStatus,omitempty"`
 	EstimatedNodes          int           `json:"estimatedNodes,omitempty"`
 	SummaryMode             bool          `json:"summaryMode,omitempty"`
+	topologyScopeMCP
 }
 
 type nsSummary struct {
@@ -2211,7 +2277,12 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
-	allowed := filterNamespacesForUser(ctx, requested)
+	allowed, failed := filterNamespacesForUserWithStatus(ctx, requested)
+	if failed {
+		// Not a denial: an empty list marked accessDenied would tell the
+		// agent the caller has no access when Radar just couldn't check.
+		return nil, nil, errNamespaceCheckFailed()
+	}
 	if allowed != nil && len(allowed) == 0 {
 		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
 		// The marker lets a consumer tell "nothing recorded" from "not readable";
@@ -2288,6 +2359,9 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	// real (a fixed internal 20 used to make 21-100 silently unreachable),
 	// and the pre-cap total makes truncation visible instead of silent.
 	deduplicated, totalGroups := aicontext.DeduplicateEventsN(eventValues, limit)
+	if deduplicated == nil {
+		deduplicated = []aicontext.DeduplicatedEvent{} // "events":[], not null
+	}
 
 	// Always wrap into the response struct so capped + uncapped agree on
 	// wire shape ({events: [...], narrowHint?: "..."}).
@@ -2790,7 +2864,9 @@ type mcpHelmRelease struct {
 	ResourceHealth           string              `json:"resourceHealth,omitempty"`
 	HealthIssue              string              `json:"healthIssue,omitempty"`
 	HealthSummary            string              `json:"healthSummary,omitempty"`
+	StatusUnreadCount        int                 `json:"statusUnreadCount,omitempty"`
 	LastOperation            *helm.HelmOperation `json:"lastOperation,omitempty"`
+	ManagedByFlux            bool                `json:"managedByFlux,omitempty"`
 	ManagedByFluxHelmRelease string              `json:"managedByFluxHelmRelease,omitempty"`
 }
 
@@ -3105,11 +3181,14 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		d.HelmReleases.UnavailableReason = "Helm client not initialized."
 	} else {
 		user := userFromContext(ctx)
+		// The scope comes first, as in list_helm_releases: its namespace check
+		// caches the answer the resolver then reads.
+		scope := mcpHelmObjectScope(ctx, namespace)
 		namespaces, checked, unread := resolveHelmStorageScope(ctx, namespace)
 		if namespaces != nil && len(namespaces) == 0 {
 			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user)
+			releases, read, denied, err := helmClient.ListReleasesRecordingAccess(ctx, namespaces, user, scope)
 			if !checked && ((err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err)) {
 				// A permission check went unanswered, so the refusal may be of a
 				// cluster-wide fallback the caller can't make even though some
@@ -3159,7 +3238,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 						ResourceHealth:           r.ResourceHealth,
 						HealthIssue:              r.HealthIssue,
 						HealthSummary:            r.HealthSummary,
+						StatusUnreadCount:        r.StatusUnreadCount,
 						LastOperation:            r.LastOperation,
+						ManagedByFlux:            r.ManagedByFlux,
 						ManagedByFluxHelmRelease: r.ManagedByFluxHelmRelease,
 					})
 				}

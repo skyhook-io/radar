@@ -117,6 +117,12 @@ Two things still hold on a shared listener without authentication:
    - connecting the cluster to Radar Cloud, which outlasts the request, needs an
      explicit acknowledgement.
 
+The browser request guard also covers `/metrics` and `/debug/pprof/*`. It refuses
+`Sec-Fetch-Site: cross-site` and `same-site`. Headerless requests still pass that
+guard, including browser requests over plain HTTP to non-localhost addresses;
+the listener's authentication and profiling policy still apply. See
+[Profiling](configuration.md#profiling) for diagnostic access.
+
 ## Auth Modes
 
 | Mode | Flag | When to Use |

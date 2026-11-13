@@ -13,7 +13,9 @@ import { useAvailablePorts } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../contexts/CapabilitiesContext'
 import { pluralize, getExecContainerNames } from '@skyhook-io/k8s-ui'
+import { readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import { Tooltip } from '../ui/Tooltip'
+import { notCheckedTooltip, type NotCheckedReason } from './NotCheckedBadge'
 
 interface OwnedResourcesProps {
   resources: HelmOwnedResource[]
@@ -38,10 +40,11 @@ function groupByKind(resources: HelmOwnedResource[]): Map<string, HelmOwnedResou
 }
 
 // Health status types
-type HealthFilter = 'all' | 'healthy' | 'warning' | 'error'
+type HealthFilter = 'all' | 'healthy' | 'warning' | 'error' | 'unread'
 
 // Determine health status of a resource
-function getResourceHealth(resource: HelmOwnedResource): 'healthy' | 'warning' | 'error' | 'unknown' {
+function getResourceHealth(resource: HelmOwnedResource): 'healthy' | 'warning' | 'error' | 'unread' | 'unknown' {
+  if (resource.statusUnread) return 'unread'
   // An issue field always indicates a problem regardless of status
   if (resource.issue) return 'error'
   const status = resource.status
@@ -58,17 +61,24 @@ function computeHealthSummary(resources: HelmOwnedResource[]) {
   let healthy = 0
   let warning = 0
   let error = 0
+  let unread = 0
   let unknown = 0
+  let denied = 0
 
   for (const r of resources) {
     const health = getResourceHealth(r)
     if (health === 'healthy') healthy++
     else if (health === 'warning') warning++
     else if (health === 'error') error++
+    else if (health === 'unread') {
+      unread++
+      if (readActionFor(r.statusUnread) !== 'retry') denied++
+    }
     else unknown++
   }
 
-  return { healthy, warning, error, unknown, total: resources.length }
+  const unreadReason: NotCheckedReason = denied === unread ? 'denied' : denied === 0 ? 'unconfirmed' : 'either'
+  return { healthy, warning, error, unread, unreadReason, unknown, total: resources.length }
 }
 
 export function OwnedResources({ resources, onNavigate, summaryLabel = 'created by this release' }: OwnedResourcesProps) {
@@ -99,7 +109,7 @@ export function OwnedResources({ resources, onNavigate, summaryLabel = 'created 
   return (
     <div className="p-4 space-y-4">
       {/* Health summary - clickable badges */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm text-theme-text-secondary">
           {healthFilter === 'all' ? (
             <>{pluralize(resources.length, 'resource')} {summaryLabel}</>
@@ -117,7 +127,7 @@ export function OwnedResources({ resources, onNavigate, summaryLabel = 'created 
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {health.healthy > 0 && (
             <button
               onClick={() => handleFilterClick('healthy')}
@@ -153,6 +163,20 @@ export function OwnedResources({ resources, onNavigate, summaryLabel = 'created 
             >
               {health.error} failed
             </button>
+          )}
+          {health.unread > 0 && (
+            <Tooltip content={<div className="max-w-xs">{notCheckedTooltip(health.unread, health.unreadReason)}</div>}>
+            <button
+              onClick={() => handleFilterClick('unread')}
+              className={clsx(
+                'flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-all',
+                SEVERITY_BADGE.neutral,
+                healthFilter === 'unread' && 'ring-2 ring-theme-border ring-offset-1 ring-offset-theme-surface'
+              )}
+            >
+              {health.unread} not checked
+            </button>
+            </Tooltip>
           )}
         </div>
       </div>
@@ -201,8 +225,26 @@ interface ResourceItemProps {
   onNavigate?: NavigateToResource
 }
 
+// The badge and tooltip for an object whose status the caller isn't shown.
+// A check that went unanswered isn't a denial, so it doesn't say "No access".
+function unreadStatusText(resource: HelmOwnedResource): { badge: string; tooltip: string } | null {
+  if (!resource.statusUnread) return null
+  if (readActionFor(resource.statusUnread) === 'retry') {
+    return {
+      badge: 'Not checked',
+      tooltip: `Radar couldn't check your access to this ${resource.kind}, so its status isn't shown. Refresh to try again.`,
+    }
+  }
+  return {
+    badge: 'No access',
+    tooltip: `You can't read this ${resource.kind}, so its status isn't shown and release health doesn't count it.`,
+  }
+}
+
 function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
-  const canNavigate = !!onNavigate
+  const unread = unreadStatusText(resource)
+  // Opening it, or its logs and ports, would only be refused.
+  const canNavigate = !!onNavigate && !unread
   const isPod = resource.kind.toLowerCase() === 'pod'
   const isService = resource.kind.toLowerCase() === 'service'
   const isRunning = resource.status?.toLowerCase() === 'running'
@@ -243,8 +285,16 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
+        {unread && (
+          <Tooltip content={unread.tooltip}>
+          <span className={clsx('badge-sm', SEVERITY_BADGE.neutral)}>
+            {unread.badge}
+          </span>
+          </Tooltip>
+        )}
+
         {/* Quick actions for pods */}
-        {isPod && (
+        {isPod && !unread && (
           <PodQuickActions
             namespace={resource.namespace}
             podName={resource.name}
@@ -253,7 +303,7 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
         )}
 
         {/* Quick actions for services */}
-        {isService && (
+        {isService && !unread && (
           <ServiceQuickActions
             namespace={resource.namespace}
             serviceName={resource.name}
@@ -294,6 +344,13 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
             <AlertCircle className="w-3.5 h-3.5 text-red-400" />
           </span>
           </Tooltip>
+        )}
+
+        {/* Holds the details button's place so this row's badge lines up with the rest. */}
+        {onNavigate && !canNavigate && (
+          <span aria-hidden className="invisible p-1">
+            <ExternalLink className="w-3.5 h-3.5" />
+          </span>
         )}
 
         {canNavigate && (

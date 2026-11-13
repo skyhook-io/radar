@@ -532,6 +532,8 @@ export interface DashboardHelmRelease {
   chartVersion: string;
   status: string;
   resourceHealth?: string;
+  // Workloads and Pods whose live status wasn't read.
+  statusUnreadCount?: number;
 }
 
 export interface DashboardHelmSummary {

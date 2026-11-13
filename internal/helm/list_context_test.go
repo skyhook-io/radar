@@ -92,7 +92,7 @@ func TestHelmReleaseRowsStopWithTheirContext(t *testing.T) {
 		storageNamespaces: map[string]string{},
 		histories:         map[string][]HelmRevision{},
 		latest:            []*release.Release{helmTestRelease("api", "demo", 1, release.StatusDeployed, "Install complete")},
-	}, nil, "", true)
+	}, nil, "", scannedObjects{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
 	}
@@ -108,11 +108,11 @@ func TestIssueReleaseRowsSkipResourceHealthButKeepHistory(t *testing.T) {
 		helmReleaseSecret(t, "shop", failed, false),
 	)
 
-	full, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"shop"}, true)
+	full, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"shop"}, true, scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	issueRows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"shop"}, false)
+	issueRows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"shop"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestListReleasesAcrossNamespacesSkipsForbiddenNamespaces(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("denied"))
 	})
 
-	rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"apps", "monitoring"}, false)
+	rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"apps", "monitoring"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestListReleasesAcrossNamespacesSkipsForbiddenNamespaces(t *testing.T) {
 		t.Fatalf("rows = %+v, want only the readable namespace's release", rows)
 	}
 
-	_, err = listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"monitoring"}, false)
+	_, err = listReleasesAcrossNamespacesWithClient(context.Background(), client, "", []string{"monitoring"}, false, nil)
 	if !IsForbiddenError(err) {
 		t.Fatalf("error = %v, want forbidden when no namespace is readable", err)
 	}
@@ -280,7 +280,7 @@ func TestListReleasesAcrossNamespacesTimesUninstallsUnderItsOwnContext(t *testin
 			rel := helmTestRelease("deleting", "demo", 2, release.StatusUninstalling, "Deletion in progress")
 			rel.Info.Deleted = helmtime.Time{Time: time.Now().Add(-25 * time.Minute)}
 			client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", rel, false))
-			rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, tt.readContext, []string{"demo"}, false)
+			rows, err := listReleasesAcrossNamespacesWithClient(context.Background(), client, tt.readContext, []string{"demo"}, false, nil)
 			if err != nil || len(rows) != 1 {
 				t.Fatalf("rows = %+v, err = %v", rows, err)
 			}

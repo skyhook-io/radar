@@ -154,11 +154,23 @@ type knownValuesError struct {
 func (e *knownValuesError) Error() string { return e.err.Error() }
 func (e *knownValuesError) Unwrap() error { return e.err }
 
+// refuseFluxManagedRelease keeps ownership protection independent of whether
+// the caller may read the controller's namespace and name.
+func refuseFluxManagedRelease(detail *helm.HelmReleaseDetail) error {
+	if detail.ManagedByFluxHelmRelease != "" {
+		return fmt.Errorf("release is managed by Flux HelmRelease %s; change that HelmRelease's source configuration instead", detail.ManagedByFluxHelmRelease)
+	}
+	if detail.ManagedByFlux {
+		return fmt.Errorf("release is managed by Flux, so Radar won't change it with Helm. The owning HelmRelease's namespace is unreadable or access couldn't be checked; change the release through Flux")
+	}
+	return nil
+}
+
 // storedSensitiveValues reads every stored revision's values as the caller,
 // through the client the call is pinned to, and returns their sensitive values.
 func storedSensitiveValues(client *helm.Client, in manageHelmInput, user *pkgauth.User) map[string]bool {
 	secrets := map[string]bool{}
-	if detail, readErr := client.GetReleaseAsUser(in.Namespace, in.Name, user); readErr == nil {
+	if detail, readErr := client.GetReleaseAsUser(in.Namespace, in.Name, user, nil); readErr == nil {
 		for _, revision := range detail.History {
 			if v, readErr := client.GetValuesRevisionAsUser(in.Namespace, in.Name, true, revision.Revision, user); readErr == nil {
 				collectSensitiveValues(v.UserSupplied, secrets)
@@ -229,7 +241,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 	client := helm.NewStandaloneClient(config)
 	user := userFromContext(ctx)
 	if in.Action != "install" {
-		detail, err := client.GetReleaseAsUser(in.Namespace, in.Name, user)
+		detail, err := client.GetReleaseAsUser(in.Namespace, in.Name, user, mcpHelmObjectScope(ctx, ""))
 		if err != nil {
 			return nil, nil, fmt.Errorf("read release before %s: %w", in.Action, err)
 		}
@@ -240,8 +252,8 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if status.IsPending() || status == release.StatusUninstalling {
 			return nil, nil, fmt.Errorf("release is %s; wait for the active Helm operation, or ask an operator to recover a stranded release before retrying", detail.Status)
 		}
-		if detail.ManagedByFluxHelmRelease != "" {
-			return nil, nil, fmt.Errorf("release is managed by Flux HelmRelease %s; change its source configuration instead", detail.ManagedByFluxHelmRelease)
+		if err := refuseFluxManagedRelease(detail); err != nil {
+			return nil, nil, err
 		}
 		if in.Action == "uninstall" {
 			bindingBytes, err := json.Marshal(struct {
@@ -442,7 +454,7 @@ func helmRollbackPreviewResult(in manageHelmInput, preview *helm.MCPRollbackResu
 // the release: Helm purges history after deleting resources even when a later
 // post-delete hook fails, and returns that hook's error.
 func uninstallPurgedDespiteError(client *helm.Client, in manageHelmInput, user *pkgauth.User) bool {
-	_, err := client.GetReleaseAsUser(in.Namespace, in.Name, user)
+	_, err := client.GetReleaseAsUser(in.Namespace, in.Name, user, nil)
 	return errors.Is(err, driver.ErrReleaseNotFound)
 }
 

@@ -3,6 +3,7 @@ import { Package, ArrowRight, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from '../ui/Tooltip'
 import { SEVERITY_TEXT } from '../../utils/badge-colors'
+import { NotCheckedBadge } from '../helm/NotCheckedBadge'
 
 interface HelmSummaryProps {
   data?: DashboardHelmSummary
@@ -115,25 +116,24 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
         ) : (
           <div className="divide-y divide-theme-border">
             {data.releases.map((release) => (
+              // One flex row so space runs out in order: the chart text first,
+              // then the namespace, then the name. The badges never shrink.
               <div
                 key={`${release.namespace}/${release.name}`}
-                className="flex items-center justify-between px-3 py-1.5 overflow-hidden"
+                className="flex items-center gap-2 px-3 py-1.5 overflow-hidden"
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', getHealthDot(release.resourceHealth))} />
-                  <span className="text-xs text-theme-text-primary truncate">{release.name}</span>
-                  <span className="text-[10px] text-theme-text-tertiary truncate">{release.namespace}</span>
-                </div>
-                <div className="flex items-center gap-1.5 ml-2 min-w-0">
-                  <Tooltip content={`${release.chart} ${release.chartVersion}`} delay={100}>
-                    <span className="text-[10px] text-theme-text-tertiary hidden sm:inline truncate max-w-[150px]">
-                      {release.chart} {release.chartVersion}
-                    </span>
-                  </Tooltip>
-                  <span className={clsx('badge-sm shrink-0', getStatusBadgeClass(release.status))}>
-                    {release.status}
+                <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', getHealthDot(release.resourceHealth))} />
+                <span className="min-w-[3rem] text-xs text-theme-text-primary truncate">{release.name}</span>
+                <span className="min-w-0 shrink-[20] text-[10px] text-theme-text-tertiary truncate">{release.namespace}</span>
+                <Tooltip content={`${release.chart} ${release.chartVersion}`} delay={100} wrapperClassName="ml-auto min-w-0 shrink-[400]">
+                  <span className="text-[10px] text-theme-text-tertiary hidden sm:inline truncate max-w-[150px]">
+                    {release.chart} {release.chartVersion}
                   </span>
-                </div>
+                </Tooltip>
+                <NotCheckedBadge count={release.statusUnreadCount} />
+                <span className={clsx('badge-sm shrink-0', getStatusBadgeClass(release.status))}>
+                  {release.status}
+                </span>
               </div>
             ))}
           </div>

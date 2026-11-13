@@ -64,6 +64,13 @@ func TestBuildOperationInsightSuppressesFluxOwnedReleases(t *testing.T) {
 	}
 }
 
+func TestBuildOperationInsightSuppressesFluxWithHiddenController(t *testing.T) {
+	detail := &HelmReleaseDetail{ManagedByFlux: true, LastOperation: &HelmOperation{Kind: helmhistory.KindUpgradeFailed, Status: helmhistory.StatusFailed, Revision: 2}}
+	if got := buildOperationInsight(detail); got != nil {
+		t.Fatalf("insight=%#v, want nil for Flux-owned release", got)
+	}
+}
+
 func TestBuildOperationInsightWorkloadBeatsServiceSymptom(t *testing.T) {
 	detail := &HelmReleaseDetail{
 		LastOperation: &HelmOperation{
