@@ -21,7 +21,7 @@ function nowhereReason(route: LogRoute): string {
   return 'no destination it names exists and is active'
 }
 
-function RouteLine({ flow, onNavigate }: { flow: LogRoute; onNavigate?: (ref: ResourceRef) => void }) {
+function RouteLine({ flow, unreadKinds, onNavigate }: { flow: LogRoute; unreadKinds: Set<string>; onNavigate?: (ref: ResourceRef) => void }) {
   return (
     <div className="space-y-0.5">
       <div className="flex flex-wrap items-center gap-1.5">
@@ -32,7 +32,7 @@ function RouteLine({ flow, onNavigate }: { flow: LogRoute; onNavigate?: (ref: Re
         {flow.destinations.map((o) => (
           <span key={`${o.kind}/${o.name}`} className="inline-flex items-center gap-1 text-theme-text-secondary">
             → <ResourceLink name={o.name} kind={PLURALS[o.kind] ?? 'outputs'} namespace={o.namespace ?? ''} group={flow.group} label={o.type ? `${o.name} (${o.type})` : o.name} onNavigate={o.found && o.namespace ? onNavigate : null} />
-            {!o.found && <Badge severity="neutral" size="sm">not found</Badge>}
+            {!o.found && <Badge severity="neutral" size="sm">{unreadKinds.has(PLURALS[o.kind]) ? 'not read' : 'not found'}</Badge>}
             {o.found && o.active === false && <Badge severity="error" size="sm">inactive</Badge>}
             {o.found && o.active === undefined && <Badge severity="neutral" size="sm">state not reported</Badge>}
           </span>
@@ -63,7 +63,8 @@ export function PodLogShippingSection({ data, loading, error, onNavigate }: PodL
   const closest = counted.filter((f) => !f.selected && !f.uncertain && !f.excluded)
     .sort((a, b) => a.unmet.length - b.unmet.length || a.name.localeCompare(b.name))[0]
   const unread = data.readErrors.map((e) => KIND_LABELS[e.resource] ?? e.resource)
-  const line = (f: LogRoute) => <RouteLine key={`${f.kind}/${f.namespace}/${f.name}`} flow={f} onNavigate={onNavigate} />
+  const unreadKinds = new Set(data.readErrors.map((e) => e.resource))
+  const line = (f: LogRoute) => <RouteLine key={`${f.kind}/${f.namespace}/${f.name}`} flow={f} unreadKinds={unreadKinds} onNavigate={onNavigate} />
   return (
     <Section title="Log shipping" defaultExpanded={true}>
       <div className="space-y-2 text-sm">

@@ -92,3 +92,16 @@ func TestSelects(t *testing.T) {
 		})
 	}
 }
+
+// A namespace_labels rule Radar can't evaluate decides its container as
+// uncertain: no later rule is consulted for that container.
+func TestUncertainExcludeBeforeCatchAllStaysUncertain(t *testing.T) {
+	f := Flow{Namespace: "logging", Cluster: true, Match: []Rule{
+		{Exclude: true, NamespaceLabels: map[string]string{"team": "x"}},
+		{},
+	}}
+	d := Selects(f, PodFacts{Namespace: "team", Containers: []string{"app"}})
+	if d.Selected || !d.Uncertain {
+		t.Fatalf("decision = %+v", d)
+	}
+}

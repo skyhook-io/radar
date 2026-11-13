@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -112,10 +113,7 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	facts := logging.PodFacts{Namespace: pod.Namespace, Labels: pod.Labels, Node: pod.Spec.NodeName}
-	for _, c := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
-		facts.Containers = append(facts.Containers, c.Name)
-	}
+	facts := loggingPodFacts(pod)
 
 	budget := newSyncBudget(r.Context())
 	// listDynamicSyncedWithin turns an informer that hasn't synced (a slow
@@ -143,6 +141,8 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		"ClusterOutput": slices.Contains(resp.ReadErrors, logReadError{logging.Group, "clusteroutputs"}),
 		"Output":        slices.Contains(resp.ReadErrors, logReadError{logging.Group, "outputs"}),
 	}
+	// Unread Loggings: whether the operator counts or watches a Flow is unknown.
+	loggingsUnread := slices.Contains(resp.ReadErrors, logReadError{logging.Group, "loggings"})
 	controlNamespace := map[string]string{}
 	for _, l := range loggings {
 		controlNamespace[l.LoggingRef] = l.ControlNamespace
@@ -155,9 +155,12 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		}
 		d := logging.Selects(f, facts)
 		watched, watchKnown := logging.Watched(f, loggings)
+		if loggingsUnread {
+			watched, watchKnown = false, false
+		}
 		row := logRoute{
 			Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
-			Ignored: !logging.Counted(f, loggings) || (!watched && watchKnown), Unmet: d.Unmet, HasFilters: f.HasFilters,
+			Ignored: !loggingsUnread && (!logging.Counted(f, loggings) || (!watched && watchKnown)), Unmet: d.Unmet, HasFilters: f.HasFilters,
 			Destinations: []logDestination{},
 		}
 		if row.Unmet == nil {
@@ -199,6 +202,17 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		return resp.Routes[i].Name < resp.Routes[j].Name
 	})
 	s.writeJSON(w, resp)
+}
+
+func loggingPodFacts(pod *corev1.Pod) logging.PodFacts {
+	facts := logging.PodFacts{Namespace: pod.Namespace, Labels: pod.Labels, Node: pod.Spec.NodeName}
+	for _, c := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
+		facts.Containers = append(facts.Containers, c.Name)
+	}
+	for _, c := range pod.Spec.EphemeralContainers {
+		facts.Containers = append(facts.Containers, c.Name)
+	}
+	return facts
 }
 
 func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, name string) logDestination {
