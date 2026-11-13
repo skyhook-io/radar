@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/logging"
@@ -158,17 +159,21 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		return namespaces == nil || (!readscope.NoNamespaceAccess(namespaces) && slices.Contains(namespaces, ns))
 	}
 	budget := newSyncBudget(r.Context())
-	read := func(plural string) []*unstructured.Unstructured {
-		items, err := listDynamicSyncedWithin(r.Context(), cache, plural, logging.Group, "", budget)
-		if err != nil {
+	// read lists a Logging kind as far as the caller may list it (per
+	// namespace for namespaced kinds) and Radar has it; anything short of a
+	// full read is a gap. Namespaced Flows and Outputs only matter within the
+	// view; ClusterFlows and ClusterOutputs live in control namespaces.
+	read := func(kind, plural string, cluster bool, within []string) []*unstructured.Unstructured {
+		k := integration.WorkspaceKind{Key: plural, Group: logging.Group, Kind: kind, Resource: plural, ClusterScoped: cluster}
+		acc, items := s.readWorkspaceKind(r, cache, k, within, []string{logging.Group}, budget)
+		if acc.State != integration.KindCoverageFull {
 			gap(logging.Group, plural)
-			return nil
 		}
 		return items
 	}
 
 	var loggings []logging.Logging
-	for _, u := range read("loggings") {
+	for _, u := range read("Logging", "loggings", true, nil) {
 		loggings = append(loggings, logging.LoggingFrom(u))
 	}
 	sort.Slice(loggings, func(i, j int) bool { return loggings[i].Name < loggings[j].Name })
@@ -180,31 +185,19 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	var agents []logging.Agent
 	if _, ok := discovery.GetGVRWithGroup("fluentbitagents", logging.Group); ok {
-		for _, u := range read("fluentbitagents") {
+		for _, u := range read("FluentbitAgent", "fluentbitagents", true, nil) {
 			ref, _, _ := unstructured.NestedString(u.Object, "spec", "loggingRef")
 			agents = append(agents, logging.Agent{Name: u.GetName(), LoggingRef: ref})
 		}
 	}
 
-	// Namespaced kinds only within the view; cluster kinds wherever they live
-	// (outside a control namespace they show as ignored). Either way the caller
-	// must be able to list them in that namespace.
-	visible := func(u *unstructured.Unstructured, plural string, cluster bool) bool {
-		if !cluster && !inView(u.GetNamespace()) {
-			return false
-		}
-		return allowed(logging.Group, plural, u.GetNamespace())
-	}
 	outputs := map[[3]string]logging.OutputSummary{}
 	provider := logPipelineProvider{Provider: providerLoggingOperator, Instances: []logInstance{}, Routes: []logPipelineRoute{}, Destinations: []logPipelineDestination{}}
 	for _, src := range []struct {
-		plural  string
-		cluster bool
-	}{{"clusteroutputs", true}, {"outputs", false}} {
-		for _, u := range read(src.plural) {
-			if !visible(u, src.plural, src.cluster) {
-				continue
-			}
+		kind, plural string
+		within       []string
+	}{{"ClusterOutput", "clusteroutputs", nil}, {"Output", "outputs", namespaces}} {
+		for _, u := range read(src.kind, src.plural, false, src.within) {
 			o := logging.OutputFrom(u)
 			outputs[[3]string{u.GetKind(), o.Namespace, o.Name}] = o
 			problems := o.Problems
@@ -219,13 +212,10 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 
 	var cands []logging.Candidate
 	for _, src := range []struct {
-		plural  string
-		cluster bool
-	}{{"clusterflows", true}, {"flows", false}} {
-		for _, u := range read(src.plural) {
-			if !visible(u, src.plural, src.cluster) {
-				continue
-			}
+		kind, plural string
+		within       []string
+	}{{"ClusterFlow", "clusterflows", nil}, {"Flow", "flows", namespaces}} {
+		for _, u := range read(src.kind, src.plural, false, src.within) {
 			f := logging.FlowFrom(u)
 			c := loggingCandidate(f, loggings)
 			cands = append(cands, c)

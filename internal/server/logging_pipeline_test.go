@@ -40,6 +40,9 @@ func seedPipelineFixture(t *testing.T, pods ...runtime.Object) {
 	restoreFixtureCache(t)
 	k8s.ResetResourceCache()
 	objs := append([]runtime.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "logging-system"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ops"}},
 		&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentbit", OwnerReferences: owned("FluentbitAgent", "default")},
 			Status: appsv1.DaemonSetStatus{NumberReady: 2, DesiredNumberScheduled: 3}},
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentd", OwnerReferences: owned("Logging", "default")},
