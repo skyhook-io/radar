@@ -2,6 +2,7 @@ package issues
 
 import (
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/logging"
 	"log"
 	"slices"
 	"sort"
@@ -278,6 +279,8 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		}
 	case "postgresql.cnpg.io":
 		return detectCNPGIssues(gvr, kind, u)
+	case logging.Group:
+		return detectLoggingIssues(gvr, kind, u)
 	}
 	return nil
 }
