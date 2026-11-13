@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -112,10 +113,7 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	facts := logging.PodFacts{Namespace: pod.Namespace, Labels: pod.Labels, Node: pod.Spec.NodeName}
-	for _, c := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
-		facts.Containers = append(facts.Containers, c.Name)
-	}
+	facts := loggingPodFacts(pod)
 
 	budget := newSyncBudget(r.Context())
 	// listDynamicSyncedWithin turns an informer that hasn't synced (a slow
@@ -154,11 +152,11 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		d := logging.Selects(f, facts)
-		watched, watchKnown := logging.Watched(f, loggings)
+		c := loggingCandidate(f, loggings)
 		row := logRoute{
 			Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
-			Ignored: !logging.Counted(f, loggings) || (!watched && watchKnown), Unmet: d.Unmet, HasFilters: f.HasFilters,
-			Destinations: []logDestination{},
+			Ignored: c.Ignored, Unmet: d.Unmet, HasFilters: f.HasFilters,
+			Active: flowActive(u), Destinations: flowDestinations(f, outputs, controlNamespace),
 		}
 		if row.Unmet == nil {
 			row.Unmet = []string{}
@@ -166,17 +164,8 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		// An ignored Flow forwards nothing, whatever its rules say. A Flow only a
 		// namespace selector (not evaluated) could admit may at most be selecting.
 		row.Selected, row.Uncertain = d.Selected && !row.Ignored, d.Uncertain && !row.Ignored
-		if !watched && !watchKnown && row.Selected {
+		if c.OnlyMaybe && row.Selected {
 			row.Selected, row.Uncertain = false, true
-		}
-		if active, found, _ := unstructured.NestedBool(u.Object, "status", "active"); found {
-			row.Active = &active
-		}
-		for _, ref := range f.GlobalOutputs {
-			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", controlNamespace[f.LoggingRef], ref))
-		}
-		for _, ref := range f.LocalOutputs {
-			row.Destinations = append(row.Destinations, outputRef(outputs, "Output", f.Namespace, ref))
 		}
 		row.Excluded = !row.Ignored && d.Rule >= 0 && !d.Selected && !d.Uncertain
 		if row.Selected {
@@ -199,6 +188,43 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		return resp.Routes[i].Name < resp.Routes[j].Name
 	})
 	s.writeJSON(w, resp)
+}
+
+func loggingPodFacts(pod *corev1.Pod) logging.PodFacts {
+	facts := logging.PodFacts{Namespace: pod.Namespace, Name: pod.Name, Labels: pod.Labels, Node: pod.Spec.NodeName}
+	for _, c := range append(pod.Spec.InitContainers, pod.Spec.Containers...) {
+		facts.Containers = append(facts.Containers, c.Name)
+	}
+	return facts
+}
+
+// loggingCandidate says how the operator treats a Flow: ignored when no
+// Logging counts it or its Logging doesn't watch its namespace; only "maybe"
+// when just the Logging's namespace selector, which Radar doesn't evaluate,
+// could admit it.
+func loggingCandidate(f logging.Flow, loggings []logging.Logging) logging.Candidate {
+	watched, known := logging.Watched(f, loggings)
+	return logging.Candidate{Flow: f, Ignored: !logging.Counted(f, loggings) || (!watched && known), OnlyMaybe: !watched && !known}
+}
+
+func flowActive(u *unstructured.Unstructured) *bool {
+	if active, found, _ := unstructured.NestedBool(u.Object, "status", "active"); found {
+		return &active
+	}
+	return nil
+}
+
+// flowDestinations resolves a Flow's output refs: ClusterOutputs live in its
+// Logging's control namespace, Outputs in the Flow's own.
+func flowDestinations(f logging.Flow, outputs map[[3]string]logging.OutputSummary, controlNamespace map[string]string) []logDestination {
+	out := []logDestination{}
+	for _, ref := range f.GlobalOutputs {
+		out = append(out, outputRef(outputs, "ClusterOutput", controlNamespace[f.LoggingRef], ref))
+	}
+	for _, ref := range f.LocalOutputs {
+		out = append(out, outputRef(outputs, "Output", f.Namespace, ref))
+	}
+	return out
 }
 
 func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, name string) logDestination {

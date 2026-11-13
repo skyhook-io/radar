@@ -229,6 +229,7 @@ type FeatureCapabilities struct {
 	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
 	PodFileUpload       bool `json:"podFileUpload"`      // POST /api/pods/{namespace}/{name}/files/upload
 	LoggingPodShipping  bool `json:"loggingPodShipping"` // GET /api/logging/pods/{namespace}/{name}
+	LoggingPipeline     bool `json:"loggingPipeline"`    // GET /api/logging/pipeline
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

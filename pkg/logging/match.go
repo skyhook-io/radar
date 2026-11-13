@@ -39,6 +39,7 @@ type Flow struct {
 
 type PodFacts struct {
 	Namespace  string
+	Name       string // identifies the pod in answers; not used for matching
 	Labels     map[string]string
 	Containers []string
 	Node       string
