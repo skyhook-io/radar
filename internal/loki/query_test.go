@@ -2,7 +2,6 @@ package loki
 
 import (
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 )
@@ -22,24 +21,9 @@ func TestPodSelector(t *testing.T) {
 	if _, err := PodSelector(StreamLabels{Pod: "pod"}, "team", "app-1", ""); err == nil {
 		t.Error("accepted labels without a namespace label")
 	}
-	if _, err := PodSelector(StreamLabels{Namespace: "namespace", Pod: "pod"}, "team", "app-1", "web"); err == nil {
-		t.Error("accepted a container without a container label")
-	}
-}
-
-func TestJobSelector(t *testing.T) {
-	withJob := plain
-	withJob.Job = "job_name"
-	if got, notice, _ := JobSelector(withJob, "team", "nightly.sync"); got != `{namespace="team", job_name="nightly.sync"}` || notice != "" {
-		t.Errorf("job label: %s / %q", got, notice)
-	}
-	if got, notice, _ := JobSelector(plain, "team", "nightly.sync"); got != `{namespace="team", pod=~"^nightly\\.sync-([0-9]+-)?[a-z0-9]{5}$"}` || notice != "" {
-		t.Errorf("pod regex: %s / %q", got, notice)
-	}
-	long := strings.Repeat("a", 60)
-	got, notice, _ := JobSelector(plain, "team", long)
-	if !strings.Contains(got, `"^`+strings.Repeat("a", 58)+`([0-9]+-)?`) || !strings.Contains(notice, "shortened") {
-		t.Errorf("long name: %s / %q", got, notice)
+	// Without a container label the whole pod is read; the answer says so by its key.
+	if got, err := PodSelector(StreamLabels{Namespace: "namespace", Pod: "pod"}, "team", "app-1", "web"); err != nil || got != `{namespace="team", pod="app-1"}` {
+		t.Errorf("no container label: %s %v", got, err)
 	}
 }
 

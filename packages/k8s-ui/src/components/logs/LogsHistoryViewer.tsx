@@ -29,18 +29,19 @@ type ToolbarLead = (ctx: { isDark: boolean; palette: LogPalette }) => ReactNode
  * Kubernetes: no stream and no previous instance. For a pod that is gone the
  * host passes no containers, and they come from the result.
  */
-export function LogsHistoryViewer({ podName, containers, initialContainer, fetchHistory, historyEmptyHint, overrideDownload, forceDark, defaultDark, toolbarLead }: {
+export function LogsHistoryViewer({ podName, containers, initialContainer, fetchHistory, historyEmptyHint, initialHistoryWindow = '6h', overrideDownload, forceDark, defaultDark, toolbarLead }: {
   podName: string
   containers: string[]
   initialContainer?: string
   fetchHistory: FetchHistory
   historyEmptyHint?: ReactNode
+  initialHistoryWindow?: LogsHistoryWindow
   overrideDownload?: (content: string, mime: string, filename: string) => void
   forceDark?: boolean
   defaultDark?: boolean
   toolbarLead?: ToolbarLead
 }) {
-  const [since, setSince] = useState<LogsHistoryWindow>('6h')
+  const [since, setSince] = useState<LogsHistoryWindow>(initialHistoryWindow)
   const [knownContainers, setKnownContainers] = useState(containers)
   // A gone pod's containers are unknown until the first read: read them all.
   const [container, setContainer] = useState(initialContainer || containers[0] || '')
@@ -59,7 +60,8 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
       const r = await fetchHistory({ container: container || undefined, since })
       if (n !== seq.current) return
       setResult(r)
-      setKnownContainers(known => (known.length === 0 ? r.containers : known))
+      // A wider window can show containers an earlier read didn't.
+      setKnownContainers(known => [...new Set([...known, ...r.containers])].sort())
       const keys = container ? [container] : Object.keys(r.logs)
       const lines = keys.flatMap(c => (r.logs[c] ?? '').split('\n').filter(Boolean).map(line => ({ ...parseLogLine(line), container: c })))
       lines.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
@@ -92,7 +94,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
       {result && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-1.5 text-xs text-theme-text-secondary">
           From Loki, {windowLabel}
-          {result.truncated && `, cut at ${result.limit.toLocaleString()} lines (the newest are shown)`}.
+          {result.truncated && `, the newest ${result.limit.toLocaleString()} lines (the limit; older lines in this window may be missing)`}.
         </div>
       )}
       <div className="min-h-0 flex-1">

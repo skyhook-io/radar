@@ -54,6 +54,9 @@ export function LogsViewer({ namespace, podName, containers, initialContainer, a
       autoStream={autoStream && !history}
       fetchHistory={fetchHistory}
       initialMode={history ? 'history' : 'live'}
+      // A pod opened on History is usually gone, and its lines are its last:
+      // read the whole retention a read may cover.
+      initialHistoryWindow={history ? '7d' : undefined}
     />
   )
 }

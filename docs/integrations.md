@@ -700,8 +700,10 @@ Connect Loki in **Settings → Logs (Loki)**, or with `--loki-url`; see [configu
 
 The viewer reads `GET /api/loki/pods/{namespace}/{name}/logs?container=&since=1h|6h|24h|7d` (or `start`/`end`, at most 7 days; `limit` up to 5,000 lines).
 - **Gate:** namespace access plus `get pods/log`, the same as live logs, checked before Loki is contacted. The pod need not exist any more.
+- **Without authentication** there is no caller to check and Loki never asks Kubernetes, so Radar's own identity must be able to `get pods/log` in the namespace; `--namespace-scope` applies too. History never reads more than live logs could.
+- **A Loki shared by several clusters:** the query carries no cluster label, so a pod name that exists in more than one cluster (a StatefulSet's `-0` pod) returns lines from each.
 - **Fixed queries:** Radar writes the LogQL from the namespace, pod and container only, with values escaped; no other parameter reaches Loki and there is no free-form query, search or live tail.
-- **Limits:** Loki returns the newest lines first; when it returns the limit, the answer says it was cut and the oldest lines in the window are missing.
+- **Limits:** Radar shows the newest lines in the window; when Loki returns the limit, the answer says older lines may be missing. An answer over 32 MiB reads as a 502 asking for a shorter window, and keeps the connection.
 - **Errors:** 503 when Loki is not connected or has no namespace or pod stream label; 502 with Loki's own message (redacted) when it answers an error, such as its per-query line limit.
 - An empty answer means Loki holds nothing for that pod in the window: the pod's logs may never have been shipped.
 

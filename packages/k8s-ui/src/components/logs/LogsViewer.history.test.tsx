@@ -56,7 +56,7 @@ it('reads History from Loki with the selected container and turns off streaming'
 
 it('says when Loki cut the result', async () => {
   await render({ fetchHistory: async () => result({ truncated: true }), initialMode: 'history' })
-  expect(element.textContent).toContain('cut at 5,000 lines')
+  expect(element.textContent).toContain('the newest 5,000 lines (the limit')
 })
 
 it('says why History may be empty', async () => {
@@ -87,4 +87,25 @@ it('opens History once the host can read it, when asked to start there', async (
   })
   await act(async () => { await new Promise(r => setTimeout(r, 150)) })
   expect(fetchHistory).toHaveBeenCalled()
+})
+
+it('starts History on the window the host asks for', async () => {
+  const fetchHistory = vi.fn(async () => result())
+  await render({ containers: [], fetchHistory, initialMode: 'history', initialHistoryWindow: '7d' })
+  expect(fetchHistory).toHaveBeenCalledWith({ container: undefined, since: '7d' })
+})
+
+it('keeps learning a gone pod\'s containers as the window widens', async () => {
+  let call = 0
+  const fetchHistory = vi.fn(async () => (++call === 1
+    ? result({ containers: ['web'], logs: { web: '2026-11-13T09:00:00.000000000Z a\n' } })
+    : result({ containers: ['sidecar', 'web'], logs: { sidecar: '2026-11-13T08:00:00.000000000Z b\n', web: '2026-11-13T09:00:00.000000000Z a\n' } })))
+  await render({ containers: [], fetchHistory, initialMode: 'history', initialHistoryWindow: '1h' })
+  const windowSelect = [...element.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === '7d'))!
+  await act(async () => {
+    windowSelect.value = '7d'
+    windowSelect.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  await act(async () => { await new Promise(r => setTimeout(r, 150)) })
+  expect([...element.querySelectorAll('option')].map(o => o.textContent)).toContain('sidecar')
 })

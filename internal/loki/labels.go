@@ -18,7 +18,7 @@ var (
 	namespaceLabels = []string{"namespace", "kubernetes_namespace_name", "namespace_name", "k8s_namespace_name"}
 	podLabels       = []string{"pod", "kubernetes_pod_name", "pod_name", "k8s_pod_name"}
 	containerLabels = []string{"container", "kubernetes_container_name", "container_name", "k8s_container_name"}
-	jobLabels       = []string{"job_name", "job-name", "batch_kubernetes_io_job_name"}
+	jobLabels       = []string{"job_name", "batch_kubernetes_io_job_name"}
 )
 
 // DetectLabels picks, from the label names Loki reports, the first known name

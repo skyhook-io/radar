@@ -2,9 +2,7 @@ package loki
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -52,42 +50,15 @@ func quoteLogQL(s string) string {
 }
 
 // PodSelector is the stream selector for one pod, and one container when
-// given. Only these values reach the query.
+// given and Loki labels containers (otherwise the whole pod is read; its lines
+// then carry no container). Only these values reach the query.
 func PodSelector(l StreamLabels, namespace, pod, container string) (string, error) {
 	if reason := l.HistoryReason(); reason != "" {
 		return "", errors.New(reason)
 	}
 	parts := []string{l.Namespace + "=" + quoteLogQL(namespace), l.Pod + "=" + quoteLogQL(pod)}
-	if container != "" {
-		if l.Container == "" {
-			return "", errors.New("Loki has no container stream label; read the whole pod instead")
-		}
+	if container != "" && l.Container != "" {
 		parts = append(parts, l.Container+"="+quoteLogQL(container))
 	}
 	return "{" + strings.Join(parts, ", ") + "}", nil
-}
-
-// jobPodPrefixLimit: the Job controller names pods generateName "<job>-",
-// which the API server cuts to 58 characters before the 5-character suffix.
-const jobPodPrefixLimit = 58
-
-// JobSelector selects a Job's pods: by the Job stream label when the shipper
-// adds one, else by pod name ("<job>-", Indexed Jobs add "<index>-", then the
-// random suffix). notice is set when a long Job name was cut, so pods of
-// another Job with the same prefix may be included.
-func JobSelector(l StreamLabels, namespace, job string) (selector, notice string, err error) {
-	if reason := l.HistoryReason(); reason != "" {
-		return "", "", errors.New(reason)
-	}
-	ns := l.Namespace + "=" + quoteLogQL(namespace)
-	if l.Job != "" {
-		return fmt.Sprintf("{%s, %s=%s}", ns, l.Job, quoteLogQL(job)), "", nil
-	}
-	prefix := job + "-"
-	if len(prefix) > jobPodPrefixLimit {
-		prefix = prefix[:jobPodPrefixLimit]
-		notice = "Job names this long are shortened in pod names; lines from another Job with the same prefix may be included."
-	}
-	re := "^" + regexp.QuoteMeta(prefix) + "([0-9]+-)?[a-z0-9]{5}$"
-	return fmt.Sprintf("{%s, %s=~%s}", ns, l.Pod, quoteLogQL(re)), notice, nil
 }

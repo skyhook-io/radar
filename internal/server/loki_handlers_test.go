@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -154,6 +155,7 @@ func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
 	}))
 	t.Cleanup(rec.srv.Close)
 	t.Cleanup(func() { loki.Retire(nil) })
+	allowRadarPodLogs(t)
 	loki.Configure(rec.srv.URL, map[string]string{"X-Scope-OrgID": "tenant-secret"})
 	if err := loki.EnsureConnected(t.Context()); err != nil {
 		t.Fatal(err)
@@ -168,7 +170,7 @@ func (r *lokiRecorder) count() int {
 }
 
 const twoContainers = `{"status":"success","data":{"resultType":"streams","result":[
- {"stream":{"namespace":"team","pod":"app-1","container":"web"},"values":[["1763035200000000002","second"],["1763035200000000001","first"]]},
+ {"stream":{"namespace":"team","pod":"app-1","container":"web"},"values":[["1763035201000000000","fourth"],["1763035200500000000","third-b"],["1763035200500000000","third-a"],["1763035200000000002","second"],["1763035200000000001","first"]]},
  {"stream":{"namespace":"team","pod":"app-1","container":"sidecar"},"values":[["1763035200000000003","side"]]}]}}`
 
 func lokiPodLogs(t *testing.T, query string) (*http.Response, string) {
@@ -194,8 +196,15 @@ func TestLokiPodLogsHappyPath(t *testing.T) {
 		t.Fatalf("response = %+v", got)
 	}
 	web := strings.Split(strings.TrimSpace(got.Logs["web"]), "\n")
-	if len(web) != 2 || !strings.HasSuffix(web[0], " first") || !strings.HasSuffix(web[1], " second") || !strings.HasPrefix(web[0], "2025-") {
+	want := []string{"first", "second", "third-a", "third-b", "fourth"}
+	if len(web) != len(want) {
 		t.Fatalf("web lines = %q", web)
+	}
+	for i, line := range web {
+		// Fixed-width times keep text order equal to time order, even on a whole second.
+		if ts, text, _ := strings.Cut(line, " "); len(ts) != len("2025-11-13T12:00:00.000000000Z") || text != want[i] {
+			t.Fatalf("line %d = %q, want text %q with a fixed-width time", i, line, want[i])
+		}
 	}
 	q := rec.queries[0]
 	if q.Get("query") != `{namespace="team", pod="app-1"}` || q.Get("direction") != "backward" || q.Get("limit") != "5000" {
@@ -238,6 +247,7 @@ func TestLokiPodLogsWindowRejected(t *testing.T) {
 }
 
 func TestLokiPodLogsNotConnected(t *testing.T) {
+	allowRadarPodLogs(t)
 	loki.Retire(nil)
 	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("%d %s", resp.StatusCode, raw)
@@ -284,4 +294,55 @@ func TestLokiPodLogsSharedListener(t *testing.T) {
 	if rec.count() != 1 || rec.queries[0].Get("query") != `{namespace="team", pod="app-1"}` || rec.queries[0].Get("direction") != "backward" {
 		t.Fatalf("a caller's parameter reached Loki: %v", rec.queries)
 	}
+}
+
+// Without authentication History may read no more than Radar's own identity:
+// Loki doesn't ask Kubernetes, so Radar must.
+func TestLokiPodLogsNoAuthNeedsRadarsOwnAccess(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	radarCanReadPodLogs = func(_ context.Context, ns string) bool { return ns != "kube-system" }
+	resp, err := http.Get(testServer.URL + "/api/loki/pods/kube-system/etcd-0/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || rec.count() != 0 {
+		t.Fatalf("status %d, %d queries", resp.StatusCode, rec.count())
+	}
+}
+
+func TestLokiPodLogsHonourNamespaceScope(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("other")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != http.StatusForbidden || rec.count() != 0 {
+		t.Fatalf("outside --namespace-scope: %d %s, %d queries", resp.StatusCode, raw, rec.count())
+	}
+}
+
+// An answer over the size cap is Loki answering, not Loki gone: the
+// connection stays.
+func TestLokiPodLogsTooLargeKeepsTheConnection(t *testing.T) {
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[{"stream":{"pod":"app-1"},"values":[["1","`+strings.Repeat("x", 33<<20)+`"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "")
+	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(raw, "shorter window") {
+		t.Fatalf("%d %.200s", resp.StatusCode, raw)
+	}
+	if !loki.CurrentStatus().Connected {
+		t.Fatal("a large answer dropped the connection")
+	}
+	_ = rec
+}
+
+// allowRadarPodLogs stands in for Radar's own access review, which the fake
+// clientset would refuse.
+func allowRadarPodLogs(t *testing.T) {
+	t.Helper()
+	saved := radarCanReadPodLogs
+	radarCanReadPodLogs = func(context.Context, string) bool { return true }
+	t.Cleanup(func() { radarCanReadPodLogs = saved })
 }

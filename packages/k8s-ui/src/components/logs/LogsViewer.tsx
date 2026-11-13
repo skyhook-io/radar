@@ -9,7 +9,7 @@ import type { LogExportPayload } from '../../utils/log-export'
 import type { LogPalette } from './log-palette'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
-import { LogsHistoryViewer, type FetchHistory } from './LogsHistoryViewer'
+import { LogsHistoryViewer, type FetchHistory, type LogsHistoryWindow } from './LogsHistoryViewer'
 
 export type { LogsHistoryResult, LogsHistoryWindow, FetchHistory } from './LogsHistoryViewer'
 
@@ -47,6 +47,8 @@ export interface LogsViewerProps {
   initialMode?: 'live' | 'history'
   /** Extra line under an empty History answer, e.g. a link to why logs aren't shipped. */
   historyEmptyHint?: ReactNode
+  /** History's first window, e.g. '7d' for a pod that is gone. Default '6h'. */
+  initialHistoryWindow?: LogsHistoryWindow
 }
 
 type ToolbarLead = (ctx: { isDark: boolean; palette: LogPalette }) => ReactNode

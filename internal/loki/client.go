@@ -290,6 +290,10 @@ func Get(ctx context.Context, path string, params url.Values) ([]byte, error) {
 	if errors.As(err, &httpErr) {
 		return nil, &UpstreamError{StatusCode: httpErr.StatusCode, Message: scrubLocked(httpErr.Error())}
 	}
+	if errors.Is(err, prom.ErrResponseTooLarge) {
+		// Loki answered; the answer is just too big. Keep the connection.
+		return nil, &UpstreamError{Message: "the answer is larger than Radar reads; choose a shorter window or fewer lines"}
+	}
 	if client.source == "discovered" && client.baseURL == base {
 		client.baseURL = ""
 	}
@@ -375,15 +379,9 @@ type Lines struct {
 
 // QueryRange reads the newest lines of selector in w, up to limit, and
 // returns them oldest first. selector must come from PodSelector or
-// JobSelector: nothing else reaches the query.
-func QueryRange(ctx context.Context, selector string, w Window, limit int) (Lines, error) {
-	labels, ok := Labels()
-	if !ok {
-		if err := EnsureConnected(ctx); err != nil {
-			return Lines{}, err
-		}
-		labels, _ = Labels()
-	}
+// JobSelector: nothing else reaches the query. labels map the streams back to
+// pods and containers.
+func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Window, limit int) (Lines, error) {
 	params := url.Values{
 		"query":     {selector},
 		"start":     {strconv.FormatInt(w.Start.UnixNano(), 10)},
@@ -410,7 +408,10 @@ func QueryRange(ctx context.Context, selector string, w Window, limit int) (Line
 	}
 	var out Lines
 	for _, stream := range resp.Data.Result {
-		for _, v := range stream.Values {
+		// direction=backward lists each stream newest first: walk it from the end
+		// so lines sharing a timestamp (a multi-line stack trace) keep their order.
+		for i := len(stream.Values) - 1; i >= 0; i-- {
+			v := stream.Values[i]
 			ns, err := strconv.ParseInt(v[0], 10, 64)
 			if err != nil {
 				continue

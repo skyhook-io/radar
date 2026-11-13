@@ -11,8 +11,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/loki"
 	"github.com/skyhook-io/radar/internal/readscope"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // handleLokiStatus reports the Loki connection: whether it is configured and
@@ -46,6 +49,18 @@ type lokiPodLogsResponse struct {
 	Window    lokiWindow `json:"window"`
 }
 
+// lokiTimeLayout is fixed-width (RFC3339Nano drops trailing zeros), so the
+// text order of lines is their time order and the log parser always finds the
+// time.
+const lokiTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// radarCanReadPodLogs asks whether Radar's own identity may get pods/log in
+// namespace (a SelfSubjectAccessReview).
+var radarCanReadPodLogs = func(ctx context.Context, namespace string) bool {
+	allowed, _ := k8score.CanI(ctx, k8s.GetClientInterface(), namespace, "", "pods/log", "get")
+	return allowed
+}
+
 // noContainerLabel keys the lines when Loki's streams carry no container.
 const noContainerLabel = "(all containers)"
 
@@ -54,16 +69,25 @@ const noContainerLabel = "(all containers)"
 // same as live logs, checked before Loki is contacted. The query is built
 // only from the namespace, pod, container and window (fixed LogQL, values
 // escaped); no other parameter reaches Loki. Through Radar Hub it is a GET.
-// On a shared listener without auth it reads as Radar's identity, which can
-// already read the same pod live; a cross-site request is refused by
-// requireSameOrigin.
+// --namespace-scope applies. Without authentication there is no caller to
+// check, and Loki never asks Kubernetes, so Radar's own identity must be able
+// to get pods/log in the namespace: History never reads more than live logs
+// could. A cross-site request is refused by requireSameOrigin.
 func (s *Server) handleLokiPodLogs(w http.ResponseWriter, r *http.Request) {
 	namespace, podName := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return
 	}
+	if k8s.ForceNamespaceScope && namespace != k8s.GetNamespaceScopeTarget() {
+		s.writeError(w, http.StatusForbidden, "namespace "+namespace+" is outside this Radar's namespace scope")
+		return
+	}
 	if !s.authorizePodLogRead(w, r, namespace) {
+		return
+	}
+	if auth.UserFromContext(r.Context()) == nil && !radarCanReadPodLogs(r.Context(), namespace) {
+		s.writeError(w, http.StatusForbidden, "Radar's identity can't read pod logs in namespace "+namespace+" (get pods/log)")
 		return
 	}
 	q := r.URL.Query()
@@ -88,7 +112,7 @@ func (s *Server) handleLokiPodLogs(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	lines, err := loki.QueryRange(r.Context(), selector, window, limit)
+	lines, err := loki.QueryRange(r.Context(), labels, selector, window, limit)
 	if err != nil {
 		s.writeLokiError(w, err)
 		return
@@ -107,7 +131,7 @@ func (s *Server) handleLokiPodLogs(w http.ResponseWriter, r *http.Request) {
 			b[c] = &strings.Builder{}
 			resp.Containers = append(resp.Containers, c)
 		}
-		b[c].WriteString(l.Time.Format(time.RFC3339Nano) + " " + l.Text + "\n")
+		b[c].WriteString(l.Time.Format(lokiTimeLayout) + " " + l.Text + "\n")
 	}
 	sort.Strings(resp.Containers)
 	for c, sb := range b {
