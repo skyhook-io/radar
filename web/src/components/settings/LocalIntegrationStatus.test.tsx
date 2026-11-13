@@ -8,6 +8,8 @@ vi.mock('../../api/client', () => ({
   usePrometheusStatus: () => ({}),
   useOpenCostSummary: () => ({}),
 }))
+const loki = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
+vi.mock('../../api/loki', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../api/loki')>()), useLokiStatus: () => loki.value }))
 
 const profile: IntegrationProfile = {
   target: {
@@ -48,5 +50,26 @@ describe('LocalIntegrationStatus for Argo CD', () => {
     const html = render({ configured: true, connected: true, address: 'https://argocd', reason: "Radar's last read from Argo CD failed: the request timed out." })
     expect(html).toContain('Connected')
     expect(html).toContain('the request timed out')
+  })
+})
+
+describe('LocalIntegrationStatus for Loki', () => {
+  const renderLoki = (data: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+    loki.value = { data, isError: false, isPlaceholderData: false, isFetching: false, dataUpdatedAt: 1, errorUpdatedAt: 0, ...extra }
+    const argo = {} as ReturnType<typeof useArgoStatus>
+    return renderToStaticMarkup(<LocalIntegrationStatus kind="loki" profile={{ ...profile, secretSet: false }} argo={argo} busy={false} changedAt={0} />)
+  }
+  it('shows the discovered address and the stream labels it found', () => {
+    const html = renderLoki({ configured: true, connected: true, address: 'http://localhost:4100', source: 'discovered', labels: { namespace: 'namespace', pod: 'pod', container: 'container', job: 'job_name' } })
+    expect(html).toContain('Connected')
+    expect(html).toContain('Discovered: http://localhost:4100')
+    expect(html).toContain('Stream labels: namespace, pod, container, job job_name')
+  })
+  it('says why History is unavailable', () => {
+    const html = renderLoki({ configured: true, connected: true, address: 'http://loki', source: 'manual', labels: { namespace: '', pod: '', container: '' }, historyReason: 'Loki has no namespace or pod stream label; History needs both' })
+    expect(html).toContain('History needs both')
+  })
+  it('shows the connection error', () => {
+    expect(renderLoki({ configured: true, connected: false, discovering: false, error: 'no Loki Service found in the cluster' })).toContain('no Loki Service found in the cluster')
   })
 })

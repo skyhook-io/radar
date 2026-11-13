@@ -10,7 +10,7 @@ import {
   getCredentialsMode
 } from '../../api/config'
 import { ApiError } from '../../api/client'
-import { PrometheusConnectionForm } from './PrometheusConnectionForm'
+import { LOKI_COPY, PrometheusConnectionForm } from './PrometheusConnectionForm'
 import {
   ArgoCDConnectionForm,
   CostConnectionForm,
@@ -20,7 +20,7 @@ import {
 } from './IntegrationConnectionForms'
 import type { HeaderOperation } from './ConnectionHeadersEditor'
 
-export type IntegrationKind = 'metrics' | 'argocd' | 'cost'
+export type IntegrationKind = 'metrics' | 'argocd' | 'cost' | 'loki'
 interface TargetIdentity {
   server: string
   user?: string
@@ -112,7 +112,8 @@ const previousSource = '__previous__'
 const savedCredential: Record<IntegrationKind, string> = {
   metrics: 'saved headers',
   argocd: 'a saved token',
-  cost: 'a saved API key'
+  cost: 'a saved API key',
+  loki: 'saved headers'
 }
 function describeSource(kind: IntegrationKind, source: { url: string; secretSet: boolean; headerKeys: string[]; mode?: string; clusterId?: string }) {
   if (source.url) return source.url
@@ -126,7 +127,8 @@ function describeSource(kind: IntegrationKind, source: { url: string; secretSet:
 const automaticAction: Record<IntegrationKind, string> = {
   metrics: 'Use auto-discovery',
   argocd: 'Use auto-discovery',
-  cost: 'Reset to Automatic'
+  cost: 'Reset to Automatic',
+  loki: 'Use auto-discovery'
 }
 function sameIdentity(a?: TargetIdentity, b?: TargetIdentity) {
   return !!a && !!b && a.server === b.server && a.user === b.user &&
@@ -136,7 +138,8 @@ function sameIdentity(a?: TargetIdentity, b?: TargetIdentity) {
 const names: Record<IntegrationKind, string> = {
   metrics: 'Metrics',
   argocd: 'Argo CD',
-  cost: 'Cost'
+  cost: 'Cost',
+  loki: 'Logs (Loki)'
 }
 export { names as integrationNames }
 
@@ -645,7 +648,7 @@ export function LocalConnectionSettings({
   const removedByDiscovery = [
     profile.url && (kind === 'cost' ? 'Kubecost endpoint' : 'endpoint'),
     (profile.secretSet || profile.headerKeys.length > 0) &&
-      (kind === 'metrics' ? 'headers' : kind === 'argocd' ? 'API token' : 'API key'),
+      (kind === 'metrics' || kind === 'loki' ? 'headers' : kind === 'argocd' ? 'API token' : 'API key'),
     kind === 'cost' && profile.clusterId && 'Kubecost cluster mapping'
   ].filter((item): item is string => !!item)
   const removedList: string | undefined = removedByDiscovery.length > 1
@@ -863,10 +866,11 @@ export function LocalConnectionSettings({
       )}
       <fieldset ref={editorRegion} className="min-w-0 empty:hidden">
         {editor &&
-          (kind === 'metrics' ? (
+          (kind === 'metrics' || kind === 'loki' ? (
             <PrometheusConnectionForm
               key={`${profile.revision}:${task}:${draftGeneration}`}
               local
+              copy={kind === 'loki' ? LOKI_COPY : undefined}
               value={url}
               onChange={setUrl}
               configuredHeaderKeys={selected ? selected.headerKeys : legacyDraft ? legacyDraft.headerKeys : replacing ? [] : profile.headerKeys}

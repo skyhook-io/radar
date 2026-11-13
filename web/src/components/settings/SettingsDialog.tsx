@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
-  Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
+  Terminal, Boxes, Activity, ScrollText, GitBranch, Sparkles, SlidersHorizontal, Zap,
   LayoutDashboard, ChevronRight, AlertTriangle, Coins, EyeOff,
   type LucideIcon,
 } from 'lucide-react'
@@ -38,6 +38,7 @@ import { costSourceApplyLabel, pendingSectionLabels, pendingSections, shouldShow
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
+import { LokiStatusCard } from './LokiStatusCard'
 import { LocalConfigurationDetails, SavedClusterConnections, PreviousIntegrationSettingsNotice } from './LocalConfigurationDetails'
 import { useContextSwitch } from '../../context/ContextSwitchContext'
 import { previousIntegrationSettingsKey, type IntegrationSettingsResponse } from '../../hooks/usePreviousIntegrationSettings'
@@ -154,17 +155,19 @@ export function SettingsDialog({
   const { isSwitching } = useContextSwitch()
   const settingsApiBase = getApiBase()
   const [prometheusCredentialDirty, setPrometheusCredentialDirty] = useState(false)
-  const [localDirty, setLocalDirty] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const [localDirty, setLocalDirty] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false, loki: false })
   const [discardGeneration, setDiscardGeneration] = useState(0)
-  const [localBusy, setLocalBusy] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const [localBusy, setLocalBusy] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false, loki: false })
   const [storageBusy, setStorageBusy] = useState(false)
   const integrationBusy = Object.values(localBusy).some(Boolean)
   const metricsBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, metrics: busy })), [])
   const argoBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, argocd: busy })), [])
   const costBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, cost: busy })), [])
+  const lokiBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, loki: busy })), [])
   const metricsDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, metrics: dirty })), [])
   const argoDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, argocd: dirty })), [])
   const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
+  const lokiDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, loki: dirty })), [])
   const [connectionsChangedAt, setConnectionsChangedAt] = useState(0)
   const overviewHeading = useRef<HTMLHeadingElement>(null)
   const previousNoticeDismissed = useCallback(() => {
@@ -255,7 +258,7 @@ export function SettingsDialog({
   const advancedDirty = mcpDirty || timelineDirty
   const configDirty = configData != null && (connectionDirty || advancedDirty)
   const prometheusDirty = prometheusCredentialDirty || localDirty.metrics || (editedConfig.prometheusUrl ?? '') !== (configData?.effective.prometheusUrl ?? '')
-  const pending = pendingSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd, ai: aiDirty })
+  const pending = pendingSections({ prometheus: prometheusDirty, loki: localDirty.loki, cost: costIntegrationDirty, argocd: localDirty.argocd, ai: aiDirty })
   const integrationDirty = pending.some(item => item !== 'ai')
   // Drafts that save through their own form, which "Save startup settings" leaves in place.
   const formDirty = pending.length > 0
@@ -278,8 +281,8 @@ export function SettingsDialog({
       return
     }
     if (draftFrozen) return
-    metricsDraft.current = { open, scope: settingsScope, dirty: configData != null && (prometheusDirty || configDirty || costIntegrationDirty || localDirty.argocd || aiDirty) }
-  }, [open, settingsScope, targetChangedWithDraft, draftFrozen, configData, prometheusDirty, configDirty, costIntegrationDirty, localDirty.argocd, aiDirty])
+    metricsDraft.current = { open, scope: settingsScope, dirty: configData != null && (prometheusDirty || configDirty || costIntegrationDirty || localDirty.argocd || localDirty.loki || aiDirty) }
+  }, [open, settingsScope, targetChangedWithDraft, draftFrozen, configData, prometheusDirty, configDirty, costIntegrationDirty, localDirty.argocd, localDirty.loki, aiDirty])
 
   // Load config on open + snapshot AI prefs + pick a default section that's
   // actually accessible to the current identity.
@@ -289,7 +292,7 @@ export function SettingsDialog({
     const controller = new AbortController()
     setConfigData(null)
     setPrometheusCredentialDirty(false)
-    setLocalDirty({ metrics: false, argocd: false, cost: false })
+    setLocalDirty({ metrics: false, argocd: false, cost: false, loki: false })
     setSaveMessage(null)
     setLoadError(null)
     setConfirmingClose(false)
@@ -453,7 +456,7 @@ export function SettingsDialog({
     setCostCredentialDirty(false)
     setPrometheusCredentialDirty(false)
     setDiscardGeneration(value => value + 1)
-    setLocalDirty({ metrics: false, argocd: false, cost: false })
+    setLocalDirty({ metrics: false, argocd: false, cost: false, loki: false })
     setCostDraftReset((current) => current + 1)
     setSaveMessage(null)
   }, [configData, settingsBusy, draftFrozen, targetChangedWithDraft, discardAi])
@@ -549,6 +552,7 @@ export function SettingsDialog({
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: prometheusDirty },
+    { id: 'loki', label: 'Logs', icon: ScrollText, ownerOnly: true, dirty: localDirty.loki },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: localDirty.argocd },
     { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
@@ -750,6 +754,19 @@ export function SettingsDialog({
                   onBusyChange={setStorageBusy}
                 />
               )}
+            </SectionPane>
+
+            {/* Loki pod log history — live */}
+            <SectionPane
+              id="loki"
+              active={section}
+              title="Logs (Loki)"
+              caption={configData?.integrationProfiles ? localIntegrationCaption : 'Set by this installation’s operator.'}
+              live
+              locked={!canEditConfig}
+            >
+              {configData?.integrationProfiles?.loki ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.loki.target)}`} kind="loki" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={lokiDirtyChange} onBusyChange={lokiBusyChange}
+                status={showLocalStatus && section === 'loki' && !['error', 'target_changed'].includes(configData.integrationProfiles.loki.state) ? <LocalIntegrationStatus kind="loki" profile={configData.integrationProfiles.loki} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : <LokiStatusCard active={section === 'loki'} />}
             </SectionPane>
 
             {/* Metrics backend — live */}
