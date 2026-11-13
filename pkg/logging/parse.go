@@ -100,7 +100,8 @@ func Watched(flow Flow, loggings []Logging) (watched, certain bool) {
 // redacted address, never the rest of its configuration.
 type OutputSummary struct {
 	Name, Namespace, Type, Address string
-	Cluster, Active                bool
+	Cluster                        bool
+	Active                         *bool // nil: the operator reported no state
 	ProblemsCount                  int
 	Problems                       []string
 }
@@ -128,7 +129,9 @@ func OutputFrom(u *unstructured.Unstructured) OutputSummary {
 			}
 		}
 	}
-	out.Active, _, _ = unstructured.NestedBool(u.Object, "status", "active")
+	if active, found, _ := unstructured.NestedBool(u.Object, "status", "active"); found {
+		out.Active = &active
+	}
 	count, _, _ := unstructured.NestedInt64(u.Object, "status", "problemsCount")
 	out.ProblemsCount = int(count)
 	out.Problems, _, _ = unstructured.NestedStringSlice(u.Object, "status", "problems")

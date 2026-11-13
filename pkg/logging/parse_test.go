@@ -60,14 +60,14 @@ func TestOutputFrom(t *testing.T) {
 		"loggingRef": "x",
 		"loki":       map[string]any{"url": "https://user:pw@loki.example/loki/api/v1/push?x=1", "password": map[string]any{"value": "s3cret"}},
 	}, map[string]any{"active": true, "problemsCount": int64(1), "problems": []any{"secret not found"}}))
-	if out.Type != "loki" || out.Address != "https://loki.example/loki/api/v1/push" || !out.Active || !out.Cluster || out.ProblemsCount != 1 || !reflect.DeepEqual(out.Problems, []string{"secret not found"}) {
+	if out.Type != "loki" || out.Address != "https://loki.example/loki/api/v1/push" || out.Active == nil || !*out.Active || !out.Cluster || out.ProblemsCount != 1 || !reflect.DeepEqual(out.Problems, []string{"secret not found"}) {
 		t.Fatalf("output = %+v", out)
 	}
 	if s := fmt.Sprintf("%+v", out); strings.Contains(s, "s3cret") || strings.Contains(s, "user:pw") || strings.Contains(s, "x=1") {
 		t.Fatalf("output summary leaks configuration: %s", s)
 	}
 	s3 := OutputFrom(obj("Output", "team", "archive", map[string]any{"protected": true, "s3": map[string]any{"s3_bucket": "b"}}, nil))
-	if s3.Type != "s3" || s3.Address != "" || s3.Cluster || s3.Active {
+	if s3.Type != "s3" || s3.Address != "" || s3.Cluster || s3.Active != nil {
 		t.Fatalf("s3 output = %+v", s3)
 	}
 }

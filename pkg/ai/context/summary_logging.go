@@ -17,12 +17,14 @@ func isLoggingOutput(obj *unstructured.Unstructured) bool {
 // block (hosts, tenants, token files, inline secrets) never reaches AI context.
 func summarizeLoggingOutput(obj *unstructured.Unstructured) *ResourceSummary {
 	out := logging.OutputFrom(obj)
-	s := &ResourceSummary{Kind: obj.GetKind(), Name: obj.GetName(), Namespace: obj.GetNamespace(), Age: age(obj.GetCreationTimestamp().Time), Type: out.Type, Status: "Inactive"}
-	if out.Active {
+	s := &ResourceSummary{Kind: obj.GetKind(), Name: obj.GetName(), Namespace: obj.GetNamespace(), Age: age(obj.GetCreationTimestamp().Time), Type: out.Type, Status: "Not reported"}
+	switch {
+	case out.ProblemsCount > 0 || len(out.Problems) > 0:
+		s.Status = fmt.Sprintf("%d problems", max(out.ProblemsCount, len(out.Problems)))
+	case out.Active != nil && *out.Active:
 		s.Status = "Active"
-	}
-	if out.ProblemsCount > 0 {
-		s.Status = fmt.Sprintf("%d problems", out.ProblemsCount)
+	case out.Active != nil:
+		s.Status = "Inactive"
 	}
 	return s
 }

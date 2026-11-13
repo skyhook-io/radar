@@ -5,6 +5,9 @@ describe('controlNamespacesOf', () => {
   it('lists each Logging control namespace once', () => {
     expect(controlNamespacesOf([{ spec: { controlNamespace: 'a' } }, { spec: { controlNamespace: 'a' } }, { spec: {} }], false)).toEqual(['a'])
   })
+  it('is empty when a complete read found no Logging', () => {
+    expect(controlNamespacesOf([], false)).toEqual([])
+  })
   it('is undefined while unknown, so the drawer claims nothing', () => {
     expect(controlNamespacesOf(undefined, false)).toBeUndefined()
     expect(controlNamespacesOf([{ spec: { controlNamespace: 'a' } }], true)).toBeUndefined()

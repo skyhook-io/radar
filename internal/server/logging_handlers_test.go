@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -141,9 +142,13 @@ func TestLoggingPodShippingNotSelected(t *testing.T) {
 	seedLoggingFixture(t, loggingKinds(), nil)
 	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
 	got, _ := getLoggingPod(t, resp)
-	if !got.Shipped {
-		// second-flow (empty match, counted under Logging "second") still selects it.
-		t.Fatalf("second-flow selects every pod in team: %+v", got)
+	// second-flow (empty match, Logging "second") selects it, but its only
+	// output doesn't exist, so nothing is delivered.
+	if got.Shipped || got.Uncertain {
+		t.Fatalf("response = %+v", got)
+	}
+	if f := flowByName(got, "second-flow"); !f.Selected || f.Delivers == nil || *f.Delivers {
+		t.Fatalf("second-flow = %+v", f)
 	}
 	if optin := flowByName(got, "optin"); optin.Selected || len(optin.Unmet) != 1 || optin.Unmet[0] != "label example.com/loki-logs=true" {
 		t.Errorf("optin = %+v", optin)
@@ -271,3 +276,70 @@ func TestLoggingPodShippingWatchNamespaces(t *testing.T) {
 		})
 	}
 }
+
+func seedLoggingObjects(t *testing.T, podLabels map[string]string, objs ...runtime.Object) {
+	t.Helper()
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "app-1", Labels: podLabels}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	all := append([]runtime.Object{lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil)}, objs...)
+	seedCNPGWorkspace(t, loggingKinds(), all...)
+}
+
+// Selection is not delivery: a Flow the operator reports inactive, a Flow
+// without outputs, or an output that is missing or inactive ships nothing; an
+// output with no reported state can't confirm delivery.
+func TestLoggingPodShippingNeedsAWorkingOutput(t *testing.T) {
+	active := map[string]any{"active": true}
+	inactive := map[string]any{"active": false}
+	flow := func(status map[string]any, outputs ...any) *unstructured.Unstructured {
+		return lgObj("ClusterFlow", "logging-system", "all", map[string]any{"globalOutputRefs": outputs}, status)
+	}
+	out := func(status map[string]any) *unstructured.Unstructured {
+		return lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{"url": "https://loki.example/push"}}, status)
+	}
+	for _, c := range []struct {
+		name               string
+		objs               []runtime.Object
+		shipped, uncertain bool
+		delivers           *bool
+	}{
+		{"working output", []runtime.Object{flow(active, "loki"), out(active)}, true, false, boolp(true)},
+		{"inactive flow", []runtime.Object{flow(inactive, "loki"), out(active)}, false, false, boolp(false)},
+		{"no outputs", []runtime.Object{flow(active)}, false, false, boolp(false)},
+		{"missing output", []runtime.Object{flow(active, "loki")}, false, false, boolp(false)},
+		{"inactive output", []runtime.Object{flow(active, "loki"), out(inactive)}, false, false, boolp(false)},
+		{"output state unknown", []runtime.Object{flow(active, "loki"), out(nil)}, false, true, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			seedLoggingObjects(t, nil, c.objs...)
+			resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
+			got, _ := getLoggingPod(t, resp)
+			f := flowByName(got, "all")
+			if got.Shipped != c.shipped || got.Uncertain != c.uncertain || !f.Selected || !reflect.DeepEqual(f.Delivers, c.delivers) {
+				t.Fatalf("shipped=%v uncertain=%v flow=%+v", got.Shipped, got.Uncertain, f)
+			}
+		})
+	}
+}
+
+func TestLoggingPodShippingExcludedAndOutputNamespace(t *testing.T) {
+	seedLoggingObjects(t, map[string]string{"tier": "debug"},
+		lgObj("ClusterFlow", "logging-system", "no-debug", map[string]any{"match": []any{map[string]any{"exclude": map[string]any{"labels": map[string]any{"tier": "debug"}}}, map[string]any{"select": map[string]any{}}}, "globalOutputRefs": []any{"loki"}}, map[string]any{"active": true}),
+		lgObj("ClusterFlow", "logging-system", "all", map[string]any{"globalOutputRefs": []any{"loki"}}, map[string]any{"active": true}),
+		lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true}),
+	)
+	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
+	got, _ := getLoggingPod(t, resp)
+	if f := flowByName(got, "no-debug"); !f.Excluded || f.Selected {
+		t.Errorf("no-debug = %+v", f)
+	}
+	if f := flowByName(got, "all"); len(f.Outputs) != 1 || f.Outputs[0].Namespace != "logging-system" {
+		t.Errorf("all outputs = %+v", f.Outputs)
+	}
+}
+
+func boolp(b bool) *bool { return &b }

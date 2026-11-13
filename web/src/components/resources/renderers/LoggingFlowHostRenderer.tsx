@@ -5,9 +5,10 @@ import type { ResourceRef } from '@skyhook-io/k8s-ui'
 import { useResources } from '../../../api/client'
 
 // controlNamespacesOf is undefined unless every Logging was read: a partial or
-// failed read must not mark a ClusterFlow "not counted".
+// failed read must not mark a ClusterFlow "not counted". A complete read that
+// found none is [], and then no ClusterFlow is counted.
 export function controlNamespacesOf(items: any[] | undefined, failed: boolean): string[] | undefined {
-  if (!items || failed || items.length === 0) return undefined
+  if (!items || failed) return undefined
   return [...new Set(items.map((l) => l?.spec?.controlNamespace).filter(Boolean))]
 }
 
