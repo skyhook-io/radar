@@ -67,4 +67,11 @@ describe('LoggingView', () => {
     expect(html).toContain('Loggings could not be read')
     expect(html).toContain('ClusterFlow optin')
   })
+  it('does not claim no collectors when FluentbitAgents were not read', () => {
+    const data = pipeline({ coverage: { gaps: [{ group: 'logging.banzaicloud.io', resource: 'fluentbitagents' }], namespaces: null } })
+    data.providers[0].instances[0].collectors = []
+    Object.assign(state, { data, error: null })
+    const html = render()
+    expect(html).toMatch(/Collectors(<[^>]+>)*Not read/)
+  })
 })

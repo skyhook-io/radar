@@ -103,7 +103,7 @@ function Instance({ provider, instance, gaps, open }: { provider: LogPipelinePro
         Logging <span className="font-medium text-theme-text-primary">{instance.name}</span> · control namespace {instance.controlNamespace}
       </div>
       <div className="flex flex-col gap-3 md:flex-row">
-        <Step title="Collectors"><Workloads items={instance.collectors} empty={gaps.includes('daemonsets') ? 'Not read' : 'None found'} open={open} /></Step>
+        <Step title="Collectors"><Workloads items={instance.collectors} empty={gaps.includes('daemonsets') || gaps.includes('fluentbitagents') ? 'Not read' : 'None found'} open={open} /></Step>
         <Arrow />
         <Step title="Aggregator"><Workloads items={instance.aggregators} empty={gaps.includes('statefulsets') ? 'Not read' : 'None found'} open={open} /></Step>
         <Arrow />
