@@ -91,3 +91,23 @@ export function LogRangeSelect({
     </Tooltip>
   )
 }
+
+// ── HistoryWindowSelect ───────────────────────────────────────────────────────
+
+export const HISTORY_WINDOWS = [
+  { value: '1h', label: 'Last 1 hour' },
+  { value: '6h', label: 'Last 6 hours' },
+  { value: '24h', label: 'Last 24 hours' },
+  { value: '7d', label: 'Last 7 days' },
+] as const
+
+export function HistoryWindowSelect({ value, onChange, isDark = true }: { value: string; onChange: (value: string) => void; isDark?: boolean }) {
+  const palette = getLogPalette(isDark)
+  return (
+    <Tooltip content="How far back to read from the log store" position="bottom">
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={`${selectClass(palette)} pr-5`}>
+        {HISTORY_WINDOWS.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
+      </select>
+    </Tooltip>
+  )
+}

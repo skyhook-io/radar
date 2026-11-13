@@ -24,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/loki"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -93,22 +94,27 @@ type AppConfig struct {
 	PrometheusLiteralHeaderFlag bool
 	PrometheusEnvHeaderFlag     bool
 	PrometheusSavedURL          string
-	LocalConnections            *connections.Resolver
-	LocalRuntime                *connectionruntime.Runtime
-	operatorSettingsLoaded      bool
-	BeylaJobSelector            string
-	WorkloadMetricsScope        prom.WorkloadMetricsScope
-	Version                     string
-	MCPReadOnly                 bool
-	MCPEnabled                  bool
-	MCPExecTools                bool   // register exec_pod (--mcp-exec-tools)
-	MCPHTTPTools                bool   // register curl_service (--mcp-http-tools)
-	AIHistory                   bool   // persist AI investigations across restarts
-	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
-	AuthConfig                  auth.Config
-	HubAPIURL                   string // Hub API origin override ("" = hosted default)
-	HubAppURL                   string // Hub frontend origin override ("" = derived)
-	CloudTunnelConfigured       bool   // --cloud-url was set on this process
+	// LokiURL and LokiHeaders: --loki-url / --loki-header. Empty URL finds Loki in the cluster.
+	LokiURL                string
+	LokiHeaders            map[string]string
+	LokiURLFlag            bool
+	LokiHeaderFlag         bool
+	LocalConnections       *connections.Resolver
+	LocalRuntime           *connectionruntime.Runtime
+	operatorSettingsLoaded bool
+	BeylaJobSelector       string
+	WorkloadMetricsScope   prom.WorkloadMetricsScope
+	Version                string
+	MCPReadOnly            bool
+	MCPEnabled             bool
+	MCPExecTools           bool   // register exec_pod (--mcp-exec-tools)
+	MCPHTTPTools           bool   // register curl_service (--mcp-http-tools)
+	AIHistory              bool   // persist AI investigations across restarts
+	AIHistoryDBPath        string // "" = ~/.radar/ai-runs.db
+	AuthConfig             auth.Config
+	HubAPIURL              string // Hub API origin override ("" = hosted default)
+	HubAppURL              string // Hub frontend origin override ("" = derived)
+	CloudTunnelConfigured  bool   // --cloud-url was set on this process
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -357,6 +363,18 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	// Initialize Prometheus metrics client (must come before SetManualURL)
 	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 	prometheuspkg.RegisterRediscoverySignals()
+	loki.RegisterSignals()
+	if cfg.LocalConnections == nil {
+		// Shared installations: the operator's flags, or discovery.
+		if cfg.LokiURL != "" {
+			if err := validateStartupPrometheusURL(cfg.LokiURL); err != nil {
+				log.Fatalf("Invalid --loki-url: %v", err)
+			}
+		} else if len(cfg.LokiHeaders) > 0 {
+			log.Fatalf("Invalid Loki configuration: %v", loki.ErrHeadersRequireURL)
+		}
+		loki.Configure(cfg.LokiURL, cfg.LokiHeaders)
+	}
 
 	if cfg.PrometheusURL != "" {
 		if err := validateStartupPrometheusURL(cfg.PrometheusURL); err != nil {

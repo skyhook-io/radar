@@ -78,7 +78,7 @@ export function usePreviousIntegrationSettings(relevant: boolean): PreviousInteg
   return enabled && !query.isError ? query.data ?? noOffers : noOffers
 }
 
-const settingsTabs: Record<IntegrationKind, string> = { metrics: 'Metrics', argocd: 'Argo CD', cost: 'Cost' }
+const settingsTabs: Record<IntegrationKind, string> = { metrics: 'Metrics', argocd: 'Argo CD', cost: 'Cost', loki: 'Logs' }
 
 // Only a note: call sites keep their neutral action, because another cluster's
 // backend connects fine while showing the wrong cluster's data.

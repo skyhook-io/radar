@@ -66,6 +66,21 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 	if launch != nil {
 		launches[config.IntegrationMetrics] = connections.Bundle{Settings: config.IntegrationSettings{Prometheus: launch}}
 	}
+	if cfg.LokiURLFlag || cfg.LokiHeaderFlag {
+		if !cfg.LokiURLFlag {
+			return cfg, errors.New("local Loki header flags require --loki-url in the same launch")
+		}
+		if cfg.LokiURL != "" {
+			if err := validateStartupPrometheusURL(cfg.LokiURL); err != nil {
+				return cfg, fmt.Errorf("invalid --loki-url: %w", config.LokiError(err))
+			}
+		}
+		c := &prom.Connection{URL: cfg.LokiURL, Headers: cfg.LokiHeaders}
+		if err := c.ValidateHeaderSources(); err != nil {
+			return cfg, config.LokiError(err)
+		}
+		launches[config.IntegrationLoki] = connections.Bundle{Settings: config.IntegrationSettings{Loki: c}}
+	}
 	argo, argoManaged, err := argocd.EnvironmentConfiguration()
 	if argoManaged {
 		launches[config.IntegrationArgoCD] = connections.Bundle{Settings: config.IntegrationSettings{ArgoCD: &argo}, Err: err}

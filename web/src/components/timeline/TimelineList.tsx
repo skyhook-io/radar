@@ -18,6 +18,7 @@ import type { NavigateToResource } from '../../utils/navigation'
 import { TimelineLoadError, TimelineStaleNote } from './TimelineLoadError'
 import { useStickyError } from './useStickyError'
 import { ViewModeToggle } from './ViewModeToggle'
+import { useLokiTimelineActions } from './LokiLogsAction'
 
 export type { ActivityTypeFilter, ActivityFilterKey }
 
@@ -172,6 +173,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     <TimelineStaleNote error={error} subject="list" onRetry={() => refetch()} />
   ) : null
 
+  const renderItemActions = useLokiTimelineActions()
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
       {/* Under a scrubber TimelineView already shows the note above it. */}
@@ -187,6 +189,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
           onViewChange={onViewChange}
           currentView={currentView}
           onResourceClick={onResourceClick}
+          renderItemActions={renderItemActions}
           initialFilter={initialFilter}
           initialTimeRange={initialTimeRange}
           hideRangeSelector={!!selectionWindow}

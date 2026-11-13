@@ -759,6 +759,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Pod logs (non-streaming)
 			r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
+			r.Get("/loki/pods/{namespace}/{name}/logs", s.handleLokiPodLogs)
 			r.Get("/pods/{namespace}/{name}/environment", s.handlePodEnvironment)
 			r.Post("/pods/{namespace}/{name}/environment/reveal", s.handleRevealPodEnvironment)
 
@@ -1003,6 +1004,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 			r.Get("/integrations/connections", s.handleLocalConnections)
+			r.Get("/loki/status", s.handleLokiStatus)
 			r.Put("/integrations/connections", s.handleUpdateLocalConnection)
 
 			// Desktop routes
@@ -1519,6 +1521,8 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
+		LokiConnection:           true,
+		LokiPodHistory:           true,
 	}
 }
 

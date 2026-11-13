@@ -14,8 +14,8 @@ func TestInlineSettingsRestartAndRedactedCatalog(t *testing.T) {
 	r, a, b := setupResolver(t)
 	for _, kind := range config.IntegrationKinds {
 		req := Update{Kind: kind, Action: "save", URL: stringPtr("https://" + string(kind) + ".example")}
-		if kind == config.IntegrationMetrics {
-			req.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "private-metrics-value"}}
+		if kind == config.IntegrationMetrics || kind == config.IntegrationLoki {
+			req.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "private-" + string(kind) + "-value"}}
 		} else {
 			req.Secret = &SecretEdit{Action: "set", Value: "private-" + string(kind) + "-value"}
 		}
@@ -35,7 +35,7 @@ func TestInlineSettingsRestartAndRedactedCatalog(t *testing.T) {
 		}
 	}
 	entries, err := restarted.Catalog()
-	if err != nil || len(entries) != 5 {
+	if err != nil || len(entries) != 6 {
 		t.Fatalf("catalog: count=%d error=%v", len(entries), err)
 	}
 	for _, entry := range entries {
