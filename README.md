@@ -493,7 +493,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |
 | **Kyverno** | Policy, ClusterPolicy, PolicyReport, ClusterPolicyReport |
-| **Sealed Secrets** | SealedSecret |
+| **Sealed Secrets** | SealedSecret, controller and sealing keys |
 | **Dynamic Resource Allocation** | ResourceClaim, ResourceClaimTemplate, DeviceClass, ResourceSlice (resource.k8s.io, K8s 1.32+) |
 | **NVIDIA GPU Operator** | ClusterPolicy, NVIDIADriver |
 | **Calico** | NetworkPolicy, GlobalNetworkPolicy, StagedNetworkPolicy, StagedGlobalNetworkPolicy, StagedKubernetesNetworkPolicy, IPPool, HostEndpoint, Tier |

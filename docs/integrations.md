@@ -735,6 +735,10 @@ resource, including core Secrets and these excluded kinds. See the
 
 **SealedSecret Detail View:** Encrypted data keys, template metadata, and the target Secret's scope and namespace.
 
+**Controller and sealing keys** (a section of the SealedSecret drawer): the controller Deployment and whether it is ready, how many SealedSecrets are synced and not synced (marked as limited to the namespaces you can list when that is not cluster-wide), and the sealing keys with their certificate dates, marking the one that seals new secrets (the newest key labelled `sealedsecrets.bitnami.com/sealed-secrets-key: active`; keys with another label value read "Not used"). On a SealedSecret that is not synced it shows the `kubeseal --fetch-cert` command that prints this cluster's current certificate for re-sealing. Radar shows dates only and never calls a key expired or compromised.
+
+The section reads `GET /api/sealedsecrets/controller`. The controller is a Deployment labelled `app.kubernetes.io/name=sealed-secrets`, else one named `sealed-secrets-controller`. Each part has its own gate, and a denied part is a state in a 200, never a 403 for the whole answer: the controller needs `get deployments` in its namespace, the keys need `list secrets` there, and the totals cover the SealedSecrets the caller can list. Keys come from Radar's Secret cache and only the public `tls.crt` is read: key names and certificate dates are returned, never `tls.key`, the certificate, labels or annotations. When Radar does not collect Secrets in that namespace, is still loading them (the section refreshes until they arrive) or failed to load them, the section says so instead of showing none; likewise for the controller while Deployments are loading or failed to load, or when Radar watches Deployments in some namespaces only and the controller is not among them. Only the key's first certificate counts. A key whose certificate does not parse is listed but never marked as the one sealing new secrets. On a Radar without the endpoint (Radar Hub against an older cluster) the section is absent.
+
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |

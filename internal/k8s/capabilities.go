@@ -228,6 +228,8 @@ type FeatureCapabilities struct {
 	// /api/kueue/localqueues/{namespace}/{name}/workloads
 	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
 	PodFileUpload       bool `json:"podFileUpload"` // POST /api/pods/{namespace}/{name}/files/upload
+	// GET /api/sealedsecrets/controller
+	SealedSecretsController bool `json:"sealedSecretsController"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

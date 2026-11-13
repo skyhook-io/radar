@@ -202,6 +202,7 @@ export interface FeatureCapabilities {
   podSidecarMarks?: boolean
   kueueQueueWorkloads?: boolean
   podFileUpload?: boolean
+  sealedSecretsController?: boolean // GET /api/sealedsecrets/controller
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
