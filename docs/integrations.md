@@ -9,6 +9,28 @@ to a stale view refreshes it without requiring the detail view to be reopened.
 
 Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polling: their Issues request scans the whole cluster.
 
+## Longhorn
+
+Radar explains a zero-disruption PodDisruptionBudget as Longhorn-managed when its
+selector, InstanceManager and controlled Pod agree. The warning stays visible:
+voluntary eviction is still blocked. Follow Longhorn's node drain policy and
+check its instance managers and replica health instead of relaxing the budget
+manually. The explanation does not prove storage health or a successful drain.
+
+The Helm chart grants read collection for `longhorn.io` InstanceManagers by
+default through `rbac.crdGroups.longhorn`. It does not grant callers access to
+them through the default Cloud integration-read role. Callers need InstanceManager
+list access for the detailed explanation. If that access or complete supporting
+data is unavailable, Radar keeps the generic warning with conditional advice for
+controller-managed budgets.
+
+Source-derived fixtures check the generated PDB, InstanceManager and Pod identity
+shape from Longhorn v1.10.2, v1.11.3, v1.12.2 and v1.13.0. Other identity shapes
+can retain the generic explanation.
+These are synthetic fixtures derived from source, not tests against live
+Longhorn versions. No live Longhorn deployment was tested.
+The warning, upgrade blocker and Kubernetes eviction rules are unchanged.
+
 ## OpenTelemetry Operator
 
 Radar provides native resource details for `opentelemetry.io` **OpenTelemetryCollector**
