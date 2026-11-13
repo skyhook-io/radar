@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/argoapi"
+	"github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -54,6 +55,38 @@ func TestIntegrationSettingsRejectContradictions(t *testing.T) {
 	for _, tc := range cases {
 		if tc.a.Validate(tc.kind) == nil {
 			t.Errorf("accepted invalid %s assignment: %+v", tc.kind, tc.a)
+		}
+	}
+}
+
+func TestLokiSettingsValidate(t *testing.T) {
+	loki := &prom.Connection{URL: "http://loki.example:3100"}
+	if err := (IntegrationSettings{Loki: loki, Target: "a"}).Validate(IntegrationLoki); err != nil {
+		t.Fatalf("Loki-only settings rejected: %v", err)
+	}
+	for _, tc := range []struct {
+		kind Integration
+		a    IntegrationSettings
+	}{
+		{IntegrationLoki, IntegrationSettings{Loki: loki, Kubecost: &opencost.Connection{URL: "https://cost"}, Target: "a"}},
+		{IntegrationLoki, IntegrationSettings{Loki: loki, Prometheus: &prom.Connection{URL: "https://metrics"}, Target: "a"}},
+		{IntegrationLoki, IntegrationSettings{Loki: loki, Mode: "auto", Target: "a"}},
+		{IntegrationLoki, IntegrationSettings{Loki: loki}},
+		{IntegrationMetrics, IntegrationSettings{Loki: loki, Target: "a"}},
+		{IntegrationArgoCD, IntegrationSettings{Loki: loki, Target: "a"}},
+		{IntegrationCost, IntegrationSettings{Loki: loki, Target: "a"}},
+	} {
+		if tc.a.Validate(tc.kind) == nil {
+			t.Errorf("accepted invalid %s assignment: %+v", tc.kind, tc.a)
+		}
+	}
+	if err := (IntegrationSettings{}).Validate("nope"); err == nil || err.Error() != "unknown integration type" {
+		t.Errorf("unknown kind: %v", err)
+	}
+	if c := (IntegrationSettings{Loki: &prom.Connection{URL: "u", Headers: map[string]string{"k": "v"}}}).Clone(); true {
+		c.Loki.Headers["k"] = "changed"
+		if c.URL() != "u" {
+			t.Errorf("URL() ignores Loki")
 		}
 	}
 }

@@ -112,8 +112,8 @@ Two things still hold on a shared listener without authentication:
    - profiling is off unless `RADAR_PPROF` turns it on;
    - in a cluster, integration settings are set by the operator (Helm values or
      flags), not from the UI;
-   - saved Prometheus credentials are sent only to the server they were
-     configured for;
+   - saved Prometheus and Loki credentials are sent only to the server they
+     were configured for;
    - connecting the cluster to Radar Cloud, which outlasts the request, needs an
      explicit acknowledgement.
 

@@ -72,6 +72,9 @@ export const RADAR_FEATURES = {
   helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
+  lokiConnection: { label: 'Loki connection', flag: 'lokiConnection', flagShippedWithEndpoint: true },
+  lokiPodHistory: { label: 'Log history from Loki', flag: 'lokiPodHistory', flagShippedWithEndpoint: true },
+  lokiJobRuns: { label: 'Job run logs from Loki', flag: 'lokiJobRuns', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

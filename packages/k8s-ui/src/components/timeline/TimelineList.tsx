@@ -41,6 +41,8 @@ export type { ActivityTypeFilter, ActivityFilterKey }
 
 export interface TimelineListProps {
   events: TimelineEvent[]
+  /** Host actions shown on an event's card, e.g. "Logs (Loki)" for a Pod. */
+  renderItemActions?: (item: TimelineEvent) => ReactNode
   isLoading: boolean
   onRefresh?: () => void
   onQueryChange?: (params: { timeRange: TimeRange; kinds: string[] }) => void
@@ -114,7 +116,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt, isTruncated, truncationMessage, showRoutine = false, onShowRoutineChange, routineEvents, foldPerResource }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt, isTruncated, truncationMessage, showRoutine = false, onShowRoutineChange, routineEvents, foldPerResource, renderItemActions }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -425,6 +427,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const renderActivityCard = (item: TimelineEvent) => (
     <ActivityCard
       item={item}
+      renderActions={renderItemActions}
       expanded={expandedItem === item.id}
       onToggle={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
       onResourceClick={onResourceClick}
@@ -589,6 +592,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                         data-ts-to={new Date(aggItem.item.timestamp).getTime()}
                       >
                         <ActivityCard
+                          renderActions={renderItemActions}
                           item={aggItem.item}
                           expanded={expandedItem === aggItem.item.id}
                           onToggle={() => setExpandedItem(expandedItem === aggItem.item.id ? null : aggItem.item.id)}
@@ -618,6 +622,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
 
 interface ActivityCardProps {
   item: TimelineEvent
+  renderActions?: (item: TimelineEvent) => ReactNode
   expanded: boolean
   onToggle: () => void
   onResourceClick?: NavigateToResource
@@ -626,7 +631,7 @@ interface ActivityCardProps {
   onSelect?: () => void
 }
 
-function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, selected, onSelect }: ActivityCardProps) {
+function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, selected, onSelect, renderActions }: ActivityCardProps) {
   const isChange = isChangeEvent(item)
   const isHistorical = isHistoricalEvent(item)
   const isWarning = item.eventType === 'Warning'
@@ -708,6 +713,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
                 <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{item.name}</span>
               </button>
               {item.namespace && <span className="text-xs text-theme-text-tertiary">in {item.namespace}</span>}
+              {renderActions && <span onClick={(e) => e.stopPropagation()}>{renderActions(item)}</span>}
               {item.owner && (
                 <span className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                   <span className="text-xs text-theme-text-quaternary">←</span>

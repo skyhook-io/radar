@@ -1,0 +1,87 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { expect, it, vi } from 'vitest'
+import { WorkloadLogsViewer, type WorkloadLogsResult } from './WorkloadLogsViewer'
+vi.mock('../ui/Toast', () => ({ useToast: () => ({ showError: vi.fn(), showSuccess: vi.fn() }) }))
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+
+class FakeEventSource extends EventTarget {
+  static last: FakeEventSource | undefined
+  closed = false
+  constructor() { super(); FakeEventSource.last = this }
+  close() { this.closed = true }
+  emit(type: string, data: unknown) { this.dispatchEvent(new MessageEvent(type, { data: JSON.stringify(data) })) }
+}
+
+const loki: WorkloadLogsResult = { pods: [{ name: 'run-1-abcde', containers: ['job'], ready: false }], logs: [{ pod: 'run-1-abcde', container: 'job', timestamp: '2026-11-13T02:00:00.000000000Z', content: 'done' }], notice: 'From Loki' }
+
+async function streamEndsPodsGone(readSnapshotWhenPodsGone: boolean) {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const fetchAll = vi.fn(async () => loki)
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} createStream={() => new FakeEventSource() as unknown as EventSource} autoStream readSnapshotWhenPodsGone={readSnapshotWhenPodsGone} />))
+  await act(async () => FakeEventSource.last?.emit('connected', {}))
+  await act(async () => FakeEventSource.last?.emit('end', { reason: 'pods-gone', emptyReason: 'pods-gone', emptyMessage: 'This Job has finished, but its pods are no longer present' }))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  const text = host.textContent ?? ''
+  await act(async () => root.unmount())
+  return { fetchAll, text }
+}
+
+it('reads the snapshot once the stream says the pods are gone, when the host can serve them', async () => {
+  const { fetchAll, text } = await streamEndsPodsGone(true)
+  expect(fetchAll).toHaveBeenCalled()
+  expect(text).toContain('From Loki')
+})
+
+it('keeps the stream\'s answer otherwise', async () => {
+  const { fetchAll, text } = await streamEndsPodsGone(false)
+  expect(fetchAll).not.toHaveBeenCalled()
+  expect(text).toContain('no longer present')
+})
+
+it('keeps lines the stream already showed when the pods then go', async () => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const fetchAll = vi.fn(async () => ({ pods: [], logs: [], emptyReason: 'pods-gone' }))
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} createStream={() => new FakeEventSource() as unknown as EventSource} autoStream readSnapshotWhenPodsGone />))
+  await act(async () => FakeEventSource.last?.emit('connected', {}))
+  await act(async () => FakeEventSource.last?.emit('log', { pod: 'run-1-abcde', container: 'job', timestamp: '2026-11-13T02:00:00Z', content: 'last words' }))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  await act(async () => FakeEventSource.last?.emit('end', { reason: 'pods-gone', emptyReason: 'pods-gone' }))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  expect(fetchAll).not.toHaveBeenCalled()
+  await act(async () => root.unmount())
+})
+
+it('reads the snapshot when the host becomes able to after the stream ended', async () => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const fetchAll = vi.fn(async () => loki)
+  const view = (ready: boolean) => <WorkloadLogsViewer name="run-1" fetchAll={fetchAll} createStream={() => new FakeEventSource() as unknown as EventSource} autoStream readSnapshotWhenPodsGone={ready} />
+  await act(async () => root.render(view(false)))
+  await act(async () => FakeEventSource.last?.emit('connected', {}))
+  await act(async () => FakeEventSource.last?.emit('end', { reason: 'pods-gone', emptyReason: 'pods-gone' }))
+  expect(fetchAll).not.toHaveBeenCalled()
+  await act(async () => root.render(view(true)))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  expect(fetchAll).toHaveBeenCalledTimes(1)
+  await act(async () => root.unmount())
+})
+
+it('keeps the pods the user deselected while the stream ran', async () => {
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host)
+  const two = [{ name: 'run-1-abcde', containers: ['job'], ready: false }, { name: 'run-1-fghij', containers: ['job'], ready: false }]
+  const fetchAll = vi.fn(async () => ({ ...loki, pods: two }))
+  await act(async () => root.render(<WorkloadLogsViewer name="run-1" fetchAll={fetchAll} createStream={() => new FakeEventSource() as unknown as EventSource} autoStream readSnapshotWhenPodsGone />))
+  await act(async () => FakeEventSource.last?.emit('connected', { pods: two }))
+  const filter = [...host.querySelectorAll('button')].find(b => b.textContent?.includes('pods'))!
+  await act(async () => filter.click())
+  const box = [...host.querySelectorAll('label')].find(l => l.textContent?.includes('run-1-fghij'))!.querySelector('input')!
+  await act(async () => box.click())
+  expect(host.textContent).toContain('1/2 pods')
+  await act(async () => FakeEventSource.last?.emit('end', { reason: 'pods-gone', emptyReason: 'pods-gone' }))
+  await act(async () => { await new Promise(r => setTimeout(r, 100)) })
+  expect(fetchAll).toHaveBeenCalled()
+  expect(host.textContent).toContain('1/2 pods')
+  await act(async () => root.unmount())
+  host.remove()
+})

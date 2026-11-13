@@ -692,6 +692,28 @@ resource, including core Secrets and these excluded kinds. See the
 
 ---
 
+## Loki
+
+Kubernetes keeps a container's logs only while the pod exists. When the cluster ships logs to Loki, Radar reads a pod's past logs from there: the pod logs viewer gets a **Live | History** switch, and History reads the same pod and container over the last 1 hour, 6 hours, 24 hours or 7 days. A pod that is gone (a finished CronJob run, a pod replaced by a rollout) opens on History from **Logs (Loki)** on its Timeline card.
+
+Connect Loki in **Settings → Logs (Loki)**, or with `--loki-url`; see [configuration](configuration.md#loki) for discovery, headers and stream labels.
+
+The viewer reads `GET /api/loki/pods/{namespace}/{name}/logs?container=&since=1h|6h|24h|7d` (or `start`/`end`, at most 7 days; `limit` up to 5,000 lines).
+- **Gate:** namespace access plus `get pods/log`, the same as live logs, checked before Loki is contacted. The pod need not exist any more.
+- **Without authentication** there is no caller to check and Loki never asks Kubernetes, so Radar's own identity must be able to `get pods/log` in the namespace; `--namespace-scope` applies too. History never reads more than live logs could.
+- **A Loki shared by several clusters:** the query carries no cluster label, so a pod name that exists in more than one cluster (a StatefulSet's `-0` pod) returns lines from each.
+- **Fixed queries:** Radar writes the LogQL from the namespace, pod and container only, with values escaped; no other parameter reaches Loki and there is no free-form query, search or live tail.
+- **Limits:** Radar shows the newest lines in the window; when Loki returns the limit, the answer says older lines may be missing. An answer over 32 MiB reads as a 502 asking for a shorter window, and keeps the connection.
+- **Errors:** 503 when Loki is not connected or has no namespace or pod stream label; 502 with Loki's own message (redacted) when it answers an error, such as its per-query line limit.
+- An empty answer means Loki holds nothing for that pod in the window: the pod's logs may never have been shipped.
+
+**Finished Job runs.** Where a Job's or CronJob run's logs say its pods are no longer present, Radar reads that run from Loki and says so ("From Loki, <start>–<end>"). It reads `GET /api/loki/jobs/{namespace}/{name}/logs`:
+- **Only Jobs Kubernetes still holds:** the run's own time bounds the window, from its start to its completion or last failure (or now) with a minute on each side, at most 7 days; `start`/`end` override it. A Job that is gone returns 404.
+- **Gate:** the workload logs gate (namespace access, `get jobs`, `list pods`, `get pods/log`), plus the same limits without authentication and under `--namespace-scope` as pod History, before Loki is contacted.
+- **Selecting the run's pods:** by a Job stream label when Loki has one (`job_name`, `batch_kubernetes_io_job_name`), else by the names Kubernetes gives the Job's pods: `<job>-<random>`, or for an Indexed Job `<job>-<index>-<random>`. So a Job never reads the pods of another Job whose name extends it, such as a CronJob's runs. Kubernetes shortens a long Job name in its pods' names; then lines from another Job with the same prefix may be included, and the answer says so. When Loki carries a Job label on some streams but not this run's (a Loki shared by several pipelines), the run reads as empty.
+- If Loki can't answer, the viewer keeps Kubernetes' message and adds why Loki didn't answer.
+- If Loki holds nothing for the run, the viewer keeps Kubernetes' message.
+
 ## Trivy Operator
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.

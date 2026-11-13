@@ -42,6 +42,7 @@ const render = (
     metrics: profile,
     argocd: profile,
     cost: profile,
+    loki: profile,
     [kind]: { ...profile, ...changes }
   }
   return renderToStaticMarkup(
@@ -67,6 +68,7 @@ describe('Local saved connections', () => {
       metrics: { ...profile, legacy },
       argocd: { ...profile, state: 'saved', legacy },
       cost: { ...profile, state: 'launch', legacy },
+      loki: profile,
     }
     const notice = () => renderToStaticMarkup(<PreviousIntegrationSettingsNotice profiles={profiles} onNavigate={vi.fn()} onDismissed={vi.fn()} />)
     const html = notice()
@@ -185,5 +187,13 @@ describe('Local saved connections', () => {
   it('keeps file details and saved-entry cleanup out of integration tabs', () => {
     const html = render(savedProfile)
     expect(html).not.toContain('clusters.json')
+  })
+})
+
+describe('Logs (Loki) connection', () => {
+  it('uses the URL-and-headers form with Loki wording', () => {
+    const html = render({ state: 'saved', url: 'http://loki-gateway.loki', headerKeys: ['X-Scope-OrgID'], secretSet: true }, 'loki')
+    expect(html).toContain('Logs (Loki)')
+    expect(html).not.toContain('Prometheus')
   })
 })
