@@ -55,7 +55,7 @@ export function PodLogShippingSection({ data, loading, error, onNavigate }: PodL
   return (
     <Section title="Log shipping" defaultExpanded={true}>
       <div className="space-y-2 text-sm">
-        {unread.length > 0 && <AlertBanner variant="warning" title={`Radar could not read ${unread.join(', ')}`} message="Whether this pod's logs are shipped can't be told from what Radar read." className="mb-0" />}
+        {unread.length > 0 && <AlertBanner variant="info" title={`Radar could not read ${unread.join(', ')}`} message="Whether this pod's logs are shipped can't be told from what Radar read. In-cluster, the chart collects Logging operator kinds only with rbac.crdGroups.logging enabled." className="mb-0" />}
         {selecting.length > 0 && (
           <div className="space-y-1">
             <div className="text-theme-text-secondary">{data.shipped ? 'Shipped by' : 'May be shipped by'}</div>

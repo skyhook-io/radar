@@ -401,7 +401,7 @@ export interface RendererOverrides {
   }>
   /** Host-injected: adds the Pods that mount this class and their mount state. */
   SecretProviderClassRenderer?: React.ComponentType<Pick<SecretProviderClassRendererProps, 'data' | 'onNavigate'>>
-  LoggingClusterFlowRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  LoggingFlowHostRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   /** Host-injected: adds the Backups-stored-here lookup to a storage location. */
   VeleroBSLRenderer?: React.ComponentType<{
     data: any
@@ -868,7 +868,7 @@ export function ResourceRendererDispatch({
   const VeleroBSLComp = rendererOverrides?.VeleroBSLRenderer ?? VeleroBSLRenderer
   const SecretProviderClassComp = rendererOverrides?.SecretProviderClassRenderer ?? SecretProviderClassRenderer
   const isLoggingResource = LOGGING_PLURALS.includes(kind) && isApiGroup(data?.apiVersion, LOGGING_GROUP)
-  const LoggingClusterFlowComp = rendererOverrides?.LoggingClusterFlowRenderer ?? LoggingFlowRenderer
+  const LoggingFlowHostComp = rendererOverrides?.LoggingFlowHostRenderer ?? LoggingFlowRenderer
   const VeleroBackupComp = rendererOverrides?.VeleroBackupRenderer ?? VeleroBackupRenderer
   const VeleroRestoreComp = rendererOverrides?.VeleroRestoreRenderer ?? VeleroRestoreRenderer
   const KyvernoCoverageComp = rendererOverrides?.KyvernoPolicyCoverage
@@ -1148,8 +1148,7 @@ export function ResourceRendererDispatch({
         {kind === 'secretproviderclasses' && isApiGroup(data?.apiVersion, SECRETS_STORE_GROUP) && <SecretProviderClassComp data={data} onNavigate={onNavigate} />}
         {isLoggingResource && kind === 'loggings' && <LoggingRenderer data={data} onNavigate={onNavigate} />}
         {isLoggingResource && kind === 'fluentbitagents' && <FluentbitAgentRenderer data={data} onNavigate={onNavigate} />}
-        {isLoggingResource && kind === 'flows' && <LoggingFlowRenderer data={data} onNavigate={onNavigate} />}
-        {isLoggingResource && kind === 'clusterflows' && <LoggingClusterFlowComp data={data} onNavigate={onNavigate} />}
+        {isLoggingResource && (kind === 'flows' || kind === 'clusterflows') && <LoggingFlowHostComp data={data} onNavigate={onNavigate} />}
         {isLoggingResource && (kind === 'outputs' || kind === 'clusteroutputs') && <LoggingOutputRenderer data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types — also fires

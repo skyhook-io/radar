@@ -90,14 +90,11 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	budget := newSyncBudget(r.Context())
-	dc := k8s.GetDynamicResourceCache()
+	// listDynamicSyncedWithin turns an informer that hasn't synced (a slow
+	// apiserver, or a kind Radar may not list) into an error rather than an
+	// empty list, which would read as "not shipped".
 	read := func(plural, namespace string) []*unstructured.Unstructured {
-		gvr, ok := discovery.GetGVRWithGroup(plural, logging.Group)
-		if !ok || dc == nil {
-			resp.ReadErrors = append(resp.ReadErrors, plural)
-			return nil
-		}
-		items, err := budget.listBlocking(dc, gvr, namespace)
+		items, err := listDynamicSyncedWithin(r.Context(), cache, plural, logging.Group, namespace, budget)
 		if err != nil {
 			resp.ReadErrors = append(resp.ReadErrors, plural)
 			return nil
@@ -125,16 +122,21 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		d := logging.Selects(f, facts)
+		watched, watchKnown := logging.Watched(f, loggings)
 		row := loggingPodFlow{
 			Kind: u.GetKind(), Namespace: f.Namespace, Name: f.Name,
-			Ignored: !logging.Counted(f, loggings), Unmet: d.Unmet, HasFilters: f.HasFilters,
+			Ignored: !logging.Counted(f, loggings) || (!watched && watchKnown), Unmet: d.Unmet, HasFilters: f.HasFilters,
 			Outputs: []loggingOutputRef{},
 		}
 		if row.Unmet == nil {
 			row.Unmet = []string{}
 		}
-		// An ignored Flow forwards nothing, whatever its rules say.
+		// An ignored Flow forwards nothing, whatever its rules say. A Flow only a
+		// namespace selector (not evaluated) could admit may at most be selecting.
 		row.Selected, row.Uncertain = d.Selected && !row.Ignored, d.Uncertain && !row.Ignored
+		if !watched && !watchKnown && row.Selected {
+			row.Selected, row.Uncertain = false, true
+		}
 		if active, found, _ := unstructured.NestedBool(u.Object, "status", "active"); found {
 			row.Active = &active
 		}

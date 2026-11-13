@@ -2,7 +2,6 @@ package issues
 
 import (
 	"fmt"
-	"github.com/skyhook-io/radar/pkg/logging"
 	"log"
 	"slices"
 	"sort"
@@ -16,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/logging"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )

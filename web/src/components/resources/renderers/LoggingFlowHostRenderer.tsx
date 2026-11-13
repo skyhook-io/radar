@@ -11,8 +11,8 @@ export function controlNamespacesOf(items: any[] | undefined, failed: boolean): 
   return [...new Set(items.map((l) => l?.spec?.controlNamespace).filter(Boolean))]
 }
 
-/** Host wrapper: tells the ClusterFlow drawer where the Loggings' control namespaces are. */
-export function LoggingClusterFlowRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
+/** Host wrapper: tells Flow and ClusterFlow drawers where the Loggings' control namespaces are. */
+export function LoggingFlowHostRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
   const loggings = useResources<any>('loggings', '', LOGGING_GROUP)
   const partial = loggings.coverage?.status === 'partial'
   const controlNamespaces = useMemo(() => controlNamespacesOf(loggings.data, loggings.isError || partial), [loggings.data, loggings.isError, partial])

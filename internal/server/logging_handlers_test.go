@@ -7,12 +7,17 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -199,5 +204,70 @@ func TestLoggingPodShippingSharedListener(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-site GET = %d, want 403", resp.StatusCode)
+	}
+}
+
+// A kind Radar can't list (chart toggle off, or a slow apiserver) never syncs;
+// that is a read error, never an empty list that reads as "not shipped".
+func TestLoggingPodShippingUnsyncedKindIsAReadError(t *testing.T) {
+	seedLoggingFixture(t, loggingKinds(), nil)
+	kinds := loggingKinds()
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, k := range kinds {
+		listKinds[schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}] = k.Kind + "List"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+	// The ClusterFlow list never answers within the wait, as on a slow
+	// apiserver: the informer stays unsynced and its indexer empty.
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	dyn.PrependReactor("list", "clusterflows", func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "logging.banzaicloud.io", Resource: "clusterflows"}, "", nil)
+	})
+	oldWait := dynamicSyncWait
+	dynamicSyncWait = 300 * time.Millisecond
+	t.Cleanup(func() { dynamicSyncWait = oldWait })
+	k8s.ResetTestDynamicState()
+	if err := k8s.InitTestDynamicResourceCache(dyn, kinds); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
+	got, _ := getLoggingPod(t, resp)
+	if !slices.Contains(got.ReadErrors, "clusterflows") {
+		t.Fatalf("an unsynced ClusterFlow read must be a read error: %+v", got)
+	}
+}
+
+// A Logging that watches other namespaces ignores a Flow in the pod's
+// namespace; one with a namespace selector Radar can't evaluate makes it "may".
+func TestLoggingPodShippingWatchNamespaces(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		spec      map[string]any
+		ignored   bool
+		uncertain bool
+	}{
+		{"outside watchNamespaces", map[string]any{"controlNamespace": "logging-system", "watchNamespaces": []any{"elsewhere"}}, true, false},
+		{"namespace selector", map[string]any{"controlNamespace": "logging-system", "watchNamespaceSelector": map[string]any{"matchLabels": map[string]any{"logs": "on"}}}, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			restoreFixtureCache(t)
+			k8s.ResetResourceCache()
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "app-1"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
+			if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+				t.Fatal(err)
+			}
+			seedCNPGWorkspace(t, loggingKinds(),
+				lgObj("Logging", "", "default", c.spec, nil),
+				lgObj("Flow", "team", "everything", map[string]any{}, nil),
+			)
+			resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
+			got, _ := getLoggingPod(t, resp)
+			f := flowByName(got, "everything")
+			if got.Shipped || f.Ignored != c.ignored || f.Uncertain != c.uncertain || f.Selected {
+				t.Fatalf("response = %+v", got)
+			}
+		})
 	}
 }

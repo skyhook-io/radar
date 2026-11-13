@@ -35,6 +35,16 @@ func TestLoggingOutputNeverReachesAIContext(t *testing.T) {
 			}
 		}
 	}
+	es := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "logging.banzaicloud.io/v1beta1", "kind": "Output",
+		"metadata": map[string]any{"name": "es", "namespace": "team"},
+		"spec":     map[string]any{"elasticsearch": map[string]any{"host": "elastic:changeme@es.local:9200"}},
+	}}
+	for _, level := range []VerbosityLevel{LevelSummary, LevelDetail, LevelCompact} {
+		if b, _ := json.Marshal(MinifyUnstructured(es, level)); strings.Contains(string(b), "changeme") {
+			t.Errorf("level %v leaks a scheme-less credential: %s", level, b)
+		}
+	}
 	flow := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "logging.banzaicloud.io/v1beta1", "kind": "ClusterFlow",
 		"metadata": map[string]any{"name": "optin", "namespace": "logging-system"},

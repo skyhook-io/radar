@@ -35,6 +35,15 @@ describe('Logging operator drawers', () => {
     expect(html).toContain('Not counted: outside the Logging control namespace')
     expect(text(renderToString(<LoggingFlowRenderer data={flow} controlNamespaces={['logging-system']} />))).not.toContain('Not counted')
   })
+  it('links a namespaced Flow to a ClusterOutput only when its namespace is known', () => {
+    const nsFlow = { ...flow, kind: 'Flow', metadata: { name: 'app', namespace: 'team' } }
+    const navigated: any[] = []
+    const html = text(renderToString(<LoggingFlowRenderer data={nsFlow} onNavigate={(r) => navigated.push(r)} />))
+    expect(html).toContain('ClusterOutput loki')
+    expect(html).not.toMatch(/<button[^>]*>[^<]*ClusterOutput loki/)
+    const linked = text(renderToString(<LoggingFlowRenderer data={nsFlow} onNavigate={() => {}} controlNamespaces={['logging-system']} />))
+    expect(linked).toMatch(/<button[^>]*>[^<]*ClusterOutput loki/)
+  })
   it('says when Loggings could not be read', () => {
     const html = text(renderToString(<LoggingFlowRenderer data={flow} loggingsUnreadable />))
     expect(html).toContain('Could not read Loggings')

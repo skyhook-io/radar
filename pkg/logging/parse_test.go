@@ -71,3 +71,39 @@ func TestOutputFrom(t *testing.T) {
 		t.Fatalf("s3 output = %+v", s3)
 	}
 }
+
+func TestWatched(t *testing.T) {
+	loggings := []Logging{
+		LoggingFrom(obj("Logging", "", "listed", map[string]any{"controlNamespace": "logging", "watchNamespaces": []any{"team"}}, nil)),
+		LoggingFrom(obj("Logging", "", "selected", map[string]any{"loggingRef": "sel", "controlNamespace": "logging2", "watchNamespaceSelector": map[string]any{"matchLabels": map[string]any{"logs": "on"}}}, nil)),
+	}
+	for _, c := range []struct {
+		name             string
+		flow             Flow
+		watched, certain bool
+	}{
+		{"flow in a watched namespace", Flow{Namespace: "team"}, true, true},
+		{"flow outside watchNamespaces", Flow{Namespace: "other"}, false, true},
+		{"cluster flow is always watched", Flow{Namespace: "logging", Cluster: true}, true, true},
+		{"selector can't be evaluated", Flow{Namespace: "other", LoggingRef: "sel"}, false, false},
+	} {
+		if w, sure := Watched(c.flow, loggings); w != c.watched || sure != c.certain {
+			t.Errorf("%s: Watched = %v,%v want %v,%v", c.name, w, sure, c.watched, c.certain)
+		}
+	}
+}
+
+// A host without a scheme reads to url.Parse as "scheme:opaque", so userinfo
+// in it survives prom.SafeAddress; it must not survive here.
+func TestOutputFromRedactsSchemelessCredentials(t *testing.T) {
+	for raw, want := range map[string]string{
+		"elastic:changeme@es.local:9200": "[redacted]",
+		"es.local:9200?token=abc":        "[redacted]",
+		"es.local:9200":                  "es.local:9200",
+	} {
+		out := OutputFrom(obj("Output", "team", "es", map[string]any{"elasticsearch": map[string]any{"host": raw}}, nil))
+		if out.Address != want {
+			t.Errorf("host %q → %q, want %q", raw, out.Address, want)
+		}
+	}
+}

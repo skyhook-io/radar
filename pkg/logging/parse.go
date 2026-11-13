@@ -2,6 +2,7 @@ package logging
 
 import (
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -42,12 +43,19 @@ func FlowFrom(u *unstructured.Unstructured) Flow {
 	return f
 }
 
-type Logging struct{ Name, LoggingRef, ControlNamespace string }
+type Logging struct {
+	Name, LoggingRef, ControlNamespace string
+	WatchNamespaces                    []string // spec.watchNamespaces; empty: all
+	WatchSelector                      bool     // spec.watchNamespaceSelector is set (not evaluated)
+}
 
 func LoggingFrom(u *unstructured.Unstructured) Logging {
 	l := Logging{Name: u.GetName()}
 	l.LoggingRef, _, _ = unstructured.NestedString(u.Object, "spec", "loggingRef")
 	l.ControlNamespace, _, _ = unstructured.NestedString(u.Object, "spec", "controlNamespace")
+	l.WatchNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "watchNamespaces")
+	selector, _, _ := unstructured.NestedMap(u.Object, "spec", "watchNamespaceSelector")
+	l.WatchSelector = len(selector) > 0
 	return l
 }
 
@@ -61,6 +69,31 @@ func Counted(flow Flow, loggings []Logging) bool {
 		}
 	}
 	return false
+}
+
+// Watched reports whether the flow's Logging watches the flow's namespace
+// (spec.watchNamespaces, spec.watchNamespaceSelector); a ClusterFlow is always
+// watched. certain is false when only the namespace selector, which Radar
+// doesn't evaluate, could admit it.
+func Watched(flow Flow, loggings []Logging) (watched, certain bool) {
+	if flow.Cluster {
+		return true, true
+	}
+	for _, l := range loggings {
+		if l.LoggingRef != flow.LoggingRef {
+			continue
+		}
+		if len(l.WatchNamespaces) == 0 && !l.WatchSelector {
+			return true, true
+		}
+		for _, ns := range l.WatchNamespaces {
+			if ns == flow.Namespace {
+				return true, true
+			}
+		}
+		return false, !l.WatchSelector
+	}
+	return false, true
 }
 
 // OutputSummary is what may leave the server about an Output: its type and a
@@ -89,7 +122,7 @@ func OutputFrom(u *unstructured.Unstructured) OutputSummary {
 		if block, ok := spec[out.Type].(map[string]any); ok {
 			for _, key := range []string{"url", "endpoint", "host"} {
 				if s, ok := block[key].(string); ok && s != "" {
-					out.Address = prom.SafeAddress(s)
+					out.Address = safeAddress(s)
 					break
 				}
 			}
@@ -100,4 +133,18 @@ func OutputFrom(u *unstructured.Unstructured) OutputSummary {
 	out.ProblemsCount = int(count)
 	out.Problems, _, _ = unstructured.NestedStringSlice(u.Object, "status", "problems")
 	return out
+}
+
+// safeAddress is prom.SafeAddress for a value that may lack a scheme: url.Parse
+// reads "user:pw@host:9200" as scheme "user" with an opaque rest, so its
+// userinfo would survive. Without "://", anything that could carry a
+// credential is withheld whole. The UI's safeAddress applies the same rule.
+func safeAddress(raw string) string {
+	if !strings.Contains(raw, "://") {
+		if strings.ContainsAny(raw, "@?#") {
+			return "[redacted]"
+		}
+		return raw
+	}
+	return prom.SafeAddress(raw)
 }

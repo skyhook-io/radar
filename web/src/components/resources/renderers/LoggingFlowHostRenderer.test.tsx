@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { controlNamespacesOf } from './LoggingClusterFlowRenderer'
+import { controlNamespacesOf } from './LoggingFlowHostRenderer'
 
 describe('controlNamespacesOf', () => {
   it('lists each Logging control namespace once', () => {

@@ -58,6 +58,9 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
   const globalRefs: string[] = data.spec?.globalOutputRefs ?? []
   const localRefs: string[] = [...(data.spec?.localOutputRefs ?? []), ...(data.spec?.outputRefs ?? [])]
   const notCounted = cluster && controlNamespaces !== undefined && !controlNamespaces.includes(ns)
+  // ClusterOutputs live in the Logging's control namespace: a ClusterFlow's own,
+  // or for a Flow the single known one (several Loggings: no link rather than a wrong one).
+  const outputNamespace = cluster ? ns : controlNamespaces?.length === 1 ? controlNamespaces[0] : undefined
   return <>
     {cluster && loggingsUnreadable && <AlertBanner variant="info" title="Could not read Loggings" message="Radar can't tell whether this ClusterFlow is in a Logging's control namespace, so whether the operator counts it is unknown." />}
     {notCounted && <AlertBanner variant="warning" title="Not counted: outside the Logging control namespace" message="The Logging operator only processes ClusterFlows in a Logging's control namespace; this one forwards nothing." />}
@@ -84,7 +87,7 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
       {globalRefs.length + localRefs.length === 0
         ? <p className="text-sm text-theme-text-secondary">No outputs: selected logs go nowhere.</p>
         : <ul className="space-y-1 text-sm">
-            {globalRefs.map((name) => <li key={`g-${name}`}><ResourceLink name={name} kind="clusteroutputs" namespace={cluster ? ns : (controlNamespaces?.[0] ?? '')} group={LOGGING_GROUP} label={`ClusterOutput ${name}`} onNavigate={onNavigate} /></li>)}
+            {globalRefs.map((name) => <li key={`g-${name}`}><ResourceLink name={name} kind="clusteroutputs" namespace={outputNamespace ?? ''} group={LOGGING_GROUP} label={`ClusterOutput ${name}`} onNavigate={outputNamespace ? onNavigate : null} /></li>)}
             {localRefs.map((name) => <li key={`l-${name}`}><ResourceLink name={name} kind="outputs" namespace={ns} group={LOGGING_GROUP} label={`Output ${name}`} onNavigate={onNavigate} /></li>)}
           </ul>}
     </Section>
