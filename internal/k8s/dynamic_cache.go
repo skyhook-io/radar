@@ -214,6 +214,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmrepositories", Kind: "HelmRepository", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "helmcharts", Kind: "HelmChart", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "buckets", Kind: "Bucket", Namespaced: true},
+	{Group: "source.extensions.fluxcd.io", Versions: []string{"v1beta1"}, Resource: "artifactgenerators", Kind: "ArtifactGenerator", Namespaced: true},
 	{Group: "source.toolkit.fluxcd.io", Versions: []string{"v1"}, Resource: "externalartifacts", Kind: "ExternalArtifact", Namespaced: true},
 	{Group: "kustomize.toolkit.fluxcd.io", Versions: []string{"v1", "v1beta2"}, Resource: "kustomizations", Kind: "Kustomization", Namespaced: true},
 	{Group: "helm.toolkit.fluxcd.io", Versions: []string{"v2", "v2beta2", "v2beta1"}, Resource: "helmreleases", Kind: "HelmRelease", Namespaced: true},

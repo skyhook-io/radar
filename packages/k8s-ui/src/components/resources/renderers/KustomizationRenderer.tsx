@@ -1,4 +1,5 @@
 import { Layers, FolderTree, GitBranch } from 'lucide-react'
+import { FluxHealthCheckExprs } from './FluxHealthCheckExprs'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, ResourceLink } from '../../ui/drawer-components'
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } from '../../../types/gitops'
@@ -155,6 +156,8 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
           </div>
         </Section>
       )}
+
+      <FluxHealthCheckExprs exprs={spec.healthCheckExprs} />
 
       {/* Managed Resources (Inventory) */}
       {managedResources.length > 0 && (

@@ -79,3 +79,57 @@ func TestInlineHelmReleaseUsesRecordedChart(t *testing.T) {
 		t.Fatalf("chartRef followed stale generated chart: %+v", got)
 	}
 }
+
+func TestExternalArtifactNamesItsGenerator(t *testing.T) {
+	ea := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "ExternalArtifact",
+		"metadata": map[string]any{"namespace": "flux-system", "name": "app"},
+		"spec":     map[string]any{"sourceRef": map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator", "name": "gen"}},
+	}}
+	got := FluxSourceReferences(ea)
+	want := []FluxSourceRef{{Ref: resourceid.NewRef("source.extensions.fluxcd.io", "ArtifactGenerator", "flux-system", "gen"), Role: "generator"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs = %+v, want %+v", got, want)
+	}
+	ea.Object["spec"].(map[string]any)["sourceRef"].(map[string]any)["apiVersion"] = "example.com/v1"
+	if got := FluxSourceReferences(ea); got != nil {
+		t.Fatalf("foreign generator group accepted: %+v", got)
+	}
+}
+
+func TestArtifactGeneratorNamesItsSources(t *testing.T) {
+	gen := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
+		"metadata": map[string]any{"namespace": "flux-system", "name": "gen"},
+		"spec": map[string]any{"sources": []any{
+			map[string]any{"alias": "repo", "kind": "GitRepository", "name": "platform"},
+			map[string]any{"alias": "charts", "kind": "OCIRepository", "name": "charts", "namespace": "shared"},
+			map[string]any{"kind": "HelmRepository", "name": "x"},
+			map[string]any{"alias": "empty", "kind": "Bucket"},
+		}},
+	}}
+	want := []FluxSourceRef{
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "GitRepository", "flux-system", "platform"), Role: "source", Alias: "repo"},
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "OCIRepository", "shared", "charts"), Role: "source", Alias: "charts"},
+	}
+	if got := FluxSourceReferences(gen); !reflect.DeepEqual(got, want) {
+		t.Fatalf("refs = %+v, want %+v", got, want)
+	}
+}
+
+func TestIsUpstreamFluxSource(t *testing.T) {
+	for _, tc := range []struct {
+		group, kind string
+		want        bool
+	}{
+		{"source.toolkit.fluxcd.io", "HelmChart", true},
+		{"source.toolkit.fluxcd.io", "ExternalArtifact", true},
+		{"source.extensions.fluxcd.io", "ArtifactGenerator", true},
+		{"source.toolkit.fluxcd.io", "GitRepository", false},
+		{"example.com", "ExternalArtifact", false},
+	} {
+		if got := IsUpstreamFluxSource(tc.group, tc.kind); got != tc.want {
+			t.Errorf("IsUpstreamFluxSource(%q, %q) = %v", tc.group, tc.kind, got)
+		}
+	}
+}

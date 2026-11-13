@@ -808,6 +808,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status. Credentials are referenced by Secret name only (secretRef, certSecretRef, proxySecretRef); no inline credential fields in source.toolkit.fluxcd.io/v1."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); source-controller v1.9 CRD schemas"
+  - group: "source.extensions.fluxcd.io"
+    resources: ["artifactgenerators"]
+    scope: Namespaced
+    collection: "flux"
+    decision: grant
+    reason: "Operational configuration and status; sources are referenced by name, no inline credentials."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); source-watcher v1beta1 CRD schema"
   - group: "sources.knative.dev"
     resources: ["apiserversources","containersources","pingsources","sinkbindings"]
     scope: Namespaced

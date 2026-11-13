@@ -36,6 +36,9 @@ FIXTURES_DIR="${SCRIPT_DIR}/gitops-demo"
 # ARGOCD_VERSION=v2.13.2 to exercise the older inline shape.
 ARGOCD_VERSION="${ARGOCD_VERSION:-v3.5.2}"
 FLUX_VERSION="${FLUX_VERSION:-v2.4.0}"
+# FLUX_SOURCE_WATCHER=1 also installs source-watcher (Flux 2.7+), which serves
+# ArtifactGenerator; the artifact-chain fixture applies only then.
+FLUX_SOURCE_WATCHER="${FLUX_SOURCE_WATCHER:-0}"
 
 # The argo3-health Application sources its manifests from this repository
 # on GitHub. Point it at a branch to test fixture changes before they land.
@@ -82,6 +85,7 @@ cmd_up() {
 
   install_argocd
   install_flux
+  install_source_watcher
   apply_fixtures
   mint_radar_token
   print_summary
@@ -144,6 +148,38 @@ install_flux() {
   ok "Flux healthy"
 }
 
+# install_source_watcher applies source-watcher from the same Flux release.
+# install.yaml leaves it out (it is opt-in); the release's manifests.tar.gz
+# carries it without a namespace, so it is applied into flux-system.
+install_source_watcher() {
+  [ "${FLUX_SOURCE_WATCHER}" = "1" ] || return 0
+  step "Installing source-watcher (${FLUX_VERSION}) for ArtifactGenerator"
+  command -v curl >/dev/null && command -v tar >/dev/null || fail "FLUX_SOURCE_WATCHER=1 needs curl and tar"
+  local tmp
+  tmp=$(mktemp -d)
+  if ! curl -fsSL -o "$tmp/manifests.tar.gz" "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/manifests.tar.gz"; then
+    rm -rf "$tmp"
+    fail "couldn't download Flux ${FLUX_VERSION} manifests for source-watcher (FLUX_SOURCE_WATCHER=1)"
+  fi
+  if ! tar -xzf "$tmp/manifests.tar.gz" -C "$tmp" source-watcher.yaml 2>/dev/null; then
+    warn "no source-watcher in Flux ${FLUX_VERSION} (needs 2.7+); skipping the artifact-chain fixture"
+    rm -rf "$tmp"
+    return 0
+  fi
+  kubectl --context "${KUBECTL_CTX}" -n flux-system apply -f "$tmp/source-watcher.yaml" >/dev/null
+  rm -rf "$tmp"
+  kubectl --context "${KUBECTL_CTX}" -n flux-system rollout status deployment/source-watcher --timeout=180s >/dev/null
+  # On Flux 2.7 helm-controller refuses chartRef ExternalArtifact
+  # ("AccessDenied: ExternalArtifact feature gate is disabled") unless the
+  # gate is on.
+  if ! kubectl --context "${KUBECTL_CTX}" -n flux-system get deployment helm-controller -o jsonpath='{.spec.template.spec.containers[0].args}' | grep -q 'ExternalArtifact=true'; then
+    kubectl --context "${KUBECTL_CTX}" -n flux-system patch deployment helm-controller --type=json \
+      -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--feature-gates=ExternalArtifact=true"}]' >/dev/null
+    kubectl --context "${KUBECTL_CTX}" -n flux-system rollout status deployment/helm-controller --timeout=180s >/dev/null
+  fi
+  ok "source-watcher healthy"
+}
+
 # --- Demo fixtures ---------------------------------------------------------
 
 apply_fixtures() {
@@ -160,6 +196,11 @@ apply_fixtures() {
   for f in $(ls "${FIXTURES_DIR}"/*.yaml 2>/dev/null | sort); do
     if ! grep -q '^[[:space:]]*[^#[:space:]]' "$f"; then
       note "skipping $(basename "$f") (placeholder / comments only)"
+      continue
+    fi
+    if [ "$(basename "$f")" = "15-flux-artifacts.yaml" ] \
+        && ! kubectl --context "${KUBECTL_CTX}" get crd artifactgenerators.source.extensions.fluxcd.io >/dev/null 2>&1; then
+      note "skipping $(basename "$f") (source-watcher not installed; set FLUX_SOURCE_WATCHER=1)"
       continue
     fi
     note "applying $(basename "$f")"

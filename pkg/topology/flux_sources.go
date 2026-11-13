@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -10,46 +11,81 @@ import (
 
 func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstructured, provider DynamicProvider, opts BuildOptions) ([]Node, []Edge, []string) {
 	var refs []declaredDependency
-	chartTargets := map[string]bool{}
+	upstream := map[string]resourceid.Ref{}
 	for _, root := range roots {
 		for _, ref := range gitops.FluxSourceReferences(root) {
 			refs = append(refs, declaredDependency{Source: resourceid.NewRef(resourceid.GroupFromAPIVersion(root.GetAPIVersion()), root.GetKind(), root.GetNamespace(), root.GetName()), Target: ref.Ref, Label: ref.Role, Configuration: true})
-			if ref.Kind == "HelmChart" {
-				chartTargets[ref.Key()] = true
+			if gitops.IsUpstreamFluxSource(ref.Group, ref.Kind) {
+				upstream[ref.Key()] = ref.Ref
 			}
 		}
 	}
 	nodes, edges, warnings := addObservedDependencyEdges(nodes, edges, refs, provider, opts)
-	observedCharts := map[string]bool{}
-	for i := range nodes {
-		for _, key := range nodeResourceKeys(&nodes[i]) {
-			if chartTargets[key] {
-				observedCharts[key] = true
+	if provider == nil {
+		return nodes, edges, warnings
+	}
+	// Follow observed upstream sources (a chart to its source, an artifact to
+	// its generator, a generator to its sources) a few levels at most. Each
+	// kind is one cached list, shared by every reference, never a per-object
+	// Get, and only objects already in the graph are followed.
+	listed := map[resourceid.GroupKind][]*unstructured.Unstructured{}
+	followed := map[string]bool{}
+	for level := 0; level < gitops.MaxFluxSourceLevels && len(upstream) > 0; level++ {
+		present := map[string]bool{}
+		for i := range nodes {
+			for _, key := range nodeResourceKeys(&nodes[i]) {
+				present[key] = true
 			}
 		}
-	}
-	if len(observedCharts) == 0 || provider == nil {
-		return nodes, edges, warnings
-	}
-	// Follow the source of observed referenced charts. This is a second cached
-	// kind read, shared by all chart references, never a per-chart Get.
-	gvr, found := provider.GetGVRWithGroup("HelmChart", "source.toolkit.fluxcd.io")
-	if !found {
-		return nodes, edges, warnings
-	}
-	charts, err := provider.ListNamespaces(gvr, opts.Namespaces)
-	if err != nil {
-		return nodes, edges, append(warnings, fmt.Sprintf("Failed to list Flux chart sources: %v", err))
-	}
-	refs = nil
-	for _, chart := range charts {
-		if chart == nil || !observedCharts[resourceid.ResourceKey(gvr.Group, "HelmChart", chart.GetNamespace(), chart.GetName())] {
-			continue
+		byKind := map[resourceid.GroupKind]bool{}
+		for key, ref := range upstream {
+			if present[key] && !followed[key] {
+				byKind[ref.GroupKind()] = true
+			}
 		}
-		for _, ref := range gitops.FluxSourceReferences(chart) {
-			refs = append(refs, declaredDependency{Source: resourceid.NewRef(gvr.Group, "HelmChart", chart.GetNamespace(), chart.GetName()), Target: ref.Ref, Label: ref.Role, Configuration: true})
+		kinds := make([]resourceid.GroupKind, 0, len(byKind))
+		for kind := range byKind {
+			kinds = append(kinds, kind)
 		}
+		sort.Slice(kinds, func(i, j int) bool { return kinds[i].String() < kinds[j].String() })
+		refs = nil
+		next := map[string]resourceid.Ref{}
+		for _, kind := range kinds {
+			objects, ok := listed[kind]
+			if !ok {
+				gvr, found := provider.GetGVRWithGroup(kind.Kind, kind.Group)
+				if !found {
+					listed[kind] = nil
+					continue
+				}
+				var err error
+				objects, err = provider.ListNamespaces(gvr, opts.Namespaces)
+				if err != nil {
+					warnings = append(warnings, fmt.Sprintf("Failed to list Flux sources %s: %v", kind.String(), err))
+				}
+				listed[kind] = objects
+			}
+			for _, obj := range objects {
+				if obj == nil {
+					continue
+				}
+				self := resourceid.NewRef(kind.Group, kind.Kind, obj.GetNamespace(), obj.GetName())
+				if _, wanted := upstream[self.Key()]; !wanted || !present[self.Key()] || followed[self.Key()] {
+					continue
+				}
+				followed[self.Key()] = true
+				for _, ref := range gitops.FluxSourceReferences(obj) {
+					refs = append(refs, declaredDependency{Source: self, Target: ref.Ref, Label: ref.Role, Configuration: true})
+					if gitops.IsUpstreamFluxSource(ref.Group, ref.Kind) {
+						next[ref.Key()] = ref.Ref
+					}
+				}
+			}
+		}
+		var sourceWarnings []string
+		nodes, edges, sourceWarnings = addObservedDependencyEdges(nodes, edges, refs, provider, opts)
+		warnings = append(warnings, sourceWarnings...)
+		upstream = next
 	}
-	nodes, edges, sourceWarnings := addObservedDependencyEdges(nodes, edges, refs, provider, opts)
-	return nodes, edges, append(warnings, sourceWarnings...)
+	return nodes, edges, warnings
 }

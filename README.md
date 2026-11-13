@@ -363,7 +363,7 @@ Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
   <br><em>GitOps fleet view — Argo + Flux applications side-by-side with sync, health, source, destination, and lifecycle state</em>
 </p>
 
-- Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
+- Fleet view + per-app detail page for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `ExternalArtifact`, `ArtifactGenerator`, `Kustomization`, `HelmRelease`, `Alert`)
 - **Diagnosis** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation failures, one-click remediation
 - Sync, suspend, resume, reconcile, and rollback from the UI or through MCP
 
@@ -462,7 +462,7 @@ The Helm chart grants read access to common built-in Kubernetes kinds; Secrets, 
 | **Autoscaling** | HorizontalPodAutoscalers, VerticalPodAutoscalers |
 | **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
 | **Other Kubernetes APIs** | CertificateSigningRequests; Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, ClusterTrustBundles (only when served by the cluster) |
-| **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert |
+| **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, ExternalArtifact, ArtifactGenerator, Kustomization, HelmRelease, Alert |
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
 | **Argo Workflows** | Workflow, WorkflowTemplate |

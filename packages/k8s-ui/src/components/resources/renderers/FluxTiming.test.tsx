@@ -89,3 +89,32 @@ describe('Flux drawer and resource timing', () => {
     expect(invalidHistory).not.toContain('Attempt started')
   })
 })
+
+describe('Flux health-check expressions', () => {
+  const text = (html: string) => html.replace(/<!-- -->/g, '')
+  const exprs = [
+    { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', current: "status.phase == 'Cluster in healthy state'", failed: "status.phase == 'Failed'" },
+    { apiVersion: 'example.com/v1', kind: 'Widget', current: 'status.ready', inProgress: '!status.ready' },
+  ]
+
+  it('lists a Kustomization’s expressions', () => {
+    const html = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', spec: { ...base.spec, healthCheckExprs: exprs } }} />))
+    expect(html).toContain('Health checks (expressions)')
+    expect(html).toContain('status.phase == &#x27;Cluster in healthy state&#x27;')
+    expect(html).toContain('!status.ready')
+    expect(html).toContain('Widget')
+    const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('Health checks (expressions)'))
+    expect(section).toContain('aria-expanded="true"')
+  })
+
+  it('lists a HelmRelease’s expressions', () => {
+    const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, spec: { ...helm.spec, healthCheckExprs: [exprs[1]] } }} />))
+    expect(html).toContain('Health checks (expressions)')
+    expect(html).toContain('status.ready')
+  })
+
+  it('shows nothing without expressions', () => {
+    const html = text(renderToString(<FluxHelmReleaseRenderer data={helm} />))
+    expect(html).not.toContain('Health checks (expressions)')
+  })
+})

@@ -15,7 +15,7 @@ import { getArgoRolloutStepNumber, getObservedGeneration, getWorkloadRolloutActi
 import { getCertificateStatus, getCertificateRequestStatus, getClusterIssuerStatus, getClusterIssuerType, getOrderState, getChallengeState, getChallengeType } from './resource-utils-certmanager'
 import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpenter'
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
-import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
+import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus, getExternalArtifactStatus, getArtifactGeneratorStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
 import { getVulnerabilityReportImage as _getVulnerabilityReportImage } from './resource-utils-trivy'
 import { getKyvernoPolicyRuleTypes as _getKyvernoPolicyRuleTypes, getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
@@ -1878,6 +1878,13 @@ export {
 // ============================================================================
 export {
   getFluxResourceStatus,
+  getExternalArtifactStatus,
+  getExternalArtifactRevision,
+  getExternalArtifactGenerator,
+  getArtifactGeneratorStatus,
+  getArtifactGeneratorSources,
+  getArtifactGeneratorCount,
+  shortArtifactRevision,
   getGitRepositoryStatus,
   getOCIRepositoryStatus,
   getHelmRepositoryStatus,
@@ -2568,6 +2575,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'applications') return getArgoApplicationStatus(resource).text
       if (kindLower === 'applicationsets') return getArgoApplicationSetStatus(resource).text
       if (kindLower === 'gitrepositories') return getGitRepositoryStatus(resource).text
+      if (kindLower === 'externalartifacts' && _isApiGroup(resource.apiVersion, 'source.toolkit.fluxcd.io')) return getExternalArtifactStatus(resource).text
+      if (kindLower === 'artifactgenerators' && _isApiGroup(resource.apiVersion, 'source.extensions.fluxcd.io')) return getArtifactGeneratorStatus(resource).text
       if (kindLower === 'ocirepositories') return getOCIRepositoryStatus(resource).text
       if (kindLower === 'helmrepositories') return getHelmRepositoryStatus(resource).text
       if (kindLower === 'kustomizations') return getKustomizationStatus(resource).text

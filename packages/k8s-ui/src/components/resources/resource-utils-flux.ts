@@ -2,6 +2,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
+import { isApiGroup } from './resource-utils-cnpg'
 import type { FluxCondition } from '../../types/gitops'
 import { getFluxDeployedRelease, getFluxHelmChartVersion } from '../../utils/flux-history'
 
@@ -195,4 +196,42 @@ export function getFluxAlertProvider(alert: any): string {
 
 export function getFluxAlertEventCount(alert: any): number {
   return alert.spec?.eventSources?.length || 0
+}
+
+// ============================================================================
+// ExternalArtifact (source.toolkit.fluxcd.io) and ArtifactGenerator
+// (source.extensions.fluxcd.io): artifacts a generator composes from sources.
+// ============================================================================
+
+export const getExternalArtifactStatus = getFluxResourceStatus
+export const getArtifactGeneratorStatus = getFluxResourceStatus
+
+export function getExternalArtifactRevision(ea: any): string {
+  return ea.status?.artifact?.revision || ''
+}
+
+export function getExternalArtifactGenerator(ea: any): string {
+  const ref = ea.spec?.sourceRef
+  if (ref?.kind !== 'ArtifactGenerator') return ''
+  if (ref.apiVersion && !isApiGroup(ref.apiVersion, 'source.extensions.fluxcd.io')) return ''
+  return ref.name || ''
+}
+
+// Digest revisions ("latest@sha256:…") read as the tag and 12 hex chars.
+export function shortArtifactRevision(revision: string): string {
+  const at = revision.indexOf('@sha256:')
+  return at >= 0 ? `${revision.slice(0, at)}@${revision.slice(at + 8, at + 20)}` : revision
+}
+
+export function getArtifactGeneratorSources(ag: any): string {
+  const sources: any[] = ag.spec?.sources || []
+  return sources
+    .filter((s) => s?.kind && s?.name)
+    .map((s) => `${s.alias ? `${s.alias}→` : ''}${s.kind}/${s.name}`)
+    .join(', ')
+}
+
+export function getArtifactGeneratorCount(ag: any): number {
+  const inventory = ag.status?.inventory
+  return Array.isArray(inventory) ? inventory.length : 0
 }

@@ -192,6 +192,7 @@ export function formatGroupName(group: string): string {
     'helm.crossplane.io': 'Crossplane',
     'kubernetes.crossplane.io': 'Crossplane',
     'source.toolkit.fluxcd.io': 'Flux',
+    'source.extensions.fluxcd.io': 'Flux',
     'helm.toolkit.fluxcd.io': 'Flux',
     'kustomize.toolkit.fluxcd.io': 'Flux',
     'notification.toolkit.fluxcd.io': 'Flux',

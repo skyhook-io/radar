@@ -21,6 +21,17 @@ kubectl config use-context kind-radar-gitops-demo
 ./scripts/gitops-demo.sh down
 ```
 
+The Flux artifact chain (ArtifactGenerator → ExternalArtifact → HelmRelease) needs Flux 2.7+
+and its opt-in `source-watcher` component:
+
+```bash
+FLUX_VERSION=v2.7.5 FLUX_SOURCE_WATCHER=1 ./scripts/gitops-demo.sh up   # or v2.8.x
+```
+
+`install_source_watcher` takes `source-watcher.yaml` from that release's `manifests.tar.gz`
+(`install.yaml` leaves it out), applies it into `flux-system`, and turns on helm-controller's `ExternalArtifact` feature gate, which Flux 2.7 leaves off. Without it, or on the default
+Flux version, `15-flux-artifacts.yaml` is skipped and the rest of the demo is unchanged. With it, a failed download stops the run rather than finishing without source-watcher.
+
 ## What's in the cluster
 
 ### Argo CD scenarios
@@ -55,6 +66,8 @@ kubectl config use-context kind-radar-gitops-demo
 | `flux-system/zombie-kustomization` | Kustomization | Stuck `Terminating` via fake finalizer (no controller scaled down). Drives lifecycle severity ramp + finalizer attribution + `[Terminating]` chip + Audit `stuckTerminating`. Severity tier ramps with cluster age: info → warning at 5min → alert at 30min. |
 | `flux-system/podinfo-unreachable` | GitRepository | Repository that doesn't exist: the source never stores an artifact. Consumed by `podinfo-no-source`, which stays `Ready=False` ("Source artifact not found"). |
 | `flux-system/podinfo-stale` | GitRepository | Fetches `master`, then `setup_stale_source` points it at a missing branch: `Ready=False` but its last artifact stays. `podinfo-stale-source` stays `Ready=True` on the old revision — Ready, but new commits won't land. |
+| `flux-system/podinfo-artifacts` | ArtifactGenerator | Only with `FLUX_SOURCE_WATCHER=1`: composes `podinfo-chart` (ExternalArtifact) from GitRepository `podinfo-charts` (alias `podinfo`, copy `@podinfo/charts/podinfo/ → @artifact/`). |
+| `flux-system/podinfo-from-artifact` | HelmRelease | Only with `FLUX_SOURCE_WATCHER=1`: installs the chart through `chartRef: {kind: ExternalArtifact}` into `demo-flux-artifacts`. Its Topology tab shows GitRepository → ArtifactGenerator → ExternalArtifact → HelmRelease. |
 
 ### State coverage matrix
 
