@@ -28,3 +28,13 @@ it('honors the requested any-problem rule for posture and degraded protection wi
   renderToStaticMarkup(<CNPGInvestigationAction namespace="db" name="payments" render={render} context={{ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'payments', health: 'healthy' }} />)
   expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'problem' }))
 })
+
+it('keeps the Cluster posture checks (single instance, backup destination, WAL, in-tree) without a problem mark', () => {
+  const render = vi.fn(() => null)
+  state.dimensions = [{ tone: 'healthy' }]
+  for (const id of ['cnpgSingleInstance', 'cnpgNoBackupDestination', 'cnpgNoWALArchiving', 'cnpgInTreeBackupDeprecated']) {
+    state.row = { attention: false, problems: [{ id: `audit:${id}:db/payments`, severity: 'posture' }] }
+    renderToStaticMarkup(<CNPGInvestigationAction namespace="db" name="payments" render={render} context={{ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'payments', health: 'healthy' }} />)
+    expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'healthy' }))
+  }
+})

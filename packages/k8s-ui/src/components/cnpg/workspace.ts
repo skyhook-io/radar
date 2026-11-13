@@ -120,6 +120,16 @@ export function isCNPGWorkspaceKind(kind: string, group: string | undefined): bo
 
 export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations' | 'pooling'
 
+// Workspace titles and categories for the Checks rules about CNPG Clusters;
+// an id not listed here shows its message, under protection.
+const CNPG_AUDIT_CHECKS: Record<string, { title: string; category: CNPGProblemCategory }> = {
+  cnpgNoDeclarativeBackup: { title: 'No declarative backup schedule', category: 'protection' },
+  cnpgNoBackupDestination: { title: 'No backup destination', category: 'protection' },
+  cnpgNoWALArchiving: { title: 'No WAL archiving', category: 'protection' },
+  cnpgSingleInstance: { title: 'Single instance', category: 'availability' },
+  cnpgInTreeBackupDeprecated: { title: 'Deprecated in-tree Barman backup', category: 'declarations' },
+}
+
 export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }[] = [
   { id: 'availability', label: 'Availability' },
   { id: 'protection', label: 'Backups' },
@@ -623,6 +633,9 @@ function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const declaration = cnpgBackupDeclaration(cluster)
   const plugin = cnpgBarmanPlugin(declaration)
   const archivers = declaration.plugins.filter((p) => p.enabled && p.isWALArchiver)
+  // Gates only the Failing state: a declared archiver CNPG reports as failing
+  // keeps the operator's message even with no store. Otherwise a store-less
+  // archiver reads "no destination" below, the same as cnpgArchivesWAL.
   const archiveConfigured = archivers.length > 0 || !!declaration.inTreeDestination
   if (c?.status === 'False' && archiveConfigured) {
     return { state: 'failing', text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
@@ -876,13 +889,16 @@ function problemsFor(
   }
   const newestBackup = [...backupTimes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
   out.push(...cnpgFoldLastBackupFailed(cnpgCollapseBackupFailures(fromIssues, backupTimes), newestBackup))
+  // A blocked schedule's Issue already names the missing destination.
+  const scheduleBlocked = fromIssues.some((p) => p.reason === 'CNPGScheduleDestinationMissing')
   for (const f of audit) {
     if (f.kind !== 'Cluster' || f.name !== name || (f.namespace ?? '') !== ns) continue
+    if (f.checkId === 'cnpgNoBackupDestination' && scheduleBlocked) continue
     out.push({
       id: `audit:${f.checkId}:${ns}/${name}`,
       severity: 'posture',
-      category: 'protection',
-      title: f.checkId === 'cnpgNoDeclarativeBackup' ? 'No declarative backup schedule' : f.message,
+      category: CNPG_AUDIT_CHECKS[f.checkId]?.category ?? 'protection',
+      title: CNPG_AUDIT_CHECKS[f.checkId]?.title ?? f.message,
       detail: f.message,
       subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: ns, name },
       source: 'audit',

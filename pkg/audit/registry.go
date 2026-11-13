@@ -25,33 +25,35 @@ const (
 // these are the "go deeper" links (canonical Kubernetes docs + the hardening
 // guides the Frameworks tags name) rendered in the expanded card.
 var (
-	refSecurityContext = Reference{Label: "K8s: Security Context", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/security-context/"}
-	refPodSecurityStd  = Reference{Label: "K8s: Pod Security Standards", URL: "https://kubernetes.io/docs/concepts/security/pod-security-standards/"}
-	refNSACISA         = Reference{Label: "NSA/CISA Kubernetes Hardening Guide", URL: "https://media.defense.gov/2022/Aug/29/2003066362/-1/-1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF"}
-	refResources       = Reference{Label: "K8s: Resource Management", URL: "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"}
-	refProbes          = Reference{Label: "K8s: Liveness, Readiness & Startup Probes", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"}
-	refImages          = Reference{Label: "K8s: Container Images", URL: "https://kubernetes.io/docs/concepts/containers/images/"}
-	refDeployments     = Reference{Label: "K8s: Deployments", URL: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"}
-	refDisruptions     = Reference{Label: "K8s: Pod Disruption Budgets", URL: "https://kubernetes.io/docs/concepts/workloads/pods/disruptions/"}
-	refTopologySpread  = Reference{Label: "K8s: Topology Spread Constraints", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/"}
-	refAffinity        = Reference{Label: "K8s: Affinity and Anti-affinity", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity"}
-	refGKEDiskTypes    = Reference{Label: "Compute Engine: Machine series disk support", URL: "https://cloud.google.com/compute/docs/disks/persistent-disks"}
-	refSAToken         = Reference{Label: "K8s: Configure Service Accounts for Pods", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/"}
-	refSecrets         = Reference{Label: "K8s: Secrets", URL: "https://kubernetes.io/docs/concepts/configuration/secret/"}
-	refConfigMaps      = Reference{Label: "K8s: ConfigMaps", URL: "https://kubernetes.io/docs/concepts/configuration/configmap/"}
-	refHostPath        = Reference{Label: "K8s: hostPath Volumes", URL: "https://kubernetes.io/docs/concepts/storage/volumes/#hostpath"}
-	refDeprecatedAPI   = Reference{Label: "K8s: Deprecated API Migration Guide", URL: "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"}
-	refService         = Reference{Label: "K8s: Service", URL: "https://kubernetes.io/docs/concepts/services-networking/service/"}
-	refIngress         = Reference{Label: "K8s: Ingress", URL: "https://kubernetes.io/docs/concepts/services-networking/ingress/"}
-	refTraefikCRD      = Reference{Label: "Traefik: Kubernetes IngressRoute", URL: "https://doc.traefik.io/traefik/routing/providers/kubernetes-crd/"}
-	refFinalizers      = Reference{Label: "K8s: Finalizers", URL: "https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/"}
-	refCrossplane      = Reference{Label: "Crossplane: Managed Resources", URL: "https://docs.crossplane.io/latest/concepts/managed-resources/"}
-	refOpenGitOps      = Reference{Label: "OpenGitOps: Principles", URL: "https://opengitops.dev/"}
-	refArgoCD          = Reference{Label: "Argo CD: Declarative GitOps", URL: "https://argo-cd.readthedocs.io/en/stable/"}
-	refHelm            = Reference{Label: "Helm: Charts", URL: "https://helm.sh/docs/topics/charts/"}
-	refCNPGBackup      = Reference{Label: "CloudNativePG: Backup", URL: "https://cloudnative-pg.io/documentation/current/backup/"}
-	refPV              = Reference{Label: "K8s: Persistent Volumes", URL: "https://kubernetes.io/docs/concepts/storage/persistent-volumes/"}
-	refStorageClass    = Reference{Label: "K8s: Storage Classes", URL: "https://kubernetes.io/docs/concepts/storage/storage-classes/"}
+	refSecurityContext  = Reference{Label: "K8s: Security Context", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/security-context/"}
+	refPodSecurityStd   = Reference{Label: "K8s: Pod Security Standards", URL: "https://kubernetes.io/docs/concepts/security/pod-security-standards/"}
+	refNSACISA          = Reference{Label: "NSA/CISA Kubernetes Hardening Guide", URL: "https://media.defense.gov/2022/Aug/29/2003066362/-1/-1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF"}
+	refResources        = Reference{Label: "K8s: Resource Management", URL: "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"}
+	refProbes           = Reference{Label: "K8s: Liveness, Readiness & Startup Probes", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"}
+	refImages           = Reference{Label: "K8s: Container Images", URL: "https://kubernetes.io/docs/concepts/containers/images/"}
+	refDeployments      = Reference{Label: "K8s: Deployments", URL: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"}
+	refDisruptions      = Reference{Label: "K8s: Pod Disruption Budgets", URL: "https://kubernetes.io/docs/concepts/workloads/pods/disruptions/"}
+	refTopologySpread   = Reference{Label: "K8s: Topology Spread Constraints", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/"}
+	refAffinity         = Reference{Label: "K8s: Affinity and Anti-affinity", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity"}
+	refGKEDiskTypes     = Reference{Label: "Compute Engine: Machine series disk support", URL: "https://cloud.google.com/compute/docs/disks/persistent-disks"}
+	refSAToken          = Reference{Label: "K8s: Configure Service Accounts for Pods", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/"}
+	refSecrets          = Reference{Label: "K8s: Secrets", URL: "https://kubernetes.io/docs/concepts/configuration/secret/"}
+	refConfigMaps       = Reference{Label: "K8s: ConfigMaps", URL: "https://kubernetes.io/docs/concepts/configuration/configmap/"}
+	refHostPath         = Reference{Label: "K8s: hostPath Volumes", URL: "https://kubernetes.io/docs/concepts/storage/volumes/#hostpath"}
+	refDeprecatedAPI    = Reference{Label: "K8s: Deprecated API Migration Guide", URL: "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"}
+	refService          = Reference{Label: "K8s: Service", URL: "https://kubernetes.io/docs/concepts/services-networking/service/"}
+	refIngress          = Reference{Label: "K8s: Ingress", URL: "https://kubernetes.io/docs/concepts/services-networking/ingress/"}
+	refTraefikCRD       = Reference{Label: "Traefik: Kubernetes IngressRoute", URL: "https://doc.traefik.io/traefik/routing/providers/kubernetes-crd/"}
+	refFinalizers       = Reference{Label: "K8s: Finalizers", URL: "https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/"}
+	refCrossplane       = Reference{Label: "Crossplane: Managed Resources", URL: "https://docs.crossplane.io/latest/concepts/managed-resources/"}
+	refOpenGitOps       = Reference{Label: "OpenGitOps: Principles", URL: "https://opengitops.dev/"}
+	refArgoCD           = Reference{Label: "Argo CD: Declarative GitOps", URL: "https://argo-cd.readthedocs.io/en/stable/"}
+	refHelm             = Reference{Label: "Helm: Charts", URL: "https://helm.sh/docs/topics/charts/"}
+	refCNPGBackup       = Reference{Label: "CloudNativePG: Backup", URL: "https://cloudnative-pg.io/documentation/current/backup/"}
+	refCNPGBarmanPlugin = Reference{Label: "CloudNativePG: Barman Cloud plugin", URL: "https://cloudnative-pg.io/plugin-barman-cloud/"}
+	refCNPGReplication  = Reference{Label: "CloudNativePG: Replication", URL: "https://cloudnative-pg.io/documentation/current/replication/"}
+	refPV               = Reference{Label: "K8s: Persistent Volumes", URL: "https://kubernetes.io/docs/concepts/storage/persistent-volumes/"}
+	refStorageClass     = Reference{Label: "K8s: Storage Classes", URL: "https://kubernetes.io/docs/concepts/storage/storage-classes/"}
 )
 
 // CheckRegistry maps checkID → metadata for all built-in checks.
@@ -438,6 +440,40 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "No ScheduledBackup targets this CloudNativePG cluster, so nothing in the cluster declares when its backups run. Backups may still be taken on demand or by an external scheduler — this reports what is declared, not whether backups exist. Without a declared schedule there is no in-cluster record of the intended backup cadence, and no signal when backups silently stop.",
 		Remediation: "Create a ScheduledBackup in the cluster's namespace referencing it by spec.cluster.name, with the schedule and the method that matches how backups run (barmanObjectStore, volumeSnapshot, or plugin for barman-cloud). Note CNPG schedules are six-field cron expressions — they include a leading seconds field.",
 		References:  []Reference{refCNPGBackup},
+	},
+	// Same posture grading: these report what the Cluster declares to CNPG.
+	// Backups outside CNPG (dump jobs, storage snapshots) are invisible to them.
+	checkCNPGNoBackupDestination: {
+		ID:          checkCNPGNoBackupDestination,
+		Title:       "PostgreSQL cluster has no backup destination",
+		Category:    CategoryReliability,
+		Description: "The CloudNativePG cluster declares no backup destination: no barman-cloud plugin with an ObjectStore, no in-tree spec.backup.barmanObjectStore with a destinationPath, and no spec.backup.volumeSnapshot. CNPG can't take a backup of it, on demand or on a schedule. A dump job or storage snapshots outside CNPG may still cover the database; this reports what CNPG is configured to do.",
+		Remediation: "Give the cluster a destination: the barman-cloud plugin with an ObjectStore (spec.plugins with barmanObjectName), or spec.backup.volumeSnapshot. Then add a ScheduledBackup for it.",
+		References:  []Reference{refCNPGBackup, refCNPGBarmanPlugin},
+	},
+	checkCNPGNoWALArchiving: {
+		ID:          checkCNPGNoWALArchiving,
+		Title:       "PostgreSQL cluster has a backup destination but no WAL archiving",
+		Category:    CategoryReliability,
+		Description: "The CloudNativePG cluster has a backup destination, but nothing CNPG runs archives its WAL: only volume snapshots are configured, or the backup plugin is not marked isWALArchiver. Without archived WAL the cluster can be restored only to a backup, not to a point in time between backups. CNPG may still report ContinuousArchiving as working: with no archiver it accepts each WAL file without keeping it.",
+		Remediation: "Set isWALArchiver: true on the barman-cloud plugin entry in spec.plugins (it needs an ObjectStore), or configure an in-tree destination while you still use it.",
+		References:  []Reference{refCNPGBackup, refCNPGBarmanPlugin},
+	},
+	checkCNPGSingleInstance: {
+		ID:          checkCNPGSingleInstance,
+		Title:       "PostgreSQL cluster runs a single instance",
+		Category:    CategoryReliability,
+		Description: "spec.instances is 1 (or unset), so CNPG runs a primary with no standby. When the primary's node, volume or pod fails there is nothing to fail over to, and the database is unavailable until it comes back.",
+		Remediation: "Set spec.instances to 2 or more for a hot standby CNPG can promote, if the database needs to stay up through a node failure. A single instance is a fine choice for disposable or development databases; ignore the check on those with the radarhq.io/ignore-checks annotation.",
+		References:  []Reference{refCNPGReplication},
+	},
+	checkCNPGInTreeBackupDeprecated: {
+		ID:          checkCNPGInTreeBackupDeprecated,
+		Title:       "PostgreSQL cluster uses the deprecated in-tree Barman backup",
+		Category:    CategoryReliability,
+		Description: "The CloudNativePG cluster backs up through spec.backup.barmanObjectStore and has no enabled barman-cloud plugin. CNPG deprecated the in-tree Barman integration in 1.26 in favour of the barman-cloud plugin, and plans to remove it.",
+		Remediation: "Move the cluster to the barman-cloud plugin: create an ObjectStore from the barmanObjectStore block, add the plugin to spec.plugins with isWALArchiver: true, then remove spec.backup.barmanObjectStore.",
+		References:  []Reference{refCNPGBarmanPlugin, refCNPGBackup},
 	},
 
 	// ── GitOps coverage (emit under Reliability) ───────────────────────

@@ -166,6 +166,9 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// and on ScheduledBackup absence-authority — records nothing rather than
 	// reporting a missing input.
 	findings = append(findings, checkCNPGDeclarativeBackup(tr, input)...)
+	// --- CloudNativePG: backup destination, WAL archiving, instances, in-tree Barman ---
+	// Reads only the Cluster objects, so it runs wherever Clusters are listed.
+	findings = append(findings, checkCNPGClusterPosture(tr, input)...)
 	findings = append(findings, checkStorage(tr, input, time.Now())...)
 
 	// --- Per-resource opt-outs (radarhq.io/ignore-checks) ---

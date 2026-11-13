@@ -411,22 +411,17 @@ func workspaceIssueVisible(iss issues.Issue, access map[string]integration.KindA
 	return ok && access[key].Covers(iss.Namespace)
 }
 
-// workspaceAudit reports the declarative-backup posture finding only for
-// Clusters whose namespace had its ScheduledBackups read: without that list,
-// "no schedule targets this cluster" is an absence nobody established.
+// workspaceAudit reports every CNPG check over the visible Clusters. The
+// Cluster rules read only the Cluster; the schedule rule alone needs the
+// namespace's ScheduledBackups read: without that list, "no schedule targets
+// this cluster" is an absence nobody established, so its finding is dropped.
 func (s *Reader) workspaceAudit(clusters, scheduled []*unstructured.Unstructured, schedAccess integration.KindAccess) []CNPGWorkspaceAuditFinding {
 	out := []CNPGWorkspaceAuditFinding{}
-	var subjects []*unstructured.Unstructured
-	for _, c := range clusters {
-		if schedAccess.Covers(c.GetNamespace()) {
-			subjects = append(subjects, c)
-		}
-	}
-	if len(subjects) == 0 {
+	if len(clusters) == 0 {
 		return out
 	}
 	results := bp.RunChecks(&bp.CheckInput{
-		CNPGClusters:                      subjects,
+		CNPGClusters:                      clusters,
 		CNPGScheduledBackups:              scheduled,
 		CNPGScheduledBackupsAuthoritative: true,
 	})
@@ -435,7 +430,10 @@ func (s *Reader) workspaceAudit(clusters, scheduled []*unstructured.Unstructured
 		return out
 	}
 	for _, f := range results.Findings {
-		if f.CheckID != noDeclarativeBackupCheckID {
+		if !strings.HasPrefix(f.CheckID, "cnpg") {
+			continue
+		}
+		if f.CheckID == noDeclarativeBackupCheckID && !schedAccess.Covers(f.Namespace) {
 			continue
 		}
 		out = append(out, CNPGWorkspaceAuditFinding{
@@ -452,7 +450,10 @@ func (s *Reader) workspaceAudit(clusters, scheduled []*unstructured.Unstructured
 		if out[i].Namespace != out[j].Namespace {
 			return out[i].Namespace < out[j].Namespace
 		}
-		return out[i].Name < out[j].Name
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].CheckID < out[j].CheckID
 	})
 	return out
 }

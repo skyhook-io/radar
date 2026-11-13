@@ -21,7 +21,7 @@ func TestBackupDeclarations(t *testing.T) {
 		Name                                           string
 		Cluster                                        map[string]any
 		Method, Plugin, BlockerCode, DestinationPlugin string
-		HasDestination                                 bool
+		HasDestination, ArchivesWAL                    bool
 		Barman                                         *struct{ ObjectStore, ServerName string }
 	}
 	if err := json.Unmarshal(data, &cases); err != nil {
@@ -40,6 +40,9 @@ func TestBackupDeclarations(t *testing.T) {
 			}
 			if code != tc.BlockerCode {
 				t.Fatalf("blocker = %q, want %q", code, tc.BlockerCode)
+			}
+			if declaration.ArchivesWAL() != tc.ArchivesWAL {
+				t.Fatalf("archives WAL = %v", declaration.ArchivesWAL())
 			}
 			plugin, ok := declaration.BarmanPlugin()
 			if ok != (tc.Barman != nil) {

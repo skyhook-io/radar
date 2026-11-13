@@ -118,7 +118,7 @@ counts, which is the class of bug this fixture exists to catch.
 
 | Resource | Badge | What it exercises |
 |---|---|---|
-| `pg/pg-healthy` | `Healthy` | Baseline. Also one of the three clusters `cnpgNoDeclarativeBackup` reports — it has no backup configuration at all. |
+| `pg/pg-healthy` | `Healthy` | Baseline. It has no backup configuration at all, so Checks report `cnpgNoBackupDestination` on it (and the schedule check skips it). |
 | `pg/pg-wal-failing` | `WAL Archiving Failing` | The headline state. **Real** archiver failure (see above). Badge, drawer banner, `critical` Issue and the AI context must all agree while every pod is Ready. |
 | `pg/pg-unrecoverable` | `Unrecoverable` | Terminal phase outranking instance counts: red badge on a 2/2 row, with Instances and Primary muted + tooltipped. Also the unresolvable-catalog case — see below. |
 | `pg/pg-doomed` | `Unrecoverable` | A second terminal cluster so the Status filter renders a count of `(2)`. A dropdown where every option reads `(1)` cannot distinguish "counts work" from "counts are always 1". Its image comes from an ImageCatalog, so `spec.imageName` is empty and only `status.image` says what is running. |
@@ -216,7 +216,7 @@ manifest carrying both.
 3. **`pg-wal-failing` drawer** — WAL banner, and the "otherwise serving normally" clause present (it is a healthy cluster apart from archiving).
 4. **`pg-unrecoverable` drawer** — terminal banner; Instances/Primary muted with tooltips in the list.
 5. **Issues** — WAL archiving `critical`; concurrent causes on one cluster appear as separate rows.
-6. **Checks / audit** — `cnpgNoDeclarativeBackup` reports `evaluated 4 / passed 1`. Only `pg-wal-failing` passes, via its `method: plugin` ScheduledBackup — which is what makes the check demonstrably plugin-aware rather than merely asserted to be.
+6. **Checks / audit** — in namespace `pg`, `cnpgNoDeclarativeBackup` reports `evaluated 2 / passed 1`: it evaluates only the clusters with a backup destination. `pg-wal-failing` passes via its `method: plugin` ScheduledBackup — which is what makes the check demonstrably plugin-aware rather than merely asserted to be — and `pg-doomed` (plugin destination, no schedule) is flagged. `pg-healthy` and `pg-unrecoverable` have no destination and get `cnpgNoBackupDestination` instead; `pg-wal-failing` gets `cnpgInTreeBackupDeprecated`. With `SKIP_BARMAN_PLUGIN=1`, `pg-doomed` has no destination either and the schedule check reads `evaluated 1 / passed 1`.
 7. **Backups list** — CNPG columns (Cluster / Method / Started); the Velero row renders Velero's set instead.
 8. **`kb-mysql`** — generic drawer, own sidebar group.
 9. **`pg-store`** — a recovery window per server, each server name opening its cluster; `pg-wal-failing` flagged as failing since its last success. `pg-store-fresh` says no backup has been reported, not that something is wrong.
