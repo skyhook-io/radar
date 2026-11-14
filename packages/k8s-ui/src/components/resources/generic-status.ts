@@ -2,6 +2,7 @@ import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus } from './resource-utils-strimzi'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
+import { UPGRADE_PLAN_GROUP, getUpgradePlanStatus } from './resource-utils-upgrade-plan'
 import { isApiGroup } from './resource-utils-cnpg'
 import type { HealthLevel } from './resource-utils'
 import { getGatewayPolicyStatus } from './gateway-policy-status'
@@ -109,6 +110,10 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
       return { text: native.text, tone: native.level }
     }
     if (resource.kind === 'MetricTemplate') return { text: 'Configured', tone: 'neutral' }
+  }
+  if (isApiGroup(resource?.apiVersion, UPGRADE_PLAN_GROUP) && resource.kind === 'Plan') {
+    const native = getUpgradePlanStatus(resource)
+    return { text: native.text, tone: native.level }
   }
   const status = resource?.status
   if (!status || typeof status !== 'object') return null

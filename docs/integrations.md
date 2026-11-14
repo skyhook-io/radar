@@ -140,6 +140,26 @@ Issues reports missing declared Flagger targets, analysis MetricTemplates and pr
 Absence is reported only from an already watched, synced inventory covering the referenced namespace. Unwatched, unsynced or unreadable dependencies produce no missing-reference finding; the scan starts no watches and makes no provider requests. Secret checks use metadata existence, never values. Findings depending on another namespace or Secret inventory are withheld unless the caller may read that evidence. Generated primary workloads and Services are not declared prerequisites.
 
 
+## System Upgrade Controller
+
+Rancher, k3s and RKE2 upgrade nodes with [system-upgrade-controller](https://github.com/rancher/system-upgrade-controller): a `Plan` (`upgrade.cattle.io/v1`) selects Nodes with `spec.nodeSelector` and runs one upgrade Job per Node, `spec.concurrency` at a time.
+
+**Plan drawer.** Status reads `Not valid` when the controller rejected the Plan (`Validated=False`); `Failed` when it reports a failed upgrade Job, a node selection or job validation error (`Complete=False` with `JobFailed`, `SelectNodesFailed` or `ValidationFailed`); `Version not resolved` when `LatestResolved=False` (for example an unreachable channel); `Waiting for window` outside `spec.window`; `In progress` while it is applying to a Node or otherwise `Complete=False`; `Complete` when `Complete=True`; and `Not reported` otherwise. Target shows the version (or channel), the upgrade image, concurrency, service account, cordon and drain settings, the Secret names it mounts, and how many env variables and env sources the upgrade and prepare containers get (never their values). Progress lists the Nodes the controller would select (it also requires a `kubernetes.io/hostname` label and skips Nodes whose `plan.upgrade.cattle.io/<plan>` label is `disabled`), each **upgraded** (that label equals the Plan's `status.latestHash`), **upgrading** (its hostname is in `status.applying`, which holds hostnames, not Node names) or **pending**, with an "N of M nodes upgraded" bar, capped at 50 rows. Progress needs the Node list: when Radar can't read every Node it says progress is unknown instead of showing "0 of 0", and a selector with an operator Radar doesn't evaluate is named rather than guessed. A null `nodeSelector` selects no Node, an empty one every Node, as the controller reads it.
+
+**Issues.** A Plan the controller rejected raises a warning Issue (`UpgradePlanInvalid`) with the controller's message. A failed upgrade Job is already reported by the Job checks.
+
+**Upgrade impact.** When Plans that upgrade the distribution itself exist (an upgrade image ending in `k3s-upgrade` or `rke2-upgrade`), the Upgrade impact page lists them with their version and state, linking to each, even when its own scan fails; when the caller could list Plans in only some namespaces the count reads "at least". Other Plans, such as Rancher's system-agent upgrader, appear only in their own list.
+
+**Values.** Env values (`spec.upgrade.envs`, `spec.prepare.envs`) are shown in no drawer section and are redacted from AI context. The YAML tab shows the object as stored to whoever can read it.
+
+**In-cluster.** The chart toggle `rbac.crdGroups.systemUpgrade` is **off by default** (read-baseline decision `withhold`: Plan env can carry values, and `spec.secrets` names Secrets mounted into upgrade Jobs). Local runs use your own kubeconfig.
+
+| Resource | Group | Topology | Detail View | AI Summary |
+|----------|-------|----------|-------------|------------|
+| Plan | `upgrade.cattle.io/v1` | — | Yes | Env values redacted |
+
+---
+
 ## ConfigMap and Secret reflection (Reflector)
 
 [EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies

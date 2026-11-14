@@ -234,6 +234,7 @@ rbac:
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     flagger: false         # Opt in to get/list/watch flagger.app Canaries and MetricTemplates. No default collection expansion.
+    systemUpgrade: false   # Opt in to get/list/watch upgrade.cattle.io Plans (system-upgrade-controller). Plans can carry env values.
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com
     reflector: true         # reflector.v1.k8s.emberstack.com

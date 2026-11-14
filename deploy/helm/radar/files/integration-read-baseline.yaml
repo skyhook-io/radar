@@ -17,6 +17,13 @@ entries:
     decision: withhold
     reason: "Canary webhooks and MetricTemplate provider headers can contain inline credentials. Native visibility adds no caller grants."
     source: "https://github.com/fluxcd/flagger/tree/c781cdc199d44cf84e21e90aedd8ff14c1df450e/pkg/apis/flagger/v1beta1"
+  - group: "upgrade.cattle.io"
+    resources: ["plans"]
+    scope: Namespaced
+    collection: "systemUpgrade"
+    decision: withhold
+    reason: "spec.upgrade.envs and spec.prepare.envs can carry inline values, and spec.secrets names Secrets mounted into upgrade Jobs. Native visibility adds no caller grants."
+    source: "https://github.com/rancher/system-upgrade-controller/tree/v0.21.0/pkg/apis/upgrade.cattle.io/v1"
   - group: "secrets-store.csi.x-k8s.io"
     resources: ["secretproviderclasses"]
     scope: Namespaced
