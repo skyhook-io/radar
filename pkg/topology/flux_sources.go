@@ -12,6 +12,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 	var refs []declaredDependency
 	chartTargets := map[string]bool{}
 	for _, root := range roots {
+		refs = append(refs, fluxDependsOn(root)...)
 		for _, ref := range gitops.FluxSourceReferences(root) {
 			refs = append(refs, declaredDependency{Source: resourceid.NewRef(resourceid.GroupFromAPIVersion(root.GetAPIVersion()), root.GetKind(), root.GetNamespace(), root.GetName()), Target: ref.Ref, Label: ref.Role, Configuration: true})
 			if ref.Kind == "HelmChart" {
@@ -52,4 +53,33 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 	}
 	nodes, edges, sourceWarnings := addObservedDependencyEdges(nodes, edges, refs, provider, opts)
 	return nodes, edges, append(warnings, sourceWarnings...)
+}
+
+// fluxDependsOn turns spec.dependsOn into dependencies on objects of the
+// root's own kind and group, the only targets Flux allows there.
+func fluxDependsOn(root *unstructured.Unstructured) []declaredDependency {
+	kind := root.GetKind()
+	if kind != "Kustomization" && kind != "HelmRelease" {
+		return nil
+	}
+	entries, _, _ := unstructured.NestedSlice(root.Object, "spec", "dependsOn")
+	group := resourceid.GroupFromAPIVersion(root.GetAPIVersion())
+	source := resourceid.NewRef(group, kind, root.GetNamespace(), root.GetName())
+	var refs []declaredDependency
+	for _, entry := range entries {
+		dep, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := dep["name"].(string)
+		namespace, _ := dep["namespace"].(string)
+		if namespace == "" {
+			namespace = root.GetNamespace()
+		}
+		if namespace == root.GetNamespace() && name == root.GetName() {
+			continue
+		}
+		refs = append(refs, declaredDependency{Source: source, Target: resourceid.NewRef(group, kind, namespace, name), Label: "depends on"})
+	}
+	return refs
 }

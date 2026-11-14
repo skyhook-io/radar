@@ -3,6 +3,7 @@ import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts, Reso
 import { GitOpsStatusBadge, ManagedResourcesList, SyncCountdown } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, parseFluxInventory, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
+import { Badge } from '../../ui/Badge'
 import { getFluxHandledRequestToken, getFluxLastApply } from '../../../utils/flux-history'
 
 interface KustomizationRendererProps {
@@ -166,13 +167,13 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
 
       {/* Revision info */}
       {(status.lastAppliedRevision || status.lastAttemptedRevision || lastApply || handledRequest) && (
-        <Section title="Revision" defaultExpanded={false}>
+        <Section title="Revision" defaultExpanded={true}>
           <PropertyList>
             {status.lastAppliedRevision && (
               <Property label="Applied" value={status.lastAppliedRevision} />
             )}
             {status.lastAttemptedRevision && status.lastAttemptedRevision !== status.lastAppliedRevision && (
-              <Property label="Attempted" value={status.lastAttemptedRevision} />
+              <Property label="Attempted" value={<>{status.lastAttemptedRevision}{status.lastAppliedRevision && <> <Badge severity="warning" size="sm">not yet applied</Badge></>}</>} />
             )}
             {lastApply && (
               <Property

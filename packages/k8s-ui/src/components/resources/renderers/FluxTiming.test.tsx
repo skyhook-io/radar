@@ -88,4 +88,39 @@ describe('Flux drawer and resource timing', () => {
     const invalidHistory = renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { history: [{ ...helm.status.history[0], lastDeployed: 'invalid' }] } }} />)
     expect(invalidHistory).not.toContain('Attempt started')
   })
+
+  const text = (html: string) => html.replaceAll('<!-- -->', '')
+  const ready = [{ type: 'Ready', status: 'True', reason: 'ReconciliationSucceeded' }]
+
+  it('opens Revision and flags an attempted revision not yet applied (Kustomization)', () => {
+    const html = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, conditions: ready, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:bbb' } }} />))
+    expect(html).toContain('main@sha1:aaa')
+    expect(html).toContain('not yet applied')
+    const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('>Revision<'))
+    expect(section).toContain('aria-expanded="true"')
+  })
+
+  it('falls back to the applied revision for a HelmRelease without release history', () => {
+    const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { lastAppliedRevision: '1.2.0', lastAttemptedRevision: '1.4.0' } }} />))
+    expect(html).toContain('not yet applied')
+    const noChart = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { history: [{ version: 4, status: 'deployed' }], lastAppliedRevision: '1.2.0', lastAttemptedRevision: '1.4.0' } }} />))
+    expect(noChart).toContain('not yet applied')
+  })
+
+  it('flags a HelmRelease whose attempted chart differs from the deployed one', () => {
+    const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, conditions: ready, lastAttemptedRevision: '1.4.0' } }} />))
+    expect(html).toContain('not yet applied')
+    const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('Revision Info'))
+    expect(section).toContain('aria-expanded="true"')
+  })
+
+  it('shows no marker when the revisions match or one is missing', () => {
+    const ks = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:aaa' } }} />))
+    const hrMatch = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, lastAttemptedRevision: '1.2.0' } }} />))
+    const hrNoHistory = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { lastAttemptedRevision: '1.4.0' } }} />))
+    expect(ks).not.toContain('not yet applied')
+    expect(hrMatch).not.toContain('not yet applied')
+    expect(hrNoHistory).not.toContain('not yet applied')
+  })
 })
+
