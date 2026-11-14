@@ -1080,6 +1080,16 @@ The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.
 
 Unreadable owner links omit this context. MCP requires exact owner-object read permissions; the UI follows namespace-level Related Resources access, so their coverage may differ. Modern worker attribution also requires StrimziPodSet collection. See [MCP semantics and access requirements](mcp.md#strimzi-connector-evidence).
 
+## Strimzi Kafka clusters and node pools
+
+`Kafka` and `KafkaNodePool` resources in `kafka.strimzi.io` have curated tables and drawers. The Kafka drawer shows the reported and declared Kafka and metadata versions, the metadata mode Strimzi reports, the cluster ID, the node pools Strimzi lists in `status.kafkaNodePools` (each links to its pool), and a listener table that joins declared listeners (`spec.kafka.listeners`) with the addresses Strimzi reports. The node pool drawer shows the owning Kafka (from the `strimzi.io/cluster` label), roles, reported and desired replicas, node IDs, storage volumes and resource requests/limits. Listener certificates and authentication secrets are never read, and free-form condition messages stay in YAML because they can echo configuration.
+
+Strimzi marks failure with `NotReady=True`, never `Ready=False`, so Radar reads that condition. The status badge reads **Ready** only when the operator has processed the current generation and reports `Ready=True`; it reads **Not ready** for `NotReady=True`, and **Reconciliation paused**, **Status stale** or **Status unknown** (never healthy) for a paused, outdated or unreported status. A `Warning` condition is shown as a warning, not a failure. Ready means Strimzi reconciled the resource; it does not establish that clients can reach the brokers, and a reported replica count below the desired count is expected while a pool scales.
+
+A `NotReady=True` Kafka or KafkaNodePool whose status matches its current generation produces one warning in Issues (including the API and MCP). Paused, stale, missing or terminating status produces none, and the condition message is left out of the issue. Radar Cloud's default integration-read role does not grant `kafkas` or `kafkanodepools` because their specs can carry credentials. Both kinds are watched at startup when installed, so no extra Helm setting is needed beyond the existing `rbac.crdGroups.strimzi`.
+
+Not covered: relationships beyond the exact references above (for example Pods managed through `StrimziPodSet`), `KafkaTopic`, `KafkaUser`, and any connection to Kafka itself.
+
 ## CloudNativePG
 
 [CloudNativePG](https://cloudnative-pg.io/) (CNPG) is the Kubernetes operator for PostgreSQL, covering the full lifecycle from bootstrapping to monitoring, with high availability, automated failover, and backup management.

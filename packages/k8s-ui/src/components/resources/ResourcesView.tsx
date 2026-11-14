@@ -1,6 +1,6 @@
 import { CRDVersionsCell } from './renderers/crd-cells'
 import { getCRDColumnValue } from './resource-utils-crd'
-import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
+import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import type { ResourceCoverage } from '../../types/resource-coverage'
@@ -377,6 +377,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'connectCluster', 'connectorClass', 'connectorTasks',
+  'kafkaVersion', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -605,6 +606,24 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'connectCluster', label: 'KafkaConnect', width: 'min-w-32' },
     { key: 'connectorClass', label: 'Class', width: 'min-w-48' },
     { key: 'connectorTasks', label: 'Tasks / Max', width: 'w-28 shrink-0', tooltip: 'Reported tasks / configured maximum. A smaller count is not itself a failure.' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  kafkas: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Operator Status', width: 'w-44 shrink-0', tooltip: 'Strimzi reconciliation status. Ready does not establish that clients can connect.' },
+    { key: 'kafkaVersion', label: 'Kafka Version', width: 'w-32 shrink-0' },
+    { key: 'kafkaPools', label: 'Node Pools', width: 'min-w-40' },
+    { key: 'kafkaListeners', label: 'Listeners', width: 'min-w-40' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
+  ],
+  kafkanodepools: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
+    { key: 'status', label: 'Operator Status', width: 'w-44 shrink-0', tooltip: 'Strimzi reconciliation status, not a live check of the broker Pods.' },
+    { key: 'poolKafka', label: 'Kafka', width: 'min-w-32' },
+    { key: 'poolRoles', label: 'Roles', width: 'w-40 shrink-0' },
+    { key: 'poolReplicas', label: 'Replicas', width: 'w-28 shrink-0', tooltip: 'Reported / desired replicas. A difference is expected while the pool scales.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   opentelemetrycollectors: [
@@ -2960,6 +2979,8 @@ function isCuratedUnboundedGroup(key: string, group: string): boolean {
  */
 const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   kafkaconnectors: ['kafka.strimzi.io'],
+  kafkas: ['kafka.strimzi.io'],
+  kafkanodepools: ['kafka.strimzi.io'],
   opentelemetrycollectors: ['opentelemetry.io'],
   instrumentations: ['opentelemetry.io'],
   canaries: ['flagger.app'],
@@ -5565,6 +5586,12 @@ export function ResourcesView({
       if (column === 'connectorTasks') return Array.isArray(resource.status?.connectorStatus?.tasks) ? resource.status.connectorStatus.tasks.length : -1
       return connectorValue
     }
+    const strimziClusterValue = getStrimziClusterColumnValue(resource, column)
+    if (strimziClusterValue !== undefined) {
+      if (column === 'kafkaPools') return resource.status?.kafkaNodePools?.length ?? -1
+      if (column === 'poolReplicas') return Number.isInteger(resource.status?.replicas) ? resource.status.replicas : -1
+      return strimziClusterValue
+    }
     const otelValue = getOpenTelemetryColumnValue(resource, column)
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
@@ -7786,6 +7813,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   if (connectorValue !== undefined) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
     return <span className="text-sm text-theme-text-secondary break-all">{connectorValue || '-'}</span>
+  }
+  const strimziClusterValue = getStrimziClusterColumnValue(resource, column)
+  if (strimziClusterValue !== undefined) {
+    if (column === 'status') return <GenericCell resource={resource} column={column} />
+    return <span className="text-sm text-theme-text-secondary break-all">{strimziClusterValue || '-'}</span>
   }
   if (isApiGroup(resource.apiVersion, 'opentelemetry.io') && ['opentelemetrycollectors', 'instrumentations'].includes(kindLower)) {
     if (column === 'status') return <GenericCell resource={resource} column={column} />
