@@ -748,6 +748,7 @@ retain their finite grants.
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
+| `longhorn` | `longhorn.io` (`instancemanagers` only), for controller-aware PodDisruptionBudget explanations; on by default. |
 | `mariadb` | `mariadb.mmontes.io` |
 | `multus` | `k8s.cni.cncf.io` (`network-attachment-definitions`) |
 | `networkPolicyApi` | `policy.networking.k8s.io` |

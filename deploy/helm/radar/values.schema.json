@@ -103,6 +103,7 @@
             "kubeshark": { "type": "boolean" },
             "kured": { "type": "boolean" },
             "kyverno": { "type": "boolean" },
+            "longhorn": { "type": "boolean", "description": "Collect longhorn.io InstanceManagers for controller-aware PodDisruptionBudget explanations (default true)." },
             "mariadb": { "type": "boolean" },
             "multus": { "type": "boolean" },
             "nginx": { "type": "boolean" },

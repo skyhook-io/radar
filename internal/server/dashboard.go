@@ -398,7 +398,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 				continue
 			case issues.EvidenceDegraded:
 				p.Message = p.degraded.Message
-				p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
+				if !p.degraded.KeepSubjectOnset {
+					p.Duration, p.DurationSeconds, p.OnsetUnknown = "", 0, true
+				}
 			}
 			resp.Problems = append(resp.Problems, p)
 		}

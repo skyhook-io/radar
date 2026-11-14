@@ -1,0 +1,89 @@
+{
+  "pdb": {
+    "apiVersion": "policy/v1",
+    "kind": "PodDisruptionBudget",
+    "metadata": {
+      "name": "instance-manager-example",
+      "namespace": "storage-system",
+      "generation": 1
+    },
+    "spec": {
+      "minAvailable": 1,
+      "selector": {
+        "matchLabels": {
+          "longhorn.io/managed-by": "longhorn-manager",
+          "longhorn.io/component": "instance-manager",
+          "longhorn.io/instance-manager-type": "aio",
+          "longhorn.io/node": "worker-a",
+          "longhorn.io/instance-manager-image": "imi-9848ef81",
+          "longhorn.io/data-engine": "v1"
+        }
+      }
+    },
+    "status": {
+      "observedGeneration": 1,
+      "expectedPods": 1,
+      "currentHealthy": 1,
+      "desiredHealthy": 1,
+      "disruptionsAllowed": 0
+    }
+  },
+  "im": {
+    "apiVersion": "longhorn.io/v1beta2",
+    "kind": "InstanceManager",
+    "metadata": {
+      "name": "instance-manager-example",
+      "namespace": "storage-system",
+      "uid": "00000000-0000-4000-8000-000000000001"
+    },
+    "spec": {
+      "nodeID": "worker-a",
+      "image": "docker.io/longhornio/longhorn-instance-manager:v1.10.2",
+      "type": "aio",
+      "dataEngine": "v1"
+    },
+    "status": {
+      "currentState": "running",
+      "instanceEngines": {},
+      "instanceReplicas": {},
+      "instances": {}
+    }
+  },
+  "pod": {
+    "apiVersion": "v1",
+    "kind": "Pod",
+    "metadata": {
+      "name": "instance-manager-example",
+      "namespace": "storage-system",
+      "labels": {
+        "longhorn.io/managed-by": "longhorn-manager",
+        "longhorn.io/component": "instance-manager",
+        "longhorn.io/instance-manager-type": "aio",
+        "longhorn.io/node": "worker-a",
+        "longhorn.io/instance-manager-image": "imi-9848ef81",
+        "longhorn.io/data-engine": "v1"
+      },
+      "ownerReferences": [
+        {
+          "apiVersion": "longhorn.io/v1beta2",
+          "kind": "InstanceManager",
+          "name": "instance-manager-example",
+          "uid": "00000000-0000-4000-8000-000000000001",
+          "controller": true
+        }
+      ]
+    },
+    "spec": {
+      "nodeName": "worker-a"
+    },
+    "status": {
+      "phase": "Running",
+      "conditions": [
+        {
+          "type": "Ready",
+          "status": "True"
+        }
+      ]
+    }
+  }
+}

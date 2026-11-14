@@ -947,8 +947,8 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 
 	// PDBs that require every selected pod to stay healthy allow zero voluntary
 	// evictions even when the workload is fully healthy. That is not an outage,
-	// but it blocks node drains and upgrades; name the policy footgun from
-	// status instead of leaving agents to infer it during a failed drain.
+	// but it blocks evictions in this snapshot. A controller may intentionally
+	// manage that protection and reconsider it during drain.
 	if pdbLister := cache.PodDisruptionBudgets(); pdbLister != nil {
 		var pdbs []*policyv1.PodDisruptionBudget
 		if namespace != "" {
@@ -956,6 +956,7 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 		} else {
 			pdbs, _ = pdbLister.List(labels.Everything())
 		}
+		longhornContext := collectLonghornPDBContext(cache, pdbs)
 		for _, pdb := range pdbs {
 			if det, ok := terminatingProblem("PodDisruptionBudget", "policy", pdb, now); ok {
 				problems = append(problems, det)
@@ -979,7 +980,7 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				Group:             "policy",
 				Severity:          "high",
 				Reason:            "Voluntary evictions blocked",
-				Action:            "Relax the PDB (minAvailable / maxUnavailable) or add replicas so drains and node upgrades can proceed.",
+				Action:            k8score.PDBBlockedEvictionAction,
 				Message:           pdbBlocksEvictionsMessage(pdb),
 				Fingerprint:       "pdb:zero-disruptions",
 				Age:               timeutil.FormatAgeShort(ageDur),
@@ -987,6 +988,9 @@ func DetectProblemsInScope(cache *ResourceCache, namespace string, scope *Detect
 				ResourceCreatedAt: pdb.CreationTimestamp.Time,
 			}
 			setDetectionOnset(&detection, now, onsetAt)
+			if isLonghornManagedPDB(pdb, longhornContext) {
+				explainLonghornPDB(&detection)
+			}
 			problems = append(problems, detection)
 		}
 	}
@@ -1913,7 +1917,7 @@ func pdbStructurallyBlocksEvictions(pdb *policyv1.PodDisruptionBudget) bool {
 }
 
 func pdbBlocksEvictionsMessage(pdb *policyv1.PodDisruptionBudget) string {
-	return fmt.Sprintf("PDB selects %d healthy pod(s) and allows 0 voluntary disruptions; node drains and upgrades cannot evict these pods. Set maxUnavailable to at least 1, lower minAvailable, or scale the workload above the required healthy count.",
+	return fmt.Sprintf("PDB selects %d healthy pod(s) and allows 0 voluntary disruptions; node drains and upgrades cannot evict these pods while the budget allows no disruptions.",
 		pdb.Status.ExpectedPods)
 }
 

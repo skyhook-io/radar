@@ -464,6 +464,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.longhorn }}
+  - apiGroups: ["longhorn.io"]
+    resources: ["instancemanagers"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.nvidia }}
   - apiGroups: ["nvidia.com"]
     resources: ["*"]

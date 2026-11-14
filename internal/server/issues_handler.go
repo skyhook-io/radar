@@ -556,7 +556,8 @@ func (s *Server) issueSubjectAccess(r *http.Request) func(issues.Ref) bool {
 
 // issueEvidenceAccess authorizes an inventory a finding was derived from at
 // the granularity Radar reads it: a namespaced read needs namespace access
-// (and a Secret read a Secrets check); a cluster-wide read needs the SAR.
+// (and Secret or Longhorn InstanceManager evidence needs its exact read);
+// a cluster-wide read needs the SAR.
 func (s *Server) issueEvidenceAccess(r *http.Request) func(issues.EvidenceRead) bool {
 	if auth.UserFromContext(r.Context()) == nil {
 		return func(issues.EvidenceRead) bool { return true }
@@ -569,8 +570,9 @@ func (s *Server) issueEvidenceAccess(r *http.Request) func(issues.EvidenceRead) 
 		if !inNamespace(read.Namespace) {
 			return false
 		}
-		if read.Group == "" && read.Resource == "secrets" {
-			return s.canRead(r, "", "secrets", read.Namespace, read.Verb)
+		if (read.Group == "" && read.Resource == "secrets") ||
+			(read.Group == "longhorn.io" && read.Resource == "instancemanagers") {
+			return s.canRead(r, read.Group, read.Resource, read.Namespace, read.Verb)
 		}
 		return true
 	}
