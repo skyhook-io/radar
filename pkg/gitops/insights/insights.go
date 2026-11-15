@@ -876,7 +876,7 @@ func degradedResourceFromEvents(root *unstructured.Unstructured, resolver Resolv
 // path's framing.
 func resourceHealthIssue(change Change, resolver Resolver) Issue {
 	if change.Missing {
-		action := "Sync the application to create the resource."
+		action := "Review the diff in Changes and the sync policy before deciding whether to sync."
 		if change.Sync == "Synced" {
 			action = "Refresh the application to check its status."
 		}

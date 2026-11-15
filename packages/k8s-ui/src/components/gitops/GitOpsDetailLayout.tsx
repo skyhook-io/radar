@@ -12,11 +12,14 @@ import { RadarUpgradeNote, radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 
-function argoAutoSyncControllerNote(controller: ArgoActionHandlers['autoSyncController']): string {
+function argoAutoSyncControllerNote(controller: ArgoActionHandlers['autoSyncController'], enabling = false): string {
   if (!controller) return ''
-  return controller.kind === 'ApplicationSet'
-    ? ` ApplicationSet ${controller.name} may overwrite this setting or control when this Application syncs. Review its policy before changing auto-sync.`
-    : ` Application ${controller.name} manages this one from Git and may overwrite this setting when it syncs. Review its source before changing auto-sync.`
+  if (controller.kind === 'ApplicationSet') {
+    return enabling
+      ? ` ApplicationSet ${controller.name} may overwrite this setting. Enabling may apply pending changes immediately and bypass ApplicationSet rollout ordering. Review its template and rollout policy first.`
+      : ` ApplicationSet ${controller.name} may overwrite this setting or control when this Application syncs. Review its template and rollout policy before changing auto-sync.`
+  }
+  return ` Application ${controller.name} manages this one from Git and may overwrite this setting when it syncs. Review its source before changing auto-sync.`
 }
 
 function argoResumeDescription(suspended: boolean, settings: ArgoActionHandlers['resumeSettings']): string {
@@ -456,7 +459,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   ) : (
                     <ActionButton
                       label="Enable auto-sync"
-                      description={argoResumeDescription(effectiveSuspended, argo.resumeSettings) + argoAutoSyncControllerNote(argo.autoSyncController)}
+                      description={argoResumeDescription(effectiveSuspended, argo.resumeSettings) + argoAutoSyncControllerNote(argo.autoSyncController, true)}
                       icon={Play}
                       loading={argo.resuming}
                       onClick={() => !resumeBlockedReason && !resumeUpgrade && argo.onResume()}
