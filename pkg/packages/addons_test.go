@@ -58,12 +58,20 @@ func TestClassifyAddon(t *testing.T) {
 			wantAddon: false, wantWhy: "",
 		},
 		{
-			name: "Gateway API inference extension still matches its own entry", wl: "gateway-api-inference-extension-epp",
-			wantAddon: true, wantWhy: "name=gateway-api-inference-extension-epp (gateway-api-inference-extension)",
+			name: "user model deployment named like a model platform", wl: "kserve-fraud", app: "kserve-fraud",
+			wantAddon: false, wantWhy: "",
 		},
 		{
-			name: "operator known only by its CRD group", wl: "gpu-operator",
-			wantAddon: true, wantWhy: "name=gpu-operator",
+			name: "integration without name matching needs its chart", wl: "gpu-operator",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "integration classified by its chart", chart: "gpu-operator-v24.9.0", wl: "gpu-operator",
+			wantAddon: true, wantWhy: "chart=gpu-operator",
+		},
+		{
+			name: "integration that accepts name matching", wl: "argo-cd-server",
+			wantAddon: true, wantWhy: "name=argo-cd-server (argo-cd)",
 		},
 		{
 			// The upstream addon-manager label is the platform declaring
@@ -117,13 +125,18 @@ func TestAddonCatalogCoversCRDGroups(t *testing.T) {
 			t.Errorf("crdGroupToChart[%q]=%q classified as add-on=%v, want %v", group, chart, addon, want)
 		}
 	}
+	mapped := map[string]bool{}
+	for _, chart := range crdGroupToChart {
+		mapped[chart] = true
+	}
 	for name := range integrationsNotAddons {
-		found := false
-		for _, chart := range crdGroupToChart {
-			found = found || chart == name
-		}
-		if !found {
+		if !mapped[name] {
 			t.Errorf("integrationsNotAddons lists %q, which no crdGroupToChart entry maps to", name)
+		}
+	}
+	for _, name := range nameMatchedIntegrations {
+		if !mapped[name] {
+			t.Errorf("nameMatchedIntegrations lists %q, which no crdGroupToChart entry maps to", name)
 		}
 	}
 }

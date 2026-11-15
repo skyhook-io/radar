@@ -50,22 +50,34 @@ var addonChartsExtra = []string{
 // the catalog stays a derivative of crdGroupToChart, not a parallel copy.
 var knownAddonCharts = buildAddonCatalog()
 
+// Name-only evidence (a workload name or app.kubernetes.io label that matches a
+// catalog entry) is weak: a user can name their own app "kserve-fraud" or
+// "lws-storage-sample". Only the entries below accept it; every other catalog
+// entry needs chart, add-on manager or image evidence.
+//
+// nameMatchedIntegrations are the crdGroupToChart names that matched by name
+// before name matching became opt-in. addonChartsExtra entries also accept it.
+var nameMatchedIntegrations = []string{
+	"argo-cd", "cert-manager", "external-secrets", "flagger", "flux", "istio",
+	"karpenter", "kube-prometheus-stack", "kyverno", "secrets-store-csi-driver",
+	"traefik", "velero",
+}
+
+var nameMatchedAddons = buildNameMatchedAddons()
+
 // genericAddonNames are real add-ons, but common enough words that name-only
 // evidence can misclassify a user app literally named "vector" or "vault".
 // Chart/addon-manager/image evidence still classifies them.
 var genericAddonNames = map[string]bool{
 	"alloy": true, "contour": true, "kong": true, "vault": true, "vector": true,
-	// Workload APIs users name their own objects with; upstream examples use
-	// names like "lws-storage-sample".
-	"lws": true, "jobset": true, "volcano": true,
 }
 
 // integrationsNotAddons are crdGroupToChart names that identify an integration
-// but must not classify workloads, because the name or a chart prefixed with it
-// belongs to the user's own apps.
+// but must not classify workloads even by chart, because a chart named like
+// them belongs to the user's own apps.
 var integrationsNotAddons = map[string]bool{
-	// Upstream CRDs with no workload of their own; "gateway-api-*" is a common
-	// name for a team's own API gateway service.
+	// Upstream CRDs with no chart or workload of their own; "gateway-api" is a
+	// common name for a team's own API gateway service and its chart.
 	"gateway-api": true,
 	// Users deploy their model servers with the llm-d-modelservice chart.
 	"llm-d": true,
@@ -88,6 +100,20 @@ func buildAddonCatalog() map[string]bool {
 	}
 	for _, chart := range addonChartsExtra {
 		m[chart] = true
+	}
+	return m
+}
+
+func buildNameMatchedAddons() map[string]bool {
+	m := make(map[string]bool, len(nameMatchedIntegrations)+len(addonChartsExtra))
+	for _, name := range nameMatchedIntegrations {
+		m[name] = true
+	}
+	for _, chart := range addonChartsExtra {
+		m[chart] = true
+	}
+	for name := range genericAddonNames {
+		delete(m, name)
 	}
 	return m
 }
@@ -153,8 +179,9 @@ func imageRepo(image string) string {
 }
 
 // ClassifyAddon reports whether a workload belongs to 3rd-party platform
-// machinery, matching its helm.sh/chart base, primary image repo,
-// app.kubernetes.io/{name,part-of}, or workload name against the shared add-on catalog. Returns the evidence
+// machinery, matching its helm.sh/chart base or primary image repo against the
+// shared add-on catalog, and its app.kubernetes.io/{name,part-of} or workload
+// name against the entries in nameMatchedAddons. Returns the evidence
 // ("field=value", with the matched catalog base in parens on a prefix hit) when
 // classified.
 //
@@ -195,7 +222,7 @@ func classifyAddonValue(field, value string, strong bool) (bool, string) {
 		return false, ""
 	}
 	base, ok := matchAddonChart(v)
-	if !ok || (!strong && genericAddonNames[base]) {
+	if !ok || (!strong && !nameMatchedAddons[base]) {
 		return false, ""
 	}
 	if base == v {
