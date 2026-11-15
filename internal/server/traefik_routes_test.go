@@ -372,3 +372,44 @@ func TestTraefikUnreadSecretState(t *testing.T) {
 		}
 	}
 }
+
+// Traefik drops the router when a Service backend's port matches none of the
+// Service's ports (a number against spec.ports[].port, a name against
+// spec.ports[].name), so pods being ready says nothing about the route.
+func TestBuildTraefikRoutesFlagsAPortTheServiceDoesNotExpose(t *testing.T) {
+	svc := selService("shop", "web")
+	svc.Spec.Ports = []corev1.ServicePort{{Name: "http", Port: 80}}
+	f := tFixture{
+		services: map[string]*corev1.Service{"shop/web": svc},
+		pods:     map[string][]*corev1.Pod{"shop": {readyPod(true), readyPod(true)}},
+	}
+	rule := func(port any) map[string]any {
+		return map[string]any{"match": "Host(`web.example.com`)", "kind": "Rule", "services": []any{map[string]any{"name": "web", "port": port}}}
+	}
+	for _, tc := range []struct {
+		port    any
+		missing bool
+	}{
+		{int64(8080), true},
+		{int64(80), false},
+		{"http", false},
+		{"80", true},
+		{"https", true},
+	} {
+		rows, _, _ := buildTraefikRoutes(f.input(tRoute("shop", "web", nil, nil, rule(tc.port))))
+		b := rows[0].Services[0]
+		if b.PortMissing != tc.missing || hasProblem(rows[0], "backend_port_missing") != tc.missing {
+			t.Errorf("port %v: portMissing = %v, problems %v", tc.port, b.PortMissing, rows[0].Problems)
+		}
+	}
+	external := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: "web.example.com"}}
+	f.services["shop/web"] = external
+	if rows, _, _ := buildTraefikRoutes(f.input(tRoute("shop", "web", nil, nil, rule(int64(8443))))); rows[0].Services[0].PortMissing {
+		t.Errorf("an ExternalName Service takes any numeric port: %+v", rows[0].Services[0])
+	}
+	f.denyRead = true
+	f.services["shop/web"] = svc
+	if rows, _, _ := buildTraefikRoutes(f.input(tRoute("shop", "web", nil, nil, rule(int64(8080))))); rows[0].Services[0].PortMissing {
+		t.Errorf("a Service the caller can't list is not judged: %+v", rows[0].Services[0])
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,8 +68,11 @@ type traefikBackendFact struct {
 	Port      string `json:"port,omitempty"`
 	Kind      string `json:"kind"`
 	Exists    *bool  `json:"exists"`
-	ReadyPods *int   `json:"readyPods"`
-	TotalPods *int   `json:"totalPods"`
+	// PortMissing: the Service was read and has no such port, so Traefik
+	// drops the router.
+	PortMissing bool `json:"portMissing,omitempty"`
+	ReadyPods   *int `json:"readyPods"`
+	TotalPods   *int `json:"totalPods"`
 }
 
 // traefikTLSFact: Mode secret|resolver|default|none. Certificate is
@@ -110,6 +114,7 @@ type traefikRoutesInput struct {
 
 // buildTraefikRoutes composes one row per rule of the selected IngressRoutes
 // from the caches, with no per-route API call. Problems: backend_missing,
+// backend_port_missing,
 // backend_not_ready, middleware_missing, cert_expired, cert_expiring,
 // duplicate_host. usedBy counts distinct routes.
 func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []traefikMiddlewareUse, truncated bool) {
@@ -240,6 +245,9 @@ func traefikBackend(v k8s.TraefikRefVerdict, in traefikRoutesInput, counts map[[
 			!in.CanRead(issuesapi.EvidenceRead{Resource: "pods", Namespace: ns, Verb: "list"}))) {
 		return fact
 	}
+	if s, ok := in.Service(ns, v.Name); ok && v.Port != "" {
+		fact.PortMissing = !traefikServiceHasPort(s, v.Port, v.PortName)
+	}
 	key := [2]string{ns, v.Name}
 	c, seen := counts[key]
 	if !seen {
@@ -277,6 +285,18 @@ func traefikTLS(route *unstructured.Unstructured, in traefikRoutesInput) traefik
 	return traefikTLSFact{Mode: "default"}
 }
 
+// traefikServiceHasPort mirrors Traefik's getServicePort (v2 and v3): a number
+// matches spec.ports[].port, a name spec.ports[].name; an ExternalName
+// Service accepts any number.
+func traefikServiceHasPort(s *corev1.Service, port string, byName bool) bool {
+	for _, p := range s.Spec.Ports {
+		if (byName && p.Name == port) || (!byName && strconv.Itoa(int(p.Port)) == port) {
+			return true
+		}
+	}
+	return !byName && s.Spec.Type == corev1.ServiceTypeExternalName
+}
+
 func traefikRowProblems(row traefikRouteRow, now time.Time) []string {
 	problems := []string{}
 	add := func(code string, cond bool) {
@@ -284,15 +304,17 @@ func traefikRowProblems(row traefikRouteRow, now time.Time) []string {
 			problems = append(problems, code)
 		}
 	}
-	missingBackend, notReady, missingMw := false, false, false
+	missingBackend, portMissing, notReady, missingMw := false, false, false, false
 	for _, s := range row.Services {
 		missingBackend = missingBackend || (s.Exists != nil && !*s.Exists)
+		portMissing = portMissing || s.PortMissing
 		notReady = notReady || (s.TotalPods != nil && s.ReadyPods != nil && *s.ReadyPods == 0)
 	}
 	for _, m := range row.Middlewares {
 		missingMw = missingMw || (m.Exists != nil && !*m.Exists)
 	}
 	add("backend_missing", missingBackend)
+	add("backend_port_missing", portMissing)
 	add("backend_not_ready", notReady)
 	add("middleware_missing", missingMw)
 	if row.TLS.Certificate == "read" && row.TLS.NotAfter != nil {

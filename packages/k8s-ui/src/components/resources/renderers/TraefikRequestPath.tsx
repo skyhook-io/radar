@@ -90,6 +90,7 @@ export function TraefikRequestPath({ facts, middlewareUse, onNavigate }: { facts
                   {s.name}{s.port ? `:${s.port}` : ''}
                 </RefLink>
                 <Presence exists={s.exists} />
+                {s.portMissing && <Badge severity="error" size="sm">no port {s.port} on this Service</Badge>}
                 {s.kind === 'Service' && <FactValue fact={podsFact(s)} />}
               </span>
             ))}

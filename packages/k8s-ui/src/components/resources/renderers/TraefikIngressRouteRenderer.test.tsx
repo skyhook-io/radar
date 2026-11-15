@@ -74,3 +74,9 @@ it('says why a TLS Secret is not read instead of waiting forever', () => {
   expect(line('failed')).toBe('Secret ui-tls: Radar could not load Secrets')
   expect(line('notLoaded')).toBe('Secret ui-tls: not loaded yet')
 })
+
+it('flags a backend port the Service does not expose', () => {
+  const html = render([facts({ services: [{ namespace: 'shop', name: 'ui', port: '8080', kind: 'Service', exists: true, portMissing: true, readyPods: 2, totalPods: 2 }], problems: ['backend_port_missing'] })])
+  expect(html).toContain('no port 8080 on this Service')
+  expect(render([facts()])).not.toContain('no port')
+})

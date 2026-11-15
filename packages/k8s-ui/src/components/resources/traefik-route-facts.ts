@@ -9,6 +9,8 @@ export interface TraefikBackendFact {
   port?: string
   kind: string
   exists: boolean | null
+  /** The Service was read and has no such port: Traefik drops the router. */
+  portMissing?: boolean
   readyPods: number | null
   totalPods: number | null
 }
@@ -23,7 +25,7 @@ export type TraefikTLSFact =
   | { mode: 'default' }
   | { mode: 'none' }
 
-export type TraefikRouteProblem = 'backend_missing' | 'backend_not_ready' | 'middleware_missing' | 'cert_expired' | 'cert_expiring' | 'duplicate_host'
+export type TraefikRouteProblem = 'backend_missing' | 'backend_port_missing' | 'backend_not_ready' | 'middleware_missing' | 'cert_expired' | 'cert_expiring' | 'duplicate_host'
 
 export interface TraefikRouteFacts {
   ref: { group: string; namespace: string; name: string }

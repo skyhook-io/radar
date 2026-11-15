@@ -21,7 +21,10 @@ type TraefikRefVerdict struct {
 	Name      string
 	Missing   *bool
 	Port      string // a Service backend's port as written
-	Via       string // the chain/errors Middleware leading to a missing target
+	// PortName: the port was written as a string, which Traefik matches
+	// against the Service's port names, never its numbers.
+	PortName bool
+	Via      string // the chain/errors Middleware leading to a missing target
 	// Refused: a Traefik that loads the route rejects this cross-namespace
 	// reference, so it never routes there.
 	Refused bool
@@ -75,6 +78,7 @@ func ParseTraefikRuleRefs(route *unstructured.Unstructured) []TraefikRuleRefs {
 			v := TraefikRefVerdict{Kind: kind, Namespace: refNamespace(svc), Name: name}
 			if port, ok := svc["port"]; ok && port != nil {
 				v.Port = fmt.Sprint(port)
+				_, v.PortName = port.(string)
 			}
 			out[i].Services = append(out[i].Services, v)
 		}
