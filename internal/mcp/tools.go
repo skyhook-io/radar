@@ -2868,6 +2868,7 @@ type mcpHelmRelease struct {
 	LastOperation            *helm.HelmOperation     `json:"lastOperation,omitempty"`
 	ManagedByFlux            bool                    `json:"managedByFlux,omitempty"`
 	ManagedByFluxHelmRelease string                  `json:"managedByFluxHelmRelease,omitempty"`
+	ManagedByK3s             bool                    `json:"managedByK3s,omitempty"`
 	Controller               *helm.ReleaseController `json:"controller,omitempty"`
 }
 
@@ -3243,6 +3244,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 						LastOperation:            r.LastOperation,
 						ManagedByFlux:            r.ManagedByFlux,
 						ManagedByFluxHelmRelease: r.ManagedByFluxHelmRelease,
+						ManagedByK3s:             r.ManagedByK3s,
 						Controller:               r.Controller,
 					})
 				}

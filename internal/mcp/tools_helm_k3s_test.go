@@ -125,3 +125,37 @@ func TestControllerRefusalNamesK3sDisableForPackagedCharts(t *testing.T) {
 		t.Fatalf("refusal = %v", err)
 	}
 }
+
+// A caller who can't read the HelmChart's namespace is still refused, without
+// learning which HelmChart or add-on installs the release.
+func TestRefuseControllerManagedReleaseHidesUnreadableK3sChart(t *testing.T) {
+	visible := &helm.ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "traefik", Addon: "traefik"}
+	for _, tc := range []struct {
+		name    string
+		detail  helm.HelmReleaseDetail
+		blocked bool
+		named   bool
+	}{
+		{"hidden HelmChart", helm.HelmReleaseDetail{ManagedByK3s: true}, true, false},
+		{"readable HelmChart", helm.HelmReleaseDetail{ManagedByK3s: true, Controller: visible}, true, true},
+		{"ordinary Helm release", helm.HelmReleaseDetail{}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, action := range []string{"upgrade", "rollback", "uninstall"} {
+				err := refuseControllerManagedRelease(action, &tc.detail)
+				if (err != nil) != tc.blocked {
+					t.Fatalf("%s: blocked=%v, want %v", action, err != nil, tc.blocked)
+				}
+				if err == nil {
+					continue
+				}
+				if named := strings.Contains(err.Error(), "traefik"); named != tc.named {
+					t.Fatalf("%s: HelmChart named=%v, want %v: %v", action, named, tc.named, err)
+				}
+				if !tc.named && !strings.Contains(err.Error(), "k3s/RKE2 helm-controller") {
+					t.Fatalf("%s: refusal doesn't name the controller: %v", action, err)
+				}
+			}
+		})
+	}
+}

@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
-import { ReleaseControllerBadge, otherController, releaseControllerOf } from './releaseController'
+import { HiddenK3sBadge, ReleaseControllerBadge, managedByOtherController, releaseControllerOf } from './releaseController'
 import type { HelmReleaseController } from '@skyhook-io/k8s-ui'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { GitBranch, Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, ChevronRight, RotateCcw, Clock } from 'lucide-react'
@@ -668,10 +668,11 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
   )
 })
 
-function ControllerBadge({ release }: { release: { controller?: HelmReleaseController; managedByFlux?: boolean; managedByFluxHelmRelease?: string } }) {
+function ControllerBadge({ release }: { release: { controller?: HelmReleaseController; managedByFlux?: boolean; managedByFluxHelmRelease?: string; managedByK3s?: boolean } }) {
   const controller = releaseControllerOf(release)
   if (controller) return <ReleaseControllerBadge controller={controller} />
-  return release.managedByFlux ? <HiddenFluxBadge /> : null
+  if (release.managedByFlux) return <HiddenFluxBadge />
+  return release.managedByK3s ? <HiddenK3sBadge /> : null
 }
 
 // Flux owns the release but the caller can't read its HelmRelease's namespace.
@@ -712,7 +713,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <NotCheckedBadge count={release.statusUnreadCount} />
           {listOperation && <HelmOperationChip operation={listOperation} />}
           <ControllerBadge release={release} />
-          {upgradeInfo?.updateAvailable && !otherController(release) && (
+          {upgradeInfo?.updateAvailable && !managedByOtherController(release) && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>
                 <ArrowUpCircle className="w-3 h-3" />

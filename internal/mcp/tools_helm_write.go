@@ -255,8 +255,8 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if err := refuseFluxManagedRelease(detail); err != nil {
 			return nil, nil, err
 		}
-		if c := detail.Controller; c != nil && c.Tool != "flux" {
-			return nil, nil, controllerRefusal(in.Action, c)
+		if err := refuseControllerManagedRelease(in.Action, detail); err != nil {
+			return nil, nil, err
 		}
 		if in.Action == "uninstall" {
 			bindingBytes, err := json.Marshal(struct {
@@ -471,6 +471,18 @@ func helmUninstallPreviewResult(in manageHelmInput, status, token string, previe
 	addCappedList(result, "resources", preview.Delete)
 	addCappedList(result, "kept", preview.Kept)
 	return toJSONResult(result)
+}
+
+// refuseControllerManagedRelease refuses a write to a release a controller
+// other than Flux installs, naming it only when the caller can read it.
+func refuseControllerManagedRelease(action string, detail *helm.HelmReleaseDetail) error {
+	if c := detail.Controller; c != nil && c.Tool != "flux" {
+		return controllerRefusal(action, c)
+	}
+	if detail.Controller == nil && detail.ManagedByK3s {
+		return fmt.Errorf("release is managed by the k3s/RKE2 helm-controller, so Radar won't change it with Helm: a change made here is overwritten when its install Job reruns. The owning HelmChart's namespace is unreadable or access couldn't be checked; change the release through its HelmChart")
+	}
+	return nil
 }
 
 // controllerRefusal says where a release's controller wants the change made.

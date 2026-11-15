@@ -286,6 +286,8 @@ export interface InvestigationHelmRelease {
   statusUnreadCount?: number;
   managedByFlux?: boolean;
   managedByFluxHelmRelease?: string;
+  /** k3s/RKE2 ownership, kept when the HelmChart is withheld. */
+  managedByK3s?: boolean;
   controller?: InvestigationHelmController;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];

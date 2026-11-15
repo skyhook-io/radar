@@ -4,7 +4,7 @@ import { flushSync } from 'react-dom'
 import { FetchResult, compareVersions, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, SlidersHorizontal, Eye, Loader2, Server } from 'lucide-react'
 import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
@@ -27,7 +27,7 @@ import { OwnedResources } from './OwnedResources'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
 import { HelmDrawerFrame } from './HelmDrawerFrame'
 import { ObservedHelmReleaseDrawer } from './ObservedHelmReleaseDrawer'
-import { ReleaseControllerNote, controllerManagedText, otherController as otherControllerOf } from './releaseController'
+import { HIDDEN_K3S_TEXT, ReleaseControllerNote, controllerManagedText, otherController as otherControllerOf } from './releaseController'
 import type { HelmReleaseController } from '@skyhook-io/k8s-ui'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
@@ -205,6 +205,8 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
   const [refetch, isRefreshAnimating] = useRefreshAnimation(refetchRelease)
   // A controller other than Flux (Flux keeps its own GitOps routing below).
   const otherController = releaseDetail ? otherControllerOf(releaseDetail) : undefined
+  const hiddenK3s = !otherController && !!releaseDetail?.managedByK3s
+  const otherManaged = !!otherController || hiddenK3s
 
   // Fetch manifest for selected revision (or latest)
   const { data: manifest, isLoading: manifestLoading } = useHelmManifest(
@@ -595,7 +597,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
                 upgrade check failed
               </span>
               </Tooltip>
-            ) : upgradeInfo?.updateAvailable && otherController ? (
+            ) : upgradeInfo?.updateAvailable && otherManaged ? (
               // Another controller reinstalls the release; there is no Radar view to route an upgrade to.
               null
             ) : upgradeInfo?.updateAvailable && (releaseDetail?.managedByFlux || releaseDetail?.managedByFluxHelmRelease) ? (
@@ -630,7 +632,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
               </span>
               </Tooltip>
             ) : upgradeInfo?.error ? (
-              otherController ? null : (releaseDetail?.managedByFlux || releaseDetail?.managedByFluxHelmRelease) ? (
+              otherManaged ? null : (releaseDetail?.managedByFlux || releaseDetail?.managedByFluxHelmRelease) ? (
                 // Keep source changes with Flux even when its controller link is hidden.
                 <Tooltip content={releaseDetail?.managedByFluxHelmRelease
                   ? "Chart source is managed by Flux. Track upgrades from its HelmRelease in the GitOps view."
@@ -670,7 +672,7 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
             ) : null}
           </div>
           <div className="flex items-center gap-1">
-            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFlux && !releaseDetail?.managedByFluxHelmRelease && !otherController && <Tooltip content="Choose chart source">
+            {sourceFeature.support === 'supported' && !releaseDetail?.managedByFlux && !releaseDetail?.managedByFluxHelmRelease && !otherManaged && <Tooltip content="Choose chart source">
               <button type="button" aria-label="Choose chart source" disabled={!canHelmWrite} onClick={() => setShowTrackSource(true)} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"><Link2 className="w-4 h-4" /></button>
             </Tooltip>}
             <Tooltip content="Refresh">
@@ -742,6 +744,13 @@ function FullHelmRelease({ release, onClose, onNavigateToResource }: Pick<HelmRe
             </Tooltip>
           )}
           {otherController && <ReleaseControllerNote controller={otherController} onNavigateToResource={onNavigateToResource} />}
+          {hiddenK3s && (
+            <Tooltip content={HIDDEN_K3S_TEXT} wrapperClassName="mt-1">
+            <span className="inline-flex items-center gap-1 mt-1 text-xs text-theme-text-secondary">
+              <Server className="w-3 h-3" />Managed by k3s
+            </span>
+            </Tooltip>
+          )}
         </div>
 
         {/* Tabs */}

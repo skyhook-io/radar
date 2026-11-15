@@ -209,7 +209,10 @@ export function adaptHelmRelease(
       return;
     }
   }
-  if (value.managedByFlux !== undefined && typeof value.managedByFlux !== "boolean") {
+  if (
+    (value.managedByFlux !== undefined && typeof value.managedByFlux !== "boolean") ||
+    (value.managedByK3s !== undefined && typeof value.managedByK3s !== "boolean")
+  ) {
     invalidPayload(builder, source);
     return;
   }
@@ -260,6 +263,7 @@ export function adaptHelmRelease(
       ? { statusUnreadCount: value.statusUnreadCount }
       : {}),
     ...(value.managedByFlux === true ? { managedByFlux: true } : {}),
+    ...(value.managedByK3s === true ? { managedByK3s: true } : {}),
     managedByFluxHelmRelease: value.managedByFluxHelmRelease as
       string | undefined,
     ...releaseControllerField(value.controller),

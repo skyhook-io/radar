@@ -19,6 +19,25 @@ export function otherController(r: { controller?: HelmReleaseController; managed
   return c && c.tool !== 'flux' ? c : undefined
 }
 
+// Upgrade hints are hidden for any controller other than Flux, including a k3s
+// HelmChart the caller can't read.
+export function managedByOtherController(r: { controller?: HelmReleaseController; managedByFluxHelmRelease?: string; managedByK3s?: boolean }): boolean {
+  return !!otherController(r) || !!r.managedByK3s
+}
+
+export const HIDDEN_K3S_TEXT = "Managed by the k3s/RKE2 helm-controller. The owning HelmChart's namespace isn't available in this view, or Radar couldn't check your access. An upgrade or rollback here is overwritten when its install Job reruns; change the release through its HelmChart."
+
+export function HiddenK3sBadge() {
+  return (
+    <Tooltip content={HIDDEN_K3S_TEXT}>
+      <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
+        <Server className="w-3 h-3" />
+        k3s
+      </span>
+    </Tooltip>
+  )
+}
+
 const TOOL_LABELS: Record<string, string> = { flux: 'Flux', k3s: 'k3s' }
 
 function controllerLabel(c: HelmReleaseController): string {

@@ -315,6 +315,18 @@ describe("helm release card detail", () => {
     expect(renderToStaticMarkup(<HelmBody data={data} />)).toContain("Managed by k3s HelmChart kube-system/shop · values in HelmChartConfig kube-system/shop");
   });
 
+  it("shows k3s ownership without naming a hidden HelmChart", () => {
+    const projection = project([tool("helm", "get_helm_release", { ...helmRelease, managedByK3s: true })]);
+    const [group] = groupsOf(projection.groups, "helm");
+    const data = group.latest.data;
+    if (data.type !== "helm") throw new Error("expected a helm card");
+    expect(data.release.managedByK3s).toBe(true);
+    expect(data.release.controller).toBeUndefined();
+    const html = renderToStaticMarkup(<HelmBody data={data} />);
+    expect(html).toContain("Managed by the k3s/RKE2 helm-controller");
+    expect(html).not.toContain("undefined");
+  });
+
   it("drops a malformed controller instead of showing it", () => {
     const projection = project([
       tool("helm-k3s-bad", "get_helm_release", { ...helmRelease, controller: { tool: 7, kind: "HelmChart", name: "shop" } }, { summary: JSON.stringify({ namespace: "shop", name: "shop" }) }),

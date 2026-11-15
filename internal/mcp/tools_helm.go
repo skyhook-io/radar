@@ -255,6 +255,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if detail.ManagedByFluxHelmRelease != "" {
 		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease
 	}
+	if detail.ManagedByK3s {
+		result["managedByK3s"] = true
+	}
 	if detail.Controller != nil {
 		result["controller"] = detail.Controller
 	}

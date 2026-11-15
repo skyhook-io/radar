@@ -157,6 +157,10 @@ export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
           Managed by {release.controller.tool} {release.controller.kind} {release.controller.namespace}/{release.controller.name}
           {release.controller.values ? ` · values in ${release.controller.values}` : ''}
         </p>
+      ) : release.managedByK3s ? (
+        <p className="text-xs text-theme-text-tertiary">
+          Managed by the k3s/RKE2 helm-controller
+        </p>
       ) : null}
       {release.hooks && release.hooks.length > 0 ? (
         <div>

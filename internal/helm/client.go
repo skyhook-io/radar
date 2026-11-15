@@ -658,7 +658,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
 		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(rel.Name, effectiveStorage, fluxMap, access)
-		hr.Controller = scopedReleaseController(hr.ManagedByFlux, hr.ManagedByFluxHelmRelease, k3sMap[effectiveStorage+"/"+rel.Name], access)
+		hr.Controller, hr.ManagedByK3s = scopedReleaseController(hr.ManagedByFlux, hr.ManagedByFluxHelmRelease, k3sMap[effectiveStorage+"/"+rel.Name], access)
 		result = append(result, hr)
 	}
 	return result, nil
@@ -742,6 +742,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 
 	managedByFlux, fluxReference := scopedFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()), access)
 	k3s := k3sHelmChartMap(context.Background())[effectiveStorage+"/"+rel.Name]
+	controller, managedByK3s := scopedReleaseController(managedByFlux, fluxReference, k3s, access)
 
 	detail := &HelmReleaseDetail{
 		Name:                     rel.Name,
@@ -769,7 +770,8 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		Operations:               analysis.Operations,
 		ManagedByFlux:            managedByFlux,
 		ManagedByFluxHelmRelease: fluxReference,
-		Controller:               scopedReleaseController(managedByFlux, fluxReference, k3s, access),
+		ManagedByK3s:             managedByK3s,
+		Controller:               controller,
 	}
 	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {
@@ -1590,22 +1592,27 @@ func scopedFluxOwnership(name, storageNamespace string, fluxMap map[string]strin
 }
 
 // scopedReleaseController applies scopedFluxOwnership's rule to the
-// controller: no controller identity from a namespace the caller cannot read.
-// Flux ownership with its identity withheld still wins over a k3s HelmChart.
-func scopedReleaseController(managedByFlux bool, fluxReference string, k3s k3sOwner, access StatusAccess) *ReleaseController {
-	if managedByFlux && fluxReference == "" {
-		return nil
-	}
-	if fluxReference == "" && k3s.chart != "" {
-		namespace, _, _ := strings.Cut(k3s.chart, "/")
-		if noStatusAccess(access) {
-			return nil
+// controller: no controller identity from a namespace the caller cannot read,
+// while managedByK3s keeps the k3s ownership fact. Flux ownership with its
+// identity withheld still wins over a k3s HelmChart.
+func scopedReleaseController(managedByFlux bool, fluxReference string, k3s k3sOwner, access StatusAccess) (controller *ReleaseController, managedByK3s bool) {
+	if managedByFlux {
+		if fluxReference == "" {
+			return nil, false
 		}
-		if allowed, _ := access.statusDecision(k3sHelmChartKind, k3sHelmGroup, namespace); !allowed {
-			return nil
-		}
+		return releaseController(fluxReference, k3s), false
 	}
-	return releaseController(fluxReference, k3s)
+	if k3s.chart == "" {
+		return nil, false
+	}
+	namespace, _, _ := strings.Cut(k3s.chart, "/")
+	if noStatusAccess(access) {
+		return nil, true
+	}
+	if allowed, _ := access.statusDecision(k3sHelmChartKind, k3sHelmGroup, namespace); !allowed {
+		return nil, true
+	}
+	return releaseController("", k3s), true
 }
 
 // applyFluxOwnership stamps ManagedByFluxHelmRelease on a HelmRelease (or

@@ -1048,6 +1048,8 @@ export interface HelmRelease {
   managedByFlux?: boolean
   // Readable controller reference, in namespace/name form.
   managedByFluxHelmRelease?: string
+  // k3s/RKE2 ownership, kept when the controller (its HelmChart) is withheld.
+  managedByK3s?: boolean
   // The controller that installs this release from its own definition (Flux,
   // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
   // managedByFluxHelmRelease.
@@ -1132,6 +1134,8 @@ export interface HelmReleaseDetail {
   // Ownership is retained even when the controller reference is withheld.
   managedByFlux?: boolean
   managedByFluxHelmRelease?: string
+  // k3s/RKE2 ownership, kept when the controller (its HelmChart) is withheld.
+  managedByK3s?: boolean
   // The controller that installs this release from its own definition (Flux,
   // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
   // managedByFluxHelmRelease.

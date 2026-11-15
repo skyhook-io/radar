@@ -39,6 +39,9 @@ type HelmRelease struct {
 	// ManagedByFluxHelmRelease is the owning Flux controller in namespace/name
 	// form, returned only when the caller can read its namespace.
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	// ManagedByK3s is ManagedByFlux for a k3s/RKE2 HelmChart: set even when
+	// Controller is withheld because the caller can't read its namespace.
+	ManagedByK3s bool `json:"managedByK3s,omitempty"`
 	// Controller is the controller that installs this release from its own
 	// definition (a Flux HelmRelease, a k3s HelmChart, …), so a Helm change
 	// made here can be overwritten by it. Set for Flux alongside
@@ -146,6 +149,7 @@ type HelmReleaseDetail struct {
 	// See HelmRelease.ManagedByFluxHelmRelease.
 	ManagedByFlux            bool   `json:"managedByFlux,omitempty"`
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
+	ManagedByK3s             bool   `json:"managedByK3s,omitempty"`
 	// See HelmRelease.Controller.
 	Controller *ReleaseController `json:"controller,omitempty"`
 	// See HelmRelease.StatusUnreadCount.

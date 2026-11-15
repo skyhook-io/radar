@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/search"
@@ -98,15 +99,24 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	}
 	// A caller who can't read the HelmChart's namespace isn't told which
 	// object installs the release.
+	// It still learns that k3s owns it, so writes stay refused.
+	private := map[string]k3sOwner{"kube-system/traefik": {chart: "private-charts/traefik", config: "private-charts/traefik", addon: "private-addon"}}
 	for _, access := range []StatusAccess{teamACaller(), nil} {
-		rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, "", access)
-		if rows[0].Controller != nil {
-			t.Fatalf("controller for unreadable namespace = %+v", rows[0].Controller)
+		rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, private, "", access)
+		if rows[0].Controller != nil || !rows[0].ManagedByK3s {
+			t.Fatalf("unreadable HelmChart: controller = %+v, managedByK3s = %v", rows[0].Controller, rows[0].ManagedByK3s)
 		}
+		if raw := mustJSON(t, rows[0]); strings.Contains(raw, "private-") {
+			t.Fatalf("hidden HelmChart leaked: %s", raw)
+		}
+	}
+	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, "", adminCaller())
+	if !rows[0].ManagedByK3s {
+		t.Fatal("readable HelmChart lost managedByK3s")
 	}
 	// Flux ownership with its HelmRelease withheld still wins over the HelmChart.
 	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", teamACaller())
-	if !rows[0].ManagedByFlux || rows[0].Controller != nil {
+	if !rows[0].ManagedByFlux || rows[0].Controller != nil || rows[0].ManagedByK3s {
 		t.Fatalf("hidden Flux owner, row = %+v", rows[0])
 	}
 }
