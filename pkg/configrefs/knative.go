@@ -9,7 +9,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// Knative's API groups.
 const (
 	KnativeServingGroup   = "serving.knative.dev"
 	KnativeEventingGroup  = "eventing.knative.dev"

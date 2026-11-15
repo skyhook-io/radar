@@ -93,7 +93,6 @@ func ContourSecretPathReferences(obj *unstructured.Unstructured) []PathRef {
 	return refs
 }
 
-// ContourGroup is Contour's API group.
 const ContourGroup = "projectcontour.io"
 
 // ContourBackendReferences returns the Services an HTTPProxy's routes and

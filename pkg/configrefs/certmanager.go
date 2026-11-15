@@ -6,7 +6,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// CertManagerGroup and CertManagerACMEGroup are cert-manager's API groups.
 const (
 	CertManagerGroup     = "cert-manager.io"
 	CertManagerACMEGroup = "acme.cert-manager.io"
