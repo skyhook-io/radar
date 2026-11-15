@@ -2074,9 +2074,10 @@ export function useApplyDesktopUpdate() {
       }
       return response.json();
     },
+    // No success toast: the update card shows the restart, in the corner a
+    // toast would cover.
     meta: {
       errorMessage: "Failed to apply update",
-      successMessage: "Update applied — restarting...",
     },
   });
 }
