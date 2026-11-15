@@ -106,8 +106,8 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
     { header: 'Last validation', width: '13%', cell: (l) => <ValidationCell l={l} /> },
     { header: 'Default', width: '7%', cell: (l) => <DefaultCell l={l} /> },
     { header: 'Access mode', width: '9%', cell: (l) => l.accessMode || <span className="text-theme-text-tertiary">ReadWrite</span> },
-    { header: 'Backups targeting it', width: '11%', cell: (l) => <BackupCount l={l} count={(b) => b.targeting} /> },
-    { header: 'Completed, not expired', width: '11%', cell: (l) => <BackupCount l={l} count={(b) => b.completedNotExpired} /> },
+    { header: 'Targeting it', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.targeting} /> },
+    { header: 'Completed', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.completedNotExpired} /> },
     { header: 'Expired', width: '9%', cell: (l) => <BackupCount l={l} count={(b) => b.expired} /> },
     { header: 'Schedules writing here', width: '17%', cell: (l) => <SchedulesCell l={l} /> },
   ]
@@ -127,10 +127,10 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
           onInspect={onInspect}
           inspected={inspected}
           empty={coverageEmpty(data.coverage.backupStorageLocations, 'Velero storage locations')}
-          minWidth={1100}
+          minWidth={1180}
           footer={
             <>
-              Backups are counted by the location each one names; Velero writes it when it first processes the backup.
+              Backups are counted by the location each one names; Velero writes it when it first processes the backup. Completed counts the ones Velero reported Completed whose expiration has not passed; neither says a restore would succeed.
               {unassigned.map((i) => (
                 <div key={i.namespace}>
                   {multi ? `${i.namespace}: ` : ''}
