@@ -13,7 +13,7 @@ export interface TraefikBackendFact {
   totalPods: number | null
 }
 
-export type TraefikCertificateState = 'read' | 'denied' | 'notLoaded' | 'notFound' | 'notTLS'
+export type TraefikCertificateState = 'read' | 'denied' | 'loading' | 'notCollected' | 'failed' | 'notLoaded' | 'notFound' | 'notTLS'
 
 /** One variant per TLS mode; a secret's notAfter is present only when its certificate was read. */
 export type TraefikTLSFact =

@@ -66,3 +66,11 @@ describe('tlsLine expiry boundary', () => {
     expect(tlsLine(at(-2.5), now).text).toContain('expired 2d ago')
   })
 })
+
+it('says why a TLS Secret is not read instead of waiting forever', () => {
+  const line = (certificate: any) => tlsLine({ mode: 'secret', secret: 'ui-tls', certificate })?.text
+  expect(line('loading')).toBe('Secret ui-tls: Secrets are still loading')
+  expect(line('notCollected')).toBe('Secret ui-tls: Radar does not collect Secrets in this namespace')
+  expect(line('failed')).toBe('Secret ui-tls: Radar could not load Secrets')
+  expect(line('notLoaded')).toBe('Secret ui-tls: not loaded yet')
+})

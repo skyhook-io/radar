@@ -51,6 +51,10 @@ export function tlsLine(tls: TraefikTLSFact, now = Date.now()): { text: string; 
     case 'denied': return { text: `${secret}: no access to Secrets in this namespace` }
     case 'notFound': return { text: `${secret}: not found` }
     case 'notTLS': return { text: `${secret}: no TLS certificate in it` }
+    case 'loading': return { text: `${secret}: Secrets are still loading` }
+    case 'notCollected': return { text: `${secret}: Radar does not collect Secrets in this namespace` }
+    case 'failed': return { text: `${secret}: Radar could not load Secrets` }
+    // Older Radar sends notLoaded for all three.
     case 'notLoaded': return { text: `${secret}: not loaded yet` }
   }
 }

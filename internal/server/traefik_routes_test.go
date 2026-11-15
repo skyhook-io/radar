@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func tRoute(ns, name string, entryPoints []any, tls map[string]any, rules ...map[string]any) *unstructured.Unstructured {
@@ -350,5 +351,24 @@ func TestMarkDuplicateHostsGroups(t *testing.T) {
 	got, _, _ := buildTraefikRoutes(in)
 	if len(got) != 1 || !hasProblem(got[0], "duplicate_host") {
 		t.Errorf("a duplicate past the cap must still mark the returned row: %+v", got)
+	}
+}
+
+// A Secret Radar can't read from its cache is loading, failed, or in a
+// namespace Radar doesn't collect Secrets in, which never resolves by waiting.
+func TestTraefikUnreadSecretState(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a    k8score.KindReadAssessment
+		want string
+	}{
+		{"namespace informer still syncing", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Loading: []string{"apps"}}, "loading"},
+		{"not watched", k8score.KindReadAssessment{Readiness: k8score.KindUnavailable}, "notCollected"},
+		{"namespace not covered", k8score.KindReadAssessment{Readiness: k8score.KindReady, Read: []string{}, Uncovered: []string{"apps"}}, "notCollected"},
+		{"load failed", k8score.KindReadAssessment{Readiness: k8score.KindPending, Read: []string{}, Failed: []string{"apps"}}, "failed"},
+	} {
+		if got := traefikUnreadSecretState(tc.a); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

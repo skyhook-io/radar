@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/trace"
 	"github.com/skyhook-io/radar/pkg/certs"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/traefik"
 )
@@ -71,7 +72,8 @@ type traefikBackendFact struct {
 }
 
 // traefikTLSFact: Mode secret|resolver|default|none. Certificate is
-// read|denied|notLoaded|notFound|notTLS for a secret; only read carries
+// read|denied|loading|notCollected|failed|notFound|notTLS for a secret;
+// notLoaded only when no reader was wired. Only read carries
 // NotAfter.
 type traefikTLSFact struct {
 	Mode        string     `json:"mode"`
@@ -578,7 +580,7 @@ func readTraefikCert(s *Server, r *http.Request, cache *k8s.ResourceCache, ns, n
 	obj, found, ok := cache.ReadableObject("secrets", ns, name)
 	switch {
 	case !ok:
-		return traefikCertAnswer{state: "notLoaded"}
+		return traefikCertAnswer{state: traefikUnreadSecretState(cache.AssessKindRead("secrets", []string{ns}))}
 	case !found:
 		return traefikCertAnswer{state: "notFound"}
 	}
@@ -591,6 +593,18 @@ func readTraefikCert(s *Server, r *http.Request, cache *k8s.ResourceCache, ns, n
 		return traefikCertAnswer{state: "notTLS"}
 	}
 	return traefikCertAnswer{state: "read", notAfter: cert.NotAfter}
+}
+
+// traefikUnreadSecretState says why a namespace's Secrets can't be read from
+// the cache: still syncing, failed to load, or not collected by Radar there.
+func traefikUnreadSecretState(a k8score.KindReadAssessment) string {
+	switch {
+	case len(a.Loading) > 0:
+		return "loading"
+	case len(a.Failed) > 0:
+		return "failed"
+	}
+	return "notCollected"
 }
 
 // readTraefikKind reads one Traefik kind in each installed API group as the
