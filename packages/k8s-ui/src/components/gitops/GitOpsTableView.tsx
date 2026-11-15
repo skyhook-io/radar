@@ -1028,7 +1028,7 @@ function GitOpsFilterSidebar({
 
         <GitOpsFilterSection icon={CircleDot} title="Automation (Sync policy)">
           <GitOpsFacetButton label="Auto-sync" count={automationCounts.auto} active={automationFilters.has('auto')} onClick={() => onToggleAutomation('auto')} />
-          <GitOpsFacetButton label="Manual" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
+          <GitOpsFacetButton label="Auto-sync off" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
           <GitOpsFacetButton label="Suspended" count={automationCounts.suspended} active={automationFilters.has('suspended')} tone="warning" onClick={() => onToggleAutomation('suspended')} />
         </GitOpsFilterSection>
 
@@ -2047,13 +2047,6 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
   }
 }
 
-// An ApplicationSet is a generator, not a deployed app — it has no sync/health
-// of its own in the sense the fleet table shows for Applications. Its own
-// status.conditions use a different vocabulary (ErrorOccurred,
-// ParametersGenerated, ResourcesUpToDate — never Ready), so the generic
-// getGitOpsResourceStatus fallback below correctly bottoms out at
-// Unknown/Unknown rather than us inventing a fleet-health rollup from
-// generator-run conditions that don't mean what a Synced/Healthy chip implies.
 // An ApplicationSet's template fields may carry generator placeholders
 // ({{path}}, {{cluster.name}}, …) that only resolve per generated Application.
 // Rendering the raw placeholder is worse than rendering nothing, so a value is

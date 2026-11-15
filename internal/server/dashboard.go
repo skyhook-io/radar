@@ -287,6 +287,8 @@ type DashboardHelmRelease struct {
 	ChartVersion   string `json:"chartVersion"`
 	Status         string `json:"status"`
 	ResourceHealth string `json:"resourceHealth,omitempty"`
+	// See helm.HelmRelease.StatusUnreadCount.
+	StatusUnreadCount int `json:"statusUnreadCount,omitempty"`
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -1255,7 +1257,7 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string, c
 		}
 	}
 
-	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()))
+	releases, read, denied, err := helmClient.ListReleasesRecordingAccess(r.Context(), namespaces, auth.UserFromContext(r.Context()), s.helmObjectScope(r))
 	if (err == nil && len(read) == 0 && len(denied) > 0) || helm.ReleaseReadDeniedForCaller(err) {
 		// With a permission check unanswered, the read may have fallen back
 		// to a cluster-wide list the caller can't make even though some
@@ -1304,12 +1306,13 @@ func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelm
 	result.Releases = make([]DashboardHelmRelease, 0, limit)
 	for _, rel := range releases[:limit] {
 		result.Releases = append(result.Releases, DashboardHelmRelease{
-			Name:           rel.Name,
-			Namespace:      rel.Namespace,
-			Chart:          rel.Chart,
-			ChartVersion:   rel.ChartVersion,
-			Status:         rel.Status,
-			ResourceHealth: rel.ResourceHealth,
+			Name:              rel.Name,
+			Namespace:         rel.Namespace,
+			Chart:             rel.Chart,
+			ChartVersion:      rel.ChartVersion,
+			Status:            rel.Status,
+			ResourceHealth:    rel.ResourceHealth,
+			StatusUnreadCount: rel.StatusUnreadCount,
 		})
 	}
 

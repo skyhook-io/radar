@@ -264,6 +264,8 @@ export interface InvestigationHelmOwnedResource {
   message?: string;
   summary?: string;
   issue?: string;
+  /** Why the caller isn't shown this object's live status (a read code). */
+  statusUnread?: string;
 }
 export interface InvestigationHelmRelease {
   name: string;
@@ -280,6 +282,9 @@ export interface InvestigationHelmRelease {
   resourceHealth?: string;
   healthIssue?: string;
   healthSummary?: string;
+  /** Workloads and Pods whose live status wasn't read. */
+  statusUnreadCount?: number;
+  managedByFlux?: boolean;
   managedByFluxHelmRelease?: string;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];

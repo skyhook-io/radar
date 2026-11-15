@@ -1,5 +1,5 @@
 import { getCRDColumnValue } from './resource-utils-crd'
-import { getStrimziConnectorColumnValue } from './resource-utils-strimzi'
+import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 import { FLUX_OPERATOR_GROUP, getFluxOperatorColumnValue, getFluxOperatorStatus } from './resource-utils-flux-operator'
@@ -862,6 +862,47 @@ export function getExecContainerNames(pod: any): string[] {
     .filter((c: any) => c.restartPolicy === 'Always')
     .map((c: any) => c.name)
   return [...regular, ...sidecars].filter(Boolean)
+}
+
+/** Init container names in run order, native sidecars included. */
+export function getInitContainerNames(pod: any): string[] {
+  return (pod?.spec?.initContainers || []).map((c: any) => c.name).filter(Boolean)
+}
+
+/** The containers that can have logs: init containers (in run order), then the regular ones. */
+export function getLogContainerNames(pod: any): string[] {
+  return [...(pod?.spec?.initContainers || []), ...(pod?.spec?.containers || [])]
+    .map((c: any) => c.name)
+    .filter(Boolean)
+}
+
+/**
+ * The container to open logs on. While a pod is stuck initializing, its regular
+ * containers wait in PodInitializing and have no logs, so this picks the first
+ * init container that hasn't exited 0, or a native sidecar that hasn't started
+ * while the pod is still initializing. Otherwise it falls back to
+ * getDefaultContainerName.
+ *
+ * Sidecars are only candidates during initialization: kubelet routinely stops
+ * them with a non-zero exit when a pod finishes, and one that fails after
+ * initialization doesn't override the pod's default container. Regular init
+ * containers need no such gate; they have all exited 0 in an initialized pod,
+ * except when a recreated sandbox runs them again while Initialized stays True.
+ * Table rows carry no `started`, so a running sidecar counts as started there.
+ */
+export function getDefaultLogContainerName(pod: any): string | undefined {
+  const phase = pod?.status?.phase
+  const initializing = phase !== 'Succeeded' && phase !== 'Failed' &&
+    !(pod?.status?.conditions || []).some((c: any) => c.type === 'Initialized' && c.status === 'True')
+  const sidecars = new Set(
+    (pod?.spec?.initContainers || []).filter((c: any) => c.restartPolicy === 'Always').map((c: any) => c.name),
+  )
+  const stuck = (pod?.status?.initContainerStatuses || []).find((s: any) =>
+    sidecars.has(s.name)
+      ? initializing && !(s.started ?? Boolean(s.state?.running))
+      : s.state?.terminated?.exitCode !== 0,
+  )
+  return stuck?.name || getDefaultContainerName(pod)
 }
 
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
@@ -2518,6 +2559,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   try {
   const connectorValue = getStrimziConnectorColumnValue(resource, column)
   if (connectorValue !== undefined) return connectorValue
+  const strimziClusterValue = getStrimziClusterColumnValue(resource, column)
+  if (strimziClusterValue !== undefined) return strimziClusterValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)

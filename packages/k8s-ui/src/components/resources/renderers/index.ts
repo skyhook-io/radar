@@ -202,6 +202,7 @@ export { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from './FlaggerR
 export { SecretProviderClassRenderer, SecretsStoreMountsSection } from './SecretsStoreRenderers'
 
 export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
+export { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from './StrimziKafkaRenderer'
 
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
 

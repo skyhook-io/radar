@@ -8,6 +8,8 @@ import {
   ResourceLink,
 } from "@skyhook-io/k8s-ui";
 import { apiVersionToGroup } from "../../../../utils/navigation";
+import { readActionFor } from "@skyhook-io/k8s-ui/utils/read-actions";
+import { notCheckedTooltip } from "../../../helm/NotCheckedBadge";
 import { Tooltip } from "../../../ui/Tooltip";
 import { EvidenceNavigationContext } from "../navigation";
 import { type EvidenceDataOf, ResourceFact, severityBadge } from "../cardParts";
@@ -66,6 +68,20 @@ export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
           >
             resources {release.resourceHealth}
           </Badge>
+        ) : null}
+        {release.statusUnreadCount ? (
+          <Tooltip
+            content={
+              <div className="max-w-xs">
+                {notCheckedTooltip(release.statusUnreadCount, "either", "health")}
+              </div>
+            }
+            delay={150}
+          >
+            <Badge severity="neutral" size="sm">
+              {release.statusUnreadCount} not checked
+            </Badge>
+          </Tooltip>
         ) : null}
         <Tooltip
           content={new Date(release.updated).toLocaleString()}
@@ -132,9 +148,9 @@ export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
           Release metadata stored in namespace {release.storageNamespace}
         </p>
       ) : null}
-      {release.managedByFluxHelmRelease ? (
+      {release.managedByFlux || release.managedByFluxHelmRelease ? (
         <p className="text-xs text-theme-text-tertiary">
-          Managed by Flux HelmRelease {release.managedByFluxHelmRelease}
+          Managed by Flux{release.managedByFluxHelmRelease ? ` HelmRelease ${release.managedByFluxHelmRelease}` : ''}
         </p>
       ) : null}
       {release.hooks && release.hooks.length > 0 ? (
@@ -244,59 +260,74 @@ export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
       ) : null}
       {release.resources.length > 0 ? (
         <div className="max-h-52 overflow-y-auto rounded-md border border-theme-border">
-          {release.resources.map((owned, index) => (
-            <div
-              key={`${owned.kind}-${owned.namespace}-${owned.name}`}
-              className={clsx(
-                "flex min-w-0 items-center gap-2 px-2.5 py-1.5",
-                index > 0 && "border-t border-theme-border/60",
-              )}
-            >
-              <StatusDot
-                tone={mapHealthToTone(
-                  owned.issue ? "unhealthy" : (owned.status ?? ""),
+          {release.resources.map((owned, index) => {
+            const unread = owned.statusUnread
+              ? readActionFor(owned.statusUnread) === "retry"
+                ? "Not checked"
+                : "No access"
+              : undefined;
+            return (
+              <div
+                key={`${owned.kind}-${owned.namespace}-${owned.name}`}
+                className={clsx(
+                  "flex min-w-0 items-center gap-2 px-2.5 py-1.5",
+                  index > 0 && "border-t border-theme-border/60",
                 )}
-                className="shrink-0"
-              />
-              <Badge tone="structural" size="sm">
-                {owned.kind}
-              </Badge>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-mono text-xs">
-                  <ResourceLink
-                    name={owned.name}
-                    kind={owned.kind}
-                    namespace={owned.namespace}
-                    group={
-                      owned.apiVersion
-                        ? apiVersionToGroup(owned.apiVersion)
-                        : undefined
-                    }
-                    label={`${owned.namespace ? `${owned.namespace}/` : ""}${owned.name}`}
-                    onNavigate={
-                      owned.apiVersion && onOpenResource
-                        ? (ref) => onOpenResource(ref)
-                        : undefined
-                    }
-                  />
-                </span>
-                {owned.issue ? (
-                  <span className="block truncate text-xs text-warning-text">
-                    {owned.issue}
+              >
+                <StatusDot
+                  tone={mapHealthToTone(
+                    owned.issue ? "unhealthy" : (owned.status ?? ""),
+                  )}
+                  className="shrink-0"
+                />
+                <Badge tone="structural" size="sm">
+                  {owned.kind}
+                </Badge>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-mono text-xs">
+                    <ResourceLink
+                      name={owned.name}
+                      kind={owned.kind}
+                      namespace={owned.namespace}
+                      group={
+                        owned.apiVersion
+                          ? apiVersionToGroup(owned.apiVersion)
+                          : undefined
+                      }
+                      label={`${owned.namespace ? `${owned.namespace}/` : ""}${owned.name}`}
+                      onNavigate={
+                        owned.apiVersion && onOpenResource && !unread
+                          ? (ref) => onOpenResource(ref)
+                          : undefined
+                      }
+                    />
                   </span>
-                ) : owned.summary || owned.message ? (
-                  <span className="block truncate text-xs text-theme-text-tertiary">
-                    {owned.summary || owned.message}
+                  {owned.issue ? (
+                    <span className="block truncate text-xs text-warning-text">
+                      {owned.issue}
+                    </span>
+                  ) : owned.summary || owned.message ? (
+                    <span className="block truncate text-xs text-theme-text-tertiary">
+                      {owned.summary || owned.message}
+                    </span>
+                  ) : null}
+                </span>
+                {unread ? (
+                  <Badge
+                    severity="neutral"
+                    size="sm"
+                    className="ml-auto shrink-0"
+                  >
+                    {unread}
+                  </Badge>
+                ) : owned.ready || owned.status ? (
+                  <span className="ml-auto shrink-0 font-mono text-xs text-theme-text-tertiary">
+                    {owned.ready || owned.status}
                   </span>
                 ) : null}
-              </span>
-              {owned.ready || owned.status ? (
-                <span className="ml-auto shrink-0 font-mono text-xs text-theme-text-tertiary">
-                  {owned.ready || owned.status}
-                </span>
-              ) : null}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>

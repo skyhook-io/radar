@@ -21,19 +21,18 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // A release a Flux HelmRelease owns is refused for every write, before Helm
-// runs: Flux would revert the change on its next reconcile.
+// runs, including when the controller reference is hidden.
 func TestManageHelmRefusesFluxManagedRelease(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	gvr := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
 	owner := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
-		"metadata": map[string]any{"name": "demo-hr", "namespace": "team-a"},
-		"spec":     map[string]any{"releaseName": "demo"},
+		"metadata": map[string]any{"name": "hidden-manager", "namespace": "team-b"},
+		"spec":     map[string]any{"releaseName": "demo", "storageNamespace": "team-a"},
 	}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "HelmReleaseList"}, owner)
 	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "HelmRelease", Namespaced: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
@@ -90,16 +89,35 @@ func TestManageHelmRefusesFluxManagedRelease(t *testing.T) {
 		k8s.SetConnectionStatus(oldStatus)
 	}()
 
-	ctx := auth.ContextWithUser(t.Context(), &auth.User{Username: "helm-mcp-flux"})
-	for _, in := range []manageHelmInput{
-		{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}},
-		{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}, DryRun: true},
-		{Action: "rollback", Namespace: "team-a", Name: "demo", Revision: 1},
-		{Action: "uninstall", Namespace: "team-a", Name: "demo"},
+	for _, caller := range []struct {
+		name          string
+		namespaces    []string
+		wantReference bool
+	}{
+		{"restricted", []string{"team-a"}, false},
+		{"admin", nil, true},
 	} {
-		_, _, err := handleManageHelm(ctx, nil, in)
-		if err == nil || !strings.Contains(err.Error(), "managed by Flux HelmRelease team-a/demo-hr") {
-			t.Errorf("%s (dry_run=%v): a Flux-owned release must be refused: %v", in.Action, in.DryRun, err)
+		ctx := withTestUserPerms(t, "helm-mcp-flux-"+caller.name, nil, caller.namespaces)
+		for _, in := range []manageHelmInput{
+			{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}},
+			{Action: "upgrade", Namespace: "team-a", Name: "demo", Values: map[string]any{"replicas": 2}, DryRun: true},
+			{Action: "rollback", Namespace: "team-a", Name: "demo", Revision: 1},
+			{Action: "uninstall", Namespace: "team-a", Name: "demo"},
+		} {
+			_, _, err := handleManageHelm(ctx, nil, in)
+			if err == nil || !strings.Contains(err.Error(), "managed by Flux") {
+				t.Errorf("%s (dry_run=%v): a Flux-owned release must be refused: %v", in.Action, in.DryRun, err)
+			}
+
+			if err != nil {
+				hasReference := strings.Contains(err.Error(), "team-b/hidden-manager")
+				if hasReference != caller.wantReference {
+					t.Errorf("%s/%s: controller reference shown=%v, want=%v: %v", caller.name, in.Action, hasReference, caller.wantReference, err)
+				}
+				if !caller.wantReference && (strings.Contains(err.Error(), "hidden-manager") || strings.Contains(err.Error(), "team-b")) {
+					t.Errorf("%s: write refusal leaked hidden controller: %v", in.Action, err)
+				}
+			}
 		}
 	}
 }

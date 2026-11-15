@@ -3,6 +3,7 @@ import { investigationEvidenceSubjectRef } from "../index";
 import { groupsOf, project, tool } from "../evidenceFixtures";
 import { renderToStaticMarkup } from "react-dom/server";
 import { HelmBody } from "../bodies/platform";
+import { EvidenceNavigationContext } from "../navigation";
 
 const helmRelease = {
   name: "shop",
@@ -302,4 +303,55 @@ describe("helm release card detail", () => {
     expect(html).toContain("{ color, message }");
     expect(html).toContain("[2 items]");
   });
+
+  it("says how many objects were not checked and does not link them", () => {
+    const projection = project([
+      tool(
+        "helm",
+        "get_helm_release",
+        {
+          ...helmRelease,
+          resourceHealth: "unknown",
+          statusUnreadCount: 1,
+          resources: [
+            helmRelease.resources[1],
+            {
+              kind: "Deployment",
+              apiVersion: "apps/v1",
+              name: "worker",
+              namespace: "shared",
+              statusUnread: "user_namespace_not_visible",
+            },
+          ],
+        },
+        { summary: JSON.stringify({ namespace: "shop", name: "shop" }) },
+      ),
+    ]);
+    const [group] = groupsOf(projection.groups, "helm");
+    const data = group.latest.data;
+    if (data.type !== "helm") throw new Error("expected a helm card");
+    expect(data.release.statusUnreadCount).toBe(1);
+    const html = renderToStaticMarkup(
+      <EvidenceNavigationContext.Provider value={{ onOpenResource: () => {} }}>
+        <HelmBody data={data} />
+      </EvidenceNavigationContext.Provider>,
+    );
+    expect(html).toContain("1 not checked");
+    expect(html).toContain("No access");
+    expect(html.match(/<button[^>]*>[^<]*shop\/api/)).not.toBeNull();
+    expect(html.match(/<button[^>]*>[^<]*shared\/worker/)).toBeNull();
+  });
+  it("shows Flux ownership without exposing or linking a hidden controller", () => {
+    const projection = project([tool("helm", "get_helm_release", {...helmRelease, managedByFlux: true})]);
+    const [group] = groupsOf(projection.groups, "helm");
+    const data = group.latest.data;
+    if (data.type !== "helm") throw new Error("expected a helm card");
+    expect(data.release.managedByFlux).toBe(true);
+    expect(data.release.managedByFluxHelmRelease).toBeUndefined();
+    const html = renderToStaticMarkup(<HelmBody data={data} />);
+    expect(html).toContain("Managed by Flux");
+    expect(html).not.toContain("undefined");
+    expect(html).not.toContain("private-manager");
+  });
+
 });
