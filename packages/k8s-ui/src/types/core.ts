@@ -2018,6 +2018,8 @@ export interface LogWorkload { kind: string; namespace: string; name: string; re
 export interface LogInstance {
   name: string
   controlNamespace: string
+  /** Where the collectors run (fluentBitAgentNamespace); older Radar omits it. */
+  collectorNamespace?: string
   collectors: LogWorkload[]
   aggregators: LogWorkload[]
   /** The kind wasn't read in this Logging's control namespace: an empty list is unknown, not none. */
@@ -2033,6 +2035,8 @@ export interface LogPipelineRoute {
   /** The Logging whose loggingRef the route carries; empty when none has it. */
   instance: string
   ignored: boolean
+  /** Receives what no other route of its instance selects (a Logging's defaultFlow). */
+  fallback?: boolean
   hasFilters: boolean
   active?: boolean
   destinations: LogDestination[]

@@ -37,7 +37,7 @@ describe('LoggingView', () => {
     Object.assign(state, { data: pipeline({ coverage: { gaps: [{ group: 'logging.banzaicloud.io', resource: 'flows' }], namespaces: null }, unrouted: { count: 0, lowerBound: true, pods: [], truncated: false } }), error: null })
     const html = render()
     expect(html).toContain('Radar could not read Flows')
-    expect(html).toMatch(/Running pods nothing routes: (<[^>]+>)*\?</)
+    expect(html).toMatch(/Running pods no Logging operator route selects: (<[^>]+>)*\?</)
   })
   it('says when no shipper Radar understands is installed', () => {
     Object.assign(state, { data: pipeline({ providers: [] }), error: null })
@@ -79,8 +79,24 @@ describe('LoggingView', () => {
     const base = pipeline({ coverage: { gaps: [{ group: 'apps', resource: 'daemonsets' }], namespaces: null } })
     base.providers[0].instances[0].collectors = []
     Object.assign(state, { data: base, error: null })
-    expect(render()).toContain('None found')
+    expect(render()).toContain('Not found in logging')
     base.providers[0].instances[0].collectorsUnread = true
     expect(render()).toContain('Not read')
+  })
+  it('names the default flow as a route and never says unrouted logs are lost', () => {
+    const data = pipeline({ unrouted: { count: 0, lowerBound: false, pods: [], truncated: false } })
+    data.providers[0].routes.push({ provider: 'logging-operator', kind: 'Logging', group: 'logging.banzaicloud.io', namespace: '', name: 'default', instance: 'default', ignored: false, fallback: true, hasFilters: false,
+      destinations: [{ kind: 'ClusterOutput', namespace: 'logging', name: 'loki', found: true, active: true }], selectedPods: { count: 4, lowerBound: false } })
+    Object.assign(state, { data, error: null })
+    const html = render()
+    expect(html).toContain('default flow')
+    expect(html).not.toContain('lost with the pod')
+  })
+  it('says where it looked for collectors', () => {
+    const data = pipeline()
+    data.providers[0].instances[0].collectors = []
+    data.providers[0].instances[0].collectorNamespace = 'logging-agents'
+    Object.assign(state, { data, error: null })
+    expect(render()).toContain('Not found in logging-agents')
   })
 })

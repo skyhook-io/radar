@@ -9,7 +9,7 @@ const KIND_LABELS: Record<string, string> = {
   pods: 'Pods', loggings: 'Loggings', fluentbitagents: 'FluentbitAgents', clusterflows: 'ClusterFlows', flows: 'Flows',
   clusteroutputs: 'ClusterOutputs', outputs: 'Outputs', daemonsets: 'DaemonSets', statefulsets: 'StatefulSets',
 }
-const PLURALS: Record<string, string> = { ClusterFlow: 'clusterflows', Flow: 'flows', ClusterOutput: 'clusteroutputs', Output: 'outputs' }
+const PLURALS: Record<string, string> = { ClusterFlow: 'clusterflows', Flow: 'flows', ClusterOutput: 'clusteroutputs', Output: 'outputs', Logging: 'loggings' }
 
 function Count({ value, what }: { value: LogPodCount; what: string }) {
   const { text, title } = countLabel(value, what)
@@ -49,7 +49,7 @@ function RouteRows({ routes, open }: { routes: LogPipelineRoute[]; open: Open })
     <>
       {routes.map((r) => (
         <div key={`${r.kind}/${r.namespace}/${r.name}`} className="flex flex-wrap items-center gap-1.5 text-sm">
-          <button className="text-left text-accent-text hover:underline" onClick={() => open({ kind: PLURALS[r.kind] ?? 'flows', namespace: r.namespace, name: r.name, group: r.group })}>{`${r.kind} ${r.name}`}</button>
+          <button className="text-left text-accent-text hover:underline" onClick={() => open({ kind: PLURALS[r.kind] ?? 'flows', namespace: r.namespace, name: r.name, group: r.group })}>{r.fallback ? 'default flow' : `${r.kind} ${r.name}`}</button>
           {r.ignored ? <Badge severity="neutral" size="sm">ignored by the operator</Badge> : <Count value={r.selectedPods} what="running pods selected" />}
           {r.active === false && <Badge severity="error" size="sm">inactive</Badge>}
         </div>
@@ -103,9 +103,9 @@ function Instance({ provider, instance, gaps, open }: { provider: LogPipelinePro
         Logging <span className="font-medium text-theme-text-primary">{instance.name}</span> · control namespace {instance.controlNamespace}
       </div>
       <div className="flex flex-col gap-3 md:flex-row">
-        <Step title="Collectors"><Workloads items={instance.collectors} empty={instance.collectorsUnread ? 'Not read' : 'None found'} open={open} /></Step>
+        <Step title="Collectors"><Workloads items={instance.collectors} empty={instance.collectorsUnread ? 'Not read' : `Not found in ${instance.collectorNamespace || instance.controlNamespace}`} open={open} /></Step>
         <Arrow />
-        <Step title="Aggregator"><Workloads items={instance.aggregators} empty={instance.aggregatorsUnread ? 'Not read' : 'None found'} open={open} /></Step>
+        <Step title="Aggregator"><Workloads items={instance.aggregators} empty={instance.aggregatorsUnread ? 'Not read' : `Not found in ${instance.controlNamespace}`} open={open} /></Step>
         <Arrow />
         <Step title="Routes · running pods"><RouteRows routes={routes} open={open} /></Step>
         <Arrow />
@@ -160,9 +160,9 @@ export function LoggingView({ namespaces, onOpenResource }: WorkspaceScreenProps
         ))}
         <section className="card-inner space-y-2">
           <div className="text-sm font-medium text-theme-text-primary">
-            Running pods nothing routes: <Count value={data.unrouted} what="running pods whose logs no route selects" />
+            Running pods no Logging operator route selects: <Count value={data.unrouted} what="running pods no Flow or default flow selects" />
           </div>
-          <div className="text-xs text-theme-text-tertiary">Their logs are lost with the pod.{data.unrouted.truncated && ` Showing the first ${data.unrouted.pods.length}.`}</div>
+          <div className="text-xs text-theme-text-tertiary">Radar reads only Logging operator Flows; another agent may still ship these logs.{data.unrouted.truncated && ` Showing the first ${data.unrouted.pods.length}.`}</div>
           {data.unrouted.pods.length > 0 && (
             <table className="w-full text-sm">
               <thead><tr className="text-left text-xs text-theme-text-tertiary"><th className="py-1 font-normal">Namespace</th><th className="py-1 font-normal">Pod</th></tr></thead>

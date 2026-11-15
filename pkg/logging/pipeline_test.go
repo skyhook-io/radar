@@ -3,6 +3,8 @@ package logging
 import (
 	"reflect"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestInstanceWorkloads(t *testing.T) {
@@ -18,6 +20,30 @@ func TestInstanceWorkloads(t *testing.T) {
 	collectors, aggregators := InstanceWorkloads(l, agents, ws)
 	if names(collectors) != "demo-fluentbit,inline-fluentbit" || names(aggregators) != "demo-fluentd" {
 		t.Fatalf("collectors=%s aggregators=%s", names(collectors), names(aggregators))
+	}
+}
+
+// A detached FluentdConfig or SyslogNGConfig owns the aggregator instead of
+// the Logging; the Logging's status names it.
+func TestInstanceWorkloadsDetachedAggregator(t *testing.T) {
+	l := LoggingFrom(&unstructured.Unstructured{Object: map[string]any{
+		"kind": "Logging", "metadata": map[string]any{"name": "demo"},
+		"spec":   map[string]any{"controlNamespace": "logging", "fluentBitAgentNamespace": "agents"},
+		"status": map[string]any{"fluentdConfigName": "demo-fluentd", "syslogNGConfigName": "demo-syslog"},
+	}})
+	if l.CollectorNamespace != "agents" {
+		t.Errorf("CollectorNamespace = %q", l.CollectorNamespace)
+	}
+	if def := LoggingFrom(&unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"controlNamespace": "logging"}}}); def.CollectorNamespace != "logging" {
+		t.Errorf("default CollectorNamespace = %q", def.CollectorNamespace)
+	}
+	ws := []Workload{
+		{Kind: "StatefulSet", Name: "fd", OwnerKind: "FluentdConfig", OwnerName: "demo-fluentd"},
+		{Kind: "StatefulSet", Name: "sng", OwnerKind: "SyslogNGConfig", OwnerName: "demo-syslog"},
+		{Kind: "StatefulSet", Name: "other", OwnerKind: "FluentdConfig", OwnerName: "someone-else"},
+	}
+	if _, aggregators := InstanceWorkloads(l, nil, ws); names(aggregators) != "fd,sng" {
+		t.Fatalf("aggregators = %s", names(aggregators))
 	}
 }
 

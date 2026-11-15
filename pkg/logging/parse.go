@@ -58,6 +58,12 @@ type Logging struct {
 	// ClusterFlows and ClusterOutputs count from any namespace.
 	ClusterResourcesFromAllNamespaces bool
 	DefaultFlow                       *DefaultFlow // spec.defaultFlow
+	// CollectorNamespace: spec.fluentBitAgentNamespace, where the fluent-bit
+	// DaemonSets run; the control namespace when unset.
+	CollectorNamespace string
+	// Detached aggregator configs the operator bound (status.fluentdConfigName,
+	// status.syslogNGConfigName); they own the aggregator StatefulSet.
+	FluentdConfigName, SyslogNGConfigName string
 }
 
 // DefaultFlow receives what no Flow of its Logging selects.
@@ -75,6 +81,12 @@ func LoggingFrom(u *unstructured.Unstructured) Logging {
 	selector, _, _ := unstructured.NestedMap(u.Object, "spec", "watchNamespaceSelector")
 	l.WatchSelector = len(selector) > 0
 	l.ClusterResourcesFromAllNamespaces, _, _ = unstructured.NestedBool(u.Object, "spec", "allowClusterResourcesFromAllNamespaces")
+	l.CollectorNamespace, _, _ = unstructured.NestedString(u.Object, "spec", "fluentBitAgentNamespace")
+	if l.CollectorNamespace == "" {
+		l.CollectorNamespace = l.ControlNamespace
+	}
+	l.FluentdConfigName, _, _ = unstructured.NestedString(u.Object, "status", "fluentdConfigName")
+	l.SyslogNGConfigName, _, _ = unstructured.NestedString(u.Object, "status", "syslogNGConfigName")
 	if df, found, _ := unstructured.NestedMap(u.Object, "spec", "defaultFlow"); found && df != nil {
 		d := &DefaultFlow{}
 		d.GlobalOutputs, _, _ = unstructured.NestedStringSlice(df, "globalOutputRefs")

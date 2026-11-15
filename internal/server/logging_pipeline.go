@@ -31,10 +31,12 @@ type logWorkload struct {
 }
 
 type logInstance struct {
-	Name             string        `json:"name"`
-	ControlNamespace string        `json:"controlNamespace"`
-	Collectors       []logWorkload `json:"collectors"`
-	Aggregators      []logWorkload `json:"aggregators"`
+	Name             string `json:"name"`
+	ControlNamespace string `json:"controlNamespace"`
+	// CollectorNamespace is where the collectors run (fluentBitAgentNamespace).
+	CollectorNamespace string        `json:"collectorNamespace"`
+	Collectors         []logWorkload `json:"collectors"`
+	Aggregators        []logWorkload `json:"aggregators"`
 	// Unread: the caller or Radar couldn't read that kind in this Logging's
 	// control namespace (or FluentbitAgents, for collectors), so an empty
 	// list means unknown, not none.
@@ -50,8 +52,11 @@ type logPipelineRoute struct {
 	Name      string `json:"name"`
 	// Instance names the Logging whose loggingRef the route carries; empty when
 	// no Logging has it.
-	Instance     string           `json:"instance"`
-	Ignored      bool             `json:"ignored"`
+	Instance string `json:"instance"`
+	Ignored  bool   `json:"ignored"`
+	// Fallback: the route receives what no other route of its instance selects
+	// (the Logging's defaultFlow).
+	Fallback     bool             `json:"fallback,omitempty"`
 	HasFilters   bool             `json:"hasFilters"`
 	Active       *bool            `json:"active,omitempty"`
 	Destinations []logDestination `json:"destinations"`
@@ -183,10 +188,13 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(loggings, func(i, j int) bool { return loggings[i].Name < loggings[j].Name })
 	loggingsUnread := slices.Contains(resp.Coverage.Gaps, logReadError{logging.Group, "loggings"})
-	controlNamespace := map[string]string{}
+	clusterOutputNamespace := map[string]string{} // "" is every namespace
 	instanceOf := map[string]string{}
 	for _, l := range loggings {
-		controlNamespace[l.LoggingRef] = l.ControlNamespace
+		clusterOutputNamespace[l.LoggingRef] = l.ControlNamespace
+		if l.ClusterResourcesFromAllNamespaces {
+			clusterOutputNamespace[l.LoggingRef] = ""
+		}
 		instanceOf[l.LoggingRef] = l.Name
 	}
 	var agents []logging.Agent
@@ -227,17 +235,18 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 			cands = append(cands, c)
 			provider.Routes = append(provider.Routes, logPipelineRoute{
 				Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
-				Instance: instanceOf[f.LoggingRef], Ignored: c.Ignored, HasFilters: f.HasFilters, Active: flowActive(u), Destinations: flowDestinations(f, outputs, controlNamespace),
+				Instance: instanceOf[f.LoggingRef], Ignored: c.Ignored, HasFilters: f.HasFilters, Active: flowActive(u), Destinations: flowDestinations(f, outputs, clusterOutputNamespace),
 			})
 		}
 	}
 	// An unread Flow may route a pod of its namespace, and an unread ClusterFlow
 	// in a control namespace (the only place the operator counts one) any pod:
 	// such pods aren't known to be unrouted. Outside the control namespaces an
-	// unread ClusterFlow routes nothing.
+	// unread ClusterFlow routes nothing, unless a Logging takes cluster
+	// resources from every namespace.
 	clusterFlowsKnown := !loggingsUnread
 	for _, l := range loggings {
-		if !access["clusterflows"].Covers(l.ControlNamespace) {
+		if !access["clusterflows"].Covers(l.ControlNamespace) || (l.ClusterResourcesFromAllNamespaces && access["clusterflows"].State != integration.KindCoverageFull) {
 			clusterFlowsKnown = false
 		}
 	}
@@ -246,11 +255,11 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	agentsUnread := slices.Contains(resp.Coverage.Gaps, logReadError{logging.Group, "fluentbitagents"})
 	for _, l := range loggings {
 		var ws []logging.Workload
-		ns := l.ControlNamespace
-		dsRead, _ := typed("apps", "daemonsets", []string{ns})
+		ns, agentNS := l.ControlNamespace, l.CollectorNamespace
+		dsRead, _ := typed("apps", "daemonsets", []string{agentNS})
 		stsRead, _ := typed("apps", "statefulsets", []string{ns})
-		if in(dsRead, ns) && cache.DaemonSets() != nil {
-			list, _ := cache.DaemonSets().DaemonSets(ns).List(labels.Everything())
+		if in(dsRead, agentNS) && cache.DaemonSets() != nil {
+			list, _ := cache.DaemonSets().DaemonSets(agentNS).List(labels.Everything())
 			for _, d := range list {
 				ws = append(ws, ownedWorkload("DaemonSet", d.Namespace, d.Name, d.OwnerReferences, int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled)))
 			}
@@ -267,8 +276,8 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		}
 		collectors, aggregators := logging.InstanceWorkloads(l, agents, ws)
 		provider.Instances = append(provider.Instances, logInstance{
-			Name: l.Name, ControlNamespace: ns, Collectors: wireWorkloads(collectors), Aggregators: wireWorkloads(aggregators),
-			CollectorsUnread: !in(dsRead, ns) || agentsUnread, AggregatorsUnread: !in(stsRead, ns),
+			Name: l.Name, ControlNamespace: ns, CollectorNamespace: agentNS, Collectors: wireWorkloads(collectors), Aggregators: wireWorkloads(aggregators),
+			CollectorsUnread: !in(dsRead, agentNS) || agentsUnread, AggregatorsUnread: !in(stsRead, ns),
 		})
 	}
 
@@ -291,6 +300,47 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	for i := range provider.Routes {
 		provider.Routes[i].SelectedPods = logPodCount{Count: counts[i].Count, LowerBound: counts[i].LowerBound || podsPartial}
 	}
+	// knownUnrouted keeps the pods every route that could select them was read
+	// for; partial: some were dropped.
+	knownUnrouted := func(ps []logging.PodFacts) (known []logging.PodFacts, partial bool) {
+		if !clusterFlowsKnown {
+			return nil, true
+		}
+		for _, p := range ps {
+			if flowsKnownIn(p.Namespace) {
+				known = append(known, p)
+			} else {
+				partial = true
+			}
+		}
+		return known, partial
+	}
+	// A Logging's defaultFlow receives every pod no Flow of that Logging
+	// selects, so with one, no pod is unrouted.
+	defaultCatches := false
+	for _, l := range loggings {
+		if l.DefaultFlow == nil {
+			continue
+		}
+		defaultCatches = true
+		var own []logging.Candidate
+		for _, c := range cands {
+			if c.Flow.LoggingRef == l.LoggingRef {
+				own = append(own, c)
+			}
+		}
+		_, caught, maybe := logging.CountPods(own, pods)
+		caught, partial := knownUnrouted(caught)
+		route := logPipelineRoute{
+			Provider: providerLoggingOperator, Kind: "Logging", Group: logging.Group, Name: l.Name, Instance: l.Name, Fallback: true,
+			HasFilters: l.DefaultFlow.HasFilters, Destinations: []logDestination{},
+			SelectedPods: logPodCount{Count: len(caught), LowerBound: podsPartial || partial || maybe},
+		}
+		for _, ref := range l.DefaultFlow.GlobalOutputs {
+			route.Destinations = append(route.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], ref))
+		}
+		provider.Routes = append(provider.Routes, route)
+	}
 	sort.Slice(provider.Routes, func(i, j int) bool {
 		a, b := provider.Routes[i], provider.Routes[j]
 		if a.Ignored != b.Ignored {
@@ -301,19 +351,9 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(unrouted, func(i, j int) bool {
 		return unrouted[i].Namespace+"/"+unrouted[i].Name < unrouted[j].Namespace+"/"+unrouted[j].Name
 	})
-	routesPartial := !clusterFlowsKnown
-	if clusterFlowsKnown {
-		known := unrouted[:0]
-		for _, p := range unrouted {
-			if flowsKnownIn(p.Namespace) {
-				known = append(known, p)
-			} else {
-				routesPartial = true
-			}
-		}
-		unrouted = known
-	} else {
-		unrouted = nil
+	unrouted, routesPartial := knownUnrouted(unrouted)
+	if defaultCatches {
+		unrouted, routesPartial, uncertain = nil, false, false
 	}
 	resp.Unrouted.Count = len(unrouted)
 	resp.Unrouted.LowerBound = podsPartial || routesPartial || uncertain

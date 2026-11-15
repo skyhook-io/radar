@@ -12,7 +12,8 @@ type Workload struct {
 type Agent struct{ Name, LoggingRef string }
 
 // InstanceWorkloads finds a Logging's collectors (DaemonSets owned by it, or by
-// a FluentbitAgent with its loggingRef) and aggregators (StatefulSets it owns).
+// a FluentbitAgent with its loggingRef) and aggregators (StatefulSets owned by
+// it, or by the detached FluentdConfig or SyslogNGConfig its status names).
 func InstanceWorkloads(l Logging, agents []Agent, ws []Workload) (collectors, aggregators []Workload) {
 	ours := map[string]bool{}
 	for _, a := range agents {
@@ -25,7 +26,9 @@ func InstanceWorkloads(l Logging, agents []Agent, ws []Workload) (collectors, ag
 		switch {
 		case w.Kind == "DaemonSet" && (byLogging || (w.OwnerKind == "FluentbitAgent" && ours[w.OwnerName])):
 			collectors = append(collectors, w)
-		case w.Kind == "StatefulSet" && byLogging:
+		case w.Kind == "StatefulSet" && (byLogging ||
+			(w.OwnerKind == "FluentdConfig" && l.FluentdConfigName != "" && w.OwnerName == l.FluentdConfigName) ||
+			(w.OwnerKind == "SyslogNGConfig" && l.SyslogNGConfigName != "" && w.OwnerName == l.SyslogNGConfigName)):
 			aggregators = append(aggregators, w)
 		}
 	}

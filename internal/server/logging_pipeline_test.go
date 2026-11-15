@@ -37,23 +37,29 @@ func owned(kind, name string) []metav1.OwnerReference {
 // (label logs=on) → ClusterOutput loki, plus the given pods.
 func seedPipelineFixture(t *testing.T, pods ...runtime.Object) {
 	t.Helper()
+	seedPipelineFixtureWith(t, map[string]any{"controlNamespace": "logging-system"}, nil, []runtime.Object{
+		&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentbit", OwnerReferences: owned("FluentbitAgent", "default")},
+			Status: appsv1.DaemonSetStatus{NumberReady: 2, DesiredNumberScheduled: 3}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentd", OwnerReferences: owned("Logging", "default")},
+			Status: appsv1.StatefulSetStatus{ReadyReplicas: 1, Replicas: 1}},
+	}, pods...)
+}
+
+func seedPipelineFixtureWith(t *testing.T, loggingSpec, loggingStatus map[string]any, workloads []runtime.Object, pods ...runtime.Object) {
+	t.Helper()
 	restoreFixtureCache(t)
 	k8s.ResetResourceCache()
 	objs := append([]runtime.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "logging-system"}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team"}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ops"}},
-		&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentbit", OwnerReferences: owned("FluentbitAgent", "default")},
-			Status: appsv1.DaemonSetStatus{NumberReady: 2, DesiredNumberScheduled: 3}},
-		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentd", OwnerReferences: owned("Logging", "default")},
-			Status: appsv1.StatefulSetStatus{ReadyReplicas: 1, Replicas: 1}},
-	}, pods...)
+	}, append(workloads, pods...)...)
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objs...)); err != nil {
 		t.Fatal(err)
 	}
 	kinds := append(loggingKinds(), k8s.APIResource{Group: logging.Group, Version: "v1beta1", Name: "fluentbitagents", Kind: "FluentbitAgent", Verbs: []string{"get", "list", "watch"}})
 	seedCNPGWorkspace(t, kinds,
-		lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil),
+		lgObj("Logging", "", "default", loggingSpec, loggingStatus),
 		lgObj("FluentbitAgent", "", "default", map[string]any{}, nil),
 		lgObj("ClusterFlow", "logging-system", "optin", map[string]any{
 			"match":            []any{map[string]any{"select": map[string]any{"labels": map[string]any{"logs": "on"}}}},
@@ -297,5 +303,41 @@ func TestLoggingPipelineInstanceSaysWhatItRead(t *testing.T) {
 	in := got.Providers[0].Instances[0]
 	if !in.CollectorsUnread || in.AggregatorsUnread {
 		t.Fatalf("instance = %+v", in)
+	}
+}
+
+// Collectors run in fluentBitAgentNamespace, and a detached FluentdConfig owns
+// the aggregator.
+func TestLoggingPipelineAgentNamespaceAndDetachedAggregator(t *testing.T) {
+	seedPipelineFixtureWith(t,
+		map[string]any{"controlNamespace": "logging-system", "fluentBitAgentNamespace": "logging-agents"},
+		map[string]any{"fluentdConfigName": "default-fluentd"},
+		[]runtime.Object{
+			&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-agents", Name: "default-fluentbit", OwnerReferences: owned("FluentbitAgent", "default")}},
+			&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentd", OwnerReferences: owned("FluentdConfig", "default-fluentd")}},
+		}, pipelinePods()...)
+	got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
+	i := got.Providers[0].Instances[0]
+	if len(i.Collectors) != 1 || i.Collectors[0].Namespace != "logging-agents" || i.CollectorNamespace != "logging-agents" || len(i.Aggregators) != 1 || i.Aggregators[0].Name != "default-fluentd" {
+		t.Fatalf("instance = %+v", i)
+	}
+}
+
+// The defaultFlow receives what no Flow selects: those pods are routed, and it
+// shows as a route with their count.
+func TestLoggingPipelineDefaultFlow(t *testing.T) {
+	seedPipelineFixtureWith(t, map[string]any{"controlNamespace": "logging-system", "defaultFlow": map[string]any{"globalOutputRefs": []any{"loki"}}}, nil, nil, pipelinePods()...)
+	got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
+	if got.Unrouted.Count != 0 || len(got.Unrouted.Pods) != 0 {
+		t.Errorf("unrouted = %+v", got.Unrouted)
+	}
+	var fb *logPipelineRoute
+	for i, r := range got.Providers[0].Routes {
+		if r.Fallback {
+			fb = &got.Providers[0].Routes[i]
+		}
+	}
+	if fb == nil || fb.Kind != "Logging" || fb.Instance != "default" || fb.SelectedPods != (logPodCount{Count: 1}) || len(fb.Destinations) != 1 || !fb.Destinations[0].Found {
+		t.Fatalf("default flow route = %+v", fb)
 	}
 }
