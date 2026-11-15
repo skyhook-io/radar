@@ -2146,8 +2146,12 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 	// permCache.Get back after a transient discovery failure conflates
 	// "cluster-admin sentinel" with "cache miss" and would silently leak the
 	// full namespace list to a restricted user during apiserver flakes.
-	allowedNames := s.parseNamespacesForUser(r)
+	allowedNames, discoveryFailed := s.parseNamespacesForUserWithStatus(r)
 	if allowedNames != nil && len(allowedNames) == 0 {
+		if discoveryFailed {
+			s.writeCollectionFailure(w, "namespaces", permissionFailure(false, ""))
+			return
+		}
 		s.writeJSON(w, []map[string]any{})
 		return
 	}
@@ -2165,7 +2169,12 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 		// GetAccessibleNamespaces (SA-listed). Apply the same per-user
 		// filter so restricted users don't see SA-visible names they
 		// have no access to.
-		accessible, _ := k8s.GetAccessibleNamespaces(r.Context())
+		accessible, source := k8s.GetAccessibleNamespacesWithSource(r.Context())
+		if source == k8s.NamespaceListFailed {
+			// The seeds alone would read as the whole list.
+			s.writeCollectionFailure(w, "namespaces", readFailuref(readreason.ReadError, "Radar couldn't list namespaces; retry shortly"))
+			return
+		}
 		result := make([]map[string]any, 0, len(accessible))
 		for _, name := range accessible {
 			if allowedSet != nil && !allowedSet[name] {

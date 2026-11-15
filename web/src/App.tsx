@@ -1044,7 +1044,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const hideGroupHeader = namespaces.length === 1 && effectiveGroupingMode === 'namespace'
 
   // Fetch available namespaces
-  const { data: availableNamespaces } = useNamespaces()
+  const { data: availableNamespaces, error: availableNamespacesError } = useNamespaces()
 
   // This tab's namespace pick plus the picker's source list (see
   // utils/namespacePick). Loaded eagerly so the picker can render its current
@@ -2220,6 +2220,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                     <div className="relative">
                       <LargeClusterNamespacePicker
                         namespaces={availableNamespaces}
+                        error={availableNamespacesError?.message}
                         onSelect={(ns) => {
                           setNamespaces([ns])
                           setActiveNamespace.mutate({ namespaces: [ns] })
@@ -2351,6 +2352,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             initialTimeRange={(searchParams.get('time') as '5m' | '30m' | '1h' | '6h' | '24h' | 'all') || undefined}
             requiresNamespaceFilter={topology?.requiresNamespaceFilter && namespaces.length === 0}
             availableNamespaces={availableNamespaces}
+            availableNamespacesError={availableNamespacesError?.message}
             onNamespaceSelect={(ns) => {
               setNamespaces([ns])
               setActiveNamespace.mutate({ namespaces: [ns] })
