@@ -295,7 +295,7 @@ func main() {
 		t.Before = append(t.Before, time.Since(start).Nanoseconds())
 
 		start = time.Now()
-		after, coverage := k8s.AnswerRelationships(fetched, s.obj, owner, unrestricted, istioDomain, provider, dp)
+		after, coverage := k8s.AnswerRelationships(cache, fetched, s.obj, owner, unrestricted, istioDomain)
 		t.After = append(t.After, time.Since(start).Nanoseconds())
 		if after == nil {
 			after = &topology.Relationships{}
@@ -382,7 +382,7 @@ func main() {
 			}
 			t.Before = append(t.Before, time.Since(start).Nanoseconds())
 			start = time.Now()
-			after, _ := k8s.AnswerRelationships(fetched, s.obj, owner, restricted, istioDomain, provider, dp)
+			after, _ := k8s.AnswerRelationships(cache, fetched, s.obj, owner, restricted, istioDomain)
 			if after == nil {
 				after = &topology.Relationships{}
 			}

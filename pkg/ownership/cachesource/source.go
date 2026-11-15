@@ -113,6 +113,15 @@ func TypedCache(s ownership.ReadSession) (*k8score.ResourceCache, bool) {
 	return cs.caches.Typed, true
 }
 
+// SessionCaches returns the caches pinned by a session begun by this source.
+func SessionCaches(s ownership.ReadSession) (Caches, bool) {
+	cs, ok := s.(*session)
+	if !ok {
+		return Caches{}, false
+	}
+	return cs.caches, true
+}
+
 func (s *session) Catalog() *ownership.Catalog {
 	return s.catalog
 }

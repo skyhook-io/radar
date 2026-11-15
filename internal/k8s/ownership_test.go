@@ -367,3 +367,28 @@ func TestAnswerLiveManagerPreservesCallerAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestRelationshipReadBindsCapturedCache(t *testing.T) {
+	_, typed, source, _ := historyFixture(t)
+	previous := ownershipSource
+	ownershipSource = source.(*cachesource.Source)
+	t.Cleanup(func() { ownershipSource = previous })
+	captured := &ResourceCache{ResourceCache: typed}
+	session, err := BeginOwnershipRead(captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caches, ok := cachesource.SessionCaches(session)
+	if !ok || caches.Typed != typed {
+		t.Fatalf("session caches = %+v, %v", caches, ok)
+	}
+	for _, wrong := range []*ResourceCache{nil, {ResourceCache: &k8score.ResourceCache{}}} {
+		if _, err := BeginOwnershipRead(wrong); !errors.Is(err, ownership.ErrCachesReplaced) {
+			t.Fatalf("wrong cache: %v", err)
+		}
+		answer, _ := AnswerRelationships(wrong, ownership.Observation{}, nil, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, "")
+		if answer != nil {
+			t.Fatalf("answer after cache mismatch: %+v", answer)
+		}
+	}
+}

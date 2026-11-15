@@ -162,14 +162,23 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 // relationship graph's edges are (topology.RelationsAnswer), then ownership,
 // with one ownership view whose searches both share. It answers nil when the
 // caches aren't ready or are replaced mid-answer.
-func AnswerRelationships(fetched ownership.Observation, obj runtime.Object, owner metav1.Object, access func(*ownership.Catalog) ownership.Access, istioDomain string, provider topology.ResourceProvider, dp topology.DynamicProvider) (*topology.Relationships, map[string]relations.Coverage) {
-	session, err := ownershipSource.Begin()
+func AnswerRelationships(cache *ResourceCache, fetched ownership.Observation, obj runtime.Object, owner metav1.Object, access func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage) {
+	session, err := BeginOwnershipRead(cache)
 	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
 		return nil, nil
 	}
 	rs, ok := session.(relations.Session)
 	if !ok {
 		return nil, nil
+	}
+	caches, ok := cachesource.SessionCaches(session)
+	if !ok {
+		return nil, nil
+	}
+	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
+	var dp topology.DynamicProvider
+	if caches.Dynamic != nil && caches.Discovery != nil {
+		dp = NewTopologyDynamicProvider(&DynamicResourceCache{DynamicResourceCache: caches.Dynamic}, &ResourceDiscovery{ResourceDiscovery: caches.Discovery})
 	}
 	acc := access(session.Catalog())
 	ov := ownership.NewView(session, acc)
