@@ -27,7 +27,8 @@ type Session interface {
 	ownership.ReadSession
 	// Indexed reads the objects of gk in scope that index files under any of
 	// keys, from stores loaded in full, each object once, with a gap for each
-	// part of scope it couldn't read. A kind discovery doesn't serve is read
+	// part of scope it couldn't read. An empty index reads every object of
+	// gk in scope. A kind discovery doesn't serve is read
 	// as empty only when discovery was complete. The objects are the cached
 	// ones: callers must not modify or keep them.
 	Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead

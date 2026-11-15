@@ -39,9 +39,9 @@ func visitPathRef(visit func(Declaration), r configrefs.PathRef) {
 var Autoscalers = &Family{
 	Name: "autoscalers",
 	Sources: []Source{
-		{Kind: resourceid.GroupKind{Group: "autoscaling", Kind: "HorizontalPodAutoscaler"}},
+		{Kind: resourceid.GroupKind{Group: "autoscaling", Kind: "HorizontalPodAutoscaler"}, Targets: []resourceid.GroupKind{kindDeployment, kindStatefulSet, kindReplicaSet, kindRollout}},
 		{Kind: resourceid.GroupKind{Group: "autoscaling.k8s.io", Kind: "VerticalPodAutoscaler"}},
-		{Kind: kindScaledObject},
+		{Kind: kindScaledObject, Targets: []resourceid.GroupKind{kindDeployment, kindStatefulSet, kindRollout}},
 	},
 	Targets: []resourceid.GroupKind{kindDeployment, kindStatefulSet, kindDaemonSet, kindReplicaSet, kindRollout},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
@@ -66,16 +66,16 @@ var Autoscalers = &Family{
 	},
 }
 
-// KEDAAuthentication is the family of the TriggerAuthentications a KEDA
-// ScaledObject or ScaledJob's triggers use. A ClusterTriggerAuthentication is
-// cluster-scoped: References lists it, and Referrers doesn't answer for it.
+// KEDAAuthentication is the family of the TriggerAuthentications and
+// ClusterTriggerAuthentications a KEDA ScaledObject or ScaledJob's triggers
+// use.
 var KEDAAuthentication = &Family{
 	Name: "kedaAuthentication",
 	Sources: []Source{
 		{Kind: kindScaledObject},
 		{Kind: resourceid.GroupKind{Group: "keda.sh", Kind: "ScaledJob"}},
 	},
-	Targets: []resourceid.GroupKind{{Group: "keda.sh", Kind: "TriggerAuthentication"}},
+	Targets: []resourceid.GroupKind{{Group: "keda.sh", Kind: "TriggerAuthentication"}, {Group: "keda.sh", Kind: "ClusterTriggerAuthentication"}},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		u, ok := obj.(*unstructured.Unstructured)
 		if !ok {
@@ -98,8 +98,8 @@ var IngressBackends = &Family{
 		if !ok {
 			return nil
 		}
-		for _, name := range configrefs.IngressBackendServices(ing) {
-			visit(Declaration{Target: resourceid.Ref{Kind: "Service", Namespace: ing.Namespace, Name: name}, Path: "spec.rules[].http.paths[].backend.service.name"})
+		for _, r := range configrefs.IngressBackendServiceRefs(ing) {
+			visitPathRef(visit, r)
 		}
 		return nil
 	},

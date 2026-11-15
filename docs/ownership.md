@@ -74,18 +74,28 @@ with the path declaring it. The `View` answers every family the same way:
 
 - `References(family, subject)`: each target the subject declares, every path declaring it, and what reading it
   found: present, absent, unread (with its gap) or withheld from the caller.
-- `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A family's
-  targets are always in the declarer's namespace, so the answer reads that namespace's objects of each declaring kind
-  through the namespace index and evaluates what each declares; an index of every declaration cost about 1.4 KB per
-  Pod and made a Pod relist about five times as long
-  ([measurements](loadtest.md#relationship-cost-baselines)).
+- `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A
+  family's namespaced targets are always in the declarer's namespace, so the answer reads that namespace's objects of
+  each declaring kind through the namespace index and evaluates what each declares; for a cluster-scoped target it
+  reads every namespace, checking the caller's access in each. An index of every declaration cost about 1.4 KB per Pod
+  and made a Pod relist about five times as long ([measurements](loadtest.md#relationship-cost-baselines)).
+- A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
+  doesn't scale a DaemonSet).
 - Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
   denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
 
-**Config references** (`config_references.go`) is the first family: the ConfigMaps, Secrets, PersistentVolumeClaims and
-ServiceAccount a Pod, a pod-template workload (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo
-Rollout) or an Ingress's TLS declares, extracted by `pkg/configrefs` (`ObjectReferences`), which the topology builder
-also uses. ReplicaSets scaled explicitly to zero declare nothing: they are old revisions.
+The families so far:
+
+| Family | Sources → targets | File |
+|---|---|---|
+| `ConfigReferences` | Pods, pod-template workloads (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo Rollout), Ingress TLS → ConfigMaps, Secrets, PersistentVolumeClaims, ServiceAccounts. ReplicaSets scaled explicitly to zero declare nothing: they are old revisions | `config_references.go` |
+| `Autoscalers` | HorizontalPodAutoscalers, VerticalPodAutoscalers, KEDA ScaledObjects → the workloads they scale, per source as each controller accepts them | `families.go` |
+| `KEDAAuthentication` | ScaledObjects, ScaledJobs → TriggerAuthentications, ClusterTriggerAuthentications | `families.go` |
+| `IngressBackends` | Ingresses → their default and rule backend Services | `families.go` |
+| `RolloutServices` | Argo Rollouts → the canary, stable, active and preview Services their strategy names | `families.go` |
+| `CertificateSecrets` | cert-manager Certificates → the Secret they write | `families.go` |
+
+Extractors live in `pkg/configrefs`, which the topology builder also uses.
 
 Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
 one change that also removes the graph.

@@ -127,10 +127,12 @@ func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []st
 }
 
 // readIndex reads the objects indexer files under any of keys, which are
-// sorted and distinct, each once. One of k8score's own indexes answers every
+// sorted and distinct, each once; an empty index reads every object. One of k8score's own indexes answers every
 // key from one hold of the store's lock; any other is read key by key.
 func readIndex(indexer cache.Indexer, index string, keys []string) ([]any, error) {
 	switch {
+	case index == "":
+		return indexer.List(), nil
 	case len(keys) == 0:
 		return nil, nil
 	case len(keys) == 1:

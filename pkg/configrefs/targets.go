@@ -15,6 +15,18 @@ type PathRef struct {
 	Path string
 }
 
+// targetGroup is the API group a reference names: from its apiVersion, or,
+// for a reference that omits it, the group a built-in kind belongs to.
+func targetGroup(apiVersion, kind string) string {
+	if apiVersion != "" {
+		return resourceid.GroupFromAPIVersion(apiVersion)
+	}
+	if b, ok := resourceid.BuiltinForKind(kind); ok {
+		return b.Group
+	}
+	return ""
+}
+
 // HPAScaleTarget returns the workload a HorizontalPodAutoscaler scales, in
 // its own namespace.
 func HPAScaleTarget(hpa *autoscalingv2.HorizontalPodAutoscaler) (PathRef, bool) {
@@ -22,7 +34,7 @@ func HPAScaleTarget(hpa *autoscalingv2.HorizontalPodAutoscaler) (PathRef, bool) 
 	if t.Name == "" || t.Kind == "" {
 		return PathRef{}, false
 	}
-	return PathRef{Ref: resourceid.Ref{Group: resourceid.GroupFromAPIVersion(t.APIVersion), Kind: t.Kind, Namespace: hpa.Namespace, Name: t.Name}, Path: "spec.scaleTargetRef"}, true
+	return PathRef{Ref: resourceid.Ref{Group: targetGroup(t.APIVersion, t.Kind), Kind: t.Kind, Namespace: hpa.Namespace, Name: t.Name}, Path: "spec.scaleTargetRef"}, true
 }
 
 // VPATarget returns the workload a VerticalPodAutoscaler sizes, in its own
@@ -34,7 +46,7 @@ func VPATarget(vpa *unstructured.Unstructured) (PathRef, bool) {
 		return PathRef{}, false
 	}
 	apiVersion, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "apiVersion")
-	return PathRef{Ref: resourceid.Ref{Group: resourceid.GroupFromAPIVersion(apiVersion), Kind: kind, Namespace: vpa.GetNamespace(), Name: name}, Path: "spec.targetRef"}, true
+	return PathRef{Ref: resourceid.Ref{Group: targetGroup(apiVersion, kind), Kind: kind, Namespace: vpa.GetNamespace(), Name: name}, Path: "spec.targetRef"}, true
 }
 
 // KEDAScaleTargetRef is KEDAScaleTarget as a reference in the ScaledObject's

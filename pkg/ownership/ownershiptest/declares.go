@@ -99,8 +99,8 @@ func (s scanSession) Borrow(ref resourceid.Ref) (runtime.Object, ownership.Objec
 	return APIObject(s.byRef[ref]), read
 }
 
-// Indexed answers the namespace index, the only index it knows, by each
-// object's namespace.
+// Indexed answers the namespace index by each object's namespace, and an
+// empty index with every readable object; it knows no other index.
 func (s scanSession) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
 	var r relations.IndexedRead
 	gap := func(gk resourceid.GroupKind, namespace string, reason readreason.Code) {
@@ -124,11 +124,11 @@ func (s scanSession) Indexed(gk resourceid.GroupKind, index string, keys []strin
 		gap(gk, "", readreason.ReadError)
 	case served:
 		read, ok := s.readable(dependentKind{gk: gk, namespaced: namespaced}, scope, namespaces, gap)
-		if !ok || index != cache.NamespaceIndex {
+		if !ok || index != cache.NamespaceIndex && index != "" {
 			break
 		}
 		for _, o := range s.byKind[gk] {
-			if read(o) && slices.Contains(keys, o.Ref.Namespace) {
+			if read(o) && (index == "" || slices.Contains(keys, o.Ref.Namespace)) {
 				r.Objects = append(r.Objects, relations.IndexedObject{Ref: o.Ref, Object: APIObject(o)})
 			}
 		}

@@ -16,8 +16,9 @@ import (
 // such as the ConfigMaps a Pod mounts. A View answers both directions of
 // every family the same way, so adding one is a table entry.
 //
-// Every target a family declares is in its source's namespace: the sources
-// naming a target are found by reading that namespace.
+// A target is in its source's namespace or cluster-scoped: the sources
+// naming a namespaced target are found by reading its namespace, and those
+// naming a cluster-scoped one by reading every namespace.
 type Family struct {
 	// Name keys the family's coverage on the wire.
 	Name string
@@ -110,9 +111,11 @@ type ReferrersAnswer struct {
 // read the subject gets nothing.
 func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferencesAnswer {
 	var a ReferencesAnswer
-	if f.source(subject.GroupKind()) < 0 || !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
+	i := f.source(subject.GroupKind())
+	if i < 0 || !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
 		return a
 	}
+	source := f.Sources[i]
 	obj := fetched
 	if obj == nil {
 		borrowed, read := v.session.Borrow(subject)
@@ -128,6 +131,9 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 	}
 	byTarget := map[resourceid.Ref]int{}
 	err := f.Declared(obj, func(d Declaration) {
+		if !slices.Contains(f.Targets, d.Target.GroupKind()) || !source.declares(d.Target.GroupKind()) {
+			return
+		}
 		i, seen := byTarget[d.Target]
 		if !seen {
 			i = len(a.Declared)
@@ -144,8 +150,8 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 	slices.SortFunc(a.Declared, func(x, y Declared) int {
 		return cmp.Or(cmp.Compare(x.Ref.Group, y.Ref.Group), cmp.Compare(x.Ref.Kind, y.Ref.Kind), cmp.Compare(x.Ref.Name, y.Ref.Name))
 	})
-	for i := range a.Declared {
-		d := &a.Declared[i]
+	for j := range a.Declared {
+		d := &a.Declared[j]
 		switch v.decide(d.Ref.GroupKind(), d.Ref.Namespace) {
 		case ownership.Allowed:
 		case ownership.Undecided:
@@ -185,7 +191,7 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 // about 1.4 KB a Pod and made a relist about five times as long.
 func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferrersAnswer {
 	var a ReferrersAnswer
-	if !slices.Contains(f.Targets, subject.GroupKind()) || subject.Namespace == "" || !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
+	if !slices.Contains(f.Targets, subject.GroupKind()) || !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
 		return a
 	}
 	switch read := v.session.Object(subject); read.State {
@@ -201,17 +207,27 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	default:
 		return a
 	}
-	scope := ownership.InNamespace(subject.Namespace)
+	// A namespaced target's sources are in its namespace; a cluster-scoped
+	// one's anywhere, read in full (index "") rather than by namespace.
+	scope, index, keys := ownership.InNamespace(subject.Namespace), cache.NamespaceIndex, []string{subject.Namespace}
+	if subject.Namespace == "" {
+		scope, index, keys = ownership.SearchScope{AllNamespaces: true, IncludeClusterScoped: true}, "", nil
+	}
 	for _, source := range f.Sources {
 		gk := source.Kind
 		if !source.declares(subject.GroupKind()) || !v.mayRead(gk, subject.Namespace, &a.Coverage) {
 			continue
 		}
-		read := v.session.Indexed(gk, cache.NamespaceIndex, []string{subject.Namespace}, scope)
+		read := v.session.Indexed(gk, index, keys, scope)
 		for _, g := range read.Gaps {
 			a.Coverage.addGap(g)
 		}
 		for _, o := range read.Objects {
+			// Read across namespaces for a cluster-scoped target, each source
+			// is checked in its own namespace.
+			if subject.Namespace == "" && o.Ref.Namespace != "" && !v.mayRead(gk, o.Ref.Namespace, &a.Coverage) {
+				continue
+			}
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
 				if d.Target == subject && !slices.Contains(paths, d.Path) {

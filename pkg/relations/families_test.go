@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -89,3 +90,74 @@ func TestCertificateSecretsNameTheSecretTheyWrite(t *testing.T) {
 	cert := object("cert-manager.io/v1", "Certificate", "front", map[string]any{"secretName": "front-tls"})
 	checkFamily(t, CertificateSecrets, []runtime.Object{tls, cert}, cert, ref("", "Secret", "front-tls"), "spec.secretName")
 }
+
+func TestAClusterTriggerAuthenticationsReferrersAreReadAcrossNamespaces(t *testing.T) {
+	auth := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "keda.sh/v1alpha1", "kind": "ClusterTriggerAuthentication", "metadata": map[string]any{"name": "shared-creds"}}}
+	trigger := map[string]any{"triggers": []any{map[string]any{"type": "rabbitmq", "authenticationRef": map[string]any{"kind": "ClusterTriggerAuthentication", "name": "shared-creds"}}}}
+	inShop := object("keda.sh/v1alpha1", "ScaledObject", "worker", trigger)
+	inTeam := object("keda.sh/v1alpha1", "ScaledObject", "worker", trigger)
+	inTeam.SetNamespace("team")
+	c := allNamespaces{cluster{objects: []runtime.Object{auth, inShop, inTeam}}}
+	subject := resourceid.Ref{Group: "keda.sh", Kind: "ClusterTriggerAuthentication", Name: "shared-creds"}
+	if got := referrerRefs(NewView(c, ownership.Unrestricted()).Referrers(KEDAAuthentication, subject, nil)); len(got) != 2 {
+		t.Errorf("referrers = %v; want the ScaledObjects in both namespaces", got)
+	}
+	shopOnly := NewView(c, namespaceAccess("shop")).Referrers(KEDAAuthentication, subject, nil)
+	if got := referrerRefs(shopOnly); len(got) != 1 || got[0].Namespace != "shop" || !shopOnly.Coverage.Narrowed {
+		t.Errorf("a caller reading only shop got %+v", shopOnly)
+	}
+}
+
+func TestDeclarationsASourceCannotMakeAreLeftOut(t *testing.T) {
+	ds := typed(&appsv1.DaemonSet{ObjectMeta: meta("agent")}, "apps", "v1", "DaemonSet")
+	hpa := typed(&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: meta("agent"), Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+		ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "DaemonSet", Name: "agent"}}}, "autoscaling", "v2", "HorizontalPodAutoscaler")
+	v := NewView(cluster{objects: []runtime.Object{ds, hpa}}, ownership.Unrestricted())
+	if got := v.References(Autoscalers, refOf(hpa), hpa); len(got.Declared) != 0 {
+		t.Errorf("an HPA can't scale a DaemonSet, yet declares %+v", got.Declared)
+	}
+	if got := referrerRefs(v.Referrers(Autoscalers, refOf(ds), nil)); len(got) != 0 {
+		t.Errorf("a DaemonSet's autoscalers = %v; HPAs can't scale it", got)
+	}
+}
+
+func TestVersionlessAutoscalerTargetsResolveBuiltInGroups(t *testing.T) {
+	web := deployment("web", mounts())
+	hpa := typed(&autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: meta("web"), Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+		ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"}}}, "autoscaling", "v2", "HorizontalPodAutoscaler")
+	checkFamily(t, Autoscalers, []runtime.Object{web, hpa}, hpa, ref("apps", "Deployment", "web"), "spec.scaleTargetRef")
+}
+
+func TestAnIngressDefaultBackendSaysSo(t *testing.T) {
+	svc := typed(&corev1.Service{ObjectMeta: meta("fallback")}, "", "v1", "Service")
+	ing := typed(&networkingv1.Ingress{ObjectMeta: meta("front"), Spec: networkingv1.IngressSpec{DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "fallback"}}}}, "networking.k8s.io", "v1", "Ingress")
+	checkFamily(t, IngressBackends, []runtime.Object{svc, ing}, ing, ref("", "Service", "fallback"), "spec.defaultBackend.service.name")
+}
+
+// allNamespaces is a cluster whose Indexed also answers an empty index with
+// every object, as the cache source does.
+type allNamespaces struct{ cluster }
+
+func (c allNamespaces) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
+	if index != "" {
+		return c.cluster.Indexed(gk, index, keys, scope)
+	}
+	var r IndexedRead
+	for _, obj := range c.objects {
+		if ref := refOf(obj); ref.GroupKind() == gk {
+			r.Objects = append(r.Objects, IndexedObject{Ref: ref, Object: obj})
+		}
+	}
+	return r
+}
+
+// namespaceAccess may read only its namespaces, and anything cluster-scoped.
+type namespaceAccess string
+
+func (n namespaceAccess) CanRead(_ resourceid.GroupKind, namespace string) ownership.Decision {
+	if namespace == "" || namespace == string(n) {
+		return ownership.Allowed
+	}
+	return ownership.Denied
+}
+func (n namespaceAccess) Namespaces() ([]string, bool) { return []string{string(n)}, false }
