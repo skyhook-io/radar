@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/relations"
@@ -28,6 +29,8 @@ type relationEdge struct {
 // edges do. Storage and PodPlacement are answered by the direct reads
 // GetRelationshipsWithObject already makes.
 var familyEdges = map[string]relationEdge{
+	"fluxHelmOrigins":          {EdgeManages, true, ""},
+	"cronWorkflowRuns":         {EdgeManages, true, ""},
 	"configReferences":         {EdgeConfigures, true, ""},
 	"reflections":              {EdgeConfigures, true, reflectionEdgeLabel},
 	"sealedSecrets":            {EdgeManages, false, ""},
@@ -80,6 +83,15 @@ func edgeFor(family string, source, target resourceid.Ref) (relationEdge, bool) 
 		e = relationEdge{EdgeConfigures, false, ""}
 	}
 	return e, ok
+}
+
+func (n *neighborhood) projectFamily(session relations.Session, name string, target resourceid.Ref) bool {
+	if name != relations.FluxHelmOrigins.Name {
+		return true
+	}
+	obj, read := n.borrow(session, target)
+	u, ok := obj.(*unstructured.Unstructured)
+	return read.State == ownership.Present && ok && gitops.FluxTargetsLocalCluster(u) && !gitops.FluxMembersReadable(u)
 }
 
 // neighborhood is the part of a relationship graph around one subject that
@@ -143,7 +155,7 @@ func (n *neighborhood) cover(name string, c relations.Coverage) {
 // answer adds every family's answers about subject: what it declares and
 // selects, and what declares and selects it. routingOnly keeps the answers
 // that reach subject by routing, which is all a Service's entrypoints need.
-func (n *neighborhood) answer(v *relations.View, families []*relations.Family, selectors []*relations.SelectorFamily, subject resourceid.Ref, obj runtime.Object, routingOnly bool) {
+func (n *neighborhood) answer(session relations.Session, v *relations.View, families []*relations.Family, selectors []*relations.SelectorFamily, subject resourceid.Ref, obj runtime.Object, routingOnly bool) {
 	gk := subject.GroupKind()
 	for _, f := range families {
 		e, mapped := familyEdges[f.Name]
@@ -155,7 +167,9 @@ func (n *neighborhood) answer(v *relations.View, families []*relations.Family, s
 		for _, d := range refs.Declared {
 			if d.State == relations.TargetPresent {
 				if e, ok := edgeFor(f.Name, subject, d.Ref); ok {
-					n.edge(subject, d.Ref, e, false)
+					if n.projectFamily(session, f.Name, d.Ref) {
+						n.edge(subject, d.Ref, e, false)
+					}
 				}
 			}
 		}
@@ -163,7 +177,9 @@ func (n *neighborhood) answer(v *relations.View, families []*relations.Family, s
 		n.cover(f.Name, referrers.Coverage)
 		for _, r := range referrers.Referrers {
 			if e, ok := edgeFor(f.Name, r.Ref, subject); ok {
-				n.edge(r.Ref, subject, e, false)
+				if n.projectFamily(session, f.Name, subject) {
+					n.edge(r.Ref, subject, e, false)
+				}
 			}
 		}
 	}
@@ -198,7 +214,12 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access}
 	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
-	n.answer(v, families, selectors, subject, obj, false)
+	n.answer(session, v, families, selectors, subject, obj, false)
+	joined := v.Composed(relations.CertificateRoutes, subject, obj)
+	n.cover(relations.CertificateRoutes.Name, joined.Coverage)
+	for _, edge := range joined.Edges {
+		n.edge(edge.Producer, edge.Consumer, relationEdge{edge: EdgeConfigures}, false)
+	}
 
 	n.management(session, ov, subject)
 	children := ov.Children(subject)
@@ -216,7 +237,7 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 		}
 		for r := range n.nodes {
 			if familyNodeID(r) == e.Source && r.GroupKind() == serviceKind && r != subject {
-				n.answer(v, families, selectors, r, nil, true)
+				n.answer(session, v, families, selectors, r, nil, true)
 				n.knativeServing(session, r, nil)
 			}
 		}
