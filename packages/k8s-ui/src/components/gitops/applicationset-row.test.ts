@@ -1,4 +1,6 @@
 import { describe, test, expect } from 'vitest'
+import { getArgoApplicationSetStatus } from '../resources/resource-utils-argo'
+import { getGitOpsResourceStatus } from './detail-helpers'
 
 import { destinationNamespaceLabel, hasSyncPolicy, normalizeArgoApplicationSet, normalizeArgoApplication } from './GitOpsTableView'
 
@@ -222,5 +224,29 @@ describe('a declared template source claims the row even when unresolved', () =>
     const row = normalizeArgoApplicationSet(multi)
     expect(row.repository).toBe('')
     expect(row.path).toBe('')
+  })
+})
+
+
+describe('ApplicationSet health across resource and GitOps views', () => {
+  const ready = { type: 'ResourcesUpToDate', status: 'True' }
+  const progressing = { type: 'RolloutProgressing', status: 'True', message: 'Waiting for applications' }
+  const error = { type: 'ErrorOccurred', status: 'True', message: 'No rollout steps' }
+
+  test.each([
+    { name: 'generation complete while rolling out', status: { conditions: [ready, progressing] }, health: 'Progressing', badge: 'Progressing', message: progressing.message },
+    { name: 'generation error wins over progress', status: { conditions: [ready, progressing, error] }, health: 'Degraded', badge: 'Error', message: error.message },
+    { name: 'finished rollout', status: { conditions: [ready, { ...progressing, status: 'False' }] }, health: 'Healthy', badge: 'Ready', message: undefined },
+    { name: 'reported health wins', status: { conditions: [ready], health: { status: 'Progressing', message: 'Controller health' } }, health: 'Progressing', badge: 'Progressing', message: 'Controller health' },
+    { name: 'config warning independent from health', status: { conditions: [{ type: 'InvalidRolloutConfig', status: 'True' }], health: { status: 'Healthy' } }, health: 'Healthy', badge: 'Ready', message: undefined },
+    { name: 'empty health after an upgrade', status: { conditions: [ready, progressing], health: {} }, health: 'Progressing', badge: 'Progressing', message: progressing.message },
+    { name: 'unpopulated health status', status: { conditions: [ready, progressing], health: { status: '' } }, health: 'Progressing', badge: 'Progressing', message: progressing.message },
+    { name: 'reported unknown stays unknown', status: { conditions: [ready], health: { status: 'Unknown', message: 'Waiting' } }, health: 'Unknown', badge: 'Unknown', message: 'Waiting' },
+    { name: 'no status yet', status: {}, health: 'Unknown', badge: 'Unknown', message: 'Status cannot be determined' },
+  ])('$name', ({ status, health, badge, message }) => {
+    const resource = { ...listGeneratorSet, status }
+    expect(getGitOpsResourceStatus('applicationsets', resource)).toMatchObject({ health, message, sync: 'Unknown' })
+    expect(normalizeArgoApplicationSet(resource).health).toBe(health)
+    expect(getArgoApplicationSetStatus(resource).text).toBe(badge)
   })
 })

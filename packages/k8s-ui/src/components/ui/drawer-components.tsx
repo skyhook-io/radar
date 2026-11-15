@@ -256,6 +256,7 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'OutOfSync',
   // ArgoCD ApplicationSet
   'ErrorOccurred',
+  'InvalidRolloutConfig',
   // FluxCD (meta)
   'Stalled',
   // Gateway API (sigs.k8s.io/gateway-api v1)

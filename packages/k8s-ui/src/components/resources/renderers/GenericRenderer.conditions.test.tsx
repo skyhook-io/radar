@@ -4,6 +4,7 @@ import { GenericRenderer, genericConditionTone } from './GenericRenderer'
 
 const resource = { apiVersion: 'serving.kserve.io/v1beta1', kind: 'InferenceService', metadata: { name: 'fraud-score' } }
 const stopRequested = { ...resource, metadata: { ...resource.metadata, annotations: { 'serving.kserve.io/stop': 'true' } } }
+const appSet = { apiVersion: 'argoproj.io/v1alpha1', kind: 'ApplicationSet', metadata: { name: 'clusters' } }
 const cond = (type: string, status: string) => ({ type, status })
 
 describe('genericConditionTone', () => {
@@ -21,6 +22,21 @@ describe('genericConditionTone', () => {
     ['Stopped', 'Unknown', 'unknown'],
   ])('%s=%s is %s', (type, status, tone) => {
     expect(genericConditionTone(resource, cond(type, status))).toBe(tone)
+  })
+
+  it.each([
+    ['InvalidRolloutConfig', 'True', 'fail'],
+    ['InvalidRolloutConfig', 'False', 'ok'],
+    ['RolloutProgressing', 'True', 'neutral'],
+    ['RolloutProgressing', 'False', 'neutral'],
+    ['RolloutProgressing', 'Unknown', 'unknown'],
+  ])('ApplicationSet %s=%s is %s', (type, status, tone) => {
+    expect(genericConditionTone(appSet, cond(type, status))).toBe(tone)
+  })
+
+  it('does not reinterpret rollout activity on unrelated resources', () => {
+    expect(genericConditionTone({ ...appSet, apiVersion: 'example.com/v1' }, cond('RolloutProgressing', 'False'))).toBe('unclear')
+    expect(genericConditionTone({ ...appSet, kind: 'Workflow' }, cond('RolloutProgressing', 'True'))).toBe('ok')
   })
 
   it('follows a deliberate stop on readiness that is False because of it', () => {
@@ -49,6 +65,19 @@ describe('GenericRenderer conditions', () => {
     expect(chip?.[2]).toBe(status)
     return chip?.[1] ?? ''
   }
+
+  it('renders invalid rollout configuration as a problem independently of progress', () => {
+    const html = render([cond('InvalidRolloutConfig', 'True'), cond('RolloutProgressing', 'True')], appSet)
+    expect(chipClass(html, 'InvalidRolloutConfig', 'True')).toContain('status-red')
+    expect(chipClass(html, 'RolloutProgressing', 'True')).not.toContain('status-green')
+  })
+
+  it('renders a completed valid rollout without false problems', () => {
+    const html = render([cond('InvalidRolloutConfig', 'False'), cond('RolloutProgressing', 'False')], appSet)
+    expect(chipClass(html, 'InvalidRolloutConfig', 'False')).not.toContain('status-red')
+    expect(chipClass(html, 'RolloutProgressing', 'False')).not.toContain('status-red')
+    expect(html).not.toContain('bg-red-500/10')
+  })
 
   it("doesn't color a healthy service's Stopped=False red", () => {
     const html = render([cond('Ready', 'True'), cond('Stopped', 'False')])
