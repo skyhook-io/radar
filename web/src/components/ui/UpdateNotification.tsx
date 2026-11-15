@@ -200,7 +200,10 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   }
 
   // Determine what the current effective state is
-  const effectiveState: DesktopUpdateState = updateStatus?.state ?? 'idle'
+  // The updater is idle again once the new version is in place, before Radar
+  // restarts; the card keeps showing the restart rather than offering the
+  // update again.
+  const effectiveState: DesktopUpdateState = applyUpdate.isPending || applyUpdate.isSuccess ? 'applying' : updateStatus?.state ?? 'idle'
 
   const panel = shouldRender && (
     <div

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 let deploymentMode = 'local'
 let installMethod = 'direct'
 let manualUpdate: 'appimage' | 'package' | 'download' | undefined
+let applied = false
 
 vi.mock('../../api/client', () => ({
   useCapabilities: () => ({ data: { deployment: { mode: deploymentMode } } }),
@@ -22,7 +23,7 @@ vi.mock('../../api/client', () => ({
   }),
   useStartDesktopUpdate: () => ({ mutate: vi.fn(), isPending: false }),
   useDesktopUpdateStatus: () => ({ data: undefined }),
-  useApplyDesktopUpdate: () => ({ mutate: vi.fn() }),
+  useApplyDesktopUpdate: () => ({ mutate: vi.fn(), isPending: false, isSuccess: applied }),
 }))
 
 import { UpdateNotification, manualCheckToast } from './UpdateNotification'
@@ -43,6 +44,7 @@ describe('UpdateNotification', () => {
     deploymentMode = 'local'
     installMethod = 'direct'
     manualUpdate = undefined
+    applied = false
   })
 
   it('keeps the update popup for local installations', () => {
@@ -66,6 +68,14 @@ describe('UpdateNotification', () => {
     expect(html).toContain('href="https://github.com/skyhook-io/radar/releases/tag/v1.3.0"')
     // Only the dismiss button: no in-app update.
     expect(html.match(/<button/g)).toHaveLength(1)
+  })
+
+  it('keeps showing the restart once the new version is in place', () => {
+    installMethod = 'desktop'
+    applied = true
+    const html = renderNotification()
+    expect(html).toContain('Applying Update...')
+    expect(html).not.toContain('Update Available')
   })
 
   it('suppresses the update popup for shared in-cluster viewers', () => {
