@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -394,6 +397,47 @@ func TestVeleroRunMessagesRoutesEachFailureToItsOwnAnswer(t *testing.T) {
 		rec := post(t, dyn, "/api/velero/backups/velero/nightly/messages")
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("status = %d, want 403", rec.Code)
+		}
+	})
+
+	// The server Deployment is readable and stopped: nothing can answer, so the
+	// reader is told now, and nothing is created for Velero to clean up later.
+	t.Run("answers at once when the Velero server is stopped", func(t *testing.T) {
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "velero", Namespace: "velero"},
+			Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{
+				{Name: "velero", Image: "velero/velero:v1.18.1", Command: []string{"/velero"}, Args: []string{"server"}},
+			}}}},
+		}
+		if _, err := testFakeClient.AppsV1().Deployments("velero").Create(context.Background(), dep, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("create deployment: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = testFakeClient.AppsV1().Deployments("velero").Delete(context.Background(), "velero", metav1.DeleteOptions{})
+		})
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if _, err := k8s.GetResourceCache().Deployments().Deployments("velero").Get("velero"); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("deployment never reached the cache")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		dyn := answerWith(t, "http://unused")
+		start := time.Now()
+		rec := post(t, dyn, "/api/velero/backups/velero/nightly/messages")
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "has no running replicas") {
+			t.Fatalf("status = %d body = %s, want 503 naming the stopped server", rec.Code, rec.Body.String())
+		}
+		if time.Since(start) > 2*time.Second {
+			t.Errorf("took %s; a known-stopped server must not be waited on", time.Since(start))
+		}
+		for _, a := range dyn.Actions() {
+			if a.GetVerb() == "create" {
+				t.Errorf("created a %s Velero cannot serve", a.GetResource().Resource)
+			}
 		}
 	})
 

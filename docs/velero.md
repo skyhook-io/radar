@@ -11,7 +11,7 @@ Radar's Velero views answer two questions the per-kind pages cannot: **are the s
 
 Both are listed under the **Velero** category in the Resources sidebar, above the kind lists. Rows open the existing resource drawer; there is no Velero-specific detail page. The Schedule drawer adds a **Schedule activity** section (the same reading plus up to ten recent runs) wherever it opens, including from the kind list and search.
 
-**The namespace filter does not apply.** Velero keeps its objects in its own namespace (`velero`, `kommander` on NKP, or wherever it was installed), while the filter selects application namespaces; applying it would empty the views. Every kind is still read only where the caller may list it, Radar's `--namespace-scope` still bounds the request, and a namespace the caller did not name is never reported as denied. More than one installation shows installation chips.
+**The namespace filter does not apply.** Velero keeps its objects in its own namespace (`velero`, `kommander` on NKP, or wherever it was installed), while the filter selects application namespaces; applying it would empty the views. Every kind is still read only where the caller may list it, Radar's `--namespace-scope` still bounds the request, and a namespace the caller did not name is never reported as denied. A caller who cannot list a kind cluster-wide is checked only in the namespaces where Radar holds objects of that kind (its watched namespaces when Radar itself watches namespace by namespace), so the cost does not grow with the cluster and does not depend on Radar listing Namespaces; such a caller's coverage always reads partial, so it never shows whether Velero exists where they cannot look. More than one installation shows installation chips.
 
 ## Data
 

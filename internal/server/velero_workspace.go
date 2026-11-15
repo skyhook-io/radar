@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"sort"
 
 	"github.com/go-chi/chi/v5"
 	appsv1 "k8s.io/api/apps/v1"
@@ -124,22 +125,58 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 				}
-				access, items := s.readWorkspaceKind(r.WithContext(ctx), cache, k, namespaces, []string{veleropkg.Group}, budget)
+				candidates := func() []string { return veleroNamespacesHeld(ctx, cache, k, budget) }
+				access, items := s.readWorkspaceKindAmong(r.WithContext(ctx), cache, k, namespaces, []string{veleropkg.Group}, budget, candidates, true)
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 				}
 				return access, items
 			},
 			Deployments: func(ctx context.Context, namespace string) ([]*appsv1.Deployment, bool) {
-				if !current() || !s.canRead(r.WithContext(ctx), "apps", "deployments", namespace, "list") {
+				if !current() {
 					return nil, false
 				}
-				if !slices.Contains(cache.AssessKindRead("deployments", []string{namespace}).Read, namespace) || cache.Deployments() == nil {
-					return nil, false
-				}
-				deployments, err := cache.Deployments().Deployments(namespace).List(labels.Everything())
-				return deployments, err == nil && current()
+				deployments, ok := s.veleroDeployments(r.WithContext(ctx), cache, namespace)
+				return deployments, ok && current()
 			},
 		},
 	}, true
+}
+
+// veleroNamespacesHeld is where Radar's own identity holds objects of k, the
+// only namespaces worth checking a caller without cluster-wide list access
+// against. Velero keeps its objects in one or two namespaces, so this costs a
+// handful of access checks where every namespace in the cluster would cost one
+// each, and it does not depend on Radar being able to list Namespaces. When
+// Radar watches k namespace by namespace, its watched namespaces stand in.
+func veleroNamespacesHeld(ctx context.Context, cache *k8s.ResourceCache, k integration.WorkspaceKind, budget *syncBudget) []string {
+	if list, err := listKindInGroups(ctx, cache, k, nil, []string{veleropkg.Group}, budget); err == nil {
+		seen := map[string]bool{}
+		var out []string
+		for _, o := range list {
+			if ns := o.GetNamespace(); ns != "" && !seen[ns] {
+				seen[ns] = true
+				out = append(out, ns)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+	if _, _, watched, ok := dynamicNamespaceWatches(k, budget); ok {
+		return watched
+	}
+	return nil
+}
+
+// veleroDeployments are a namespace's Deployments, where the caller may list
+// them and Radar holds them: what the Velero server's state is read from.
+func (s *Server) veleroDeployments(r *http.Request, cache *k8s.ResourceCache, namespace string) ([]*appsv1.Deployment, bool) {
+	if cache == nil || !s.canRead(r, "apps", "deployments", namespace, "list") {
+		return nil, false
+	}
+	if !slices.Contains(cache.AssessKindRead("deployments", []string{namespace}).Read, namespace) || cache.Deployments() == nil {
+		return nil, false
+	}
+	deployments, err := cache.Deployments().Deployments(namespace).List(labels.Everything())
+	return deployments, err == nil
 }

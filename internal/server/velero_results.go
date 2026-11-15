@@ -22,6 +22,8 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
 // A Backup's status carries how many errors and warnings a run produced, and
@@ -150,6 +152,17 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 	if !s.canRead(r, veleroGroup, kindParam, namespace, "get") {
 		s.writeError(w, http.StatusForbidden, "no access to this Velero "+target.kind)
 		return
+	}
+
+	// Only the Velero server answers a DownloadRequest. When the caller can see
+	// that it is not running, say so now rather than after the full wait.
+	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {
+		if server := veleropkg.ServerConfigFromDeployments(deployments, true); server.Down() {
+			s.writeError(w, http.StatusServiceUnavailable,
+				fmt.Sprintf("The Velero server (Deployment %s in namespace %s) has no running replicas, and only it can serve these messages. Start it, then try again.",
+					server.Deployment, namespace))
+			return
+		}
 	}
 
 	auth.AuditLog(r, namespace, name)

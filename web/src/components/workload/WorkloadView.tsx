@@ -1,3 +1,4 @@
+import { VeleroScheduleStatusBadge } from '../velero/VeleroScheduleStatusBadge'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
 import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
@@ -255,6 +256,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     />
   )
 }
+
+const renderVeleroScheduleStatus = (resource: any) => <VeleroScheduleStatusBadge resource={resource} />
 
 // The kinds the traffic map draws as a node of their own: those that own
 // pods, which it groups under them.
@@ -1214,6 +1217,7 @@ export function WorkloadView({
         name={name}
         expanded={expanded}
         {...rest}
+        renderStatusBadge={rest.renderStatusBadge ?? (apiKind === 'schedules' && effectiveGroup === 'velero.io' ? renderVeleroScheduleStatus : undefined)}
         group={effectiveGroup}
         // Data
         resource={resource}

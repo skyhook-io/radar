@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -406,5 +407,59 @@ func TestVeleroWorkspace_ServerConfigFollowsDeploymentAccess(t *testing.T) {
 	without := getVeleroWorkspace(t, env.authGet(t, "/api/velero/workspace", "velero-only", ""))
 	if without.Installations[0].Server.Source != veleropkg.ServerUnread || without.Installations[0].Server.TimeZone != "" {
 		t.Errorf("server %+v, want unread", without.Installations[0].Server)
+	}
+}
+
+// A caller without cluster-wide list access is checked only where Velero
+// objects are, so the cost does not grow with the cluster's namespaces, and
+// the views work when Radar cannot list Namespaces at all.
+func TestVeleroWorkspace_RestrictedCallerCheckedOnlyWhereVeleroIs(t *testing.T) {
+	seedCNPGWorkspace(t, veleroWorkspaceTestKinds, veleroWorkspaceFixture("velero")...)
+	others := make([]string, 30)
+	for i := range others {
+		others[i] = fmt.Sprintf("app-%02d", i)
+	}
+	seedNamespaces(t, append([]string{"velero"}, others...)...)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{}}
+	for _, resource := range []string{"schedules", "backups", "backupstoragelocations", "restores", "backuprepositories"} {
+		allow(perms, veleroGroup, resource, "", false)
+		allow(perms, veleroGroup, resource, "velero", true)
+		allow(perms, veleroGroup, resource, "app-00", true)
+	}
+	env.srv.permCache.Set("velero-reader", nil, perms)
+
+	got := getVeleroWorkspace(t, env.authGet(t, "/api/velero/workspace", "velero-reader", ""))
+	if scheduleNamed(got, "velero", "hourly") == nil {
+		t.Fatalf("the readable installation is missing: %+v", got.Schedules)
+	}
+	// The caller may list app-00 too, but it holds no Velero objects, so it is
+	// never checked or read: checking every namespace would cost one access
+	// review per namespace per kind.
+	for _, ns := range got.Coverage["schedules"].AllowedNamespaces {
+		if ns != "velero" {
+			t.Fatalf("read schedules in %s, which holds no Velero objects: %+v", ns, got.Coverage["schedules"])
+		}
+	}
+}
+
+func TestVeleroWorkspace_RestrictedCallerWithoutNamespaceListing(t *testing.T) {
+	seedCNPGWorkspace(t, veleroWorkspaceTestKinds, veleroWorkspaceFixture("velero")...)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{}}
+	for _, resource := range []string{"schedules", "backups", "backupstoragelocations", "restores", "backuprepositories"} {
+		allow(perms, veleroGroup, resource, "", false)
+		allow(perms, veleroGroup, resource, "velero", true)
+	}
+	env.srv.permCache.Set("velero-reader", nil, perms)
+
+	got := getVeleroWorkspace(t, env.authGet(t, "/api/velero/workspace", "velero-reader", ""))
+	if scheduleNamed(got, "velero", "hourly") == nil {
+		t.Fatalf("no namespaces in Radar's cache emptied the views: %+v", got.Coverage)
+	}
+	// Every namespace holding Velero was readable, and the answer still does
+	// not say so: "full" here would tell the caller there is nothing else.
+	if cov := got.Coverage["schedules"]; cov.State != integration.KindCoveragePartial || len(cov.DeniedNamespaces) != 0 {
+		t.Errorf("schedules coverage %+v, want partial naming nothing", cov)
 	}
 }
