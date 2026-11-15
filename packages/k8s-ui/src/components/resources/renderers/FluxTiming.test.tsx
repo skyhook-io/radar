@@ -92,24 +92,32 @@ describe('Flux drawer and resource timing', () => {
   const text = (html: string) => html.replaceAll('<!-- -->', '')
   const ready = [{ type: 'Ready', status: 'True', reason: 'ReconciliationSucceeded' }]
 
-  it('opens Revision and flags an attempted revision not yet applied (Kustomization)', () => {
+  it('opens Revision and flags an attempted revision that is not the last successful apply (Kustomization)', () => {
     const html = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, conditions: ready, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:bbb' } }} />))
     expect(html).toContain('main@sha1:aaa')
-    expect(html).toContain('not yet applied')
+    expect(html).toContain('not the last successful apply')
     const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('>Revision<'))
     expect(section).toContain('aria-expanded="true"')
   })
 
+  it('does not call a revision that failed its health checks unapplied', () => {
+    // kustomize-controller applies the objects, then records lastAppliedRevision only once health checks pass.
+    const healthFailed = [{ type: 'Ready', status: 'False', reason: 'HealthCheckFailed' }]
+    const html = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, conditions: healthFailed, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:bbb' } }} />))
+    expect(html).not.toContain('not yet applied')
+    expect(html).toContain('not the last successful apply')
+  })
+
   it('falls back to the applied revision for a HelmRelease without release history', () => {
     const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { lastAppliedRevision: '1.2.0', lastAttemptedRevision: '1.4.0' } }} />))
-    expect(html).toContain('not yet applied')
+    expect(html).toContain('not the last successful apply')
     const noChart = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { history: [{ version: 4, status: 'deployed' }], lastAppliedRevision: '1.2.0', lastAttemptedRevision: '1.4.0' } }} />))
-    expect(noChart).toContain('not yet applied')
+    expect(noChart).toContain('not the last successful apply')
   })
 
   it('flags a HelmRelease whose attempted chart differs from the deployed one', () => {
     const html = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, conditions: ready, lastAttemptedRevision: '1.4.0' } }} />))
-    expect(html).toContain('not yet applied')
+    expect(html).toContain('not the last successful apply')
     const section = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('Revision Info'))
     expect(section).toContain('aria-expanded="true"')
   })
@@ -118,9 +126,9 @@ describe('Flux drawer and resource timing', () => {
     const ks = text(renderToString(<KustomizationRenderer data={{ ...base, apiVersion: 'kustomize.toolkit.fluxcd.io/v1', kind: 'Kustomization', status: { ...base.status, lastAppliedRevision: 'main@sha1:aaa', lastAttemptedRevision: 'main@sha1:aaa' } }} />))
     const hrMatch = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { ...helm.status, lastAttemptedRevision: '1.2.0' } }} />))
     const hrNoHistory = text(renderToString(<FluxHelmReleaseRenderer data={{ ...helm, status: { lastAttemptedRevision: '1.4.0' } }} />))
-    expect(ks).not.toContain('not yet applied')
-    expect(hrMatch).not.toContain('not yet applied')
-    expect(hrNoHistory).not.toContain('not yet applied')
+    expect(ks).not.toContain('not the last successful apply')
+    expect(hrMatch).not.toContain('not the last successful apply')
+    expect(hrNoHistory).not.toContain('not the last successful apply')
   })
 })
 
