@@ -15,8 +15,9 @@ const (
 )
 
 // detectLonghornVolumeIssues reports faulted volumes (critical: no usable
-// replica) and degraded ones (warning: replicas rebuilding, routine after a
-// drain or restart). A detached volume is not a problem. The onset of a
+// replica) and degraded ones (warning: fewer healthy replicas than requested,
+// which Longhorn reports whether or not it can place a new one, so the Issue
+// claims no rebuild). A detached volume is not a problem. The onset of a
 // degraded volume is status.lastDegradedAt when Longhorn recorded it.
 func detectLonghornVolumeIssues(gvr schema.GroupVersionResource, kind string, items []*unstructured.Unstructured) []Issue {
 	var out []Issue
@@ -32,7 +33,7 @@ func detectLonghornVolumeIssues(gvr schema.GroupVersionResource, kind string, it
 			at, err := time.Parse(time.RFC3339, raw)
 			out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning,
 				ReasonLonghornVolumeDegraded,
-				"Fewer healthy replicas than requested; Longhorn is rebuilding them. Routine after a node drain or restart; check node disks if it lasts.",
+				"Fewer healthy replicas than requested. Longhorn rebuilds them when it can place a replica, which is routine after a node drain or restart; if it lasts, check whether a replica can be scheduled (node disks, scheduling settings).",
 				at, err == nil, "", u.GetCreationTimestamp().Time))
 		}
 	}

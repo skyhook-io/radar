@@ -103,6 +103,7 @@
             "kubeshark": { "type": "boolean" },
             "kured": { "type": "boolean" },
             "kyverno": { "type": "boolean" },
+            "longhorn": { "type": "boolean" },
             "mariadb": { "type": "boolean" },
             "multus": { "type": "boolean" },
             "nginx": { "type": "boolean" },
@@ -117,7 +118,6 @@
             "tekton": { "type": "boolean" },
             "traefik": { "type": "boolean" },
             "trivy": { "type": "boolean" },
-            "longhorn": { "type": "boolean" },
             "velero": { "type": "boolean" }
           }
         },

@@ -748,6 +748,7 @@ retain their finite grants.
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
+| `longhorn` | `longhorn.io` (`volumes`, `engines`, `replicas`), read-only volume health; on by default. |
 | `mariadb` | `mariadb.mmontes.io` |
 | `multus` | `k8s.cni.cncf.io` (`network-attachment-definitions`) |
 | `networkPolicyApi` | `policy.networking.k8s.io` |
@@ -763,7 +764,6 @@ retain their finite grants.
 | `tekton` | `tekton.dev` |
 | `traefik` | `traefik.io`, `traefik.containo.us` |
 | `trivy` | `aquasecurity.github.io` |
-| `longhorn` | `longhorn.io` (`volumes`, `engines`, `replicas`), read-only volume health; on by default. |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
 

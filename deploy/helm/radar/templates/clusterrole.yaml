@@ -464,6 +464,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.longhorn }}
+  - apiGroups: ["longhorn.io"]
+    resources: ["volumes", "engines", "replicas"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.nvidia }}
   - apiGroups: ["nvidia.com"]
     resources: ["*"]
@@ -605,11 +610,6 @@ rules:
   {{- if .Values.rbac.crdGroups.trivy }}
   - apiGroups: ["aquasecurity.github.io"]
     resources: ["*"]
-    verbs: ["get", "list", "watch"]
-  {{- end }}
-  {{- if .Values.rbac.crdGroups.longhorn }}
-  - apiGroups: ["longhorn.io"]
-    resources: ["volumes", "engines", "replicas"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.velero }}

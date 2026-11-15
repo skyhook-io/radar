@@ -27,5 +27,19 @@ describe('LonghornVolumeRenderer (host)', () => {
     const html = await render({ error: new Error('boom') })
     expect(html).toContain('? of 3')
     expect(html).toContain('Could not check')
+    expect(html).not.toContain('Engine not running')
+  })
+
+  it('reads the active Engine while a volume migrates, and unknown when none is active', async () => {
+    const migrating = await render({ data: [
+      { spec: { volumeName: 'pvc-1', active: false }, status: { replicaModeMap: { a: 'RW' } } },
+      { spec: { volumeName: 'pvc-1', active: true }, status: { replicaModeMap: { a: 'RW', b: 'RW', c: 'RW' } } },
+    ] })
+    expect(migrating).toContain('3 of 3')
+    const ambiguous = await render({ data: [
+      { spec: { volumeName: 'pvc-1', active: false }, status: { replicaModeMap: { a: 'RW' } } },
+      { spec: { volumeName: 'pvc-1', active: false }, status: { replicaModeMap: { a: 'RW', b: 'RW' } } },
+    ] })
+    expect(ambiguous).toContain('? of 3')
   })
 })

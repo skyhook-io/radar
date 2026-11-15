@@ -45,3 +45,21 @@ export function longhornRebuilds(engine: any): LonghornRebuild[] {
     .sort((a, b) => a.replica.localeCompare(b.replica))
     .map(({ rebuilding: _rebuilding, ...r }) => r)
 }
+
+// Longhorn Volume conditions whose normal value is False; True means something
+// is going on (a restore, too many snapshots, …), not that the volume failed.
+const LONGHORN_FALSE_IS_NORMAL = new Set(['Restore', 'TooManySnapshots', 'WaitForBackingImage', 'BackingImageIncompatible', 'OfflineRebuilding'])
+
+/** Tone for a Longhorn Volume condition; undefined leaves the default reading. */
+export function longhornVolumeConditionTone(condition: any): 'ok' | 'warning' | 'neutral' | undefined {
+  const type = condition?.type
+  if (!LONGHORN_FALSE_IS_NORMAL.has(type)) return undefined
+  if (condition?.status === 'False') return 'ok'
+  if (condition?.status === 'True') return type === 'Restore' ? 'neutral' : 'warning'
+  return undefined
+}
+
+/** True when the Volume's Scheduled condition says Longhorn can't place a replica. */
+export function longhornReplicaUnschedulable(volume: any): boolean {
+  return (volume?.status?.conditions ?? []).some((c: any) => c?.type === 'Scheduled' && c?.status === 'False')
+}

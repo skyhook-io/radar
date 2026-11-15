@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,18 @@ func TestLonghornVolumeIssues(t *testing.T) {
 	d := byName["v-degraded"]
 	if d.Severity != SeverityWarning || d.Reason != ReasonLonghornVolumeDegraded {
 		t.Errorf("degraded = %s/%s, want warning/%s", d.Severity, d.Reason, ReasonLonghornVolumeDegraded)
+	}
+	// Longhorn reports degraded whenever replicas are short, including when it
+	// can't place a new one, so the Issue mustn't claim a rebuild is running.
+	if strings.Contains(d.Message, "is rebuilding") {
+		t.Errorf("degraded message %q claims a rebuild in progress", d.Message)
+	}
+	for _, g := range issuesapi.Catalog() {
+		for _, c := range g.Categories {
+			if c.Category == issuesapi.CategoryVolumeDegraded && strings.Contains(c.Description, "is rebuilding") {
+				t.Errorf("catalog text %q claims a rebuild in progress", c.Description)
+			}
+		}
 	}
 	if d.OnsetUnknown || time.Since(d.FirstSeen) < 80*time.Minute {
 		t.Errorf("degraded onset = %v (unknown=%v), want lastDegradedAt", d.FirstSeen, d.OnsetUnknown)

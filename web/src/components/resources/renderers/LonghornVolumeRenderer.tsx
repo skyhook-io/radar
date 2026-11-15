@@ -7,10 +7,13 @@ import { useResources } from '../../../api/client'
 export function LonghornVolumeRenderer({ data }: { data: any }) {
   const engines = useResources<any>('engines', data?.metadata?.namespace ?? '', LONGHORN_GROUP)
   const name = data?.metadata?.name
-  const engine = engines.data?.find((e) => e?.spec?.volumeName === name)
+  // A migrating volume has two Engines; Longhorn's current one is spec.active.
+  const candidates = engines.data?.filter((e) => e?.spec?.volumeName === name) ?? []
+  const engine = candidates.length === 1 ? candidates[0] : candidates.find((e) => e?.spec?.active === true)
+  const engineUnknown = !!engines.error || (candidates.length > 1 && !engine)
   return (
     <>
-      <BaseLonghornVolumeRenderer data={data} engine={engine} />
+      <BaseLonghornVolumeRenderer data={data} engine={engine} engineUnknown={engineUnknown} />
       <LookupFailureNote errors={[engines.error]} what="this volume's engine (healthy replicas, rebuilds)" />
     </>
   )

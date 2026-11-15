@@ -38,4 +38,30 @@ describe('LonghornVolumeRenderer', () => {
     expect(html).not.toContain('db-0')
     expect(html).not.toContain('shop')
   })
+
+  it('reads a healthy volume\'s routine False conditions as fine, not failing', () => {
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'healthy', conditions: [
+      { type: 'Scheduled', status: 'True' }, { type: 'Restore', status: 'False' }, { type: 'TooManySnapshots', status: 'False' },
+      { type: 'WaitForBackingImage', status: 'False' }, { type: 'OfflineRebuilding', status: 'False' },
+    ] })} />)
+    expect(html).not.toMatch(/failing/i)
+  })
+
+  it('says degraded without claiming a rebuild the engine does not report', () => {
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'degraded' })} engine={{ status: { replicaModeMap: { a: 'RW', b: 'RW' } } }} />)
+    expect(html).toContain('Degraded')
+    expect(html).not.toContain('Rebuilding')
+  })
+
+  it('says Longhorn cannot place a replica when scheduling failed', () => {
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'degraded', conditions: [{ type: 'Scheduled', status: 'False', reason: 'ReplicaSchedulingFailure' }] })} />)
+    expect(html).toContain('can&#x27;t place')
+    expect(html).not.toContain('Rebuilding')
+  })
+
+  it('explains an unknown replica count on a detached volume', () => {
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'detached', robustness: 'unknown' })} />)
+    expect(html).toContain('? of 3')
+    expect(html).toContain('Engine not running')
+  })
 })
