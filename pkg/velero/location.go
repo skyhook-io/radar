@@ -102,6 +102,9 @@ type LocationReading struct {
 	// Schedules is nil when the namespace's Schedules were not read.
 	Schedules []ScheduleRef `json:"schedules"`
 	Attention bool          `json:"attention"`
+	// Reason is ReasonServerDown when an overdue validation is explained by
+	// the Velero server having no available pod.
+	Reason string `json:"reason,omitempty"`
 }
 
 // LocationInput is what ReadLocation needs; the slices are the namespace's.
@@ -135,6 +138,9 @@ func ReadLocation(in LocationInput) LocationReading {
 	}
 	// An Unavailable location is already an Issue (BackupStorageLocationUnavailable).
 	r.Attention = r.ValidationOverdue
+	if r.ValidationOverdue && in.Server.Down() {
+		r.Reason = ReasonServerDown
+	}
 
 	if in.BackupsRead {
 		counts := LocationBackups{}

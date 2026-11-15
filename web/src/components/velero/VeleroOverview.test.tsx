@@ -63,6 +63,17 @@ describe('Velero overview', () => {
     expect(html).toContain('Show 3 more')
   })
 
+  it('names a stopped Velero server first, and as the cause of late schedules', () => {
+    const late = schedule({ name: 'late-one', state: 'late', attention: true, missedRuns: 2, reason: 'serverDown' })
+    const html = text(render(workspace({
+      schedules: [late],
+      installations: [{ namespace: 'velero', server: { source: 'deployment', deployment: 'velero', availableReplicas: 0 }, defaultSource: 'spec' }],
+    })))
+    expect(html).toContain('Velero server not running')
+    expect(html.indexOf('Velero server not running')).toBeLessThan(html.indexOf('late-one'))
+    expect(html).toContain('The Velero server has no running pod, so nothing submits backups.')
+  })
+
   it('says a next run in the past was due, not that it ran', () => {
     const html = text(render(workspace({ schedules: [schedule({ state: 'late', attention: true, nextRun: new Date(Date.now() - 3 * 3_600_000).toISOString() })] })))
     expect(html).toContain('was due 3h ago')

@@ -351,7 +351,7 @@ func TestVeleroWorkspace_ServerConfigFollowsDeploymentAccess(t *testing.T) {
 			Name: "velero", Image: "velero/velero:v1.18.1", Command: []string{"/velero"}, Args: []string{"server"},
 			Env: []corev1.EnvVar{{Name: "TZ", Value: "Europe/Berlin"}},
 		}}}}},
-		Status: appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1},
+		Status: appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1},
 	}
 	if _, err := testFakeClient.AppsV1().Deployments("velero").Create(context.Background(), dep, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create deployment: %v", err)

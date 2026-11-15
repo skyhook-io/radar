@@ -21,6 +21,7 @@ import {
   veleroScheduleStateLabel,
   veleroScheduleTone,
   veleroLocalTime,
+  veleroServerDownText,
   type ResourceRef,
   type VeleroLocationReading,
   type VeleroScheduleReading,
@@ -56,6 +57,19 @@ function scheduleProblem(s: VeleroScheduleReading): WorkspaceProblem {
     source: 'reading',
     origin: { label: 'Radar’s reading of the schedule', detail: 'The Schedule and its Backups, read against the Velero controller’s own rules.' },
     tone: tone === 'healthy' ? 'neutral' : tone,
+  }
+}
+
+function serverProblem(namespace: string, deployment?: string): WorkspaceProblem {
+  return {
+    id: `server:${namespace}`,
+    category: 'server',
+    title: 'Velero server not running',
+    detail: veleroServerDownText(namespace, deployment),
+    subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
+    source: 'reading',
+    origin: { label: 'Radar’s reading of the Velero server', detail: 'The server Deployment’s available pods.' },
+    tone: 'unhealthy',
   }
 }
 
@@ -133,11 +147,14 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
   )
   const attention = useMemo<WorkspaceProblem[]>(
     () => [
+      ...data.installations
+        .filter((i) => (installation === null || i.namespace === installation) && i.server.availableReplicas === 0)
+        .map((i) => serverProblem(i.namespace, i.server.deployment)),
       ...schedules.filter((s) => s.attention).map(scheduleProblem),
       ...locations.filter((l) => l.attention).map(locationProblem),
       ...issues.map(veleroIssueProblem),
     ],
-    [issues, schedules, locations],
+    [issues, schedules, locations, data.installations, installation],
   )
   const capped = cappedIssueNotes(data, issues, installation)
   const [showAll, setShowAll] = useState(false)

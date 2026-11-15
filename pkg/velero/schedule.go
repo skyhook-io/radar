@@ -74,6 +74,9 @@ const (
 	ReasonBackupsUnread     = "backupsUnread"
 	ReasonNoFutureTime      = "noFutureTime"
 	ReasonValidationPending = "validationPending"
+	// ReasonServerDown: the Velero server Deployment has no available pod,
+	// which explains a late or unvalidated schedule.
+	ReasonServerDown = "serverDown"
 )
 
 // RunsRead says whether a Schedule's backups were read.
@@ -160,6 +163,17 @@ type ScheduleInput struct {
 // ReadSchedule reads one Schedule. Backups not of this schedule are ignored,
 // so callers may pass the whole namespace.
 func ReadSchedule(in ScheduleInput) ScheduleReading {
+	r := readSchedule(in)
+	switch r.State {
+	case StateLate, StateProbablyLate, StateLateOrHeld, StateNotValidated:
+		if r.Attention && in.Server.Down() {
+			r.Reason = ReasonServerDown
+		}
+	}
+	return r
+}
+
+func readSchedule(in ScheduleInput) ScheduleReading {
 	s := in.Schedule
 	r := ScheduleReading{Namespace: s.GetNamespace(), Name: s.GetName(), Created: s.GetCreationTimestamp().UTC()}
 	r.Cron, _, _ = unstructured.NestedString(s.Object, "spec", "schedule")

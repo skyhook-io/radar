@@ -52,6 +52,7 @@ export type VeleroScheduleReason =
   | 'backupsUnread'
   | 'noFutureTime'
   | 'validationPending'
+  | 'serverDown'
 
 /** pkg/velero Run: one Backup a Schedule submitted. */
 export interface VeleroRun {
@@ -119,6 +120,8 @@ export interface VeleroServerConfig {
   defaultLocation?: string
   validationFrequencySeconds?: number
   schedulingDisabled?: boolean
+  /** The server Deployment's available pods, when the Deployment was found. */
+  availableReplicas?: number
 }
 
 /** pkg/velero DefaultSource */
@@ -164,6 +167,8 @@ export interface VeleroLocationReading {
   /** null when the namespace's Schedules were not read. */
   schedules: VeleroScheduleRef[] | null
   attention: boolean
+  /** 'serverDown' when the Velero server having no available pod explains an overdue validation. */
+  reason?: 'serverDown'
 }
 
 /** internal/velero Installation: one namespace Velero objects were read in. */

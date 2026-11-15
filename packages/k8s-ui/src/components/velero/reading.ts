@@ -76,6 +76,8 @@ export function veleroLocalTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
+const SERVER_DOWN = 'The Velero server has no running pod, so nothing submits backups.'
+
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
 }
@@ -107,6 +109,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
       return 'This schedule’s name is longer than 63 characters, so Velero cannot label its backups and every run fails.'
     case 'notValidated': {
       if (!reading.attention) return 'Waiting for Velero to validate this schedule.'
+      if (reading.reason === 'serverDown') return `Velero hasn’t validated this schedule. ${SERVER_DOWN}`
       const created = opts?.created ?? reading.created
       return created
         ? `Velero hasn’t validated this schedule since it was created ${formatAge(created)} ago, so its controller may not be processing schedules.`
@@ -132,11 +135,14 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
       const since = reading.lastSubmitted
         ? `since ${veleroLocalTime(reading.lastSubmitted)} (${formatRelativeAgeTime(reading.lastSubmitted)})`
         : 'since the schedule was created'
-      return `No backup submitted ${since}; ${missedText(reading.missedRuns)}. Velero does not catch up on missed runs.`
+      const cause = reading.reason === 'serverDown' ? ` ${SERVER_DOWN}` : ' Velero does not catch up on missed runs.'
+      return `No backup submitted ${since}; ${missedText(reading.missedRuns)}.${cause}`
     }
     case 'probablyLate':
+      if (reading.reason === 'serverDown') return `Past its scheduled time. ${SERVER_DOWN}`
       return 'Looks late, but Radar couldn’t confirm the Velero server’s time zone.'
     case 'lateOrHeld':
+      if (reading.reason === 'serverDown') return `Past its scheduled time. ${SERVER_DOWN}`
       return 'Past its scheduled time. Radar can’t read this namespace’s backups, so a running backup may be holding it.'
     case 'possiblyLate':
       return 'Past its estimated time, but Radar couldn’t confirm the Velero server’s time zone, so it may not be due yet.'
@@ -151,7 +157,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
 const ZONE_SOURCE_LABEL: Record<VeleroZoneSource, string> = {
   cron: 'from cron',
   server: 'server TZ',
-  serverDefault: 'server default UTC',
+  serverDefault: 'server default',
   inferred: 'inferred',
   unknown: 'zone unknown',
 }
@@ -212,9 +218,15 @@ export function veleroFrequencyText(seconds: number): string {
 /** Why a storage location needs attention. */
 export function veleroLocationReasonText(loc: VeleroLocationReading): string {
   if (loc.validationOverdue && loc.lastValidation && loc.frequency) {
-    return `Velero last validated this location ${formatAge(loc.lastValidation)} ago; it validates every ${veleroFrequencyText(loc.frequency.seconds)}.`
+    const cause = loc.reason === 'serverDown' ? ' The Velero server has no running pod, so nothing validates it.' : ''
+    return `Velero last validated this location ${formatAge(loc.lastValidation)} ago; it validates every ${veleroFrequencyText(loc.frequency.seconds)}.${cause}`
   }
   return ''
+}
+
+/** Why an installation needs attention: its server Deployment has no available pod. */
+export function veleroServerDownText(namespace: string, deployment?: string): string {
+  return `Deployment ${deployment ?? 'velero'} in ${namespace} has no available pod, so no schedule submits backups and no storage location is validated.`
 }
 
 const DEFAULT_SOURCE_DETAIL: Record<VeleroDefaultSource, string> = {

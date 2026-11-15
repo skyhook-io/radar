@@ -130,6 +130,36 @@ func TestReadScheduleTiming(t *testing.T) {
 	}
 }
 
+func TestServerDownExplainsLateSchedulesAndOverdueValidation(t *testing.T) {
+	d := veleroDeployment(nil, nil)
+	d.Status.AvailableReplicas = 0
+	down := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true)
+	if !down.Down() {
+		t.Fatalf("a Deployment with no available pod is down: %+v", down)
+	}
+	r := read(schedule("nightly", "0 * * * *", lastBackup(at("08:00"))), nil, down, at("12:10"))
+	if r.State != StateLate || r.Reason != ReasonServerDown || !r.Attention {
+		t.Fatalf("got %s %s attention=%v", r.State, r.Reason, r.Attention)
+	}
+	onTime := read(schedule("nightly", "0 * * * *", lastBackup(at("12:00"))), nil, down, at("12:10"))
+	if onTime.Reason == ReasonServerDown {
+		t.Fatal("a schedule that is not late takes no server-down reason")
+	}
+	loc := ReadLocation(LocationInput{Location: location("l", func(o map[string]any) {
+		o["status"].(map[string]any)["lastValidationTime"] = ts(at("11:00"))
+	}), Server: down, Now: at("12:00")})
+	if !loc.ValidationOverdue || loc.Reason != ReasonServerDown {
+		t.Fatalf("location %+v", loc)
+	}
+	d.Status.AvailableReplicas = 1
+	if up := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true); up.Down() {
+		t.Fatal("a Deployment with an available pod is not down")
+	}
+	if (ServerConfig{Source: ServerUnread}).Down() {
+		t.Fatal("an unread server is not known to be down")
+	}
+}
+
 func TestReadScheduleSchedulingDisabled(t *testing.T) {
 	server := ServerConfigFromDeployments([]*appsv1.Deployment{veleroDeployment(nil, []string{"--disable-controllers=gc,schedule"})}, true)
 	r := read(schedule("nightly", "0 * * * *", lastBackup(at("08:00"))), nil, server, at("12:10"))
@@ -226,7 +256,7 @@ func veleroDeployment(env []corev1.EnvVar, args []string) *appsv1.Deployment {
 		Spec: appsv1.DeploymentSpec{Replicas: &one, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name: "velero", Image: "velero/velero:v1.18.1", Command: []string{"/velero"}, Args: append([]string{"server"}, args...), Env: env,
 		}}}}},
-		Status: appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 1, UpdatedReplicas: 1},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 2, Replicas: 1, UpdatedReplicas: 1, AvailableReplicas: 1},
 	}
 }
 

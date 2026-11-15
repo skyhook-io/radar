@@ -51,10 +51,17 @@ type ServerConfig struct {
 	// SchedulingDisabled: --restore-only or --disable-controllers removes the
 	// schedule controller, so no Schedule runs.
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
+	// AvailableReplicas is the server Deployment's available pod count,
+	// set whenever the Deployment was found (a rollout included).
+	AvailableReplicas *int32 `json:"availableReplicas,omitempty"`
 
 	zone     *time.Location
 	flagsSet bool
 }
+
+// Down reports that the server Deployment was read and has no available pod,
+// so nothing submits scheduled backups or validates locations.
+func (c ServerConfig) Down() bool { return c.AvailableReplicas != nil && *c.AvailableReplicas == 0 }
 
 // FlagsKnown reports whether the server's flags were read in full.
 func (c ServerConfig) FlagsKnown() bool { return c.flagsSet }
@@ -73,7 +80,8 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 		if !ok {
 			continue
 		}
-		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name}
+		available := d.Status.AvailableReplicas
+		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, AvailableReplicas: &available}
 		if !rolloutComplete(d) {
 			cfg.Source = ServerRolling
 			return cfg
