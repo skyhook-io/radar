@@ -1533,7 +1533,7 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
-Storage context uses the drawer's cached relationships. A PVC depends on its
+Storage context uses the same caller-scoped Storage family answers as the drawer. A PVC depends on its
 declared PV and StorageClass, including a Pending claim with no volume yet; a PV
 depends on its StorageClass and lists its claim as a dependent; a StorageClass
 lists its PVs and the claims that declare it. For these three kinds the lists

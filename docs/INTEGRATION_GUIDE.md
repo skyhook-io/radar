@@ -65,7 +65,8 @@ adapters belong in `internal/` and `web/`.
 |---|---|---|
 | Native API interpretation | `pkg/configrefs`, `pkg/conditions`, `pkg/health`, or an existing integration package | Pure parsing and domain rules; no HTTP, global cache or caller authorization. Extract a new package only when the rule needs one. |
 | Inventory and ownership | `pkg/k8score`, `pkg/ownership`, `pkg/ownership/cachesource`; Radar adapters in `internal/k8s` | Reuse informer stores, indexes and caller-scoped ownership views. Do not build a second owner/manager model from display edges or name guesses. |
-| Display relationships | `pkg/topology` | Spec references, selectors and semantic edges for topology and Related Resources. A displayed relationship is not proof of controller ownership or observed traffic. |
+| Related Resources and agent relationships | `pkg/relations`, `pkg/topology/relations_answer.go` | Caller-scoped declared, selector and composition families, each with its field disposition and coverage. Owner/manager evidence stays in `pkg/ownership`. |
+| Display relationships | `pkg/topology` | Spec references, selectors and semantic edges for topology. A displayed relationship is not proof of controller ownership or observed traffic. |
 | Issues | `internal/issues`, reusing shared domain rules | One canonical finding and its required evidence reads, reused by resource views and agent context. Do not create a separate detector in a drawer or MCP handler. |
 | Findings on related resources | `pkg/issuesapi.RelatedFindingsGroup`; [wire semantics](mcp.md#related-findings-in-resource-context) | Keep each association anchor and assessed kind set separate. Count authorized snapshots; report unread inventory as gaps and omitted findings as truncated. Reuse canonical Issue identities; absence never establishes recovery. |
 | Agent contracts | `pkg/ai/context` for resource summaries/minification; `pkg/resourcecontext` for structured related evidence | Importable contracts and builders. Hosts supply authorized observations and lookups; these packages do not call `internal` services. |
@@ -236,15 +237,22 @@ drawer section in
   The topology graph is a display/projection consumer of that evidence, not its
   replacement. Do not require a kind to have a visual node before agents can
   follow its controller chain.
-- [ ] For spec/selector edges and display nodes, start in `pkg/topology/`:
-  `builder.go`, `relationships.go`, `pseudokinds.go`
+- [ ] A new drawer or agent relationship is a `pkg/relations` family (declared,
+  selector or composition) with its `Projection` field disposition beside the rule.
+  Name the fields in both directions, or explain a direct read / intentional
+  non-projection. Extend the family inventory and projection tests; see
+  [ownership.md](ownership.md#beyond-ownership-other-relations). Keep coverage and
+  caller access in the family path. A display edge alone does not supply these answers.
+- [ ] For display edges and nodes, start in `pkg/topology/`:
+  `builder.go`, `pseudokinds.go`
   and `types.go`. Use actual references, documented labels/selectors or controller
   links—not matching names, historical references treated as live usage, or
   configuration treated as observed traffic. Preserve group/namespace identity
   and handle missing/unreadable related objects honestly.
 - [ ] Choose semantic edges: `EdgeManages` (ownership), `EdgeExposes` (exposure),
   `EdgeConfigures` (configuration), `EdgeUses` (scaling/usage), `EdgeProtects`
-  (protection). These affect Related Resources grouping, not just appearance.
+  (protection). These control display semantics. Related Resources grouping comes
+  from each family's field disposition, projected in `relations_answer.go`.
 - [ ] Reuse lists between node/edge construction and handle cache errors. Check
   the generic CRD pass for duplicates and collisions: it skips an object a typed
   pass already drew (matched by resource key, `nodeResourceKeys`) and only adds
