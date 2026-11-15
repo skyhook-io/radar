@@ -412,3 +412,80 @@ func TestLoggingPodFactsIncludeEphemeralContainers(t *testing.T) {
 		t.Fatalf("containers = %v", got)
 	}
 }
+
+func seedLoggingWith(t *testing.T, logging *unstructured.Unstructured, objs ...runtime.Object) {
+	t.Helper()
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "app-1"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	seedCNPGWorkspace(t, loggingKinds(), append([]runtime.Object{logging}, objs...)...)
+}
+
+// What no Flow selects still ships through the Logging's defaultFlow.
+func TestLoggingPodShippingDefaultFlow(t *testing.T) {
+	withDefault := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system", "defaultFlow": map[string]any{"globalOutputRefs": []any{"loki"}}}, nil)
+	loki := lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true})
+	optin := lgObj("ClusterFlow", "logging-system", "optin", map[string]any{"match": []any{map[string]any{"select": map[string]any{"labels": map[string]any{"example.com/logs": "true"}}}}, "globalOutputRefs": []any{"loki"}}, nil)
+	t.Run("no Flow selects", func(t *testing.T) {
+		seedLoggingWith(t, withDefault, loki, optin)
+		got, _ := getLoggingPod(t, mustGet(t, "/api/logging/pods/team/app-1"))
+		fb := flowByName(got, "default")
+		if !got.Shipped || !fb.Fallback || !fb.Selected || fb.Kind != "Logging" || fb.Delivers == nil || !*fb.Delivers || len(fb.Destinations) != 1 || !fb.Destinations[0].Found {
+			t.Fatalf("shipped=%v default=%+v", got.Shipped, fb)
+		}
+	})
+	t.Run("a Flow selects", func(t *testing.T) {
+		all := lgObj("ClusterFlow", "logging-system", "all", map[string]any{"globalOutputRefs": []any{"loki"}}, map[string]any{"active": true})
+		seedLoggingWith(t, withDefault, loki, all)
+		got, _ := getLoggingPod(t, mustGet(t, "/api/logging/pods/team/app-1"))
+		if fb := flowByName(got, "default"); fb.Name != "" {
+			t.Fatalf("a selecting Flow leaves nothing for the default flow, got %+v", fb)
+		}
+	})
+}
+
+func TestLoggingPodShippingClusterResourcesFromAllNamespaces(t *testing.T) {
+	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system", "allowClusterResourcesFromAllNamespaces": true}, nil)
+	seedLoggingWith(t, l,
+		lgObj("ClusterFlow", "team", "elsewhere", map[string]any{"globalOutputRefs": []any{"loki"}}, map[string]any{"active": true}),
+		lgObj("ClusterOutput", "team", "loki", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true}),
+	)
+	got, _ := getLoggingPod(t, mustGet(t, "/api/logging/pods/team/app-1"))
+	f := flowByName(got, "elsewhere")
+	if !got.Shipped || f.Ignored || len(f.Destinations) != 1 || !f.Destinations[0].Found || f.Destinations[0].Namespace != "team" {
+		t.Fatalf("shipped=%v flow=%+v", got.Shipped, f)
+	}
+}
+
+// The operator rejects a Flow with both match and selectors, or select and
+// exclude in one entry, and deprecated outputRefs are never rendered.
+func TestLoggingPodShippingInvalidFlowAndDeprecatedOutputRefs(t *testing.T) {
+	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil)
+	seedLoggingWith(t, l,
+		lgObj("Flow", "team", "both", map[string]any{"match": []any{map[string]any{"select": map[string]any{}, "exclude": map[string]any{"labels": map[string]any{"a": "b"}}}}, "localOutputRefs": []any{"out"}}, nil),
+		lgObj("Flow", "team", "legacy", map[string]any{"outputRefs": []any{"out"}}, nil),
+		lgObj("Output", "team", "out", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true}),
+	)
+	got, _ := getLoggingPod(t, mustGet(t, "/api/logging/pods/team/app-1"))
+	if f := flowByName(got, "both"); !f.Ignored || f.Selected || f.Invalid == "" {
+		t.Errorf("both = %+v", f)
+	}
+	if f := flowByName(got, "legacy"); len(f.Destinations) != 0 || f.Delivers == nil || *f.Delivers {
+		t.Errorf("legacy = %+v", f)
+	}
+	if got.Shipped {
+		t.Errorf("shipped = true")
+	}
+}
+
+func mustGet(t *testing.T, path string) *http.Response {
+	t.Helper()
+	resp, err := http.Get(testServer.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}

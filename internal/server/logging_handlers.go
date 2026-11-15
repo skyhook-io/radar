@@ -39,6 +39,11 @@ type logRoute struct {
 	Selected  bool   `json:"selected"`
 	Uncertain bool   `json:"uncertain"`
 	Ignored   bool   `json:"ignored"`
+	// Invalid: why the operator rejects the route and never renders it.
+	Invalid string `json:"invalid,omitempty"`
+	// Fallback: the route receives what no other route of its shipper selects
+	// (the Logging's defaultFlow).
+	Fallback bool `json:"fallback,omitempty"`
 	// Excluded: an exclude rule decided the pod; such a route is not a near miss.
 	Excluded bool `json:"excluded"`
 	// Delivers says whether a selecting route gets logs anywhere: it isn't
@@ -143,10 +148,16 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 	}
 	// Unread Loggings: whether the operator counts or watches a Flow is unknown.
 	loggingsUnread := slices.Contains(resp.ReadErrors, logReadError{logging.Group, "loggings"})
-	controlNamespace := map[string]string{}
+	// Where a Logging's ClusterOutputs are looked up; "" is every namespace.
+	clusterOutputNamespace := map[string]string{}
 	for _, l := range loggings {
-		controlNamespace[l.LoggingRef] = l.ControlNamespace
+		clusterOutputNamespace[l.LoggingRef] = l.ControlNamespace
+		if l.ClusterResourcesFromAllNamespaces {
+			clusterOutputNamespace[l.LoggingRef] = ""
+		}
 	}
+	// Per loggingRef: whether a counted Flow selects the pod for certain, or may.
+	selectedBy, maybeBy := map[string]bool{}, map[string]bool{}
 
 	for _, u := range flows {
 		f := logging.FlowFrom(u)
@@ -160,8 +171,8 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		}
 		row := logRoute{
 			Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
-			Ignored: !loggingsUnread && (!logging.Counted(f, loggings) || (!watched && watchKnown)), Unmet: d.Unmet, HasFilters: f.HasFilters,
-			Destinations: []logDestination{},
+			Ignored: f.Invalid != "" || (!loggingsUnread && (!logging.Counted(f, loggings) || (!watched && watchKnown))), Invalid: f.Invalid,
+			Unmet: d.Unmet, HasFilters: f.HasFilters, Destinations: []logDestination{},
 		}
 		if row.Unmet == nil {
 			row.Unmet = []string{}
@@ -176,7 +187,7 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			row.Active = &active
 		}
 		for _, ref := range f.GlobalOutputs {
-			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", controlNamespace[f.LoggingRef], ref))
+			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[f.LoggingRef], ref))
 		}
 		for _, ref := range f.LocalOutputs {
 			row.Destinations = append(row.Destinations, outputRef(outputs, "Output", f.Namespace, ref))
@@ -186,10 +197,37 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			row.Delivers = loggingDelivers(row, outputsUnread)
 		}
 		if !row.Ignored {
+			selectedBy[f.LoggingRef] = selectedBy[f.LoggingRef] || row.Selected
+			maybeBy[f.LoggingRef] = maybeBy[f.LoggingRef] || row.Uncertain
+		}
+		resp.Routes = append(resp.Routes, row)
+	}
+	// The defaultFlow receives what no Flow of its Logging selects. Unread Flows
+	// leave open whether one does.
+	flowsUnread := slices.Contains(resp.ReadErrors, logReadError{logging.Group, "flows"}) || slices.Contains(resp.ReadErrors, logReadError{logging.Group, "clusterflows"})
+	for _, l := range loggings {
+		if l.DefaultFlow == nil || selectedBy[l.LoggingRef] {
+			continue
+		}
+		row := logRoute{
+			Provider: providerLoggingOperator, Kind: "Logging", Group: logging.Group, Name: l.Name, Fallback: true,
+			Unmet: []string{}, HasFilters: l.DefaultFlow.HasFilters, Destinations: []logDestination{},
+		}
+		row.Uncertain = maybeBy[l.LoggingRef] || flowsUnread
+		row.Selected = !row.Uncertain
+		for _, ref := range l.DefaultFlow.GlobalOutputs {
+			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], ref))
+		}
+		if row.Selected {
+			row.Delivers = loggingDelivers(row, outputsUnread)
+		}
+		resp.Routes = append(resp.Routes, row)
+	}
+	for _, row := range resp.Routes {
+		if !row.Ignored {
 			resp.Shipped = resp.Shipped || (row.Delivers != nil && *row.Delivers)
 			resp.Uncertain = resp.Uncertain || row.Uncertain || (row.Selected && row.Delivers == nil)
 		}
-		resp.Routes = append(resp.Routes, row)
 	}
 	if resp.Shipped {
 		resp.Uncertain = false
@@ -215,8 +253,18 @@ func loggingPodFacts(pod *corev1.Pod) logging.PodFacts {
 	return facts
 }
 
+// outputRef finds a named output. A ClusterOutput with namespace "" may be in
+// any namespace; like the operator, the first by namespace wins.
 func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, name string) logDestination {
 	ref := logDestination{Kind: kind, Namespace: namespace, Name: name}
+	if kind == "ClusterOutput" && namespace == "" {
+		for key, o := range outputs {
+			if key[0] == kind && key[2] == name && (!ref.Found || o.Namespace < ref.Namespace) {
+				ref.Namespace, ref.Type, ref.Found, ref.Active = o.Namespace, o.Type, true, o.Active
+			}
+		}
+		return ref
+	}
 	if o, ok := outputs[[3]string{kind, namespace, name}]; ok {
 		ref.Type, ref.Found, ref.Active = o.Type, true, o.Active
 	}

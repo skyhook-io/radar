@@ -5,7 +5,9 @@ import type { LogRoute, LogShipping } from '../../../types/core'
 import { LOGGING_GROUP } from '../resource-utils-logging'
 
 const KIND_LABELS: Record<string, string> = { clusterflows: 'ClusterFlows', flows: 'Flows', clusteroutputs: 'ClusterOutputs', outputs: 'Outputs', loggings: 'Loggings' }
-const PLURALS: Record<string, string> = { ClusterFlow: 'clusterflows', Flow: 'flows', ClusterOutput: 'clusteroutputs', Output: 'outputs' }
+const PLURALS: Record<string, string> = { ClusterFlow: 'clusterflows', Flow: 'flows', ClusterOutput: 'clusteroutputs', Output: 'outputs', Logging: 'loggings' }
+
+const routeLabel = (route: LogRoute) => route.fallback ? `default flow of ${route.kind} ${route.name}` : `${route.kind} ${route.name}`
 
 export interface PodLogShippingProps {
   data: LogShipping | null
@@ -17,7 +19,7 @@ export interface PodLogShippingProps {
 // Why a selecting route delivers nothing, from what the server reported.
 function nowhereReason(route: LogRoute): string {
   if (route.active === false) return `the ${route.kind} is inactive`
-  if (route.destinations.length === 0) return `the ${route.kind} names no destination`
+  if (route.destinations.length === 0) return `the ${route.fallback ? 'default flow' : route.kind} names no destination`
   return 'no destination it names exists and is active'
 }
 
@@ -25,7 +27,7 @@ function RouteLine({ flow, unreadKinds, onNavigate }: { flow: LogRoute; unreadKi
   return (
     <div className="space-y-0.5">
       <div className="flex flex-wrap items-center gap-1.5">
-        <ResourceLink name={flow.name} kind={PLURALS[flow.kind] ?? 'flows'} namespace={flow.namespace} group={flow.group} label={`${flow.kind} ${flow.name}`} onNavigate={onNavigate} />
+        <ResourceLink name={flow.name} kind={PLURALS[flow.kind] ?? 'flows'} namespace={flow.namespace} group={flow.group} label={routeLabel(flow)} onNavigate={onNavigate} />
         {flow.selected && <Badge severity="success" size="sm">selected</Badge>}
         {flow.uncertain && <Badge severity="warning" size="sm">may be selected</Badge>}
         {flow.ignored && <Badge severity="neutral" size="sm">ignored by the operator</Badge>}
@@ -38,7 +40,7 @@ function RouteLine({ flow, unreadKinds, onNavigate }: { flow: LogRoute; unreadKi
           </span>
         ))}
       </div>
-      {flow.selected && flow.hasFilters && <div className="text-xs text-theme-text-tertiary">This {flow.kind} filters records; some lines may be dropped.</div>}
+      {flow.selected && flow.hasFilters && <div className="text-xs text-theme-text-tertiary">This {flow.fallback ? 'default flow' : flow.kind} filters records; some lines may be dropped.</div>}
     </div>
   )
 }
@@ -89,8 +91,9 @@ export function PodLogShippingSection({ data, loading, error, onNavigate }: PodL
         ))}
         {delivering.length + maybe.length + nowhere.length === 0 && unread.length === 0 && (
           <div className="space-y-1">
-            <div className="text-theme-text-primary">Not shipped: nothing routes this pod's logs. Its logs are lost with the pod.</div>
+            <div className="text-theme-text-primary">No Logging operator Flow selects this pod.</div>
             {excluded.map((f) => <div key={`x-${f.namespace}/${f.name}`} className="text-theme-text-secondary">Excluded by {f.name}</div>)}
+            {data.routes.filter((f) => f.invalid).map((f) => <div key={`i-${f.namespace}/${f.name}`} className="text-theme-text-secondary">{routeLabel(f)} is rejected by the operator: {f.invalid}</div>)}
             {closest && (
               <div className="text-theme-text-secondary">
                 Closest match: {closest.name}{closest.unmet.length > 0 && <> needs {closest.unmet.join(' and ')}</>}

@@ -34,7 +34,8 @@ func TestFlowFromAndCounted(t *testing.T) {
 		t.Fatalf("cluster flow = %+v", optin)
 	}
 	legacy := FlowFrom(obj("Flow", "team", "legacy", map[string]any{"selectors": map[string]any{"app": "x"}, "localOutputRefs": []any{"out"}, "outputRefs": []any{"old"}, "loggingRef": "second"}, nil))
-	if legacy.Cluster || !reflect.DeepEqual(legacy.LegacySelector, map[string]string{"app": "x"}) || !reflect.DeepEqual(legacy.LocalOutputs, []string{"out", "old"}) || legacy.LoggingRef != "second" {
+	// The operator renders only globalOutputRefs and localOutputRefs.
+	if legacy.Cluster || !reflect.DeepEqual(legacy.LegacySelector, map[string]string{"app": "x"}) || !reflect.DeepEqual(legacy.LocalOutputs, []string{"out"}) || !reflect.DeepEqual(legacy.DeprecatedOutputs, []string{"old"}) || legacy.LoggingRef != "second" {
 		t.Fatalf("legacy flow = %+v", legacy)
 	}
 
@@ -52,6 +53,39 @@ func TestFlowFromAndCounted(t *testing.T) {
 		if got := Counted(c.flow, loggings); got != c.want {
 			t.Errorf("Counted(%s) = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+func TestFlowFromNamespacesRegexAndInvalid(t *testing.T) {
+	f := FlowFrom(obj("ClusterFlow", "logging-system", "re", map[string]any{"match": []any{map[string]any{"select": map[string]any{"namespaces_regex": []any{"^team-"}}}}}, nil))
+	if f.Invalid != "" || len(f.Match) != 1 || !reflect.DeepEqual(f.Match[0].NamespacesRegex, []string{"^team-"}) {
+		t.Fatalf("flow = %+v", f)
+	}
+	for name, spec := range map[string]map[string]any{
+		"match and selectors":             {"match": []any{}, "selectors": map[string]any{"app": "x"}},
+		"select and exclude in one entry": {"match": []any{map[string]any{"select": map[string]any{}, "exclude": map[string]any{"labels": map[string]any{"a": "b"}}}}},
+	} {
+		if f := FlowFrom(obj("Flow", "team", "bad", spec, nil)); f.Invalid == "" {
+			t.Errorf("%s: Invalid is empty", name)
+		}
+	}
+}
+
+func TestLoggingFromDefaultFlowAndClusterResources(t *testing.T) {
+	l := LoggingFrom(obj("Logging", "", "default", map[string]any{
+		"controlNamespace":                       "logging-system",
+		"allowClusterResourcesFromAllNamespaces": true,
+		"defaultFlow":                            map[string]any{"globalOutputRefs": []any{"loki"}, "outputRefs": []any{"old"}},
+	}, nil))
+	if !l.ClusterResourcesFromAllNamespaces || l.DefaultFlow == nil || !reflect.DeepEqual(l.DefaultFlow.GlobalOutputs, []string{"loki"}) || !reflect.DeepEqual(l.DefaultFlow.DeprecatedOutputs, []string{"old"}) {
+		t.Fatalf("logging = %+v", l)
+	}
+	stray := FlowFrom(obj("ClusterFlow", "team", "stray", map[string]any{}, nil))
+	if !Counted(stray, []Logging{l}) {
+		t.Error("a ClusterFlow outside the control namespace counts when the Logging allows cluster resources from all namespaces")
+	}
+	if l := LoggingFrom(obj("Logging", "", "x", map[string]any{"controlNamespace": "a"}, nil)); l.DefaultFlow != nil {
+		t.Errorf("no defaultFlow: %+v", l.DefaultFlow)
 	}
 }
 

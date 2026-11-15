@@ -1988,6 +1988,10 @@ export interface LogRoute {
   selected: boolean
   uncertain: boolean
   ignored: boolean
+  /** Why the operator rejects the route; it never renders it. */
+  invalid?: string
+  /** Receives what no other route of its shipper selects (a Logging's defaultFlow). */
+  fallback?: boolean
   excluded: boolean
   /** For a selecting route: whether its logs reach a destination; undefined = unknown. */
   delivers?: boolean

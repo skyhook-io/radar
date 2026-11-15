@@ -26,26 +26,27 @@ describe('PodLogShippingSection', () => {
       flow({ name: 'far', unmet: ['label a=1', 'label b=2'] }),
       flow({ name: 'optin', unmet: ['label example.com/loki-logs=true'] }),
     ] }))
-    expect(html).toContain('Not shipped: nothing routes this pod&#x27;s logs')
+    expect(html).toContain('No Logging operator Flow selects this pod.')
+    expect(html).not.toContain('lost with the pod')
     expect(html).toContain('Closest match: optin')
     expect(html).toContain('label example.com/loki-logs=true')
   })
   it('says may be selected when uncertain', () => {
     const html = render(answer({ uncertain: true, routes: [flow({ uncertain: true })] }))
     expect(html).toContain('may be selected')
-    expect(html).not.toContain('Not shipped')
+    expect(html).not.toContain('No Logging operator Flow selects')
   })
   it('never says not shipped when Flows were unread', () => {
     const html = render(answer({ readErrors: [{ group: 'logging.banzaicloud.io', resource: 'clusterflows' }], routes: [flow({ unmet: ['label x=1'] })] }))
     expect(html).toContain('Radar could not read ClusterFlows')
-    expect(html).not.toContain('Not shipped')
+    expect(html).not.toContain('No Logging operator Flow selects')
   })
   it('says a selected Flow delivers nothing, and why', () => {
     const html = render(answer({ routes: [flow({ selected: true, delivers: false, active: false })] }))
     expect(html).toContain('Selected, but its logs go nowhere')
     expect(html).toContain('the ClusterFlow is inactive')
     expect(html).not.toContain('Shipped by')
-    expect(html).not.toContain('nothing routes this pod')
+    expect(html).not.toContain('No Logging operator Flow selects')
     const missing = render(answer({ routes: [flow({ selected: true, delivers: false, destinations: [{ kind: 'ClusterOutput', name: 'loki', found: false }] })] }))
     expect(missing).toContain('no destination it names exists and is active')
   })
@@ -73,11 +74,23 @@ describe('PodLogShippingSection', () => {
   it('shows a failed request as an alert, not as not shipped', () => {
     const html = render(null, new Error('boom'))
     expect(html).toContain('boom')
-    expect(html).not.toContain('Not shipped')
+    expect(html).not.toContain('No Logging operator Flow selects')
   })
   it('says an output of a kind Radar could not read is not read, not missing', () => {
     const html = render(answer({ readErrors: [{ group: 'logging.banzaicloud.io', resource: 'clusteroutputs' }], routes: [flow({ selected: true, destinations: [{ kind: 'ClusterOutput', namespace: 'logging-system', name: 'loki', found: false }] })] }))
     expect(html).toContain('not read')
     expect(html).not.toContain('not found')
+  })
+  it('names the default flow that ships what no Flow selects', () => {
+    const html = render(answer({ shipped: true, routes: [
+      flow({ kind: 'Logging', namespace: '', name: 'default', fallback: true, selected: true, delivers: true }),
+      flow({ name: 'optin', unmet: ['label x=1'] }),
+    ] }))
+    expect(html).toContain('Shipped by')
+    expect(html).toContain('default flow of Logging default')
+    expect(html).not.toContain('No Logging operator Flow selects')
+  })
+  it('says why the operator rejects an invalid Flow', () => {
+    expect(render(answer({ routes: [flow({ ignored: true, invalid: 'match and selectors are both set' })] }))).toContain('ClusterFlow optin is rejected by the operator: match and selectors are both set')
   })
 })

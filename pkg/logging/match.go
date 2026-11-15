@@ -5,6 +5,7 @@ package logging
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -19,6 +20,9 @@ type Rule struct {
 	ContainerNames []string
 	Hosts          []string
 	Namespaces     []string // ClusterFlow only
+	// NamespacesRegex (ClusterFlow only): the namespace must match one pattern,
+	// unanchored, as the operator's label router does with Ruby's Regexp.
+	NamespacesRegex []string
 	// NamespaceLabels is not evaluated (Radar doesn't read namespace labels
 	// here): a rule using it that would otherwise decide makes the answer
 	// uncertain.
@@ -33,8 +37,12 @@ type Flow struct {
 	Match          []Rule
 	LegacySelector map[string]string // spec.selectors, used only when Match is empty
 	GlobalOutputs  []string          // spec.globalOutputRefs
-	LocalOutputs   []string          // spec.localOutputRefs and the deprecated spec.outputRefs
-	HasFilters     bool
+	LocalOutputs   []string          // spec.localOutputRefs
+	// DeprecatedOutputs: spec.outputRefs, which the operator never renders.
+	DeprecatedOutputs []string
+	HasFilters        bool
+	// Invalid: why the operator rejects the Flow (it never renders it); empty when valid.
+	Invalid string
 }
 
 type PodFacts struct {
@@ -46,7 +54,7 @@ type PodFacts struct {
 
 type Decision struct {
 	Selected  bool
-	Uncertain bool     // a rule using namespace_labels would decide
+	Uncertain bool     // a rule using namespace_labels, or a regex Radar can't evaluate, would decide
 	Rule      int      // the deciding rule, -1 when none decided or match is empty
 	Unmet     []string // what the nearest select rule lacks, when no rule decided
 }
@@ -75,7 +83,7 @@ func Selects(flow Flow, pod PodFacts) Decision {
 			if !ruleHolds(r, pod, container) {
 				continue
 			}
-			if len(r.NamespaceLabels) > 0 {
+			if _, known := namespaceRegexHolds(r, pod.Namespace); len(r.NamespaceLabels) > 0 || !known {
 				if uncertainRule < 0 {
 					uncertainRule = ri
 				}
@@ -101,7 +109,34 @@ func ruleHolds(r Rule, pod PodFacts, container string) bool {
 	return len(missingLabels(r.Labels, pod.Labels)) == 0 &&
 		(len(r.ContainerNames) == 0 || slices.Contains(r.ContainerNames, container)) &&
 		(len(r.Hosts) == 0 || slices.Contains(r.Hosts, pod.Node)) &&
-		(len(r.Namespaces) == 0 || slices.Contains(r.Namespaces, pod.Namespace))
+		(len(r.Namespaces) == 0 || slices.Contains(r.Namespaces, pod.Namespace)) &&
+		regexHoldsOrUnknown(r, pod.Namespace)
+}
+
+func regexHoldsOrUnknown(r Rule, namespace string) bool {
+	holds, known := namespaceRegexHolds(r, namespace)
+	return holds || !known
+}
+
+// namespaceRegexHolds evaluates namespaces_regex with Go's regexp. known is
+// false for a pattern RE2 can't compile (Ruby-only syntax) or one containing a
+// comma, which fluentd's array parameter splits into separate patterns.
+func namespaceRegexHolds(r Rule, namespace string) (holds, known bool) {
+	if len(r.NamespacesRegex) == 0 {
+		return true, true
+	}
+	known = true
+	for _, pattern := range r.NamespacesRegex {
+		re, err := regexp.Compile(pattern)
+		if err != nil || strings.Contains(pattern, ",") {
+			known = false
+			continue
+		}
+		if re.MatchString(namespace) {
+			holds = true
+		}
+	}
+	return holds, known || holds
 }
 
 // nearestUnmet lists what the select rule closest to holding lacks, at pod
@@ -122,6 +157,9 @@ func nearestUnmet(rules []Rule, pod PodFacts) []string {
 		}
 		if len(r.Namespaces) > 0 && !slices.Contains(r.Namespaces, pod.Namespace) {
 			unmet = append(unmet, "namespace in "+list(r.Namespaces))
+		}
+		if !regexHoldsOrUnknown(r, pod.Namespace) {
+			unmet = append(unmet, "namespace matching "+list(r.NamespacesRegex))
 		}
 		sort.Strings(unmet)
 		if !found || len(unmet) < len(best) {
