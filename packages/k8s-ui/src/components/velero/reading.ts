@@ -122,6 +122,9 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
       if (reading.reason === 'unstartedBlocker' && blocker) {
         return `Held by backup ${blocker.name}, which Velero hasn’t started for ${formatAge(blocker.created)}.`
       }
+      if (blocker && (blocker.phase === '' || blocker.phase === 'New' || !blocker.phase)) {
+        return `Held by backup ${blocker.name}, submitted ${formatRelativeAgeTime(blocker.created)} and not started yet; Velero submits nothing new until it does.`
+      }
       return blocker
         ? `Backup ${blocker.name} from this schedule is still running; Velero submits the next one after it finishes.`
         : 'A backup from this schedule is still running; Velero submits the next one after it finishes.'

@@ -9,6 +9,7 @@ import {
   veleroFrequencyText,
   veleroLocationReasonText,
   type VeleroLocationReading,
+  veleroLocalTime,
 } from '@skyhook-io/k8s-ui'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
@@ -27,7 +28,7 @@ function AvailabilityCell({ l }: { l: VeleroLocationReading }) {
 
 function ValidationCell({ l }: { l: VeleroLocationReading }) {
   const when = l.lastValidation ? (
-    <Tooltip content={new Date(l.lastValidation).toLocaleString()}>
+    <Tooltip content={veleroLocalTime(l.lastValidation)}>
       <span>{formatRelativeAgeTime(l.lastValidation)}</span>
     </Tooltip>
   ) : (
@@ -75,9 +76,9 @@ function SchedulesCell({ l }: { l: VeleroLocationReading }) {
   return (
     <ul className="space-y-0.5">
       {l.schedules.map((s) => (
-        <li key={s.name} className="break-all">
-          {s.name}
-          {s.viaDefault && <span className="text-xs text-theme-text-tertiary"> (via default)</span>}
+        <li key={s.name}>
+          <span className="break-all">{s.name}</span>
+          {s.viaDefault && <span className="whitespace-nowrap text-xs text-theme-text-tertiary"> (via default)</span>}
         </li>
       ))}
     </ul>
