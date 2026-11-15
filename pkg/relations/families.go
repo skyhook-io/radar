@@ -19,7 +19,18 @@ var (
 	kindService      = resourceid.GroupKind{Kind: "Service"}
 	kindSecret       = resourceid.GroupKind{Kind: "Secret"}
 	kindScaledObject = resourceid.GroupKind{Group: "keda.sh", Kind: "ScaledObject"}
+	kindGateway      = resourceid.GroupKind{Group: configrefs.GatewayAPIGroup, Kind: "Gateway"}
+	kindCertificate  = resourceid.GroupKind{Group: configrefs.CertManagerGroup, Kind: "Certificate"}
 )
+
+// gatewayRoutes are the Gateway API route kinds, as sources.
+var gatewayRoutes = func() []Source {
+	var out []Source
+	for _, kind := range configrefs.GatewayRouteKinds {
+		out = append(out, Source{Kind: resourceid.GroupKind{Group: configrefs.GatewayAPIGroup, Kind: kind}})
+	}
+	return out
+}()
 
 // unstructuredOf returns obj when it is an unstructured object of gk.
 func unstructuredOf(obj runtime.Object, gk resourceid.GroupKind) (*unstructured.Unstructured, bool) {
@@ -125,11 +136,83 @@ var RolloutServices = &Family{
 // writes its certificate to.
 var CertificateSecrets = &Family{
 	Name:    "certificateSecrets",
-	Sources: []Source{{Kind: resourceid.GroupKind{Group: "cert-manager.io", Kind: "Certificate"}}},
+	Sources: []Source{{Kind: kindCertificate}},
 	Targets: []resourceid.GroupKind{kindSecret},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
-		if u, ok := unstructuredOf(obj, resourceid.GroupKind{Group: "cert-manager.io", Kind: "Certificate"}); ok {
+		if u, ok := unstructuredOf(obj, kindCertificate); ok {
 			if r, ok := configrefs.CertificateSecret(u); ok {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+// GatewayParents is the family of the Gateways a Gateway API route attaches
+// to, which may be in another namespace.
+var GatewayParents = &Family{
+	Name:           "gatewayParents",
+	Sources:        gatewayRoutes,
+	Targets:        []resourceid.GroupKind{kindGateway},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			for _, r := range configrefs.GatewayRouteParents(u) {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+// GatewayBackends is the family of the Services a Gateway API route sends
+// traffic to, which may be in another namespace. A cross-namespace backend is
+// declared whether or not a ReferenceGrant permits it.
+var GatewayBackends = &Family{
+	Name:           "gatewayBackends",
+	Sources:        gatewayRoutes,
+	Targets:        []resourceid.GroupKind{kindService},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			for _, r := range configrefs.GatewayRouteBackendServices(u) {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+// GatewayClasses is the family of the GatewayClass a Gateway names.
+var GatewayClasses = &Family{
+	Name:    "gatewayClasses",
+	Sources: []Source{{Kind: kindGateway}},
+	Targets: []resourceid.GroupKind{{Group: configrefs.GatewayAPIGroup, Kind: "GatewayClass"}},
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := unstructuredOf(obj, kindGateway); ok {
+			if r, ok := configrefs.GatewayClassOf(u); ok {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+// CertManagerIssuers is the family of the Issuer or ClusterIssuer a
+// cert-manager Certificate, CertificateRequest, ACME Order or Challenge
+// names.
+var CertManagerIssuers = &Family{
+	Name: "certManagerIssuers",
+	Sources: []Source{
+		{Kind: kindCertificate},
+		{Kind: resourceid.GroupKind{Group: configrefs.CertManagerGroup, Kind: "CertificateRequest"}},
+		{Kind: resourceid.GroupKind{Group: configrefs.CertManagerACMEGroup, Kind: "Order"}},
+		{Kind: resourceid.GroupKind{Group: configrefs.CertManagerACMEGroup, Kind: "Challenge"}},
+	},
+	Targets: []resourceid.GroupKind{{Group: configrefs.CertManagerGroup, Kind: "Issuer"}, {Group: configrefs.CertManagerGroup, Kind: "ClusterIssuer"}},
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			if r, ok := configrefs.CertManagerIssuer(u); ok {
 				visitPathRef(visit, r)
 			}
 		}

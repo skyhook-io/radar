@@ -75,12 +75,14 @@ with the path declaring it. The `View` answers every family the same way:
 - `References(family, subject)`: each target the subject declares, every path declaring it, and what reading it
   found: present, absent, unread (with its gap) or withheld from the caller.
 - `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A
-  family's namespaced targets are always in the declarer's namespace, so the answer reads that namespace's objects of
-  each declaring kind through the namespace index and evaluates what each declares. A cluster-scoped target is answered
-  as `Children` answers a cluster-scoped owner: the namespaces the caller may read something in are searched, each
-  declarer is checked where it is, and a gap is kept only if it covers what the caller may read
-  (`ownership.GapCoversReadable`). An index of every declaration cost about 1.4 KB per Pod
-  and made a Pod relist about five times as long ([measurements](loadtest.md#relationship-cost-baselines)).
+  namespaced target is normally declared from its own namespace, so the answer reads that namespace's objects of each
+  declaring kind through the namespace index and evaluates what each declares. An index of every declaration cost
+  about 1.4 KB per Pod and made a Pod relist about five times as long
+  ([measurements](loadtest.md#relationship-cost-baselines)).
+- A cluster-scoped target, or any target of a family whose declarations cross namespaces (`CrossNamespace`, as Gateway
+  API references do), is answered as `Children` answers a cluster-scoped owner: the namespaces the caller may read
+  something in are searched, each declarer is checked where it is, and a gap is kept only if it covers what the caller
+  may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
 - Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
@@ -96,8 +98,13 @@ The families so far:
 | `IngressBackends` | Ingresses → their default and rule backend Services | `families.go` |
 | `RolloutServices` | Argo Rollouts → the canary, stable, active and preview Services their strategy names | `families.go` |
 | `CertificateSecrets` | cert-manager Certificates → the Secret they write | `families.go` |
+| `GatewayParents` | Gateway API routes (HTTP, GRPC, TCP, TLS, UDP) → the Gateways their parentRefs attach to, in any namespace | `families.go` |
+| `GatewayBackends` | Gateway API routes → the Services their rules send traffic to, in any namespace, whether or not a ReferenceGrant permits it | `families.go` |
+| `GatewayClasses` | Gateways → the GatewayClass they name | `families.go` |
+| `CertManagerIssuers` | cert-manager Certificates, CertificateRequests, ACME Orders and Challenges → the Issuer or ClusterIssuer their `issuerRef` names (external issuers aren't followed) | `families.go` |
 
-Extractors live in `pkg/configrefs`, which the topology builder also uses.
+Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
+families can't read a reference differently.
 
 Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
 one change that also removes the graph.

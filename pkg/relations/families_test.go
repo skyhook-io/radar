@@ -35,7 +35,7 @@ func referrerRefs(a ReferrersAnswer) []resourceid.Ref {
 // referrers must be source.
 func checkFamily(t *testing.T, f *Family, objects []runtime.Object, source runtime.Object, target resourceid.Ref, path string) {
 	t.Helper()
-	v := NewView(cluster{objects: objects}, ownership.Unrestricted())
+	v := NewView(allNamespaces{cluster: cluster{objects: objects}}, ownership.Unrestricted())
 	refs := v.References(f, refOf(source), source)
 	if len(refs.Declared) != 1 || refs.Declared[0].Ref != target || refs.Declared[0].State != TargetPresent || !slices.Equal(refs.Declared[0].Paths, []string{path}) || !refs.Coverage.Complete() {
 		t.Errorf("%s: %v declares %+v; want %v at %s, present", f.Name, refOf(source), refs, target, path)
@@ -106,7 +106,7 @@ func TestAClusterTriggerAuthenticationsReferrersAreReadAcrossNamespaces(t *testi
 	// The caller may read ScaledObjects in shop but can't be told about them
 	// cluster-wide, as MCP can't, and team's are still loading.
 	c.gaps = []ownership.Gap{{Kind: kindScaledObject, Namespace: "team", Reason: readreason.KindSyncPending}}
-	shopOnly := NewView(c, namespaceAccess("shop")).Referrers(KEDAAuthentication, subject, nil)
+	shopOnly := NewView(c, namespaceAccess{"shop", []string{"ClusterTriggerAuthentication"}}).Referrers(KEDAAuthentication, subject, nil)
 	if got := referrerRefs(shopOnly); len(got) != 1 || got[0].Namespace != "shop" || !shopOnly.Coverage.Narrowed {
 		t.Errorf("a caller reading only shop got %+v", shopOnly)
 	}
@@ -114,7 +114,7 @@ func TestAClusterTriggerAuthenticationsReferrersAreReadAcrossNamespaces(t *testi
 		t.Errorf("a caller reading only shop was told of team's gaps: %+v", shopOnly.Coverage.NotChecked)
 	}
 	c.gaps = []ownership.Gap{{Kind: kindScaledObject, Namespace: "shop", Reason: readreason.KindSyncPending}}
-	if got := NewView(c, namespaceAccess("shop")).Referrers(KEDAAuthentication, subject, nil); got.Coverage.Complete() {
+	if got := NewView(c, namespaceAccess{"shop", []string{"ClusterTriggerAuthentication"}}).Referrers(KEDAAuthentication, subject, nil); got.Coverage.Complete() {
 		t.Errorf("shop's ScaledObjects are loading, yet the answer is complete: %+v", got)
 	}
 }
@@ -173,17 +173,84 @@ func (c allNamespaces) Indexed(gk resourceid.GroupKind, index string, keys []str
 	return r
 }
 
-// namespaceAccess may read only its namespace and cluster-scoped KEDA kinds.
-// Asked about another kind across the cluster it can't decide, as MCP can't.
-type namespaceAccess string
+// namespaceAccess may read only its namespace and the cluster-scoped kinds
+// it names. Asked about another kind across the cluster it can't decide, as
+// MCP can't.
+type namespaceAccess struct {
+	namespace    string
+	clusterKinds []string
+}
 
 func (n namespaceAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
 	switch {
-	case namespace == string(n), namespace == "" && gk.Kind == "ClusterTriggerAuthentication":
+	case namespace == n.namespace, namespace == "" && slices.Contains(n.clusterKinds, gk.Kind):
 		return ownership.Allowed
 	case namespace == "":
 		return ownership.Undecided
 	}
 	return ownership.Denied
 }
-func (n namespaceAccess) Namespaces() ([]string, bool) { return []string{string(n)}, false }
+func (n namespaceAccess) Namespaces() ([]string, bool) { return []string{n.namespace}, false }
+
+func inNamespace(u *unstructured.Unstructured, namespace string) *unstructured.Unstructured {
+	u.SetNamespace(namespace)
+	return u
+}
+
+func TestGatewayRoutesNameGatewaysAndBackendsAcrossNamespaces(t *testing.T) {
+	gw := inNamespace(object("gateway.networking.k8s.io/v1", "Gateway", "shared", map[string]any{"gatewayClassName": "envoy"}), "infra")
+	svc := typed(&corev1.Service{ObjectMeta: meta("web")}, "", "v1", "Service")
+	route := inNamespace(object("gateway.networking.k8s.io/v1", "HTTPRoute", "web", map[string]any{
+		"parentRefs": []any{map[string]any{"name": "shared", "namespace": "infra", "sectionName": "https"}},
+		"rules":      []any{map[string]any{"backendRefs": []any{map[string]any{"name": "web", "namespace": "shop", "port": int64(80)}}}},
+	}), "frontend")
+	objects := []runtime.Object{gw, svc, route}
+	checkFamily(t, GatewayParents, objects, route, resourceid.Ref{Group: "gateway.networking.k8s.io", Kind: "Gateway", Namespace: "infra", Name: "shared"}, "spec.parentRefs")
+	checkFamily(t, GatewayBackends, objects, route, ref("", "Service", "web"), "spec.rules[].backendRefs")
+
+	class := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "gateway.networking.k8s.io/v1", "kind": "GatewayClass", "metadata": map[string]any{"name": "envoy"}}}
+	checkFamily(t, GatewayClasses, []runtime.Object{class, gw}, gw, resourceid.Ref{Group: "gateway.networking.k8s.io", Kind: "GatewayClass", Name: "envoy"}, "spec.gatewayClassName")
+}
+
+func TestARestrictedCallerSeesOnlyTheRoutesItMayRead(t *testing.T) {
+	gw := object("gateway.networking.k8s.io/v1", "Gateway", "shared", nil)
+	parent := map[string]any{"parentRefs": []any{map[string]any{"name": "shared", "namespace": "shop"}}}
+	own := object("gateway.networking.k8s.io/v1", "HTTPRoute", "own", parent)
+	other := inNamespace(object("gateway.networking.k8s.io/v1", "GRPCRoute", "other", parent), "team")
+	c := allNamespaces{cluster: cluster{objects: []runtime.Object{gw, own, other}}}
+	if got := referrerRefs(NewView(c, ownership.Unrestricted()).Referrers(GatewayParents, refOf(gw), nil)); len(got) != 2 {
+		t.Errorf("the Gateway's routes = %v; want the routes in both namespaces", got)
+	}
+	a := NewView(c, namespaceAccess{namespace: "shop"}).Referrers(GatewayParents, refOf(gw), nil)
+	if got := referrerRefs(a); len(got) != 1 || got[0].Name != "own" || !a.Coverage.Narrowed || len(a.Coverage.NotChecked) != 0 {
+		t.Errorf("a caller reading only shop got %+v", a)
+	}
+}
+
+func TestGatewayReferencesToOtherKindsAreLeftOut(t *testing.T) {
+	route := object("gateway.networking.k8s.io/v1", "HTTPRoute", "mesh", map[string]any{
+		"parentRefs": []any{map[string]any{"group": "", "kind": "Service", "name": "web"}},
+		"rules":      []any{map[string]any{"backendRefs": []any{map[string]any{"group": "example.com", "kind": "Bucket", "name": "web"}}}},
+	})
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{route}}}, ownership.Unrestricted())
+	for _, f := range []*Family{GatewayParents, GatewayBackends} {
+		if got := v.References(f, refOf(route), route); len(got.Declared) != 0 {
+			t.Errorf("%s: a mesh route declares %+v", f.Name, got.Declared)
+		}
+	}
+}
+
+func TestCertManagerIssuersNameIssuersAndClusterIssuers(t *testing.T) {
+	issuer := object("cert-manager.io/v1", "Issuer", "letsencrypt", nil)
+	cert := object("cert-manager.io/v1", "Certificate", "front", map[string]any{"issuerRef": map[string]any{"name": "letsencrypt"}})
+	checkFamily(t, CertManagerIssuers, []runtime.Object{issuer, cert}, cert, ref("cert-manager.io", "Issuer", "letsencrypt"), "spec.issuerRef")
+
+	cluster := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "cert-manager.io/v1", "kind": "ClusterIssuer", "metadata": map[string]any{"name": "shared"}}}
+	order := inNamespace(object("acme.cert-manager.io/v1", "Order", "front-1", map[string]any{"issuerRef": map[string]any{"kind": "ClusterIssuer", "name": "shared"}}), "team")
+	checkFamily(t, CertManagerIssuers, []runtime.Object{cluster, order}, order, resourceid.Ref{Group: "cert-manager.io", Kind: "ClusterIssuer", Name: "shared"}, "spec.issuerRef")
+
+	external := object("cert-manager.io/v1", "Certificate", "vault", map[string]any{"issuerRef": map[string]any{"group": "vault.example.com", "kind": "VaultIssuer", "name": "v"}})
+	if got := NewView(allNamespaces{}, ownership.Unrestricted()).References(CertManagerIssuers, refOf(external), external); len(got.Declared) != 0 {
+		t.Errorf("an external issuer is declared: %+v", got.Declared)
+	}
+}

@@ -4941,18 +4941,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		routeID := routeIDs[routeKind+"/"+ns+"/"+name]
 
 		// Gateway → Route edges (read parentRefs)
-		parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
-		for _, pRef := range parentRefs {
-			pMap, ok := pRef.(map[string]any)
-			if !ok {
-				continue
-			}
-			if !configrefs.GatewayParentIsGateway(pMap) {
-				continue
-			}
-			parentName, _ := pMap["name"].(string)
-			parentNS := configrefs.GatewayRefNamespace(pMap, ns)
-			gwID := gatewayIDs[parentNS+"/"+parentName]
+		for _, parent := range configrefs.GatewayRouteParents(route) {
+			gwID := gatewayIDs[parent.Ref.Namespace+"/"+parent.Ref.Name]
 			if edgeID := fmt.Sprintf("%s-to-%s", gwID, routeID); gwID != "" && !gatewayEdgeSeen[edgeID] {
 				gatewayEdgeSeen[edgeID] = true
 				edges = append(edges, Edge{
@@ -4965,32 +4955,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		// Route → Service edges (read backendRefs from rules)
-		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-		for _, rule := range rules {
-			ruleMap, ok := rule.(map[string]any)
-			if !ok {
-				continue
-			}
-			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
-			for _, bRef := range backendRefs {
-				bMap, ok := bRef.(map[string]any)
-				if !ok {
-					continue
-				}
-				backendName, _ := bMap["name"].(string)
-				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
-				if configrefs.GatewayBackendIsService(bMap) {
-					svcKey := backendNS + "/" + backendName
-					if svcID, ok := serviceIDs[svcKey]; ok && !gatewayEdgeSeen[routeID+"-to-"+svcID] {
-						gatewayEdgeSeen[routeID+"-to-"+svcID] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
-							Source: routeID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
+			svcKey := backend.Ref.Namespace + "/" + backend.Ref.Name
+			if svcID, ok := serviceIDs[svcKey]; ok && !gatewayEdgeSeen[routeID+"-to-"+svcID] {
+				gatewayEdgeSeen[routeID+"-to-"+svcID] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
+					Source: routeID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}
@@ -5921,23 +5895,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		if !opts.MatchesNamespaceFilter(ns) {
 			continue
 		}
-		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-		for _, rule := range rules {
-			ruleMap, ok := rule.(map[string]any)
-			if !ok {
-				continue
-			}
-			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
-			for _, bRef := range backendRefs {
-				bMap, ok := bRef.(map[string]any)
-				if !ok {
-					continue
-				}
-				backendName, _ := bMap["name"].(string)
-				if configrefs.GatewayBackendIsService(bMap) {
-					servicesFromGateway[configrefs.GatewayRefNamespace(bMap, ns)+"/"+backendName] = true
-				}
-			}
+		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
+			servicesFromGateway[backend.Ref.Namespace+"/"+backend.Ref.Name] = true
 		}
 	}
 
@@ -6345,17 +6304,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Gateway → Route edges
-		parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
-		for _, pRef := range parentRefs {
-			pMap, ok := pRef.(map[string]any)
-			if !ok {
-				continue
-			}
-			if !configrefs.GatewayParentIsGateway(pMap) {
-				continue
-			}
-			parentName, _ := pMap["name"].(string)
-			if gwID, ok := trafficGwIDMap[configrefs.GatewayRefNamespace(pMap, ns)+"/"+parentName]; ok && !trafficGatewayEdgeSeen[gwID+"-to-"+routeID] {
+		for _, parent := range configrefs.GatewayRouteParents(route) {
+			if gwID, ok := trafficGwIDMap[parent.Ref.Namespace+"/"+parent.Ref.Name]; ok && !trafficGatewayEdgeSeen[gwID+"-to-"+routeID] {
 				trafficGatewayEdgeSeen[gwID+"-to-"+routeID] = true
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
@@ -6367,37 +6317,23 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		// Route → Service edges
-		for _, rule := range rules {
-			ruleMap, ok := rule.(map[string]any)
-			if !ok {
+		for _, backend := range configrefs.GatewayRouteBackendServices(route) {
+			svcKey := backend.Ref.Namespace + "/" + backend.Ref.Name
+			if _, ok := servicesToInclude[svcKey]; !ok {
 				continue
 			}
-			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
-			for _, bRef := range backendRefs {
-				bMap, ok := bRef.(map[string]any)
-				if !ok {
-					continue
-				}
-				backendName, _ := bMap["name"].(string)
-				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
-				if configrefs.GatewayBackendIsService(bMap) {
-					svcKey := backendNS + "/" + backendName
-					if _, ok := servicesToInclude[svcKey]; ok {
-						svcID := fmt.Sprintf("service/%s/%s", backendNS, backendName)
-						serviceIDs[svcKey] = svcID
-						if trafficGatewayEdgeSeen[routeID+"-to-"+svcID] {
-							continue
-						}
-						trafficGatewayEdgeSeen[routeID+"-to-"+svcID] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
-							Source: routeID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+			svcID := fmt.Sprintf("service/%s/%s", backend.Ref.Namespace, backend.Ref.Name)
+			serviceIDs[svcKey] = svcID
+			if trafficGatewayEdgeSeen[routeID+"-to-"+svcID] {
+				continue
 			}
+			trafficGatewayEdgeSeen[routeID+"-to-"+svcID] = true
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
+				Source: routeID,
+				Target: svcID,
+				Type:   EdgeRoutesTo,
+			})
 		}
 	}
 

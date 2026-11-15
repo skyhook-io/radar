@@ -16,9 +16,11 @@ import (
 // such as the ConfigMaps a Pod mounts. A View answers both directions of
 // every family the same way, so adding one is a table entry.
 //
-// A target is in its source's namespace or cluster-scoped: the sources
-// naming a namespaced target are found by reading its namespace, and those
-// naming a cluster-scoped one by reading every namespace.
+// A target is in its source's namespace or cluster-scoped, unless the family
+// is CrossNamespace: the sources naming a namespaced target are found by
+// reading its namespace, and those naming a cluster-scoped one, or any
+// target of a CrossNamespace family, by reading every namespace the caller
+// may read.
 type Family struct {
 	// Name keys the family's coverage on the wire.
 	Name string
@@ -26,6 +28,9 @@ type Family struct {
 	Sources []Source
 	// Targets are the kinds a declaration can name.
 	Targets []resourceid.GroupKind
+	// CrossNamespace: a declaration may name a namespaced target in another
+	// namespace, as a Gateway API route may name a Gateway.
+	CrossNamespace bool
 	// Declared visits what obj declares, each with the path declaring it.
 	// It returns an error when part of obj couldn't be read, after visiting
 	// what could.
@@ -178,15 +183,16 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 	return a
 }
 
-// Referrers answers what declares subject in f, among its namespace's
-// objects of f's source kinds, up to the view's limit with a total. It
+// Referrers answers what declares subject in f, among the objects of f's
+// source kinds that may name it (see Family), up to the view's limit with a
+// total. It
 // answers only for a subject Radar holds: a caller who may not read it gets
 // nothing, and a subject Radar couldn't read gets its gap. fetched is the
 // subject as the host read it, or nil: a subject the host read that the
 // cache doesn't hold yet leaves the answer incomplete rather than empty.
 //
-// The namespace's objects are read through the namespace index every store
-// keeps and evaluated as asked, rather than kept in an index of every
+// Objects are read through the namespace index every store keeps and
+// evaluated as asked, rather than kept in an index of every
 // declaration: for config references on a Pod store such an index cost
 // about 1.4 KB a Pod and made a relist about five times as long.
 func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferrersAnswer {
@@ -208,13 +214,13 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 		return a
 	}
 	// A namespaced target's sources are in its namespace. A cluster-scoped
-	// one's can be anywhere, so, as ownership.View.Children does, the search
-	// covers the namespaces the caller may read something in, each source is
-	// checked where it is, and a gap is kept only if it covers what the
-	// caller may read.
-	clusterTarget := subject.Namespace == ""
+	// one's, or a CrossNamespace family's, can be anywhere, so, as
+	// ownership.View.Children does, the search covers the namespaces the
+	// caller may read something in, each source is checked where it is, and a
+	// gap is kept only if it covers what the caller may read.
+	across := subject.Namespace == "" || f.CrossNamespace
 	scope, index, keys := ownership.InNamespace(subject.Namespace), cache.NamespaceIndex, []string{subject.Namespace}
-	if clusterTarget {
+	if across {
 		namespaces, all := v.access.Namespaces()
 		scope = ownership.SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: true}
 		index, keys = "", nil
@@ -226,19 +232,19 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	}
 	for _, source := range f.Sources {
 		gk := source.Kind
-		if !source.declares(subject.GroupKind()) || !clusterTarget && !v.mayRead(gk, subject.Namespace, &a.Coverage) {
+		if !source.declares(subject.GroupKind()) || !across && !v.mayRead(gk, subject.Namespace, &a.Coverage) {
 			continue
 		}
 		read := v.session.Indexed(gk, index, keys, scope)
 		for _, g := range read.Gaps {
-			if !clusterTarget || ownership.GapCoversReadable(v.access, v.session.Catalog(), g, scope) {
+			if !across || ownership.GapCoversReadable(v.access, v.session.Catalog(), g, scope) {
 				a.Coverage.addGap(g)
 			}
 		}
 		for _, o := range read.Objects {
 			// Saying a check failed would say a referrer may be there, so an
 			// undecided one narrows the answer as a denied one does.
-			if clusterTarget && v.decide(gk, o.Ref.Namespace) != ownership.Allowed {
+			if across && v.decide(gk, o.Ref.Namespace) != ownership.Allowed {
 				a.Coverage.Narrowed = true
 				continue
 			}
