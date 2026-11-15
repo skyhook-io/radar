@@ -23,7 +23,9 @@ const (
 	SubstrateVerdictServing   = "serving"
 	SubstrateVerdictNoWorkers = "noWorkers"
 	// SubstrateVerdictBehind: some actor's snapshot upload is overdue.
-	SubstrateVerdictBehind  = "behind"
+	SubstrateVerdictBehind = "behind"
+	// SubstrateVerdictCurrent: no overdue upload is counted. Snapshots with no
+	// storage destination are not counted, so it does not prove all are saved.
 	SubstrateVerdictCurrent = "current"
 	SubstrateVerdictUnknown = "unknown"
 

@@ -2254,7 +2254,7 @@ The verdict line reads now, and its facts over the charts' hour:
 | WorkerPool | **Full** (neutral) | No API replica sees a free (idle or partial) worker | |
 | WorkerPool | Serving, No workers | Free workers exist; or no schedulable worker and none short | |
 | Node | **Uploads behind** (amber) | Some actor's snapshot upload to object storage is overdue | Overdue uploads by band, worst first; oldest snapshot not yet in storage |
-| Node | Up to date | No overdue upload | |
+| Node | No overdue uploads | atelet counts no overdue upload. Snapshots with no storage destination are not counted, so this is not proof that every snapshot is saved; the oldest unsaved snapshot fact shows that | |
 
 Facts are uncolored. One Radar could not read says **Unavailable** with the reason (the same reason its chart gives), never 0; one whose series exist but recorded nothing for this pool or node says **None**. When the verdict cannot be read it says **Unknown** with the reason.
 

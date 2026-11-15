@@ -86,6 +86,13 @@ describe('SubstrateVerdictLine', () => {
     connected = true
   })
 
+  it('claims no more than the overdue count proves on a node', () => {
+    withVerdict({ state: 'current', facts: [] })
+    const html = render(node)
+    expect(html).toContain('No overdue uploads')
+    expect(html).not.toContain('Up to date')
+  })
+
   it('renders nothing without a verdict', () => {
     health = { data: { ...base, status: 'notFound' } }
     expect(render(pool)).toBe('')

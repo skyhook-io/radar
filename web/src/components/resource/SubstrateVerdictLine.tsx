@@ -54,7 +54,9 @@ function VerdictState({ verdict }: { verdict: SubstrateVerdict }) {
     case 'serving':
       return <span className="text-theme-text-primary">Serving</span>
     case 'current':
-      return <span className="text-theme-text-primary">Up to date</span>
+      // Only what the count proves: snapshots with no storage destination are
+      // not counted as overdue, so zero overdue is not "everything is saved".
+      return <span className="text-theme-text-primary">No overdue uploads</span>
   }
   return (
     <Tooltip content={verdict.reason ?? 'Radar could not read this from Prometheus'}>
