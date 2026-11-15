@@ -1023,7 +1023,7 @@ function GitOpsFilterSidebar({
 
         <GitOpsFilterSection icon={CircleDot} title="Automation (Sync policy)">
           <GitOpsFacetButton label="Auto-sync" count={automationCounts.auto} active={automationFilters.has('auto')} onClick={() => onToggleAutomation('auto')} />
-          <GitOpsFacetButton label="Manual" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
+          <GitOpsFacetButton label="Auto-sync off" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
           <GitOpsFacetButton label="Suspended" count={automationCounts.suspended} active={automationFilters.has('suspended')} tone="warning" onClick={() => onToggleAutomation('suspended')} />
         </GitOpsFilterSection>
 
