@@ -127,6 +127,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     toMs: selectionWindow?.toMs,
   })
   const loadError = useStickyError(error, fetchedEvents != null)
+  const renderItemActions = useLokiTimelineActions()
   const split = useMemo(
     () => (splitRows && fetchedEvents ? splitRoutineActivity(fetchedEvents, fetchLimit) : undefined),
     [splitRows, fetchedEvents, fetchLimit],
@@ -173,7 +174,6 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     <TimelineStaleNote error={error} subject="list" onRetry={() => refetch()} />
   ) : null
 
-  const renderItemActions = useLokiTimelineActions()
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
       {/* Under a scrubber TimelineView already shows the note above it. */}
