@@ -237,6 +237,7 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 		}
 	}
 
+	n.fillNodeData(session, istioDomain)
 	provider = &relationDirectProvider{ResourceProvider: provider, session: session, n: n}
 	rel := getRelationshipsWithObject(subject.Kind, subject.Namespace, subject.Name, obj, &n.topo, provider, dp, nil, n.allowedRef)
 	if rel == nil {
@@ -510,6 +511,28 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 		ksvcRef = resourceid.NewRef(serving, "Service", subject.Namespace, revision.GetLabels()["serving.knative.dev/service"])
 		if ksvc, ok := read(ksvcRef); ok && slices.Contains(privateRevisions(ksvc), rev) {
 			n.edge(ksvcRef, subject, exposes, false)
+		}
+	}
+}
+
+func (n *neighborhood) fillNodeData(session relations.Session, istioDomain string) {
+	for i := range n.topo.Nodes {
+		node := &n.topo.Nodes[i]
+		ref := resourceRefForNode(node, nil)
+		if ref == nil {
+			continue
+		}
+		r := refIdentity(*ref)
+		if r.Group == "networking.istio.io" && (r.Kind == "VirtualService" || r.Kind == "DestinationRule") {
+			node.Data["istioServiceDomain"] = istioDomain
+		}
+		if r.Group == "" && (r.Kind == "ConfigMap" || r.Kind == "Secret") {
+			obj, read := n.borrow(session, r)
+			if read.State == ownership.Present {
+				if m, err := apimeta.Accessor(obj); err == nil {
+					node.Data["resourceVersion"] = m.GetResourceVersion()
+				}
+			}
 		}
 	}
 }

@@ -268,3 +268,19 @@ func TestRelationsAnswerOwnedAndPoolAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestRelationsAnswerScalars(t *testing.T) {
+	source := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "source", ResourceVersion: "rv-opaque"}}, "", "ConfigMap")
+	mirror := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "mirror", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflects": "shop/source"}}}, "", "ConfigMap")
+	s := newProjectionSession(t, source, mirror)
+	rel := projectionAnswer(t, s, mirror, ownership.Unrestricted(), ownership.Unrestricted())
+	if rel.Reflection == nil || rel.Reflection.SourceResourceVersion != "rv-opaque" {
+		t.Fatalf("reflection scalar: %+v", rel.Reflection)
+	}
+	vs := projectionCR("networking.istio.io", "VirtualService", "shop", "web", map[string]any{})
+	s = newProjectionSession(t, vs)
+	rel, _ = RelationsAnswer(s, ownership.Unrestricted(), ownership.Unrestricted(), ownership.NewView(s, ownership.Unrestricted()), projectionRef(vs), vs, "corp.internal", nil, nil)
+	if rel.IstioServiceDomain != "corp.internal" {
+		t.Fatalf("Istio domain: %+v", rel)
+	}
+}

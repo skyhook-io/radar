@@ -440,7 +440,7 @@ func compare(kind string, subject resourceid.Ref, before, after *topology.Relati
 	rt := bv.Type()
 	for i := range rt.NumField() {
 		f := rt.Field(i)
-		if !f.IsExported() || f.Tag.Get("json") == "-" || f.Name == "Ownership" || f.Name == "IstioServiceDomain" {
+		if !f.IsExported() || f.Tag.Get("json") == "-" || f.Name == "Ownership" {
 			continue
 		}
 		b, a := refSet(bv.Field(i)), refSet(av.Field(i))
@@ -499,10 +499,27 @@ func refSet(v reflect.Value) sets.Set[string] {
 			if x.Source != nil {
 				out.Insert("source:" + x.Source.Group + "/" + x.Source.Kind + "/" + x.Source.Namespace + "/" + x.Source.Name)
 			}
+			if x.SourceResourceVersion != "" {
+				out.Insert("sourceResourceVersion:" + x.SourceResourceVersion)
+			}
 			for _, m := range x.Mirrors {
 				out.Insert("mirror:" + m.Group + "/" + m.Kind + "/" + m.Namespace + "/" + m.Name)
 			}
 		}
+	case *topology.ControllerChain:
+		if x != nil {
+			for _, r := range x.Refs {
+				add(r)
+			}
+			out.Insert("stop:" + x.Stop)
+			out.Insert("reason:" + x.Reason)
+		}
+	default:
+		data, err := json.Marshal(v.Interface())
+		if err != nil {
+			panic(err)
+		}
+		out.Insert("value:" + string(data))
 	}
 	return out
 }
