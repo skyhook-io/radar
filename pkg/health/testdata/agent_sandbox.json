@@ -294,7 +294,7 @@
             "type": "Ready",
             "status": "False",
             "reason": "DependenciesNotReady",
-            "message": "Pod exists with phase: Running; container \"agent\" is waiting: CrashLoopBackOff",
+            "message": "Pod exists with phase: Running; container \"agent\" is in CrashLoopBackOff (last exit: Error)",
             "observedGeneration": 1,
             "lastTransitionTime": "2026-11-14T10:00:00Z"
           }
@@ -304,6 +304,68 @@
     "level": "unhealthy",
     "uiLevel": "unhealthy",
     "text": "CrashLoopBackOff",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "crash loop without a recorded exit",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "DependenciesNotReady",
+            "message": "Pod exists with phase: Running; init container \"setup\" is in CrashLoopBackOff",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "CrashLoopBackOff",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "container config error",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "DependenciesNotReady",
+            "message": "Pod exists with phase: Pending; container \"agent\" is waiting: CreateContainerConfigError",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "CreateContainerConfigError",
     "settled": false,
     "inProgress": false,
     "mirrored": false

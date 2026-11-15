@@ -53,7 +53,22 @@ var sandboxClaimOwnReasons = map[string]bool{
 	"SandboxNotReady": true, "ReconcilerError": true,
 }
 
-var sandboxWaitingReason = regexp.MustCompile(`is waiting: ([A-Za-z]+)`)
+// The controller names a container that is not starting normally in Ready's
+// message: `container "x" is waiting: ImagePullBackOff`, or
+// `container "x" is in CrashLoopBackOff (last exit: Error)`.
+var sandboxWaitingReason = regexp.MustCompile(`is waiting: ([A-Za-z]+)|is in (CrashLoopBackOff)`)
+
+func sandboxContainerFailure(message string) string {
+	m := sandboxWaitingReason.FindStringSubmatch(message)
+	if m == nil {
+		return ""
+	}
+	reason := m[1] + m[2]
+	if !isFatalWaitingReason(reason) {
+		return ""
+	}
+	return reason
+}
 
 type sandboxCondition struct {
 	status, reason, message string
@@ -83,6 +98,16 @@ func findSandboxCondition(u *unstructured.Unstructured, condType string) sandbox
 		return c
 	}
 	return sandboxCondition{}
+}
+
+// later returns whichever condition last changed status. Neither alone marks
+// when the current state began: Kubernetes keeps a condition's transition time
+// when only its reason changes.
+func later(a, b sandboxCondition) sandboxCondition {
+	if !b.transitionKnown || (a.transitionKnown && !b.transition.After(a.transition)) {
+		return a
+	}
+	return b
 }
 
 // AgentSandbox returns the health of an Agent Sandbox Sandbox or SandboxClaim.
@@ -132,20 +157,20 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 			r.Mirrored = isClaim
 			return r
 		}
-		return progress("Suspending", suspended)
+		return progress("Suspending", later(ready, suspended))
 	}
 	if text, ok := sandboxSettledReasons[reason]; ok {
 		return AgentSandboxReadiness{Verdict: Verdict{Level: LevelNeutral, Reason: text}, Settled: true, Mirrored: isClaim && !sandboxClaimOwnReasons[reason]}
 	}
 	if reason == "DependenciesNotReady" {
-		if m := sandboxWaitingReason.FindStringSubmatch(ready.message); m != nil && isFatalWaitingReason(m[1]) {
-			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelUnhealthy, Reason: m[1]}, Mirrored: isClaim}
+		if failure := sandboxContainerFailure(ready.message); failure != "" {
+			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelUnhealthy, Reason: failure}, Mirrored: isClaim}
 		}
 		// A resume flips Suspended back to False; Ready stayed False all along
 		// and kept its old transition time.
 		since := ready
-		if suspended := findSandboxCondition(u, "Suspended"); suspended.found && suspended.status == "False" && suspended.transitionKnown && (!since.transitionKnown || suspended.transition.After(since.transition)) {
-			since = suspended
+		if suspended := findSandboxCondition(u, "Suspended"); suspended.found && suspended.status == "False" {
+			since = later(ready, suspended)
 		}
 		if scheduled := findSandboxCondition(u, "PodScheduled"); scheduled.found && scheduled.status == "False" && scheduled.reason != "" {
 			return progress(scheduled.reason, since)

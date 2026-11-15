@@ -63,6 +63,8 @@ describe('Agent Sandbox warm pools and expiry', () => {
     expect(getSandboxWarmPoolStatus(warm(3, 1))).toMatchObject({ text: 'Warming', level: 'degraded' })
     expect(getSandboxWarmPoolStatus(warm(3, 3, 2, 1))).toMatchObject({ text: 'Progressing' })
     expect(getSandboxWarmPoolStatus(warm(0, 0))).toMatchObject({ text: 'Scaled to zero', level: 'neutral' })
+    const draining = { metadata: { generation: 2 }, spec: { replicas: 0 }, status: { replicas: 3, readyReplicas: 3, observedGeneration: 2 } }
+    expect(getSandboxWarmPoolStatus(draining)).toMatchObject({ text: 'Scaling down', level: 'degraded' })
   })
 
   it('formats expiry relative to now', () => {

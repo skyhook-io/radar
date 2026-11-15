@@ -162,9 +162,12 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
   }
   if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
   if (reason === 'DependenciesNotReady') {
-    // The controller names a waiting container in its message ("container
-    // "agent" is waiting: ImagePullBackOff"). A hard failure is not provisioning.
-    const waiting = typeof ready.message === 'string' ? /is waiting: ([A-Za-z]+)/.exec(ready.message)?.[1] : undefined
+    // The controller names a container that is not starting normally in its
+    // message: `container "agent" is waiting: ImagePullBackOff`, or `container
+    // "agent" is in CrashLoopBackOff (last exit: Error)`. A hard failure is not
+    // provisioning.
+    const match = typeof ready.message === 'string' ? /is waiting: ([A-Za-z]+)|is in (CrashLoopBackOff)/.exec(ready.message) : null
+    const waiting = match ? match[1] ?? match[2] : undefined
     if (waiting && FATAL_WAITING_REASONS.has(waiting)) return badge(waiting, 'unhealthy')
     const scheduled = findCondition(conditions, 'PodScheduled')
     if (scheduled?.status === 'False' && scheduled.reason) return badge(scheduled.reason, 'alert')
@@ -218,7 +221,7 @@ export function getSandboxWarmPoolStatus(resource: any): StatusBadge {
     return badge('Progressing', 'degraded')
   }
   const desired = count(resource?.spec?.replicas)
-  if (desired === 0) return badge('Scaled to zero', 'neutral')
+  if (desired === 0) return (count(status.replicas) ?? 0) > 0 ? badge('Scaling down', 'degraded') : badge('Scaled to zero', 'neutral')
   const ready = count(status.readyReplicas) ?? 0
   if (desired === undefined) return ready > 0 ? badge('Ready', 'healthy') : badge('Pending', 'degraded')
   return ready >= desired ? badge('Ready', 'healthy') : badge('Warming', 'degraded')
