@@ -1,6 +1,6 @@
 import { Info, LineChart, Loader2, Lock, Wifi } from 'lucide-react'
 import { clsx } from 'clsx'
-import { AlertBanner, RadarUpgradeNote, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
+import { AlertBanner, RadarUpgradeNote, Section, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
 import { AreaChart, SeriesLegend, formatMetricValue } from '@skyhook-io/k8s-ui/components/charts'
 import { isForbiddenError, useAutoPromConnect, usePrometheusConnect, usePrometheusStatus } from '../../api/client'
 import { useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type SubstrateTarget } from '../../api/substrateHealth'
@@ -74,16 +74,20 @@ export function SubstrateHealthCharts({ target, standalone = false }: { target: 
   return <Frame><Charts health={data} /></Frame>
 }
 
+// A drawer section like its neighbours, not a card: the charts are the only cards.
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3" aria-label="Agent Substrate metrics">
-      <div className="flex items-center gap-2 mb-3 text-sm font-medium text-theme-text-secondary">
-        <LineChart className="w-4 h-4 text-theme-text-tertiary" />
-        Agent Substrate (last {RANGE})
-      </div>
-      {children}
+    <section aria-label="Agent Substrate metrics">
+      <Section title={`Agent Substrate · last ${RANGE}`} icon={LineChart}>
+        {children}
+      </Section>
     </section>
   )
+}
+
+// Averaged worker counts can be fractional; their axis stays on whole numbers.
+function chartUnit(unit: string): string {
+  return unit === 'workers' ? 'avgCount' : unit
 }
 
 function Muted({ children, tone }: { children: React.ReactNode; tone?: 'warning' }) {
@@ -95,7 +99,7 @@ function Charts({ health }: { health: SubstrateHealth }) {
   return (
     <>
       <p className="mb-3 text-xs text-theme-text-tertiary">
-        Aggregates only: Substrate keeps actor names out of its metrics, so no chart is about one actor.
+        Aggregates: Substrate keeps actor names out of its metrics.
       </p>
       <div className="grid grid-cols-1 gap-3">
         {groupCharts(health.charts).map(group => group.length === 1
@@ -132,7 +136,7 @@ function groupCharts(charts: SubstrateChart[]): SubstrateChart[][] {
 
 function SharedReason({ charts }: { charts: SubstrateChart[] }) {
   return (
-    <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0">
+    <section className="card-inner-lg min-w-0">
       <h4 className="mb-1 text-xs font-medium text-theme-text-secondary">{charts.map(c => c.title).join(' · ')}</h4>
       <Muted tone={charts[0].state === 'empty' || charts[0].state === 'noSeries' ? undefined : 'warning'}>{chartReason(charts[0])}</Muted>
     </section>
@@ -144,9 +148,16 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
   const seriesLabels = series.map(s => s.labels.series || chart.title)
   // Only a sample from the last two steps is "now"; an older one ended earlier in the range.
   const since = health.end - 2 * health.stepSeconds
+  const unit = chartUnit(chart.unit)
   const latest = chart.state === 'ok' && series.length === 1 ? lastValue(series[0].dataPoints, since) : undefined
+  // Each line's latest value sits in its legend entry: lines that share a
+  // value hide one another on the plot.
+  const legendValues = series.map(s => {
+    const v = lastValue(s.dataPoints, since)
+    return v === undefined ? undefined : formatMetricValue(v, unit)
+  })
   return (
-    <section className="flex flex-col rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0">
+    <section className="card-inner-lg flex flex-col min-w-0">
       <header className="flex items-baseline justify-between gap-2 mb-1">
         <h4 className="flex items-center gap-1 text-xs font-medium text-theme-text-secondary">
           {chart.title}
@@ -155,14 +166,14 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
           </Tooltip>
         </h4>
         {latest !== undefined && (
-          <span className="text-sm font-semibold tabular-nums text-theme-text-primary">{formatMetricValue(latest, chart.unit)}</span>
+          <span className="text-sm font-semibold tabular-nums text-theme-text-primary">{formatMetricValue(latest, unit)}</span>
         )}
       </header>
       {chart.state === 'ok' ? (
         <>
           <AreaChart
             series={series}
-            unit={chart.unit}
+            unit={unit}
             color="var(--accent)"
             fillColor="var(--accent-muted)"
             layout="dashboard"
@@ -171,8 +182,7 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
             domain={{ start: health.start, end: health.end }}
             stepSeconds={health.stepSeconds}
           />
-          {series.length > 1 && <SeriesLegend series={series} color="var(--accent)" seriesLabels={seriesLabels} />}
-          {series.length > 1 && <LatestValues series={series} labels={seriesLabels} unit={chart.unit} since={since} />}
+          {series.length > 1 && <SeriesLegend series={series} color="var(--accent)" seriesLabels={seriesLabels} values={legendValues} />}
           {chart.omitted ? <Muted>{chart.omitted} more series not shown.</Muted> : null}
           {chart.reason ? <Muted>{capitalize(chart.reason)}.</Muted> : null}
         </>
@@ -180,17 +190,6 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
         <Muted tone={chart.state === 'empty' || chart.state === 'noSeries' ? undefined : 'warning'}>{chartReason(chart)}</Muted>
       )}
     </section>
-  )
-}
-
-// Lines that share a value hide one another; the latest value of each stays readable here.
-function LatestValues({ series, labels, unit, since }: { series: { dataPoints: { timestamp: number; value: number | null }[] }[]; labels: string[]; unit: string; since: number }) {
-  const values = series.map((s, i) => ({ label: labels[i], value: lastValue(s.dataPoints, since) })).filter(v => v.value !== undefined)
-  if (!values.length) return null
-  return (
-    <p className="mt-1 text-xs text-theme-text-tertiary tabular-nums">
-      Now: {values.map(v => `${v.label} ${formatMetricValue(v.value!, unit)}`).join(' · ')}
-    </p>
   )
 }
 

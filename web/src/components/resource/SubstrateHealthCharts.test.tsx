@@ -73,9 +73,11 @@ describe('SubstrateHealthCharts', () => {
       chart({ id: 'resumeTime', title: 'Resume time', state: 'duplicateSources', reason: 'reported through more than one scrape job (a, b)', series: [] }),
     ] } }
     const html = render(pool)
-    expect(html).toContain('Now: idle (gvisor) 1.50 · partial (gvisor) 1.50')
+    // Each line's latest value sits in its legend entry, unrounded.
+    expect(html).toMatch(/idle \(gvisor\)<\/span><span class="tabular-nums[^"]*">1\.5</)
+    expect(html).toMatch(/partial \(gvisor\)<\/span><span class="tabular-nums[^"]*">1\.5</)
     expect(html).toContain('Not shown: reported through more than one scrape job (a, b).')
-    expect(html).toContain('Aggregates only')
+    expect(html).toContain('Aggregates: Substrate keeps actor names out')
     expect(html).toContain('confirm these series belong to this exact cluster')
   })
 
@@ -94,6 +96,6 @@ describe('SubstrateHealthCharts', () => {
       { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 2 }, { timestamp: 4600, value: null as unknown as number }] },
       { labels: { series: 'partial (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 1 }] },
     ] })] } }
-    expect(render(pool)).not.toContain('Now:')
+    expect(render(pool)).not.toMatch(/<\/span><span class="tabular-nums/)
   })
 })
