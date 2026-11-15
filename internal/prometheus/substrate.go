@@ -105,8 +105,9 @@ func substratePoolCharts() []substrateChartDef {
 	return []substrateChartDef{
 		{
 			id: "workers", title: "Workers by state", unit: "workers", seriesBy: "state",
-			population: "Every worker Pod of this pool, by how many actor slots are in use and by sandbox class. A worker is a Pod, not an actor slot. Each API replica reports the whole pool, so the counts are averaged across replicas and can be fractional while they disagree. Workers of class unknown are not capacity.",
-			inst:       instWorkers,
+			population:  "Every worker Pod of this pool, by how many actor slots are in use and by sandbox class. A worker is a Pod, not an actor slot. Each API replica reports the whole pool, so the counts are averaged across replicas and can be fractional while they disagree. Workers of class unknown are not capacity.",
+			inst:        instWorkers,
+			emptyReason: "Substrate's API reported no workers for this pool in this range",
 			queries: func(x substrateExpr) []substrateQuery {
 				workers := x.norm(x.vec(instWorkers, ""), "ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class")
 				return []substrateQuery{{expr: `sum by (ate_worker_state, ate_sandbox_class) (avg by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (` + collapseHA(workers) + `))`}}

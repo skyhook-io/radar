@@ -81,6 +81,14 @@ describe('SubstrateHealthCharts', () => {
     expect(html).toContain('confirm these series belong to this exact cluster')
   })
 
+  it('collapses among drawer sections, but is a plain heading on a Metrics tab', () => {
+    health = { data: { ...base, status: 'available', charts: [chart({})] } }
+    expect(render(pool)).toContain('aria-expanded')
+    const tab = renderToStaticMarkup(<SubstrateHealthCharts target={pool} collapsible={false} />)
+    expect(tab).not.toContain('aria-expanded')
+    expect(tab).toContain('Agent Substrate · last 1h')
+  })
+
   it('states a reason shared by several charts once', () => {
     const refused = { state: 'duplicateSources' as const, reason: 'reported through more than one scrape job (a, b)', series: [] }
     health = { data: { ...base, status: 'available', charts: [

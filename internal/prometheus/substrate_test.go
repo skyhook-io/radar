@@ -377,3 +377,12 @@ func TestSubstrateChartUnits(t *testing.T) {
 		t.Fatalf("units = %v", units)
 	}
 }
+
+// An empty chart always says why.
+func TestSubstrateChartsExplainEmpty(t *testing.T) {
+	for _, d := range append(substratePoolCharts(), substrateNodeCharts()...) {
+		if d.emptyReason == "" {
+			t.Errorf("%s has no empty reason", d.id)
+		}
+	}
+}

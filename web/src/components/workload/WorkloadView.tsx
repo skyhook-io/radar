@@ -1323,7 +1323,7 @@ export function WorkloadView({
           <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />
         )}
         renderMetricsTab={({ kind, namespace: ns, name: n }) => isSubstrateWorkerPool ? (
-          <SubstrateHealthCharts target={{ kind: 'workerpool', namespace: ns, name: n }} standalone />
+          <SubstrateHealthCharts target={{ kind: 'workerpool', namespace: ns, name: n }} standalone collapsible={!expanded} />
         ) : (
           <>
             <MetricsTabContent
@@ -1334,7 +1334,7 @@ export function WorkloadView({
               expanded={expanded}
               fill={!(isNode && servesSubstrate)}
             />
-            {isNode && servesSubstrate && <div className="pt-4"><SubstrateHealthCharts target={{ kind: 'node', name: n }} /></div>}
+            {isNode && servesSubstrate && <div className="pt-4"><SubstrateHealthCharts target={{ kind: 'node', name: n }} collapsible={!expanded} /></div>}
           </>
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (

@@ -19,7 +19,7 @@ const NOT_FOUND = {
  * when Prometheus is not connected unless standalone (the only content of its
  * tab), which offers to connect; every other state says why there is no chart.
  */
-export function SubstrateHealthCharts({ target, standalone = false }: { target: SubstrateTarget; standalone?: boolean }) {
+export function SubstrateHealthCharts({ target, standalone = false, collapsible = true }: { target: SubstrateTarget; standalone?: boolean; collapsible?: boolean }) {
   useAutoPromConnect()
   const { data: status } = usePrometheusStatus()
   const connect = usePrometheusConnect()
@@ -29,7 +29,7 @@ export function SubstrateHealthCharts({ target, standalone = false }: { target: 
   if (!connected) {
     if (!standalone || !status) return null
     return (
-      <Frame>
+      <Frame collapsible={collapsible}>
         <Muted>{status.discovering ? 'Discovering Prometheus…' : status.error || 'Connect Prometheus to chart this pool\'s workers, resumes and crashes.'}</Muted>
         {!status.discovering && (
           <button type="button" onClick={() => connect.mutate()} disabled={connect.isPending} className="btn-brand mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium">
@@ -41,11 +41,11 @@ export function SubstrateHealthCharts({ target, standalone = false }: { target: 
     )
   }
   if (upgrade && target.kind === 'workerpool') {
-    return <Frame><RadarUpgradeNote requirement={upgrade} /></Frame>
+    return <Frame collapsible={collapsible}><RadarUpgradeNote requirement={upgrade} /></Frame>
   }
   if (isForbiddenError(error)) {
     return (
-      <Frame>
+      <Frame collapsible={collapsible}>
         <AlertBanner
           variant="info"
           icon={Lock}
@@ -58,7 +58,7 @@ export function SubstrateHealthCharts({ target, standalone = false }: { target: 
     )
   }
   if (error) {
-    return <Frame><Muted tone="warning">Agent Substrate metrics could not be read: {error.message}</Muted></Frame>
+    return <Frame collapsible={collapsible}><Muted tone="warning">Agent Substrate metrics could not be read: {error.message}</Muted></Frame>
   }
   if (!data) return null
 
@@ -66,21 +66,32 @@ export function SubstrateHealthCharts({ target, standalone = false }: { target: 
     case 'notOnNode':
       return null
     case 'notFound':
-      return target.kind === 'workerpool' ? <Frame><Muted>{NOT_FOUND.workerpool}</Muted></Frame> : null
+      return target.kind === 'workerpool' ? <Frame collapsible={collapsible}><Muted>{NOT_FOUND.workerpool}</Muted></Frame> : null
     case 'notAttributable':
     case 'error':
-      return <Frame><Muted tone={data.status === 'error' ? 'warning' : undefined}>{data.reason}</Muted></Frame>
+      return <Frame collapsible={collapsible}><Muted tone={data.status === 'error' ? 'warning' : undefined}>{data.reason}</Muted></Frame>
   }
-  return <Frame><Charts health={data} /></Frame>
+  return <Frame collapsible={collapsible}><Charts health={data} /></Frame>
 }
 
-// A drawer section like its neighbours, not a card: the charts are the only cards.
-function Frame({ children }: { children: React.ReactNode }) {
+// A section like its neighbours, not a card: the charts are the only cards.
+// Collapsible among the drawer's sections; a plain heading on a Metrics tab,
+// where collapsing it would only empty the tab.
+function Frame({ children, collapsible }: { children: React.ReactNode; collapsible: boolean }) {
+  const title = `Agent Substrate · last ${RANGE}`
   return (
     <section aria-label="Agent Substrate metrics">
-      <Section title={`Agent Substrate · last ${RANGE}`} icon={LineChart}>
-        {children}
-      </Section>
+      {collapsible ? (
+        <Section title={title} icon={LineChart}>{children}</Section>
+      ) : (
+        <>
+          <h3 className="mb-2 flex items-center gap-2 text-sm font-medium text-theme-text-secondary">
+            <LineChart className="h-4 w-4" />
+            {title}
+          </h3>
+          {children}
+        </>
+      )}
     </section>
   )
 }
@@ -136,7 +147,7 @@ function groupCharts(charts: SubstrateChart[]): SubstrateChart[][] {
 
 function SharedReason({ charts }: { charts: SubstrateChart[] }) {
   return (
-    <section className="card-inner-lg min-w-0">
+    <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0">
       <h4 className="mb-1 text-xs font-medium text-theme-text-secondary">{charts.map(c => c.title).join(' · ')}</h4>
       <Muted tone={charts[0].state === 'empty' || charts[0].state === 'noSeries' ? undefined : 'warning'}>{chartReason(charts[0])}</Muted>
     </section>
@@ -157,7 +168,7 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
     return v === undefined ? undefined : formatMetricValue(v, unit)
   })
   return (
-    <section className="card-inner-lg flex flex-col min-w-0">
+    <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 flex flex-col min-w-0">
       <header className="flex items-baseline justify-between gap-2 mb-1">
         <h4 className="flex items-center gap-1 text-xs font-medium text-theme-text-secondary">
           {chart.title}
