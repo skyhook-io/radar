@@ -360,3 +360,51 @@ var KnativeRouteRevisions = &Family{
 		return nil
 	},
 }
+
+var (
+	kindVirtualService  = resourceid.GroupKind{Group: configrefs.IstioNetworkingGroup, Kind: "VirtualService"}
+	kindDestinationRule = resourceid.GroupKind{Group: configrefs.IstioNetworkingGroup, Kind: "DestinationRule"}
+)
+
+// IstioGateways is the family of the Istio Gateways a VirtualService binds
+// to, which may be in another namespace.
+var IstioGateways = &Family{
+	Name:           "istioGateways",
+	Sources:        []Source{{Kind: kindVirtualService}},
+	Targets:        []resourceid.GroupKind{{Group: configrefs.IstioNetworkingGroup, Kind: "Gateway"}},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := unstructuredOf(obj, kindVirtualService); ok {
+			for _, r := range configrefs.IstioVirtualServiceGateways(u) {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+// IstioServiceHosts is the family of the Services a VirtualService routes to
+// and a DestinationRule configures, by host, in any namespace. Hosts resolve
+// with the mesh's domain (configrefs.IstioServiceDomain), which comes from
+// istiod rather than from the objects, so the family is made for it.
+func IstioServiceHosts(domain string) *Family {
+	return &Family{
+		Name:           "istioServiceHosts",
+		Sources:        []Source{{Kind: kindVirtualService}, {Kind: kindDestinationRule}},
+		Targets:        []resourceid.GroupKind{kindService},
+		CrossNamespace: true,
+		Declared: func(obj runtime.Object, visit func(Declaration)) error {
+			if u, ok := unstructuredOf(obj, kindVirtualService); ok {
+				for _, r := range configrefs.IstioVirtualServiceDestinations(u, domain) {
+					visitPathRef(visit, r)
+				}
+			}
+			if u, ok := unstructuredOf(obj, kindDestinationRule); ok {
+				if r, ok := configrefs.IstioDestinationRuleService(u, domain); ok {
+					visitPathRef(visit, r)
+				}
+			}
+			return nil
+		},
+	}
+}

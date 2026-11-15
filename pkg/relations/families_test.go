@@ -8,6 +8,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -303,4 +304,22 @@ func TestKnativeFamiliesNameWhereEventsAndTrafficGo(t *testing.T) {
 	route := object("serving.knative.dev/v1", "Route", "handler", nil)
 	route.Object["status"] = map[string]any{"traffic": []any{map[string]any{"revisionName": "handler-00002", "percent": int64(100)}}}
 	checkFamily(t, KnativeRouteRevisions, []runtime.Object{rev, route}, route, ref("serving.knative.dev", "Revision", "handler-00002"), "status.traffic[].revisionName")
+}
+
+func TestIstioFamiliesNameGatewaysAndServiceHosts(t *testing.T) {
+	gw := inNamespace(object("networking.istio.io/v1", "Gateway", "ingress", nil), "istio-system")
+	svc := typed(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "backend", Name: "api"}}, "", "v1", "Service")
+	vs := object("networking.istio.io/v1", "VirtualService", "api", map[string]any{
+		"gateways": []any{"istio-system/ingress", "mesh"},
+		"http":     []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "api.backend.svc.cluster.local"}}}}},
+	})
+	checkFamily(t, IstioGateways, []runtime.Object{gw, vs}, vs, resourceid.Ref{Group: "networking.istio.io", Kind: "Gateway", Namespace: "istio-system", Name: "ingress"}, "spec.gateways")
+	hosts := IstioServiceHosts("cluster.local")
+	checkFamily(t, hosts, []runtime.Object{svc, vs}, vs, resourceid.Ref{Kind: "Service", Namespace: "backend", Name: "api"}, "spec.http[].route[].destination.host")
+
+	dr := object("networking.istio.io/v1", "DestinationRule", "api", map[string]any{"host": "api.backend.svc.cluster.local"})
+	checkFamily(t, hosts, []runtime.Object{svc, dr}, dr, resourceid.Ref{Kind: "Service", Namespace: "backend", Name: "api"}, "spec.host")
+	if got := NewView(allNamespaces{}, ownership.Unrestricted()).References(IstioServiceHosts(""), refOf(dr), dr); len(got.Declared) != 0 {
+		t.Errorf("with the mesh's domain unknown an FQDN names %+v", got.Declared)
+	}
 }

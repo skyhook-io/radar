@@ -5,6 +5,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"reflect"
 	"testing"
 )
 
@@ -57,5 +58,33 @@ func TestIstioHostsJoinOnlyKubernetesServiceNames(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestIstioRouteEdgesAreNamedByTheFirstProtocolToReachAService(t *testing.T) {
+	vsGVR := schema.GroupVersionResource{Group: "networking.istio.io", Version: "v1", Resource: "virtualservices"}
+	route := func(host string) []any {
+		return []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": host}}}}}
+	}
+	vs := genericIdentityObject(vsGVR, "VirtualService", "rules", "route")
+	vs.Object["spec"] = map[string]any{"http": route("web"), "tcp": append(route("db"), route("web")...), "tls": route("vault")}
+	d := &genericIdentityDynamic{watched: []schema.GroupVersionResource{vsGVR}, kinds: map[schema.GroupVersionResource]string{vsGVR: "VirtualService"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{vsGVR: {vs}}, listCalls: map[schema.GroupVersionResource]int{}}
+	var services []*corev1.Service
+	for _, name := range []string{"web", "db", "vault"} {
+		services = append(services, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "rules", Name: name}})
+	}
+	topo, err := NewBuilder(&mockProvider{services: services}).WithDynamic(d).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, e := range topo.Edges {
+		if e.Source == "virtualservice/rules/route" {
+			got = append(got, e.ID)
+		}
+	}
+	want := []string{"virtualservice/rules/route-to-service/rules/web", "virtualservice/rules/route-tcp-to-service/rules/db", "virtualservice/rules/route-tls-to-service/rules/vault"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("edges = %v, want %v", got, want)
 	}
 }

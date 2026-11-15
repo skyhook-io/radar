@@ -4581,25 +4581,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		vsName := vs.GetName()
 		vsID := virtualServiceIDs[vsNs+"/"+vsName]
 
-		spec, _, _ := unstructured.NestedMap(vs.Object, "spec")
-		if spec == nil {
+		if spec, _, _ := unstructured.NestedMap(vs.Object, "spec"); spec == nil {
 			continue
 		}
 
 		// Create Istio Gateway → VirtualService edges
-		vsGateways, _, _ := unstructured.NestedStringSlice(spec, "gateways")
-		for _, gwRef := range vsGateways {
-			if gwRef == "mesh" {
-				continue // "mesh" is a special keyword meaning sidecar-to-sidecar
-			}
-			// Gateway ref can be "namespace/name" or just "name" (same namespace)
-			gwNs := vsNs
-			gwName := gwRef
-			if parts := strings.SplitN(gwRef, "/", 2); len(parts) == 2 {
-				gwNs = parts[0]
-				gwName = parts[1]
-			}
-			if igwID, ok := istioGatewayIDs[gwNs+"/"+gwName]; ok {
+		for _, gw := range configrefs.IstioVirtualServiceGateways(vs) {
+			if igwID, ok := istioGatewayIDs[gw.Ref.Namespace+"/"+gw.Ref.Name]; ok {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", igwID, vsID),
 					Source: igwID,
@@ -4609,20 +4597,20 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 
-		// addVSToSvcEdge is a helper that deduplicates VS→Service edges
-		addVSToSvcEdge := func(protocol string, destHost string) {
-			svcName, svcNs := parseIstioHost(destHost, vsNs, istioDomain)
-			svcID, ok := serviceIDs[svcNs+"/"+svcName]
+		// VirtualService → Service edges, from HTTP, then TCP, then TLS
+		// routes; the first protocol to reach a Service names the edge.
+		for _, dest := range configrefs.IstioVirtualServiceDestinations(vs, istioDomain) {
+			svcID, ok := serviceIDs[dest.Ref.Namespace+"/"+dest.Ref.Name]
 			if !ok {
-				return
+				continue
 			}
 			dedupeKey := vsID + "|" + svcID
 			if vsToSvcSeen[dedupeKey] {
-				return
+				continue
 			}
 			vsToSvcSeen[dedupeKey] = true
 			suffix := ""
-			if protocol != "" {
+			if protocol, _, _ := strings.Cut(strings.TrimPrefix(dest.Path, "spec."), "["); protocol != "http" {
 				suffix = "-" + protocol
 			}
 			edges = append(edges, Edge{
@@ -4632,66 +4620,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Type:   EdgeExposes,
 			})
 		}
-
-		// Create VirtualService → Service edges (via HTTP route destinations)
-		httpRoutes, _, _ := unstructured.NestedSlice(spec, "http")
-		for _, httpRoute := range httpRoutes {
-			routeMap, ok := httpRoute.(map[string]any)
-			if !ok {
-				continue
-			}
-			routeDestinations, _, _ := unstructured.NestedSlice(routeMap, "route")
-			for _, rd := range routeDestinations {
-				rdMap, ok := rd.(map[string]any)
-				if !ok {
-					continue
-				}
-				destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-				if destHost != "" {
-					addVSToSvcEdge("", destHost)
-				}
-			}
-		}
-
-		// Also handle TCP route destinations
-		tcpRoutes, _, _ := unstructured.NestedSlice(spec, "tcp")
-		for _, tcpRoute := range tcpRoutes {
-			routeMap, ok := tcpRoute.(map[string]any)
-			if !ok {
-				continue
-			}
-			routeDestinations, _, _ := unstructured.NestedSlice(routeMap, "route")
-			for _, rd := range routeDestinations {
-				rdMap, ok := rd.(map[string]any)
-				if !ok {
-					continue
-				}
-				destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-				if destHost != "" {
-					addVSToSvcEdge("tcp", destHost)
-				}
-			}
-		}
-
-		// Also handle TLS route destinations
-		tlsRoutes, _, _ := unstructured.NestedSlice(spec, "tls")
-		for _, tlsRoute := range tlsRoutes {
-			routeMap, ok := tlsRoute.(map[string]any)
-			if !ok {
-				continue
-			}
-			routeDestinations, _, _ := unstructured.NestedSlice(routeMap, "route")
-			for _, rd := range routeDestinations {
-				rdMap, ok := rd.(map[string]any)
-				if !ok {
-					continue
-				}
-				destHost, _, _ := unstructured.NestedString(rdMap, "destination", "host")
-				if destHost != "" {
-					addVSToSvcEdge("tls", destHost)
-				}
-			}
-		}
 	}
 
 	// 14c. Create Istio DestinationRule → Service edges (via spec.host)
@@ -4700,13 +4628,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		drName := dr.GetName()
 		drID := destinationRuleIDs[drNs+"/"+drName]
 
-		host, _, _ := unstructured.NestedString(dr.Object, "spec", "host")
-		if host == "" {
+		host, named := configrefs.IstioDestinationRuleService(dr, istioDomain)
+		if !named {
 			continue
 		}
-
-		svcName, svcNs := parseIstioHost(host, drNs, istioDomain)
-		if svcID, ok := serviceIDs[svcNs+"/"+svcName]; ok {
+		if svcID, ok := serviceIDs[host.Ref.Namespace+"/"+host.Ref.Name]; ok {
 			edges = append(edges, Edge{
 				ID:     fmt.Sprintf("%s-to-%s", drID, svcID),
 				Source: drID,
