@@ -97,8 +97,9 @@ func ContourSecretPathReferences(obj *unstructured.Unstructured) []PathRef {
 const ContourGroup = "projectcontour.io"
 
 // ContourBackendReferences returns the Services an HTTPProxy's routes and
-// TCP proxy send to, in its namespace, and the HTTPProxies it includes,
-// which may be in another namespace.
+// TCP proxy send to, in its namespace, and the HTTPProxies its routes and
+// TCP proxy delegate to (includes, tcpproxy.include and its deprecated
+// spelling includes), which may be in another namespace.
 func ContourBackendReferences(obj *unstructured.Unstructured) []PathRef {
 	var refs []PathRef
 	addServices := func(raw map[string]any, path string) {
@@ -117,20 +118,27 @@ func ContourBackendReferences(obj *unstructured.Unstructured) []PathRef {
 			addServices(m, "spec.routes[]")
 		}
 	}
-	includes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "includes")
-	for _, item := range includes {
-		m, _ := item.(map[string]any)
+	include := func(m map[string]any, path string) {
 		name, _ := m["name"].(string)
 		if name == "" {
-			continue
+			return
 		}
 		ns, _ := m["namespace"].(string)
 		if ns == "" {
 			ns = obj.GetNamespace()
 		}
-		refs = append(refs, PathRef{Ref: resourceid.NewRef(ContourGroup, "HTTPProxy", ns, name), Path: "spec.includes[]"})
+		refs = append(refs, PathRef{Ref: resourceid.NewRef(ContourGroup, "HTTPProxy", ns, name), Path: path})
+	}
+	includes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "includes")
+	for _, item := range includes {
+		m, _ := item.(map[string]any)
+		include(m, "spec.includes[]")
 	}
 	tcp, _, _ := unstructured.NestedMap(obj.Object, "spec", "tcpproxy")
 	addServices(tcp, "spec.tcpproxy")
+	for _, field := range []string{"include", "includes"} {
+		m, _, _ := unstructured.NestedMap(tcp, field)
+		include(m, "spec.tcpproxy."+field)
+	}
 	return refs
 }

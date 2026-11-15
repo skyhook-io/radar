@@ -1,6 +1,8 @@
 package relations
 
 import (
+	"strings"
+
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -251,11 +253,14 @@ var FluxSources = &Family{
 }
 
 // NodeClasses is the family of the NodeClass a Karpenter NodePool's nodes
-// are launched from, whichever provider defines it.
+// are launched from, whichever provider defines it: a Karpenter provider's,
+// or EKS Auto Mode's NodeClass.
 var NodeClasses = &Family{
-	Name:     "nodeClasses",
-	Sources:  []Source{{Kind: resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}}},
-	IsTarget: func(gk resourceid.GroupKind) bool { return karpenter.IsNodeClassKind(gk.Group, gk.Kind) },
+	Name:    "nodeClasses",
+	Sources: []Source{{Kind: resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}}},
+	IsTarget: func(gk resourceid.GroupKind) bool {
+		return karpenter.IsNodeClassKind(gk.Group, gk.Kind) || gk == resourceid.GroupKind{Group: "eks.amazonaws.com", Kind: "NodeClass"}
+	},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}); ok {
 			if r, ok := karpenter.NodeClassRefForNodePool(u); ok {
@@ -288,11 +293,10 @@ func knative(group, kind string) resourceid.GroupKind {
 }
 
 var (
-	kindKnativeService = knative(configrefs.KnativeServingGroup, "Service")
-	kindTrigger        = knative(configrefs.KnativeEventingGroup, "Trigger")
-	kindBroker         = knative(configrefs.KnativeEventingGroup, "Broker")
-	kindChannel        = knative(configrefs.KnativeMessagingGroup, "Channel")
-	kindInMemory       = knative(configrefs.KnativeMessagingGroup, "InMemoryChannel")
+	kindTrigger  = knative(configrefs.KnativeEventingGroup, "Trigger")
+	kindBroker   = knative(configrefs.KnativeEventingGroup, "Broker")
+	kindChannel  = knative(configrefs.KnativeMessagingGroup, "Channel")
+	kindInMemory = knative(configrefs.KnativeMessagingGroup, "InMemoryChannel")
 )
 
 // knativeEventSources are the kinds that send events somewhere: Triggers,
@@ -303,19 +307,20 @@ var knativeEventSources = func() []Source {
 	for _, kind := range configrefs.KnativeSourceKinds {
 		out = append(out, Source{Kind: knative(configrefs.KnativeSourcesGroup, kind)})
 	}
-	return append(out, Source{Kind: kindChannel, Targets: []resourceid.GroupKind{kindInMemory}}, Source{Kind: kindInMemory, Targets: []resourceid.GroupKind{kindInMemory}})
+	return append(out, Source{Kind: kindChannel}, Source{Kind: kindInMemory})
 }()
 
 // KnativeEventDestinations is the family of where a Knative Trigger
 // delivers events, an event source sends them, or a Channel's backing
 // channel is, in any namespace. Any addressable kind can be a destination;
-// the family answers for the ones Knative ships and core Services.
+// the family answers for core Services and every kind in a Knative group,
+// such as JobSink, rather than every kind there is, which would make every
+// object's answer depend on Knative's stores.
 var KnativeEventDestinations = &Family{
 	Name:    "knativeEventDestinations",
 	Sources: knativeEventSources,
-	Targets: []resourceid.GroupKind{
-		kindKnativeService, kindService, kindBroker, kindChannel, kindInMemory,
-		knative(configrefs.KnativeFlowsGroup, "Sequence"), knative(configrefs.KnativeFlowsGroup, "Parallel"),
+	IsTarget: func(gk resourceid.GroupKind) bool {
+		return gk == kindService || gk.Group == "knative.dev" || strings.HasSuffix(gk.Group, ".knative.dev")
 	},
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {

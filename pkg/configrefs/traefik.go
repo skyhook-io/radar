@@ -8,16 +8,17 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// Traefik's API groups: Traefik 2.10 serves both and reads a reference
-// from either; Traefik 3 serves only TraefikGroup.
+// Traefik's API groups. Traefik 2.10 serves both and resolves a reference
+// from either, preferring TraefikGroup when both hold the name; Traefik 3
+// serves only TraefikGroup.
 const (
 	TraefikGroup       = "traefik.io"
 	TraefikLegacyGroup = "traefik.containo.us"
 )
 
 // traefikNamedRef is the object of kind that raw names by name and
-// namespace, defaulting to obj's. A Traefik kind is named in obj's group,
-// with the other Traefik group as an alternative.
+// namespace, defaulting to obj's. A Traefik kind is named in TraefikGroup,
+// with TraefikLegacyGroup as the alternative, whichever group obj is in.
 func traefikNamedRef(obj *unstructured.Unstructured, raw map[string]any, kind, path string) (PathRef, bool) {
 	name, _ := raw["name"].(string)
 	if name == "" {
@@ -30,11 +31,7 @@ func traefikNamedRef(obj *unstructured.Unstructured, raw map[string]any, kind, p
 	if kind == "Service" {
 		return PathRef{Ref: resourceid.NewRef("", kind, ns, name), Path: path}, true
 	}
-	group, other := TraefikGroup, TraefikLegacyGroup
-	if resourceid.GroupFromAPIVersion(obj.GetAPIVersion()) == TraefikLegacyGroup {
-		group, other = TraefikLegacyGroup, TraefikGroup
-	}
-	return PathRef{Ref: resourceid.NewRef(group, kind, ns, name), Path: path, Or: []resourceid.Ref{resourceid.NewRef(other, kind, ns, name)}}, true
+	return PathRef{Ref: resourceid.NewRef(TraefikGroup, kind, ns, name), Path: path, Or: []resourceid.Ref{resourceid.NewRef(TraefikLegacyGroup, kind, ns, name)}}, true
 }
 
 // TraefikBackendReferences returns the Services and TraefikServices an

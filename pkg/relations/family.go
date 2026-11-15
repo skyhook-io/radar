@@ -69,7 +69,8 @@ type Declaration struct {
 	Target resourceid.Ref
 	Path   string
 	// Or are the same reference in other API groups the controller also
-	// resolves it from: the declaration names whichever of them exists.
+	// resolves it from, in the order it tries them after Target: the
+	// declaration names the first that exists.
 	Or []resourceid.Ref
 }
 
@@ -190,25 +191,24 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 	return a
 }
 
-// readTarget reads what d declares: the first of candidates the caller may
-// read that Radar holds. Failing that, d is unread if a candidate couldn't
-// be read or checked, withheld if the caller may not read one, and otherwise
-// absent, named by its first candidate.
+// readTarget reads what d declares as its controller resolves it: the
+// first of candidates that exists. A candidate Radar couldn't read, or the
+// caller may not, ends the search there, since a later one may be shadowed
+// by it: d is then unread or withheld rather than resolved to a fallback.
+// d is absent, named by its first candidate, when none exists.
 func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage) {
 	d.State = TargetAbsent
-	var unread, withheld bool
-	var gap ownership.Gap
 	for _, r := range candidates {
 		switch v.decide(r.GroupKind(), r.Namespace) {
 		case ownership.Allowed:
 		case ownership.Undecided:
-			if !unread {
-				unread, gap = true, ownership.Gap{Kind: r.GroupKind(), Namespace: r.Namespace, Reason: readreason.UserPermissionCheckFailed}
-			}
-			continue
+			d.State, d.Gap = TargetUnread, ownership.Gap{Kind: r.GroupKind(), Namespace: r.Namespace, Reason: readreason.UserPermissionCheckFailed}
+			c.addGap(d.Gap)
+			return
 		default:
-			withheld = true
-			continue
+			d.State = TargetWithheld
+			c.Narrowed = true
+			return
 		}
 		switch read := v.session.Object(r); read.State {
 		case ownership.Present:
@@ -216,19 +216,35 @@ func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage)
 			return
 		case ownership.Absent:
 		default:
-			if !unread {
-				unread, gap = true, read.Gap
-			}
+			d.State, d.Gap = TargetUnread, read.Gap
+			c.addGap(read.Gap)
+			return
 		}
 	}
-	switch {
-	case unread:
-		d.State, d.Gap = TargetUnread, gap
-		c.addGap(gap)
-	case withheld:
-		d.State = TargetWithheld
-		c.Narrowed = true
+}
+
+// resolvesTo reports whether a declaration whose candidates are candidates
+// resolves to subject: subject is one of them and none before it exists. A
+// candidate before it that Radar couldn't read, or the caller may not, leaves
+// that unknown, so the answer doesn't claim it and says why in c.
+func (v *View) resolvesTo(candidates []resourceid.Ref, subject resourceid.Ref, c *Coverage) bool {
+	for _, r := range candidates {
+		if r == subject {
+			return true
+		}
+		if !v.mayRead(r.GroupKind(), r.Namespace, c) {
+			return false
+		}
+		switch read := v.session.Object(r); read.State {
+		case ownership.Absent:
+		case ownership.Present:
+			return false
+		default:
+			c.addGap(read.Gap)
+			return false
+		}
 	}
+	return false
 }
 
 // Referrers answers what declares subject in f, among the objects of f's
@@ -298,7 +314,10 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 			}
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
-				if (d.Target == subject || slices.Contains(d.Or, subject)) && !slices.Contains(paths, d.Path) {
+				if slices.Contains(paths, d.Path) || d.Target != subject && !slices.Contains(d.Or, subject) {
+					return
+				}
+				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, &a.Coverage) {
 					paths = append(paths, d.Path)
 				}
 			})

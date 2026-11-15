@@ -201,3 +201,35 @@ func TestATraefikReferenceIsReadFromEitherGroup(t *testing.T) {
 		t.Errorf("a Middleware in neither group reads as %+v; want absent, named in the route's group", missing.Declared)
 	}
 }
+
+func TestTraefikPrefersItsCurrentGroupAndNeverFallsBackPastAnUnknown(t *testing.T) {
+	route := object("traefik.containo.us/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"kind": "TraefikService", "name": "split"}}}}})
+	current := object("traefik.io/v1alpha1", "TraefikService", "split", nil)
+	shadowed := object("traefik.containo.us/v1alpha1", "TraefikService", "split", nil)
+	c := allNamespaces{cluster: cluster{objects: []runtime.Object{route, current, shadowed}}}
+	v := NewView(c, ownership.Unrestricted())
+	if got := v.References(TraefikBackends, refOf(route), route); len(got.Declared) != 1 || got.Declared[0].Ref != refOf(current) {
+		t.Errorf("with the name in both groups the route uses %+v; want traefik.io's", got.Declared)
+	}
+	if got := referrerRefs(v.Referrers(TraefikBackends, refOf(shadowed), nil)); len(got) != 0 {
+		t.Errorf("the shadowed legacy TraefikService's referrers = %v; Traefik uses traefik.io's", got)
+	}
+	if got := referrerRefs(v.Referrers(TraefikBackends, refOf(current), nil)); len(got) != 1 {
+		t.Errorf("traefik.io's TraefikService's referrers = %v; want the route", got)
+	}
+
+	c.unread = map[resourceid.GroupKind]readreason.Code{{Group: "traefik.io", Kind: "TraefikService"}: readreason.KindSyncPending}
+	v = NewView(c, ownership.Unrestricted())
+	if got := v.References(TraefikBackends, refOf(route), route); len(got.Declared) != 1 || got.Declared[0].State != TargetUnread || got.Coverage.Complete() {
+		t.Errorf("with traefik.io's store loading the route's backend reads as %+v; want unread, not the legacy fallback", got)
+	}
+	if got := v.Referrers(TraefikBackends, refOf(shadowed), nil); len(got.Referrers) != 0 || got.Coverage.Complete() {
+		t.Errorf("with traefik.io's store loading the legacy TraefikService's referrers are %+v; want none, incomplete", got)
+	}
+}
+
+func TestAContourTCPProxyDelegates(t *testing.T) {
+	child := inNamespace(object("projectcontour.io/v1", "HTTPProxy", "child", nil), "apps")
+	parent := object("projectcontour.io/v1", "HTTPProxy", "parent", map[string]any{"tcpproxy": map[string]any{"include": map[string]any{"name": "child", "namespace": "apps"}}})
+	checkFamily(t, ContourBackends, []runtime.Object{child, parent}, parent, resourceid.Ref{Group: "projectcontour.io", Kind: "HTTPProxy", Namespace: "apps", Name: "child"}, "spec.tcpproxy.include")
+}

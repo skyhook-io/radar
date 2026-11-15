@@ -335,3 +335,31 @@ func TestArgoWorkflowsNameTheirTemplates(t *testing.T) {
 	}}}), "ops")
 	checkFamily(t, ArgoWorkflowTemplates, []runtime.Object{shared, cron}, cron, resourceid.Ref{Group: "argoproj.io", Kind: "ClusterWorkflowTemplate", Name: "notify"}, "spec.workflowSpec.templates[].steps[][].templateRef")
 }
+
+func TestOpenEndedTargetsFollowTheReferenceExactly(t *testing.T) {
+	eks := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "eks.amazonaws.com/v1", "kind": "NodeClass", "metadata": map[string]any{"name": "default"}}}
+	pool := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.sh/v1", "kind": "NodePool", "metadata": map[string]any{"name": "auto"},
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"nodeClassRef": map[string]any{"group": "eks.amazonaws.com", "kind": "NodeClass", "name": "default"}}}}}}
+	checkFamily(t, NodeClasses, []runtime.Object{eks, pool}, pool, resourceid.Ref{Group: "eks.amazonaws.com", Kind: "NodeClass", Name: "default"}, "spec.template.spec.nodeClassRef")
+
+	sink := object("sinks.knative.dev/v1alpha1", "JobSink", "jobs", nil)
+	ping := object("sources.knative.dev/v1", "PingSource", "tick", map[string]any{"sink": map[string]any{"ref": map[string]any{"apiVersion": "sinks.knative.dev/v1alpha1", "kind": "JobSink", "name": "jobs"}}})
+	checkFamily(t, KnativeEventDestinations, []runtime.Object{sink, ping}, ping, ref("sinks.knative.dev", "JobSink", "jobs"), "spec.sink.ref")
+	if KnativeEventDestinations.Covers(resourceid.GroupKind{Kind: "ConfigMap"}) {
+		t.Error("Knative destinations cover ConfigMaps")
+	}
+}
+
+func TestAWorkflowTemplateUsedTwiceReportsBothPaths(t *testing.T) {
+	use := map[string]any{"name": "lib", "templateRef": map[string]any{"name": "library"}}
+	wf := object("argoproj.io/v1alpha1", "Workflow", "run", map[string]any{"templates": []any{
+		map[string]any{"name": "a", "dag": map[string]any{"tasks": []any{use}}},
+		map[string]any{"name": "b", "steps": []any{[]any{use}}},
+	}})
+	lib := object("argoproj.io/v1alpha1", "WorkflowTemplate", "library", nil)
+	got := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{wf, lib}}}, ownership.Unrestricted()).References(ArgoWorkflowTemplates, refOf(wf), wf)
+	want := []string{"spec.templates[].dag.tasks[].templateRef", "spec.templates[].steps[][].templateRef"}
+	if len(got.Declared) != 1 || !slices.Equal(got.Declared[0].Paths, want) {
+		t.Errorf("declared %+v; want one target at %v", got.Declared, want)
+	}
+}

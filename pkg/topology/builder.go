@@ -5017,7 +5017,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if configID == "" {
 				continue
 			}
-			for _, r := range configrefs.TraefikSecretReferences(res) {
+			// ConfigMaps come first, as they always have: a neighborhood
+			// capped by node count keeps the earliest edges.
+			refs := configrefs.TraefikSecretReferences(res)
+			slices.SortStableFunc(refs, func(x, y configrefs.PathRef) int {
+				rank := func(r configrefs.PathRef) int {
+					if r.Ref.Kind == "ConfigMap" {
+						return 0
+					}
+					return 1
+				}
+				return rank(x) - rank(y)
+			})
+			for _, r := range refs {
 				ref := r.Ref
 				nodeID := "secret/" + ref.Namespace + "/" + ref.Name
 				if ref.Kind == "ConfigMap" {
@@ -6886,7 +6898,9 @@ type argoWorkflowTemplateRef struct {
 func argoWorkflowTemplateRefsFromWorkflowSpec(obj map[string]any, fields ...string) []argoWorkflowTemplateRef {
 	var refs []argoWorkflowTemplateRef
 	for _, r := range configrefs.ArgoWorkflowTemplateRefs(obj, "", fields...) {
-		refs = append(refs, argoWorkflowTemplateRef{name: r.Ref.Name, clusterScope: r.Ref.Kind == "ClusterWorkflowTemplate"})
+		if ref := (argoWorkflowTemplateRef{name: r.Ref.Name, clusterScope: r.Ref.Kind == "ClusterWorkflowTemplate"}); !slices.Contains(refs, ref) {
+			refs = append(refs, ref)
+		}
 	}
 	return refs
 }

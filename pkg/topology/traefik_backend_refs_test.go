@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -54,5 +56,30 @@ func TestTraefikBackendKindsInBothViews(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestATraefikTransportsConfigMapsComeBeforeItsSecrets(t *testing.T) {
+	stGVR := schema.GroupVersionResource{Group: "traefik.io", Version: "v1alpha1", Resource: "serverstransports"}
+	st := genericIdentityObject(stGVR, "ServersTransport", "team", "upstream")
+	st.Object["spec"] = map[string]any{"rootCAs": []any{map[string]any{"secret": "first"}, map[string]any{"configMap": "second"}}}
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{stGVR},
+		kinds:     map[schema.GroupVersionResource]string{stGVR: "ServersTransport"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{stGVR: {st}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	topo, err := NewBuilder(&mockProvider{}).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sources []string
+	for _, e := range topo.Edges {
+		if strings.HasSuffix(e.Target, "/team/upstream") {
+			sources = append(sources, e.Source)
+		}
+	}
+	if want := []string{"configmap/team/second", "secret/team/first"}; !reflect.DeepEqual(sources, want) {
+		t.Errorf("transport edges from %v, want %v", sources, want)
 	}
 }
