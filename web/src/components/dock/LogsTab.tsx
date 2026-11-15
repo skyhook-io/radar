@@ -5,6 +5,7 @@ interface LogsTabProps {
   podName: string
   containers: string[]
   initialContainer?: string
+  initContainers?: string[]
 }
 
 export function LogsTab({
@@ -12,6 +13,7 @@ export function LogsTab({
   podName,
   containers,
   initialContainer,
+  initContainers,
 }: LogsTabProps) {
   return (
     <div className="h-full">
@@ -20,6 +22,7 @@ export function LogsTab({
         podName={podName}
         containers={containers}
         initialContainer={initialContainer}
+        initContainers={initContainers}
       />
     </div>
   )
