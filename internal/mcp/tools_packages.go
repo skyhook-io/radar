@@ -7,6 +7,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/server"
 )
 
@@ -56,12 +57,14 @@ func handleListPackages(ctx context.Context, req *mcp.CallToolRequest, input lis
 	// Intersect the requested namespace(s) with the user's RBAC-allowed set.
 	// nil = all-namespace access; empty = no access (ListPackages returns empty).
 	namespaces := filterNamespacesForUser(ctx, requested)
+	visible, checkFailed := filterNamespacesForUserWithStatus(ctx, nil)
 	resp, err := server.ListPackages(ctx, server.ListPackagesParams{
-		Namespaces: namespaces,
-		Source:     normalizeMCPPackageSourceFilter(input.Source),
-		Chart:      input.Chart,
-		User:       user,
-		Groups:     groups,
+		Namespaces:  namespaces,
+		Source:      normalizeMCPPackageSourceFilter(input.Source),
+		Chart:       input.Chart,
+		User:        user,
+		Groups:      groups,
+		StatusScope: helm.NamespaceStatusScope{Namespaces: visible, Checked: !checkFailed},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("packages: %w", err)

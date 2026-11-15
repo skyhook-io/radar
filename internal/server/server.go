@@ -524,13 +524,14 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	}
 
 	metricsHandler := s.newMetricsHandler()
-	r.Get("/metrics", metricsHandler.ServeHTTP)
+	r.With(s.requireSameOrigin).Get("/metrics", metricsHandler.ServeHTTP)
 
 	// Profiling exposes process diagnostics and can trigger costly collection.
 	// Keep unauthenticated shared listeners opt-in and Cloud routes unmounted.
 	if s.pprofEnabled() {
 		log.Printf("[server] pprof endpoints enabled at /debug/pprof/")
 		r.Route("/debug/pprof", func(r chi.Router) {
+			r.Use(s.requireSameOrigin)
 			r.Get("/", pprof.Index)
 			r.Get("/cmdline", func(w http.ResponseWriter, r *http.Request) {
 				if s.authConfig.Enabled() {
@@ -5530,6 +5531,11 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	for _, c := range auth.ClearSessionCookie(r) {
 		http.SetCookie(w, c)
 	}
+	if s.authConfig.Mode == "proxy" {
+		for _, c := range auth.ClearProxyCookies(r, s.authConfig.ProxyLogoutCookies, s.basePath) {
+			http.SetCookie(w, c)
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]string{"status": "logged out"}
 	// Clearing Radar's cookie alone doesn't switch users: the proxy
@@ -5549,7 +5555,7 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	// Tells the frontend whether proxy-mode logout can tear down the upstream
 	// session (vs only clearing Radar's cookie), so it can warn the user.
 	if s.authConfig.Mode == "proxy" {
-		resp["proxyLogoutConfigured"] = s.authConfig.ProxyLogoutURL != ""
+		resp["proxyLogoutConfigured"] = s.authConfig.ProxyLogoutURL != "" || len(s.authConfig.ProxyLogoutCookies) > 0
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		resp["username"] = user.Username

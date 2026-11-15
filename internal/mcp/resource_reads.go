@@ -158,7 +158,7 @@ func resolveReadTargetFrom(ctx context.Context, cache *k8s.ResourceCache, reques
 		return target, errConnectionChanged()
 	}
 	if code == readreason.UserPermissionCheckFailed {
-		return target, readErrorf(code, "Radar couldn't check which namespaces you can access, so it read nothing.")
+		return target, errNamespaceCheckFailed()
 	}
 	if code == readreason.UserNoNamespaceAccess {
 		return target, readErrorf(code, "You can't access any namespace in this request's scope, so Radar read nothing. %s %s", withCloudRole(ctx, "A cluster admin can grant access"), namespaceAccessRule)

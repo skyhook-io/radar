@@ -30,6 +30,7 @@ import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
+import { TerminalPreferences } from './components/dock/TerminalPreferences'
 import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
@@ -55,6 +56,7 @@ import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
+import { AboutDialog, type AboutInfo } from './desktop/AboutDialog'
 import { useUsageData, useUsageRecording } from './api/usage-data'
 import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ProductHuntNotice } from './components/product-hunt/ProductHuntNotice'
@@ -647,6 +649,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     window.addEventListener('radar:open-settings', handler)
     return () => window.removeEventListener('radar:open-settings', handler)
   }, [openSettings])
+
+  // Help → About Radar in the Windows desktop app (cmd/desktop/menu.go).
+  const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
+  useEffect(() => {
+    const handler = (e: Event) => setAboutInfo((e as CustomEvent<AboutInfo>).detail)
+    window.addEventListener('radar:open-about', handler)
+    return () => window.removeEventListener('radar:open-about', handler)
+  }, [])
 
   // Listen for "open-local-terminal" DOM event — the AI surface is portaled above
   // the DockProvider, so it can't call useOpenLocalTerminal directly; it dispatches
@@ -2625,6 +2635,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Diagnostics overlay */}
       {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
 
+      <AboutDialog
+        info={aboutInfo}
+        onClose={() => setAboutInfo(null)}
+        onShowWhatsNew={whatsNewStatus.available ? openWhatsNew : undefined}
+        onReportIssue={() => { setDiagnosticsFocus(undefined); setShowDiagnostics(true) }}
+      />
+
       {/* Settings dialog — My permissions is rendered inline in its own section */}
       <SettingsDialog
         open={showSettings}
@@ -2663,6 +2680,7 @@ function DockSpacer() {
 // Main App component wrapped with providers
 function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   return (
+    <TerminalPreferences>
     <ConnectionProvider>
       <CapabilitiesProvider>
         <RadarUpgradeProvider>
@@ -2680,6 +2698,7 @@ function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadSt
         </RadarUpgradeProvider>
       </CapabilitiesProvider>
     </ConnectionProvider>
+    </TerminalPreferences>
   )
 }
 
