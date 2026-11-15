@@ -3964,10 +3964,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 			serviceAccountID := fmt.Sprintf("serviceaccount/%s/%s", serviceAccount.Namespace, serviceAccount.Name)
-			nodes = append(nodes, Node{
-				ID: serviceAccountID, Kind: KindServiceAccount, Name: serviceAccount.Name, Status: StatusHealthy,
-				Data: map[string]any{"namespace": serviceAccount.Namespace, "labels": serviceAccount.Labels},
-			})
+			nodes = append(nodes, serviceAccountNode(serviceAccount))
 			for _, workloadID := range consumers {
 				edges = append(edges, Edge{
 					ID: fmt.Sprintf("%s-to-%s", serviceAccountID, workloadID), Source: serviceAccountID, Target: workloadID, Type: EdgeConfigures,
@@ -4001,10 +3998,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 				sealedSecretID := fmt.Sprintf("sealedsecret/%s/%s", namespace, sealedSecret.GetName())
-				nodes = append(nodes, Node{
-					ID: sealedSecretID, Kind: KindSealedSecret, Name: sealedSecret.GetName(), Status: sealedSecretHealth(sealedSecret),
-					Data: map[string]any{"namespace": namespace, "targetSecret": targetName, "labels": sealedSecret.GetLabels(), "apiVersion": sealedSecret.GetAPIVersion()},
-				})
+				nodes = append(nodes, sealedSecretNode(sealedSecret))
 				if secretID := visibleSecretIDs[key]; secretID != "" {
 					edges = append(edges, Edge{ID: fmt.Sprintf("%s-to-%s", sealedSecretID, secretID), Source: sealedSecretID, Target: secretID, Type: EdgeManages})
 					continue
@@ -4043,33 +4037,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 
 			if len(consumers) > 0 || podPVCTargets[workloadRefKey{namespace: pvc.Namespace, name: pvc.Name}] {
-				// Get storage info
-				var storageSize string
-				if pvc.Spec.Resources.Requests != nil {
-					if storage, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
-						storageSize = storage.String()
-					}
-				}
-
-				var storageClass string
-				if pvc.Spec.StorageClassName != nil {
-					storageClass = *pvc.Spec.StorageClassName
-				}
-
-				nodes = append(nodes, Node{
-					ID:     pvcID,
-					Kind:   KindPVC,
-					Name:   pvc.Name,
-					Status: getPVCStatus(pvc),
-					Data: map[string]any{
-						"namespace":    pvc.Namespace,
-						"storageClass": storageClass,
-						"accessModes":  pvc.Spec.AccessModes,
-						"storage":      storageSize,
-						"phase":        string(pvc.Status.Phase),
-						"labels":       pvc.Labels,
-					},
-				})
+				nodes = append(nodes, persistentVolumeClaimNode(pvc))
 			}
 		}
 	}

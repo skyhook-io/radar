@@ -126,7 +126,7 @@ type MatchesAnswer struct {
 // lookup reads objects for an answer whose coverage is c.
 func (v *View) lookup(c *Coverage) Lookup {
 	return func(ref resourceid.Ref) (runtime.Object, bool) {
-		obj, read := v.session.Borrow(ref)
+		obj, read := v.lookupSession.Borrow(ref)
 		switch read.State {
 		case ownership.Present:
 			return obj, true
