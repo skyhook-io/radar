@@ -83,6 +83,8 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		return nil, nil, readErrorf(readreason.KindUnknown, "%s", err.Error())
 	case errors.Is(err, vulnerabilities.ErrNotReady):
 		return nil, nil, readErrorf(readreason.KindSyncPending, "%s", err.Error())
+	case errors.Is(err, vulnerabilities.ErrConnectionChanged):
+		return nil, nil, readErrorf(readreason.ConnectionChanged, "%s", err.Error())
 	case err != nil:
 		if code, ok := readplan.CollectorErrorCode(err); ok {
 			return nil, nil, readErrorf(code, "%s", err.Error())

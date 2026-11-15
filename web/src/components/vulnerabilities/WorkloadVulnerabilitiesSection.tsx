@@ -44,19 +44,20 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   const clean = data?.clean ?? []
   const unscanned = data?.unscanned ?? []
   const critical = images.reduce((n, img) => n + (img.findingsUnread ? 0 : img.counts.critical), 0)
-  const fixFirst: VulnerabilityFinding[] = []
-  const seen = new Set<string>()
+  // Images arrive ordered by their whole counts: rank the fixable findings
+  // across all of them, keeping each CVE's worst occurrence, so a Critical
+  // in the second image beats a High in the first.
+  const worse = (a: VulnerabilityFinding, b: VulnerabilityFinding) => (a.severity === b.severity ? (b.score ?? 0) - (a.score ?? 0) : a.severity === 'critical' ? -1 : 1)
+  const worst = new Map<string, VulnerabilityFinding>()
   for (const img of images) {
     for (const f of img.findings) {
-      if ((f.severity === 'critical' || f.severity === 'high') && f.fixedVersion && !seen.has(f.id)) {
-        seen.add(f.id)
-        fixFirst.push(f)
+      if ((f.severity === 'critical' || f.severity === 'high') && f.fixedVersion) {
+        const prev = worst.get(f.id)
+        if (!prev || worse(f, prev) < 0) worst.set(f.id, f)
       }
     }
   }
-  // Images arrive ordered by their whole counts; rank the fixable findings
-  // across all of them so a Critical in the second image beats a High in the first.
-  fixFirst.sort((a, b) => (a.severity === b.severity ? (b.score ?? 0) - (a.score ?? 0) : a.severity === 'critical' ? -1 : 1))
+  const fixFirst = [...worst.values()].sort(worse)
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
   const open = () => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), namespaces: namespace }).toString() })
 
@@ -83,7 +84,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
           {unscanned.map((u) => (
             <div key={u.image} className="flex flex-col gap-0.5 rounded-md border border-theme-border bg-theme-surface px-3 py-2">
               <span className="flex flex-wrap items-baseline gap-x-2">
-                <span className="font-medium text-theme-text-primary">{u.workloads.map((w) => w.container).join(', ')}</span>
+                <span className="font-medium text-theme-text-primary">{[...new Set(u.workloads.filter(isThis).map((w) => w.container))].join(', ')}</span>
                 <ImageName image={u.image} className="text-xs text-theme-text-tertiary" />
               </span>
               <span className="text-xs text-warning-text">No report yet: Trivy hasn't scanned this image.</span>

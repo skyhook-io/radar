@@ -92,6 +92,15 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), InstalledVersion: p.installed,
 					Workloads: workloads[:min(len(workloads), MaxWorkloadsPerAffected)], WorkloadsTotal: len(workloads),
 				})
+			} else {
+				// The same package at another version in this image: one
+				// upgrade replaces both, and the image lists both.
+				for i := range a.row.Affected {
+					fi := &a.row.Affected[i]
+					if fi.ImageID == r.imageID && !slices.Contains(strings.Split(fi.InstalledVersion, ", "), p.installed) {
+						fi.InstalledVersion += ", " + p.installed
+					}
+				}
 			}
 		}
 	}

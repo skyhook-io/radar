@@ -70,6 +70,8 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 			s.writeErrorCode(w, http.StatusNotFound, string(readreason.KindUnknown), err.Error())
 		case errors.Is(err, vulnerabilities.ErrNotReady):
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), err.Error())
+		case errors.Is(err, vulnerabilities.ErrConnectionChanged):
+			s.writeErrorCode(w, http.StatusConflict, string(readreason.ConnectionChanged), err.Error())
 		case isCollectorRefusal(err):
 			code, _ := readplan.CollectorErrorCode(err)
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(code), err.Error())

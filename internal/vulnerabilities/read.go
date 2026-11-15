@@ -26,6 +26,10 @@ var ErrNotInstalled = errors.New("no vulnerability scanner reports in this clust
 // ErrNotReady: the caches the rollup joins haven't synced yet.
 var ErrNotReady = errors.New("vulnerability reports aren't ready yet: Radar is still loading the cluster")
 
+// ErrConnectionChanged: Radar's cluster connection was replaced while the
+// read ran, so its inputs may come from two clusters.
+var ErrConnectionChanged = errors.New("Radar's cluster connection changed during this read (a context switch or reconnect); confirm which cluster Radar is connected to, then retry")
+
 // syncWait bounds how long a read waits for the report watch to sync.
 const syncWait = 10 * time.Second
 
@@ -74,9 +78,14 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	// one deadline, so queued namespaces don't add their waits up.
 	// The deadline covers starting the watch too, which can wait on
 	// discovery.
-	readyCtx, cancelReady := context.WithTimeout(ctx, syncWait)
-	defer cancelReady()
+	var (
+		readyOnce   sync.Once
+		readyCtx    context.Context
+		cancelReady context.CancelFunc = func() {}
+	)
+	defer func() { cancelReady() }()
 	list := func(ns string) ([]*unstructured.Unstructured, error) {
+		readyOnce.Do(func() { readyCtx, cancelReady = context.WithTimeout(ctx, syncWait) })
 		notReady := func(err error) error {
 			if ctx.Err() == nil && readyCtx.Err() != nil {
 				return ErrNotReady
@@ -307,6 +316,9 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	resp, err := build(ctx, items, targets, req.View, req.Filter)
 	if err != nil {
 		return Response{}, err
+	}
+	if cache != k8s.GetResourceCache() || dynamic != k8s.GetDynamicResourceCache() || discovery != k8s.GetResourceDiscovery() {
+		return Response{}, ErrConnectionChanged
 	}
 	resp.Coverage.Gaps = append([]resourceapi.Gap{}, gaps...)
 	resp.Coverage.Complete = len(gaps) == 0 && !resp.Coverage.Truncated && resp.Coverage.RowsOmitted == 0

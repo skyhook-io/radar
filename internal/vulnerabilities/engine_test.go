@@ -472,3 +472,33 @@ func TestFixRowsKeepEcosystemsApart(t *testing.T) {
 		}
 	}
 }
+
+// One image can carry a package at two versions (nested dependencies): the
+// upgrade lists both under that image.
+func TestFixRowListsEveryInstalledVersion(t *testing.T) {
+	u := vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+		{"CVE-1", "HIGH", "lodash", "4.17.19", "4.17.21"},
+		{"CVE-1", "HIGH", "lodash", "4.17.20", "4.17.21"},
+	}})
+	for _, v := range u.Object["report"].(map[string]any)["vulnerabilities"].([]any) {
+		v.(map[string]any)["packagePURL"] = "pkg:npm/lodash"
+	}
+	targets := []target{liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout)}
+	resp := mustBuild(t, []*unstructured.Unstructured{u}, targets, ViewFix, Filter{})
+	if len(resp.Fixes) != 1 || len(resp.Fixes[0].Affected) != 1 || resp.Fixes[0].Affected[0].InstalledVersion != "4.17.19, 4.17.20" {
+		t.Fatalf("both installed versions: %+v", resp.Fixes)
+	}
+}
+
+// One unscanned image under two spellings is one unscanned image.
+func TestUnscannedAliasesAreOneImage(t *testing.T) {
+	web := WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "web-1", "nginx", "nginx:1.25", "", web),
+		liveTarget("shop", "ReplicaSet", "web-2", "nginx", "docker.io/library/nginx:1.25", "", web),
+	}
+	resp := mustBuild(t, nil, targets, ViewImage, Filter{})
+	if resp.Summary.ImagesUnscanned != 1 || len(resp.Unscanned) != 1 {
+		t.Fatalf("unscanned: %d %+v", resp.Summary.ImagesUnscanned, resp.Unscanned)
+	}
+}

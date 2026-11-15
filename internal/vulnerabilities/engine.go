@@ -275,10 +275,11 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 		w := t.workload
 		w.Container = t.container
-		if j.unscanned[t.image] == nil {
-			j.unscanned[t.image] = map[WorkloadRef]bool{}
+		image := canonicalImage(t.image)
+		if j.unscanned[image] == nil {
+			j.unscanned[image] = map[WorkloadRef]bool{}
 		}
-		j.unscanned[t.image][w] = true
+		j.unscanned[image][w] = true
 	}
 	return j, nil
 }

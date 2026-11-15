@@ -435,8 +435,8 @@ function FindingsList({ findings, total, unread }: { findings: VulnerableImage['
   }
   return (
     <div className="flex flex-col divide-y divide-theme-border border-y border-theme-border">
-      {findings.map((f) => (
-        <div key={`${f.id}/${f.package}/${f.installedVersion}`} className="grid grid-cols-[136px_72px_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-3 py-1 text-xs">
+      {findings.map((f, i) => (
+        <div key={`${f.id}/${f.package}/${f.installedVersion}/${i}`} className="grid grid-cols-[136px_72px_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-3 py-1 text-xs">
           {f.link ? (
             <WithTooltip tip={f.title}><a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline">{f.id}</a></WithTooltip>
           ) : (
@@ -467,7 +467,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
             const several = f.from.length > 1
             return (
               <Disclosure
-                key={`${f.package}/${f.to ?? (f.listed ?? []).join('|')}`}
+                key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.listed ?? []).join('|')}`}
                 flush
                 summary={
                   <div className={clsx('grid flex-1 items-center gap-4 text-sm', FIX_COLS)}>
@@ -672,7 +672,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, onOpen, onSh
         <span className="col-span-3">{lead}</span>
       </div>
       {fixes.slice(0, MAX_WORKLOAD_UPGRADES).map((f) => (
-        <div key={`${f.package}/${f.to ?? (f.listed ?? []).join('|')}`} className={clsx(SUB, WORKLOAD_COLS)}>
+        <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.listed ?? []).join('|')}`} className={clsx(SUB, WORKLOAD_COLS)}>
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
             {f.packageType && <span className="truncate text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
