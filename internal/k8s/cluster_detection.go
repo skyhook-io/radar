@@ -152,11 +152,11 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 
 	// Fallback to direct API if cache unavailable
 	if client := GetClient(); node == nil && client != nil {
-		var err error
-		node, err = k8score.FindPlatformNode(ctx, client)
-		if err != nil {
+		nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+		if err != nil || len(nodeList.Items) == 0 {
 			return detectPlatformFallback(ctx)
 		}
+		node = &nodeList.Items[0]
 	}
 
 	if node == nil {

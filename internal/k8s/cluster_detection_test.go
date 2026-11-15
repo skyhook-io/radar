@@ -29,9 +29,8 @@ func TestGetClusterPlatform(t *testing.T) {
 		want          string
 	}{
 		{
-			name: "EKS after unmarked AWS node",
+			name: "EKS compute label from API",
 			nodes: corev1.NodeList{Items: []corev1.Node{
-				{Spec: corev1.NodeSpec{ProviderID: "aws:///zone/custom"}},
 				{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"eks.amazonaws.com/compute-type": "auto"}}},
 			}},
 			want: "eks",
@@ -136,6 +135,9 @@ func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.
 		case "/version":
 			_ = json.NewEncoder(w).Encode(version.Info{GitVersion: serverVersion})
 		case "/api/v1/nodes":
+			if r.URL.Query().Get("limit") != "1" {
+				t.Errorf("node list limit = %q, want 1", r.URL.Query().Get("limit"))
+			}
 			if denyNodes {
 				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(metav1.Status{

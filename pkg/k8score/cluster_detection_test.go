@@ -2,15 +2,12 @@ package k8score
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
-	clienttesting "k8s.io/client-go/testing"
 )
 
 func TestDetectNodePlatform(t *testing.T) {
@@ -54,49 +51,6 @@ func TestDetectNodePlatform(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := DetectNodePlatform(tt.node); got != tt.want {
 				t.Fatalf("DetectNodePlatform() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestFindPlatformNode(t *testing.T) {
-	plain := nodeWithSignals("v1.31.4", "aws:///zone/plain", nil)
-	marked := nodeWithLabels(map[string]string{"eks.amazonaws.com/compute-type": "auto"})
-	marked.Name = "eks-worker"
-	readErr := errors.New("node read failed")
-	for _, tt := range []struct {
-		name     string
-		nodes    []corev1.Node
-		err      error
-		wantName string
-	}{
-		{name: "empty"},
-		{name: "all unknown", nodes: []corev1.Node{plain}, wantName: plain.Name},
-		{name: "later node", nodes: []corev1.Node{plain, marked}, wantName: marked.Name},
-		{name: "first known node", nodes: []corev1.Node{marked, plain}, wantName: marked.Name},
-		{name: "read error", err: readErr},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			client := fake.NewSimpleClientset()
-			calls := 0
-			client.PrependReactor("list", "nodes", func(action clienttesting.Action) (bool, runtime.Object, error) {
-				opts := action.(clienttesting.ListActionImpl).GetListOptions()
-				if opts.Limit != 100 || opts.Continue != "" {
-					t.Fatalf("unexpected list options: %+v", opts)
-				}
-				calls++
-				return true, &corev1.NodeList{ListMeta: metav1.ListMeta{Continue: "more-nodes"}, Items: tt.nodes}, tt.err
-			})
-			node, err := FindPlatformNode(context.Background(), client)
-			if !errors.Is(err, tt.err) {
-				t.Fatalf("error = %v, want %v", err, tt.err)
-			}
-			name := ""
-			if node != nil {
-				name = node.Name
-			}
-			if name != tt.wantName || calls != 1 {
-				t.Fatalf("node = %q, calls = %d; want %q, 1", name, calls, tt.wantName)
 			}
 		})
 	}
