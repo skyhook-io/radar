@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { LoggingFlowRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/LoggingRenderers'
 import { LOGGING_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-logging'
 import type { ResourceRef } from '@skyhook-io/k8s-ui'
+import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
 import { useResources } from '../../../api/client'
 
 // controlNamespacesOf is undefined unless every Logging was read: a partial,
@@ -42,5 +43,11 @@ export function LoggingFlowHostRenderer({ data, onNavigate }: { data: any; onNav
   const clusterOutputsRead = loggingsReadComplete(clusterOutputs) ? clusterOutputs.data : undefined
   const outputsRead = loggingsReadComplete(outputs) ? outputs.data : undefined
   const missingOutputs = useMemo(() => missingOutputRefs(data, clusterOutputsRead, outputsRead), [data, clusterOutputsRead, outputsRead])
-  return <LoggingFlowRenderer data={data} onNavigate={onNavigate} controlNamespaces={controlNamespaces} missingOutputs={missingOutputs} loggingsUnreadable={!!loggings.error || loggings.coverage?.status === 'partial'} />
+  // A failed outputs read only withholds the "rejected" claim; say so rather than look checked.
+  return (
+    <>
+      <LoggingFlowRenderer data={data} onNavigate={onNavigate} controlNamespaces={controlNamespaces} missingOutputs={missingOutputs} loggingsUnreadable={!!loggings.error || loggings.coverage?.status === 'partial'} />
+      <LookupFailureNote errors={[clusterOutputs.error, data?.kind === 'Flow' ? outputs.error : null]} what="whether this flow's outputs exist" />
+    </>
+  )
 }

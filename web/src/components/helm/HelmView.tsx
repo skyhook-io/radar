@@ -12,6 +12,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
 import { InstallWizard } from './InstallWizard'
 import { ObservedHelmNotice } from './ObservedHelmNotice'
+import { NotCheckedBadge } from './NotCheckedBadge'
 
 type ViewTab = 'releases' | 'charts'
 
@@ -665,9 +666,9 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
   )
 })
 
-function FluxBadge({ release }: { release: string }) {
+function FluxBadge({ release }: { release?: string }) {
   return (
-    <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${release}. Changes here will be reverted at the next reconcile — manage via the GitOps tab.`}>
+    <Tooltip content={release ? `Installed by Flux helm-controller via HelmRelease ${release}. Manage its source in GitOps.` : "The owning Flux HelmRelease's namespace isn't available in this view, or Radar couldn't check your access. Manage this release through Flux; direct Helm changes may be reconciled back."}>
       <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
         <GitBranch className="w-3 h-3" />
         Flux
@@ -699,8 +700,9 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} />
+          <NotCheckedBadge count={release.statusUnreadCount} />
           {listOperation && <HelmOperationChip operation={listOperation} />}
-          {release.managedByFluxHelmRelease && <FluxBadge release={release.managedByFluxHelmRelease} />}
+          {(release.managedByFlux || release.managedByFluxHelmRelease) && <FluxBadge release={release.managedByFluxHelmRelease} />}
           {upgradeInfo?.updateAvailable && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>

@@ -171,10 +171,8 @@ func TestAPIRoutesAreGuardedOnTheRealRouter(t *testing.T) {
 		"/mcp-readonly/*":                  "MCP, answers GET with nothing a page can use",
 		"/mcp-investigation/*":             "MCP, answers GET with nothing a page can use",
 		"/mcp-apply/*":                     "MCP, answers GET with nothing a page can use",
-		"/metrics":                         "Prometheus scrape, no side effects",
 		"/.well-known/oauth-authorization-server": "OAuth metadata for MCP clients, static",
 		"/.well-known/oauth-protected-resource":   "OAuth metadata for MCP clients, static",
-		"/debug/pprof/":                           "local profiling, not mounted in cloud mode",
 	}
 	// A key ending in "/" covers every route under it.
 	listed := func(m map[string]string, route string) bool {
@@ -210,7 +208,8 @@ func TestAPIRoutesAreGuardedOnTheRealRouter(t *testing.T) {
 			case http.MethodGet, http.MethodHead:
 				read = true
 			}
-			if !strings.HasPrefix(route, "/api/") {
+			guardedOutsideAPI := route == "/metrics" || strings.HasPrefix(route, "/debug/pprof/")
+			if !strings.HasPrefix(route, "/api/") && !guardedOutsideAPI {
 				if !read && !listed(writesOutsideAPI, route) {
 					t.Errorf("%s %s accepts writes outside /api, so requireSameOrigin does not cover it; move it under /api or list it in writesOutsideAPI with a reason", method, route)
 				}
@@ -501,5 +500,39 @@ func TestBrowserOriginAllowedRejectsSchemeDowngrade(t *testing.T) {
 				t.Fatalf("browserOriginAllowed(tls=%v xfp=%q origin=%q) = %v, want %v", tc.tls, tc.forwardedProto, tc.origin, got, tc.want)
 			}
 		})
+	}
+}
+
+// Metrics and profiling answer a scraper or a terminal, which send no
+// Sec-Fetch-Site, and Radar's own page. A page on another port of the same
+// host is same-site. When the browser sends Sec-Fetch-Site, those pages cannot
+// read diagnostics or start a CPU profile. Headerless requests remain allowed.
+func TestDiagnosticsPagesRefuseOtherSites(t *testing.T) {
+	enabled := true
+	srv := New(Config{DevMode: true, EnablePprof: &enabled})
+	defer srv.Stop()
+	for _, path := range []string{"/metrics", "/debug/pprof/cmdline", "/debug/pprof/profile?seconds=1"} {
+		for _, tc := range []struct {
+			site string
+			want int
+		}{
+			{"cross-site", http.StatusForbidden},
+			{"same-site", http.StatusForbidden},
+			{"same-origin", http.StatusOK},
+			{"", http.StatusOK},
+		} {
+			if strings.Contains(path, "/profile") && tc.want == http.StatusOK {
+				continue // Successful profiles use global process state; only exercise their rejection here.
+			}
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			if tc.site != "" {
+				req.Header.Set("Sec-Fetch-Site", tc.site)
+			}
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Errorf("GET %s with Sec-Fetch-Site %q: status %d, want %d", path, tc.site, rec.Code, tc.want)
+			}
+		}
 	}
 }

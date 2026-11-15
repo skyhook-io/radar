@@ -25,6 +25,12 @@ don't assume every discoverable resource has a CRD object.
   Entries carry group, versions, plural, kind and scope; `WarmupCommonCRDs` consumes
   this registry. Don't add a separate name-only warmup list. Fallback registration
   probes access; an entry is not proof that the API is installed or readable.
+- [ ] Map each new API group to its Helm chart name in `crdGroupToChart`
+  ([crd_groups.go](../pkg/packages/crd_groups.go)). The package list merges CRDs
+  into their Helm release by that name, and usage stats report it as the
+  integration. A group that shouldn't be reported goes in
+  `supportedGroupsNotReported` (`internal/k8s/supported_crd_usage_test.go`) with
+  a reason; that test fails for a supported group in neither.
 - [ ] Check the [Helm ClusterRole](../deploy/helm/radar/templates/clusterrole.yaml) and
   [values](../deploy/helm/radar/values.yaml) for the new API group. Follow existing
   per-group read-access toggles; don't rely on an opt-in wildcard or request write

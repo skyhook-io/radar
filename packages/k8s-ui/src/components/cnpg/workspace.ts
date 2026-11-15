@@ -1,4 +1,4 @@
-import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
+import { cnpgBackupDeclaration, cnpgBarmanPlugin, cnpgWALArchiverUnknown } from '../../utils/cnpg-backup'
 // CloudNativePG workspace model: pure derivations over the /api/cnpg/workspace
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
@@ -119,6 +119,16 @@ export function isCNPGWorkspaceKind(kind: string, group: string | undefined): bo
 }
 
 export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations' | 'pooling'
+
+// Workspace titles and categories for the Checks rules about CNPG Clusters;
+// an id not listed here shows its message, under protection.
+const CNPG_AUDIT_CHECKS: Record<string, { title: string; category: CNPGProblemCategory }> = {
+  cnpgNoDeclarativeBackup: { title: 'No declarative backup schedule', category: 'protection' },
+  cnpgNoBackupDestination: { title: 'No backup destination', category: 'protection' },
+  cnpgNoWALArchiving: { title: 'No WAL archiving', category: 'protection' },
+  cnpgSingleInstance: { title: 'Single instance', category: 'availability' },
+  cnpgInTreeBackupDeprecated: { title: 'Deprecated in-tree Barman backup', category: 'declarations' },
+}
 
 export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }[] = [
   { id: 'availability', label: 'Availability' },
@@ -621,14 +631,23 @@ function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   const declaration = cnpgBackupDeclaration(cluster)
-  const plugin = cnpgBarmanPlugin(declaration)
-  const archivers = declaration.plugins.filter((p) => p.enabled && p.isWALArchiver)
-  const archiveConfigured = archivers.length > 0 || !!declaration.inTreeDestination
+  // CNPG hands every WAL file to each enabled archive-capable plugin, whatever
+  // isWALArchiver says, so a False condition with any plugin or an in-tree
+  // block is a real archiving failure, store or no store.
+  const archiveConfigured = declaration.plugins.some((p) => p.enabled) || !!declaration.inTreeDestination
   if (c?.status === 'False' && archiveConfigured) {
     return { state: 'failing', text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
   }
-  const destinationKnown = !!(plugin?.isWALArchiver && plugin.barmanObjectName) || !!declaration.inTreeDestination
-  const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
+  const barman = cnpgBarmanPlugin(declaration)
+  const destinationKnown = !!barman?.barmanObjectName || !!declaration.inTreeDestination
+  const customArchiver = declaration.plugins.some((p) => p.enabled && p.isWALArchiver && p.name !== CNPG_BARMAN_PLUGIN_NAME)
+  if (!destinationKnown && cnpgWALArchiverUnknown(declaration)) {
+    return {
+      state: 'unknown', text: 'Not assessed', tone: 'unknown', source: 'Cluster spec',
+      detail: 'A plugin that may archive WAL is enabled but not marked isWALArchiver; whether it keeps WAL is not assessed here.',
+      ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}),
+    }
+  }
   if (!destinationKnown && !customArchiver) {
     return {
       state: 'no_destination', text: CNPG_NO_WAL_ARCHIVE_DESTINATION,
@@ -876,13 +895,16 @@ function problemsFor(
   }
   const newestBackup = [...backupTimes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
   out.push(...cnpgFoldLastBackupFailed(cnpgCollapseBackupFailures(fromIssues, backupTimes), newestBackup))
+  // A blocked schedule's Issue already names the missing destination.
+  const scheduleBlocked = fromIssues.some((p) => p.reason === 'CNPGScheduleDestinationMissing')
   for (const f of audit) {
     if (f.kind !== 'Cluster' || f.name !== name || (f.namespace ?? '') !== ns) continue
+    if (f.checkId === 'cnpgNoBackupDestination' && scheduleBlocked) continue
     out.push({
       id: `audit:${f.checkId}:${ns}/${name}`,
       severity: 'posture',
-      category: 'protection',
-      title: f.checkId === 'cnpgNoDeclarativeBackup' ? 'No declarative backup schedule' : f.message,
+      category: CNPG_AUDIT_CHECKS[f.checkId]?.category ?? 'protection',
+      title: CNPG_AUDIT_CHECKS[f.checkId]?.title ?? f.message,
       detail: f.message,
       subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: ns, name },
       source: 'audit',

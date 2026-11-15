@@ -248,6 +248,12 @@ allocation sites and sizes; they are not raw dumps of cached resource contents.
 The diagnostics overlay and generated bug reports use `/api/diagnostics`,
 which remains available independently of profiling.
 
+`/metrics` and `/debug/pprof/*` refuse browser requests whose `Sec-Fetch-Site`
+header is `cross-site` or `same-site`, including a page on another localhost
+port. Open the diagnostic URL directly or use a command-line client. Requests
+without that header remain allowed by this guard; browsers generally omit it
+over plain HTTP to non-localhost addresses. This guard is not authentication.
+
 ## Desktop Window Behavior
 
 On macOS, closing the Radar window hides the app rather than quitting it. The

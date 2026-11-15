@@ -1,6 +1,6 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package updater
 
-// DetectMode: macOS and Windows installs always use the in-app updater.
+// DetectMode: macOS installs always use the in-app updater.
 func DetectMode() Mode { return ModeInPlace }

@@ -1204,6 +1204,27 @@ describe('Strimzi KafkaConnector exact group', () => {
   })
 })
 
+describe('Strimzi Kafka and KafkaNodePool exact group', () => {
+  const kafka = {apiVersion: 'kafka.strimzi.io/v1', kind: 'Kafka', metadata: {name:'main',generation:1}, spec: {kafka: {version:'4.0.0'}}, status:{observedGeneration:1,conditions:[{type:'NotReady',status:'True'}]}}
+  const pool = {apiVersion: 'kafka.strimzi.io/v1', kind: 'KafkaNodePool', metadata: {name:'brokers',generation:1}, spec: {replicas:3}, status:{observedGeneration:1,conditions:[{type:'Warning',status:'True',reason:'KafkaStorage'}]}}
+  it('renders curated drawers and Strimzi status', () => {
+    expect(getResourceStatus('kafkas', kafka)?.text).toBe('Not ready')
+    expect(renderKind('kafkas', kafka)).toContain('Kafka Cluster')
+    expect(getResourceStatus('kafkanodepools', pool)?.text).toBe('Warnings')
+    expect(renderKind('kafkanodepools', pool)).toContain('Node IDs')
+  })
+  it('leaves unrelated and lookalike groups generic', () => {
+    for (const apiVersion of ['other.io/v1', 'fake.kafka.strimzi.io/v1']) {
+      for (const [kind, data, marker, curated] of [['kafkas', kafka, 'Kafka Cluster', 'Not ready'], ['kafkanodepools', pool, 'Node IDs', 'Warnings']] as const) {
+        const other = {...data, apiVersion}
+        expect(getResourceStatus(kind, data)?.text).toBe(curated)
+        expect(getResourceStatus(kind, other)?.text).not.toBe(curated)
+        expect(renderKind(kind, other)).not.toContain(marker)
+      }
+    }
+  })
+})
+
 it('keeps foreign customresourcedefinitions on generic renderer and status', () => {
   const data = { apiVersion: 'foreign.io/v1', kind: 'CustomResourceDefinition', metadata: { name: 'foreign' }, spec: { example: 'generic-sentinel' }, status: { conditions: [{ type: 'Established', status: 'True' }] } }
   const html = renderToString(<ResourceRendererDispatch resource={{ kind: 'customresourcedefinitions', name: 'foreign', namespace: '' }} data={data} onCopy={() => {}} copied={null} showCommonSections={false} />)
