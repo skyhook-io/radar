@@ -41,6 +41,16 @@ function emit(name: string, ...data: unknown[]) {
   post('EE' + JSON.stringify({ name, data }))
 }
 
+/** True inside the Windows desktop app, where the page can run native menu items. */
+export function hasDesktopMenu(): boolean {
+  return webview() !== null
+}
+
+/** Runs a native menu item by its "Menu/Label" path (cmd/desktop/titlebar.go). */
+export function runDesktopMenuItem(path: string) {
+  emit('radar:titlebar:invoke', path)
+}
+
 function isMaximised() {
   return looksMaximised(window.outerWidth, window.outerHeight, screen.availWidth, screen.availHeight)
 }
@@ -78,7 +88,7 @@ function TitleBar({ title, menus }: TitleBarState) {
 
   const invoke = useCallback((path: string) => {
     leaveBar()
-    emit('radar:titlebar:invoke', path)
+    runDesktopMenuItem(path)
   }, [leaveBar])
 
   useEffect(() => {
