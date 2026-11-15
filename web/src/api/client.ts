@@ -2203,8 +2203,17 @@ export function useCapabilities() {
     staleTime: 60000, // 1 minute - cached on backend too
     // Re-check periodically so transient failures self-correct, but not while
     // the cluster is down: reconnecting refreshes every query anyway.
-    refetchInterval: connected ? 60000 : false,
+    refetchInterval: (query) => connected ? capabilitiesRefetchInterval(query, 60000) : false,
   });
+}
+
+// The server keeps a result built on a failed check for only 5s; ask again
+// soon so a timed-out check doesn't hide controls until the settled refetch.
+export function capabilitiesRefetchInterval(
+  query: { state: { data?: Pick<Capabilities, "checksIncomplete"> } },
+  settled: number | false,
+): number | false {
+  return query.state.data?.checksIncomplete ? 5000 : settled;
 }
 
 // ============================================================================
@@ -2491,6 +2500,7 @@ export function useNamespaceCapabilities(
       fetchJSON(`/capabilities?namespace=${encodeURIComponent(namespace!)}`),
     enabled: !!needsCheck,
     staleTime: 60000,
+    refetchInterval: (query) => capabilitiesRefetchInterval(query, false),
   });
 }
 

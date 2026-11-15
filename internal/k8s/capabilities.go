@@ -138,6 +138,10 @@ type Capabilities struct {
 	Karpenter              IntegrationCapability    `json:"karpenter"`               // Per-request Karpenter discovery + NodePool read state; populated by the HTTP layer after user SAR.
 	PolicyReports          *PolicyReportStatus      `json:"policyReports,omitempty"` // Why the Kyverno PolicyReport index is (or is not) populated, so an empty policy view can say which.
 	CloudConnect           *CloudConnectCapability  `json:"cloudConnect,omitempty"`
+	// ChecksIncomplete: an access check errored, so a false above may be a
+	// failed check rather than a denial. The server re-checks after a short
+	// TTL; the UI should refetch soon.
+	ChecksIncomplete bool `json:"checksIncomplete,omitempty"`
 
 	// HelmWriteUnavailable records a failed or unavailable Helm-write lookup from CheckCapabilities.
 	// It is internal preflight state, not a wire capability.
@@ -449,7 +453,8 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	// Cache the result. Use a short TTL if API errors caused fail-closed results,
 	// so transient K8s API failures don't hide UI controls for a full minute.
 	ttl := capabilitiesTTL
-	if hadErrors.Load() {
+	caps.ChecksIncomplete = hadErrors.Load()
+	if caps.ChecksIncomplete {
 		ttl = capabilitiesErrorTTL
 		log.Printf("Warning: capability checks had API errors, using short cache TTL (%v)", ttl)
 	}
@@ -610,7 +615,8 @@ func userNamespaceCapabilitiesCacheKey(username string, groups []string, namespa
 
 // CheckCapabilitiesForUser runs SubjectAccessReview as the given user
 // to determine what the user can do (exec, logs, delete, helm, etc.)
-// Results are cached per identity (username + groups) with 60s TTL.
+// Results are cached per identity (username + groups) with 60s TTL, or 5s
+// when a check errored (the result then fails closed and says so).
 func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
 	identityKey := pkgauth.IdentityCacheKey(username, groups)
 	if entry, ok := userCapabilitiesCache.Load(identityKey); ok {
@@ -656,28 +662,35 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 	}
 
+	var hadErrors atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(checks))
 
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
+			allowed, apiErr := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
 			// Try namespace-scoped fallback
 			if fallbackNs := capabilityProbeNamespace(); fallbackNs != "" && c.namespaceFallback {
-				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
+				allowed, nsAPIErr := canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
+					return
 				}
+				apiErr = apiErr || nsAPIErr
+			}
+			if apiErr {
+				hadErrors.Store(true)
 			}
 		}(check)
 	}
 
 	wg.Wait()
+	caps.ChecksIncomplete = hadErrors.Load()
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
@@ -686,10 +699,14 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 		caps.Exec = false
 	}
 
-	// Cache result
+	ttl := userCapabilitiesTTL
+	if caps.ChecksIncomplete {
+		ttl = capabilitiesErrorTTL
+		log.Printf("Warning: capability checks for user %s had API errors, using short cache TTL (%v)", SanitizeForLog(username), ttl)
+	}
 	userCapabilitiesCache.Store(identityKey, &userCapEntry{
 		caps:      caps,
-		expiresAt: time.Now().Add(userCapabilitiesTTL),
+		expiresAt: time.Now().Add(ttl),
 	})
 
 	return caps, nil
