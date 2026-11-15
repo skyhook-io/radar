@@ -54,6 +54,9 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
       }
     }
   }
+  // Images arrive ordered by their whole counts; rank the fixable findings
+  // across all of them so a Critical in the second image beats a High in the first.
+  fixFirst.sort((a, b) => (a.severity === b.severity ? (b.score ?? 0) - (a.score ?? 0) : a.severity === 'critical' ? -1 : 1))
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
   const open = () => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), namespaces: namespace }).toString() })
 

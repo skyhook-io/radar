@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/vulnerabilities"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
 
@@ -194,5 +196,78 @@ func TestTrimVulnerabilitiesMarksIncomplete(t *testing.T) {
 	got := trimVulnerabilities(resp, 2)
 	if got.Coverage.Complete || got.Coverage.RowsOmitted != 1 || len(got.Images) != 2 {
 		t.Fatalf("%+v", got.Coverage)
+	}
+}
+
+// setupCronAndJob runs, in shop, an unsuspended CronJob nightly between runs
+// (its report matches its template) and a Pod of an unrelated Job batch-1,
+// with only the given typed kinds collected.
+func setupCronAndJob(t *testing.T, kinds ...string) {
+	t.Helper()
+	controller := true
+	scopes := map[string]k8score.ResourceScope{}
+	for _, k := range kinds {
+		scopes[k] = k8score.ResourceScope{Enabled: true}
+	}
+	suspended := false
+	objs := []runtime.Object{
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}},
+		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: "shop", UID: "uid-nightly"}, Spec: batchv1.CronJobSpec{
+			Suspend: &suspended,
+			JobTemplate: batchv1.JobTemplateSpec{Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "report", Image: "acme/report:1"}}}}}},
+		}},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "batch-1-x", Namespace: "shop",
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: "batch-1", Controller: &controller}}},
+			Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "work", Image: "acme/batch:1"}}},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{"report": map[string]any{
+		"artifact":        map[string]any{"repository": "acme/report", "tag": "1"},
+		"vulnerabilities": []any{map[string]any{"vulnerabilityID": "CVE-1", "resource": "zlib", "installedVersion": "1", "fixedVersion": "2", "severity": "HIGH"}},
+	}}}
+	u.SetAPIVersion("aquasecurity.github.io/v1alpha1")
+	u.SetKind("VulnerabilityReport")
+	u.SetNamespace("shop")
+	u.SetName("cronjob-nightly-report")
+	u.SetLabels(map[string]string{"trivy-operator.container.name": "report"})
+	u.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "CronJob", Name: "nightly", UID: "uid-nightly", Controller: &controller}})
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(objs...), scopes); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetResourceCache)
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{vulnReportGVR: "VulnerabilityReportList"}, u)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{
+		Group: vulnReportGVR.Group, Version: vulnReportGVR.Version, Kind: "VulnerabilityReport", Name: vulnReportGVR.Resource,
+		Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Without Jobs, a Job's Pods can't be traced to a CronJob: they're withheld
+// and named, while a CronJob with its own target keeps its report.
+func TestListVulnerabilitiesWithoutJobs(t *testing.T) {
+	setupCronAndJob(t, "pods", "namespaces", "cronjobs", "replicasets", "deployments")
+	got := listVulns(t, context.Background(), listVulnerabilitiesInput{})
+	if len(got.Images) != 1 || got.Images[0].Workloads[0].Name != "nightly" {
+		t.Fatalf("the scheduled CronJob keeps its scan: %+v", got.Images)
+	}
+	if len(got.Unscanned) != 0 || got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.RadarKindNotCollected {
+		t.Fatalf("the Job's Pod is withheld and named, not unscanned: %+v / %+v", got.Unscanned, got.Coverage)
+	}
+}
+
+// Without Pods nothing is known to run: the answer says why instead of
+// waiting on a cache that won't load.
+func TestListVulnerabilitiesWithoutPods(t *testing.T) {
+	setupCronAndJob(t, "namespaces", "cronjobs", "jobs", "replicasets", "deployments")
+	got := listVulns(t, context.Background(), listVulnerabilitiesInput{})
+	if got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.RadarKindNotCollected {
+		t.Fatalf("coverage: %+v", got.Coverage)
 	}
 }

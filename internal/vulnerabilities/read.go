@@ -72,19 +72,22 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	// A report list read before its watch synced would read as no reports,
 	// and every running image as unscanned. Every namespace's wait shares
 	// one deadline, so queued namespaces don't add their waits up.
-	deadline := time.Now().Add(syncWait)
+	// The deadline covers starting the watch too, which can wait on
+	// discovery.
+	readyCtx, cancelReady := context.WithTimeout(ctx, syncWait)
+	defer cancelReady()
 	list := func(ns string) ([]*unstructured.Unstructured, error) {
-		if err := dynamic.EnsureWatchingContext(ctx, gvr, ns); err != nil {
-			return nil, err
-		}
-		waitCtx, cancel := context.WithDeadline(ctx, deadline)
-		synced := dynamic.WaitForSyncContext(waitCtx, gvr, ns)
-		cancel()
-		if !synced {
-			if err := ctx.Err(); err != nil {
-				return nil, err
+		notReady := func(err error) error {
+			if ctx.Err() == nil && readyCtx.Err() != nil {
+				return ErrNotReady
 			}
-			return nil, ErrNotReady
+			return err
+		}
+		if err := dynamic.EnsureWatchingContext(readyCtx, gvr, ns); err != nil {
+			return nil, notReady(err)
+		}
+		if !dynamic.WaitForSyncContext(readyCtx, gvr, ns) {
+			return nil, notReady(ctx.Err())
 		}
 		return dynamic.ListReadOnlyContext(ctx, gvr, ns)
 	}
@@ -173,13 +176,23 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	// missing report would otherwise read as an unscanned image, a missing
 	// Pod or CronJob as an inactive report.
 	readable, gaps = narrowToDynamic(readplan.Dynamic(dynamic, gvr, readable, false), readable, gaps)
-	readable, gaps, ok = narrowToTyped(cache.AssessKindRead("pods", readable), readable, gaps)
+	podRead := cache.AssessKindRead("pods", readable)
+	if podRead.Readiness == k8score.KindUnavailable {
+		// Without Pods nothing is known to run: every report would read as
+		// inactive. Say so instead of retrying a cache that won't load.
+		return empty(req.View, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Namespaces: resourceapi.UnknownNames()}), nil
+	}
+	readable, gaps, ok = narrowToTyped(podRead, readable, gaps)
 	if !ok {
 		return Response{}, ErrNotReady
 	}
 	items = filterNamespaces(items, readable)
-	cronReadable, cronGaps, cronOK := narrowToTyped(cache.AssessKindRead("cronjobs", readable), readable, nil)
-	jobReadable, jobGaps, jobOK := narrowToTyped(cache.AssessKindRead("jobs", readable), readable, nil)
+	cronRead := cache.AssessKindRead("cronjobs", readable)
+	cronReadable, cronGaps, cronOK := narrowToTyped(cronRead, readable, nil)
+	jobRead := cache.AssessKindRead("jobs", readable)
+	jobReadable, jobGaps, jobOK := narrowToTyped(jobRead, readable, nil)
+	rsRead := cache.AssessKindRead("replicasets", readable)
+	rsReadable, rsGaps, rsOK := narrowToTyped(rsRead, readable, nil)
 
 	live, ready := liveTargets(cache, readable, req.CanRead, req.CanListPods)
 	if !ready {
@@ -221,11 +234,9 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		if cronOK {
 			gaps = append(gaps, cronGaps...)
 		} else {
-			gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
+			gaps = append(gaps, kindGap(cronRead))
 		}
 	}
-	// A running object the caller can't read is withheld whether or not it
-	// has a report yet: without the gap, an unscanned one would just vanish.
 	// Where Jobs aren't read, a Job's Pods can't be traced to the CronJob
 	// that Trivy scanned them through: its report would read as inactive
 	// and the running image as unscanned. Both are withheld instead.
@@ -241,19 +252,44 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 			}
 			return false
 		})
+		// A CronJob that still has its own (unsuspended) target keeps its
+		// report; others there may be what the withheld Pods run.
+		scheduled := map[ownerKey]bool{}
+		for _, t := range targets {
+			if t.key.kind == "CronJob" {
+				scheduled[t.key.owner()] = true
+			}
+		}
 		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
 			r, ok := reportHeader(u)
-			return ok && (r.owner.kind == "Job" || r.owner.kind == "CronJob") && jobUnknown(r.owner.namespace) && slices.Contains(namespaces, r.owner.namespace)
+			if !ok || !slices.Contains(namespaces, r.owner.namespace) {
+				return false
+			}
+			return r.owner.kind == "Job" || (r.owner.kind == "CronJob" && !scheduled[r.owner])
 		})
 		if len(namespaces) > 0 {
-			slices.Sort(namespaces)
 			if jobOK {
 				gaps = append(gaps, jobGaps...)
 			} else {
-				gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
+				gaps = append(gaps, kindGap(jobRead))
 			}
 		}
 	}
+	// Where ReplicaSets aren't read, a Deployment's Pods are named by their
+	// ReplicaSet. The findings hold, but the workloads are not the ones a
+	// person would name, so the answer says it is partial.
+	if !rsOK || len(rsGaps) > 0 {
+		rsUnknown := func(ns string) bool { return !rsOK || (rsReadable != nil && !slices.Contains(rsReadable, ns)) }
+		if slices.ContainsFunc(targets, func(t target) bool { return t.key.kind == "ReplicaSet" && rsUnknown(t.key.namespace) }) {
+			if rsOK {
+				gaps = append(gaps, rsGaps...)
+			} else {
+				gaps = append(gaps, kindGap(rsRead))
+			}
+		}
+	}
+	// A running object the caller can't read is withheld whether or not it
+	// has a report yet: without the gap, an unscanned one would just vanish.
 	if len(live.withheld) > 0 {
 		var namespaces []string
 		for owner := range live.withheld {
@@ -347,6 +383,15 @@ func filterNamespaces(items []*unstructured.Unstructured, namespaces []string) [
 // narrowToTyped narrows readable to the namespaces where a typed kind has
 // loaded, naming the others. ok is false when the kind isn't collected at
 // all or hasn't loaded anywhere.
+// kindGap is the gap for a join input that can't be read anywhere: one
+// Radar doesn't collect, or one still loading.
+func kindGap(a k8score.KindReadAssessment) resourceapi.Gap {
+	if a.Readiness == k8score.KindUnavailable {
+		return resourceapi.Gap{Code: readreason.RadarKindNotCollected, Namespaces: resourceapi.UnknownNames()}
+	}
+	return resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()}
+}
+
 func narrowToTyped(a k8score.KindReadAssessment, readable []string, gaps []resourceapi.Gap) ([]string, []resourceapi.Gap, bool) {
 	switch {
 	case a.Readiness == k8score.KindUnavailable:

@@ -400,7 +400,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                   <span className="text-xs font-medium text-theme-text-secondary">
                     {img.matching === img.findingsTotal ? 'Findings, worst first' : `${img.matching} of ${img.findingsTotal} findings match`}
                   </span>
-                  <FindingsList findings={img.findings} total={img.findingsTotal} />
+                  <FindingsList findings={img.findings} total={img.findingsTotal} unread={img.findingsUnread} />
                   <span className="flex gap-3 text-xs">
                     {img.matching > img.findings.length && <span className="text-theme-text-tertiary">{img.matching - img.findings.length} more in the report.</span>}
                     <button type="button" onClick={() => onOpenReport(img)} className="text-accent-text hover:underline">Open the scan report</button>
@@ -426,7 +426,10 @@ function namespaceCount(img: VulnerableImage): string {
   return `${partial ? 'at least ' : ''}${n} ${n === 1 ? 'namespace' : 'namespaces'}`
 }
 
-function FindingsList({ findings, total }: { findings: VulnerableImage['findings']; total: number }) {
+function FindingsList({ findings, total, unread }: { findings: VulnerableImage['findings']; total: number; unread?: boolean }) {
+  if (unread) {
+    return <span className="text-xs text-warning-text">This image's report has too many findings to read in one request. Narrow with the namespace picker.</span>
+  }
   if (findings.length === 0) {
     return <span className="text-xs text-theme-text-tertiary">{total === 0 ? 'No CVEs reported for this image.' : 'No findings match the filters.'}</span>
   }
@@ -639,6 +642,8 @@ function WorkloadUpgrades({ workload: w, active, severities, query, onOpen, onSh
   const fixes = data?.fixes ?? []
   const several = w.containers.length > 1
   const filtered = severities.length > 0 || query !== ''
+  // Containers whose findings weren't read: their upgrades are unknown.
+  const unknown = w.containers.filter((c) => !c.scanned || c.findingsUnread).length
   const actions = (
     <span className="flex flex-wrap gap-x-4">
       <button type="button" onClick={() => onOpen(ref)} className="text-accent-text hover:underline">Open {w.name}</button>
@@ -649,7 +654,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, onOpen, onSh
   let lead: React.ReactNode
   if (isLoading) lead = <span className="text-theme-text-tertiary">Reading its upgrades…</span>
   else if (error) lead = <span className="text-warning-text">Couldn't read its upgrades: {error instanceof Error ? error.message : 'request failed'}.</span>
-  else if (total === 0) lead = <span className="text-theme-text-tertiary">Nothing to upgrade: no findings were read for its containers.</span>
+  else if (total === 0 && unknown > 0) lead = <span className="text-warning-text">{unknown === w.containers.length ? "No findings were read for its containers: not scanned yet, or too many to read." : 'Its other containers have no reported CVEs; the rest weren\'t read.'}</span>
   // The workload's counts cover its whole images; under a filter only the
   // upgrade rows follow it, so the sentence leaves the counts out.
   else if (filtered) lead = <span className="text-theme-text-secondary">{fixes.length === 0 ? 'None of the findings that match has a fixed release yet.' : `${fixes.length} ${fixes.length === 1 ? 'upgrade' : 'upgrades'} for the findings that match`}</span>
@@ -658,6 +663,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, onOpen, onSh
     <span className="text-theme-text-secondary">
       {fixes.length} {fixes.length === 1 ? 'upgrade clears' : 'upgrades clear'} {fixable} of its {total} findings
       {total > fixable && <span className="text-theme-text-tertiary">; {total - fixable} have no fix yet</span>}
+      {unknown > 0 && <span className="text-warning-text">. {unknown} {unknown === 1 ? "container's" : "containers'"} findings weren't read</span>}
     </span>
   )
   return (

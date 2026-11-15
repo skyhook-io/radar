@@ -165,6 +165,12 @@ export interface VulnerabilitiesParams {
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
 
+function workloadOfPath(path: unknown): string {
+  if (typeof path !== 'string') return ''
+  const q = new URLSearchParams(path.split('?')[1] ?? '')
+  return [q.get('workloadKind'), q.get('workloadNamespace'), q.get('workloadName')].join('/')
+}
+
 /** The cluster doesn't serve the report kind: no scanner, not a failure. */
 export function isKindUnknown(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404 && error.data?.error_code === 'kind_unknown'
@@ -219,6 +225,6 @@ export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
     refetchIntervalInBackground: false,
     // Keep showing the last answer while the tab's filters change, but never
     // carry one workload's answer over to another's drawer or row.
-    placeholderData: (prev) => (prev?.view === p.view && !p.workload ? prev : undefined),
+    placeholderData: (prev, prevQuery) => (prev?.view === p.view && workloadOfPath(prevQuery?.queryKey[1]) === workloadOfPath(path) ? prev : undefined),
   })
 }
