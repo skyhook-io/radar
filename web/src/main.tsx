@@ -4,6 +4,7 @@ import { RadarApp } from './RadarApp'
 import { setAutomaticRequestMarking } from './api/config'
 import { openExternal } from './utils/navigation'
 import { installWailsClipboardShim } from './utils/wails-clipboard'
+import { installWindowsTitleBar } from './desktop/WindowsTitleBar'
 import { installDesktopZoomShortcuts } from './utils/desktop-zoom'
 import './index.css'
 
@@ -27,6 +28,7 @@ window.addEventListener('click', (e: MouseEvent) => {
 // Wails desktop clipboard shim — see web/src/utils/wails-clipboard.ts for the
 // full WKWebView background and what each interception exists for.
 installWailsClipboardShim()
+installWindowsTitleBar()
 installDesktopZoomShortcuts()
 
 // Mouse back/forward button navigation (button 3 = back, button 4 = forward).

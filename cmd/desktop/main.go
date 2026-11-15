@@ -327,6 +327,14 @@ func main() {
 	// hidden window there is only recoverable by killing the process.
 	hideOnClose := goruntime.GOOS == "darwin"
 
+	desktopApp.setMenu(createMenu(desktopApp, version, goruntime.GOOS))
+	// The page drives the frameless window's title bar through the Wails
+	// runtime, so it must be allowed to talk to it (titlebar.go).
+	bindingsOrigins := ""
+	if customTitleBar {
+		bindingsOrigins = "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.ActualPort()))
+	}
+
 	// Run Wails application
 	err = wails.Run(&options.App{
 		Title:            windowTitle,
@@ -348,7 +356,9 @@ func main() {
 			Handler: NewRedirectHandler(net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.ActualPort())), cfg.Namespace, cfg.Namespaces),
 		},
 
-		Menu: createMenu(desktopApp, version, goruntime.GOOS),
+		Menu:                   desktopApp.menu,
+		Frameless:              customTitleBar,
+		BindingsAllowedOrigins: bindingsOrigins,
 
 		BackgroundColour: options.NewRGBA(10, 10, 15, 255),
 
@@ -365,7 +375,7 @@ func main() {
 			TitleBar: mac.TitleBarDefault(),
 			About: &mac.AboutInfo{
 				Title:   "Radar",
-				Message: "Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version + "\n\nhttps://github.com/skyhook-io/radar",
+				Message: aboutText(version),
 			},
 		},
 
