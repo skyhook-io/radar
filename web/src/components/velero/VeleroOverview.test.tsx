@@ -61,7 +61,8 @@ describe('Velero overview', () => {
     const html = text(render(workspace({ issues, schedules: [late] })))
     expect(html.indexOf('late-one')).toBeLessThan(html.indexOf('run-0'))
     expect(html.indexOf('Schedules <span')).toBeLessThan(html.indexOf('Backups and restores'))
-    expect(html).toContain('Show 6 more')
+    // One schedule row, then the rest of an eight-row budget for the runs.
+    expect(html).toContain('Show 3 more')
   })
 
   it('answers "is Velero working?" in one line before the detail', () => {
@@ -89,6 +90,19 @@ describe('Velero overview', () => {
     expect(html).toContain('Schedules:</dt><dd class="font-medium text-theme-text-primary">unknown — not read')
     expect(html).toContain('Storage:</dt><dd class="font-medium text-theme-text-primary">unknown — not read')
     expect(html).not.toContain('no locations')
+    expect(html).not.toContain('no schedules')
+  })
+
+  it('keeps every group visible but holds the whole list to eight rows', () => {
+    const issues = Array.from({ length: 10 }, (_, i) => ({
+      id: `i${i}`, severity: 'critical' as const, category: 'backup', kind: 'Backup', group: 'velero.io', namespace: 'velero', name: `run-${i}`, reason: 'BackupFailed', message: 'boom',
+    }))
+    const late = Array.from({ length: 9 }, (_, i) => schedule({ name: `late-${i}`, state: 'late', attention: true, missedRuns: 2 }))
+    const html = text(render(workspace({ issues, schedules: late })))
+    // The schedules take the budget; the runs group still shows its first row.
+    expect(html).toContain('run-0')
+    expect(html).toContain('Show 1 more')
+    expect(html).toContain('Show 9 more')
   })
 
   it('does not call a schedule fine when Radar cannot read its cron', () => {

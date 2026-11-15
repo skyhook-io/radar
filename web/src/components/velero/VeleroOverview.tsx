@@ -45,9 +45,10 @@ import {
 
 export const VELERO_NOTHING_NEEDS_ATTENTION = 'Nothing in what Radar can read needs attention.'
 
-// Each group shows this many rows before folding, so a burst of failed runs
-// cannot push the schedules this view exists for off the screen.
-const GROUP_FOLD = 4
+// Rows shown across all groups before folding, so a burst of problems cannot
+// push the schedules this view exists for off the screen. Every group shows at
+// least its first row.
+const ATTENTION_BUDGET = 8
 
 type AttentionGroupId = 'server' | 'schedules' | 'storage' | 'runs'
 
@@ -197,7 +198,7 @@ function schedulesFact(schedules: VeleroScheduleReading[], partial: boolean): Su
   return { label: 'Schedules', value: `${needing.length} of ${of} need attention`, tone: worst }
 }
 
-function newestBackupFact(schedules: VeleroScheduleReading[], onInspect: VeleroScreenProps['onInspect']): SummaryFact {
+function newestBackupFact(schedules: VeleroScheduleReading[], schedulesPartial: boolean, onInspect: VeleroScreenProps['onInspect']): SummaryFact {
   const label = 'Newest successful scheduled backup'
   let newest: { at: string; namespace: string; name: string } | undefined
   for (const s of schedules) {
@@ -206,9 +207,10 @@ function newestBackupFact(schedules: VeleroScheduleReading[], onInspect: VeleroS
     const at = run.completed ?? run.ranAt
     if (!newest || Date.parse(at) > Date.parse(newest.at)) newest = { at, namespace: s.namespace, name: run.name }
   }
-  const unread = schedules.some((s) => s.runs.read === 'unknown')
+  // Schedules or their backups Radar could not read may hold a newer one.
+  const unread = schedulesPartial || schedules.some((s) => s.runs.read === 'unknown')
   if (!newest) {
-    if (unread) return { label, value: 'unknown — no access to backups', tone: 'unknown' }
+    if (unread) return { label, value: schedulesPartial && schedules.length === 0 ? 'unknown — not read' : 'unknown — no access to backups', tone: 'unknown' }
     return { label, value: schedules.length === 0 ? 'no schedules' : 'none kept', tone: schedules.length === 0 ? 'neutral' : 'alert' }
   }
   const run = newest
@@ -217,7 +219,7 @@ function newestBackupFact(schedules: VeleroScheduleReading[], onInspect: VeleroS
     // An age is not a verdict: whether it is late is each schedule's state.
     tone: 'neutral',
     value: (
-      <Tooltip content={`${run.name} · ${veleroLocalTime(run.at)}${unread ? ' · some schedules’ backups were not read' : ''}`}>
+      <Tooltip content={`${run.name} · ${veleroLocalTime(run.at)}${unread ? ' · some schedules or their backups were not read' : ''}`}>
         <button type="button" onClick={() => onInspect(veleroResource('Backup', run.namespace, run.name))} className="text-accent-text hover:underline">
           {formatRelativeAgeTime(run.at)}
         </button>
@@ -252,10 +254,10 @@ function VeleroSummary({ facts }: { facts: SummaryFact[] }) {
   )
 }
 
-function AttentionGroup({ id, title, problems, onNavigate }: { id: string; title: string; problems: WorkspaceProblem[]; onNavigate: (ref: ResourceRef) => void }) {
+function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: string; title: string; problems: WorkspaceProblem[]; visible: number; onNavigate: (ref: ResourceRef) => void }) {
   const [showAll, setShowAll] = useState(false)
-  const shown = problems.slice(0, GROUP_FOLD)
-  const folded = problems.slice(GROUP_FOLD)
+  const shown = problems.slice(0, visible)
+  const folded = problems.slice(visible)
   const foldId = `velero-attention-${id}-more`
   return (
     <div>
@@ -306,14 +308,20 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
     [issues, schedules, locations, data.installations, installation],
   )
   const capped = cappedIssueNotes(data, issues, installation)
-  const groups = useMemo(
-    () => ATTENTION_GROUPS.map((g) => ({ ...g, problems: attention.filter((p) => attentionGroup(p) === g.id) })).filter((g) => g.problems.length > 0),
-    [attention],
-  )
+  const groups = useMemo(() => {
+    let budget = ATTENTION_BUDGET
+    return ATTENTION_GROUPS.map((g) => ({ ...g, problems: attention.filter((p) => attentionGroup(p) === g.id) }))
+      .filter((g) => g.problems.length > 0)
+      .map((g) => {
+        const visible = Math.max(1, Math.min(g.problems.length, budget))
+        budget = Math.max(0, budget - visible)
+        return { ...g, visible }
+      })
+  }, [attention])
   const facts = [
     serverFact(inInstallation(data.installations, installation)),
     schedulesFact(schedules, readInPart(data.coverage.schedules)),
-    newestBackupFact(schedules, onInspect),
+    newestBackupFact(schedules, readInPart(data.coverage.schedules), onInspect),
     storageFact(locations, readInPart(data.coverage.backupStorageLocations)),
   ]
   const navigate = (ref: ResourceRef) => onInspect(refToSelectedResource(ref))
@@ -408,7 +416,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
             ) : (
               <div className="space-y-4">
                 {groups.map((g) => (
-                  <AttentionGroup key={g.id} id={g.id} title={g.title} problems={g.problems} onNavigate={navigate} />
+                  <AttentionGroup key={g.id} id={g.id} title={g.title} problems={g.problems} visible={g.visible} onNavigate={navigate} />
                 ))}
               </div>
             )}
