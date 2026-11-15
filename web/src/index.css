@@ -158,6 +158,12 @@ html.radar-custom-titlebar #radar {
 html.radar-custom-titlebar #radar .h-screen {
   height: calc(100vh - var(--radar-titlebar-h));
 }
+/* Full-window overlays (dialogs, fullscreen views) start below the title bar
+   so their own top controls stay reachable. */
+html.radar-custom-titlebar .fixed.inset-0:not([data-radar-titlebar]),
+html.radar-custom-titlebar .fixed.top-0:not([data-radar-titlebar]) {
+  top: var(--radar-titlebar-h);
+}
 
 /* ============================================
    REACT FLOW CUSTOMIZATIONS

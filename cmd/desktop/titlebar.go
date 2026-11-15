@@ -112,12 +112,25 @@ func formatAccelerator(a *keys.Accelerator) string {
 	return strings.Join(append(parts, strings.ToUpper(a.Key)), "+")
 }
 
-func (a *DesktopApp) installTitleBar(m *menu.Menu) {
+// setMenu records the native menu and, on Windows, what the page's title bar
+// needs from it. It runs before Wails starts, so every push carries complete
+// menus and the event handlers only read.
+func (a *DesktopApp) setMenu(m *menu.Menu) {
+	a.menu = m
+	if customTitleBar {
+		a.titleBarMenus = titleBarMenus(m)
+		a.titleBarActions = menuActions(m)
+	}
+}
+
+// installTitleBar runs in OnStartup, which Wails starts alongside the first
+// navigation, so the page may say hello before these handlers exist; it
+// repeats the hello until it gets an answer.
+func (a *DesktopApp) installTitleBar() {
 	if !customTitleBar {
 		return
 	}
-	a.titleBarMenus = titleBarMenus(m)
-	actions := menuActions(m)
+	actions := a.titleBarActions
 	runtime.EventsOn(a.ctx, "radar:titlebar:hello", func(...any) {
 		a.pushTitleBar()
 	})
@@ -135,8 +148,8 @@ func (a *DesktopApp) installTitleBar(m *menu.Menu) {
 	})
 }
 
-func titleBarScript(title string, menus []titleBarMenu) string {
-	detail, _ := json.Marshal(map[string]any{"title": title, "menus": menus})
+func titleBarScript(rev uint64, title string, menus []titleBarMenu) string {
+	detail, _ := json.Marshal(map[string]any{"rev": rev, "title": title, "menus": menus})
 	return "window.dispatchEvent(new CustomEvent('radar:titlebar',{detail:" + string(detail) + "}))"
 }
 
@@ -144,8 +157,13 @@ func (a *DesktopApp) pushTitleBar() {
 	if !customTitleBar || a.ctx == nil {
 		return
 	}
+	// Pushes run on different goroutines and Wails doesn't keep their order,
+	// so each carries a revision taken with the title and the page drops older
+	// ones; otherwise a hello answered just before a context switch could put
+	// the previous cluster's name back.
 	a.titleMu.Lock()
-	title := a.currentTitle
+	a.titleRev++
+	rev, title := a.titleRev, a.currentTitle
 	a.titleMu.Unlock()
-	runtime.WindowExecJS(a.ctx, titleBarScript(title, a.titleBarMenus))
+	runtime.WindowExecJS(a.ctx, titleBarScript(rev, title, a.titleBarMenus))
 }

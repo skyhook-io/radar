@@ -88,19 +88,20 @@ func TestFormatAccelerator(t *testing.T) {
 }
 
 func TestTitleBarScriptIsAnEventWithJSONDetail(t *testing.T) {
-	script := titleBarScript(`Radar — "prod" </script>`, []titleBarMenu{{Label: "File", Items: []titleBarItem{{Label: "Quit", Shortcut: "Ctrl+Q"}}}})
+	script := titleBarScript(7, `Radar — "prod" </script>`, []titleBarMenu{{Label: "File", Items: []titleBarItem{{Label: "Quit", Shortcut: "Ctrl+Q"}}}})
 	const prefix = "window.dispatchEvent(new CustomEvent('radar:titlebar',{detail:"
 	if !strings.HasPrefix(script, prefix) || !strings.HasSuffix(script, "}))") {
 		t.Fatalf("script = %s", script)
 	}
 	var detail struct {
+		Rev   uint64         `json:"rev"`
 		Title string         `json:"title"`
 		Menus []titleBarMenu `json:"menus"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSuffix(strings.TrimPrefix(script, prefix), "}))")), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Title != `Radar — "prod" </script>` || detail.Menus[0].Items[0].Shortcut != "Ctrl+Q" {
+	if detail.Rev != 7 || detail.Title != `Radar — "prod" </script>` || detail.Menus[0].Items[0].Shortcut != "Ctrl+Q" {
 		t.Fatalf("detail = %+v", detail)
 	}
 }

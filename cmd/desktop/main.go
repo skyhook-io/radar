@@ -323,7 +323,7 @@ func main() {
 	// hidden window there is only recoverable by killing the process.
 	hideOnClose := goruntime.GOOS == "darwin"
 
-	desktopApp.menu = createMenu(desktopApp, version, goruntime.GOOS)
+	desktopApp.setMenu(createMenu(desktopApp, version, goruntime.GOOS))
 	// The page drives the frameless window's title bar through the Wails
 	// runtime, so it must be allowed to talk to it (titlebar.go).
 	bindingsOrigins := ""

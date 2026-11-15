@@ -24,6 +24,8 @@ import {
 } from './titleBar'
 
 const TITLEBAR_HEIGHT = 32
+const HELLO_INTERVAL_MS = 250
+const HELLO_TRIES = 120
 
 type WebView = { postMessage: (message: string) => void }
 
@@ -96,9 +98,18 @@ function TitleBar({ title, menus }: TitleBarState) {
         setOpen(mnemonic)
         return
       }
-      if (e.key === 'Escape' && open === null && inBar()) {
+      // Consume Escape here, at the first capture listener, so drawers and
+      // dialogs underneath don't also close.
+      if (e.key === 'Escape' && (open !== null || inBar())) {
         e.preventDefault()
-        leaveBar()
+        e.stopPropagation()
+        if (open !== null) {
+          const i = open
+          setOpen(null)
+          triggers.current[i]?.focus()
+        } else {
+          leaveBar()
+        }
       }
     }
     const onKeyUp = (e: KeyboardEvent) => {
@@ -186,7 +197,7 @@ function TitleBar({ title, menus }: TitleBarState) {
               menu={m}
               open={open === i}
               onInvoke={invoke}
-              onClose={() => { setOpen(null); triggers.current[i]?.focus() }}
+              onMove={(dir) => moveTo((i + dir + menus.length) % menus.length)}
             />
           </div>
         ))}
@@ -205,7 +216,7 @@ function TitleBar({ title, menus }: TitleBarState) {
   )
 }
 
-function MenuDropdown({ menu, open, onInvoke, onClose }: { menu: TitleBarMenu; open: boolean; onInvoke: (path: string) => void; onClose: () => void }) {
+function MenuDropdown({ menu, open, onInvoke, onMove }: { menu: TitleBarMenu; open: boolean; onInvoke: (path: string) => void; onMove: (dir: 1 | -1) => void }) {
   const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   const ref = useRef<HTMLDivElement>(null)
 
@@ -220,7 +231,8 @@ function MenuDropdown({ menu, open, onInvoke, onClose }: { menu: TitleBarMenu; o
     const idx = items.indexOf(document.activeElement as HTMLButtonElement)
     if (e.key === 'ArrowDown') { e.preventDefault(); items[(idx + 1) % items.length]?.focus() }
     else if (e.key === 'ArrowUp') { e.preventDefault(); items[(idx - 1 + items.length) % items.length]?.focus() }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); onMove(1) }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); onMove(-1) }
   }
 
   return (
@@ -282,16 +294,21 @@ function CaptionButton({ glyph, label, onClick, close }: { glyph: string; label:
 
 // A frameless window has no native resize border, so the page edges start the resize.
 function installResizeEdges() {
-  let edge: string | null = null
-  window.addEventListener('mousemove', (e) => {
-    const next = resizeEdgeAt(e.clientX, e.clientY, window.innerWidth, window.innerHeight, isMaximised())
-    if (next !== edge) {
-      edge = next
-      document.documentElement.style.cursor = next ?? ''
-    }
-  }, true)
+  const edgeFor = (e: MouseEvent) => resizeEdgeAt(e.clientX, e.clientY, window.innerWidth, window.innerHeight, isMaximised())
+  let cursor: string | null = null
+  const setCursor = (next: string | null) => {
+    if (next === cursor) return
+    cursor = next
+    document.documentElement.style.cursor = next ?? ''
+  }
+  window.addEventListener('mousemove', (e) => setCursor(edgeFor(e)), true)
+  window.addEventListener('resize', () => setCursor(null))
+  window.addEventListener('blur', () => setCursor(null))
+  // Recompute from this press: the window may have been maximised or resized
+  // since the pointer last moved.
   window.addEventListener('mousedown', (e) => {
-    if (e.button !== 0 || !edge) return
+    const edge = e.button === 0 ? edgeFor(e) : null
+    if (!edge) return
     e.preventDefault()
     e.stopPropagation()
     post('resize:' + edge)
@@ -301,8 +318,13 @@ function installResizeEdges() {
 export function installWindowsTitleBar() {
   if (!webview()) return
   let root: ReactDOM.Root | null = null
+  let rev = -1
   window.addEventListener('radar:titlebar', (e) => {
-    const { title, menus } = (e as CustomEvent<TitleBarState>).detail
+    const detail = (e as CustomEvent<TitleBarState & { rev: number }>).detail
+    // Pushes can arrive out of order; an older one would show a stale title.
+    if (detail.rev <= rev) return
+    rev = detail.rev
+    const { title, menus } = detail
     if (!root) {
       document.documentElement.classList.add('radar-custom-titlebar')
       document.documentElement.style.setProperty('--radar-titlebar-h', `${TITLEBAR_HEIGHT}px`)
@@ -313,5 +335,13 @@ export function installWindowsTitleBar() {
     }
     root.render(<TitleBar title={title || 'Radar'} menus={menus ?? []} />)
   })
-  emit('radar:titlebar:hello')
+  // The desktop app registers its handler at startup, which can finish after
+  // the page loads; repeat the hello until the first answer arrives.
+  let tries = 0
+  const hello = () => {
+    if (root || tries++ >= HELLO_TRIES) return
+    emit('radar:titlebar:hello')
+    window.setTimeout(hello, HELLO_INTERVAL_MS)
+  }
+  hello()
 }

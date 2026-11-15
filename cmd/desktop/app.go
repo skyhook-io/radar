@@ -41,10 +41,12 @@ type DesktopApp struct {
 	execJS         func(string)
 
 	// Windows title bar (titlebar.go).
-	menu          *menu.Menu
-	titleBarMenus []titleBarMenu
-	titleMu       sync.Mutex
-	currentTitle  string
+	menu            *menu.Menu
+	titleBarMenus   []titleBarMenu
+	titleBarActions map[string]*menu.MenuItem
+	titleMu         sync.Mutex
+	titleRev        uint64
+	currentTitle    string
 }
 
 func NewDesktopApp(srv *server.Server, timelineStoreCfg timeline.StoreConfig) *DesktopApp {
@@ -90,9 +92,7 @@ func (a *DesktopApp) startup(ctx context.Context) {
 	startNativeMouseMonitor(ctx)
 	a.srv.SetSaveFileFunc(a.saveFile)
 	a.srv.SetSaveFileStreamFunc(a.saveFileStream)
-	if a.menu != nil {
-		a.installTitleBar(a.menu)
-	}
+	a.installTitleBar()
 
 	// The OS titlebar must track the active kubeconfig context for the same
 	// reason the in-page selector does: a fleet UI showing the wrong cluster
