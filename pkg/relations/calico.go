@@ -1,0 +1,114 @@
+package relations
+
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/skyhook-io/radar/pkg/netpol"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
+
+// Calico serves its policies through two groups that hold the same objects:
+// the API server's projectcalico.org and the CRDs' crd.projectcalico.org.
+var calicoGroups = []string{"projectcalico.org", "crd.projectcalico.org"}
+
+// calicoPolicyKinds are Calico's policy kinds, as topology.CalicoPolicyKinds
+// lists them (a test keeps the two equal).
+var calicoPolicyKinds = []struct {
+	kind       string
+	namespaced bool
+	staged     bool
+}{
+	{"NetworkPolicy", true, false},
+	{"GlobalNetworkPolicy", false, false},
+	{"StagedNetworkPolicy", true, true},
+	{"StagedGlobalNetworkPolicy", false, true},
+	{"StagedKubernetesNetworkPolicy", true, true},
+}
+
+// calicoSelectors are the policy kinds, staged or enforced, in both groups.
+func calicoSelectors(staged bool) []Selector {
+	var out []Selector
+	for _, group := range calicoGroups {
+		for _, k := range calicoPolicyKinds {
+			if k.staged == staged {
+				out = append(out, Selector{Kind: resourceid.GroupKind{Group: group, Kind: k.kind}, Selection: calicoSelection(k.namespaced, k.staged)})
+			}
+		}
+	}
+	return out
+}
+
+// calicoIdentity names a policy the same way whichever group served it.
+func calicoIdentity(r resourceid.Ref) resourceid.Ref {
+	if r.Group == "crd.projectcalico.org" {
+		r.Group = "projectcalico.org"
+	}
+	return r
+}
+
+// calicoSelection is a Calico policy's selection, as Calico matches it
+// (netpol.CompileCalicoPolicyMatcher): its selector over the endpoint labels
+// Calico adds to a workload's pods, narrowed by its namespace and
+// ServiceAccount selectors, whose labels are read only when it has them. A
+// global policy chooses in every namespace. A staged policy that previews no
+// protection, as a staged deletion doesn't, chooses nothing.
+func calicoSelection(namespaced, staged bool) func(runtime.Object) (Selection, bool, error) {
+	return func(obj runtime.Object) (Selection, bool, error) {
+		policy, ok := obj.(*unstructured.Unstructured)
+		if !ok || staged && !netpol.CalicoStagedActionPreviewsProtection(policy) {
+			return Selection{}, false, nil
+		}
+		matcher := netpol.CompileCalicoPolicyMatcher(policy)
+		needsNamespace, needsServiceAccount, raw := matcher.Needs()
+		return Selection{AnyNamespace: !namespaced, Matches: func(c Candidate, lookup Lookup) (bool, bool) {
+			serviceAccount := c.ServiceAccount
+			if serviceAccount == "" {
+				serviceAccount = "default"
+			}
+			podLabels := c.Labels
+			if !raw {
+				podLabels = netpol.CalicoEndpointLabels(c.Ref.Namespace, c.Labels, serviceAccount)
+			}
+			var namespaceLabels, serviceAccountLabels map[string]string
+			if needsNamespace {
+				ns, ok := lookup(resourceid.NewRef("", "Namespace", "", c.Ref.Namespace))
+				namespace, isNamespace := ns.(*corev1.Namespace)
+				if !ok || !isNamespace {
+					return false, false
+				}
+				namespaceLabels = netpol.CalicoNamespaceLabels(namespace)
+			}
+			if needsServiceAccount {
+				obj, ok := lookup(resourceid.NewRef("", "ServiceAccount", c.Ref.Namespace, serviceAccount))
+				sa, isServiceAccount := obj.(*corev1.ServiceAccount)
+				if !ok || !isServiceAccount {
+					return false, false
+				}
+				serviceAccountLabels = netpol.CalicoServiceAccountLabels(sa)
+			}
+			return matcher.Matches(podLabels, namespaceLabels, serviceAccount, serviceAccountLabels)
+		}}, true, nil
+	}
+}
+
+// CalicoPolicies is the family of the workloads Calico's NetworkPolicies and
+// GlobalNetworkPolicies apply to.
+var CalicoPolicies = &SelectorFamily{
+	Name:           "calicoPolicies",
+	Selectors:      calicoSelectors(false),
+	Selectables:    []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
+	CrossNamespace: true,
+	Identity:       calicoIdentity,
+}
+
+// CalicoStagedPolicies is the family of the workloads Calico's staged
+// policies would apply to once promoted.
+var CalicoStagedPolicies = &SelectorFamily{
+	Name:           "calicoStagedPolicies",
+	Selectors:      calicoSelectors(true),
+	Selectables:    []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
+	CrossNamespace: true,
+	Identity:       calicoIdentity,
+}

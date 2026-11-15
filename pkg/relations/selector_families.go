@@ -186,7 +186,7 @@ func ciliumSelection(obj runtime.Object) (Selection, bool, error) {
 	if !ok {
 		return Selection{}, false, nil
 	}
-	return Selection{Matches: func(c Candidate) (bool, bool) {
+	return Selection{Matches: func(c Candidate, _ Lookup) (bool, bool) {
 		return netpol.CiliumSelects(u, netpol.CiliumIdentityOf(c.Ref.Namespace, c.Labels, c.ServiceAccount, nil))
 	}}, true, nil
 }

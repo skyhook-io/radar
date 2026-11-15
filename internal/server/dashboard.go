@@ -28,6 +28,7 @@ import (
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/netpol"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -1574,7 +1575,7 @@ type npSelector struct {
 
 type dashboardCalicoPolicy struct {
 	policy     *unstructured.Unstructured
-	matcher    *topology.CalicoPolicyMatcher
+	matcher    *netpol.CalicoPolicyMatcher
 	definition topology.CalicoPolicyKind
 	// previewsProtection is false for the staged actions that describe removing
 	// or ignoring a policy rather than adding one.
@@ -1758,7 +1759,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 						seenCalicoPolicies[identity] = struct{}{}
 						calicoPolicies = append(calicoPolicies, dashboardCalicoPolicy{
 							policy:             policy,
-							matcher:            topology.CompileCalicoPolicyMatcher(policy),
+							matcher:            netpol.CompileCalicoPolicyMatcher(policy),
 							definition:         definition,
 							previewsProtection: !definition.Staged || topology.CalicoStagedActionPreviewsProtection(policy),
 							stagesRemoval:      definition.Staged && topology.CalicoStagedActionStagesRemoval(policy),
@@ -1872,7 +1873,7 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 				coveredIfStaged[workload.key] = true
 			}
 		}
-		calicoEndpointLabels := topology.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
+		calicoEndpointLabels := netpol.CalicoEndpointLabels(workload.namespace, workload.labels, workload.serviceAccount)
 		for _, policy := range calicoPolicies {
 			if policy.definition.Namespaced && policy.policy.GetNamespace() != workload.namespace {
 				continue

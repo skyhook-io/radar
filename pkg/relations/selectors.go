@@ -28,6 +28,10 @@ type SelectorFamily struct {
 	// CrossNamespace: a selector may choose objects in other namespaces, as
 	// a ServiceMonitor's namespaceSelector does.
 	CrossNamespace bool
+	// Identity, when set, names the object a match is, for kinds served by
+	// two groups that hold the same objects, as Calico's are: each object is
+	// listed once, under the first group answers find it in.
+	Identity func(resourceid.Ref) resourceid.Ref
 }
 
 // Selector is a kind that chooses. Selects narrows the family's
@@ -42,10 +46,10 @@ type Selector struct {
 
 // Selection is what one selector chooses, and where.
 type Selection struct {
-	// Matches reports whether c is chosen. decided is false when that can't
-	// be told from what Radar holds, as for a selector on labels Radar
-	// didn't read.
-	Matches func(c Candidate) (chosen, decided bool)
+	// Matches reports whether c is chosen, reading through lookup any other
+	// object that takes, such as its Namespace for labels a selector names.
+	// decided is false when that can't be told from what Radar holds.
+	Matches func(c Candidate, lookup Lookup) (chosen, decided bool)
 	// Namespaces are the namespaces it chooses in when it names them, and
 	// AnyNamespace says it chooses in every one; otherwise it chooses in its
 	// own.
@@ -56,7 +60,7 @@ type Selection struct {
 // LabelSelection is the Selection of a label selector over a candidate's
 // labels, in the selector's own namespace.
 func LabelSelection(sel labels.Selector) Selection {
-	return Selection{Matches: func(c Candidate) (bool, bool) { return sel.Matches(c.Labels), true }}
+	return Selection{Matches: func(c Candidate, _ Lookup) (bool, bool) { return sel.Matches(c.Labels), true }}
 }
 
 func (s Selection) chooses(own, namespace string) bool {
@@ -140,8 +144,8 @@ func (v *View) candidate(s Selectable, o IndexedObject, c *Coverage) (Candidate,
 
 // match reports whether selection chooses cand, recording in c that it
 // couldn't tell when it can't.
-func match(selection Selection, selector resourceid.Ref, cand Candidate, c *Coverage) bool {
-	chosen, decided := selection.Matches(cand)
+func (v *View) match(selection Selection, selector resourceid.Ref, cand Candidate, c *Coverage) bool {
+	chosen, decided := selection.Matches(cand, v.lookup(c))
 	if !decided {
 		c.addGap(ownership.Gap{Kind: selector.GroupKind(), Namespace: selector.Namespace, Reason: readreason.FilterEvalFailed})
 	}
@@ -185,12 +189,12 @@ func (v *View) Selected(f *SelectorFamily, subject resourceid.Ref, fetched runti
 			if !selection.chooses(subject.Namespace, o.Ref.Namespace) {
 				return
 			}
-			if cand, ok := v.candidate(target, o, &a.Coverage); ok && match(selection, subject, cand, &a.Coverage) {
+			if cand, ok := v.candidate(target, o, &a.Coverage); ok && v.match(selection, subject, cand, &a.Coverage) {
 				a.Matches = append(a.Matches, o.Ref)
 			}
 		})
 	}
-	v.order(&a, func(gk resourceid.GroupKind) int { return f.selectable(gk) })
+	v.order(&a, f.Identity, func(gk resourceid.GroupKind) int { return f.selectable(gk) })
 	return a
 }
 
@@ -221,21 +225,32 @@ func (v *View) SelectedBy(f *SelectorFamily, subject resourceid.Ref, fetched run
 			if err != nil {
 				a.Coverage.addGap(ownership.Gap{Kind: sel.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
-			if ok && selection.chooses(o.Ref.Namespace, subject.Namespace) && match(selection, o.Ref, cand, &a.Coverage) {
+			if ok && selection.chooses(o.Ref.Namespace, subject.Namespace) && v.match(selection, o.Ref, cand, &a.Coverage) {
 				a.Matches = append(a.Matches, o.Ref)
 			}
 		})
 	}
-	v.order(&a, func(gk resourceid.GroupKind) int { return f.selector(gk) })
+	v.order(&a, f.Identity, func(gk resourceid.GroupKind) int { return f.selector(gk) })
 	return a
 }
 
-// order sorts a's matches by kind rank, namespace and name, and applies the
-// view's limit.
-func (v *View) order(a *MatchesAnswer, rank func(resourceid.GroupKind) int) {
-	slices.SortFunc(a.Matches, func(x, y resourceid.Ref) int {
+// order sorts a's matches by kind rank, namespace and name, lists each
+// identity once, and applies the view's limit.
+func (v *View) order(a *MatchesAnswer, identity func(resourceid.Ref) resourceid.Ref, rank func(resourceid.GroupKind) int) {
+	slices.SortStableFunc(a.Matches, func(x, y resourceid.Ref) int {
 		return cmp.Or(cmp.Compare(rank(x.GroupKind()), rank(y.GroupKind())), cmp.Compare(x.Namespace, y.Namespace), cmp.Compare(x.Name, y.Name))
 	})
+	if identity != nil {
+		seen := map[resourceid.Ref]bool{}
+		a.Matches = slices.DeleteFunc(a.Matches, func(r resourceid.Ref) bool {
+			id := identity(r)
+			if seen[id] {
+				return true
+			}
+			seen[id] = true
+			return false
+		})
+	}
 	if v.limit > 0 && len(a.Matches) > v.limit {
 		a.Coverage.Truncated = true
 		a.Coverage.Total = len(a.Matches)
