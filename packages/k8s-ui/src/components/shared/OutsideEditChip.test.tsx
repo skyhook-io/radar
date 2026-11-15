@@ -6,7 +6,18 @@ import { OutsideEditChip } from './OutsideEditChip'
 const change = (patch: Partial<GitOpsOutsideChange>): GitOpsOutsideChange => ({
   manager: 'kubectl-patch', tool: 'kubectl patch', operation: 'Update', paths: ['spec.replicas'], morePaths: 0, outcome: 'reported', harmless: false, ...patch,
 })
-const render = (changes: GitOpsOutsideChange[]) => renderToString(<OutsideEditChip changes={changes} />).replace(/<!-- -->/g, '').replace(/<[^>]+>/g, '').replace(/&nbsp;|\u00a0/g, ' ')
+// Text between tags, read character by character (a tag regex is an incomplete sanitizer).
+const textOf = (html: string) => {
+  let out = ''
+  let inTag = false
+  for (const ch of html) {
+    if (ch === '<') inTag = true
+    else if (ch === '>') inTag = false
+    else if (!inTag) out += ch
+  }
+  return out
+}
+const render = (changes: GitOpsOutsideChange[]) => textOf(renderToString(<OutsideEditChip changes={changes} />)).replaceAll('&nbsp;', ' ').replaceAll('\u00a0', ' ')
 
 describe('OutsideEditChip', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-12T10:00:00Z')) })
