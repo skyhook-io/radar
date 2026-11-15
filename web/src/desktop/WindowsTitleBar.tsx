@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../hooks/useAnimatedUnmount'
+import { Tooltip } from '../components/ui/Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../utils/animation'
 import {
   type Press,
@@ -284,21 +285,22 @@ function MenuDropdown({ menu, open, onInvoke, onMove }: { menu: TitleBarMenu; op
 
 function CaptionButton({ glyph, label, onClick, close }: { glyph: string; label: string; onClick: () => void; close?: boolean }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onClick}
-      className={clsx(
-        'w-[46px] text-[10px] outline-none',
-        // Red on hover is the Windows close-button convention, not a theme colour.
-        close ? 'hover:bg-[#c42b1c] hover:text-white' : 'hover:bg-theme-hover hover:text-theme-text-primary',
-      )}
-      style={{ fontFamily: '"Segoe Fluent Icons", "Segoe MDL2 Assets"' }}
-    >
-      {glyph}
-    </button>
+    <Tooltip content={label} position="bottom" wrapperClassName="items-stretch">
+      <button
+        type="button"
+        aria-label={label}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onClick}
+        className={clsx(
+          'w-[46px] text-[10px] outline-none',
+          // Red on hover is the Windows close-button convention, not a theme colour.
+          close ? 'hover:bg-[#c42b1c] hover:text-white' : 'hover:bg-theme-hover hover:text-theme-text-primary',
+        )}
+        style={{ fontFamily: '"Segoe Fluent Icons", "Segoe MDL2 Assets"' }}
+      >
+        {glyph}
+      </button>
+    </Tooltip>
   )
 }
 

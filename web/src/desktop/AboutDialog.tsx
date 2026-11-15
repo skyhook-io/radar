@@ -100,7 +100,6 @@ export function AboutDialog({
             type="button"
             onClick={copyVersion}
             aria-label="Copy version info"
-            title="Copy version info"
             className="ml-2 inline-flex items-center gap-1 align-middle text-xs text-theme-text-tertiary hover:text-theme-text-primary"
           >
             {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
