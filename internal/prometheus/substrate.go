@@ -6,7 +6,6 @@ import (
 	"math"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,12 +15,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// Agent Substrate charts read the series Substrate's components export under
-// their default names: the OTel Prometheus exporter, and Prometheus's own OTLP
-// receiver, both escape names with underscores and add unit and type suffixes
-// (ate.actor.crashes → ate_actor_crashes_total, a histogram in seconds →
-// *_seconds_bucket). A pipeline configured to keep UTF-8 names, or to send
-// native histograms, reads as "not found", naming the series that were checked.
+// Agent Substrate charts read the series Substrate's components export, under
+// either name spelling (substrate_naming.go). Histograms are read from their
+// classic buckets; a native-histogram pipeline reads as "not found", naming the
+// series that were checked.
 //
 // Substrate forbids actor identity in metric labels, so every chart is an
 // aggregate. Pool charts read what Substrate attributes to a pool; node charts
@@ -74,6 +71,8 @@ type SubstrateHealthResponse struct {
 	End         int64            `json:"end"`
 	StepSeconds int64            `json:"stepSeconds"`
 	Charts      []SubstrateChart `json:"charts"`
+	// Verdict is set when Status is available.
+	Verdict *SubstrateVerdict `json:"verdict,omitempty"`
 }
 
 type substrateQuery struct {
@@ -81,126 +80,89 @@ type substrateQuery struct {
 	expr  string
 }
 
-// substrateFamily is one exported instrument a chart derives from: its scope,
-// presence and duplicate-source checks run on it.
-type substrateFamily struct {
-	metric string
-	// additive: the chart sums or averages across emitters, so the same
-	// process observed through two scrape jobs would be counted twice or weigh
-	// twice. Only a chart that takes a maximum is unaffected by a duplicate.
-	additive bool
+type substrateChartDef struct {
+	id, title, unit, population, seriesBy string
+	inst                                  substrateInstrument
+	// also: other instruments the chart's queries read. Each is checked like
+	// inst; the chart is drawn only when all of them resolve to one scope.
+	also        []substrateInstrument
+	queries     func(x substrateExpr) []substrateQuery
+	emptyReason string
+	// bucketed: the queries read the histogram's _bucket series, while its
+	// presence is judged by _count.
+	bucketed bool
 }
 
-type substrateChartDef struct {
-	id, title, unit, population, source, seriesBy string
-	family                                        substrateFamily
-	// also: other families the chart's queries read. Each is checked like
-	// family; the chart is drawn only when all of them resolve to one scope.
-	also        []substrateFamily
-	queries     func(sel, window string) []substrateQuery
-	emptyReason string
-	// presence: the series the chart's queries actually read, when that is
-	// not family (a quantile reads _bucket; family is _count).
-	presence string
+func (d substrateChartDef) families() []substrateInstrument {
+	return append([]substrateInstrument{d.inst}, d.also...)
 }
 
 func substrateRateWindow(step time.Duration) string {
 	return max(2*time.Minute, 2*step).Round(time.Second).String()
 }
 
-// rate collapses copies of one series that differ only by the labels an HA
-// Prometheus pair or a federation adds, so they are not added twice.
-func rate(metric, sel, window string) string {
-	return collapseHA("rate(" + metric + "{" + sel + "}[" + window + "])")
-}
-
-func collapseHA(expr string) string {
-	return "max without (prometheus, prometheus_replica, replica) (" + expr + ")"
-}
-
-func quantile(q, bucket, sel, window string) string {
-	return "histogram_quantile(" + q + ", sum by (le) (" + rate(bucket, sel, window) + "))"
-}
-
-// failureShare is failed observations as a percentage of all of them, over the
-// same selector; no observations in a window leaves no point rather than 0%.
-func failureShare(count, sel, window string) string {
-	all := "sum(" + rate(count, sel, window) + ")"
-	failed := "sum(" + rate(count, sel+`,error_type!=""`, window) + ")"
-	return "100 * (" + failed + " or 0 * " + all + ") / (" + all + " > 0)"
-}
-
 func substratePoolCharts() []substrateChartDef {
-	workers := substrateFamily{metric: "ate_workerpool_workers", additive: true}
-	lifecycle := substrateFamily{metric: "ate_actor_lifecycle_operation_duration_seconds_count", additive: true}
-	assignment := substrateFamily{metric: "ate_scheduler_assignment_duration_seconds_count", additive: true}
 	return []substrateChartDef{
 		{
 			id: "workers", title: "Workers by state", unit: "workers", seriesBy: "state",
 			population: "Every worker Pod of this pool, by how many actor slots are in use and by sandbox class. A worker is a Pod, not an actor slot. Each API replica reports the whole pool, so the counts are averaged across replicas and can be fractional while they disagree. Workers of class unknown are not capacity.",
-			source:     "ate_workerpool_workers",
-			family:     workers,
-			queries: func(sel, _ string) []substrateQuery {
-				return []substrateQuery{{expr: `sum by (ate_worker_state, ate_sandbox_class) (avg by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (` + collapseHA("ate_workerpool_workers{"+sel+"}") + `))`}}
+			inst:       instWorkers,
+			queries: func(x substrateExpr) []substrateQuery {
+				workers := x.norm(x.vec(instWorkers, ""), "ate.workerpool.namespace", "ate.workerpool.name", "ate.worker.state", "ate.sandbox.class")
+				return []substrateQuery{{expr: `sum by (ate_worker_state, ate_sandbox_class) (avg by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (` + collapseHA(workers) + `))`}}
 			},
 		},
 		{
 			id: "readiness", title: "Ready and desired workers", unit: "count", seriesBy: "series",
 			population: "The pool's desired and ready worker counts as Substrate's controller recorded them over time.",
-			source:     "ate_workerpool_desired_workers, ate_workerpool_ready_workers",
-			family:     substrateFamily{metric: "ate_workerpool_desired_workers"},
-			also:       []substrateFamily{{metric: "ate_workerpool_ready_workers"}},
-			queries: func(sel, _ string) []substrateQuery {
+			inst:       instDesired,
+			also:       []substrateInstrument{instReady},
+			queries: func(x substrateExpr) []substrateQuery {
 				return []substrateQuery{
-					{label: "desired", expr: "max(ate_workerpool_desired_workers{" + sel + "})"},
-					{label: "ready", expr: "max(ate_workerpool_ready_workers{" + sel + "})"},
+					{label: "desired", expr: "max(" + x.vec(instDesired, "") + ")"},
+					{label: "ready", expr: "max(" + x.vec(instReady, "") + ")"},
 				}
 			},
 			emptyReason: "Substrate's controller exported no worker counts in this range",
 		},
 		{
-			id: "resumeTime", presence: "ate_actor_lifecycle_operation_duration_seconds_bucket", title: "Resume time", unit: "seconds", seriesBy: "series",
+			id: "resumeTime", bucketed: true, title: "Resume time", unit: "seconds", seriesBy: "series",
 			population:  "Successful resumes of actors placed on this pool. A resume that failed before a worker was assigned carries no pool and is not counted.",
-			source:      "ate_actor_lifecycle_operation_duration_seconds",
-			family:      lifecycle,
+			inst:        instLifecycle,
 			emptyReason: "no actor resumed on this pool in this range",
-			queries: func(sel, w string) []substrateQuery {
-				ok := sel + `,ate_actor_operation_name="resume",error_type=""`
+			queries: func(x substrateExpr) []substrateQuery {
+				ok := []string{x.m("ate.actor.operation.name", "=", "resume"), x.m("error.type", "=", "")}
 				return []substrateQuery{
-					{label: "p50", expr: quantile("0.5", "ate_actor_lifecycle_operation_duration_seconds_bucket", ok, w)},
-					{label: "p95", expr: quantile("0.95", "ate_actor_lifecycle_operation_duration_seconds_bucket", ok, w)},
+					{label: "p50", expr: x.quantile("0.5", instLifecycle, ok...)},
+					{label: "p95", expr: x.quantile("0.95", instLifecycle, ok...)},
 				}
 			},
 		},
 		{
 			id: "resumeFailures", title: "Failed resumes", unit: "percent",
 			population:  "Resumes of actors placed on this pool that returned an error, as a share of all of them. A resume that failed before a worker was assigned carries no pool and is not counted.",
-			source:      "ate_actor_lifecycle_operation_duration_seconds_count",
-			family:      lifecycle,
+			inst:        instLifecycle,
 			emptyReason: "no actor resumed on this pool in this range",
-			queries: func(sel, w string) []substrateQuery {
-				return []substrateQuery{{label: "failed", expr: failureShare("ate_actor_lifecycle_operation_duration_seconds_count", sel+`,ate_actor_operation_name="resume"`, w)}}
+			queries: func(x substrateExpr) []substrateQuery {
+				return []substrateQuery{{label: "failed", expr: x.failureShare(instLifecycle, x.m("ate.actor.operation.name", "=", "resume"))}}
 			},
 		},
 		{
-			id: "placementTime", presence: "ate_scheduler_assignment_duration_seconds_bucket", title: "Placement time", unit: "seconds", seriesBy: "series",
+			id: "placementTime", bucketed: true, title: "Placement time", unit: "seconds", seriesBy: "series",
 			population:  "How long the scheduler took to place an actor on a worker of this pool. Placements that found no capacity name no pool, so they are not counted here.",
-			source:      "ate_scheduler_assignment_duration_seconds",
-			family:      assignment,
+			inst:        instAssignment,
 			emptyReason: "no actor was placed on this pool in this range",
-			queries: func(sel, w string) []substrateQuery {
-				placed := sel + `,ate_scheduler_outcome="assigned"`
-				return []substrateQuery{{label: "p95", expr: quantile("0.95", "ate_scheduler_assignment_duration_seconds_bucket", placed, w)}}
+			queries: func(x substrateExpr) []substrateQuery {
+				return []substrateQuery{{label: "p95", expr: x.quantile("0.95", instAssignment, x.m("ate.scheduler.outcome", "=", "assigned"))}}
 			},
 		},
 		{
 			id: "crashes", title: "Actor crashes", unit: "per minute",
 			population:  "Crashes of actors running on this pool's workers. An actor that crashed before it got a worker carries no pool and is not counted.",
-			source:      "ate_actor_crashes_total",
-			family:      substrateFamily{metric: "ate_actor_crashes_total", additive: true},
+			inst:        instCrashes,
 			emptyReason: "no actor on this pool crashed in this range",
-			queries: func(sel, w string) []substrateQuery {
-				return []substrateQuery{{label: "crashes", expr: "60 * sum(" + rate("ate_actor_crashes_total", sel, w) + ")"}}
+			queries: func(x substrateExpr) []substrateQuery {
+				return []substrateQuery{{label: "crashes", expr: "60 * sum(" + x.rate(instCrashes, "") + ")"}}
 			},
 		},
 	}
@@ -211,62 +173,57 @@ func substrateNodeCharts() []substrateChartDef {
 		{
 			id: "unsavedSnapshotAge", title: "Oldest snapshot not yet in storage", unit: "seconds",
 			population:  "The age of the oldest actor snapshot on this node that is still only on local disk. While it grows, losing the node loses that actor's latest state.",
-			source:      "atelet_snapshot_undurable_age_max_seconds",
-			family:      substrateFamily{metric: "atelet_snapshot_undurable_age_max_seconds"},
+			inst:        instUndurable,
 			emptyReason: "atelet reported no snapshot age on this node in this range",
-			queries: func(sel, _ string) []substrateQuery {
-				return []substrateQuery{{label: "oldest", expr: "max(atelet_snapshot_undurable_age_max_seconds{" + sel + "})"}}
+			queries: func(x substrateExpr) []substrateQuery {
+				return []substrateQuery{{label: "oldest", expr: "max(" + x.vec(instUndurable, "") + ")"}}
 			},
 		},
 		{
 			id: "overdueUploads", title: "Actors with overdue uploads", unit: "count", seriesBy: "band",
 			population:  "Actors whose snapshot upload to object storage is late, by how late.",
-			source:      "atelet_snapshot_upload_overdue_actors",
-			family:      substrateFamily{metric: "atelet_snapshot_upload_overdue_actors"},
+			inst:        instOverdue,
 			emptyReason: "atelet reported no overdue uploads on this node in this range",
-			queries: func(sel, _ string) []substrateQuery {
-				return []substrateQuery{{expr: "max by (ate_snapshot_upload_overdue_band) (atelet_snapshot_upload_overdue_actors{" + sel + "})"}}
+			queries: func(x substrateExpr) []substrateQuery {
+				return []substrateQuery{{expr: "max by (ate_snapshot_upload_overdue_band) (" + x.norm(x.vec(instOverdue, ""), "ate.snapshot.upload_overdue_band") + ")"}}
 			},
 		},
 		{
-			id: "uploadTime", presence: "atelet_snapshot_upload_duration_seconds_bucket", title: "Snapshot upload time", unit: "seconds", seriesBy: "series",
+			id: "uploadTime", bucketed: true, title: "Snapshot upload time", unit: "seconds", seriesBy: "series",
 			population:  "Successful snapshot uploads from this node to object storage.",
-			source:      "atelet_snapshot_upload_duration_seconds",
-			family:      substrateFamily{metric: "atelet_snapshot_upload_duration_seconds_count", additive: true},
+			inst:        instUpload,
 			emptyReason: "no snapshot was uploaded from this node in this range",
-			queries: func(sel, w string) []substrateQuery {
-				return []substrateQuery{{label: "p95", expr: quantile("0.95", "atelet_snapshot_upload_duration_seconds_bucket", sel+`,error_type=""`, w)}}
+			queries: func(x substrateExpr) []substrateQuery {
+				return []substrateQuery{{label: "p95", expr: x.quantile("0.95", instUpload, x.m("error.type", "=", ""))}}
 			},
 		},
 		{
 			id: "uploadFailures", title: "Failed snapshot uploads", unit: "percent",
 			population:  "Snapshot uploads from this node that failed, as a share of all of them.",
-			source:      "atelet_snapshot_upload_duration_seconds_count",
-			family:      substrateFamily{metric: "atelet_snapshot_upload_duration_seconds_count", additive: true},
+			inst:        instUpload,
 			emptyReason: "no snapshot was uploaded from this node in this range",
-			queries: func(sel, w string) []substrateQuery {
-				return []substrateQuery{{label: "failed", expr: failureShare("atelet_snapshot_upload_duration_seconds_count", sel, w)}}
+			queries: func(x substrateExpr) []substrateQuery {
+				return []substrateQuery{{label: "failed", expr: x.failureShare(instUpload)}}
 			},
 		},
 		{
-			id: "restoreTime", presence: "ate_actor_restore_duration_seconds_bucket", title: "Restore and checkpoint time", unit: "seconds", seriesBy: "series",
+			id: "restoreTime", bucketed: true, title: "Restore and checkpoint time", unit: "seconds", seriesBy: "series",
 			population:  "Whole restores and checkpoints of actors on this node. The two overlap in time and are not added together.",
-			source:      "ate_actor_restore_duration_seconds, ate_actor_checkpoint_duration_seconds",
-			family:      substrateFamily{metric: "ate_actor_restore_duration_seconds_count", additive: true},
-			also:        []substrateFamily{{metric: "ate_actor_checkpoint_duration_seconds_count", additive: true}},
+			inst:        instRestore,
+			also:        []substrateInstrument{instCheckpoint},
 			emptyReason: "no actor was restored on this node in this range",
-			queries: func(sel, w string) []substrateQuery {
-				total := sel + `,ate_snapshot_phase="total"`
+			queries: func(x substrateExpr) []substrateQuery {
+				total := x.m("ate.snapshot.phase", "=", "total")
 				return []substrateQuery{
-					{label: "restore p95", expr: quantile("0.95", "ate_actor_restore_duration_seconds_bucket", total, w)},
-					{label: "checkpoint p95", expr: quantile("0.95", "ate_actor_checkpoint_duration_seconds_bucket", total, w)},
+					{label: "restore p95", expr: x.quantile("0.95", instRestore, total)},
+					{label: "checkpoint p95", expr: x.quantile("0.95", instCheckpoint, total)},
 				}
 			},
 		},
 	}
 }
 
-// substrateFamilyCheck is what one family's probes established.
+// substrateFamilyCheck is what one chart's family probes established.
 type substrateFamilyCheck struct {
 	matchers  string
 	isolation SeriesIsolation
@@ -276,16 +233,16 @@ type substrateFamilyCheck struct {
 
 type substrateScopeResolver func(ctx context.Context, probe scopeProbe) (string, SeriesIsolation, error)
 
-// checkSubstrateFamilies resolves the cluster scope of the families one chart
-// reads, probed together so that two families from different clusters are
-// caught even when no cluster label proves either, and refuses a summed or
-// averaged family reported through more than one scrape job.
-func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, families []substrateFamily, sel string, window time.Duration, requireEach bool) substrateFamilyCheck {
+// checkSubstrateFamilies resolves the cluster scope of the instruments one
+// chart reads, probed together so that two from different clusters are caught
+// even when no cluster label proves either, and refuses a summed or averaged
+// instrument reported through more than one scrape job.
+func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, sp substrateSpelling, families []substrateInstrument, sel string, window time.Duration, requireEach bool) substrateFamilyCheck {
 	extra := make([]string, 0, len(families)-1)
 	for _, f := range families[1:] {
-		extra = append(extra, f.metric)
+		extra = append(extra, sp.probe(f))
 	}
-	matchers, iso, err := resolve(ctx, scopeProbe{metric: families[0].metric, additionalMetrics: extra, selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true,
+	matchers, iso, err := resolve(ctx, scopeProbe{metric: sp.probe(families[0]), additionalMetrics: extra, selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true,
 		unverifiedNote: "Radar couldn't confirm these Substrate series belong to this exact cluster (no cluster label it could check)"})
 	switch {
 	case errors.Is(err, ErrScopeAmbiguous):
@@ -301,14 +258,14 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 	if requireEach && matchers != "" && len(families) > 1 {
 		for _, f := range families {
 			present := func(s string) (bool, error) {
-				res, err := strictQuerier{q}.Query(ctx, "count(count_over_time("+f.metric+"{"+s+"}["+window.String()+"]))")
+				res, err := strictQuerier{q}.Query(ctx, "count(count_over_time("+vectorSelector(sp.probe(f), s)+"["+window.String()+"]))")
 				return err == nil && len(res.Series) > 0, err
 			}
 			scoped, err := present(withScope(sel, matchers))
 			if err == nil && !scoped {
 				var anywhere bool
 				if anywhere, err = present(sel); err == nil && anywhere {
-					check.state, check.reason = SubstrateChartMismatch, "this cluster's identity labels do not appear on "+f.metric+", which this chart combines"
+					check.state, check.reason = SubstrateChartMismatch, "this cluster's identity labels do not appear on "+sp.stem(f)+", which this chart combines"
 					return check
 				}
 			}
@@ -322,7 +279,7 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 		if !f.additive {
 			continue
 		}
-		res, err := strictQuerier{q}.Query(ctx, "count by (job) (count_over_time("+f.metric+"{"+withScope(sel, matchers)+"}["+window.String()+"]))")
+		res, err := strictQuerier{q}.Query(ctx, "count by (job) (count_over_time("+vectorSelector(sp.probe(f), withScope(sel, matchers))+"["+window.String()+"]))")
 		if err != nil {
 			check.state, check.reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
 			return check
@@ -341,16 +298,12 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 	return check
 }
 
-func (d substrateChartDef) families() []substrateFamily {
-	return append([]substrateFamily{d.family}, d.also...)
-}
-
-func substrateFamiliesKey(families []substrateFamily) string {
-	metrics := make([]string, len(families))
+func substrateFamiliesKey(families []substrateInstrument) string {
+	names := make([]string, len(families))
 	for i, f := range families {
-		metrics[i] = f.metric
+		names[i] = f.name
 	}
-	return strings.Join(metrics, "|")
+	return strings.Join(names, "|")
 }
 
 // substrateProbeWindow covers every sample a chart reads: the probes run now,
@@ -362,6 +315,7 @@ func substrateProbeWindow(start, end time.Time, step time.Duration) time.Duratio
 }
 
 type substrateRequest struct {
+	sp         substrateSpelling
 	sel        string
 	charts     []substrateChartDef
 	rangeName  string
@@ -369,28 +323,55 @@ type substrateRequest struct {
 	step       time.Duration
 }
 
-func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, req substrateRequest) []SubstrateChart {
-	window := req.end.Sub(req.start)
-	w := substrateRateWindow(req.step)
-	steps := max(0, int(window/req.step)+1)
+// substrateRun is one request's charts and verdict, sharing their scope checks.
+type substrateRun struct {
+	ctx     context.Context
+	q       seriesQuerier
+	resolve substrateScopeResolver
+	req     substrateRequest
+	window  time.Duration
+	checks  map[string]substrateFamilyCheck
+}
 
-	probeWindow := substrateProbeWindow(req.start, req.end, req.step)
-	checks := map[string]substrateFamilyCheck{}
-	for _, d := range req.charts {
-		families := append([]substrateFamily{d.family}, d.also...)
-		key := substrateFamiliesKey(families)
-		if _, ok := checks[key]; !ok {
-			checks[key] = checkSubstrateFamilies(ctx, q, resolve, families, req.sel, probeWindow, true)
-		}
+func newSubstrateRun(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, req substrateRequest) *substrateRun {
+	return &substrateRun{ctx: ctx, q: q, resolve: resolve, req: req, window: substrateProbeWindow(req.start, req.end, req.step), checks: map[string]substrateFamilyCheck{}}
+}
+
+// check is not safe for concurrent use; every check runs before the charts' queries.
+func (r *substrateRun) check(families []substrateInstrument) substrateFamilyCheck {
+	key := substrateFamiliesKey(families)
+	if c, ok := r.checks[key]; ok {
+		return c
+	}
+	c := checkSubstrateFamilies(r.ctx, r.q, r.resolve, r.req.sp, families, r.req.sel, r.window, true)
+	r.checks[key] = c
+	return c
+}
+
+func (r *substrateRun) expr(matchers, window string) substrateExpr {
+	return substrateExpr{sp: r.req.sp, sel: withScope(r.req.sel, matchers), window: window}
+}
+
+func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, req substrateRequest) []SubstrateChart {
+	return newSubstrateRun(ctx, q, resolve, req).charts()
+}
+
+func (r *substrateRun) charts() []SubstrateChart {
+	req := r.req
+	w := substrateRateWindow(req.step)
+	steps := max(0, int(req.end.Sub(req.start)/req.step)+1)
+	checks := make([]substrateFamilyCheck, len(req.charts))
+	for i, d := range req.charts {
+		checks[i] = r.check(d.families())
 	}
 
 	charts := make([]SubstrateChart, len(req.charts))
 	sem := make(chan struct{}, substrateConcurrency)
 	var wg sync.WaitGroup
 	for i, d := range req.charts {
-		check := checks[substrateFamiliesKey(append([]substrateFamily{d.family}, d.also...))]
+		check := checks[i]
 		c := &charts[i]
-		*c = SubstrateChart{ID: d.id, Title: d.title, Unit: d.unit, Population: d.population, Source: d.source, SeriesBy: d.seriesBy, Isolation: check.isolation, Series: []prom.Series{}, Steps: steps}
+		*c = SubstrateChart{ID: d.id, Title: d.title, Unit: d.unit, Population: d.population, Source: req.sp.source(d.families()), SeriesBy: d.seriesBy, Isolation: check.isolation, Series: []prom.Series{}, Steps: steps}
 		if check.state != "" {
 			c.State, c.Reason = check.state, check.reason
 			continue
@@ -400,22 +381,22 @@ func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrat
 			defer wg.Done()
 			select {
 			case sem <- struct{}{}:
-			case <-ctx.Done():
-				c.State, c.Reason = SubstrateChartError, ctx.Err().Error()
+			case <-r.ctx.Done():
+				c.State, c.Reason = SubstrateChartError, r.ctx.Err().Error()
 				return
 			}
 			defer func() { <-sem }()
-			runSubstrateChart(ctx, strictQuerier{q}, d, withScope(req.sel, check.matchers), w, req.start, req.end, req.step, c)
+			runSubstrateChart(r.ctx, strictQuerier{r.q}, d, r.expr(check.matchers, w), req.start, req.end, req.step, c)
 		}()
 	}
 	wg.Wait()
 	return charts
 }
 
-func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef, sel, w string, start, end time.Time, step time.Duration, c *SubstrateChart) {
+func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef, x substrateExpr, start, end time.Time, step time.Duration, c *SubstrateChart) {
 	series := []prom.Series{}
 	var missing []string
-	for _, query := range d.queries(sel, w) {
+	for _, query := range d.queries(x) {
 		res, err := q.QueryRange(ctx, query.expr, start, end, step)
 		if err != nil {
 			c.State, c.Reason, c.Series = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200), []prom.Series{}
@@ -453,24 +434,25 @@ func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef
 	c.Series = []prom.Series{}
 	window := end.Sub(start).String()
 	present := func(metric string) (bool, error) {
-		res, err := q.Query(ctx, "count(last_over_time("+metric+"{"+sel+"}["+window+"]))")
+		res, err := q.Query(ctx, "count(last_over_time("+vectorSelector(metric, x.sel)+"["+window+"]))")
 		return err == nil && len(res.Series) > 0, err
 	}
-	presence := d.family.metric
-	if d.presence != "" {
-		presence = d.presence
+	sp := x.sp
+	presence := sp.probe(d.inst)
+	if d.bucketed {
+		presence = sp.metric(d.inst, "_bucket")
 	}
 	found, err := present(presence)
-	if err == nil && !found && presence != d.family.metric {
+	if err == nil && !found && d.bucketed {
 		// Observations without classic buckets: a native-histogram pipeline,
 		// or one that dropped the buckets. Not the same as no activity.
 		for _, f := range d.families() {
 			var counted bool
-			if counted, err = present(f.metric); err != nil {
+			if counted, err = present(sp.probe(f)); err != nil {
 				break
 			}
 			if counted {
-				c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has "+f.metric+" but none of the classic histogram buckets (_bucket) Radar reads"
+				c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has "+sp.probe(f)+" but none of the classic histogram buckets (_bucket) Radar reads"
 				return
 			}
 		}
@@ -481,7 +463,7 @@ func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef
 	case found:
 		c.State, c.Reason = SubstrateChartEmpty, d.emptyReason
 	default:
-		c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has no "+d.source+" series for this in the range"
+		c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has no "+c.Source+" series for this in the range"
 	}
 }
 
@@ -541,40 +523,34 @@ func substrateResponseStatus(charts []SubstrateChart) (string, string) {
 	return SubstrateAvailable, ""
 }
 
-func substratePoolSelector(namespace, name string) string {
-	return "ate_workerpool_namespace=" + strconv.Quote(namespace) + ",ate_workerpool_name=" + strconv.Quote(name)
+func substratePoolSelector(sp substrateSpelling, namespace, name string) string {
+	return sp.match("ate.workerpool.namespace", "=", namespace) + "," + sp.match("ate.workerpool.name", "=", name)
 }
 
-func substrateNodeSelector(node string) string {
-	return "node=" + strconv.Quote(node)
+func substrateNodeSelector(sp substrateSpelling, node string) string {
+	return sp.match("node", "=", node)
 }
 
-// substrateNodeAttribution decides whether atelet's series can be attributed
-// to nodes at all, and to this node, over the window.
-// substrateNodeFamilies are the per-node families atelet exports that the
+// substrateNodeFamilies are the per-node instruments atelet exports that the
 // node charts read.
-var substrateNodeFamilies = []string{
-	"atelet_snapshot_undurable_age_max_seconds",
-	"atelet_snapshot_upload_overdue_actors",
-	"atelet_snapshot_upload_duration_seconds_count",
-	"ate_actor_restore_duration_seconds_count",
-	"ate_actor_checkpoint_duration_seconds_count",
-}
+var substrateNodeFamilies = []substrateInstrument{instUndurable, instOverdue, instUpload, instRestore, instCheckpoint}
 
 // anyNodeFamily selects any of atelet's node families. Each is evaluated on
 // its own before the union: a range function drops metric names, and series
 // that differed only by name would collide.
-func anyNodeFamily(sel string, window time.Duration) string {
+func anyNodeFamily(sp substrateSpelling, sel string, window time.Duration) string {
 	parts := make([]string, len(substrateNodeFamilies))
 	for i, f := range substrateNodeFamilies {
-		parts[i] = "last_over_time(" + f + "{" + sel + "}[" + window.String() + "])"
+		parts[i] = "last_over_time(" + vectorSelector(sp.probe(f), sel) + "[" + window.String() + "])"
 	}
 	return strings.Join(parts, " or ")
 }
 
-func substrateNodeAttribution(ctx context.Context, q seriesQuerier, matchers, node string, window time.Duration) (string, string, error) {
+// substrateNodeAttribution decides whether atelet's series can be attributed
+// to nodes at all, and to this node, over the window.
+func substrateNodeAttribution(ctx context.Context, q seriesQuerier, sp substrateSpelling, matchers, node string, window time.Duration) (string, string, error) {
 	count := func(sel string) (bool, error) {
-		res, err := strictQuerier{q}.Query(ctx, "count("+anyNodeFamily(withScope(sel, matchers), window)+")")
+		res, err := strictQuerier{q}.Query(ctx, "count("+anyNodeFamily(sp, withScope(sel, matchers), window)+")")
 		if err != nil {
 			return false, err
 		}
@@ -592,7 +568,7 @@ func substrateNodeAttribution(ctx context.Context, q seriesQuerier, matchers, no
 	if !labelled {
 		return SubstrateChartNotAttributable, noLabel, nil
 	}
-	mine, err := count(substrateNodeSelector(node))
+	mine, err := count(substrateNodeSelector(sp, node))
 	if err != nil {
 		return "", "", err
 	}
@@ -613,17 +589,17 @@ func substrateNodeAttribution(ctx context.Context, q seriesQuerier, matchers, no
 // markUnattributedNodeCharts explains a node chart with no series of its own
 // when its family is exported without a node label: those series could be
 // this node's.
-func markUnattributedNodeCharts(ctx context.Context, q seriesQuerier, matchers string, window time.Duration, charts []SubstrateChart) {
+func markUnattributedNodeCharts(ctx context.Context, q seriesQuerier, sp substrateSpelling, matchers string, window time.Duration, charts []SubstrateChart) {
 	defs := substrateNodeCharts()
 	for i := range charts {
 		if charts[i].State != SubstrateChartNoSeries {
 			continue
 		}
 		for _, f := range defs[i].families() {
-			res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+f.metric+"{"+withScope(`node=""`, matchers)+"}["+window.String()+"]))")
+			res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+vectorSelector(sp.probe(f), withScope(`node=""`, matchers))+"["+window.String()+"]))")
 			if err == nil && len(res.Series) > 0 {
 				charts[i].State = SubstrateChartNotAttributable
-				charts[i].Reason = f.metric + " is exported without a node label, so Radar cannot tell which node reported it"
+				charts[i].Reason = sp.probe(f) + " is exported without a node label, so Radar cannot tell which node reported it"
 				break
 			}
 		}
@@ -654,8 +630,8 @@ func clientScopeResolver(client *Client) substrateScopeResolver {
 	}
 }
 
-// handleSubstrateWorkerPool returns the curated Substrate charts for one
-// WorkerPool, gated on reading that WorkerPool.
+// handleSubstrateWorkerPool returns the curated Substrate charts and the
+// capacity verdict for one WorkerPool, gated on reading that WorkerPool.
 func handleSubstrateWorkerPool(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if !canRead(r, "ate.dev", "workerpools", namespace, "get") {
@@ -663,14 +639,36 @@ func handleSubstrateWorkerPool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
-		charts := querySubstrateCharts(ctx, q, resolve, substrateRequest{sel: substratePoolSelector(namespace, name), charts: substratePoolCharts(), rangeName: rangeName, start: start, end: end, step: step})
-		status, reason := substrateResponseStatus(charts)
-		return SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
+		return collectSubstratePool(ctx, q, resolve, namespace, name, rangeName, start, end, step)
 	})
 }
 
-// handleSubstrateNode returns atelet's curated charts for one Node, gated on
-// reading Nodes like the Node resource charts.
+var substratePoolInstruments = []substrateInstrument{instWorkers, instDesired, instReady, instLifecycle, instAssignment, instCrashes}
+
+func collectSubstratePool(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, namespace, name, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
+	failed := func(reason string) SubstrateHealthResponse {
+		return SubstrateHealthResponse{Status: SubstrateChartError, Reason: reason, Range: rangeName, Charts: []SubstrateChart{}}
+	}
+	base := func(sp substrateSpelling) string { return substratePoolSelector(sp, namespace, name) }
+	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, substratePoolInstruments, base, substrateProbeWindow(start, end, step))
+	switch {
+	case err != nil:
+		return failed(queryFailed(err))
+	case ambiguous != "":
+		return failed(ambiguous)
+	}
+	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sp: sp, sel: base(sp), charts: substratePoolCharts(), rangeName: rangeName, start: start, end: end, step: step})
+	charts := run.charts()
+	status, reason := substrateResponseStatus(charts)
+	resp := SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
+	if status == SubstrateAvailable {
+		resp.Verdict = run.poolVerdict(charts)
+	}
+	return resp
+}
+
+// handleSubstrateNode returns atelet's curated charts and the snapshot
+// verdict for one Node, gated on reading Nodes like the Node resource charts.
 func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 	node := chi.URLParam(r, "name")
 	if !canRead(r, "", "nodes", "", "get") {
@@ -678,34 +676,50 @@ func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
-		// Attribution is decided within this cluster's series: another
-		// cluster's node labels say nothing about this one's.
-		window := substrateProbeWindow(start, end, step)
-		families := make([]substrateFamily, len(substrateNodeFamilies))
-		for i, f := range substrateNodeFamilies {
-			families[i] = substrateFamily{metric: f}
-		}
-		// Scope only: a family absent here says nothing about the node's other charts.
-		scope := checkSubstrateFamilies(ctx, q, resolve, families, "", window, false)
-		if scope.state != "" {
-			return SubstrateHealthResponse{Status: SubstrateChartError, Reason: scope.reason, Range: rangeName, Charts: []SubstrateChart{}}
-		}
-		status, reason, err := substrateNodeAttribution(ctx, q, scope.matchers, node, window)
-		if err != nil {
-			return SubstrateHealthResponse{Status: SubstrateChartError, Reason: "Prometheus query failed: " + truncate(err.Error(), 200), Range: rangeName, Charts: []SubstrateChart{}}
-		}
-		if status != SubstrateAvailable {
-			return SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: []SubstrateChart{}}
-		}
-		charts := querySubstrateCharts(ctx, q, resolve, substrateRequest{sel: substrateNodeSelector(node), charts: substrateNodeCharts(), rangeName: rangeName, start: start, end: end, step: step})
-		markUnattributedNodeCharts(ctx, q, scope.matchers, window, charts)
-		status, reason = substrateResponseStatus(charts)
-		if status == SubstrateNotFound {
-			// atelet reports for this node, just none of what these charts read.
-			status = SubstrateAvailable
-		}
-		return SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
+		return collectSubstrateNode(ctx, q, resolve, node, rangeName, start, end, step)
 	})
+}
+
+func collectSubstrateNode(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, node, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
+	failed := func(status, reason string) SubstrateHealthResponse {
+		return SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: []SubstrateChart{}}
+	}
+	window := substrateProbeWindow(start, end, step)
+	base := func(sp substrateSpelling) string { return substrateNodeSelector(sp, node) }
+	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, substrateNodeFamilies, base, window)
+	switch {
+	case err != nil:
+		return failed(SubstrateChartError, queryFailed(err))
+	case ambiguous != "":
+		return failed(SubstrateChartError, ambiguous)
+	}
+	// Attribution is decided within this cluster's series: another cluster's
+	// node labels say nothing about this one's. Scope only: a family absent
+	// here says nothing about the node's other charts.
+	scope := checkSubstrateFamilies(ctx, q, resolve, sp, substrateNodeFamilies, "", window, false)
+	if scope.state != "" {
+		return failed(SubstrateChartError, scope.reason)
+	}
+	status, reason, err := substrateNodeAttribution(ctx, q, sp, scope.matchers, node, window)
+	if err != nil {
+		return failed(SubstrateChartError, queryFailed(err))
+	}
+	if status != SubstrateAvailable {
+		return failed(status, reason)
+	}
+	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sp: sp, sel: base(sp), charts: substrateNodeCharts(), rangeName: rangeName, start: start, end: end, step: step})
+	charts := run.charts()
+	markUnattributedNodeCharts(ctx, q, sp, scope.matchers, window, charts)
+	status, reason = substrateResponseStatus(charts)
+	if status == SubstrateNotFound {
+		// atelet reports for this node, just none of what these charts read.
+		status = SubstrateAvailable
+	}
+	resp := SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
+	if status == SubstrateAvailable {
+		resp.Verdict = run.nodeVerdict(charts)
+	}
+	return resp
 }
 
 type substrateCollect func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse

@@ -80,7 +80,7 @@ func (p scopeProbe) over(sel string) string {
 	metrics := append([]string{p.metric}, p.additionalMetrics...)
 	probes := make([]string, len(metrics))
 	for i, metric := range metrics {
-		probes[i] = metric + "{" + sel + "}"
+		probes[i] = vectorSelector(metric, sel)
 		if p.window > 0 {
 			probes[i] = "count_over_time(" + probes[i] + "[" + p.window.String() + "])"
 		}

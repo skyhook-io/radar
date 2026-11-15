@@ -12,9 +12,11 @@ import (
 
 // fakeSubstrateProm answers each query from the first rule whose fragment it contains.
 type fakeSubstrateProm struct {
-	rules   []fakeRule
-	mu      sync.Mutex
-	queries []string
+	rules    []fakeRule
+	names    []string
+	namesErr error
+	mu       sync.Mutex
+	queries  []string
 }
 
 type fakeRule struct {
@@ -58,7 +60,7 @@ func unverifiedScope(context.Context, scopeProbe) (string, SeriesIsolation, erro
 
 func poolRequest(charts []substrateChartDef) substrateRequest {
 	end := time.Unix(10_000*60, 0)
-	return substrateRequest{sel: substratePoolSelector("agents", "pool"), charts: charts, start: end.Add(-time.Hour), end: end, step: time.Minute}
+	return substrateRequest{sel: substratePoolSelector(substrateSpelling{}, "agents", "pool"), charts: charts, start: end.Add(-time.Hour), end: end, step: time.Minute}
 }
 
 func chartByID(charts []SubstrateChart, id string) SubstrateChart {
@@ -182,7 +184,7 @@ func TestSubstrateNodeAttribution(t *testing.T) {
 		{"labelled for this node", []fakeRule{{family + `node="worker-1"}`, result(series(nil, 1))}, {family + `node!=""}`, result(series(nil, 1))}, {family + "}", result(series(nil, 1))}}, SubstrateAvailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _, err := substrateNodeAttribution(context.Background(), &fakeSubstrateProm{rules: tc.rules}, "", "worker-1", time.Hour)
+			got, _, err := substrateNodeAttribution(context.Background(), &fakeSubstrateProm{rules: tc.rules}, substrateSpelling{}, "", "worker-1", time.Hour)
 			if err != nil || got != tc.want {
 				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
 			}
@@ -310,7 +312,7 @@ func TestSubstrateNodeChartsWithoutNodeLabels(t *testing.T) {
 	for _, d := range substrateNodeCharts() {
 		charts = append(charts, SubstrateChart{ID: d.id, State: SubstrateChartNoSeries})
 	}
-	markUnattributedNodeCharts(context.Background(), f, "", time.Hour, charts)
+	markUnattributedNodeCharts(context.Background(), f, substrateSpelling{}, "", time.Hour, charts)
 	if c := chartByID(charts, "uploadTime"); c.State != SubstrateChartNotAttributable {
 		t.Fatalf("uploadTime = %s, want notAttributable", c.State)
 	}
@@ -326,7 +328,7 @@ func TestSubstrateNodePresenceUsesEveryFamily(t *testing.T) {
 		{`last_over_time(atelet_snapshot_upload_overdue_actors{node!=""}`, result(series(nil, 1))},
 		{`last_over_time(atelet_snapshot_upload_overdue_actors{}`, result(series(nil, 1))},
 	}}
-	got, _, err := substrateNodeAttribution(context.Background(), f, "", "worker-1", time.Hour)
+	got, _, err := substrateNodeAttribution(context.Background(), f, substrateSpelling{}, "", "worker-1", time.Hour)
 	if err != nil || got != SubstrateAvailable {
 		t.Fatalf("got %s, %v; want available", got, err)
 	}
@@ -341,7 +343,7 @@ func TestSubstrateRestoreChartReadsCheckpointsToo(t *testing.T) {
 	for _, d := range substrateNodeCharts() {
 		charts = append(charts, SubstrateChart{ID: d.id, State: SubstrateChartNoSeries})
 	}
-	markUnattributedNodeCharts(context.Background(), f, "", time.Hour, charts)
+	markUnattributedNodeCharts(context.Background(), f, substrateSpelling{}, "", time.Hour, charts)
 	if c := chartByID(charts, "restoreTime"); c.State != SubstrateChartNotAttributable || !strings.Contains(c.Reason, "ate_actor_checkpoint_duration_seconds_count") {
 		t.Fatalf("restoreTime = %s %q, want checkpoints named as unattributable", c.State, c.Reason)
 	}
@@ -349,17 +351,17 @@ func TestSubstrateRestoreChartReadsCheckpointsToo(t *testing.T) {
 
 // Scope for a node's charts does not require every atelet family to be present here.
 func TestSubstrateNodeScopeIgnoresAbsentFamilies(t *testing.T) {
-	families := []substrateFamily{{metric: "atelet_snapshot_undurable_age_max_seconds"}, {metric: "ate_actor_checkpoint_duration_seconds_count"}}
+	families := []substrateInstrument{instUndurable, instCheckpoint}
 	resolve := func(context.Context, scopeProbe) (string, SeriesIsolation, error) {
 		return `cluster="a"`, SeriesIsolation{Mode: SeriesIsolationVerified}, nil
 	}
 	f := &fakeSubstrateProm{rules: []fakeRule{
 		{`count(count_over_time(ate_actor_checkpoint_duration_seconds_count{}`, result(series(nil, 1))},
 	}}
-	if check := checkSubstrateFamilies(context.Background(), f, resolve, families, "", time.Hour, false); check.state != "" {
+	if check := checkSubstrateFamilies(context.Background(), f, resolve, substrateSpelling{}, families, "", time.Hour, false); check.state != "" {
 		t.Fatalf("node scope = %s %q, want no refusal", check.state, check.reason)
 	}
-	if check := checkSubstrateFamilies(context.Background(), f, resolve, families, "", time.Hour, true); check.state != SubstrateChartMismatch {
+	if check := checkSubstrateFamilies(context.Background(), f, resolve, substrateSpelling{}, families, "", time.Hour, true); check.state != SubstrateChartMismatch {
 		t.Fatalf("paired check = %s, want mismatch", check.state)
 	}
 }
@@ -375,4 +377,3 @@ func TestSubstrateChartUnits(t *testing.T) {
 		t.Fatalf("units = %v", units)
 	}
 }
-

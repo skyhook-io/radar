@@ -139,6 +139,9 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
+import { SubstrateHealthCharts } from '../resource/SubstrateHealthCharts'
+import { SubstrateVerdictLine } from '../resource/SubstrateVerdictLine'
+import { useAPIResources } from '../../api/apiResources'
 import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
 
@@ -631,6 +634,11 @@ export function WorkloadView({
   // The fetched resource's own group, once it has loaded: the route's group is
   // '' whenever a link left ?apiGroup out.
   const identityGroup = resource?.apiVersion ? resourceGroup : effectiveGroup
+  const isNode = apiKind === 'nodes' && !effectiveGroup
+  const isSubstrateWorkerPool = apiKind === 'workerpools' && effectiveGroup === 'ate.dev'
+  // Substrate's node charts are asked of Prometheus only on a cluster that serves it.
+  const { data: apiResources } = useAPIResources()
+  const servesSubstrate = isNode && apiResources?.some(r => r.group === 'ate.dev' && r.name === 'workerpools') === true
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
@@ -1314,14 +1322,19 @@ export function WorkloadView({
         renderRelatedYaml={(ref) => (
           <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />
         )}
-        renderMetricsTab={({ kind, namespace: ns, name: n }) => (
-          <MetricsTabContent
-            kind={kind}
-            namespace={ns}
-            name={n}
-            resource={resource}
-            expanded={expanded}
-          />
+        renderMetricsTab={({ kind, namespace: ns, name: n }) => isSubstrateWorkerPool ? (
+          <div className="p-4"><SubstrateHealthCharts target={{ kind: 'workerpool', namespace: ns, name: n }} standalone /></div>
+        ) : (
+          <>
+            <MetricsTabContent
+              kind={kind}
+              namespace={ns}
+              name={n}
+              resource={resource}
+              expanded={expanded}
+            />
+            {isNode && servesSubstrate && <div className="px-4 pt-2 pb-4"><SubstrateHealthCharts target={{ kind: 'node', name: n }} /></div>}
+          </>
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (
           <div className="space-y-4">
@@ -1351,16 +1364,23 @@ export function WorkloadView({
           />
         )}
         isMetricsAvailable={(kind, res) =>
-          isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending')
+          isSubstrateWorkerPool || (isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending'))
         }
         isCostAvailable={(kind) => isOpenCostWorkloadKind(kind)}
         onDuplicate={handleDuplicate}
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
         rendererOverrides={resourceRendererOverrides}
-        renderOverviewIntro={apiKind === 'nodes' && !effectiveGroup && resource?.metadata?.uid
-          ? () => <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
-          : undefined}
+        renderOverviewIntro={isSubstrateWorkerPool
+          ? ({ namespace: ns, name: n }) => <SubstrateVerdictLine target={{ kind: 'workerpool', namespace: ns, name: n }} onOpenMetrics={expanded ? () => handleTabChange('metrics') : undefined} />
+          : isNode && resource?.metadata?.uid
+            ? () => (
+              <div className="space-y-3">
+                <NodeDrainStatus name={name} nodeUID={resource.metadata.uid} />
+                {servesSubstrate && <SubstrateVerdictLine target={{ kind: 'node', name }} onOpenMetrics={expanded ? () => handleTabChange('metrics') : undefined} />}
+              </div>
+            )
+            : undefined}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload

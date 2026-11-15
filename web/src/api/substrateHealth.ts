@@ -28,6 +28,35 @@ export interface SubstrateChart {
   covered: number
 }
 
+export type SubstrateVerdictState =
+  /** Substrate's own capacity alert condition has held for five minutes. */
+  | 'short'
+  | 'full'
+  | 'serving'
+  | 'noWorkers'
+  /** A node: some actor's snapshot upload is overdue. */
+  | 'behind'
+  | 'current'
+  | 'unknown'
+
+export interface SubstrateFact {
+  id: string
+  label: string
+  unit: string
+  /** ok has a value; empty means the series exist and recorded nothing here; unavailable says why. */
+  state: 'ok' | 'empty' | 'unavailable'
+  value?: number
+  of?: number
+  reason?: string
+  parts?: { label: string; value: number }[]
+}
+
+export interface SubstrateVerdict {
+  state: SubstrateVerdictState
+  reason?: string
+  facts: SubstrateFact[]
+}
+
 export interface SubstrateHealth {
   /** available · notFound (no Substrate series at all) · notOnNode · notAttributable · error (every chart failed) */
   status: 'available' | 'notFound' | 'notOnNode' | 'notAttributable' | 'error'
@@ -38,6 +67,8 @@ export interface SubstrateHealth {
   end: number
   stepSeconds: number
   charts: SubstrateChart[]
+  /** Set when status is available. */
+  verdict?: SubstrateVerdict
 }
 
 export type SubstrateTarget =

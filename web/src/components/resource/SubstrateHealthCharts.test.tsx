@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateHealth } from '../../api/substrateHealth'
 
 let health: { data?: SubstrateHealth; error?: unknown; upgrade?: unknown } = {}
+let promStatus: { connected: boolean; discovering?: boolean; error?: string } = { connected: true }
 
 vi.mock('../../api/client', async (orig) => ({
   ...(await orig<typeof import('../../api/client')>()),
   useAutoPromConnect: () => {},
-  usePrometheusStatus: () => ({ data: { connected: true } }),
+  usePrometheusStatus: () => ({ data: promStatus }),
+  usePrometheusConnect: () => ({ mutate: () => {}, isPending: false }),
 }))
 vi.mock('../../api/substrateHealth', async (orig) => ({
   ...(await orig<typeof import('../../api/substrateHealth')>()),
@@ -35,6 +37,14 @@ function chart(overrides: Partial<SubstrateHealth['charts'][number]>): Substrate
 }
 
 describe('SubstrateHealthCharts', () => {
+  it('offers to connect Prometheus only where it is the whole tab', () => {
+    promStatus = { connected: false }
+    health = {}
+    expect(render(pool)).toBe('')
+    expect(renderToStaticMarkup(<SubstrateHealthCharts target={pool} standalone />)).toContain('Discover Prometheus')
+    promStatus = { connected: true }
+  })
+
   it('says what it looked for when a pool has no Substrate series', () => {
     health = { data: { ...base, status: 'notFound' } }
     expect(render(pool)).toContain('Prometheus has no Agent Substrate metrics for this pool')

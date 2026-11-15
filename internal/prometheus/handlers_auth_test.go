@@ -62,6 +62,8 @@ func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = authMatrixBody
 		}
 		_, _ = w.Write([]byte(body))
+	case "/api/v1/label/__name__/values":
+		_, _ = w.Write([]byte(`{"status":"success","data":[]}`))
 	default:
 		http.NotFound(w, r)
 	}

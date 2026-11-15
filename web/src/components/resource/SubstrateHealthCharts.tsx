@@ -1,30 +1,45 @@
-import { Info, LineChart, Lock } from 'lucide-react'
+import { Info, LineChart, Loader2, Lock, Wifi } from 'lucide-react'
 import { clsx } from 'clsx'
 import { AlertBanner, RadarUpgradeNote, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
 import { AreaChart, SeriesLegend, formatMetricValue } from '@skyhook-io/k8s-ui/components/charts'
-import { isForbiddenError, useAutoPromConnect, usePrometheusStatus } from '../../api/client'
+import { isForbiddenError, useAutoPromConnect, usePrometheusConnect, usePrometheusStatus } from '../../api/client'
 import { useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type SubstrateTarget } from '../../api/substrateHealth'
 
 const RANGE = '1h'
 
 const NOT_FOUND = {
-  workerpool: 'Prometheus has no Agent Substrate metrics for this pool. Radar reads the names Substrate exports by default, such as ate_workerpool_workers; a pipeline that keeps UTF-8 names or sends native histograms is not read.',
+  workerpool: 'Prometheus has no Agent Substrate metrics for this pool. Radar reads them under the underscore names Substrate\'s exporter gives them by default (ate_workerpool_workers) or the dotted ones Google Managed Prometheus keeps (ate.workerpool.workers); native histograms are not read.',
   node: '',
 } as const
 
 /**
  * Agent Substrate charts for one WorkerPool or Node, from the curated
  * /prometheus/substrate endpoints. Aggregates only: Substrate keeps actor
- * identity out of metric labels. Hidden when Prometheus is not connected, and
- * on a Node that runs no Substrate; every other state says why there is no chart.
+ * identity out of metric labels. Hidden on a Node that runs no Substrate, and
+ * when Prometheus is not connected unless standalone (the only content of its
+ * tab), which offers to connect; every other state says why there is no chart.
  */
-export function SubstrateHealthCharts({ target }: { target: SubstrateTarget }) {
+export function SubstrateHealthCharts({ target, standalone = false }: { target: SubstrateTarget; standalone?: boolean }) {
   useAutoPromConnect()
   const { data: status } = usePrometheusStatus()
+  const connect = usePrometheusConnect()
   const connected = status?.connected === true
   const { data, error, upgrade } = useSubstrateHealth(target, RANGE, connected && Boolean(target.name))
 
-  if (!connected) return null
+  if (!connected) {
+    if (!standalone || !status) return null
+    return (
+      <Frame>
+        <Muted>{status.discovering ? 'Discovering Prometheus…' : status.error || 'Connect Prometheus to chart this pool\'s workers, resumes and crashes.'}</Muted>
+        {!status.discovering && (
+          <button type="button" onClick={() => connect.mutate()} disabled={connect.isPending} className="btn-brand mt-3 inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium">
+            {connect.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wifi className="h-3.5 w-3.5" />}
+            Discover Prometheus
+          </button>
+        )}
+      </Frame>
+    )
+  }
   if (upgrade && target.kind === 'workerpool') {
     return <Frame><RadarUpgradeNote requirement={upgrade} /></Frame>
   }
@@ -61,7 +76,7 @@ export function SubstrateHealthCharts({ target }: { target: SubstrateTarget }) {
 
 function Frame({ children }: { children: React.ReactNode }) {
   return (
-    <section className="mt-4 rounded-lg border border-theme-border bg-theme-surface/30 p-3" aria-label="Agent Substrate metrics">
+    <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3" aria-label="Agent Substrate metrics">
       <div className="flex items-center gap-2 mb-3 text-sm font-medium text-theme-text-secondary">
         <LineChart className="w-4 h-4 text-theme-text-tertiary" />
         Agent Substrate (last {RANGE})
