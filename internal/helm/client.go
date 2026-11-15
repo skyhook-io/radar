@@ -343,26 +343,26 @@ func (c *Client) GetActionConfigForUser(namespace string, user *pkgauth.User) (*
 // ListReleasesAsUser is ListReleases with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity (same
 // behavior as ListReleases).
-func (c *Client) ListReleasesAsUser(ctx context.Context, namespace string, user *pkgauth.User) ([]HelmRelease, error) {
+func (c *Client) ListReleasesAsUser(ctx context.Context, namespace string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
 	if user == nil {
-		return c.ListReleases(ctx, namespace)
+		return c.ListReleases(ctx, namespace, access)
 	}
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, user)
+	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, user, access)
 }
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
-func (c *Client) ListReleases(ctx context.Context, namespace string) ([]HelmRelease, error) {
+func (c *Client) ListReleases(ctx context.Context, namespace string, access StatusAccess) ([]HelmRelease, error) {
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, nil)
+	return c.listReleasesWith(ctx, actionConfig, contextName, namespace, nil, access)
 }
 
 // ListReleasesAcrossNamespaces lists releases for an explicit set of namespaces
@@ -378,7 +378,7 @@ func (c *Client) ListReleases(ctx context.Context, namespace string) ([]HelmRele
 // skipped so one of them doesn't blank releases the caller CAN see. Only when
 // every namespace is forbidden is the 403 surfaced, so the UI still shows
 // "Access Restricted" rather than a misleading empty list.
-func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User) ([]HelmRelease, error) {
+func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil
 	}
@@ -387,7 +387,7 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true)
+	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, namespaces, true, access)
 }
 
 // ListReleasesRecordingAccess is ListReleasesAcrossNamespaces that also says
@@ -395,7 +395,7 @@ func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []
 // than skipping refused namespaces silently. A refusal everywhere is a result
 // here (nothing read, something denied), not an error. A cluster-wide read
 // (nil namespaces) reports itself as "" in read or denied.
-func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User) (rows []HelmRelease, read, denied []string, err error) {
+func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []string, user *pkgauth.User, access StatusAccess) (rows []HelmRelease, read, denied []string, err error) {
 	if namespaces != nil && len(namespaces) == 0 {
 		return []HelmRelease{}, nil, nil, nil
 	}
@@ -403,13 +403,13 @@ func (c *Client) ListReleasesRecordingAccess(ctx context.Context, namespaces []s
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), namespaces)
+	return listReleasesRecordingAccess(ctx, client, k8s.GetContextName(), namespaces, access)
 }
 
 // contextName is the cluster context the read started on; a release history
 // analysed after a switch away from it records no uninstall start.
-func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
-	rows, err := listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
+func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess) ([]HelmRelease, error) {
+	rows, err := listReleaseRows(ctx, contextName, namespaces, includeResourceHealth, access, false, ReleaseReadDeniedForCaller, func(ctx context.Context, namespace string) (*helmReleaseStorageSnapshot, error) {
 		return helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	})
 	if err != nil {
@@ -441,13 +441,16 @@ func (e *PartialReadError) Unwrap() error { return e.Err }
 // failure fails the whole read, unless keepGoing is set: then the remaining
 // namespaces are still read, and when at least one namespace was read the
 // rows come back with a *PartialReadError naming the namespaces that failed.
-func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
+func listReleaseRows(ctx context.Context, contextName string, namespaces []string, includeResourceHealth bool, access StatusAccess, keepGoing bool, denied func(error) bool, read func(context.Context, string) (*helmReleaseStorageSnapshot, error)) ([]HelmRelease, error) {
 	scopes := namespaces
 	if scopes == nil {
 		scopes = []string{""}
 	}
 	fluxMap := fluxHelmReleaseMap(ctx)
 	all := make([]HelmRelease, 0)
+	// Health is added once every scope is read, so the caller's access is
+	// checked once for the objects of every release; rels[i] is all[i]'s.
+	var rels []*release.Release
 	var lastForbidden, firstFailure error
 	var failed, deniedScopes []string
 	var failures, denials []error
@@ -467,10 +470,11 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		snapshot, err := read(ctx, ns)
 		if err == nil {
 			var rows []HelmRelease
-			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, includeResourceHealth)
+			rows, err = helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, contextName, access)
 			if err == nil {
 				authorized = true
 				all = append(all, rows...)
+				rels = append(rels, snapshot.latest...)
 				continue
 			}
 		}
@@ -488,6 +492,9 @@ func listReleaseRows(ctx context.Context, contextName string, namespaces []strin
 		if firstFailure == nil {
 			firstFailure = err
 		}
+	}
+	if includeResourceHealth {
+		addReleasesHealth(all, rels, access)
 	}
 	// With keepGoing, a namespace the caller was denied is part of the answer
 	// once another was read: those releases weren't checked, and a caller that
@@ -615,7 +622,7 @@ func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace stri
 	return resources, parseErrors, nil
 }
 
-func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Configuration, contextName, namespace string, user *pkgauth.User) ([]HelmRelease, error) {
+func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Configuration, contextName, namespace string, user *pkgauth.User, access StatusAccess) ([]HelmRelease, error) {
 	if err := actionConfig.KubeClient.IsReachable(); err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -624,10 +631,10 @@ func (c *Client) listReleasesWith(ctx context.Context, actionConfig *action.Conf
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true)
+	return listReleasesAcrossNamespacesWithClient(ctx, client, contextName, []string{namespace}, true, access)
 }
 
-func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string, includeResourceHealth bool) ([]HelmRelease, error) {
+func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string, access StatusAccess) ([]HelmRelease, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -638,9 +645,6 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		}
 		storageNs := snapshot.storageNamespaces[releaseStorageKey(rel)]
 		hr := toHelmReleaseSummary(rel, storageNs)
-		if includeResourceHealth {
-			addResourceHealth(&hr, rel)
-		}
 		// Match against the release's *actual* storage namespace (the
 		// un-normalized value), since toHelmRelease zeroes StorageNamespace
 		// when it equals Namespace for compactness.
@@ -652,7 +656,7 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 		analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
 		hr.LastOperation = analysis.LastOperation
 		hr.Operations = analysis.Operations
-		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
+		hr.ManagedByFlux, hr.ManagedByFluxHelmRelease = scopedFluxOwnership(rel.Name, effectiveStorage, fluxMap, access)
 		result = append(result, hr)
 	}
 	return result, nil
@@ -660,29 +664,30 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 
 // GetReleaseAsUser is GetRelease with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity.
-func (c *Client) GetReleaseAsUser(namespace, name string, user *pkgauth.User) (*HelmReleaseDetail, error) {
+func (c *Client) GetReleaseAsUser(namespace, name string, user *pkgauth.User, access StatusAccess) (*HelmReleaseDetail, error) {
 	if user == nil {
-		return c.GetRelease(namespace, name)
+		return c.GetRelease(namespace, name, access)
 	}
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name)
+	return getReleaseWith(actionConfig, contextName, namespace, name, access)
 }
 
-// GetRelease returns details for a specific release
-func (c *Client) GetRelease(namespace, name string) (*HelmReleaseDetail, error) {
+// GetRelease returns details for a specific release. Its resources carry live
+// status only where access allows; see StatusAccess.
+func (c *Client) GetRelease(namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name)
+	return getReleaseWith(actionConfig, contextName, namespace, name, access)
 }
 
-func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, name string) (*HelmReleaseDetail, error) {
+func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -720,12 +725,8 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	}
 	analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
 
-	// Parse manifest to get owned resources
 	resources := parseManifestResources(rel.Manifest, rel.Namespace)
-
-	// Enrich resources with live status from k8s cache
-	enrichResourcesWithStatus(resources)
-	health, issue, summary := computeResourceHealth(resources)
+	health, issue, summary := readReleaseStatus(resources, access)
 
 	// Extract hooks
 	hooks := extractHooks(rel)
@@ -737,7 +738,7 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	// Extract dependencies
 	dependencies := extractDependencies(rel)
 
-	managedByFlux := applyFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()))
+	managedByFlux, fluxReference := scopedFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()), access)
 
 	detail := &HelmReleaseDetail{
 		Name:                     rel.Name,
@@ -756,13 +757,15 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 		ResourceHealth:           health,
 		HealthIssue:              issue,
 		HealthSummary:            summary,
+		StatusUnreadCount:        statusUnreadCount(resources),
 		Hooks:                    hooks,
 		HookDiagnostics:          hookDiagnostics,
 		Readme:                   readme,
 		Dependencies:             dependencies,
 		LastOperation:            analysis.LastOperation,
 		Operations:               analysis.Operations,
-		ManagedByFluxHelmRelease: managedByFlux,
+		ManagedByFlux:            managedByFlux,
+		ManagedByFluxHelmRelease: fluxReference,
 	}
 	detail.OperationInsight = buildOperationInsight(detail)
 	if detail.StorageNamespace == detail.Namespace {
@@ -1492,13 +1495,6 @@ func releaseUpgradeKey(rel *release.Release, storageNamespace string) string {
 	return storageNamespace + "/" + rel.Name
 }
 
-// toHelmRelease converts a helm release to our API type
-func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
-	hr := toHelmReleaseSummary(rel, storageNamespace)
-	addResourceHealth(&hr, rel)
-	return hr
-}
-
 func toHelmReleaseSummary(rel *release.Release, storageNamespace string) HelmRelease {
 	hr := HelmRelease{
 		Name:             rel.Name,
@@ -1515,14 +1511,6 @@ func toHelmReleaseSummary(rel *release.Release, storageNamespace string) HelmRel
 		hr.StorageNamespace = ""
 	}
 	return hr
-}
-
-// addResourceHealth computes health from the resources the release's
-// manifest declares.
-func addResourceHealth(hr *HelmRelease, rel *release.Release) {
-	resources := parseManifestResources(rel.Manifest, rel.Namespace)
-	enrichResourcesWithStatus(resources)
-	hr.ResourceHealth, hr.HealthIssue, hr.HealthSummary = computeResourceHealth(resources)
 }
 
 // fluxHelmReleaseMap returns a map keyed by "<storageNamespace>/<releaseName>"
@@ -1576,6 +1564,25 @@ func fluxHelmReleaseKeys(hrs []*unstructured.Unstructured) map[string]string {
 		out[storageNs+"/"+releaseName] = hr.GetNamespace() + "/" + hr.GetName()
 	}
 	return out
+}
+
+// scopedFluxOwnership preserves the ownership fact without returning a
+// controller reference from a namespace the caller cannot read. Nil access
+// is used by internal history/write checks: ownership still blocks direct
+// MCP Helm changes, while no controller identity is returned.
+func scopedFluxOwnership(name, storageNamespace string, fluxMap map[string]string, access StatusAccess) (bool, string) {
+	reference := applyFluxOwnership(name, storageNamespace, fluxMap)
+	if reference == "" {
+		return false, ""
+	}
+	namespace, _, valid := strings.Cut(reference, "/")
+	if noStatusAccess(access) || !valid {
+		return true, ""
+	}
+	if allowed, _ := access.statusDecision("HelmRelease", "helm.toolkit.fluxcd.io", namespace); !allowed {
+		return true, ""
+	}
+	return true, reference
 }
 
 // applyFluxOwnership stamps ManagedByFluxHelmRelease on a HelmRelease (or
@@ -1737,13 +1744,17 @@ func decodeHelmReleaseData(data string) (*release.Release, error) {
 	return &rel, nil
 }
 
-// computeResourceHealth analyzes owned resources and returns overall health status
+// computeResourceHealth analyzes owned resources and returns overall health
+// status. It counts built-in workloads and Pods only, and none whose status was
+// withheld from the caller; when one was, an unread part could be the broken
+// one, so it doesn't claim "healthy".
 func computeResourceHealth(resources []OwnedResource) (health, issue, summary string) {
 	if len(resources) == 0 {
 		return "unknown", "", ""
 	}
 
 	var unhealthyCount, degradedCount, healthyCount, unknownCount int
+	withheld := false
 	var primaryIssue string
 	var issueSeverity int // 0=none, 1=degraded, 2=unhealthy
 
@@ -1752,6 +1763,16 @@ func computeResourceHealth(resources []OwnedResource) (health, issue, summary st
 	var workloadIssues []string
 
 	for _, r := range resources {
+		if _, ok := builtInGroup(r); !ok {
+			continue
+		}
+		if r.StatusUnread != "" {
+			switch r.Kind {
+			case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet", "Pod":
+				withheld = true
+			}
+			continue
+		}
 		// Skip non-workload resources for health calculation
 		switch r.Kind {
 		case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet":
@@ -1804,7 +1825,7 @@ func computeResourceHealth(resources []OwnedResource) (health, issue, summary st
 		health = "unhealthy"
 	} else if degradedCount > 0 {
 		health = "degraded"
-	} else if healthyCount > 0 {
+	} else if healthyCount > 0 && !withheld {
 		health = "healthy"
 	} else {
 		health = "unknown"
@@ -1965,14 +1986,24 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 	return resources
 }
 
-// enrichResourcesWithStatus adds live status from k8s cache to resources
-func enrichResourcesWithStatus(resources []OwnedResource) {
+// enrichResourcesWithStatus adds live status from the k8s cache to the
+// built-in objects access lets the caller see, and marks the ones it withholds.
+func enrichResourcesWithStatus(resources []OwnedResource, access StatusAccess) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return
 	}
 
 	for i := range resources {
+		group, ok := builtInGroup(resources[i])
+		if !ok {
+			continue
+		}
+		lookup, reason := access.statusDecision(resources[i].Kind, group, resources[i].Namespace)
+		if !lookup {
+			resources[i].StatusUnread = reason
+			continue
+		}
 		status := cache.GetResourceStatus(resources[i].Kind, resources[i].Namespace, resources[i].Name)
 		if status != nil {
 			resources[i].Status = status.Status

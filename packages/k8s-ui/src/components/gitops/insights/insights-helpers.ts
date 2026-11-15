@@ -52,7 +52,7 @@ export function missingResourceMessage(sync?: string, context?: { hazard?: strin
   if (context?.hazard) return 'Not present in the cluster. See the sync warning above before syncing this Application.'
   return context?.rolledBack
     ? 'Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.'
-    : 'Not present in the cluster. Sync the application to create it.'
+    : 'Not present in the cluster. Review the desired changes and sync policy before deciding whether to sync.'
 }
 
 export function isArgoResourceSyncEligible(change: GitOpsChange, declared: boolean, hook?: string): boolean {

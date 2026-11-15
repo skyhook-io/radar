@@ -2,6 +2,9 @@
 # Usage: irm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1 redraws the progress bar for every chunk it
+# downloads, which makes large downloads many times slower.
+$ProgressPreference = "SilentlyContinue"
 
 $Repo = "skyhook-io/radar"
 $BinaryName = "kubectl-radar.exe"

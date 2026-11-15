@@ -53,6 +53,9 @@ type kindDiffRegistration struct {
 	// backstopIgnored are paths under backstopRoot that controllers rewrite
 	// on their own, which the backstop does not report.
 	backstopIgnored []string
+	// requestRoots are top-level fields a controller writes as an operation
+	// handshake; the diff function records their effect through status.
+	requestRoots []string
 }
 
 // diffFunctions is the single source of truth for kinds with audited diff
@@ -82,7 +85,7 @@ var diffFunctions = map[string]kindDiffRegistration{
 	"PodDisruptionBudget":            {group: "policy", diff: diffPDB, backstopRoot: "spec"},
 	"Node":                           {group: "", diff: diffNode},
 	"PersistentVolumeClaim":          {group: "", diff: diffPVC},
-	"Application":                    {group: "argoproj.io", diff: diffApplication},
+	"Application":                    {group: "argoproj.io", diff: diffApplication, backstopRoot: "spec", requestRoots: []string{"operation"}},
 	"Kustomization":                  {group: "kustomize.toolkit.fluxcd.io", diff: diffKustomization},
 	"HelmRelease":                    {group: "helm.toolkit.fluxcd.io", diff: diffFluxHelmRelease},
 	"GitRepository":                  {group: "source.toolkit.fluxcd.io", diff: func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") }},

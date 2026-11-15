@@ -25,6 +25,8 @@ interface ToastContextType {
   showCopied: (command: string, label?: string, event?: React.MouseEvent) => void
   showError: (message: string, detail?: string) => void
   showSuccess: (message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void
+  /** Removes the toast shown with this id, if it is still on screen. */
+  dismissToast: (id: string) => void
 }
 
 const ToastContext = createContext<ToastContextType | null>(null)
@@ -160,7 +162,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, [showError, showSuccess, showToast])
 
   return (
-    <ToastContext.Provider value={{ showToast, showCopied, showError, showSuccess }}>
+    <ToastContext.Provider value={{ showToast, showCopied, showError, showSuccess, dismissToast }}>
       {children}
 
       {/* Render toasts */}
