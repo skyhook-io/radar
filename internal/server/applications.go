@@ -32,6 +32,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
@@ -45,19 +46,10 @@ import (
 // run here, what runtime class they have, and what version they run" — the unit
 // is a logical app/release grouping over concrete workloads.
 //
-// What defines an app boundary: the K8s STRUCTURAL relationship graph is the
-// spine. A workload's app is its topmost EdgeManages ancestor — the root that
-// collapses native owner chains (Pod→RS→Deployment), in-cluster GitOps managers
-// (an ArgoCD Application / Flux Kustomization / Flux HelmRelease that manages a
-// set of workloads), and generic-CRD owners. The pkg/subject Tier-2 label
-// overlay (app.kubernetes.io/part-of, Argo/Flux/Helm signals) then CONSOLIDATES
-// roots the graph can't connect — hub-spoke Argo (controller in another
-// cluster), native-Helm release annotations — with a confidence score. Roots
-// and overlay keys are unioned per workload; satellites (Services/Ingress/
-// config/scalers/PDBs) are ATTACHED to an app via the same graph but never
-// merge two apps that merely share one (the over-merge guardrail). Nothing is
-// hidden: a singleton workload with no signal is its own raw row, and add-on
-// machinery is classified with evidence rather than dropped.
+// A workload's boundary follows readable controller and owner references to
+// the nearest recording GitOps manager, or its top owner. The label overlay
+// consolidates otherwise separate roots. Relation-family attachments never
+// merge apps that merely share a satellite.
 
 // applicationsResponse is the GET /api/applications body.
 type applicationsResponse struct {
@@ -100,10 +92,7 @@ type workloadRef struct {
 	Name      string `json:"name"`
 }
 
-const (
-	applicationsCacheTTL      = 10 * time.Second
-	applicationsGraphCacheTTL = 60 * time.Second
-)
+const applicationsCacheTTL = 10 * time.Second
 
 var applicationsCacheMaxEntries = 256
 
@@ -111,15 +100,14 @@ var (
 	applicationsCacheMu         sync.Mutex
 	applicationsCache           = map[string]applicationsCacheEntry{}
 	applicationsBuildSF         singleflight.Group
+	applicationsBuildSlot       = make(chan struct{}, 1)
 	applicationsCacheGeneration uint64
 )
 
 type applicationsCacheEntry struct {
-	at      time.Time
-	rows    []appRow
-	claims  []argoClaim
-	graph   *appGraph
-	graphAt time.Time
+	at     time.Time
+	rows   []appRow
+	claims []argoClaim
 }
 
 // appRow is one logical app in this cluster.
@@ -145,7 +133,7 @@ type appRow struct {
 	SourceConflict bool              `json:"sourceConflict,omitempty"` // workloads resolve to different source-system objects
 	Workloads      []appWorkload     `json:"workloads"`
 	Events         []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
-	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
+	Relationships  *appRelationships `json:"relationships,omitempty"` // structural satellites from the family batch
 
 	sourceStrict bool
 	// sourceWithheld: this caller's copy dropped a source they can't read.
@@ -208,7 +196,7 @@ type appHistoryIncident struct {
 }
 
 // appRelationships is the structural neighborhood of an app, derived from the
-// topology graph: what fronts it (Services/Ingress/Routes) and what supports it.
+// relation families: what fronts it (Services/Ingress/Routes) and what supports it.
 type appRelationships struct {
 	Services          []string               `json:"services,omitempty"`
 	Ingresses         []string               `json:"ingresses,omitempty"`
@@ -588,22 +576,9 @@ func firstNonEmptyString(values ...string) string {
 	return ""
 }
 
-// appGraph bundles the topology graph and the primitives derived from it that
-// the collection pass needs. A nil graph (build failure / no cache) degrades
-// cleanly: every workload becomes its own structural root and carries no
-// satellites — identity then rests on the label overlay alone, raw-always.
-type appGraph struct {
-	topo       *topology.Topology
-	idx        *topology.RelationshipsIndex
-	provider   topology.ResourceProvider
-	dp         topology.DynamicProvider
-	byID       map[string]topology.Node
-	byResource map[string]string
-}
-
-// ListApplications builds the structural topology graph, resolves each app
-// workload to its graph root + label overlay, and groups them into logical
-// apps. Add-on machinery is classified (not dropped); nothing is hidden.
+// ListApplications resolves each workload through shared ownership and
+// manager evidence, joins its batched attachments, and groups it by root and
+// label overlay. Add-on machinery is classified (not dropped); nothing is hidden.
 func ListApplications(ctx context.Context, namespaces []string) (*applicationsResponse, error) {
 	return listApplicationsForRequest(ctx, namespaces, true)
 }
@@ -632,12 +607,12 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 
-		g := entry.graph
-		graphAt := entry.graphAt
-		if g == nil || time.Since(graphAt) >= applicationsGraphCacheTTL {
-			g = buildAppGraph(cache, namespaces)
-			graphAt = time.Now()
+		select {
+		case applicationsBuildSlot <- struct{}{}:
+		case <-buildCtx.Done():
+			return nil, buildCtx.Err()
 		}
+		defer func() { <-applicationsBuildSlot }()
 		session, err := k8s.BeginOwnershipRead(cache)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
@@ -647,7 +622,12 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		// every Application and Kustomization. Each caller's copy withholds a
 		// source they can't read (filterApplicationSources).
 		managers := ownership.NewView(session, ownership.Unrestricted())
-		wls := collectAppWorkloads(buildCtx, cache, namespaces, g, managers, canListClusterWorkflowTemplates)
+		batch := buildAppRelationBatch(buildCtx, session.(relations.Session), namespaces)
+		read := &applicationInventory{batch: batch, session: session.(relations.Session), owners: managers}
+		wls := collectAppWorkloads(buildCtx, cache, namespaces, read, managers, canListClusterWorkflowTemplates)
+		if err := buildCtx.Err(); err != nil {
+			return nil, err
+		}
 		if err := session.ValidateCaches(); err != nil {
 			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
 		}
@@ -663,7 +643,7 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 		if len(applicationsCache) >= applicationsCacheMaxEntries {
 			evictOldestApplicationsCacheEntry()
 		}
-		applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims, graph: g, graphAt: graphAt}
+		applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
 		applicationsCacheMu.Unlock()
 		return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
 	})
@@ -709,49 +689,8 @@ func applicationsCacheKeyFor(namespaces []string, canListClusterWorkflowTemplate
 	return permissionMode + strings.Join(ns, ",")
 }
 
-// buildAppGraph constructs the same resources-view topology the /api/topology
-// handler builds, then indexes it for root walks and satellite lookups.
-func buildAppGraph(cache *k8s.ResourceCache, namespaces []string) *appGraph {
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}}
-	provider := k8s.NewTopologyResourceProvider(cache)
-	if provider == nil {
-		return g
-	}
-	g.provider = provider
-	g.dp = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-
-	opts := topology.DefaultBuildOptions()
-	opts.Namespaces = namespaces
-	b := topology.NewBuilder(provider)
-	if g.dp != nil {
-		b = b.WithDynamic(g.dp)
-	}
-	topo, err := b.Build(opts)
-	if err != nil || topo == nil {
-		return g
-	}
-	g.topo = topo
-	g.idx = topology.IndexByResource(topo)
-	for _, n := range topo.Nodes {
-		g.byID[n.ID] = n
-		ns, _ := n.Data["namespace"].(string)
-		kind := topology.KubernetesKindForNode(&n)
-		group := appGraphNodeGroup(&n, kind)
-		g.byResource[resourceid.ResourceKey(group, kind, ns, n.Name)] = n.ID
-	}
-	return g
-}
-
-func appGraphNodeGroup(node *topology.Node, kind string) string {
-	apiVersion, _ := node.Data["apiVersion"].(string)
-	if group := resourceid.GroupFromAPIVersion(apiVersion); group != "" {
-		return group
-	}
-	return resourceid.GroupForBuiltinKind(kind)
-}
-
 // isGitOpsManagerKind reports whether a node is an in-cluster GitOps manager —
-// the boundary structuralRoot stops climbing AT. Above a manager lies either a
+// the boundary applicationStructuralRoot stops climbing AT. Above a manager lies either a
 // source ref (GitRepository → Kustomization is an EdgeManages edge too) or a
 // parent manager (app-of-apps); climbing THROUGH one would resolve every
 // installation sharing that source/parent to the same structural root and
@@ -768,123 +707,6 @@ func isGitOpsManagerKind(kind topology.NodeKind, group string) bool {
 		return group == "helm.toolkit.fluxcd.io"
 	}
 	return false
-}
-
-// structuralRoot walks incoming EdgeManages edges from startID toward the
-// app's structural root: the lowest in-cluster GitOps manager (ArgoCD
-// Application, Flux Kustomization/HelmRelease) when one manages the workload,
-// otherwise the workload's topmost ownerRef ancestor (incl. operator CRs). It
-// stops AT the first manager — it does not climb through to the manager's
-// source ref or parent manager.
-func (g *appGraph) structuralRoot(startID string) (topology.Node, bool) {
-	cur := startID
-	top, ok := g.byID[cur]
-	if g.idx == nil {
-		return top, ok
-	}
-	visited := map[string]bool{cur: true}
-	for {
-		next := ""
-		incoming, _ := g.idx.EdgesFor(cur)
-		for _, e := range incoming {
-			if e.Type == topology.EdgeManages {
-				next = e.Source
-				break
-			}
-		}
-		if next == "" || visited[next] {
-			break
-		}
-		visited[next] = true
-		n, exists := g.byID[next]
-		if exists {
-			top = n
-			ok = true
-		}
-		cur = next
-		if exists && isGitOpsManagerKind(n.Kind, appGraphNodeGroup(&n, topology.KubernetesKindForNode(&n))) {
-			break
-		}
-	}
-	return top, ok
-}
-
-// rootOf returns the structural-root key ("<ns>/<Kind>/<name>"), root Kind,
-// API group, and exact identity for a workload, falling back to the workload
-// itself when the graph is absent.
-func (g *appGraph) rootOf(group, kind, ns, name string) (rootKey, rootKind, rootGroup, rootIdentity string) {
-	rootKey = ns + "/" + kind + "/" + name
-	rootKind = kind
-	rootGroup = group
-	rootIdentity = resourceid.ResourceKey(group, kind, ns, name)
-	if g.topo == nil {
-		return
-	}
-	nodeID, found := g.byResource[rootIdentity]
-	if !found {
-		return
-	}
-	rn, ok := g.structuralRoot(nodeID)
-	if !ok {
-		return
-	}
-	rns, _ := rn.Data["namespace"].(string)
-	rootKind = string(rn.Kind)
-	identityKind := topology.KubernetesKindForNode(&rn)
-	rootGroup = appGraphNodeGroup(&rn, identityKind)
-	return rns + "/" + rootKind + "/" + rn.Name, rootKind, rootGroup,
-		resourceid.ResourceKey(appGraphNodeGroup(&rn, identityKind), identityKind, rns, rn.Name)
-}
-
-// relationshipsFor pulls the workload's structural satellites from the graph.
-func (g *appGraph) relationshipsFor(kind, ns, name string, obj any) *appRelationships {
-	if g.topo == nil {
-		return &appRelationships{exposureIncomplete: true}
-	}
-	rel := topology.GetRelationshipsWithObject(kind, ns, name, obj, g.topo, g.provider, g.dp, g.idx)
-	if rel == nil {
-		if len(g.topo.Warnings) > 0 {
-			return &appRelationships{exposureIncomplete: true}
-		}
-		return nil
-	}
-	out := &appRelationships{
-		exposureIncomplete: len(g.topo.Warnings) > 0,
-		Configs:            len(rel.ConfigRefs),
-		Scalers:            len(rel.Scalers),
-		Storage:            len(rel.StorageRefs),
-		PDBs:               len(rel.PDBs),
-		NetworkPolicies:    len(rel.NetworkPolicies),
-		serviceRefs:        refsByKey(rel.Services),
-		ingressRefs:        refsByKey(rel.Ingresses),
-		routeRefs:          refsByKey(appRouteRefs(rel.Routes, rel.Gateways, rel.Backends)),
-		configRefs:         refsByKey(rel.ConfigRefs),
-		scalerRefs:         refsByKey(rel.Scalers),
-		storageRefs:        refsByKey(rel.StorageRefs),
-		pdbRefs:            refsByKey(rel.PDBs),
-		networkPolicyRefs:  refsByKey(rel.NetworkPolicies),
-	}
-	out.Services = refNames(sortedRefs(out.serviceRefs, 20), 20)
-	out.Ingresses = refNames(sortedRefs(out.ingressRefs, 20), 20)
-	out.Routes = routeRefNames(sortedRefs(out.routeRefs, 20), 20)
-	if len(out.Services) == 0 && len(out.Ingresses) == 0 && len(out.Routes) == 0 &&
-		len(out.serviceRefs) == 0 && len(out.ingressRefs) == 0 && len(out.routeRefs) == 0 &&
-		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 && out.NetworkPolicies == 0 && !out.exposureIncomplete {
-		return nil
-	}
-	return out
-}
-
-func appRouteRefs(routes []topology.ResourceRef, routeLikeGroups ...[]topology.ResourceRef) []topology.ResourceRef {
-	out := append([]topology.ResourceRef{}, routes...)
-	for _, group := range routeLikeGroups {
-		for _, ref := range group {
-			if isAppRouteKind(ref.Kind) {
-				out = append(out, ref)
-			}
-		}
-	}
-	return out
 }
 
 func isAppRouteKind(kind string) bool {
@@ -918,7 +740,7 @@ type appWorkloadInput struct {
 // each to its structural root and label overlay, and classifies add-on
 // machinery. Pods and Warning events are indexed once per namespace and joined,
 // not re-listed per workload.
-func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *appGraph, managers *ownership.View, canListClusterWorkflowTemplates bool) []appWorkloadInput {
+func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, g *applicationInventory, managers *ownership.View, canListClusterWorkflowTemplates bool) []appWorkloadInput {
 	var out []appWorkloadInput
 	jobSets := listDynamicByNamespacesGroup(ctx, cache, namespaces, jobset.Kind, jobset.Group)
 	jobSetByName := map[string]*unstructured.Unstructured{}
@@ -927,7 +749,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	}
 
 	podsByNS := indexPodsByNamespace(cache, namespaces)
-	eventsByObj := indexWarningEventsByObject(cache, namespaces, g)
+	eventsByObj := indexWarningEventsByObject(cache, namespaces, g.resolveEventGroup)
 	cronJobBatches := cronJobBatchSummaries(cache, namespaces)
 	scaledJobBatches := scaledJobBatchSummaries(cache, namespaces)
 	cronWorkflowBatches := cronWorkflowBatchSummaries(ctx, cache, namespaces)
@@ -2088,7 +1910,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 
 // inputAtoms returns the union-find atoms for a workload. The structural-root
 // atom is always present; overlay and canonical-Argo atoms consolidate roots
-// the graph can't connect.
+// ownership cannot connect.
 func inputAtoms(in appWorkloadInput, argoAppNamespaces map[string]map[string]bool) []string {
 	atoms := []string{"S:" + in.rootIdentity}
 	atoms = append(atoms, argoCanonicalAtoms(in.rootKind, in.rootGroup, in.rootKey, argoAppNamespaces)...)
@@ -2697,25 +2519,11 @@ func indexPodsByNamespace(cache *k8s.ResourceCache, namespaces []string) map[str
 // indexWarningEventsByObject lists events once per namespace and indexes the
 // Warnings by involvedObject name, so each workload joins its events in O(1)
 // instead of re-scanning the whole namespace event stream.
-func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string, graph *appGraph) map[string]map[string][]*corev1.Event {
+func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string, resolve func(kind, ns, name string) (string, bool)) map[string]map[string][]*corev1.Event {
 	out := map[string]map[string][]*corev1.Event{}
 	lister := cache.Events()
 	if lister == nil {
 		return out
-	}
-	groups := make(map[string]string)
-	ambiguous := make(map[string]bool)
-	if graph != nil {
-		for _, node := range graph.byID {
-			kind := topology.KubernetesKindForNode(&node)
-			ns, _ := node.Data["namespace"].(string)
-			key := resourceid.ResourceKey("", kind, ns, node.Name)
-			group := appGraphNodeGroup(&node, kind)
-			if previous, ok := groups[key]; ok && previous != group {
-				ambiguous[key] = true
-			}
-			groups[key] = group
-		}
 	}
 	add := func(ns string) {
 		var evs []*corev1.Event
@@ -2735,14 +2543,13 @@ func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string, g
 			}
 			group := resourceid.GroupFromAPIVersion(e.InvolvedObject.APIVersion)
 			if e.InvolvedObject.APIVersion == "" {
-				unqualified := resourceid.ResourceKey("", e.InvolvedObject.Kind, e.Namespace, e.InvolvedObject.Name)
-				if ambiguous[unqualified] {
-					continue
-				}
-				if resolved, ok := groups[unqualified]; ok {
-					group = resolved
-				} else {
-					group = resourceid.GroupForBuiltinKind(e.InvolvedObject.Kind)
+				group = resourceid.GroupForBuiltinKind(e.InvolvedObject.Kind)
+				if resolve != nil {
+					var ok bool
+					group, ok = resolve(e.InvolvedObject.Kind, e.Namespace, e.InvolvedObject.Name)
+					if !ok {
+						continue
+					}
 				}
 			}
 			key := resourceid.ResourceKey(group, e.InvolvedObject.Kind, "", e.InvolvedObject.Name)

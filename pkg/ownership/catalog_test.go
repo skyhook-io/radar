@@ -129,3 +129,20 @@ func TestZeroReadIsUnavailable(t *testing.T) {
 		t.Fatalf("zero read = %v; an unset read must never claim an answer", r.State)
 	}
 }
+
+func TestCatalogGroupsForKindIncludesAmbiguousResources(t *testing.T) {
+	catalog := NewCatalog([]ServedResource{
+		{Group: "z.example", Kind: "Widget", Resource: "widgets", Version: "v1"},
+		{Group: "a.example", Kind: "Widget", Resource: "widgets", Version: "v1"},
+		{Group: "a.example", Kind: "Widget", Resource: "widgets", Version: "v2"},
+		{Group: "ambiguous.example", Kind: "Widget", Resource: "widgets", Version: "v1"},
+		{Group: "ambiguous.example", Kind: "Widget", Resource: "otherwidgets", Version: "v1"},
+	}, true)
+	want := []string{"a.example", "ambiguous.example", "z.example"}
+	if !slices.Equal(catalog.GroupsForKind("Widget"), want) {
+		t.Fatalf("groups=%v want=%v", catalog.GroupsForKind("Widget"), want)
+	}
+	if len(catalog.GroupsForKind("Other")) != 0 {
+		t.Fatal("unserved kind has groups")
+	}
+}

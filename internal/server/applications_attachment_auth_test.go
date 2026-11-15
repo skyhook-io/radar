@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/topology"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -60,11 +62,25 @@ func TestApplicationsAttachmentAccessInBothCacheFillOrders(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
+	addApplicationTypedDiscovery()
 	for gvr := range kinds {
 		dc := k8s.GetDynamicResourceCache()
 		if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 2*time.Second) {
 			t.Fatalf("watch %v: %v", gvr, err)
 		}
+	}
+	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := buildAppRelationBatch(context.Background(), session.(relations.Session), []string{"team"})
+	wantDeployment := &appRelationships{Services: []string{"api"}, serviceRefs: refsByKey([]topology.ResourceRef{{Kind: "Service", Namespace: "team", Name: "api"}})}
+	if got := batch.relationshipsForRef("apps", "Deployment", "team", "api"); !reflect.DeepEqual(got, wantDeployment) {
+		t.Fatalf("deployment attachments=%#v want=%#v", got, wantDeployment)
+	}
+	wantJob := &appRelationships{Configs: 2, configRefs: refsByKey([]topology.ResourceRef{{Group: "keda.sh", Kind: "TriggerAuthentication", Namespace: "team", Name: "private-triggerauthentication"}, {Group: "keda.sh", Kind: "ClusterTriggerAuthentication", Name: "private-clustertriggerauthentication"}})}
+	if got := batch.relationshipsForRef("keda.sh", "ScaledJob", "team", "jobs"); !reflect.DeepEqual(got, wantJob) {
+		t.Fatalf("ScaledJob attachments=%#v want=%#v", got, wantJob)
 	}
 	t.Cleanup(clearApplicationsCache)
 	s := &Server{permCache: auth.NewPermissionCache()}
@@ -163,8 +179,8 @@ func TestApplicationsIncompleteExposureIsNotAWorker(t *testing.T) {
 			t.Fatalf("positive exposure classified %s", got)
 		}
 	}
-	g := &appGraph{}
-	if got := classifyWorkload("Deployment", g.relationshipsFor("Deployment", "team", "api", nil)); got != "unknown" {
-		t.Fatalf("missing graph classified %s", got)
+	g := &appRelationBatch{exposureIncomplete: true}
+	if got := classifyWorkload("Deployment", g.relationshipsForRef("apps", "Deployment", "team", "api")); got != "unknown" {
+		t.Fatalf("incomplete batch classified %s", got)
 	}
 }

@@ -286,6 +286,16 @@ func (n *neighborhood) topManager(session relations.Session, ov *ownership.View,
 }
 
 func (n *neighborhood) above(session relations.Session, ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
+	if owner, ok := OwnerAbove(ov, r); ok {
+		return owner, true
+	}
+	return n.nodePool(session, r)
+}
+
+// OwnerAbove returns the highest readable controller ancestor, else the
+// sorted-first readable owner reference. Display and application climbs share
+// this choice so non-controller ownership follows the same deterministic rule.
+func OwnerAbove(ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
 	if top := ChainOf(ov.ControllerChain(r)).Top(); top != nil {
 		if id := refIdentity(*top); id != r {
 			return id, true
@@ -302,7 +312,7 @@ func (n *neighborhood) above(session relations.Session, ov *ownership.View, r re
 		slices.SortFunc(found, func(a, b resourceid.Ref) int { return strings.Compare(a.Key(), b.Key()) })
 		return found[0], true
 	}
-	return n.nodePool(session, r)
+	return resourceid.Ref{}, false
 }
 
 // ownManagers is what manages an object nothing owns: the controllers that

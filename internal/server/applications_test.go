@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
@@ -895,7 +896,7 @@ func TestGroupApplications_EntrypointRefsDeduplicateAndClassify(t *testing.T) {
 	}
 }
 
-func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
+func TestApplicationsRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T) {
 	// Route kinds are custom resources; the builder records their apiVersion.
 	apiVersions := map[string]string{
 		"HTTPRoute":      "gateway.networking.k8s.io/v1",
@@ -933,7 +934,7 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 			edge("httpproxy/prod/api-contour", "service/prod/api", topology.EdgeExposes),
 		},
 	}
-	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+	g := applicationTopologyFixture(t, topo)
 
 	rels := g.relationshipsFor("Deployment", "prod", "api", nil)
 	if rels == nil {
@@ -962,7 +963,7 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 	}
 }
 
-func TestAppGraphRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
+func TestApplicationsRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
 	topo := &topology.Topology{
 		Nodes: []topology.Node{
 			{ID: "service/ml/core", Kind: topology.KindService, Name: "core", Data: map[string]any{"namespace": "ml"}},
@@ -980,7 +981,7 @@ func TestAppGraphRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
 		"kind":       "Job",
 		"metadata":   map[string]any{"namespace": "ml", "name": "train"},
 	}}
-	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+	g := applicationTopologyFixture(t, topo)
 
 	rels := g.relationshipsFor("Job", "ml", "train", volcano)
 	if rels == nil || len(rels.Services) != 1 || rels.Services[0] != "volcano" {
@@ -1022,13 +1023,7 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 			manages("ks-infra", "dep-grafana"), // manager → workload
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, n := range topo.Nodes {
-		g.byID[n.ID] = n
-		ns, _ := n.Data["namespace"].(string)
-		kind := topology.KubernetesKindForNode(&n)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&n, kind), kind, ns, n.Name)] = n.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	apiRoot, _, apiGroup, apiIdentity := g.rootOf("apps", "Deployment", "prod", "api")
 	grafanaRoot, _, _, _ := g.rootOf("apps", "Deployment", "monitoring", "grafana")
@@ -1067,13 +1062,7 @@ func TestStructuralRoot_JobSetMembersShareTheJobSetRoot(t *testing.T) {
 			{Source: jobSetID, Target: "job/ml/train-workers-0", Type: topology.EdgeManages},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, node := range topo.Nodes {
-		g.byID[node.ID] = node
-		kind := topology.KubernetesKindForNode(&node)
-		ns, _ := node.Data["namespace"].(string)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	want := resourceid.ResourceKey("jobset.x-k8s.io", "JobSet", "ml", "train")
 	if root, kind, group, identity := g.rootOf("jobset.x-k8s.io", "JobSet", "ml", "train"); root != "ml/JobSet/train" || kind != "JobSet" || group != "jobset.x-k8s.io" || identity != want {
@@ -1102,13 +1091,7 @@ func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
 			{Source: "application/prod/app/apps.example.io", Target: "deployment/prod/api", Type: topology.EdgeManages},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-	for _, node := range topo.Nodes {
-		g.byID[node.ID] = node
-		kind := topology.KubernetesKindForNode(&node)
-		ns, _ := node.Data["namespace"].(string)
-		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
-	}
+	g := applicationTopologyFixture(t, topo)
 
 	root, _, group, _ := g.rootOf("apps", "Deployment", "prod", "api")
 	if root != "prod/Platform/root" || group != "platform.example.io" {
@@ -1133,8 +1116,7 @@ func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
 			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
-
+	g := applicationTopologyFixture(t, topo)
 	rels := g.relationshipsFor("Gateway", "prod", "gw", nil)
 	if rels == nil {
 		t.Fatal("relationshipsFor returned nil; want Routes populated")
@@ -1565,15 +1547,16 @@ func TestWarningEventIndexResolvesOnlyUnambiguousGroups(t *testing.T) {
 	}
 	defer core.Stop()
 	cache := &k8s.ResourceCache{ResourceCache: core}
-	graph := &appGraph{byID: map[string]topology.Node{
-		"argo": {Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "argoproj.io/v1alpha1"}},
-	}}
-	index := indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	argo := appTestObject("argoproj.io", "Rollout", "dev", "api")
+	session := appManagerSession(t, argo)
+	inventory := &applicationInventory{session: session.(relations.Session)}
+	index := indexWarningEventsByObject(cache, []string{"dev"}, inventory.resolveEventGroup)
 	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 1 {
 		t.Fatalf("unambiguous warning missing: %+v", index)
 	}
-	graph.byID["other"] = topology.Node{Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "other.io/v1"}}
-	index = indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	other := appTestObject("other.io", "Rollout", "dev", "api")
+	inventory.session = appManagerSession(t, argo, other).(relations.Session)
+	index = indexWarningEventsByObject(cache, []string{"dev"}, inventory.resolveEventGroup)
 	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", "", nil); len(got) != 0 {
 		t.Fatalf("ambiguous warning attributed: %+v", got)
 	}

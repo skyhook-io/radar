@@ -472,7 +472,7 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 // Pseudo-kinds: some CRDs are stored in the topology under a synthesized kind
 // distinct from their API kind (KnativeService for serving.knative.dev/Service,
 // CAPICluster for cluster.x-k8s.io/Cluster, …). We map (ref.Kind, ref.Group)
-// through pseudoKindFor BEFORE the direct kind comparison so a caller asking
+// through NodeKindForGVK BEFORE the direct kind comparison so a caller asking
 // for kind=Service&group=serving.knative.dev finds the KnativeService topology
 // node. Without this, the comparison Node.Kind="KnativeService" vs
 // ref.Kind="Service" never matches and the root lookup silently fails.
@@ -480,7 +480,7 @@ func findNodeByRef(nodes []Node, ref ResourceRef, dp DynamicProvider) (*Node, bo
 	// Resolve plural API resource names through discovery before comparing the
 	// caller-facing Kubernetes kind and Radar's topology pseudo-kind.
 	resourceKind := normalizeKindWithGroup(ref.Kind, ref.Group, dp)
-	wantKind := pseudoKindFor(resourceKind, ref.Group)
+	wantKind := NodeKindForGVK(resourceKind, ref.Group)
 	builtinGroup, builtin := resourceid.BuiltinGroup(resourceKind)
 	var match *Node
 	matchGroup := ""
@@ -522,7 +522,7 @@ func nodeIsCanonicalBuiltin(node *Node) bool {
 	return ok && (advertisedGroup == "" || advertisedGroup == group)
 }
 
-// pseudoKindFor maps an (API kind, API group) to the synthesized topology
+// NodeKindForGVK maps an (API kind, API group) to the synthesized topology
 // kind the builder assigns when both differ. For (kind, group) pairs that
 // aren't pseudo-mapped (or when group is empty), returns kind unchanged.
 //
@@ -537,7 +537,7 @@ func nodeIsCanonicalBuiltin(node *Node) bool {
 // see the NodeKind constants prefixed Knative*/CAPI* in types.go. Missing an
 // entry here means the caller-supplied API kind never matches the topology
 // node, so the neighborhood root lookup silently returns "not found."
-func pseudoKindFor(kind, group string) string {
+func NodeKindForGVK(kind, group string) string {
 	if group == "" {
 		return kind
 	}

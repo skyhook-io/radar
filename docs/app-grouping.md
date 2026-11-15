@@ -77,6 +77,16 @@ app keyed `<ns>/JobSet/<name>`; the JobSet is its workload, with lifecycle healt
 from `pkg/jobset`. Member Jobs stay in its graph and open the selected member
 in the JobSet overview.
 
+The climb first follows the controller chain's top, then readable owner
+references (including non-controller references), ordered by group, kind,
+namespace and name. Recording managers stop the climb in this order: Argo CD
+Application, Flux Kustomization, Flux HelmRelease; within one kind the sorted-first
+recording manager wins. A local HelmRelease without readable inventory retains
+its matching origin labels ahead of recorded managers. Attachments come from
+one request-local family batch; the ten-second row cache is shared, and each
+caller's access filters its copy afterward. Cold builds share one process-wide
+slot.
+
 The weaker labels (`part-of`, `name`) are a fallback for loose/raw workloads, not
 an umbrella over independently-released ones. **One honest caveat to the absolute
 claim:** apps are assembled by union-find over *atoms* — each workload contributes
@@ -104,16 +114,16 @@ behavior.)
 A workload flows left-to-right; each layer answers part of the question.
 
 ```
-  workload ──▶ [1] structuralRoot + ──▶ [2] applications_identity ──▶ [3] hub + fleet fold
+  workload ──▶ [1] ownership root + ──▶ [2] applications_identity ──▶ [3] hub + fleet fold
                   pkg/subject            app-instances → logical        logical apps →
               workload → release unit    app + env (identity,           one fleet row
               (composition)              per cluster)                   (identity, x-cluster)
 ```
 
-1. **Composition — `structuralRoot` (topology graph) + `pkg/subject` overlay (per
+1. **Composition — shared ownership + recording managers + `pkg/subject` overlay (per
    cluster).** Climbs each workload's ownership to its **release unit** (the GitOps/
    Helm manager that deploys it) and stops there (§2). The `pkg/subject` overlay
-   then *consolidates* roots the graph can't connect — hub-spoke Argo (controller
+   then *consolidates* roots ownership cannot connect — hub-spoke Argo (controller
    in another cluster), native-Helm release annotations — by reading the workload's
    labels via a **precedence cascade** (§4). Output: every workload tagged with an
    **overlay key** (which release unit / app it belongs to) and a **tier** (how
@@ -140,7 +150,7 @@ A workload flows left-to-right; each layer answers part of the question.
 
 ## 4. The composition cascade (the 9 tiers)
 
-When the topology graph can't connect two roots, `pkg/subject` consolidates them
+When ownership cannot connect two roots, `pkg/subject` consolidates them
 from the workload's labels, walking signals in strict precedence — the **first**
 (lowest-numbered) that matches wins. The ranking is **"how strongly does this
 signal indicate the release unit"**: a GitOps/Helm manager *is* a release unit (it
@@ -313,7 +323,8 @@ workload rows. After that, the normal portable fold (§6) takes over.
 
 | Concern | File |
 |---------|------|
-| **Composition: the boundary** — `structuralRoot`, `rootOf`, `groupApplications`, `inputAtoms`, the union-find over atoms | `internal/server/applications.go` |
+| **Composition: the boundary** — `applicationStructuralRoot`, `rootOf`, the request attachment batch | `internal/server/applications_relations.go`; shared climb in `pkg/topology/relations_answer.go` (`OwnerAbove`) |
+| Composition: `groupApplications`, `inputAtoms`, the union-find over atoms | `internal/server/applications.go` |
 | Composition: the overlay signal cascade (the 9 tiers, `ResolveOverlay`) | `pkg/subject/overlay.go` |
 | Identity within a cluster: env grouping + `source`/`portable`/`pathKey` | `internal/server/applications_identity.go` |
 | Hub: Join A (key-merge), forward identity, declared-only promotion, hub-spoke claim stamping, add-on fold | `radar-hub: internal/server/fleet_applications.go` → `ComputeFleetApplications` |

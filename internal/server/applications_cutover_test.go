@@ -13,8 +13,10 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
+	"slices"
 )
 
 type applicationRootGolden struct {
@@ -23,23 +25,54 @@ type applicationRootGolden struct {
 	Key  string `json:"key"`
 }
 
-func applicationRootFixture(objects []ownershiptest.Object, links [][2]int) *appGraph {
-	g := &appGraph{topo: &topology.Topology{}, byID: map[string]topology.Node{}, byResource: map[string]string{}}
-	for _, obj := range objects {
-		ref := obj.Ref
-		n := topology.Node{ID: ref.Key(), Kind: topology.NodeKind(ref.Kind), Name: ref.Name, Data: map[string]any{"namespace": ref.Namespace, "apiVersion": obj.APIVersion}}
-		g.topo.Nodes = append(g.topo.Nodes, n)
-		g.byID[n.ID], g.byResource[ref.Key()] = n, n.ID
+func applicationTopologyFixture(t *testing.T, topo *topology.Topology) *applicationInventory {
+	t.Helper()
+	var objects []ownershiptest.Object
+	byID := map[string]int{}
+	batch := &appRelationBatch{fields: map[string]map[resourceid.Ref][]topology.ResourceRef{}}
+	for _, node := range topo.Nodes {
+		ns, _ := node.Data["namespace"].(string)
+		apiVersion, _ := node.Data["apiVersion"].(string)
+		kind := topology.KubernetesKindForNode(&node)
+		group := resourceid.GroupFromAPIVersion(apiVersion)
+		if apiVersion == "" {
+			group = resourceid.GroupForBuiltinKind(kind)
+		}
+		byID[node.ID] = len(objects)
+		objects = append(objects, appTestObject(group, kind, ns, node.Name))
 	}
-	for _, link := range links {
-		from, to := objects[link[0]].Ref.Key(), objects[link[1]].Ref.Key()
-		g.topo.Edges = append(g.topo.Edges, topology.Edge{ID: from + "->" + to, Source: from, Target: to, Type: topology.EdgeManages})
+	for _, edge := range topo.Edges {
+		source, target := &objects[byID[edge.Source]], &objects[byID[edge.Target]]
+		switch edge.Type {
+		case topology.EdgeManages:
+			if isGitOpsManagerKind(topology.NodeKind(source.Ref.Kind), source.Ref.Group) {
+				source.Membership = ownership.MembersRecorded
+				source.Members = append(source.Members, target.Ref)
+			} else {
+				target.OwnerReferences = append(target.OwnerReferences, source.OwnerRef(true))
+			}
+		case topology.EdgeExposes, topology.EdgeRoutesTo:
+			switch source.Ref.Kind {
+			case "Service":
+				batch.add("Services", target.Ref, source.Ref)
+			case "Ingress":
+				batch.add("Ingresses", target.Ref, source.Ref)
+			default:
+				if isAppRouteKind(source.Ref.Kind) {
+					batch.add("Routes", target.Ref, source.Ref)
+				}
+				if isAppRouteKind(target.Ref.Kind) {
+					batch.add("Routes", source.Ref, target.Ref)
+				}
+			}
+		}
 	}
-	g.idx = topology.IndexByResource(g.topo)
-	return g
+	batch.linkEntrypoints()
+	session := appManagerSession(t, objects...)
+	return &applicationInventory{batch: batch, session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
 }
 
-func applicationRootRow(g *appGraph, ref resourceid.Ref) (string, string) {
+func applicationRootRow(g *applicationInventory, ref resourceid.Ref) (string, string) {
 	root, kind, group, identity := g.rootOf(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 	in := rawInput(ref.Kind, ref.Namespace, ref.Name, "v1", "healthy")
 	in.rootKey, in.rootKind, in.rootGroup, in.rootIdentity = root, kind, group, identity
@@ -67,7 +100,25 @@ func TestApplicationsStructuralPrecedenceGolden(t *testing.T) {
 		{"operator controller", []ownershiptest.Object{workload, operator, argo}, [][2]int{{1, 0}, {2, 0}}},
 		{"operator noncontroller owner", []ownershiptest.Object{workload, operator}, [][2]int{{1, 0}}},
 	} {
-		root, key := applicationRootRow(applicationRootFixture(tc.objects, tc.links), workload.Ref)
+		for _, link := range tc.links {
+			source, target := &tc.objects[link[0]], &tc.objects[link[1]]
+			if isGitOpsManagerKind(topology.NodeKind(source.Ref.Kind), source.Ref.Group) {
+				source.Membership = ownership.MembersRecorded
+				source.Members = append(source.Members, target.Ref)
+			} else {
+				target.OwnerReferences = append(target.OwnerReferences, source.OwnerRef(tc.name == "operator controller"))
+			}
+		}
+		if tc.name == "labels without inventory" {
+			tc.objects[1].Membership, tc.objects[1].Members = ownership.MembersUnreadable, nil
+			tc.objects[0].Labels = map[string]string{"helm.toolkit.fluxcd.io/name": "shop", "helm.toolkit.fluxcd.io/namespace": "flux-system"}
+		}
+		if tc.name == "disagreeing manager and claim" {
+			tc.objects[0].Labels = map[string]string{"argocd.argoproj.io/instance": "other"}
+		}
+		session := appManagerSession(t, tc.objects...)
+		inventory := &applicationInventory{session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
+		root, key := applicationRootRow(inventory, workload.Ref)
 		got = append(got, applicationRootGolden{Case: tc.name, Root: root, Key: key})
 	}
 	data, err := os.ReadFile("testdata/applications-structural-roots.json")
@@ -83,30 +134,36 @@ func TestApplicationsStructuralPrecedenceGolden(t *testing.T) {
 	}
 }
 
-func TestApplicationsControllerOnlyCutoverBlocker(t *testing.T) {
+func TestApplicationsNonControllerCronJobRootParity(t *testing.T) {
+	withOwnershipDiscovery(t)
+	addApplicationTypedDiscovery()
 	owner := appTestObject("batch", "CronJob", "prod", "nightly")
 	workload := appTestObject("batch", "Job", "prod", "run")
 	workload.OwnerReferences = append(workload.OwnerReferences, owner.OwnerRef(false))
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "run", Namespace: "prod", UID: workload.UID, OwnerReferences: workload.OwnerReferences}}
 	cronJob := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: "prod", UID: owner.UID}}
 	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod"), job, cronJob)...))
-	graph := buildAppGraph(k8s.GetResourceCache(), []string{"prod"})
 	view := appManagerView(t, owner, workload)
 	chain := view.ControllerChain(workload.Ref)
 	if len(chain.Chain) != 1 || chain.Chain[0] != workload.Ref {
 		t.Fatalf("controller chain = %+v", chain)
 	}
-	root, key := applicationRootRow(graph, workload.Ref)
+	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := &applicationInventory{session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
+	root, key := applicationRootRow(candidate, workload.Ref)
 	if root != "prod/CronJob/nightly" || key != "prod/CronJob/nightly" {
 		t.Fatalf("existing grouping changed: root=%q key=%q", root, key)
 	}
 	if answer := view.Manager(workload.Ref); answer.State != ownership.ManagerNone {
 		t.Fatalf("manager = %+v", answer)
 	}
-	t.Logf("cutover blocked: existing key %q, ControllerChain top with no manager would key %q", key, "prod/Job/run")
+
 }
 
-func TestApplicationsSharedManagerGraphOrderHasNoOwnershipEquivalent(t *testing.T) {
+func TestApplicationsSharedManagerWinnerIsDeterministic(t *testing.T) {
 	workload := appTestObject("apps", "Deployment", "prod", "api")
 	shop := appTestObject("argoproj.io", "Application", "argocd", "shop")
 	other := appTestObject("argoproj.io", "Application", "argocd", "other")
@@ -127,17 +184,41 @@ func TestApplicationsSharedManagerGraphOrderHasNoOwnershipEquivalent(t *testing.
 	if want := []resourceid.Ref{other.Ref, shop.Ref}; !reflect.DeepEqual(recorders, want) {
 		t.Fatalf("recorders = %v, want %v", recorders, want)
 	}
-	for _, tc := range []struct {
-		links [][2]int
-		want  string
-	}{
-		{[][2]int{{1, 0}, {2, 0}}, "argocd/Application/shop"},
-		{[][2]int{{2, 0}, {1, 0}}, "argocd/Application/other"},
-	} {
-		root, key := applicationRootRow(applicationRootFixture(objects, tc.links), workload.Ref)
-		if root != tc.want || key != tc.want {
-			t.Fatalf("links=%v: root=%q key=%q, want %q", tc.links, root, key, tc.want)
+	for order := range 2 {
+		session := appManagerSession(t, objects...)
+		candidate := &applicationInventory{session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
+		root, key := applicationRootRow(candidate, workload.Ref)
+		if root != "argocd/Application/other" || key != "argocd/Application/other" {
+			t.Fatalf("order=%d root=%q key=%q, want sorted-first other", order, root, key)
 		}
-		t.Logf("identical ownership evidence, incoming edges %v: root and key %q", tc.links, key)
+		t.Logf("sorted-first winner with manager order %d: %q", order, key)
+		slices.Reverse(objects)
+	}
+}
+
+func TestApplicationsRecordingManagerKindPrecedence(t *testing.T) {
+	workload := appTestObject("apps", "Deployment", "prod", "api")
+	argo := appTestObject("argoproj.io", "Application", "argocd", "z")
+	kustomization := appTestObject("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "z")
+	release := appTestObject("helm.toolkit.fluxcd.io", "HelmRelease", "flux-system", "z")
+	other := appTestObject("helm.toolkit.fluxcd.io", "HelmRelease", "flux-system", "a")
+	for _, m := range []*ownershiptest.Object{&argo, &kustomization, &release, &other} {
+		m.Membership = ownership.MembersRecorded
+		m.Members = []resourceid.Ref{workload.Ref}
+	}
+	for _, tc := range []struct {
+		objects []ownershiptest.Object
+		want    string
+	}{
+		{[]ownershiptest.Object{release, kustomization, argo, workload}, "argocd/Application/z"},
+		{[]ownershiptest.Object{release, kustomization, workload}, "flux-system/Kustomization/z"},
+		{[]ownershiptest.Object{release, other, workload}, "flux-system/HelmRelease/a"},
+	} {
+		session := appManagerSession(t, tc.objects...)
+		inventory := &applicationInventory{session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
+		root, key := applicationRootRow(inventory, workload.Ref)
+		if root != tc.want || key != tc.want {
+			t.Fatalf("root=%s key=%s want=%s", root, key, tc.want)
+		}
 	}
 }

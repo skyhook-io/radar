@@ -28,6 +28,12 @@ func BenchmarkApplications1000Workloads5000Services(b *testing.B) {
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		b.Fatal(err)
 	}
+	restore, err := k8s.SetTestResourceDiscovery(fake.NewClientset().Discovery())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(restore)
+	addApplicationTypedDiscovery()
 	b.Cleanup(func() {
 		clearApplicationsCache()
 		k8s.ResetResourceCache()
@@ -51,7 +57,7 @@ func BenchmarkApplications1000Workloads5000Services(b *testing.B) {
 			b.Fatalf("row %s services=%+v", row.Key, row.Relationships)
 		}
 	}
-	for _, mode := range []string{"cold_rows_cold_graph", "cold_rows_warm_graph", "warm_rows"} {
+	for _, mode := range []string{"cold_rows_cold_batch", "warm_rows"} {
 		b.Run(mode, func(b *testing.B) {
 			b.ReportAllocs()
 			for range b.N {
@@ -61,9 +67,6 @@ func BenchmarkApplications1000Workloads5000Services(b *testing.B) {
 					entry.at = time.Now()
 					if mode != "warm_rows" {
 						entry.at = time.Time{}
-					}
-					if mode == "cold_rows_cold_graph" {
-						entry.graph = nil
 					}
 					applicationsCache[key] = entry
 				}
