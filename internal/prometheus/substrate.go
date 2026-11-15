@@ -257,7 +257,7 @@ type substrateScopeResolver func(ctx context.Context, probe scopeProbe) (string,
 // subject.
 func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, sps substrateSpellings, families []substrateInstrument, base func(substrateSpelling) string, window time.Duration, scopeOnly bool) substrateFamilyCheck {
 	for _, f := range families {
-		if ambiguous := sps.of(f).ambiguous; ambiguous != "" {
+		if ambiguous := sps.of(f).ambiguity(f); ambiguous != "" {
 			return substrateFamilyCheck{state: SubstrateChartAmbiguous, reason: ambiguous}
 		}
 	}

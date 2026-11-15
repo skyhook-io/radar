@@ -217,3 +217,21 @@ func TestSubstrateAmbiguousComponentRefusesOnlyItsCharts(t *testing.T) {
 		t.Fatalf("workers refused for the controller's ambiguity: %q", c.Reason)
 	}
 }
+
+// Two suffix styles of the lifecycle histogram refuse it, not the worker gauge
+// the same component reports under one name.
+func TestSubstrateSuffixCollisionRefusesOnlyItsInstrument(t *testing.T) {
+	names := []string{"ate_workerpool_workers", "ate_actor_lifecycle_operation_duration_seconds_count", "ate_actor_lifecycle_operation_duration_count"}
+	f := &fakeSubstrateProm{names: names, rules: []fakeRule{{"count by (job)", result(series(map[string]string{"job": "ateapi"}, 1))}, {"count(", result(series(nil, 1))}}}
+	base := func(sp substrateSpelling) string { return substratePoolSelector(sp, "agents", "pool") }
+	sps, err := resolveSubstrateSpellings(context.Background(), f, unverifiedScope, substratePoolInstruments, base, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := checkSubstrateFamilies(context.Background(), f, unverifiedScope, sps, []substrateInstrument{instWorkers}, base, time.Hour, false); got.state != "" {
+		t.Fatalf("workers = %s %q, want readable", got.state, got.reason)
+	}
+	if got := checkSubstrateFamilies(context.Background(), f, unverifiedScope, sps, []substrateInstrument{instLifecycle}, base, time.Hour, false); got.state != SubstrateChartAmbiguous {
+		t.Fatalf("lifecycle = %s, want ambiguous", got.state)
+	}
+}

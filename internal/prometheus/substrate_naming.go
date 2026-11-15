@@ -105,6 +105,17 @@ type substrateSpelling struct {
 	stems map[string]string
 	// ambiguous: why this component's series cannot be read in one spelling.
 	ambiguous string
+	// ambiguousStem: per instrument, why its series cannot be read under one
+	// name in this spelling (two suffix styles with series).
+	ambiguousStem map[string]string
+}
+
+// ambiguity says why i cannot be read, or "".
+func (s substrateSpelling) ambiguity(i substrateInstrument) string {
+	if s.ambiguous != "" {
+		return s.ambiguous
+	}
+	return s.ambiguousStem[i.name]
 }
 
 // substrateSpellings is the spelling of each component's series.
@@ -318,6 +329,13 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve subs
 		return substrateSpelling{}, "", err
 	}
 	sp, _, ambiguous, err := resolveSpellingFrom(ctx, q, resolve, held, instruments, base, window)
+	if ambiguous == "" {
+		for _, inst := range instruments {
+			if reason := sp.ambiguousStem[inst.name]; reason != "" {
+				return sp, reason, err
+			}
+		}
+	}
 	return sp, ambiguous, err
 }
 
@@ -402,9 +420,13 @@ func resolveSpellingFrom(ctx context.Context, q seriesQuerier, resolve substrate
 	if isDotted {
 		chosen, candidates = liveDotted, dotted
 	}
+	// Two suffix styles of one instrument refuse that instrument only: the
+	// component's labels, and its other instruments' names, are not in doubt.
+	ambiguousStem := map[string]string{}
 	for _, inst := range instruments {
 		if stems := chosen[inst.name]; len(stems) > 1 {
-			return substrateSpelling{}, found, inst.name + " appears as both " + strings.Join(stems, " and ") + " for this in the range, so Radar cannot tell which holds the whole answer. " + switched, nil
+			ambiguousStem[inst.name] = inst.name + " appears as both " + strings.Join(stems, " and ") + " for this in the range, so Radar cannot tell which holds the whole answer. " + switched
+			chosen[inst.name] = stems[:1]
 		}
 	}
 	// Instruments with no series here fall back to a name the list holds.
@@ -413,7 +435,11 @@ func resolveSpellingFrom(ctx context.Context, q seriesQuerier, resolve substrate
 			chosen[name] = stems[:1]
 		}
 	}
-	return spellingFrom(isDotted, chosen, instruments), found, "", nil
+	sp = spellingFrom(isDotted, chosen, instruments)
+	if len(ambiguousStem) > 0 {
+		sp.ambiguousStem = ambiguousStem
+	}
+	return sp, found, "", nil
 }
 
 // spellingFrom builds a spelling from one stem found per instrument. An

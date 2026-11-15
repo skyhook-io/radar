@@ -11,7 +11,7 @@ const (
 	verdictAnyFree = `max(ate_workerpool_workers{`
 	verdictFree    = `ate_worker_state=~"idle|partial",ate_sandbox_class!="unknown"}))`
 	verdictTotal   = `ate_worker_state=~"idle|partial|at_capacity",ate_sandbox_class!="unknown"}))`
-	verdictFresh   = "count(ate_actor_lifecycle_operation_duration_seconds_count{"
+	verdictFresh   = `count(ate_actor_lifecycle_operation_duration_seconds_count{ate_workerpool_namespace="agents",ate_workerpool_name="pool",ate_actor_operation_name="resume"`
 )
 
 func okCharts(ids ...string) []SubstrateChart {
@@ -211,4 +211,21 @@ func TestSubstratePoolVerdictUnknownWorkerState(t *testing.T) {
 	if v.State != SubstrateVerdictUnknown || !strings.Contains(v.Reason, "draining") {
 		t.Fatalf("verdict = %s %q", v.State, v.Reason)
 	}
+}
+
+// A suspend still reported says nothing about resumes that stopped.
+func TestSubstrateRangeFactFreshnessIsPerPopulation(t *testing.T) {
+	v, f := poolVerdict(t, []fakeRule{
+		{"histogram_quantile(0.95", result(series(nil, 0.8))},
+		{`count(ate_actor_lifecycle_operation_duration_seconds_count{ate_workerpool_namespace="agents",ate_workerpool_name="pool"})`, result(series(nil, 3))},
+	}, okCharts("resumeTime"))
+	if p95 := fact(v, "resumeP95"); p95.State != SubstrateFactUnavailable {
+		t.Fatalf("p95 kept fresh by another operation = %+v", p95)
+	}
+	for _, q := range f.queries {
+		if strings.HasPrefix(q, "count(ate_actor_lifecycle_operation_duration_seconds_count{") && strings.Contains(q, `ate_actor_operation_name="resume"`) && strings.Contains(q, `error_type=""`) {
+			return
+		}
+	}
+	t.Fatalf("no freshness check of successful resumes in %v", f.queries)
 }

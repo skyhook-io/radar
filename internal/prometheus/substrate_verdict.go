@@ -108,8 +108,9 @@ func queryFailed(err error) string { return "Prometheus query failed: " + trunca
 // chartFact reads one number from the same series, scope and checks as the
 // chart it summarizes: a chart Radar refused to draw leaves its fact
 // unavailable for the same reason. build reads over x.window, the request's
-// range, or now.
-func (r *substrateRun) chartFact(chart SubstrateChart, def substrateChartDef, id, label, unit string, build func(x substrateExpr) string) SubstrateFact {
+// range, or now; population is the matchers of the observations it
+// summarizes, which must still be reported now.
+func (r *substrateRun) chartFact(chart SubstrateChart, def substrateChartDef, id, label, unit string, population func(x substrateExpr) []string, build func(x substrateExpr) string) SubstrateFact {
 	if chart.State != SubstrateChartOK && chart.State != SubstrateChartEmpty {
 		return unavailableFact(id, label, unit, chart.Reason)
 	}
@@ -127,9 +128,15 @@ func (r *substrateRun) chartFact(chart SubstrateChart, def substrateChartDef, id
 	case v == nil:
 		return SubstrateFact{ID: id, Label: label, Unit: unit, State: SubstrateFactEmpty, Reason: def.emptyReason}
 	}
-	// A summary over the range still has a value after the series stopped,
+	// A summary over the range still has a value after its series stopped,
 	// counting only the time before; say nothing rather than a stale number.
-	fresh, err := instantValue(r.ctx, r.q, "count("+x.vec(def.inst, def.inst.probeSuffix())+")")
+	// Another population of the same instrument (a suspend, a failed resume)
+	// still reporting proves nothing about this one.
+	var matchers []string
+	if population != nil {
+		matchers = population(x)
+	}
+	fresh, err := instantValue(r.ctx, r.q, "count("+x.vec(def.inst, def.inst.probeSuffix(), matchers...)+")")
 	switch {
 	case err != nil:
 		return unavailableFact(id, label, unit, queryFailed(err))
@@ -162,13 +169,13 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	freeFact := unavailableFact("freeWorkers", "Free workers", "workers", "")
 	defer func() {
 		v.Facts = append([]SubstrateFact{freeFact},
-			r.chartFact(findSubstrateChart(charts, "resumeTime"), chartDef(defs, "resumeTime"), "resumeP95", "Resume p95", "seconds", func(x substrateExpr) string {
-				return x.quantile("0.95", instLifecycle, x.m("ate.actor.operation.name", "=", "resume"), x.m("error.type", "=", ""))
+			r.chartFact(findSubstrateChart(charts, "resumeTime"), chartDef(defs, "resumeTime"), "resumeP95", "Resume p95", "seconds", succeededResumes, func(x substrateExpr) string {
+				return x.quantile("0.95", instLifecycle, succeededResumes(x)...)
 			}),
-			r.chartFact(findSubstrateChart(charts, "resumeFailures"), chartDef(defs, "resumeFailures"), "resumeFailures", "Failed resumes", "percent", func(x substrateExpr) string {
-				return x.failureShare(instLifecycle, x.m("ate.actor.operation.name", "=", "resume"))
+			r.chartFact(findSubstrateChart(charts, "resumeFailures"), chartDef(defs, "resumeFailures"), "resumeFailures", "Failed resumes", "percent", resumes, func(x substrateExpr) string {
+				return x.failureShare(instLifecycle, resumes(x)...)
 			}),
-			r.chartFact(findSubstrateChart(charts, "crashes"), chartDef(defs, "crashes"), "crashes", "Crashes", "count", func(x substrateExpr) string {
+			r.chartFact(findSubstrateChart(charts, "crashes"), chartDef(defs, "crashes"), "crashes", "Crashes", "count", nil, func(x substrateExpr) string {
 				return "sum(" + collapseHA("increase("+x.vec(instCrashes, "")+"["+x.window+"])") + ")"
 			}),
 		)
@@ -253,6 +260,14 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	return v
 }
 
+func resumes(x substrateExpr) []string {
+	return []string{x.m("ate.actor.operation.name", "=", "resume")}
+}
+
+func succeededResumes(x substrateExpr) []string {
+	return append(resumes(x), x.m("error.type", "=", ""))
+}
+
 // poolShort reports whether Substrate's capacity alert condition holds for
 // the pool. Its error says why the shortfall cannot be judged.
 func (r *substrateRun) poolShort() (bool, error) {
@@ -291,7 +306,7 @@ func (r *substrateRun) nodeVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	defs := r.req.charts
 	v := &SubstrateVerdict{State: SubstrateVerdictUnknown}
 	overdue := unavailableFact("overdueUploads", "Overdue uploads", "count", "")
-	oldest := r.chartFact(findSubstrateChart(charts, "unsavedSnapshotAge"), chartDef(defs, "unsavedSnapshotAge"), "oldestUnsaved", "Oldest unsaved snapshot", "seconds", func(x substrateExpr) string {
+	oldest := r.chartFact(findSubstrateChart(charts, "unsavedSnapshotAge"), chartDef(defs, "unsavedSnapshotAge"), "oldestUnsaved", "Oldest unsaved snapshot", "seconds", nil, func(x substrateExpr) string {
 		return "max(" + x.vec(instUndurable, "") + ")"
 	})
 	defer func() { v.Facts = []SubstrateFact{overdue, oldest} }()
