@@ -227,14 +227,15 @@ type appRelationships struct {
 	PDBRefs           []topology.ResourceRef `json:"pdbRefs,omitempty"`
 	NetworkPolicyRefs []topology.ResourceRef `json:"networkPolicyRefs,omitempty"`
 
-	serviceRefs       map[string]topology.ResourceRef
-	ingressRefs       map[string]topology.ResourceRef
-	routeRefs         map[string]topology.ResourceRef
-	configRefs        map[string]topology.ResourceRef
-	scalerRefs        map[string]topology.ResourceRef
-	storageRefs       map[string]topology.ResourceRef
-	pdbRefs           map[string]topology.ResourceRef
-	networkPolicyRefs map[string]topology.ResourceRef
+	serviceRefs        map[string]topology.ResourceRef
+	ingressRefs        map[string]topology.ResourceRef
+	routeRefs          map[string]topology.ResourceRef
+	configRefs         map[string]topology.ResourceRef
+	scalerRefs         map[string]topology.ResourceRef
+	storageRefs        map[string]topology.ResourceRef
+	pdbRefs            map[string]topology.ResourceRef
+	networkPolicyRefs  map[string]topology.ResourceRef
+	exposureIncomplete bool
 }
 
 // appEvent is a recent k8s Warning event correlated to an app's workloads/pods
@@ -282,6 +283,7 @@ type appWorkload struct {
 	// declaration (authoritative, portable). Resolver input, not on the wire.
 	appAnnotation string
 	jobSetParent  string
+	relationships *appRelationships
 }
 
 type appBatchSummary struct {
@@ -837,33 +839,37 @@ func (g *appGraph) rootOf(group, kind, ns, name string) (rootKey, rootKind, root
 // relationshipsFor pulls the workload's structural satellites from the graph.
 func (g *appGraph) relationshipsFor(kind, ns, name string, obj any) *appRelationships {
 	if g.topo == nil {
-		return nil
+		return &appRelationships{exposureIncomplete: true}
 	}
 	rel := topology.GetRelationshipsWithObject(kind, ns, name, obj, g.topo, g.provider, g.dp, g.idx)
 	if rel == nil {
+		if len(g.topo.Warnings) > 0 {
+			return &appRelationships{exposureIncomplete: true}
+		}
 		return nil
 	}
 	out := &appRelationships{
-		Configs:           len(rel.ConfigRefs),
-		Scalers:           len(rel.Scalers),
-		Storage:           len(rel.StorageRefs),
-		PDBs:              len(rel.PDBs),
-		NetworkPolicies:   len(rel.NetworkPolicies),
-		serviceRefs:       refsByKey(rel.Services),
-		ingressRefs:       refsByKey(rel.Ingresses),
-		routeRefs:         refsByKey(appRouteRefs(rel.Routes, rel.Gateways, rel.Backends)),
-		configRefs:        refsByKey(rel.ConfigRefs),
-		scalerRefs:        refsByKey(rel.Scalers),
-		storageRefs:       refsByKey(rel.StorageRefs),
-		pdbRefs:           refsByKey(rel.PDBs),
-		networkPolicyRefs: refsByKey(rel.NetworkPolicies),
+		exposureIncomplete: len(g.topo.Warnings) > 0,
+		Configs:            len(rel.ConfigRefs),
+		Scalers:            len(rel.Scalers),
+		Storage:            len(rel.StorageRefs),
+		PDBs:               len(rel.PDBs),
+		NetworkPolicies:    len(rel.NetworkPolicies),
+		serviceRefs:        refsByKey(rel.Services),
+		ingressRefs:        refsByKey(rel.Ingresses),
+		routeRefs:          refsByKey(appRouteRefs(rel.Routes, rel.Gateways, rel.Backends)),
+		configRefs:         refsByKey(rel.ConfigRefs),
+		scalerRefs:         refsByKey(rel.Scalers),
+		storageRefs:        refsByKey(rel.StorageRefs),
+		pdbRefs:            refsByKey(rel.PDBs),
+		networkPolicyRefs:  refsByKey(rel.NetworkPolicies),
 	}
 	out.Services = refNames(sortedRefs(out.serviceRefs, 20), 20)
 	out.Ingresses = refNames(sortedRefs(out.ingressRefs, 20), 20)
 	out.Routes = routeRefNames(sortedRefs(out.routeRefs, 20), 20)
 	if len(out.Services) == 0 && len(out.Ingresses) == 0 && len(out.Routes) == 0 &&
 		len(out.serviceRefs) == 0 && len(out.ingressRefs) == 0 && len(out.routeRefs) == 0 &&
-		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 && out.NetworkPolicies == 0 {
+		out.Configs == 0 && out.Scalers == 0 && out.Storage == 0 && out.PDBs == 0 && out.NetworkPolicies == 0 && !out.exposureIncomplete {
 		return nil
 	}
 	return out
@@ -966,6 +972,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				Namespace:        ns,
 				Name:             name,
 				WorkloadClass:    classifyWorkload(kind, rels),
+				relationships:    rels,
 				Image:            image,
 				Version:          imageutil.ImageTag(image),
 				AppVersion:       lbls["app.kubernetes.io/version"],
@@ -2532,6 +2539,9 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 			len(rels.serviceRefs) > 0 || len(rels.ingressRefs) > 0 || len(rels.routeRefs) > 0) {
 			return "service"
 		}
+		if rels != nil && rels.exposureIncomplete {
+			return "unknown"
+		}
 		return "worker"
 	default:
 		return "unknown"
@@ -2938,7 +2948,7 @@ func namespaceFromKey(key string) string {
 
 // filterApplicationsForUser projects the shared rows for the caller.
 func (s *Server) filterApplicationsForUser(r *http.Request, shared *applicationsResponse) *applicationsResponse {
-	return s.filterApplicationSources(r, s.filterApplicationAuthenticationRefs(r, shared))
+	return s.filterApplicationSources(r, s.filterApplicationAttachments(r, shared))
 }
 
 // filterApplicationSources withholds what names a GitOps manager the caller
@@ -2988,41 +2998,101 @@ func (s *Server) canReadAppSource(r *http.Request, group, kind, namespace string
 	return group != "" && resource != "" && namespace != "" && s.canRead(r, group, resource, namespace, "get")
 }
 
-// Applications rows are shared across callers, so authentication references are authorized on a copy after the cache.
-func (s *Server) filterApplicationAuthenticationRefs(r *http.Request, shared *applicationsResponse) *applicationsResponse {
+// Shared rows retain every attachment; authorization runs on each caller's copy.
+func (s *Server) filterApplicationAttachments(r *http.Request, shared *applicationsResponse) *applicationsResponse {
 	if auth.UserFromContext(r.Context()) == nil {
 		return shared
+	}
+	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+	var access ownership.Access
+	if err == nil {
+		access = s.ownershipAccess(r, session.Catalog())
+	}
+	allowed := func(ref topology.ResourceRef) bool {
+		if access == nil || access.CanRead(resourceid.GroupKind{Group: ref.Group, Kind: ref.Kind}, ref.Namespace) != ownership.Allowed {
+			return false
+		}
+		if ref.Group == "keda.sh" {
+			switch ref.Kind {
+			case "TriggerAuthentication":
+				return s.canRead(r, ref.Group, "triggerauthentications", ref.Namespace, "get")
+			case "ClusterTriggerAuthentication":
+				return s.canRead(r, ref.Group, "clustertriggerauthentications", "", "get")
+			}
+		}
+		return true
 	}
 	out := *shared
 	out.Applications = append([]appRow(nil), shared.Applications...)
 	for i := range out.Applications {
 		row := &out.Applications[i]
-		if row.Relationships == nil {
-			continue
-		}
-		rel := *row.Relationships
-		refs := make(map[string]topology.ResourceRef, len(rel.configRefs))
-		withheld := false
-		for key, ref := range rel.configRefs {
-			if ref.Group == "keda.sh" && (ref.Kind == "TriggerAuthentication" || ref.Kind == "ClusterTriggerAuthentication") {
-				resource := "triggerauthentications"
-				if ref.Kind == "ClusterTriggerAuthentication" {
-					resource = "clustertriggerauthentications"
-				}
-				if !s.canRead(r, ref.Group, resource, ref.Namespace, "get") {
-					withheld = true
-					continue
-				}
+		row.Relationships = filterAppRelationships(row.Relationships, allowed)
+		row.Workloads = append([]appWorkload(nil), row.Workloads...)
+		inputs := make([]appWorkloadInput, 0, len(row.Workloads))
+		for j := range row.Workloads {
+			wl := &row.Workloads[j]
+			wl.relationships = filterAppRelationships(wl.relationships, allowed)
+			if access == nil {
+				wl.relationships = &appRelationships{exposureIncomplete: true}
 			}
-			refs[key] = ref
+			wl.WorkloadClass = classifyWorkload(wl.Kind, wl.relationships)
+			inputs = append(inputs, appWorkloadInput{wl: *wl})
 		}
-		if !withheld {
-			continue
+		if len(inputs) > 0 {
+			row.WorkloadClass = classifyAppWorkloads(inputs)
 		}
-		rel.configRefs = refs
-		rel.ConfigRefs = sortedRefs(refs, 20)
-		rel.Configs = len(refs)
-		row.Relationships = &rel
 	}
+	if session != nil && session.ValidateCaches() != nil {
+		// A replaced catalog cannot authorize references retained by the old cache.
+		for i := range out.Applications {
+			row := &out.Applications[i]
+			row.Relationships = nil
+			for j := range row.Workloads {
+				row.Workloads[j].relationships = &appRelationships{exposureIncomplete: true}
+				row.Workloads[j].WorkloadClass = classifyWorkload(row.Workloads[j].Kind, row.Workloads[j].relationships)
+			}
+			inputs := make([]appWorkloadInput, 0, len(row.Workloads))
+			for _, wl := range row.Workloads {
+				inputs = append(inputs, appWorkloadInput{wl: wl})
+			}
+			row.WorkloadClass = classifyAppWorkloads(inputs)
+		}
+	}
+	return &out
+}
+
+func filterAppRelationships(shared *appRelationships, allowed func(topology.ResourceRef) bool) *appRelationships {
+	if shared == nil {
+		return nil
+	}
+	out := *shared
+	filter := func(refs map[string]topology.ResourceRef) map[string]topology.ResourceRef {
+		if refs == nil {
+			return nil
+		}
+		visible := make(map[string]topology.ResourceRef, len(refs))
+		for key, ref := range refs {
+			if allowed(ref) {
+				visible[key] = ref
+			}
+		}
+		return visible
+	}
+	out.serviceRefs = filter(shared.serviceRefs)
+	out.ingressRefs = filter(shared.ingressRefs)
+	out.routeRefs = filter(shared.routeRefs)
+	out.configRefs = filter(shared.configRefs)
+	out.scalerRefs = filter(shared.scalerRefs)
+	out.storageRefs = filter(shared.storageRefs)
+	out.pdbRefs = filter(shared.pdbRefs)
+	out.networkPolicyRefs = filter(shared.networkPolicyRefs)
+	out.exposureIncomplete = out.exposureIncomplete || len(out.serviceRefs) != len(shared.serviceRefs) || len(out.ingressRefs) != len(shared.ingressRefs) || len(out.routeRefs) != len(shared.routeRefs)
+	out.ServiceRefs, out.IngressRefs, out.RouteRefs = sortedRefs(out.serviceRefs, 20), sortedRefs(out.ingressRefs, 20), sortedRefs(out.routeRefs, 20)
+	out.Services, out.Ingresses, out.Routes = refNames(out.ServiceRefs, 20), refNames(out.IngressRefs, 20), routeRefNames(out.RouteRefs, 20)
+	out.ConfigRefs, out.Configs = sortedRefs(out.configRefs, 20), len(out.configRefs)
+	out.ScalerRefs, out.Scalers = sortedRefs(out.scalerRefs, 20), len(out.scalerRefs)
+	out.StorageRefs, out.Storage = sortedRefs(out.storageRefs, 20), len(out.storageRefs)
+	out.PDBRefs, out.PDBs = sortedRefs(out.pdbRefs, 20), len(out.pdbRefs)
+	out.NetworkPolicyRefs, out.NetworkPolicies = sortedRefs(out.networkPolicyRefs, 20), len(out.networkPolicyRefs)
 	return &out
 }
