@@ -56,9 +56,7 @@ export interface VulnerableImage {
 export interface VulnerabilityCVEImage {
   imageId: string
   image: string
-  package: string
-  installedVersion: string
-  fixedVersion?: string
+  packages: { package: string; installedVersion: string; fixedVersion?: string }[]
   workloads: VulnerabilityWorkloadRef[]
   workloadsTotal: number
 }

@@ -108,16 +108,22 @@ type CVE struct {
 	Affected []CVEImage `json:"affected"`
 }
 
-// CVEImage is one image a CVE was found in.
+// CVEImage is one image a CVE was found in, with each package it was found
+// in there.
 type CVEImage struct {
-	ImageID          string `json:"imageId"`
-	Image            string `json:"image"`
-	Package          string `json:"package"`
-	InstalledVersion string `json:"installedVersion"`
-	FixedVersion     string `json:"fixedVersion,omitempty"`
+	ImageID  string            `json:"imageId"`
+	Image    string            `json:"image"`
+	Packages []AffectedPackage `json:"packages"`
 	// Workloads lists at most MaxWorkloadsPerAffected of WorkloadsTotal.
 	Workloads      []WorkloadRef `json:"workloads"`
 	WorkloadsTotal int           `json:"workloadsTotal"`
+}
+
+// AffectedPackage is a package a CVE was found in, and where it is fixed.
+type AffectedPackage struct {
+	Package          string `json:"package"`
+	InstalledVersion string `json:"installedVersion"`
+	FixedVersion     string `json:"fixedVersion,omitempty"`
 }
 
 // Workload is one running workload and what its containers' images carry.

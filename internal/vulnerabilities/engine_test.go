@@ -236,7 +236,7 @@ func TestCVEView(t *testing.T) {
 		t.Fatalf("cves: %+v", resp.CVEs)
 	}
 	top := resp.CVEs[0]
-	if top.ID != "CVE-A" || top.Images != 2 || top.Workloads != 2 || !top.Fixable || len(top.Affected) != 2 {
+	if top.ID != "CVE-A" || top.Images != 2 || top.Workloads != 2 || !top.Fixable || len(top.Affected) != 2 || len(top.Affected[0].Packages) != 1 {
 		t.Fatalf("top: %+v", top)
 	}
 	if resp.CVEs[1].ID != "CVE-B" || resp.CVEs[1].Fixable {
@@ -298,5 +298,20 @@ func TestRolloutWithUnchangedImageStaysScanned(t *testing.T) {
 	}
 	if len(resp.Unscanned) != 0 {
 		t.Fatalf("unscanned: %+v", resp.Unscanned)
+	}
+}
+
+// A CVE in two packages of one image is one affected image.
+func TestCVEInTwoPackagesIsOneImage(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+			{"CVE-A", "HIGH", "libssl3", "3.0", "3.1"},
+			{"CVE-A", "HIGH", "openssl", "3.0", "3.1"},
+		}}),
+	}
+	targets := []target{liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout)}
+	resp := mustBuild(t, items, targets, ViewCVE, Filter{})
+	if len(resp.CVEs) != 1 || resp.CVEs[0].Images != 1 || len(resp.CVEs[0].Affected) != 1 || len(resp.CVEs[0].Affected[0].Packages) != 2 {
+		t.Fatalf("%+v", resp.CVEs)
 	}
 }

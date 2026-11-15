@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/search"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -86,29 +87,20 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		return empty(req.View, resourceapi.Gap{Code: readreason.UserNoNamespaceAccess}), nil
 	}
 
-	readable, gaps := readableNamespaces(gvr, req, clusterNamespaces(cache))
-
-	// What runs is known only where Radar collects Pods and they have
-	// loaded; reports elsewhere are withheld and named, never read as
-	// inactive.
-	pods := cache.AssessKindRead("pods", readable)
-	switch {
-	case pods.Readiness == k8score.KindUnavailable:
-		return Response{}, ErrNotReady
-	case pods.AllNamespaces:
-		if pods.Readiness != k8score.KindReady {
-			return Response{}, ErrNotReady
+	namespaces, namespacesKnown := clusterNamespaces(cache)
+	var gaps []resourceapi.Gap
+	if !namespacesKnown && req.Namespaces == nil && req.ReportAccess != nil {
+		// Radar can't list namespaces to check access in each; check the
+		// ones that hold reports and say the scope is unknown.
+		all, err := list("")
+		if err != nil {
+			return Response{}, err
 		}
-	default:
-		gaps = appendGap(gaps, readreason.RadarNamespaceNotCollected, pods.Uncovered)
-		if readable == nil {
-			// Radar collects Pods only in some namespaces; the rest are unknown.
-			gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()})
-		}
-		gaps = appendGap(gaps, readreason.KindSyncPending, pods.Loading)
-		gaps = appendGap(gaps, readreason.KindSyncTimedOut, pods.Failed)
-		readable = pods.Read
+		namespaces = reportNamespaces(all)
+		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Namespaces: resourceapi.UnknownNames()})
 	}
+	readable, accessGaps := readableNamespaces(gvr, req, namespaces)
+	gaps = append(gaps, accessGaps...)
 
 	var items []*unstructured.Unstructured
 	for _, ns := range scopeNamespaces(readable) {
@@ -118,6 +110,18 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		}
 		items = append(items, got...)
 	}
+
+	// Each join input answers only where Radar collects it and it has
+	// loaded. Elsewhere reports are withheld and the namespaces named: a
+	// missing report would otherwise read as an unscanned image, a missing
+	// Pod or CronJob as an inactive report.
+	readable, gaps = narrowToDynamic(readplan.Dynamic(dynamic, gvr, readable, false), readable, gaps)
+	readable, gaps, ok = narrowToTyped(cache.AssessKindRead("pods", readable), readable, gaps)
+	if !ok {
+		return Response{}, ErrNotReady
+	}
+	items = filterNamespaces(items, readable)
+	cronReadable, cronGaps, cronOK := narrowToTyped(cache.AssessKindRead("cronjobs", readable), readable, nil)
 
 	live, ready := liveTargets(cache, readable, req.CanRead)
 	if !ready {
@@ -131,14 +135,18 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		items = withoutNamespaces(items, live.podDenied)
 		gaps = appendGap(gaps, readreason.UserForbidden, live.podDenied)
 	}
-	if live.cronJobsUnknown {
+	if !cronOK || len(cronGaps) > 0 {
 		before := len(items)
 		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
 			r, ok := reportHeader(u)
-			return ok && r.owner.kind == "CronJob"
+			return ok && r.owner.kind == "CronJob" && (!cronOK || (cronReadable != nil && !slices.Contains(cronReadable, r.owner.namespace)))
 		})
 		if len(items) < before {
-			gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
+			if cronOK {
+				gaps = append(gaps, cronGaps...)
+			} else {
+				gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
+			}
 		}
 	}
 	if len(live.withheld) > 0 {
@@ -201,17 +209,89 @@ func readableNamespaces(gvr schema.GroupVersionResource, req Request, clusterNam
 	return allowed, gaps
 }
 
-func clusterNamespaces(cache *k8s.ResourceCache) []string {
-	if cache == nil || cache.Namespaces() == nil {
-		return []string{}
+// clusterNamespaces lists the cluster's namespaces; known is false when
+// Radar doesn't collect them or hasn't loaded them.
+func clusterNamespaces(cache *k8s.ResourceCache) (namespaces []string, known bool) {
+	if cache == nil || cache.Namespaces() == nil || !cache.IsKindReady("namespaces") {
+		return []string{}, false
 	}
 	list, err := cache.Namespaces().List(labels.Everything())
 	if err != nil {
-		return []string{}
+		return []string{}, false
 	}
 	out := make([]string, 0, len(list))
 	for _, ns := range list {
 		out = append(out, ns.Name)
+	}
+	slices.Sort(out)
+	return out, true
+}
+
+func filterNamespaces(items []*unstructured.Unstructured, namespaces []string) []*unstructured.Unstructured {
+	if namespaces == nil {
+		return items
+	}
+	out := make([]*unstructured.Unstructured, 0, len(items))
+	for _, u := range items {
+		if slices.Contains(namespaces, u.GetNamespace()) {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// narrowToTyped narrows readable to the namespaces where a typed kind has
+// loaded, naming the others. ok is false when the kind isn't collected at
+// all or hasn't loaded anywhere.
+func narrowToTyped(a k8score.KindReadAssessment, readable []string, gaps []resourceapi.Gap) ([]string, []resourceapi.Gap, bool) {
+	switch {
+	case a.Readiness == k8score.KindUnavailable:
+		return readable, gaps, false
+	case a.AllNamespaces:
+		return readable, gaps, a.Readiness == k8score.KindReady
+	}
+	gaps = appendGap(gaps, readreason.RadarNamespaceNotCollected, a.Uncovered)
+	if readable == nil {
+		// Radar collects the kind only in some namespaces; the rest are unknown.
+		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()})
+	}
+	gaps = appendGap(gaps, readreason.KindSyncPending, a.Loading)
+	gaps = appendGap(gaps, readreason.KindSyncTimedOut, a.Failed)
+	return a.Read, gaps, true
+}
+
+// narrowToDynamic is narrowToTyped for the report kind, from its read plan.
+func narrowToDynamic(plan readplan.Plan, readable []string, gaps []resourceapi.Gap) ([]string, []resourceapi.Gap) {
+	var read []string
+	whole := false
+	for _, part := range plan.Partitions {
+		switch {
+		case part.Verdict.State == readplan.Readable && part.Extent == readplan.NamespaceSet:
+			read = append(read, part.Namespaces...)
+		case part.Verdict.State == readplan.Readable:
+			whole = true
+		case part.Extent == readplan.NamespaceSet:
+			gaps = appendGap(gaps, part.Verdict.Code, part.Namespaces)
+		default:
+			gaps = append(gaps, resourceapi.Gap{Code: part.Verdict.Code, Namespaces: resourceapi.UnknownNames()})
+		}
+	}
+	if whole {
+		return readable, gaps
+	}
+	if read == nil {
+		read = []string{}
+	}
+	slices.Sort(read)
+	return read, gaps
+}
+
+func reportNamespaces(items []*unstructured.Unstructured) []string {
+	var out []string
+	for _, u := range items {
+		if ns := u.GetNamespace(); !slices.Contains(out, ns) {
+			out = append(out, ns)
+		}
 	}
 	slices.Sort(out)
 	return out

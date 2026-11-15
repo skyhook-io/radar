@@ -396,10 +396,14 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                 {c.title && <p className="text-sm text-theme-text-secondary">{c.title}</p>}
                 <div className="overflow-hidden rounded-md border border-theme-border">
                   {c.affected.map((a) => (
-                    <div key={`${a.imageId}/${a.package}`} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,2fr)] items-start gap-3 border-b border-theme-border bg-theme-base px-3 py-2 text-xs last:border-0">
+                    <div key={a.imageId} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,2fr)] items-start gap-3 border-b border-theme-border bg-theme-base px-3 py-2 text-xs last:border-0">
                       <span className="truncate font-mono text-theme-text-primary" title={a.image}>{a.image}</span>
-                      <span className="truncate font-mono text-theme-text-tertiary">
-                        {a.package} {a.installedVersion} → {a.fixedVersion ? <span className="text-emerald-700 dark:text-emerald-400">{a.fixedVersion}</span> : 'no fix yet'}
+                      <span className="flex min-w-0 flex-col">
+                        {a.packages.map((p) => (
+                          <span key={`${p.package}/${p.installedVersion}`} className="truncate font-mono text-theme-text-tertiary">
+                            {p.package} {p.installedVersion} → {p.fixedVersion ? <span className="text-emerald-700 dark:text-emerald-400">{p.fixedVersion}</span> : 'no fix yet'}
+                          </span>
+                        ))}
                       </span>
                       <span className="flex flex-wrap gap-x-2">
                         {a.workloads.map((w) => (

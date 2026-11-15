@@ -458,6 +458,18 @@ type cveAgg struct {
 // in thousands of images holds a bounded list that still shows where it
 // runs most.
 func (c *cveAgg) keepAffected(a CVEImage) {
+	// An image's findings arrive together, so a second package of the same
+	// image joins its entry.
+	if n := len(c.row.Affected); n > 0 && c.row.Affected[n-1].ImageID == a.ImageID {
+		c.row.Affected[n-1].Packages = append(c.row.Affected[n-1].Packages, a.Packages...)
+		return
+	}
+	for i := range c.row.Affected {
+		if c.row.Affected[i].ImageID == a.ImageID {
+			c.row.Affected[i].Packages = append(c.row.Affected[i].Packages, a.Packages...)
+			return
+		}
+	}
 	if len(c.row.Affected) < MaxAffectedPerCVE {
 		c.row.Affected = append(c.row.Affected, a)
 		return
@@ -513,8 +525,8 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			c.packages[fd.Package] = true
 			c.images[r.imageID] = true
 			c.keepAffected(CVEImage{
-				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), Package: fd.Package,
-				InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion,
+				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest),
+				Packages:  []AffectedPackage{{Package: fd.Package, InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion}},
 				Workloads: listed, WorkloadsTotal: len(workloads),
 			})
 		}

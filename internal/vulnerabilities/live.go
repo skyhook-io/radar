@@ -59,7 +59,6 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 	}
 	var targets []target
 	var podDenied []string
-	cronJobsUnknown := false
 	withheld := map[ownerKey]bool{}
 	may := func(group, kind, ns string) bool { return canRead == nil || canRead(group, kind, ns) }
 	podAccess := map[string]bool{}
@@ -114,8 +113,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 				})
 			}
 		}
-		if cache.CronJobs() == nil || !cache.IsKindReady("cronjobs") {
-			cronJobsUnknown = true
+		if cache.CronJobs() == nil {
 			continue
 		}
 		var cronJobs []*batchv1.CronJob
@@ -142,7 +140,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 		}
 	}
 	slices.Sort(podDenied)
-	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld, cronJobsUnknown: cronJobsUnknown}, true
+	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld}, true
 }
 
 // liveSet is what runs, as far as the caller may see it: podDenied are
@@ -152,9 +150,6 @@ type liveSet struct {
 	targets   []target
 	podDenied []string
 	withheld  map[ownerKey]bool
-	// cronJobsUnknown: CronJobs couldn't be read, so whether one is
-	// suspended, or exists, is unknown.
-	cronJobsUnknown bool
 }
 
 func podContainers(spec corev1.PodSpec) []corev1.Container {
