@@ -70,6 +70,12 @@ OutOfSync alerts in the Issues band at the top of the page are clickable — the
 
 Operation history with deploy timestamps, the git revision deployed, who initiated the sync (human user or automation), an outcome chip per row, and per-revision **Rollback** buttons for Argo. In-progress operations pin to the top of the timeline. History `rollbackable` only reports whether an entry has an ID and recorded source(s); auto-sync, lifecycle, in-flight operations and RBAC are separate checks.
 
+### ApplicationSet health
+
+ApplicationSet fleet/detail health, resource badges and drawer banners use the controller's `status.health.status` when populated. GitOps health tooltips and non-healthy drawer banners preserve its message. When health is absent or empty (older controllers, or status not yet rewritten after an upgrade), conditions resolve in order: `ErrorOccurred=True`, `RolloutProgressing=True`, `ResourcesUpToDate=True`, then Unknown. Generation success does not imply a progressive rollout has finished. Health is controller-reported state, not proof the controller is currently running.
+
+In resource conditions, `InvalidRolloutConfig=True` is a problem independently of overall health. `RolloutProgressing` describes activity: neither True nor False is rendered as a failed condition.
+
 ## Diagnosis pipeline
 
 The Issues band at the top of the detail page surfaces seven classes of problems:
@@ -408,7 +414,7 @@ See [MCP server](mcp.md) for the full tool list and security model.
 
 ## Demo cluster
 
-`make gitops-demo` bootstraps a `kind` cluster pre-loaded with Argo CD + Flux + a curated set of fixtures covering every UI state the GitOps tab needs to render. Pinned to Argo CD `v2.13.2` + Flux `v2.4.0`.
+`make gitops-demo` bootstraps a `kind` cluster pre-loaded with Argo CD + Flux + a curated set of fixtures covering every UI state the GitOps tab needs to render. Defaults to Argo CD `v3.5.2` + Flux `v2.4.0`; override Argo with `ARGOCD_VERSION`.
 
 ```bash
 make gitops-demo              # bootstrap + apply fixtures

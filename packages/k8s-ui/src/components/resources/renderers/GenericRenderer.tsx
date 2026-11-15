@@ -357,6 +357,8 @@ export function genericConditionTone(resource: any, cond: any): GenericCondition
   if (getCrossplaneConditionTone(resource, cond) === 'neutral') return 'neutral'
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
   if (isKServeStopState(resource, cond)) return 'neutral'
+  if (resource?.kind === 'ApplicationSet' && isApiGroup(resource?.apiVersion, 'argoproj.io')
+    && cond.type === 'RolloutProgressing') return 'neutral'
   const isTrue = cond.status === 'True'
   if (WARNING_CONDITION_TYPES.has(cond.type)) return isTrue ? 'warning' : 'ok'
   if (isInvertedPolarityCondition(cond.type)) return isTrue ? 'fail' : 'ok'
