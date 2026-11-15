@@ -83,17 +83,24 @@ type outsideCoverage struct {
 	Failed     []outsideDenied `json:"failed,omitempty"`
 	Skipped    []string        `json:"skipped,omitempty"`
 	NotChecked []string        `json:"notChecked,omitempty"`
-	// LabelScan: the release records no inventory, so a fixed set of common
-	// kinds was listed by Flux's labels; other kinds weren't checked.
+	// LabelScan: Radar can't read an inventory in the release's status, so a
+	// fixed set of common kinds was listed by Flux's labels; other kinds
+	// weren't checked.
 	LabelScan bool `json:"labelScan,omitempty"`
-	// NoInventory: a Kustomization without a readable status.inventory (Flux
-	// records one only when pruning is on), so its members are unknown.
+	// NoInventory: Radar can't read a Kustomization's status.inventory (Flux
+	// records one once an apply succeeds), so its members are unknown.
 	NoInventory bool `json:"noInventory,omitempty"`
 	// Remote: the root applies to another cluster (spec.kubeConfig), whose
 	// objects Radar doesn't read.
 	Remote    bool `json:"remote,omitempty"`
 	Truncated bool `json:"truncated,omitempty"`
+	// Unlisted: tree members a LIST on Flux's labels didn't return (the labels
+	// were removed, or the object is gone), so their fields weren't checked.
+	Unlisted     []outsideRef `json:"unlisted,omitempty"`
+	UnlistedMore int          `json:"unlistedMore,omitempty"`
 }
+
+const maxOutsideUnlisted = 20
 
 type outsidePolicy struct {
 	Tool           string `json:"tool"`
@@ -113,8 +120,9 @@ type outsideChangesResponse struct {
 	Coverage     outsideCoverage               `json:"coverage"`
 }
 
-// classifyOutsideObject reads one member's managedFields. Subresource writes
-// (status, scale) are controllers', never a hand edit.
+// classifyOutsideObject reads one member's managedFields. Status writes are
+// controllers'; a scale write records spec.replicas on the object and is
+// classified by its manager, so kubectl scale counts and an HPA doesn't.
 func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.ResourceRef, ownerObj *unstructured.Unstructured) (out outsideObject, harmless []string, otherManagers []string) {
 	group := resourceid.GroupFromAPIVersion(obj.GetAPIVersion())
 	out.Ref = outsideRef{Group: group, Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName()}
@@ -132,7 +140,7 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 		}
 	}
 	for i, mf := range entries {
-		if mf.Subresource != "" {
+		if mf.Subresource == "status" {
 			continue
 		}
 		switch fieldwriters.Classify(mf.Manager, owners, radarWriteManagers) {
@@ -199,6 +207,11 @@ func outsideOutcome(policy *gitOpsWritePolicy, ignore string) string {
 		return "unknown"
 	case policy.Suspended != nil && *policy.Suspended:
 		return "suspended"
+	// helm-controller's driftDetection: disabled annotation only drops the
+	// object from drift detection; upgrades still apply it. DriftDetection is
+	// set only for a HelmRelease.
+	case policy.ObjectReconcile != "" && policy.DriftDetection != "":
+		return "excluded"
 	case policy.ObjectReconcile != "":
 		return "opted-out"
 	case ignore == "effective":
@@ -474,6 +487,8 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 	lists := 0
 	for _, g := range groups {
 		cont := ""
+		seen := map[string]bool{}
+		complete := false
 		for {
 			if lists >= limits.Lists || len(out) >= limits.Objects {
 				cov.Truncated = true
@@ -507,6 +522,7 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 				if g.Members != nil && !g.Members[item.GetName()] {
 					continue
 				}
+				seen[item.GetName()] = true
 				if len(out) >= limits.Objects {
 					cov.Truncated = true
 					return out
@@ -515,11 +531,32 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 				cov.Listed++
 			}
 			if cont = list.GetContinue(); cont == "" {
+				complete = true
 				break
 			}
 		}
+		if complete {
+			addUnlisted(cov, g, seen)
+		}
 	}
 	return out
+}
+
+func addUnlisted(cov *outsideCoverage, g outsideListGroup, seen map[string]bool) {
+	var names []string
+	for name := range g.Members {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if len(cov.Unlisted) >= maxOutsideUnlisted {
+			cov.UnlistedMore++
+			continue
+		}
+		cov.Unlisted = append(cov.Unlisted, outsideRef{Group: g.GVR.Group, Kind: g.Kind, Namespace: g.Namespace, Name: name})
+	}
 }
 
 // handleGitOpsOutsideChanges serves GET /api/gitops/outside-changes/{kind}/{namespace}/{name}

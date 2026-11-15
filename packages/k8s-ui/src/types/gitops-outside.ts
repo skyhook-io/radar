@@ -1,7 +1,7 @@
 // GET /api/gitops/outside-changes/{kind}/{namespace}/{name}: fields of a Flux
 // root's managed objects last written by a person's tool rather than Flux.
 
-export type GitOpsOutsideOutcome = 'reverted' | 'reported' | 'stays' | 'may-overwrite' | 'ignored' | 'opted-out' | 'suspended' | 'unknown'
+export type GitOpsOutsideOutcome = 'reverted' | 'reported' | 'stays' | 'may-overwrite' | 'ignored' | 'excluded' | 'opted-out' | 'suspended' | 'unknown'
 
 export interface GitOpsOutsideRef {
   group: string
@@ -42,6 +42,10 @@ export interface GitOpsOutsideCoverage {
   // The root applies to another cluster (spec.kubeConfig).
   remote?: boolean
   truncated?: boolean
+  // Tree members a LIST on Flux's labels didn't return, so they weren't
+  // checked; unlistedMore counts those past the server's cap.
+  unlisted?: GitOpsOutsideRef[]
+  unlistedMore?: number
 }
 
 export interface GitOpsOutsideChanges {

@@ -66,8 +66,26 @@ describe('GitOpsOutsideChangesView', () => {
     expect(html).toContain('This object opts out of Flux reconciliation')
   })
 
+  it('says a HelmRelease reverts only what its chart sets', () => {
+    const html = render({ count: 1, objects: [{ ref: { group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'api' }, changes: [
+      { manager: 'kubectl-edit', tool: 'kubectl edit', operation: 'Update', paths: ['spec.replicas'], morePaths: 0, outcome: 'reverted', harmless: false },
+      { manager: 'kubectl-edit', tool: 'kubectl edit', operation: 'Update', paths: ['spec.paused'], morePaths: 0, outcome: 'stays', harmless: false },
+      { manager: 'k9s', tool: 'k9s', operation: 'Update', paths: ['spec.minReadySeconds'], morePaths: 0, outcome: 'excluded', harmless: false },
+    ] }] })
+    expect(html).toContain('Flux reverts this on its next run if the chart sets this field')
+    expect(html).toContain('Stays until a Helm upgrade or rollback, which resets it if the chart sets this field')
+    expect(html).toContain('This object is excluded from drift detection; a Helm upgrade or rollback resets this field if the chart sets it')
+  })
+
+  it('names members the label list missed', () => {
+    const html = render({ coverage: { listed: 1, unlisted: [{ group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'worker' }], unlistedMore: 2 } })
+    expect(html).toMatch(/incomplete/i)
+    expect(html).toContain('Deployment prod/worker and 2 more')
+  })
+
   it('says when the root applies elsewhere or records no inventory', () => {
     expect(render({ coverage: { listed: 0, remote: true } })).toContain('applies to another cluster')
-    expect(render({ coverage: { listed: 0, noInventory: true } })).toContain('records no inventory')
+    expect(render({ coverage: { listed: 0, noInventory: true } })).toContain('Radar can&#x27;t read an inventory in this Kustomization&#x27;s status')
+    expect(render({ coverage: { listed: 0, labelScan: true } })).toContain('Radar can&#x27;t read an inventory in this release&#x27;s status')
   })
 })

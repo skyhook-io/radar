@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -180,5 +181,26 @@ func TestBuildOutsideChangesCountsFoldedActionsPerObject(t *testing.T) {
 	}
 	if len(resp.Harmless) != 1 || resp.Harmless[0].Count != 1 {
 		t.Fatalf("harmless = %+v", resp.Harmless)
+	}
+}
+
+// An inventory member without Flux's labels (removed by hand, not yet
+// re-applied) isn't returned by the label LIST; the answer names it rather
+// than reading clean.
+func TestListOutsideObjectsNamesMembersTheListMissed(t *testing.T) {
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{deploymentsGVR: "DeploymentList", servicesGVR: "ServiceList"},
+		labelledDeployment("a"))
+	dyn.PrependReactor("list", "services", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "", nil)
+	})
+	var cov outsideCoverage
+	listOutsideObjects(context.Background(), dyn, []outsideListGroup{
+		{GVR: deploymentsGVR, Kind: "Deployment", Namespace: "team", Members: map[string]bool{"a": true, "b": true}},
+		{GVR: servicesGVR, Kind: "Service", Namespace: "team", Members: map[string]bool{"web": true}},
+	}, fluxMemberSelector(fluxHelmOwner(nil)), defaultOutsideLimits, &cov)
+	want := []outsideRef{{Group: "apps", Kind: "Deployment", Namespace: "team", Name: "b"}}
+	if !reflect.DeepEqual(cov.Unlisted, want) || cov.UnlistedMore != 0 {
+		t.Fatalf("coverage = %+v", cov)
 	}
 }
