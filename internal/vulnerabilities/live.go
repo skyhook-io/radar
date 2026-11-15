@@ -1,6 +1,7 @@
 package vulnerabilities
 
 import (
+	"maps"
 	"slices"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
 
 // target is one container image that runs, or is scheduled to run, keyed the
@@ -60,6 +62,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 	var targets []target
 	var podDenied []string
 	withheld := map[ownerKey]bool{}
+	denied := map[resourceapi.KindRef]bool{}
 	may := func(group, kind, ns string) bool { return canRead == nil || canRead(group, kind, ns) }
 	podAccess := map[string]bool{}
 	mayPods := func(ns string) bool {
@@ -78,12 +81,17 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 		if seen[t.key] {
 			return
 		}
-		if !may(t.scannedGroup, t.key.kind, t.key.namespace) || !may(t.workload.Group, t.workload.Kind, t.workload.Namespace) {
-			withheld[t.key.owner()] = true
+		switch {
+		case !may(t.scannedGroup, t.key.kind, t.key.namespace):
+			denied[resourceapi.KindRef{Kind: t.key.kind, Group: t.scannedGroup}] = true
+		case !may(t.workload.Group, t.workload.Kind, t.workload.Namespace):
+			denied[resourceapi.KindRef{Kind: t.workload.Kind, Group: t.workload.Group}] = true
+		default:
+			seen[t.key] = true
+			targets = append(targets, t)
 			return
 		}
-		seen[t.key] = true
-		targets = append(targets, t)
+		withheld[t.key.owner()] = true
 	}
 	for _, ns := range scopeNamespaces(namespaces) {
 		var pods []*corev1.Pod
@@ -140,16 +148,18 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 		}
 	}
 	slices.Sort(podDenied)
-	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld}, true
+	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld, deniedKinds: slices.Collect(maps.Keys(denied))}, true
 }
 
 // liveSet is what runs, as far as the caller may see it: podDenied are
 // namespaces whose Pods the caller can't read, and withheld are scanned
-// objects the caller can't read, whose reports must not count as inactive.
+// objects the caller can't read, whose reports must not count as inactive;
+// deniedKinds are the kinds whose denial withheld them.
 type liveSet struct {
-	targets   []target
-	podDenied []string
-	withheld  map[ownerKey]bool
+	targets     []target
+	podDenied   []string
+	withheld    map[ownerKey]bool
+	deniedKinds []resourceapi.KindRef
 }
 
 func podContainers(spec corev1.PodSpec) []corev1.Container {

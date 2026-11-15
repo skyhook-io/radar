@@ -1,6 +1,7 @@
 package vulnerabilities
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -12,17 +13,17 @@ import (
 // Where Radar collects a join input only in some namespaces, the answer is
 // narrowed to those and the rest are named gaps, never read as absent.
 func TestNarrowToTyped(t *testing.T) {
-	read, gaps, ok := narrowToTyped(k8score.KindReadAssessment{Readiness: k8score.KindReady, AllNamespaces: true}, nil, nil)
+	read, gaps, ok := narrowToTyped(podKind, k8score.KindReadAssessment{Readiness: k8score.KindReady, AllNamespaces: true}, nil, nil)
 	if !ok || read != nil || len(gaps) != 0 {
 		t.Fatalf("all namespaces ready: %v %v %v", read, gaps, ok)
 	}
-	if _, _, ok := narrowToTyped(k8score.KindReadAssessment{Readiness: k8score.KindPending, AllNamespaces: true}, nil, nil); ok {
+	if _, _, ok := narrowToTyped(podKind, k8score.KindReadAssessment{Readiness: k8score.KindPending, AllNamespaces: true}, nil, nil); ok {
 		t.Fatal("a kind still loading everywhere can't answer")
 	}
-	if _, _, ok := narrowToTyped(k8score.KindReadAssessment{Readiness: k8score.KindUnavailable}, nil, nil); ok {
+	if _, _, ok := narrowToTyped(podKind, k8score.KindReadAssessment{Readiness: k8score.KindUnavailable}, nil, nil); ok {
 		t.Fatal("an uncollected kind can't answer")
 	}
-	read, gaps, ok = narrowToTyped(k8score.KindReadAssessment{
+	read, gaps, ok = narrowToTyped(podKind, k8score.KindReadAssessment{
 		Readiness: k8score.KindPending, Read: []string{"a"}, Loading: []string{"b"}, Uncovered: []string{"c"},
 	}, []string{"a", "b", "c"}, nil)
 	if !ok || !slices.Equal(read, []string{"a"}) || len(gaps) != 2 {
@@ -34,9 +35,28 @@ func TestNarrowToTyped(t *testing.T) {
 	}
 	// Asked for every namespace from a namespace-scoped collector: the
 	// namespaces it doesn't collect are unknown, and say so.
-	_, gaps, _ = narrowToTyped(k8score.KindReadAssessment{Readiness: k8score.KindReady, Read: []string{"a"}}, nil, nil)
-	if len(gaps) != 1 || gaps[0].Code != readreason.RadarNamespaceNotCollected {
+	_, gaps, _ = narrowToTyped(podKind, k8score.KindReadAssessment{Readiness: k8score.KindReady, Read: []string{"a"}}, nil, nil)
+	if len(gaps) != 1 || gaps[0].Code != readreason.RadarNamespaceNotCollected || gaps[0].Kinds.Names[0].Kind != "Pod" {
 		t.Fatalf("collection-limited: %+v", gaps)
+	}
+}
+
+// Gaps merge only for the same kind, and never into one that has stopped
+// listing its namespaces.
+func TestAppendGap(t *testing.T) {
+	gaps := appendGap(nil, reportKind, readreason.UserForbidden, []string{"a"})
+	gaps = appendGap(gaps, podKind, readreason.UserForbidden, []string{"b"})
+	if len(gaps) != 2 {
+		t.Fatalf("reports and Pods denied are separate gaps: %+v", gaps)
+	}
+	many := make([]string, 65)
+	for i := range many {
+		many[i] = fmt.Sprintf("ns-%02d", i)
+	}
+	gaps = appendGap(nil, reportKind, readreason.KindSyncPending, many)
+	gaps = appendGap(gaps, reportKind, readreason.KindSyncPending, []string{"zz"})
+	if len(gaps) != 2 || gaps[0].Namespaces.Count != 65 {
+		t.Fatalf("a count-only gap keeps its count: %+v", gaps)
 	}
 }
 

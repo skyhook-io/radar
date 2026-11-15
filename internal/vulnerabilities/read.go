@@ -3,6 +3,7 @@ package vulnerabilities
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -118,7 +119,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 			return Response{}, err
 		}
 		namespaces = reportNamespaces(all)
-		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Namespaces: resourceapi.UnknownNames()})
+		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Kinds: namespaceKind, Namespaces: resourceapi.UnknownNames()})
 	}
 	readable, accessGaps := readableNamespaces(gvr, req, namespaces)
 	gaps = append(gaps, accessGaps...)
@@ -171,7 +172,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	if len(failed) > 0 {
 		var all []string
 		for code, namespaces := range failed {
-			gaps = appendGap(gaps, code, namespaces)
+			gaps = appendGap(gaps, reportKind, code, namespaces)
 			all = append(all, namespaces...)
 		}
 		if len(all) == len(readable) {
@@ -189,19 +190,19 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	if podRead.Readiness == k8score.KindUnavailable {
 		// Without Pods nothing is known to run: every report would read as
 		// inactive. Say so instead of retrying a cache that won't load.
-		return empty(req.View, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Namespaces: resourceapi.UnknownNames()}), nil
+		return empty(req.View, resourceapi.Gap{Code: readreason.RadarKindNotCollected, Kinds: podKind, Namespaces: resourceapi.UnknownNames()}), nil
 	}
-	readable, gaps, ok = narrowToTyped(podRead, readable, gaps)
+	readable, gaps, ok = narrowToTyped(podKind, podRead, readable, gaps)
 	if !ok {
 		return Response{}, ErrNotReady
 	}
 	items = filterNamespaces(items, readable)
 	cronRead := cache.AssessKindRead("cronjobs", readable)
-	cronReadable, cronGaps, cronOK := narrowToTyped(cronRead, readable, nil)
+	cronReadable, cronGaps, cronOK := narrowToTyped(cronJobKind, cronRead, readable, nil)
 	jobRead := cache.AssessKindRead("jobs", readable)
-	jobReadable, jobGaps, jobOK := narrowToTyped(jobRead, readable, nil)
+	jobReadable, jobGaps, jobOK := narrowToTyped(jobKind, jobRead, readable, nil)
 	rsRead := cache.AssessKindRead("replicasets", readable)
-	rsReadable, rsGaps, rsOK := narrowToTyped(rsRead, readable, nil)
+	rsReadable, rsGaps, rsOK := narrowToTyped(replicaSetKind, rsRead, readable, nil)
 
 	live, ready := liveTargets(cache, readable, req.CanRead, req.CanListPods)
 	if !ready {
@@ -228,7 +229,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	if len(live.podDenied) > 0 {
 		items = withoutNamespaces(items, live.podDenied)
 		targets = slices.DeleteFunc(targets, func(t target) bool { return slices.Contains(live.podDenied, t.key.namespace) })
-		gaps = appendGap(gaps, readreason.UserForbidden, live.podDenied)
+		gaps = appendGap(gaps, podKind, readreason.UserForbidden, live.podDenied)
 	}
 	// Where CronJobs aren't read, a CronJob between runs is unknown whether
 	// or not it has a report yet.
@@ -243,7 +244,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		if cronOK {
 			gaps = append(gaps, cronGaps...)
 		} else {
-			gaps = append(gaps, kindGap(cronRead))
+			gaps = append(gaps, kindGap(cronJobKind, cronRead))
 		}
 	}
 	// Where Jobs aren't read, a Job's Pods can't be traced to the CronJob
@@ -280,7 +281,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 			if jobOK {
 				gaps = append(gaps, jobGaps...)
 			} else {
-				gaps = append(gaps, kindGap(jobRead))
+				gaps = append(gaps, kindGap(jobKind, jobRead))
 			}
 		}
 	}
@@ -293,7 +294,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 			if rsOK {
 				gaps = append(gaps, rsGaps...)
 			} else {
-				gaps = append(gaps, kindGap(rsRead))
+				gaps = append(gaps, kindGap(replicaSetKind, rsRead))
 			}
 		}
 	}
@@ -311,7 +312,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 			return ok && live.withheld[r.owner]
 		})
 		slices.Sort(namespaces)
-		gaps = appendGap(gaps, readreason.UserForbidden, namespaces)
+		gaps = appendGap(gaps, resourceapi.Kinds(live.deniedKinds, 64), readreason.UserForbidden, namespaces)
 	}
 	resp, err := build(ctx, items, targets, req.View, req.Filter)
 	if err != nil {
@@ -350,10 +351,10 @@ func readableNamespaces(gvr schema.GroupVersionResource, req Request, clusterNam
 		}
 	}
 	if len(denied) > 0 {
-		gaps = append(gaps, gap(readreason.UserForbidden, denied))
+		gaps = append(gaps, gap(reportKind, readreason.UserForbidden, denied))
 	}
 	if len(unchecked) > 0 {
-		gaps = append(gaps, gap(readreason.UserPermissionCheckFailed, unchecked))
+		gaps = append(gaps, gap(reportKind, readreason.UserPermissionCheckFailed, unchecked))
 	}
 	if allowed == nil {
 		allowed = []string{}
@@ -392,32 +393,32 @@ func filterNamespaces(items []*unstructured.Unstructured, namespaces []string) [
 	return out
 }
 
+// kindGap is the gap for a join input that can't be read anywhere: one
+// Radar doesn't collect, or one still loading.
+func kindGap(kind *resourceapi.KindSet, a k8score.KindReadAssessment) resourceapi.Gap {
+	if a.Readiness == k8score.KindUnavailable {
+		return resourceapi.Gap{Code: readreason.RadarKindNotCollected, Kinds: kind, Namespaces: resourceapi.UnknownNames()}
+	}
+	return resourceapi.Gap{Code: readreason.KindSyncPending, Kinds: kind, Namespaces: resourceapi.UnknownNames()}
+}
+
 // narrowToTyped narrows readable to the namespaces where a typed kind has
 // loaded, naming the others. ok is false when the kind isn't collected at
 // all or hasn't loaded anywhere.
-// kindGap is the gap for a join input that can't be read anywhere: one
-// Radar doesn't collect, or one still loading.
-func kindGap(a k8score.KindReadAssessment) resourceapi.Gap {
-	if a.Readiness == k8score.KindUnavailable {
-		return resourceapi.Gap{Code: readreason.RadarKindNotCollected, Namespaces: resourceapi.UnknownNames()}
-	}
-	return resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()}
-}
-
-func narrowToTyped(a k8score.KindReadAssessment, readable []string, gaps []resourceapi.Gap) ([]string, []resourceapi.Gap, bool) {
+func narrowToTyped(kind *resourceapi.KindSet, a k8score.KindReadAssessment, readable []string, gaps []resourceapi.Gap) ([]string, []resourceapi.Gap, bool) {
 	switch {
 	case a.Readiness == k8score.KindUnavailable:
 		return readable, gaps, false
 	case a.AllNamespaces:
 		return readable, gaps, a.Readiness == k8score.KindReady
 	}
-	gaps = appendGap(gaps, readreason.RadarNamespaceNotCollected, a.Uncovered)
+	gaps = appendGap(gaps, kind, readreason.RadarNamespaceNotCollected, a.Uncovered)
 	if readable == nil {
 		// Radar collects the kind only in some namespaces; the rest are unknown.
-		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()})
+		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Kinds: kind, Namespaces: resourceapi.UnknownNames()})
 	}
-	gaps = appendGap(gaps, readreason.KindSyncPending, a.Loading)
-	gaps = appendGap(gaps, readreason.KindSyncTimedOut, a.Failed)
+	gaps = appendGap(gaps, kind, readreason.KindSyncPending, a.Loading)
+	gaps = appendGap(gaps, kind, readreason.KindSyncTimedOut, a.Failed)
 	return a.Read, gaps, true
 }
 
@@ -432,9 +433,9 @@ func narrowToDynamic(plan readplan.Plan, readable []string, gaps []resourceapi.G
 		case part.Verdict.State == readplan.Readable:
 			whole = true
 		case part.Extent == readplan.NamespaceSet:
-			gaps = appendGap(gaps, part.Verdict.Code, part.Namespaces)
+			gaps = appendGap(gaps, reportKind, part.Verdict.Code, part.Namespaces)
 		default:
-			gaps = append(gaps, resourceapi.Gap{Code: part.Verdict.Code, Namespaces: resourceapi.UnknownNames()})
+			gaps = append(gaps, resourceapi.Gap{Code: part.Verdict.Code, Kinds: reportKind, Namespaces: resourceapi.UnknownNames()})
 		}
 	}
 	if whole {
@@ -442,7 +443,7 @@ func narrowToDynamic(plan readplan.Plan, readable []string, gaps []resourceapi.G
 	}
 	if plan.CollectionLimited {
 		// Radar collects reports only in some namespaces; the rest are unknown.
-		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()})
+		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Kinds: reportKind, Namespaces: resourceapi.UnknownNames()})
 	}
 	if read == nil {
 		read = []string{}
@@ -462,24 +463,40 @@ func reportNamespaces(items []*unstructured.Unstructured) []string {
 	return out
 }
 
+// Each gap names what Radar didn't read: the reports themselves, or a kind
+// the join needs.
+var (
+	reportKind     = kinds(resourceapi.KindRef{Kind: "VulnerabilityReport", Group: aicontext.TrivyGroup})
+	podKind        = kinds(resourceapi.KindRef{Kind: "Pod"})
+	cronJobKind    = kinds(resourceapi.KindRef{Kind: "CronJob", Group: "batch"})
+	jobKind        = kinds(resourceapi.KindRef{Kind: "Job", Group: "batch"})
+	replicaSetKind = kinds(resourceapi.KindRef{Kind: "ReplicaSet", Group: "apps"})
+	namespaceKind  = kinds(resourceapi.KindRef{Kind: "Namespace"})
+)
+
+func kinds(k ...resourceapi.KindRef) *resourceapi.KindSet { return resourceapi.Kinds(k, 64) }
+
 // appendGap adds a gap for namespaces, merging into an existing gap with the
-// same code.
-func appendGap(gaps []resourceapi.Gap, code readreason.Code, namespaces []string) []resourceapi.Gap {
+// same code and kinds.
+func appendGap(gaps []resourceapi.Gap, kind *resourceapi.KindSet, code readreason.Code, namespaces []string) []resourceapi.Gap {
 	if len(namespaces) == 0 {
 		return gaps
 	}
 	for i := range gaps {
-		if gaps[i].Code == code && gaps[i].Namespaces != nil {
+		// A gap past the name cap only counts its namespaces: merging into it
+		// would replace that count with the names it no longer lists.
+		if gaps[i].Code == code && gaps[i].Namespaces != nil && gaps[i].Namespaces.Extent == "" &&
+			len(gaps[i].Namespaces.Names) == gaps[i].Namespaces.Count && reflect.DeepEqual(gaps[i].Kinds, kind) {
 			merged := slices.Compact(slices.Sorted(slices.Values(slices.Concat(gaps[i].Namespaces.Names, namespaces))))
 			gaps[i].Namespaces = resourceapi.Names(merged, 64)
 			return gaps
 		}
 	}
-	return append(gaps, gap(code, namespaces))
+	return append(gaps, gap(kind, code, namespaces))
 }
 
-func gap(code readreason.Code, namespaces []string) resourceapi.Gap {
-	g := resourceapi.Gap{Code: code, Namespaces: resourceapi.Names(namespaces, 64)}
+func gap(kind *resourceapi.KindSet, code readreason.Code, namespaces []string) resourceapi.Gap {
+	g := resourceapi.Gap{Code: code, Kinds: kind, Namespaces: resourceapi.Names(namespaces, 64)}
 	if action, ok := readreason.ActionFor(code); ok {
 		g.Action = action
 	}

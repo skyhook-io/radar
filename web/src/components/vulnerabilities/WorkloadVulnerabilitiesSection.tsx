@@ -58,8 +58,19 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
     }
   }
   const fixFirst = [...worst.values()].sort(worse)
+  // An image lists its worst findings only up to a cap: past it, fixable
+  // Critical and High findings may not have arrived.
+  const fixableUnlisted = images.some((img) => {
+    const listed = img.findings.filter((f) => (f.severity === 'critical' || f.severity === 'high') && f.fixedVersion).length
+    return !img.findingsUnread && img.findings.length < img.findingsTotal && listed < img.fixable.critical + img.fixable.high
+  })
+  // The read spans the caller's scope; a gap names this namespace, or might.
+  const relevantGaps = (data?.coverage.gaps ?? []).filter((g) => {
+    const ns = g.namespaces
+    return !ns || ns.extent === 'unknown' || (ns.names ?? []).length < ns.count || (ns.names ?? []).includes(namespace)
+  })
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
-  const open = () => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), namespaces: namespace }).toString() })
+  const open = (more: Record<string, string> = {}) => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), namespaces: namespace, ...more }).toString() })
 
   return (
     <Section title={critical > 0 ? `Vulnerabilities · ${critical} critical` : 'Vulnerabilities'} icon={Shield}>
@@ -78,7 +89,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
                 {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityCounts counts={img.counts} />}
                 <span className="text-xs text-theme-text-secondary">{img.findingsUnread ? '' : `${img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown} with a fix · `}scanned {formatRelativeAgeTime(img.scannedAt)}</span>
               </span>
-              <SharedWith others={[...new Set(img.workloads.filter((w) => !isThis(w)).map((w) => `${w.namespace}/${w.name}`))]} />
+              <SharedWith others={[...new Set(img.workloads.filter((w) => !isThis(w)).map((w) => `${w.namespace}/${w.name}`))]} partial={img.workloads.length < img.workloadsTotal} />
             </div>
           ))}
           {unscanned.map((u) => (
@@ -101,9 +112,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
           ))}
           {images.length === 0 && clean.length === 0 && unscanned.length === 0 && (
             <p className="text-xs text-theme-text-tertiary">
-              {data && !data.coverage.complete
-                ? gapSentence(data.coverage.gaps)?.replace(' Counts cover the rest.', '') ?? "Some reports couldn't be read."
-                : 'No running containers in this workload.'}
+              {gapSentence(relevantGaps, { counts: false }) ?? 'No running containers in this workload.'}
             </p>
           )}
           {fixFirst.length > 0 && (
@@ -122,7 +131,12 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
               ))}
             </div>
           )}
-          <button type="button" onClick={open} className="self-start text-xs text-accent-text hover:underline">Open in Vulnerabilities</button>
+          {fixableUnlisted && (
+            <button type="button" onClick={() => open({ severity: 'critical,high', fixable: '1' })} className="self-start text-xs text-accent-text hover:underline">
+              More Critical and High findings with a fix than listed here
+            </button>
+          )}
+          <button type="button" onClick={() => open()} className="self-start text-xs text-accent-text hover:underline">Open in Vulnerabilities</button>
         </div>
       )}
     </Section>
@@ -130,12 +144,14 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
 }
 
 // The same image in other workloads: one rebuild fixes them all.
-function SharedWith({ others }: { others: string[] }) {
+// partial: the response lists only some of the image's workloads.
+function SharedWith({ others, partial }: { others: string[]; partial: boolean }) {
   if (others.length === 0) return null
   const shown = others.slice(0, 2).join(', ')
+  const rest = others.length - 2
   return (
     <span className="text-xs text-theme-text-tertiary">
-      Also runs in {shown}{others.length > 2 ? ` and ${others.length - 2} more` : ''}
+      Also runs in {shown}{rest > 0 ? ` and ${rest}${partial ? '+' : ''} more` : partial ? ', maybe more' : ''}
     </span>
   )
 }

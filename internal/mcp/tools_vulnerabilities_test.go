@@ -172,6 +172,16 @@ func TestListVulnerabilitiesFollowsReportRBAC(t *testing.T) {
 	if len(got.Unscanned) != 0 || got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.UserForbidden {
 		t.Fatalf("dave's unreadable, unscanned workload must be a gap: %+v / %+v", got.Unscanned, got.Coverage)
 	}
+	if k := got.Coverage.Gaps[0].Kinds; k == nil || len(k.Names) != 1 || k.Names[0].Kind != "ReplicaSet" {
+		t.Fatalf("the gap names the kind dave may not read: %+v", k)
+	}
+	// With ReplicaSets readable, the Deployment is what dave may not read.
+	dave.SetCanI("get", "apps", "replicasets", "team-c", true)
+	dave.SetCanI("list", "apps", "replicasets", "team-c", true)
+	got = listVulns(t, ctx, listVulnerabilitiesInput{})
+	if k := got.Coverage.Gaps[0].Kinds; len(got.Coverage.Gaps) != 1 || k == nil || len(k.Names) != 1 || k.Names[0].Kind != "Deployment" {
+		t.Fatalf("the gap names the Deployment: %+v", got.Coverage.Gaps)
+	}
 
 	if _, _, err := handleListVulnerabilities(context.Background(), nil, listVulnerabilitiesInput{View: "nope"}); err == nil {
 		t.Fatal("bad view must fail")

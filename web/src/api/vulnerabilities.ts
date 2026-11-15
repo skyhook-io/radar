@@ -132,6 +132,8 @@ export interface VulnerabilitySummary {
 export interface VulnerabilityGap {
   code: string
   action?: string
+  /** What wasn't read; absent means the reports themselves. */
+  kinds?: { count: number; names?: { kind: string; group?: string }[]; extent?: string }
   namespaces?: { count: number; names?: string[]; extent?: string }
 }
 

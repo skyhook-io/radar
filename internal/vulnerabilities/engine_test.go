@@ -2,6 +2,7 @@ package vulnerabilities
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -501,6 +502,47 @@ func TestUnscannedAliasesAreOneImage(t *testing.T) {
 	resp := mustBuild(t, nil, targets, ViewImage, Filter{})
 	if resp.Summary.ImagesUnscanned != 1 || len(resp.Unscanned) != 1 {
 		t.Fatalf("unscanned: %d %+v", resp.Summary.ImagesUnscanned, resp.Unscanned)
+	}
+}
+
+// A digest-pinned image is grouped by its digest but still shown, and found,
+// by the name the Pod spec gives it.
+func TestUnscannedPinnedImageKeepsItsName(t *testing.T) {
+	ref := "registry.k8s.io/ingress-nginx/controller:v1.9.4@sha256:5b16"
+	targets := []target{liveTarget("shop", "ReplicaSet", "web-1", "nginx", ref, "", WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"})}
+	resp := mustBuild(t, nil, targets, ViewImage, Filter{Query: "controller:v1.9.4"})
+	if len(resp.Unscanned) != 1 || resp.Unscanned[0].Image != ref {
+		t.Fatalf("unscanned: %+v", resp.Unscanned)
+	}
+	// Two repositories pushing one digest are one image, found by either name.
+	targets = append(targets, liveTarget("shop", "ReplicaSet", "pay-1", "app", "zcorp/payment-runtime@sha256:5b16", "", WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "pay"}))
+	resp = mustBuild(t, nil, targets, ViewImage, Filter{Query: "payment-runtime"})
+	if len(resp.Unscanned) != 1 || resp.Unscanned[0].WorkloadsTotal != 2 {
+		t.Fatalf("by the other name: %+v", resp.Unscanned)
+	}
+}
+
+// Narrowed to one workload, a row shared by more workloads than it lists
+// still lists that workload's containers.
+func TestWorkloadFilterListsItsOwnContainers(t *testing.T) {
+	var targets []target
+	var last WorkloadRef
+	for i := range MaxWorkloadsPerRow + 1 {
+		last = WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: fmt.Sprintf("web-%03d", i)}
+		targets = append(targets, liveTarget("shop", "ReplicaSet", last.Name+"-1", "proxy", "acme/proxy:1", "", last))
+	}
+	resp := mustBuild(t, nil, targets, ViewImage, Filter{Workload: &last})
+	if len(resp.Unscanned) != 1 || resp.Unscanned[0].WorkloadsTotal != MaxWorkloadsPerRow+1 {
+		t.Fatalf("unscanned: %+v", resp.Unscanned)
+	}
+	if got := resp.Unscanned[0].Workloads[0]; got.Name != last.Name || got.Container != "proxy" {
+		t.Fatalf("first listed: %+v", got)
+	}
+	// Under the cap too: a client trimming the list keeps it.
+	few := targets[:20]
+	last = few[19].workload
+	if got := mustBuild(t, nil, few, ViewImage, Filter{Workload: &last}).Unscanned[0].Workloads[0]; got.Name != last.Name {
+		t.Fatalf("first listed under the cap: %+v", got)
 	}
 }
 

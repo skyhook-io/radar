@@ -188,12 +188,21 @@ type imageAgg struct {
 	workloads map[WorkloadRef]bool
 }
 
+// unscannedAgg is a running image with no report: grouped by canonical
+// image, shown by a reference as the Pods spell it. A digest-pinned image's
+// canonical form is its bare digest, which names no repository.
+type unscannedAgg struct {
+	ref       string
+	refs      map[string]bool
+	workloads map[WorkloadRef]bool
+}
+
 // rollup is the joined state the three pivots read.
 type rollup struct {
 	images          map[string]*imageAgg
 	targetImage     map[targetKey]string
 	targets         []target
-	unscanned       map[string]map[WorkloadRef]bool
+	unscanned       map[string]*unscannedAgg
 	inactiveReports int
 	truncated       bool
 }
@@ -213,7 +222,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		o := targets[i].key.owner()
 		byOwner[o] = append(byOwner[o], &targets[i])
 	}
-	j := &rollup{images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]map[WorkloadRef]bool{}}
+	j := &rollup{images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]*unscannedAgg{}}
 	reports := make([]report, 0, len(items))
 	for _, u := range items {
 		if r, ok := reportHeader(u); ok {
@@ -275,11 +284,15 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 		w := t.workload
 		w.Container = t.container
-		image := canonicalImage(t.image)
-		if j.unscanned[image] == nil {
-			j.unscanned[image] = map[WorkloadRef]bool{}
+		u := j.unscanned[canonicalImage(t.image)]
+		if u == nil {
+			u = &unscannedAgg{ref: t.image, refs: map[string]bool{}, workloads: map[WorkloadRef]bool{}}
+			j.unscanned[canonicalImage(t.image)] = u
 		}
-		j.unscanned[image][w] = true
+		// One spelling of the image, the same whatever order Pods list in.
+		u.ref = min(u.ref, t.image)
+		u.refs[t.image] = true
+		u.workloads[w] = true
 	}
 	return j, nil
 }
@@ -422,16 +435,32 @@ func (m matcher) findingMatches(f Finding, rowMatched bool) bool {
 }
 
 func (m matcher) workloadKept(workloads []WorkloadRef) bool {
-	if m.f.Workload == nil {
-		return true
+	return m.f.Workload == nil || slices.ContainsFunc(workloads, m.wanted)
+}
+
+func (m matcher) wanted(w WorkloadRef) bool {
+	want := m.f.Workload
+	return want != nil && w.Kind == want.Kind && w.Namespace == want.Namespace && w.Name == want.Name && (want.Group == "" || w.Group == want.Group)
+}
+
+// listed is the first n of a row's workloads. Narrowed to one workload, its
+// own containers come first, so no cap, here or a client's, drops the one
+// asked about.
+func (m matcher) listed(workloads []WorkloadRef, n int) []WorkloadRef {
+	if m.f.Workload != nil {
+		workloads = slices.Clone(workloads)
+		slices.SortStableFunc(workloads, func(a, b WorkloadRef) int {
+			return cmp.Compare(boolRank(!m.wanted(a)), boolRank(!m.wanted(b)))
+		})
 	}
-	want := *m.f.Workload
-	for _, w := range workloads {
-		if w.Kind == want.Kind && w.Namespace == want.Namespace && w.Name == want.Name && (want.Group == "" || w.Group == want.Group) {
-			return true
-		}
+	return workloads[:min(len(workloads), n)]
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
 	}
-	return false
+	return 0
 }
 
 func (j *rollup) sortedImages() []*imageAgg {
@@ -461,7 +490,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 			if rowMatched {
 				clean = append(clean, CleanImage{
 					ID: r.imageID, Image: cmp.Or(r.image, r.digest), ScannedAt: r.scannedAt, Report: r.ref,
-					Workloads: workloads[:min(len(workloads), MaxWorkloadsPerRow)], WorkloadsTotal: len(workloads),
+					Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads),
 				})
 			}
 			continue
@@ -481,7 +510,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		row := Image{
 			ID: r.imageID, Image: cmp.Or(r.image, r.digest), Digest: r.digest, OS: r.os, ScannedAt: r.scannedAt,
 			Counts: counts, Fixable: fixable, Matching: len(matching), FindingsUnread: r.unread,
-			Workloads: workloads[:min(len(workloads), MaxWorkloadsPerRow)], WorkloadsTotal: len(workloads),
+			Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads),
 			FindingsTotal: len(r.findings), Report: r.ref,
 		}
 		row.Findings = matching[:min(len(matching), MaxFindingsPerImage)]
@@ -551,7 +580,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			continue
 		}
 		imageWorkloads[r.imageID] = workloads
-		listed := workloads[:min(len(workloads), MaxWorkloadsPerAffected)]
+		listed := m.listed(workloads, MaxWorkloadsPerAffected)
 		rowMatched := m.rowMatches(r.image, workloads)
 		for _, fd := range r.findings {
 			if !m.findingMatches(fd, rowMatched) {
@@ -733,12 +762,17 @@ func totalCount(c Counts) int { return c.Critical + c.High + c.Medium + c.Low + 
 func (j *rollup) unscannedRows(f Filter) []Unscanned {
 	m := newMatcher(f)
 	rows := []Unscanned{}
-	for image, set := range j.unscanned {
-		workloads := sortedWorkloads(set)
-		if !m.workloadKept(workloads) || !m.rowMatches(image, workloads) {
+	for _, u := range j.unscanned {
+		workloads := sortedWorkloads(u.workloads)
+		// A search finds the image by any spelling a Pod gives it.
+		matched := false
+		for ref := range u.refs {
+			matched = matched || m.rowMatches(ref, workloads)
+		}
+		if !m.workloadKept(workloads) || !matched {
 			continue
 		}
-		rows = append(rows, Unscanned{Image: image, Workloads: workloads[:min(len(workloads), MaxWorkloadsPerRow)], WorkloadsTotal: len(workloads)})
+		rows = append(rows, Unscanned{Image: u.ref, Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads)})
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
 	return rows[:min(len(rows), MaxRows)]

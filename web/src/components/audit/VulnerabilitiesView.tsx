@@ -48,6 +48,7 @@ import {
   FixVersion,
   ecosystemLabel,
   findingsCertainty,
+  readsComplete,
   imageParts,
   gapSentence,
   workloadSummary,
@@ -127,6 +128,10 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   }
 
   const filtered = severities.length > 0 || fixableOnly || query !== '' || !!workload
+  // Narrowed only to a workload whose images are all clean or unscanned:
+  // the folds below list them, so "nothing matches" would mislead.
+  const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && query === '' &&
+    ((data.unscanned ?? []).length > 0 || (data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0)
   const rows = view === 'cve' ? data.cves ?? [] : view === 'workload' ? data.workloads ?? [] : view === 'fix' ? data.fixes ?? [] : data.images ?? []
 
   return (
@@ -211,8 +216,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         <EmptyState
           tone="neutral"
           icon={ShieldAlert}
-          headline={emptyHeadline(view, filtered, data)}
-          body={filtered ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
+          headline={emptyHeadline(view, filtered, data, workloadFolds ? workload : null)}
+          body={filtered && !workloadFolds ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
         />
       ) : view === 'fix' ? (
         <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) })} />
@@ -223,6 +228,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           workloads={data.workloads ?? []}
           severities={severities}
           query={query}
+          namespaces={namespaces}
           onOpen={(w) => onNavigateToResource(toResource(w))}
           onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') })}
         />
@@ -246,12 +252,15 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   )
 }
 
-function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: VulnerabilitiesResponse): string {
+function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: VulnerabilitiesResponse, workload: { name: string } | null): string {
+  // Narrowed to one workload, the folds below say what it runs.
+  if (workload && (data.unscanned ?? []).length > 0) return `No reported CVEs for ${workload.name}, and not every image it runs is scanned yet`
+  if (workload && ((data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0)) return `No CVEs reported for ${workload.name}`
   if (filtered) return 'Nothing matches these filters'
   const s = data.summary
   if (s.imagesScanned === 0) return 'No scanned images run in this scope'
   if (view === 'fix' && totalFindings(s.counts) > 0) return `None of the ${totalFindings(s.counts)} reported findings has a fixed release yet`
-  if (!data.coverage.complete && totalFindings(s.counts) === 0 && s.imagesClean === 0) return 'No findings could be read in this scope'
+  if (!readsComplete(data.coverage) && totalFindings(s.counts) === 0 && s.imagesClean === 0) return 'No findings could be read in this scope'
   return `No CVEs reported for the ${s.imagesScanned} scanned ${s.imagesScanned === 1 ? 'image' : 'images'} that run`
 }
 
@@ -287,7 +296,7 @@ function SummaryTiles({ data }: { data: VulnerabilitiesResponse }) {
   const certainty = findingsCertainty(data)
   const nothing = certainty === 'unknown'
   const tiles = [
-    { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : data.coverage.complete ? 'every running image has a report' : 'none unscanned where Radar could read', tone: '' },
+    { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : readsComplete(data.coverage) ? 'every running image has a report' : 'none unscanned where Radar could read', tone: '' },
     { label: 'Images with Critical CVEs', value: s.imagesWithCritical, certainty, sub: nothing ? 'nothing scanned yet' : `of ${s.imagesScanned} scanned`, tone: s.imagesWithCritical > 0 ? 'text-red-700 dark:text-red-400' : '' },
     { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'a fixed release is reported', tone: s.fixableCriticalHighCves > 0 ? 'text-orange-700 dark:text-orange-400' : '' },
     { label: 'Workloads with Critical or High', value: s.workloadsAffected, certainty, sub: `of ${s.workloads} running or scheduled`, tone: '' },
@@ -578,10 +587,12 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
   )
 }
 
-function WorkloadTable({ workloads, severities, query, onOpen, onShow }: {
+function WorkloadTable({ workloads, severities, query, namespaces, onOpen, onShow }: {
   workloads: VulnerabilityWorkload[]
   severities: VulnerabilitySeverity[]
   query: string
+  /** The table's namespace scope, so an expanded row reads what the row did. */
+  namespaces: string[]
   onOpen: (w: VulnerabilityWorkloadRef) => void
   onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
 }) {
@@ -614,7 +625,7 @@ function WorkloadTable({ workloads, severities, query, onOpen, onShow }: {
               </div>
             }
           >
-            {(open) => <WorkloadUpgrades workload={w} active={open} severities={severities} query={query} onOpen={onOpen} onShow={onShow} />}
+            {(open) => <WorkloadUpgrades workload={w} active={open} severities={severities} query={query} namespaces={namespaces} onOpen={onOpen} onShow={onShow} />}
           </Disclosure>
         ))}
       </div>
@@ -626,17 +637,21 @@ const MAX_WORKLOAD_UPGRADES = 8
 
 // What a workload's owner changes: the By fix rows narrowed to this
 // workload, read when the row opens.
-function WorkloadUpgrades({ workload: w, active, severities, query, onOpen, onShow }: {
+function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, onOpen, onShow }: {
   workload: VulnerabilityWorkload
   /** False once the row closes: its subtree stays mounted, its polling stops. */
   active: boolean
   severities: VulnerabilitySeverity[]
   query: string
+  /** The table's namespace scope, so an expanded row reads what the row did. */
+  namespaces: string[]
   onOpen: (w: VulnerabilityWorkloadRef) => void
   onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
 }) {
   const ref = { kind: w.kind, group: w.group, namespace: w.namespace, name: w.name }
-  const { data, isLoading, error } = useVulnerabilities({ view: 'fix', namespaces: [w.namespace], severities, query, workload: ref }, active)
+  // The row's own scope: the newest report for an image wins across every
+  // namespace read, so a narrower read could pick an older one.
+  const { data, isLoading, error } = useVulnerabilities({ view: 'fix', namespaces, severities, query, workload: ref }, active)
   const total = totalFindings(w.counts)
   const fixable = totalFindings(w.fixable)
   const fixes = data?.fixes ?? []

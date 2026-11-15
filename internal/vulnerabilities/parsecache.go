@@ -53,6 +53,11 @@ func (c *parseCache) get(u *unstructured.Unstructured) []Finding {
 	c.mu.Unlock()
 
 	findings := parseFindings(u)
+	if cap(findings) > len(findings) {
+		// Deduplication can leave most of the backing array unused; the
+		// bound counts what is held.
+		findings = append(make([]Finding, 0, len(findings)), findings...)
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

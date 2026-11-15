@@ -102,7 +102,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 				}
 				a.row.Affected = append(a.row.Affected, FixImage{
 					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), InstalledVersion: p.installed,
-					Workloads: workloads[:min(len(workloads), MaxWorkloadsPerAffected)], WorkloadsTotal: len(workloads),
+					Workloads: m.listed(workloads, MaxWorkloadsPerAffected), WorkloadsTotal: len(workloads),
 				})
 			} else {
 				// The same package at another version in this image: one
