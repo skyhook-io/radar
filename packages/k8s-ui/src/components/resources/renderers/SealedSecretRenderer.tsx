@@ -23,14 +23,14 @@ const day = (value?: string) => (value ? value.slice(0, 10) : '-')
 
 // The Secrets namespace the keys live in: the controller's. A denied
 // controller hides its name, so the key messages fall back to generic text.
-function ControllerSection({ controller, isSynced, onNavigate }: { controller: SealedSecretsController | null; isSynced: boolean; onNavigate?: SealedSecretRendererProps['onNavigate'] }) {
+function ControllerSection({ controller, offerReseal, onNavigate }: { controller: SealedSecretsController | null; offerReseal: boolean; onNavigate?: SealedSecretRendererProps['onNavigate'] }) {
   const ref = controller?.controller
   const fetchCert = ref
     ? `kubeseal --controller-namespace ${ref.namespace} --controller-name ${ref.name} --fetch-cert`
     : 'kubeseal --fetch-cert'
-  const hint = !isSynced && (
+  const hint = offerReseal && (
     <div className="mt-3 text-xs text-theme-text-secondary">
-      To re-seal for this cluster, <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono">{fetchCert}</code> prints its current certificate.
+      If it was sealed for another cluster or with a key this controller no longer holds, re-seal it: <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono">{fetchCert}</code> prints the controller's current certificate.
     </div>
   )
   if (!controller) {
@@ -127,6 +127,8 @@ export function SealedSecretRenderer({ data, onNavigate, controller }: SealedSec
   const syncedCond = conditions.find((c: any) => c.type === 'Synced')
   const isSynced = syncedCond?.status === 'True'
   const isNotSynced = syncedCond?.status === 'False'
+  // The controller writes no reason, only the error; a Secret it doesn't own is not a sealing problem.
+  const offerReseal = isNotSynced && !String(syncedCond?.message ?? '').includes('already exists and is not managed by SealedSecret')
   const operationalIssuesShown = useOperationalIssuesShown()
 
   const hasTemplateMetadata =
@@ -176,7 +178,7 @@ export function SealedSecretRenderer({ data, onNavigate, controller }: SealedSec
         </PropertyList>
       </Section>
 
-      {controller !== undefined && <ControllerSection controller={controller} isSynced={isSynced} onNavigate={onNavigate} />}
+      {controller !== undefined && <ControllerSection controller={controller} offerReseal={offerReseal} onNavigate={onNavigate} />}
 
       {/* Encrypted Keys */}
       <Section title={`Encrypted Keys (${encryptedKeys.length})`} icon={Key}>

@@ -60,6 +60,17 @@ describe('SealedSecretRenderer controller section', () => {
     expect(render('True', controller())).not.toContain('--fetch-cert')
   })
 
+  it('offers the re-seal hint only as a possible cause of a Synced=False', () => {
+    const withStatus = (status: any) => renderToString(<SealedSecretRenderer data={{ ...sealed('False'), status }} controller={controller()} />)
+    expect(withStatus(undefined)).not.toContain('--fetch-cert')
+    expect(withStatus({ conditions: [] })).not.toContain('--fetch-cert')
+    const exists = { conditions: [{ type: 'Synced', status: 'False', message: 'failed update: Resource "db" already exists and is not managed by SealedSecret' }] }
+    expect(withStatus(exists)).not.toContain('--fetch-cert')
+    const html = withStatus({ conditions: [{ type: 'Synced', status: 'False', message: 'no key could decrypt secret (password)' }] }).replace(/<!-- -->/g, '')
+    expect(html).toContain('--fetch-cert')
+    expect(html).toContain('If it was sealed')
+  })
+
   it('never calls a key expired or compromised', () => {
     const html = render('False', controller()).toLowerCase()
     expect(html).not.toContain('xpired')
