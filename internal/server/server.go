@@ -501,7 +501,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		AllowedHeaders: []string{"Accept", "Content-Type", requestOriginHeader},
 		// Without an expose entry, cross-origin JS reads these as "" and the
 		// timeline client silently falls back to full-ring refetches.
-		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq"},
+		ExposedHeaders:   []string{"X-Radar-Timeline-Epoch", "X-Radar-Timeline-Max-Seq", "X-Radar-Timeline-Min-Seq", "X-Radar-Timeline-Page-Full"},
 		AllowCredentials: true,
 	}))
 
@@ -4139,6 +4139,10 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	// deliver. The clamp below closes any residual skew, but sampling early
 	// keeps the two values consistent to begin with.
 	retainedFloor := store.Stats().OldestSeq
+	// Whether the store returned a full page, also judged before the RBAC
+	// filter: a filtered page can come back short although more rows wait
+	// past it, and a delta client that trusted its length would lag behind.
+	pageFull := limit > 0 && len(events) >= limit
 
 	events = s.filterEventsByRBAC(r, events)
 
@@ -4162,6 +4166,9 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	// empty store reports OldestSeq==0, so the header is omitted, not sent as 0.
 	if minSeq := clampMinSeqToPage(retainedFloor, pageMinSeq); minSeq > 0 {
 		w.Header().Set("X-Radar-Timeline-Min-Seq", strconv.FormatInt(minSeq, 10))
+	}
+	if pageFull {
+		w.Header().Set("X-Radar-Timeline-Page-Full", "true")
 	}
 	s.writeJSON(w, events)
 }

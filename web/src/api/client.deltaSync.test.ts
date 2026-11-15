@@ -27,6 +27,7 @@ interface Page {
   events: TimelineEvent[]
   epoch: string
   maxSeq: number
+  pageFull?: boolean
 }
 function pageResponse(page: Page): Response {
   return new Response(JSON.stringify(page.events), {
@@ -34,6 +35,7 @@ function pageResponse(page: Page): Response {
     headers: {
       'X-Radar-Timeline-Epoch': page.epoch,
       'X-Radar-Timeline-Max-Seq': String(page.maxSeq),
+      ...(page.pageFull ? { 'X-Radar-Timeline-Page-Full': 'true' } : {}),
     },
   })
 }
@@ -155,6 +157,21 @@ describe('runDeltaSyncFetch (useChanges delta orchestration)', () => {
     expect(second[0].id).toBe(`n${LIMIT}`)
     expect(metaStore.get(META_KEY)!.highWaterSeq).toBe(6 + LIMIT)
     expect(metaStore.get(META_KEY)!.lastFullMs).toBe(2_000)
+  })
+
+  it('a delta the server marks page-full falls back to a full fetch even when access filtering shortened it', async () => {
+    const metaStore = new Map<string, ChangesDeltaMeta>()
+    responder = () => ({ events: [mk('a', 5, 0)], epoch: 'e1', maxSeq: 5 })
+    const first = await run(metaStore, undefined, 1_000)
+
+    responder = (url) =>
+      sinceSeqOf(url) != null
+        ? { events: [mk('visible', 9, 1_000)], epoch: 'e1', maxSeq: 5 + LIMIT, pageFull: true }
+        : { events: [mk('newest', 5 + LIMIT + 50, 5_000)], epoch: 'e1', maxSeq: 5 + LIMIT + 50 }
+    const second = await run(metaStore, first, 2_000)
+
+    expect(sinceSeqOf(lastUrl())).toBeNull()
+    expect(second.map((e) => e.id)).toEqual(['newest'])
   })
 
   it('an epoch change between polls forces a full resync: cursor reset, list replaced', async () => {

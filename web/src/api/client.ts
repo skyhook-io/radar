@@ -3195,7 +3195,12 @@ export function deltaFetchCursor(
 async function fetchChangesPage(
   path: string,
   signal?: AbortSignal,
-): Promise<{ events: TimelineEvent[]; epoch: string; maxSeq: number }> {
+): Promise<{
+  events: TimelineEvent[];
+  epoch: string;
+  maxSeq: number;
+  pageFull: boolean;
+}> {
   const response = await apiFetch(
     `${getApiBase()}${path}`,
     signal ? { signal } : undefined,
@@ -3219,6 +3224,9 @@ async function fetchChangesPage(
     events,
     epoch: response.headers.get("X-Radar-Timeline-Epoch") ?? "",
     maxSeq,
+    // The store filled the page before the RBAC filter, so more rows may wait
+    // past it even when fewer than `limit` arrived. Older servers omit it.
+    pageFull: response.headers.get("X-Radar-Timeline-Page-Full") === "true",
   };
 }
 
@@ -3278,7 +3286,8 @@ export async function runDeltaSyncFetch(deps: {
     );
     // The server pages deltas oldest first, so a full page means newer events
     // may still be waiting. A full fetch returns the newest `limit` instead.
-    if (delta.epoch && delta.epoch === meta!.epoch && delta.events.length < limit) {
+    const capped = delta.pageFull || delta.events.length >= limit;
+    if (delta.epoch && delta.epoch === meta!.epoch && !capped) {
       meta!.highWaterSeq = Math.max(
         meta!.highWaterSeq,
         delta.maxSeq,

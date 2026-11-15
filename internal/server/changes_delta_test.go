@@ -120,6 +120,23 @@ func TestHandleChanges_DeltaContract(t *testing.T) {
 		}
 	}
 
+	// A page the store filled to the limit says so, so a delta client knows
+	// more rows wait past it even when the RBAC filter shortens the body.
+	if rr.Header().Get("X-Radar-Timeline-Page-Full") != "" {
+		t.Fatalf("unlimited delta marked page-full")
+	}
+	rr = get("/api/changes?namespaces=default&limit=2&since_seq=0")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("capped delta status = %d", rr.Code)
+	}
+	if got := rr.Header().Get("X-Radar-Timeline-Page-Full"); got != "true" {
+		t.Fatalf("capped delta page-full header = %q, want true", got)
+	}
+	rr = get("/api/changes?namespaces=default&limit=10&since_seq=0")
+	if got := rr.Header().Get("X-Radar-Timeline-Page-Full"); got != "" {
+		t.Fatalf("short delta page-full header = %q, want absent", got)
+	}
+
 	// Empty delta (cursor at frontier): 200, epoch still present.
 	rr = get("/api/changes?namespaces=default&since_seq=" + maxSeqHeader)
 	if rr.Code != http.StatusOK {
