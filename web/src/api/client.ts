@@ -2812,8 +2812,8 @@ export function useGitOpsInsights(
 }
 
 // Fields of a Flux root's managed objects last written by a person's tool.
-// The server lists the members live (bounded) and caches per user for 30s,
-// so no polling: the header count and the tab share this one query.
+// The server lists the members live (bounded) on every request and keeps no
+// cache, so no polling: the header count and the tab share this one query.
 export function useGitOpsOutsideChanges(kind: string, namespace: string, name: string, group: string | undefined, enabled: boolean) {
   const { guard, gatedKey, support } = useRadarFeature("gitopsOutsideChanges");
   const params = group ? `?group=${encodeURIComponent(group)}` : "";
