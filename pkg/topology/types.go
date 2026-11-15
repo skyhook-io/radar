@@ -179,6 +179,9 @@ type Edge struct {
 	Partial           bool     `json:"partial,omitempty"`
 	SkipIfKindVisible string   `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
 	PolicyEffect      string   `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
+	// Family names the relation family that produced the edge, for the
+	// families Related Resources can answer from the cache instead.
+	Family string `json:"-"`
 }
 
 // PolicyEffect constants for edge annotation
@@ -549,6 +552,13 @@ type Relationships struct {
 	// topmost K8s owner (Deployment > ReplicaSet > Pod). Empty when no
 	// meaningful manager is detectable.
 	ManagedBy []ResourceRef `json:"managedBy,omitempty"`
+
+	// Coverage says, for each relation family Radar answered from its cache
+	// rather than from the graph, what that family's answer couldn't cover,
+	// keyed by family (ConfigReferenceFamily). A family listed with an empty
+	// entry was answered completely; one not listed was answered from the
+	// graph, which records no coverage, or by an older Radar.
+	Coverage map[string]RelationCoverage `json:"coverage,omitempty"`
 }
 
 // CertificateInfo holds parsed X.509 certificate metadata for a single certificate.

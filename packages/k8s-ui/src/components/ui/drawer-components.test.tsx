@@ -539,3 +539,53 @@ describe('PodTemplateSection pod-level resources', () => {
     expect(renderToString(<PodTemplateSection template={{ spec: { resources: { requests: {}, limits: {} }, containers: [container] } }} />)).not.toContain('Pod (aggregate)')
   })
 })
+
+describe('RelatedResourcesSection config references', () => {
+  const pod = { kind: 'Pod', namespace: 'shop', name: 'web-1' }
+  const cm = { kind: 'ConfigMap', namespace: 'shop', name: 'settings' }
+
+  it('adds nothing when the family was answered completely, or by an older Radar', () => {
+    for (const relationships of [{ consumers: [pod], coverage: { configReferences: {} } }, { consumers: [pod] }] as Relationships[]) {
+      const html = renderToString(<RelatedResourcesSection relationships={relationships} kind="configmaps" />)
+      expect(html).toContain('Used By')
+      expect(html).not.toContain('Couldn')
+      expect(html).not.toContain('More than shown')
+    }
+  })
+
+  it("says under Used By which kinds a ConfigMap's consumers couldn't check, even with none found", () => {
+    const html = renderToString(
+      <RelatedResourcesSection
+        relationships={{ coverage: { configReferences: { notChecked: [{ kind: 'Pod', namespace: 'shop', reason: 'kind_sync_pending' }] } } }}
+        kind="configmaps"
+      />,
+    )
+    expect(html).toContain('Used By')
+    expect(html).toContain('Couldn&#x27;t check Pod')
+    expect(html).not.toContain('Configuration')
+  })
+
+  it('says how many use a Secret when the list is cut short', () => {
+    const html = renderToString(
+      <RelatedResourcesSection relationships={{ consumers: [pod], coverage: { configReferences: { truncated: true, total: 640 } } }} kind="secrets" />,
+    )
+    expect(html).toContain('More than shown: 640 in all.')
+  })
+
+  it("puts a workload's note under Configuration, and hints when only what the viewer may read is listed", () => {
+    const html = renderToString(
+      <RelatedResourcesSection relationships={{ configRefs: [cm], coverage: { configReferences: { narrowed: true } } }} kind="deployments" />,
+    )
+    expect(html).toContain('Configuration')
+    expect(html).toContain('Only ones you can view are listed.')
+    expect(html).not.toContain('Used By')
+  })
+
+  it("says outright when Radar couldn't answer at all", () => {
+    const html = renderToString(
+      <RelatedResourcesSection relationships={{ coverage: { configReferences: { notChecked: [{ reason: 'cluster_connecting' }] } } }} kind="deployments" />,
+    )
+    expect(html).toContain('Configuration')
+    expect(html).toContain('Couldn&#x27;t check what this uses: Radar is still connecting.')
+  })
+})

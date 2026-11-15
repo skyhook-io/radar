@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -45,15 +46,51 @@ func BeginOwnershipRead(cache *ResourceCache) (ownership.ReadSession, error) {
 	return session, nil
 }
 
-// AnswerOwnership answers rel's ownership for fetched, the object the caller
-// fetched, from the caches, for the caller access describes once the
-// session's catalog is known. owner is the fetched object itself: when it is a
-// Deployment or an Argo Rollout, the ReplicaSets that only keep its rollback
-// history move to OlderRevisions, read from the answer's own caches so that
-// a context switch refuses them with it. Caches replaced or not ready leave
-// the answer unavailable.
-func AnswerOwnership(rel *topology.Relationships, fetched ownership.Observation, owner metav1.Object, access func(*ownership.Catalog) ownership.Access) {
-	answerOwnership(ownershipSource, topology.ApplyOwnership, splitHistory(fetched.Ref, owner), rel, fetched, access)
+// AnswerRelationships answers a Related Resources read of object, the
+// object the caller fetched, from the caches, for the caller access
+// describes once the session's catalog is known. It answers ownership, and,
+// in the same session, the relation families Radar reads from its caches
+// rather than the relationship graph: rel must come from
+// topology.GetRelationshipsWithOptions answering RelationshipFamilies. When
+// object is a Deployment or an Argo Rollout, the ReplicaSets that only keep
+// its rollback history move to OlderRevisions. The families' answers are
+// applied only once the session validates; caches replaced or not ready
+// leave ownership unavailable and each family saying why.
+func AnswerRelationships(rel *topology.Relationships, fetched ownership.Observation, object runtime.Object, access func(*ownership.Catalog) ownership.Access) {
+	owner, _ := apimeta.Accessor(object)
+	var references relations.ConfigReferencesAnswer
+	var consumers relations.ConfigConsumersAnswer
+	answered := false
+	answerOwnership(ownershipSource, topology.ApplyOwnership, func(rel *topology.Relationships, v *ownership.View, s ownership.ReadSession) {
+		splitHistory(fetched.Ref, owner)(rel, v, s)
+		rs, ok := s.(relations.Session)
+		if !ok {
+			return
+		}
+		view := relations.NewView(rs, access(s.Catalog()))
+		references = view.ConfigReferences(fetched.Ref, object)
+		consumers = view.ConfigConsumers(fetched.Ref)
+		answered = true
+	}, rel, fetched, access)
+	switch {
+	case !answered:
+		topology.RelationFamilyUnavailable(rel, topology.ConfigReferenceFamily, relationsUnavailableReason(rel))
+	case rel.Ownership != nil && rel.Ownership.UnavailableReason != "":
+		topology.RelationFamilyUnavailable(rel, topology.ConfigReferenceFamily, rel.Ownership.UnavailableReason)
+	default:
+		topology.ApplyConfigReferences(rel, fetched.Ref, references, consumers)
+	}
+}
+
+// RelationshipFamilies are the relation families AnswerRelationships answers
+// from the caches.
+var RelationshipFamilies = []string{topology.ConfigReferenceFamily}
+
+func relationsUnavailableReason(rel *topology.Relationships) string {
+	if rel.Ownership != nil && rel.Ownership.UnavailableReason != "" {
+		return rel.Ownership.UnavailableReason
+	}
+	return string(readreason.ReadError)
 }
 
 // splitHistory moves the ReplicaSets among rel's Children that only keep
@@ -80,8 +117,8 @@ func splitHistory(subject resourceid.Ref, owner metav1.Object) func(*topology.Re
 	}
 }
 
-// AnswerOwner is AnswerOwnership for rel's Owner and Manager, which is all a
-// resource context reads. It searches for no children and builds no member
+// AnswerOwner answers only rel's Owner and Manager, which is all a resource
+// context reads. It searches for no children and builds no member
 // list: the manager answer reads the recorder index along the controller
 // chain and, for a claim its lists don't confirm, that manager's list state.
 func AnswerOwner(rel *topology.Relationships, fetched ownership.Observation, access func(*ownership.Catalog) ownership.Access) {

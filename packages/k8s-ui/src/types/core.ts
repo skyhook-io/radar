@@ -672,6 +672,16 @@ export interface ResourceRef {
 }
 
 // Computed relationships for a resource
+/** What a relation family's part of a Relationships couldn't cover. */
+export interface RelationCoverage {
+  notChecked?: OwnershipGap[]
+  /** The family found more than the response lists; total says how many. */
+  truncated?: boolean
+  total?: number
+  /** Only what the viewer may read is listed. */
+  narrowed?: boolean
+}
+
 export interface Relationships {
   /** Istio registry domain supplied by the producer; omitted when unknown. */
   istioServiceDomain?: string
@@ -697,6 +707,12 @@ export interface Relationships {
    * Absent: no completeness is claimed, whether because the server answers
    * Owner and Children from graph edges or because the resource is an Event. */
   ownership?: OwnershipCoverage
+  /** What each relation family Radar answered from its cache couldn't cover,
+   * keyed by family (`configReferences`). A family listed with an empty entry
+   * was answered completely; one not listed was answered from the
+   * relationship graph, or by a Radar that predates this, so its coverage is
+   * unknown. */
+  coverage?: Record<string, RelationCoverage>
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
   gateways?: ResourceRef[]

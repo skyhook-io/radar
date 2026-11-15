@@ -3896,6 +3896,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					Source: cmID,
 					Target: workloadID,
 					Type:   EdgeConfigures,
+					Family: ConfigReferenceFamily,
 				})
 			}
 
@@ -3942,6 +3943,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					Source: secretID,
 					Target: workloadID,
 					Type:   EdgeConfigures,
+					Family: ConfigReferenceFamily,
 				})
 			}
 
@@ -3980,7 +3982,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 			for _, workloadID := range consumers {
 				edges = append(edges, Edge{
-					ID: fmt.Sprintf("%s-to-%s", serviceAccountID, workloadID), Source: serviceAccountID, Target: workloadID, Type: EdgeConfigures,
+					ID: fmt.Sprintf("%s-to-%s", serviceAccountID, workloadID), Source: serviceAccountID, Target: workloadID, Type: EdgeConfigures, Family: ConfigReferenceFamily,
 				})
 			}
 		}
@@ -4049,6 +4051,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					Source: pvcID,
 					Target: workloadID,
 					Type:   EdgeUses,
+					Family: ConfigReferenceFamily,
 				})
 			}
 

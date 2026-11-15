@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"slices"
 
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -186,21 +186,25 @@ func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string,
 		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
 		relIdx = nil
 	}
-	rel := topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
+	fetched, observed := k8s.OwnershipObservation(resource)
+	var opts topology.RelationshipOptions
+	if observed {
+		opts.Answered = k8s.RelationshipFamilies
+	}
+	rel := topology.GetRelationshipsWithOptions(kind, namespace, name, resource, cachedTopo,
 		k8s.NewTopologyResourceProvider(cache),
-		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx, opts)
 	if user && rel != nil {
 		s.withholdDirectLookups(r, rel)
 	}
-	fetched, ok := k8s.OwnershipObservation(resource)
-	if !ok {
+	if !observed {
 		return rel
 	}
 	if rel == nil {
 		rel = &topology.Relationships{}
 	}
-	owner, _ := apimeta.Accessor(resource)
-	k8s.AnswerOwnership(rel, fetched, owner, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+	// OwnershipObservation reads only runtime.Objects.
+	k8s.AnswerRelationships(rel, fetched, resource.(runtime.Object), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
 	return rel
 }
 

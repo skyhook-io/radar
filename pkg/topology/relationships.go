@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -349,6 +351,30 @@ func GetRelationshipsWithIndex(kind, namespace, name string, topo *Topology, pro
 // obj is nil, behavior matches the pre-refactor path: lookupObjectMetadata
 // is called, with the group-collision risk noted above.
 func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex) *Relationships {
+	return GetRelationshipsWithOptions(kind, namespace, name, obj, topo, provider, dp, idx, RelationshipOptions{})
+}
+
+// ConfigReferenceFamily is the relation family of the ConfigMaps, Secrets,
+// PersistentVolumeClaims and ServiceAccounts that Pods, pod templates and
+// Ingress TLS declare.
+const ConfigReferenceFamily = relations.ConfigFamily
+
+// RelationshipOptions changes what GetRelationshipsWithOptions reads from
+// the graph.
+type RelationshipOptions struct {
+	// Answered are the relation families the caller answers itself from the
+	// cache: their graph edges and lookups are left out, so the two sources
+	// never both answer the same question.
+	Answered []string
+}
+
+func (o RelationshipOptions) answers(family string) bool {
+	return family != "" && slices.Contains(o.Answered, family)
+}
+
+// GetRelationshipsWithOptions is GetRelationshipsWithObject, leaving out
+// the families opts says the caller answers.
+func GetRelationshipsWithOptions(kind, namespace, name string, obj any, topo *Topology, provider ResourceProvider, dp DynamicProvider, idx *RelationshipsIndex, opts RelationshipOptions) *Relationships {
 	if topo == nil {
 		return nil
 	}
@@ -401,7 +427,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	kindLower := strings.ToLower(kind)
 
 	for _, edge := range outgoingEdges {
-		if earlierJobRunEdge(edge, nodeByID) {
+		if earlierJobRunEdge(edge, nodeByID) || opts.answers(edge.Family) {
 			continue
 		}
 		// This resource points TO something (outgoing edge)
@@ -462,7 +488,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	for _, edge := range incomingEdges {
-		if earlierJobRunEdge(edge, nodeByID) {
+		if earlierJobRunEdge(edge, nodeByID) || opts.answers(edge.Family) {
 			continue
 		}
 		// Something points TO this resource (incoming edge)
@@ -716,21 +742,24 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if queriedObj == nil {
 		queriedObj = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
 	}
+	configAnswered := opts.answers(ConfigReferenceFamily)
 	if pod, ok := queriedObj.(*corev1.Pod); ok {
 
-		for _, declaration := range configrefs.PodSpecReferences(pod.Namespace, pod.Spec) {
-			if declaration.Kind == "ServiceAccount" {
-				continue
-			}
-			target := lookupIndex.nodesByResourceKey[resourceid.ResourceKey("", declaration.Kind, declaration.Namespace, declaration.Name)]
-			if target == nil {
-				continue
-			}
-			ref := ResourceRef{Kind: declaration.Kind, Namespace: declaration.Namespace, Name: declaration.Name}
-			if declaration.Kind == "PersistentVolumeClaim" {
-				rel.StorageRefs = append(rel.StorageRefs, ref)
-			} else {
-				rel.ConfigRefs = append(rel.ConfigRefs, ref)
+		if !configAnswered {
+			for _, declaration := range configrefs.PodSpecReferences(pod.Namespace, pod.Spec) {
+				if declaration.Kind == "ServiceAccount" {
+					continue
+				}
+				target := lookupIndex.nodesByResourceKey[resourceid.ResourceKey("", declaration.Kind, declaration.Namespace, declaration.Name)]
+				if target == nil {
+					continue
+				}
+				ref := ResourceRef{Kind: declaration.Kind, Namespace: declaration.Namespace, Name: declaration.Name}
+				if declaration.Kind == "PersistentVolumeClaim" {
+					rel.StorageRefs = append(rel.StorageRefs, ref)
+				} else {
+					rel.ConfigRefs = append(rel.ConfigRefs, ref)
+				}
 			}
 		}
 		if sa := pod.Spec.ServiceAccountName; sa != "" {
@@ -764,7 +793,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
-	if resourceGroup == "" && (resourceKind == "ConfigMap" || resourceKind == "Secret" || resourceKind == "PersistentVolumeClaim" || resourceKind == "ServiceAccount") {
+	if !configAnswered && resourceGroup == "" && (resourceKind == "ConfigMap" || resourceKind == "Secret" || resourceKind == "PersistentVolumeClaim" || resourceKind == "ServiceAccount") {
 		rel.Consumers = append(rel.Consumers, lookupIndex.podConsumersFor(resourceid.ResourceKey("", resourceKind, namespace, name))...)
 	}
 	if endpoint, ok := queriedObj.(*unstructured.Unstructured); ok &&

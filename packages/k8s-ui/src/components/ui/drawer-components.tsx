@@ -841,7 +841,7 @@ export type CopyHandler = (text: string, key: string) => void
 // RELATED RESOURCES SECTION
 // ============================================================================
 
-import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, ManagerAnswer } from '../../types'
+import type { TimelineEvent, Relationships, ResourceRef, OwnershipCoverage, ManagerAnswer, RelationCoverage } from '../../types'
 import { isChangeEvent, isK8sEvent } from '../../types'
 import { Info, Link } from 'lucide-react'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -862,6 +862,10 @@ interface RelatedResourcesSectionProps {
 // would carry the note.
 const KINDS_WITH_CHILDREN = new Set(['deployments', 'replicasets', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'services', 'rollouts'])
 
+// The kinds pods and pod templates declare: for these, the config-reference
+// family answers what uses them; for any other kind, what it uses.
+const CONFIG_TARGET_KINDS = new Set(['configmaps', 'secrets', 'persistentvolumeclaims', 'serviceaccounts'])
+
 export function RelatedResourcesSection({ relationships, onNavigate, kind, trackedBy }: RelatedResourcesSectionProps) {
   if (!relationships) return null
 
@@ -874,6 +878,8 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
   const unanswered = ownershipUnanswered(relationships.ownership)
   const several = !relationships.owner && relationships.ownership?.primaryOwnerState === 'several'
   const ownerMissing = relationships.owner || several ? undefined : ownerNote(relationships.ownership)
+  const configNoteOnUsers = !!kind && CONFIG_TARGET_KINDS.has(kind)
+  const configNote = familyNote(relationships.coverage?.configReferences, configNoteOnUsers ? 'what uses this' : 'what this uses')
   let childrenCoverage = childrenNote(relationships.ownership)
   const noChildren = !relationships.children?.length && !relationships.olderRevisions?.length
   if (noChildren && childrenCoverage?.hint && !childrenCoverage.text && kind && KINDS_WITH_CHILDREN.has(kind)) {
@@ -902,6 +908,7 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
     (relationships.pods && relationships.pods.length > 0) ||
     (relationships.configRefs && relationships.configRefs.length > 0) ||
     (relationships.consumers && relationships.consumers.length > 0) ||
+    configNote?.text ||
     (relationships.scalers && relationships.scalers.length > 0) ||
     (relationships.storageRefs && relationships.storageRefs.length > 0) ||
     (relationships.pdbs && relationships.pdbs.length > 0) ||
@@ -972,11 +979,17 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
         {relationships.pods && relationships.pods.length > 0 && (
           <RelationshipGroup label="Pods" refs={dedupeResourceRefs(relationships.pods)} onNavigate={onNavigate} />
         )}
-        {configRefs.length > 0 && (
-          <RelationshipGroup label="Configuration" refs={dedupeResourceRefs(configRefs)} onNavigate={onNavigate} />
+        {(configRefs.length > 0 || (!configNoteOnUsers && configNote?.text)) && (
+          <RelationshipGroup label="Configuration" refs={dedupeResourceRefs(configRefs)} onNavigate={onNavigate} note={configNoteOnUsers ? undefined : configNote} />
         )}
-        {consumers.length > 0 && (
-          <RelationshipGroup label="Used By" refs={dedupeResourceRefs(consumers)} onNavigate={onNavigate} />
+        {(consumers.length > 0 || (configNoteOnUsers && configNote?.text)) && (
+          <RelationshipGroup
+            label="Used By"
+            refs={dedupeResourceRefs(consumers)}
+            onNavigate={onNavigate}
+            note={configNoteOnUsers ? configNote : undefined}
+            capped={configNoteOnUsers && relationships.coverage?.configReferences?.truncated}
+          />
         )}
         {relationships.scalers && relationships.scalers.length > 0 && (
           <RelationshipGroup label="Autoscaler" refs={dedupeResourceRefs(relationships.scalers)} onNavigate={onNavigate} />
@@ -1087,6 +1100,36 @@ function childrenNote(coverage: OwnershipCoverage | undefined): RelationshipNote
   const text: string[] = []
   if (pressing.size > 0) text.push(`Couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}.`)
   if (children.truncated) text.push('More children than shown.')
+  if (text.length > 0) note.text = text.join(' ')
+  return note.hint || note.text ? note : undefined
+}
+
+// familyNote says what a relation family's answer may be missing, the way
+// childrenNote does for children: kinds Radar doesn't collect are a hint;
+// kinds it couldn't check for any other reason, and a list cut short, are
+// said outright.
+function familyNote(coverage: RelationCoverage | undefined, question: string): RelationshipNote | undefined {
+  if (!coverage) return undefined
+  const uncollected = new Set<string>()
+  let someNamespaces = false
+  let unanswered: string | undefined
+  const pressing = new Map<string, string>()
+  for (const g of coverage.notChecked ?? []) {
+    if (!g.kind) unanswered = gapReasonText(g.reason)
+    else if (g.reason === 'radar_kind_not_collected') uncollected.add(g.kind)
+    else if (g.reason === 'radar_namespace_not_collected') someNamespaces = true
+    else if (!pressing.has(g.kind)) pressing.set(g.kind, gapReasonText(g.reason))
+  }
+  const hint: string[] = []
+  if (uncollected.size > 0) hint.push(`Radar doesn't collect ${joinOr(Array.from(uncollected))} objects, so none of those are listed.`)
+  if (someNamespaces) hint.push("Radar doesn't collect every namespace, so some aren't listed.")
+  if (coverage.narrowed) hint.push('Only ones you can view are listed.')
+  const text: string[] = []
+  if (unanswered) text.push(`Couldn't check ${question}: ${unanswered}.`)
+  if (pressing.size > 0) text.push(`Couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}.`)
+  if (coverage.truncated) text.push(coverage.total ? `More than shown: ${coverage.total} in all.` : 'More than shown.')
+  const note: RelationshipNote = {}
+  if (hint.length > 0) note.hint = hint
   if (text.length > 0) note.text = text.join(' ')
   return note.hint || note.text ? note : undefined
 }

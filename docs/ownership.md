@@ -24,6 +24,7 @@ and scope; it never proves that no external controller or writer exists.
 |---|---|---|
 | What owns it / what does it own | `relationships.owner`, `owners`, `children` (REST resource GET); `resourceContext.owner` (AI context) | Owner references |
 | Which managers record it / what a manager records | `relationships.managers`, `manages` (Related Resources → Managed By / Manages) | Recorded membership, plus graph links for other managing controllers (a cert-manager Certificate) |
+| What it declares / what declares it (ConfigMaps, Secrets, PersistentVolumeClaims, ServiceAccounts) | `relationships.configRefs`, `storageRefs`, `serviceAccount`, `consumers`, with `relationships.coverage.configReferences` (Related Resources) | Declarations in pod specs, pod templates and Ingress TLS, read from the cache ([below](#beyond-ownership-other-relations)); the same fields also carry other families' graph links, which have no coverage yet |
 | What manages it, weighed | `relationships.ownership.manager`; `resourceContext.manager` (compact) | Recorded membership and claims, through the controller chain ([below](#what-manages-an-object)) |
 | Legacy manager pointer | `relationships.managedBy` | The manager the object's metadata names, else the topmost object its manages edges reach; still used by workload navigation and older-server manager fallbacks, not a canonical controller-owner answer |
 | Controller and other generators, for agents | `resourceContext.managedBy` | Highest readable controller plus observed non-GitOps spec generators; GitOps/Helm evidence stays in `manager`. See [agent navigation](#the-top-controller). |
@@ -82,6 +83,14 @@ also uses.
   an index of every declaration cost about 1.4 KB per Pod and made a Pod relist about five times as long
   ([measurements](loadtest.md#relationship-cost-baselines)). A caller who may not read the subject gets nothing.
 - ReplicaSets scaled explicitly to zero declare nothing: they are old revisions.
+
+Related Resources reads this family from the cache, in the same session and for the same caller as ownership
+(`internal/k8s.AnswerRelationships`); the relationship graph leaves the family's edges and lookups out
+(`topology.GetRelationshipsWithOptions`), and `topology.ApplyConfigReferences` adds the answers beside what other
+families put in the same fields. `relationships.coverage` is keyed by family: a family listed with an empty entry was
+answered completely, one with `notChecked`, `truncated`/`total` or `narrowed` says what it couldn't cover, and a
+family not listed came from the graph or an older Radar, whose coverage is unknown. Only targets Radar holds and the
+caller may read are listed, as the graph listed them; a Pod's own ServiceAccount still comes from its spec.
 
 The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
 worlds whose objects declare references (`ownershiptest.Object.Declares`).
