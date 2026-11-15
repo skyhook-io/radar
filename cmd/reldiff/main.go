@@ -61,11 +61,17 @@ type failure struct {
 	Side    string  `json:"side"`
 	Error   string  `json:"error"`
 }
+type captureGaps struct {
+	FailedGroups []string                `json:"failed_groups"`
+	Skipped      []clusterreplay.Skipped `json:"skipped"`
+}
+
 type report struct {
-	Requests   int      `json:"request_pairs"`
-	DeltaCount int      `json:"delta_count"`
-	Deltas     []*delta `json:"deltas"`
-	// Noise holds deltas whose (reader, field) also differed between two runs
+	CaptureGaps captureGaps `json:"capture_gaps"`
+	Requests    int         `json:"request_pairs"`
+	DeltaCount  int         `json:"delta_count"`
+	Deltas      []*delta    `json:"deltas"`
+	// Noise holds deltas whose (reader, kind, field) also differed between two runs
 	// of one build (-baseline): output that varies run to run, not between builds.
 	NoiseCount int            `json:"noise_count,omitempty"`
 	Noise      []*delta       `json:"noise,omitempty"`
@@ -111,7 +117,10 @@ func run(a, b, capture, out string, max int, adminA, adminB, baseline string) er
 	}
 	requests := plan(objects, header, max)
 	client := &http.Client{Timeout: 65 * time.Second}
-	result := report{Deltas: []*delta{}, Failures: []failure{}, Readiness: map[string]any{}}
+	result := report{Deltas: []*delta{}, Failures: []failure{}, Readiness: map[string]any{}, CaptureGaps: captureGaps{header.FailedGroups, header.Skipped}}
+	if len(header.FailedGroups) > 0 || len(header.Skipped) > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: incomplete capture: %d failed groups, %d skipped resources; see capture_gaps in the report\n", len(header.FailedGroups), len(header.Skipped))
+	}
 	for _, side := range []struct{ Name, Base, Admin string }{{"a", a, adminA}, {"b", b, adminB}} {
 		status, err := waitReady(client, side.Base, side.Admin)
 		if err != nil {
@@ -149,7 +158,7 @@ func run(a, b, capture, out string, max int, adminA, adminB, baseline string) er
 		for field, values := range changes {
 			key := r.Reader + "\x00" + field + "\x00" + r.Kind
 			target, count := groups, &result.DeltaCount
-			if noise[r.Reader+"\x00"+fieldPattern(field)] {
+			if noise[r.Reader+"\x00"+r.Kind+"\x00"+fieldPattern(field)] {
 				target, count = noiseGroups, &result.NoiseCount
 			}
 			d := target[key]
@@ -465,7 +474,7 @@ func loadNoise(path string) (map[string]bool, error) {
 		return nil, err
 	}
 	for _, d := range base.Deltas {
-		noise[d.Reader+"\x00"+fieldPattern(d.Field)] = true
+		noise[d.Reader+"\x00"+d.Kind+"\x00"+fieldPattern(d.Field)] = true
 	}
 	return noise, nil
 }

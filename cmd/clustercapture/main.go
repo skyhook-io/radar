@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -66,14 +65,7 @@ func run() error {
 	}
 	fmt.Printf("Captured %d objects to %s\n", count, *out)
 	if len(skipped) > 0 {
-		b, err := json.MarshalIndent(skipped, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(*out+".skipped.json", b, 0o600); err != nil {
-			return err
-		}
-		fmt.Printf("Skipped %d resources whose lists failed; see %s.skipped.json\n", len(skipped), *out)
+		fmt.Printf("Skipped %d resources whose lists failed; details are in the capture header\n", len(skipped))
 	}
 	return nil
 }

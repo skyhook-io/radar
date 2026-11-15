@@ -400,7 +400,7 @@ func boolPtr(b bool) *bool { return &b }
 func startReplayAdmin(port int, replay *replayState) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/loadtest/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "objects": replay.objects, "unsupported": replay.unsupported})
+		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "objects": replay.objects, "unsupported": replay.unsupported, "failed_groups": replay.failedGroups, "skipped": replay.skipped})
 	})
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -27,7 +28,8 @@ type Header struct {
 	Discovery   Discovery `json:"discovery"`
 	// FailedGroups are the API groups discovery couldn't answer for when the
 	// capture ran; their resources are missing from the capture.
-	FailedGroups []string `json:"failed_groups,omitempty"`
+	FailedGroups []string  `json:"failed_groups,omitempty"`
+	Skipped      []Skipped `json:"skipped,omitempty"`
 }
 
 // Skipped is a resource the capture couldn't list, so the replay lacks it.
@@ -58,7 +60,7 @@ func Listable(gv schema.GroupVersion, r metav1.APIResource) bool {
 
 // Capture writes every listable object discovery serves. A group discovery
 // can't answer for, or a resource whose list fails, is left out and reported
-// (in the header and in skipped) rather than failing the whole capture.
+// in the header rather than failing the whole capture.
 func Capture(ctx context.Context, d discovery.DiscoveryInterface, c dynamic.Interface, contextName string, dst io.Writer) (count int, skipped []Skipped, err error) {
 	groups, resources, derr := d.ServerGroupsAndResources()
 	var failedGroups []string
@@ -74,12 +76,14 @@ func Capture(ctx context.Context, d discovery.DiscoveryInterface, c dynamic.Inte
 		}
 		slices.Sort(failedGroups)
 	}
-	digest := sha256.Sum256([]byte(contextName))
-	z := gzip.NewWriter(dst)
-	enc := json.NewEncoder(z)
-	if err := enc.Encode(Header{time.Now().UTC(), hex.EncodeToString(digest[:]), Discovery{groups, resources}, failedGroups}); err != nil {
+	objects, err := os.CreateTemp("", "radar-capture-objects-*")
+	if err != nil {
 		return 0, nil, err
 	}
+	defer os.Remove(objects.Name())
+	defer objects.Close()
+	capturedAt := time.Now().UTC()
+	enc := json.NewEncoder(objects)
 	for _, list := range resources {
 		gv, err := schema.ParseGroupVersion(list.GroupVersion)
 		if err != nil {
@@ -120,6 +124,26 @@ func Capture(ctx context.Context, d discovery.DiscoveryInterface, c dynamic.Inte
 			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return count, skipped, err
+	}
+	if _, err := objects.Seek(0, io.SeekStart); err != nil {
+		return count, skipped, err
+	}
+	digest := sha256.Sum256([]byte(contextName))
+	z := gzip.NewWriter(dst)
+	if err := json.NewEncoder(z).Encode(Header{
+		CapturedAt: capturedAt, ContextHash: hex.EncodeToString(digest[:]),
+		Discovery: Discovery{groups, resources}, FailedGroups: failedGroups, Skipped: skipped,
+	}); err != nil {
+		return count, skipped, err
+	}
+	if _, err := io.Copy(z, objects); err != nil {
+		return count, skipped, err
+	}
+	if err := ctx.Err(); err != nil {
+		return count, skipped, err
+	}
 	return count, skipped, z.Close()
 }
 
@@ -159,11 +183,47 @@ func scrub(value any) {
 					}
 				}
 			}
+			if key == "command" || key == "args" {
+				if args, ok := child.([]any); ok {
+					scrubArgs(args)
+				}
+			}
 			scrub(child)
 		}
 	case []any:
 		for _, child := range v {
 			scrub(child)
+		}
+	}
+}
+
+func scrubArgs(args []any) {
+	redactNext := false
+	for i, value := range args {
+		arg, ok := value.(string)
+		if !ok {
+			redactNext = false
+			continue
+		}
+		if redactNext {
+			args[i] = ""
+			redactNext = false
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		flag, _, hasValue := strings.Cut(arg, "=")
+		name := strings.ToLower(strings.TrimLeft(flag, "-"))
+		for _, sensitive := range []string{"password", "passwd", "secret", "token", "apikey", "api-key", "api_key", "credential", "private-key", "private_key", "privatekey", "key-file", "key_file", "keyfile"} {
+			if strings.Contains(name, sensitive) {
+				if hasValue {
+					args[i] = flag + "="
+				} else {
+					redactNext = true
+				}
+				break
+			}
 		}
 	}
 }

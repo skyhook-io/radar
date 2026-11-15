@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
 	discoveryfake "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -134,4 +136,68 @@ func (c *recordingDynamic) Resource(gvr schema.GroupVersionResource) dynamic.Nam
 func (c *recordingResource) List(ctx context.Context, opts metav1.ListOptions) (*unstructured.UnstructuredList, error) {
 	c.parent.options[c.resource] = append(c.parent.options[c.resource], opts)
 	return c.NamespaceableResourceInterface.List(ctx, opts)
+}
+
+func TestSanitizeCommandAndArgs(t *testing.T) {
+	for _, field := range []string{"command", "args"} {
+		for _, name := range []string{"password", "passwd", "client-secret", "TOKEN", "apikey", "api-key", "api_key", "credentials", "private-key", "private_key", "privatekey", "key-file", "key_file", "keyfile"} {
+			for _, flag := range []string{"--" + name, "-" + name} {
+				t.Run(field+"/"+flag, func(t *testing.T) {
+					args := []any{"pilot-discovery", flag, "hunter2", flag + "=hunter2", "--domain", "mesh.internal", "--domain=mesh.internal", "--trust-domain", "trust.internal", "--trust-domain=trust.internal", "--log-level=debug"}
+					obj := map[string]any{"kind": "Deployment", "spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{field: args}}}}}}
+					Sanitize(obj)
+					want := []any{"pilot-discovery", flag, "", flag + "=", "--domain", "mesh.internal", "--domain=mesh.internal", "--trust-domain", "trust.internal", "--trust-domain=trust.internal", "--log-level=debug"}
+					if !reflect.DeepEqual(args, want) {
+						t.Fatalf("args=%#v, want %#v", args, want)
+					}
+				})
+			}
+		}
+	}
+}
+
+type partialDiscovery struct {
+	discovery.DiscoveryInterface
+	resources []*metav1.APIResourceList
+}
+
+func (d partialDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
+	return nil, d.resources, &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+		{Group: "broken.io", Version: "v1"}: context.DeadlineExceeded,
+	}}
+}
+
+func TestCaptureGapsRoundTrip(t *testing.T) {
+	d := partialDiscovery{resources: []*metav1.APIResourceList{{GroupVersion: "v1", APIResources: []metav1.APIResource{
+		{Name: "pods", Kind: "Pod", Verbs: []string{"list"}},
+		{Name: "secrets", Kind: "Secret", Verbs: []string{"list"}},
+	}}}}
+	c := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		{Version: "v1", Resource: "pods"}: "PodList", {Version: "v1", Resource: "secrets"}: "SecretList",
+	})
+	c.PrependReactor("list", "*", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if a.GetResource().Resource == "secrets" {
+			return true, nil, context.DeadlineExceeded
+		}
+		return true, &unstructured.UnstructuredList{Items: []unstructured.Unstructured{{Object: map[string]any{"metadata": map[string]any{"name": "pod"}}}}}, nil
+	})
+	var buf bytes.Buffer
+	n, skipped, err := Capture(context.Background(), d, c, "ctx", &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	header, err := Read(&buf, func(*unstructured.Unstructured) error { count++; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || count != 1 || !reflect.DeepEqual(header.FailedGroups, []string{"broken.io"}) || len(header.Skipped) != 1 || !reflect.DeepEqual(header.Skipped, skipped) || header.Skipped[0].Error != context.DeadlineExceeded.Error() {
+		t.Fatalf("incomplete capture not self-describing: n=%d count=%d header=%+v skipped=%+v", n, count, header, skipped)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	buf.Reset()
+	if _, _, err := Capture(ctx, d, c, "ctx", &buf); err == nil || buf.Len() != 0 {
+		t.Fatalf("canceled capture wrote output: bytes=%d err=%v", buf.Len(), err)
+	}
 }

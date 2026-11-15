@@ -19,12 +19,14 @@ import (
 )
 
 type replayState struct {
-	client      *fake.Clientset
-	dynamic     *dynamicfake.FakeDynamicClient
-	discovery   *replayDiscovery
-	gvrs        []schema.GroupVersionResource
-	unsupported []string
-	objects     int
+	client       *fake.Clientset
+	dynamic      *dynamicfake.FakeDynamicClient
+	discovery    *replayDiscovery
+	gvrs         []schema.GroupVersionResource
+	unsupported  []string
+	failedGroups []string
+	skipped      []clusterreplay.Skipped
+	objects      int
 }
 
 func loadReplay(path string) (*replayState, error) {
@@ -38,7 +40,7 @@ func loadReplay(path string) (*replayState, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &replayState{client: fake.NewClientset(), objects: len(objects)}
+	s := &replayState{client: fake.NewClientset(), objects: len(objects), failedGroups: header.FailedGroups, skipped: header.Skipped}
 	s.discovery = &replayDiscovery{FakeDiscovery: s.client.Discovery().(*discoveryfake.FakeDiscovery), groups: header.Discovery.Groups}
 	s.discovery.Resources = header.Discovery.Resources
 	kinds := map[schema.GroupVersionResource]string{}
@@ -122,6 +124,12 @@ func (s *replayState) start() error {
 	fmt.Fprintf(os.Stderr, "Replay caches synced: %d objects; %d unsupported resources\n", s.objects, len(s.unsupported))
 	for _, gap := range s.unsupported {
 		fmt.Fprintln(os.Stderr, "Replay unsupported:", gap)
+	}
+	for _, group := range s.failedGroups {
+		fmt.Fprintln(os.Stderr, "Replay capture failed group:", group)
+	}
+	for _, gap := range s.skipped {
+		fmt.Fprintf(os.Stderr, "Replay capture skipped: %s: %s\n", gap.Resource, gap.Error)
 	}
 	return nil
 }

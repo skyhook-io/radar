@@ -116,7 +116,9 @@ with empty strings, preserving their keys. Managed fields and last-applied
 annotations are removed recursively. Literal env values are cleared; token,
 password, authorization and private-key values are redacted through Radar's
 existing inline-secret redactor, which also handles recognized credential patterns
-in other strings. Kubeconfig contents, credential objects and the plaintext context name
+in other strings. In every `command` and `args` array, sensitive flag values are
+cleared in both `--password value` and `--password=value` forms. Non-sensitive
+arguments, including Istio domain and trust-domain settings, are preserved. Kubeconfig contents, credential objects and the plaintext context name
 are never serialized. Files are created with mode 0600.
 
 Arbitrary CRDs and free-form strings can encode credentials under unknown names
@@ -136,7 +138,8 @@ resources and reader failures remain visible rather than being dropped.
 Some readers vary between two runs of the *same* build (today: the GitOps tree and
 neighborhood around CiliumEndpoints, and the order Applications joins its add-on
 reasons). Measure that first and pass it as a baseline, so a comparison of two
-builds reports those fields as `noise`, not as deltas:
+builds reports those fields as `noise`, not as deltas. Baseline matches are scoped
+to the same reader and kind, with array positions and element keys generalized:
 
 ```sh
 # two servers from the same build, then
@@ -149,7 +152,12 @@ Arrays of resource refs, listed objects and graph nodes/edges are compared by id
 not position, so a reordered list is not a delta and a changed element is reported
 under its own key.
 
-A capture skips a resource whose list fails and writes the skipped resources next to
-the capture (`<out>.skipped.json`). Groups discovery couldn't answer for are recorded in
-the capture header (`failed_groups`); the metrics groups are never captured, since their
+A capture skips a resource whose list fails and records it in
+the capture header (`skipped`, with resource and error). Groups discovery couldn't
+answer for are recorded there as `failed_groups`; the metrics groups are never captured, since their
 values change on every read.
+
+Capture gaps are printed at replay startup and exposed as `failed_groups` and
+`skipped` in `/loadtest/status`. `reldiff` copies both into `capture_gaps` and warns
+when either is non-empty. The gzip is published only after all objects and the
+final header have been written successfully; no sidecar is required.

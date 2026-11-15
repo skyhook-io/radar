@@ -1,13 +1,21 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
-	"github.com/skyhook-io/radar/internal/clusterreplay"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/skyhook-io/radar/internal/clusterreplay"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestNormalizationAndDeltas(t *testing.T) {
@@ -82,5 +90,108 @@ func TestContainerOrderIsNotNormalizedAway(t *testing.T) {
 	b := []any{a[1], a[0]}
 	if reflect.DeepEqual(normalize(a), normalize(b)) {
 		t.Fatal("ordered container array sorted as references")
+	}
+}
+
+func TestRunReportsCaptureGapsAndScopesNoiseByKind(t *testing.T) {
+	dir := t.TempDir()
+	capture, baseline, output := filepath.Join(dir, "capture.gz"), filepath.Join(dir, "baseline.json"), filepath.Join(dir, "report.json")
+	header := clusterreplay.Header{
+		CapturedAt: time.Now().UTC(), Discovery: clusterreplay.Discovery{Resources: []*metav1.APIResourceList{}},
+		FailedGroups: []string{"broken.io"}, Skipped: []clusterreplay.Skipped{{Resource: "secrets", Error: "forbidden"}},
+	}
+	f, err := os.Create(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	z := gzip.NewWriter(f)
+	enc := json.NewEncoder(z)
+	if err := enc.Encode(header); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"Pod", "Service"} {
+		if err := enc.Encode(map[string]any{"apiVersion": "v1", "kind": kind, "metadata": map[string]any{"namespace": "default", "name": "one"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	base, err := json.Marshal(report{Deltas: []*delta{{Reader: "relationships", Kind: "Pod.", Field: "/owner/name"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baseline, base, 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := func(side string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.URL.Path == "/loadtest/status":
+				_, _ = io.WriteString(w, `{"ready":true}`)
+			case r.URL.Path == "/mcp":
+				_, _ = io.WriteString(w, `{"result":{"content":[]}}`)
+			case strings.HasPrefix(r.URL.Path, "/api/resources/") && !strings.Contains(r.URL.RawQuery, "include=summary"):
+				_ = json.NewEncoder(w).Encode(map[string]any{"relationships": map[string]any{"owner": map[string]any{"name": side}}})
+			default:
+				_, _ = io.WriteString(w, `{}`)
+			}
+		}))
+	}
+	a, b := server("a"), server("b")
+	defer a.Close()
+	defer b.Close()
+	stderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	defer func() { os.Stderr = stderr }()
+	os.Stderr = w
+	if err := run(a.URL, b.URL, capture, output, 0, a.URL, b.URL, baseline); err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = stderr
+	w.Close()
+	warning, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(warning), "1 failed groups, 1 skipped resources") || strings.Count(string(warning), "\n") != 1 {
+		t.Fatalf("missing one-line capture warning: %s", warning)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got report
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.CaptureGaps, captureGaps{header.FailedGroups, header.Skipped}) {
+		t.Fatalf("capture gaps lost: %+v", got.CaptureGaps)
+	}
+	if got.NoiseCount != 1 || len(got.Noise) != 1 || got.Noise[0].Kind != "Pod." || got.DeltaCount != 1 || len(got.Deltas) != 1 || got.Deltas[0].Kind != "Service." {
+		t.Fatalf("noise crossed kinds: noise=%+v deltas=%+v", got.Noise, got.Deltas)
+	}
+}
+
+func TestLoadNoiseGeneralizesFieldsWithinKind(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	if err := os.WriteFile(path, []byte(`{"deltas":[{"reader":"relationships","kind":"Pod.","field":"/children/[ref|Pod|one]/name"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	noise, err := loadNoise(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !noise["relationships\x00Pod.\x00"+fieldPattern("/children/[ref|Pod|two]/name")] || noise["relationships\x00Service.\x00"+fieldPattern("/children/[ref|Pod|two]/name")] {
+		t.Fatal(noise)
 	}
 }
