@@ -28,6 +28,10 @@ type Family struct {
 	Sources []Source
 	// Targets are the kinds a declaration can name.
 	Targets []resourceid.GroupKind
+	// IsTarget, when set, says instead which kinds a declaration can name,
+	// for a family whose targets are open-ended, as Karpenter's NodeClasses
+	// are: each provider defines its own.
+	IsTarget func(resourceid.GroupKind) bool
 	// CrossNamespace: a declaration may name a namespaced target in another
 	// namespace, as a Gateway API route may name a Gateway.
 	CrossNamespace bool
@@ -49,6 +53,13 @@ func (s Source) declares(target resourceid.GroupKind) bool {
 	return len(s.Targets) == 0 || slices.Contains(s.Targets, target)
 }
 
+func (f *Family) target(gk resourceid.GroupKind) bool {
+	if f.IsTarget != nil {
+		return f.IsTarget(gk)
+	}
+	return slices.Contains(f.Targets, gk)
+}
+
 func (f *Family) source(gk resourceid.GroupKind) int {
 	return slices.IndexFunc(f.Sources, func(s Source) bool { return s.Kind == gk })
 }
@@ -62,7 +73,7 @@ type Declaration struct {
 // Covers reports whether f says anything about an object of gk: a kind it
 // declares or one that declares.
 func (f *Family) Covers(gk resourceid.GroupKind) bool {
-	return f.source(gk) >= 0 || slices.Contains(f.Targets, gk)
+	return f.source(gk) >= 0 || f.target(gk)
 }
 
 // TargetState is what a declared reference found when Radar read its target.
@@ -136,7 +147,7 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 	}
 	byTarget := map[resourceid.Ref]int{}
 	err := f.Declared(obj, func(d Declaration) {
-		if !slices.Contains(f.Targets, d.Target.GroupKind()) || !source.declares(d.Target.GroupKind()) {
+		if !f.target(d.Target.GroupKind()) || !source.declares(d.Target.GroupKind()) {
 			return
 		}
 		i, seen := byTarget[d.Target]
@@ -197,7 +208,7 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 // about 1.4 KB a Pod and made a relist about five times as long.
 func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferrersAnswer {
 	var a ReferrersAnswer
-	if !slices.Contains(f.Targets, subject.GroupKind()) || !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
+	if !f.target(subject.GroupKind()) || !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
 		return a
 	}
 	switch read := v.session.Object(subject); read.State {

@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -252,5 +253,35 @@ func TestCertManagerIssuersNameIssuersAndClusterIssuers(t *testing.T) {
 	external := object("cert-manager.io/v1", "Certificate", "vault", map[string]any{"issuerRef": map[string]any{"group": "vault.example.com", "kind": "VaultIssuer", "name": "v"}})
 	if got := NewView(allNamespaces{}, ownership.Unrestricted()).References(CertManagerIssuers, refOf(external), external); len(got.Declared) != 0 {
 		t.Errorf("an external issuer is declared: %+v", got.Declared)
+	}
+}
+
+func TestFluxSourcesNameTheirArtifactsAcrossNamespaces(t *testing.T) {
+	repo := inNamespace(object("source.toolkit.fluxcd.io/v1", "GitRepository", "platform", nil), "flux-system")
+	ks := object("kustomize.toolkit.fluxcd.io/v1", "Kustomization", "apps", map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "platform", "namespace": "flux-system"}})
+	checkFamily(t, FluxSources, []runtime.Object{repo, ks}, ks, resourceid.Ref{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "flux-system", Name: "platform"}, "spec.sourceRef")
+
+	charts := object("source.toolkit.fluxcd.io/v1", "HelmRepository", "charts", nil)
+	hr := object("helm.toolkit.fluxcd.io/v2", "HelmRelease", "web", map[string]any{"chart": map[string]any{"spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "charts"}}}})
+	checkFamily(t, FluxSources, []runtime.Object{charts, hr}, hr, ref("source.toolkit.fluxcd.io", "HelmRepository", "charts"), "spec.chart.spec.sourceRef")
+}
+
+func TestNodePoolsNameTheirProvidersNodeClass(t *testing.T) {
+	class := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.k8s.aws/v1", "kind": "EC2NodeClass", "metadata": map[string]any{"name": "default"}}}
+	pool := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "karpenter.sh/v1", "kind": "NodePool", "metadata": map[string]any{"name": "general"},
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"nodeClassRef": map[string]any{"group": "karpenter.k8s.aws", "kind": "EC2NodeClass", "name": "default"}}}}}}
+	checkFamily(t, NodeClasses, []runtime.Object{class, pool}, pool, resourceid.Ref{Group: "karpenter.k8s.aws", Kind: "EC2NodeClass", Name: "default"}, "spec.template.spec.nodeClassRef")
+	if NodeClasses.Covers(resourceid.GroupKind{Kind: "ConfigMap"}) {
+		t.Error("NodeClasses covers ConfigMaps")
+	}
+}
+
+func TestClustersNameTheirClusterClass(t *testing.T) {
+	class := inNamespace(object("cluster.x-k8s.io/v1beta2", "ClusterClass", "quick-start", nil), "classes")
+	cluster := object("cluster.x-k8s.io/v1beta2", "Cluster", "prod", map[string]any{"topology": map[string]any{"classRef": map[string]any{"name": "quick-start", "namespace": "classes"}}})
+	checkFamily(t, ClusterClasses, []runtime.Object{class, cluster}, cluster, resourceid.Ref{Group: "cluster.x-k8s.io", Kind: "ClusterClass", Namespace: "classes", Name: "quick-start"}, "spec.topology.classRef")
+	legacy := object("cluster.x-k8s.io/v1beta1", "Cluster", "old", map[string]any{"topology": map[string]any{"class": "quick-start"}})
+	if r, ok := configrefs.CAPIClusterClass(legacy); !ok || r.Ref.Namespace != "shop" || r.Path != "spec.topology.class" {
+		t.Errorf("a v1beta1 Cluster names %+v", r)
 	}
 }

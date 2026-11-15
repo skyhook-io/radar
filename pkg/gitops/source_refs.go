@@ -12,6 +12,8 @@ import (
 type FluxSourceRef struct {
 	resourceid.Ref
 	Role string
+	// Path is the field that names the source.
+	Path string
 }
 
 // FluxSourceReferences follows the source contracts of Kustomization,
@@ -39,7 +41,7 @@ func FluxSourceReferences(root *unstructured.Unstructured) []FluxSourceRef {
 				chart, _, _ := unstructured.NestedString(root.Object, "status", "helmChart")
 				namespace, name, qualified := strings.Cut(chart, "/")
 				if qualified && namespace != "" && name != "" && !strings.Contains(name, "/") {
-					chartRefs = []FluxSourceRef{{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "HelmChart", namespace, name), Role: "chart reference"}}
+					chartRefs = []FluxSourceRef{{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "HelmChart", namespace, name), Role: "chart reference", Path: "status.helmChart"}}
 				}
 			}
 			fields = []string{"spec", "chart", "spec", "sourceRef"}
@@ -69,5 +71,5 @@ func FluxSourceReferences(root *unstructured.Unstructured) []FluxSourceRef {
 	if crossNamespace && StringValue(m["namespace"]) != "" {
 		namespace = StringValue(m["namespace"])
 	}
-	return append([]FluxSourceRef{{Ref: resourceid.NewRef(group, kind, namespace, name), Role: role}}, chartRefs...)
+	return append([]FluxSourceRef{{Ref: resourceid.NewRef(group, kind, namespace, name), Role: role, Path: strings.Join(fields, ".")}}, chartRefs...)
 }

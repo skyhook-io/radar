@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/csr"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -58,7 +59,7 @@ func summarizeUnstructuredKind(obj *unstructured.Unstructured, pause resourcecon
 		return summarizeKarpenterNodePool(obj)
 	case group == "karpenter.sh" && kind == "NodeClaim":
 		return summarizeKarpenterNodeClaim(obj)
-	case strings.Contains(group, "karpenter") && strings.HasSuffix(kind, "NodeClass"):
+	case karpenter.IsNodeClassKind(group, kind):
 		return summarizeKarpenterNodeClass(obj)
 	case group == "keda.sh" && kind == "ScaledObject":
 		return summarizeKedaScaledObject(obj)

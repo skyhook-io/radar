@@ -1362,21 +1362,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !ok {
 					continue
 				}
-				// v1beta2 names the class in topology.classRef; earlier versions
-				// in topology.class and topology.classNamespace.
-				className, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "name")
-				classNS, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "namespace")
-				if className == "" {
-					className, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "class")
-					classNS, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classNamespace")
-				}
-				if className == "" {
+				class, named := configrefs.CAPIClusterClass(cl)
+				if !named {
 					continue
 				}
-				if classNS == "" {
-					classNS = ns
-				}
-				ccID, ok := clusterClassIDs[classNS+"/"+className]
+				ccID, ok := clusterClassIDs[class.Ref.Namespace+"/"+class.Ref.Name]
 				if ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ccID, clID),

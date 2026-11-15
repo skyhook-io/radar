@@ -7,6 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -213,6 +215,67 @@ var CertManagerIssuers = &Family{
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			if r, ok := configrefs.CertManagerIssuer(u); ok {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+func fluxSource(kind string) resourceid.GroupKind {
+	return resourceid.GroupKind{Group: "source.toolkit.fluxcd.io", Kind: kind}
+}
+
+// FluxSources is the family of the artifacts a Flux Kustomization,
+// HelmRelease or HelmChart builds from: its source, chart reference or chart
+// source, which a Kustomization or HelmRelease may name in another
+// namespace. An inline HelmRelease also declares the HelmChart the controller
+// recorded for it.
+var FluxSources = &Family{
+	Name: "fluxSources",
+	Sources: []Source{
+		{Kind: resourceid.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact")}},
+		{Kind: resourceid.GroupKind{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}},
+		{Kind: fluxSource("HelmChart"), Targets: []resourceid.GroupKind{fluxSource("HelmRepository"), fluxSource("GitRepository"), fluxSource("Bucket")}},
+	},
+	Targets:        []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact"), fluxSource("HelmRepository"), fluxSource("HelmChart")},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			for _, r := range gitops.FluxSourceReferences(u) {
+				visit(Declaration{Target: r.Ref, Path: r.Path})
+			}
+		}
+		return nil
+	},
+}
+
+// NodeClasses is the family of the NodeClass a Karpenter NodePool's nodes
+// are launched from, whichever provider defines it.
+var NodeClasses = &Family{
+	Name:     "nodeClasses",
+	Sources:  []Source{{Kind: resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}}},
+	IsTarget: func(gk resourceid.GroupKind) bool { return karpenter.IsNodeClassKind(gk.Group, gk.Kind) },
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := unstructuredOf(obj, resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}); ok {
+			if r, ok := karpenter.NodeClassRefForNodePool(u); ok {
+				visit(Declaration{Target: resourceid.NewRef(r.Group, r.Kind, "", r.Name), Path: "spec.template.spec.nodeClassRef"})
+			}
+		}
+		return nil
+	},
+}
+
+// ClusterClasses is the family of the ClusterClass a Cluster API Cluster's
+// topology is built from, which may be in another namespace.
+var ClusterClasses = &Family{
+	Name:           "clusterClasses",
+	Sources:        []Source{{Kind: resourceid.GroupKind{Group: configrefs.CAPIGroup, Kind: "Cluster"}}},
+	Targets:        []resourceid.GroupKind{{Group: configrefs.CAPIGroup, Kind: "ClusterClass"}},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := unstructuredOf(obj, resourceid.GroupKind{Group: configrefs.CAPIGroup, Kind: "Cluster"}); ok {
+			if r, ok := configrefs.CAPIClusterClass(u); ok {
 				visitPathRef(visit, r)
 			}
 		}
