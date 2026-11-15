@@ -168,7 +168,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           tone="neutral"
           icon={ShieldAlert}
           headline={filtered ? 'Nothing matches these filters' : data.summary.imagesScanned === 0 ? 'No scanned images run in this scope' : 'No known CVEs in the images that run'}
-          body={filtered ? 'Clear a filter to see more.' : data.unscanned.length > 0 ? 'Trivy Operator hasn’t scanned the running images below yet.' : undefined}
+          body={filtered ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && data.unscanned.length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
         />
       ) : view === 'cve' ? (
         <CVETable cves={data.cves ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
@@ -195,6 +195,18 @@ function VulnerabilitiesError({ error }: { error: unknown }) {
   const upgrade = getRadarUpgradeRequirement(error)
   if (upgrade) {
     return <EmptyState tone="neutral" icon={ShieldAlert} headline={radarUpgradeHeadline('Vulnerability views')} body={radarUpgradeDetail(upgrade)} action={<RadarUpgradeAction requirement={upgrade} />} />
+  }
+  // A cluster without the report kind: nothing failed, there is no scanner.
+  if (error instanceof ApiError && error.status === 404) {
+    return (
+      <EmptyState
+        tone="neutral"
+        icon={ShieldAlert}
+        headline="No vulnerability reports in this cluster"
+        body="Radar doesn't scan images itself. It reads the VulnerabilityReports Trivy Operator writes, and this cluster doesn't serve that kind."
+        action={<a href="https://aquasecurity.github.io/trivy-operator/latest/getting-started/installation/" target="_blank" rel="noreferrer" className="btn-brand px-3 py-1.5 text-xs font-medium">How to install Trivy Operator</a>}
+      />
+    )
   }
   return (
     <EmptyState
@@ -243,7 +255,7 @@ function CoverageNotes({ data }: { data: VulnerabilitiesResponse }) {
         {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about older revisions or removed workloads and isn't counted.`}
       </p>
       {gaps && <p className="text-warning-text">{gaps}</p>}
-      {data.coverage.truncated && <p className="text-warning-text">Some images have too many findings to read in one request; their counts read as zero. Narrow with the namespace picker.</p>}
+      {data.coverage.truncated && <p className="text-warning-text">Some images have too many findings to read in one request and are marked unread. Narrow with the namespace picker.</p>}
     </div>
   )
 }
@@ -257,7 +269,7 @@ function Disclosure({ summary, children, open: initiallyOpen = false }: { summar
         <CollapseChevron open={open} className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
         {summary}
       </button>
-      <Collapse open={open} id={panelId}>
+      <Collapse open={open} id={panelId} mountLazily>
         <div className="px-3 pb-3 pl-10">{children}</div>
       </Collapse>
     </div>
@@ -285,7 +297,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
     <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
       <div className="min-w-[860px]">
         <div className="grid grid-cols-[minmax(0,2.4fr)_minmax(0,2fr)_80px_minmax(0,2fr)_100px] gap-4 border-b border-theme-border py-2 pl-10 pr-3 text-[11px] font-semibold uppercase tracking-wider text-theme-text-tertiary">
-          <span>Image</span><span>Findings</span><span>Has a fix</span><span>Running in</span><span>Scanned</span>
+          <span>Image</span><span>Findings</span><span>With a fix</span><span>Running in</span><span>Scanned</span>
         </div>
         {images.map((img) => (
           <Disclosure
@@ -296,11 +308,11 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                   <span className="truncate font-mono text-theme-text-primary" title={img.image}>{img.image}</span>
                   <span className="truncate font-mono text-xs text-theme-text-tertiary">{img.digest ? `${img.digest.slice(0, 19)}…` : 'no digest recorded'}{img.os ? ` · ${img.os}` : ''}</span>
                 </span>
-                <SeverityBar counts={img.counts} />
-                <span className="font-mono text-xs text-theme-text-secondary">{img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown}</span>
+                {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityBar counts={img.counts} />}
+                <span className="font-mono text-xs text-theme-text-secondary">{img.findingsUnread ? '—' : img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown}</span>
                 <span className="flex min-w-0 flex-col">
-                  <span className="truncate text-theme-text-secondary">{workloadSummary(img.workloads)}</span>
-                  <span className="text-xs text-theme-text-tertiary">{distinctNamespaces(img.workloads)} {distinctNamespaces(img.workloads) === 1 ? 'namespace' : 'namespaces'}</span>
+                  <span className="truncate text-theme-text-secondary">{workloadSummary(img.workloads)}{img.workloadsTotal > img.workloads.length ? ` and ${img.workloadsTotal - img.workloads.length} more` : ''}</span>
+                  <span className="text-xs text-theme-text-tertiary">{namespaceCount(img)}</span>
                 </span>
                 <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(img.scannedAt)}</span>
               </div>
@@ -316,7 +328,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                 <button type="button" onClick={() => onOpenReport(img)} className="self-start text-xs text-accent-text hover:underline">Open the scan report</button>
               </div>
               <div className="flex min-w-0 flex-col gap-2">
-                <span className="text-xs font-medium text-theme-text-secondary">Running in {img.workloads.length} {img.workloads.length === 1 ? 'container' : 'containers'}</span>
+                <span className="text-xs font-medium text-theme-text-secondary">Running in {img.workloadsTotal} {img.workloadsTotal === 1 ? 'container' : 'containers'}{img.workloadsTotal > img.workloads.length ? ` (first ${img.workloads.length})` : ''}</span>
                 <WorkloadLinks workloads={img.workloads} onOpen={onOpen} />
               </div>
             </div>
@@ -325,6 +337,13 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
       </div>
     </div>
   )
+}
+
+// The listed workloads are capped, so past the cap their namespaces are a floor.
+function namespaceCount(img: VulnerableImage): string {
+  const n = distinctNamespaces(img.workloads)
+  const partial = img.workloadsTotal > img.workloads.length
+  return `${partial ? 'at least ' : ''}${n} ${n === 1 ? 'namespace' : 'namespaces'}`
 }
 
 function FindingsList({ findings }: { findings: VulnerableImage['findings'] }) {
@@ -386,6 +405,7 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                         {a.workloads.map((w) => (
                           <button key={`${w.namespace}/${w.name}/${w.container ?? ''}`} type="button" onClick={() => onOpen(w)} className="text-accent-text hover:underline">{workloadLabel(w)}</button>
                         ))}
+                        {a.workloadsTotal > a.workloads.length && <span className="text-theme-text-tertiary">and {a.workloadsTotal - a.workloads.length} more</span>}
                       </span>
                     </div>
                   ))}
@@ -419,7 +439,7 @@ function WorkloadTable({ workloads, onOpen }: { workloads: VulnerabilityWorkload
               {w.containers.map((c) => (
                 <li key={`${c.name}/${c.image}`} className="flex min-w-0 flex-col text-xs">
                   <span className="truncate"><span className="text-theme-text-secondary">{c.name}</span> <span className="font-mono text-theme-text-tertiary">{c.image}</span></span>
-                  {c.scanned && c.counts ? <SeverityCounts counts={c.counts} /> : <span className="text-warning-text">Not scanned yet</span>}
+                  {c.scanned && c.counts ? <SeverityCounts counts={c.counts} /> : c.findingsUnread ? <span className="text-warning-text">Too many findings to read here</span> : <span className="text-warning-text">Not scanned yet</span>}
                 </li>
               ))}
             </ul>

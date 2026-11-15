@@ -5,7 +5,7 @@ import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { useAPIResources } from '../../api/apiResources'
 import { useRadarFeature } from '../../api/client'
 import { hasVulnerabilityReports, useVulnerabilities, type VulnerabilityFinding } from '../../api/vulnerabilities'
-import { SeverityBadge, SeverityCounts } from './parts'
+import { SeverityBadge, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
   kind: string
@@ -57,7 +57,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
                 <span className="truncate font-mono text-xs text-theme-text-tertiary" title={img.image}>{img.image}</span>
               </span>
               <span className="flex flex-wrap items-center gap-x-3">
-                <SeverityCounts counts={img.counts} />
+                {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityCounts counts={img.counts} />}
                 <span className="text-xs text-theme-text-secondary">{img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown} with a fix · scanned {formatRelativeAgeTime(img.scannedAt)}</span>
               </span>
               <SharedWith others={[...new Set(img.workloads.filter((w) => !isThis(w)).map((w) => `${w.namespace}/${w.name}`))]} />
@@ -73,7 +73,11 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
             </div>
           ))}
           {images.length === 0 && unscanned.length === 0 && (
-            <p className="text-xs text-theme-text-tertiary">No running containers in this workload.</p>
+            <p className="text-xs text-theme-text-tertiary">
+              {data && !data.coverage.complete
+                ? gapSentence(data.coverage.gaps)?.replace(' Counts cover the rest.', '') ?? "Some reports couldn't be read."
+                : 'No running containers in this workload.'}
+            </p>
           )}
           {fixFirst.length > 0 && (
             <div className="flex flex-col gap-1">

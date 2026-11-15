@@ -1,6 +1,8 @@
 package vulnerabilities
 
 import (
+	"slices"
+
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -47,14 +49,27 @@ var scannedByOwner = map[string]bool{"ReplicaSet": true, "ReplicationController"
 // (Pending, Running, Unknown), init containers included, and of CronJobs that
 // aren't suspended, which run on schedule and usually have no Pod between
 // runs. canRead is the caller's access to a kind in a namespace (nil allows
-// all): a target is listed only when the caller may read both the scanned
-// object and the workload it names. ok is false while the Pod cache isn't
-// ready: nothing can then be said about what runs.
-func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool) (targets []target, ok bool) {
+// all): Pods are read only in namespaces where the caller may read Pods
+// (podDenied lists the others), and a target is listed only when the caller
+// may read both the scanned object and the workload it names. ok is false
+// while the Pod cache isn't ready: nothing can then be said about what runs.
+func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool) (targets []target, podDenied []string, ok bool) {
 	if cache == nil || cache.Pods() == nil || !cache.IsKindReady("pods") {
-		return nil, false
+		return nil, nil, false
 	}
 	may := func(group, kind, ns string) bool { return canRead == nil || canRead(group, kind, ns) }
+	podAccess := map[string]bool{}
+	mayPods := func(ns string) bool {
+		allowed, seen := podAccess[ns]
+		if !seen {
+			allowed = may("", "Pod", ns)
+			podAccess[ns] = allowed
+			if !allowed {
+				podDenied = append(podDenied, ns)
+			}
+		}
+		return allowed
+	}
 	seen := map[targetKey]bool{}
 	add := func(t target) {
 		if seen[t.key] || !may(t.scannedGroup, t.key.kind, t.key.namespace) || !may(t.workload.Group, t.workload.Kind, t.workload.Namespace) {
@@ -75,7 +90,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			continue
 		}
 		for _, pod := range pods {
-			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed || !mayPods(pod.Namespace) {
 				continue
 			}
 			kind, group, name, uid := scannedOwner(cache, pod)
@@ -117,7 +132,8 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			}
 		}
 	}
-	return targets, true
+	slices.Sort(podDenied)
+	return targets, podDenied, true
 }
 
 func podContainers(spec corev1.PodSpec) []corev1.Container {

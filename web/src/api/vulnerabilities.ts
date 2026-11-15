@@ -44,7 +44,10 @@ export interface VulnerableImage {
   counts: VulnerabilityCounts
   fixable: VulnerabilityCounts
   matching: number
+  /** Past the request's findings budget: counts unknown, not zero. */
+  findingsUnread?: boolean
   workloads: VulnerabilityWorkloadRef[]
+  workloadsTotal: number
   findings: VulnerabilityFinding[]
   findingsTotal: number
   report: { kind: string; group?: string; namespace?: string; name: string }
@@ -57,6 +60,7 @@ export interface VulnerabilityCVEImage {
   installedVersion: string
   fixedVersion?: string
   workloads: VulnerabilityWorkloadRef[]
+  workloadsTotal: number
 }
 
 export interface VulnerabilityCVE {
@@ -78,6 +82,7 @@ export interface VulnerabilityWorkloadContainer {
   imageId?: string
   scanned: boolean
   scannedAt?: string
+  findingsUnread?: boolean
   counts?: VulnerabilityCounts
   fixable?: VulnerabilityCounts
 }

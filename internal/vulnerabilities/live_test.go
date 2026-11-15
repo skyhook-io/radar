@@ -73,7 +73,7 @@ func TestLiveTargets(t *testing.T) {
 		pod("done", corev1.PodSucceeded, nil, "acme/once:1"),
 	)
 
-	targets, ok := liveTargets(cache, nil, nil)
+	targets, _, ok := liveTargets(cache, nil, nil)
 	if !ok {
 		t.Fatal("cache is ready")
 	}
@@ -98,7 +98,7 @@ func TestLiveTargets(t *testing.T) {
 	}
 
 	// The caller sees only what it may read: here, not Deployments.
-	limited, _ := liveTargets(cache, []string{"shop"}, func(group, kind, ns string) bool { return kind != "Deployment" })
+	limited, _, _ := liveTargets(cache, []string{"shop"}, func(group, kind, ns string) bool { return kind != "Deployment" })
 	var kinds []string
 	for _, tg := range limited {
 		kinds = append(kinds, tg.workload.Kind)
@@ -107,7 +107,18 @@ func TestLiveTargets(t *testing.T) {
 		t.Fatalf("limited: %v", kinds)
 	}
 
-	if _, ok := liveTargets(nil, nil, nil); ok {
+	// Without Pod access in a namespace, nothing there is read as running.
+	none, denied, _ := liveTargets(cache, []string{"shop"}, func(group, kind, ns string) bool { return kind != "Pod" })
+	for _, tg := range none {
+		if tg.key.kind != "CronJob" {
+			t.Fatalf("read a Pod without Pod access: %+v", tg)
+		}
+	}
+	if !slices.Equal(denied, []string{"shop"}) {
+		t.Fatalf("denied: %v", denied)
+	}
+
+	if _, _, ok := liveTargets(nil, nil, nil); ok {
 		t.Fatal("no cache: nothing can be said about what runs")
 	}
 }

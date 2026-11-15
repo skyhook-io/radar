@@ -110,7 +110,7 @@ func TestListVulnerabilitiesFollowsReportRBAC(t *testing.T) {
 	perms.SetCanI("list", vulnReportGVR.Group, vulnReportGVR.Resource, "", false)
 	perms.SetCanI("list", vulnReportGVR.Group, vulnReportGVR.Resource, "team-a", true)
 	perms.SetCanI("list", vulnReportGVR.Group, vulnReportGVR.Resource, "team-b", false)
-	for _, kind := range []struct{ group, resource string }{{"apps", "deployments"}, {"apps", "replicasets"}} {
+	for _, kind := range []struct{ group, resource string }{{"apps", "deployments"}, {"apps", "replicasets"}, {"", "pods"}} {
 		for _, ns := range []string{"team-a", "team-b"} {
 			perms.SetCanI("get", kind.group, kind.resource, ns, true)
 			perms.SetCanI("list", kind.group, kind.resource, ns, true)
@@ -122,6 +122,30 @@ func TestListVulnerabilitiesFollowsReportRBAC(t *testing.T) {
 	}
 	if got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.UserForbidden {
 		t.Fatalf("alice's coverage must name team-b: %+v", got.Coverage)
+	}
+
+	// carol may read the reports everywhere but Pods only in team-a: what runs
+	// in team-b is unknown, so its reports are withheld and named, not
+	// counted as inactive and not showing Pod images she can't read.
+	ctx = withRestrictedUser(t, "carol", []string{"team-a", "team-b"})
+	carol := getPermCache().Get("carol", nil)
+	carol.SetCanI("list", vulnReportGVR.Group, vulnReportGVR.Resource, "", true)
+	for _, ns := range []string{"team-a", "team-b"} {
+		for _, r := range []string{"deployments", "replicasets"} {
+			carol.SetCanI("get", "apps", r, ns, true)
+			carol.SetCanI("list", "apps", r, ns, true)
+		}
+	}
+	carol.SetCanI("get", "", "pods", "team-a", true)
+	carol.SetCanI("list", "", "pods", "team-a", true)
+	carol.SetCanI("get", "", "pods", "team-b", false)
+	carol.SetCanI("list", "", "pods", "team-b", false)
+	got = listVulns(t, ctx, listVulnerabilitiesInput{})
+	if len(got.Images) != 1 || got.Images[0].Workloads[0].Namespace != "team-a" || got.Coverage.InactiveReports != 0 {
+		t.Fatalf("carol: %+v / %+v", got.Images, got.Coverage)
+	}
+	if got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.UserForbidden {
+		t.Fatalf("carol's coverage must name team-b: %+v", got.Coverage)
 	}
 
 	if _, _, err := handleListVulnerabilities(context.Background(), nil, listVulnerabilitiesInput{View: "nope"}); err == nil {

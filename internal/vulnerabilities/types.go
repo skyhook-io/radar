@@ -76,8 +76,13 @@ type Image struct {
 	// Fixable counts the findings with a fixed version, per severity.
 	Fixable Counts `json:"fixable"`
 	// Matching is how many findings pass the request's filters.
-	Matching  int           `json:"matching"`
-	Workloads []WorkloadRef `json:"workloads"`
+	Matching int `json:"matching"`
+	// FindingsUnread is true when the request's findings budget ran out
+	// before this image: its counts are unknown, not zero.
+	FindingsUnread bool `json:"findingsUnread,omitempty"`
+	// Workloads lists at most MaxWorkloadsPerRow of WorkloadsTotal.
+	Workloads      []WorkloadRef `json:"workloads"`
+	WorkloadsTotal int           `json:"workloadsTotal"`
 	// Findings are the matching findings, worst first, at most
 	// MaxFindingsPerImage of them.
 	Findings      []Finding `json:"findings"`
@@ -105,12 +110,14 @@ type CVE struct {
 
 // CVEImage is one image a CVE was found in.
 type CVEImage struct {
-	ImageID          string        `json:"imageId"`
-	Image            string        `json:"image"`
-	Package          string        `json:"package"`
-	InstalledVersion string        `json:"installedVersion"`
-	FixedVersion     string        `json:"fixedVersion,omitempty"`
-	Workloads        []WorkloadRef `json:"workloads"`
+	ImageID          string `json:"imageId"`
+	Image            string `json:"image"`
+	Package          string `json:"package"`
+	InstalledVersion string `json:"installedVersion"`
+	FixedVersion     string `json:"fixedVersion,omitempty"`
+	// Workloads lists at most MaxWorkloadsPerAffected of WorkloadsTotal.
+	Workloads      []WorkloadRef `json:"workloads"`
+	WorkloadsTotal int           `json:"workloadsTotal"`
 }
 
 // Workload is one running workload and what its containers' images carry.
@@ -133,8 +140,10 @@ type WorkloadContainer struct {
 	ImageID   string     `json:"imageId,omitempty"`
 	Scanned   bool       `json:"scanned"`
 	ScannedAt *time.Time `json:"scannedAt,omitempty"`
-	Counts    *Counts    `json:"counts,omitempty"`
-	Fixable   *Counts    `json:"fixable,omitempty"`
+	// FindingsUnread: scanned, but past the findings budget; counts unknown.
+	FindingsUnread bool    `json:"findingsUnread,omitempty"`
+	Counts         *Counts `json:"counts,omitempty"`
+	Fixable        *Counts `json:"fixable,omitempty"`
 }
 
 // Unscanned is a running image no report covers yet.
@@ -212,6 +221,10 @@ const (
 	MaxAffectedPerCVE = 50
 	// MaxRows bounds the rows of one pivot.
 	MaxRows = 2000
+	// MaxWorkloadsPerRow bounds the workloads listed per image row.
+	MaxWorkloadsPerRow = 100
+	// MaxWorkloadsPerAffected bounds the workloads listed per image of a CVE.
+	MaxWorkloadsPerAffected = 10
 )
 
 // SourceTrivyOperator is Source for Trivy Operator's VulnerabilityReports.

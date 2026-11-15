@@ -249,7 +249,45 @@ func TestFindingsBudget(t *testing.T) {
 	items := []*unstructured.Unstructured{vulnReport(reportSpec{name: "big", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/big", tag: "1", scanned: "2026-11-10T00:00:00Z", vulns: vs})}
 	targets := []target{liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/big:1", "", checkout)}
 	resp := mustBuild(t, items, targets, ViewImage, Filter{})
-	if !resp.Coverage.Truncated {
-		t.Fatal("want truncated")
+	if !resp.Coverage.Truncated || len(resp.Images) != 1 || !resp.Images[0].FindingsUnread {
+		t.Fatalf("an unread image is marked unread, not clean: %+v", resp)
+	}
+	w := mustBuild(t, items, targets, ViewWorkload, Filter{})
+	if c := w.Workloads[0].Containers[0]; !c.FindingsUnread || c.Counts != nil {
+		t.Fatalf("workload container: %+v", c)
+	}
+}
+
+// After a StatefulSet moves to a new image, the report about the old one
+// describes nothing that runs: the new image is unscanned until Trivy
+// rescans, never credited with the old scan's findings.
+func TestReportAboutAnotherImageDoesNotMatch(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "sts-db", ns: "shop", ownerKind: "StatefulSet", ownerName: "db", uid: "uid-db", container: "pg", registry: "index.docker.io", repo: "library/postgres", tag: "16.3", scanned: "2026-11-10T10:00:00Z", vulns: []vuln{{"CVE-2", "HIGH", "openssl", "3.0", ""}}}),
+	}
+	targets := []target{liveTarget("shop", "StatefulSet", "db", "pg", "postgres:16.4", "uid-db", db)}
+	resp := mustBuild(t, items, targets, ViewImage, Filter{})
+	if len(resp.Images) != 0 || resp.Coverage.InactiveReports != 1 || len(resp.Unscanned) != 1 {
+		t.Fatalf("%+v", resp)
+	}
+}
+
+// A Deployment mid-rollout with an unchanged image runs two ReplicaSets; the
+// new one isn't scanned yet. The workload shows the image scanned, and it
+// isn't listed as unscanned.
+func TestRolloutWithUnchangedImageStaysScanned(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "rs-old", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", scanned: "2026-11-10T10:00:00Z", vulns: []vuln{{"CVE-1", "CRITICAL", "zlib", "1", "2"}}}),
+	}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-2", "app", "acme/checkout:2", "", checkout),
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout),
+	}
+	resp := mustBuild(t, items, targets, ViewWorkload, Filter{})
+	if len(resp.Workloads) != 1 || len(resp.Workloads[0].Containers) != 1 || !resp.Workloads[0].Containers[0].Scanned || resp.Workloads[0].Counts.Critical != 1 {
+		t.Fatalf("%+v", resp.Workloads)
+	}
+	if len(resp.Unscanned) != 0 {
+		t.Fatalf("unscanned: %+v", resp.Unscanned)
 	}
 }

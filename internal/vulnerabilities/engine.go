@@ -27,6 +27,8 @@ type report struct {
 	os        string
 	scannedAt time.Time
 	findings  []Finding
+	// unread is true when the findings budget ran out before this report.
+	unread bool
 }
 
 // reportHeader reads a Trivy Operator VulnerabilityReport's identity without
@@ -116,8 +118,13 @@ func artifactImage(body map[string]any) (image, digest string) {
 		return "", digest
 	}
 	image = repo
-	if registry, _ := body["registry"].(map[string]any); str(registry["server"]) != "" {
-		image = str(registry["server"]) + "/" + repo
+	switch server := str(asMap(body["registry"])["server"]); server {
+	case "", "index.docker.io", "docker.io", "registry-1.docker.io":
+		// Docker Hub images read as people write them: nginx:1.25, not
+		// index.docker.io/library/nginx:1.25.
+		image = strings.TrimPrefix(repo, "library/")
+	default:
+		image = server + "/" + repo
 	}
 	if tag := str(artifact["tag"]); tag != "" {
 		image += ":" + tag
@@ -152,6 +159,12 @@ func normalizeImage(ref string) string {
 	return strings.TrimPrefix(ref, "library/")
 }
 
+// slotKey is one container of one workload running one image.
+type slotKey struct {
+	workload         WorkloadRef
+	container, image string
+}
+
 type imageAgg struct {
 	report    *report
 	workloads map[WorkloadRef]bool
@@ -168,13 +181,14 @@ type rollup struct {
 }
 
 // join matches reports to what runs. A report counts when its scanned object
-// and container run that image now and, when both carry a UID, it is the
-// same object: a ReplicaSet recreated under the same name is not what was
-// scanned. When the object runs one image the report is about it even if
-// the references are written differently; when it runs two (a StatefulSet
-// mid-rollout) the report is about the one its image names, and the other
-// stays unscanned. Of several reports about one image the newest wins, whole.
-// Findings are read only for the winners, at most MaxFindings in all.
+// and container run the image it names now and, when both carry a UID, it is
+// the same object: a ReplicaSet recreated under the same name is not what was
+// scanned. A report about another image of the same object (a StatefulSet
+// before Trivy rescanned its new image) describes nothing that runs; the
+// running image stays unscanned rather than borrowing its findings. Of
+// several reports about one image the newest wins, whole. Findings are read
+// only for the winners, at most MaxFindings in all; an image past that is
+// marked unread, never shown as clean.
 func join(ctx context.Context, items []*unstructured.Unstructured, targets []target) (*rollup, error) {
 	byOwner := map[ownerKey][]*target{}
 	for i := range targets {
@@ -190,22 +204,11 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 	}
 	for i := range reports {
 		r := &reports[i]
-		var candidates []*target
-		images := map[string]bool{}
-		for _, t := range byOwner[r.owner] {
-			if r.uid == "" || t.uid == "" || r.uid == t.uid {
-				candidates = append(candidates, t)
-				images[t.image] = true
-			}
-		}
 		var matched []*target
-		for _, t := range candidates {
-			if sameImage(t.image, r) {
+		for _, t := range byOwner[r.owner] {
+			if (r.uid == "" || t.uid == "" || r.uid == t.uid) && sameImage(t.image, r) {
 				matched = append(matched, t)
 			}
-		}
-		if len(matched) == 0 && len(images) == 1 {
-			matched = candidates
 		}
 		if len(matched) == 0 {
 			j.inactiveReports++
@@ -234,13 +237,22 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if read+n > MaxFindings {
 			j.truncated = true
 			agg.report.findings = nil
+			agg.report.unread = true
 			continue
 		}
 		read += n
 		agg.report.findings = parseFindings(agg.report.u)
 	}
+	scannedSlot := map[slotKey]bool{}
 	for _, t := range targets {
 		if _, ok := j.targetImage[t.key]; ok {
+			scannedSlot[slotKey{t.workload, t.container, t.image}] = true
+		}
+	}
+	for _, t := range targets {
+		// A new ReplicaSet of the same image, not yet scanned, is covered by
+		// the older one's report.
+		if _, ok := j.targetImage[t.key]; ok || scannedSlot[slotKey{t.workload, t.container, t.image}] {
 			continue
 		}
 		w := t.workload
@@ -263,8 +275,11 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Unscanned: j.unscannedRows(f)}
 	switch view {
 	case ViewCVE:
-		resp.CVEs = j.cves(f)
-		resp.CVEs, resp.Coverage.RowsOmitted = capRows(resp.CVEs)
+		cves, err := j.cves(ctx, f)
+		if err != nil {
+			return Response{}, err
+		}
+		resp.CVEs, resp.Coverage.RowsOmitted = capRows(cves)
 	case ViewWorkload:
 		resp.Workloads = j.workloads(f)
 		resp.Workloads, resp.Coverage.RowsOmitted = capRows(resp.Workloads)
@@ -415,7 +430,8 @@ func (j *rollup) imageRows(f Filter) []Image {
 		counts, fixable := countFindings(r.findings)
 		row := Image{
 			ID: r.imageID, Image: cmp.Or(r.image, r.digest), Digest: r.digest, OS: r.os, ScannedAt: r.scannedAt,
-			Counts: counts, Fixable: fixable, Matching: len(matching), Workloads: workloads,
+			Counts: counts, Fixable: fixable, Matching: len(matching), FindingsUnread: r.unread,
+			Workloads: workloads[:min(len(workloads), MaxWorkloadsPerRow)], WorkloadsTotal: len(workloads),
 			FindingsTotal: len(r.findings), Report: r.ref,
 		}
 		row.Findings = matching[:min(len(matching), MaxFindingsPerImage)]
@@ -425,26 +441,35 @@ func (j *rollup) imageRows(f Filter) []Image {
 		rows = append(rows, row)
 	}
 	slices.SortStableFunc(rows, func(a, b Image) int {
-		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(len(b.Workloads), len(a.Workloads)), cmp.Compare(a.Image, b.Image))
+		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
 	})
 	return rows
 }
 
 type cveAgg struct {
-	row       CVE
-	packages  map[string]bool
-	workloads map[WorkloadRef]bool
+	row      CVE
+	packages map[string]bool
+	images   map[string]bool
 }
 
-func (j *rollup) cves(f Filter) []CVE {
+// cves groups findings by CVE ID. A CVE's workload count is the distinct
+// workloads across the images that carry it; CVEs from one base image share
+// one image set, so each distinct set is counted once.
+func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 	m := newMatcher(f)
 	byID := map[string]*cveAgg{}
+	imageWorkloads := map[string][]WorkloadRef{}
 	for _, agg := range j.sortedImages() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		r := agg.report
 		workloads := sortedWorkloads(agg.workloads)
 		if !m.workloadKept(workloads) {
 			continue
 		}
+		imageWorkloads[r.imageID] = workloads
+		listed := workloads[:min(len(workloads), MaxWorkloadsPerAffected)]
 		rowMatched := m.rowMatches(r.image, workloads)
 		for _, fd := range r.findings {
 			if !m.findingMatches(fd, rowMatched) {
@@ -452,7 +477,7 @@ func (j *rollup) cves(f Filter) []CVE {
 			}
 			c := byID[fd.ID]
 			if c == nil {
-				c = &cveAgg{row: CVE{ID: fd.ID, Severity: fd.Severity}, packages: map[string]bool{}, workloads: map[WorkloadRef]bool{}}
+				c = &cveAgg{row: CVE{ID: fd.ID, Severity: fd.Severity}, packages: map[string]bool{}, images: map[string]bool{}}
 				byID[fd.ID] = c
 			}
 			if severityRank(fd.Severity) > severityRank(c.row.Severity) {
@@ -465,30 +490,42 @@ func (j *rollup) cves(f Filter) []CVE {
 			c.row.Link = cmp.Or(c.row.Link, fd.Link)
 			c.row.Fixable = c.row.Fixable || fd.FixedVersion != ""
 			c.packages[fd.Package] = true
-			for _, w := range workloads {
-				w.Container = ""
-				c.workloads[w] = true
+			c.images[r.imageID] = true
+			if len(c.row.Affected) < MaxAffectedPerCVE*4 {
+				c.row.Affected = append(c.row.Affected, CVEImage{
+					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), Package: fd.Package,
+					InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion,
+					Workloads: listed, WorkloadsTotal: len(workloads),
+				})
 			}
-			c.row.Images++
-			c.row.Affected = append(c.row.Affected, CVEImage{
-				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), Package: fd.Package,
-				InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion, Workloads: workloads,
-			})
 		}
 	}
+	workloadsBySet := map[string]int{}
 	rows := make([]CVE, 0, len(byID))
 	for _, c := range byID {
-		c.row.Packages = sortedKeys(c.packages)
-		c.row.Workloads = len(c.workloads)
-		slices.SortStableFunc(c.row.Affected, func(a, b CVEImage) int {
-			return cmp.Or(cmp.Compare(len(b.Workloads), len(a.Workloads)), cmp.Compare(a.Image, b.Image))
-		})
-		// One image can carry a CVE in several packages; count it once.
-		images := map[string]bool{}
-		for _, a := range c.row.Affected {
-			images[a.ImageID] = true
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		c.row.Images = len(images)
+		ids := sortedKeys(c.images)
+		setKey := strings.Join(ids, "\x00")
+		n, ok := workloadsBySet[setKey]
+		if !ok {
+			distinct := map[WorkloadRef]bool{}
+			for _, id := range ids {
+				for _, w := range imageWorkloads[id] {
+					w.Container = ""
+					distinct[w] = true
+				}
+			}
+			n = len(distinct)
+			workloadsBySet[setKey] = n
+		}
+		c.row.Workloads = n
+		c.row.Images = len(ids)
+		c.row.Packages = sortedKeys(c.packages)
+		slices.SortStableFunc(c.row.Affected, func(a, b CVEImage) int {
+			return cmp.Or(cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
+		})
 		c.row.Affected = c.row.Affected[:min(len(c.row.Affected), MaxAffectedPerCVE)]
 		rows = append(rows, c.row)
 	}
@@ -501,7 +538,7 @@ func (j *rollup) cves(f Filter) []CVE {
 			cmp.Compare(a.ID, b.ID),
 		)
 	})
-	return rows
+	return rows, nil
 }
 
 func (j *rollup) workloads(f Filter) []Workload {
@@ -509,7 +546,7 @@ func (j *rollup) workloads(f Filter) []Workload {
 	type wAgg struct {
 		row    Workload
 		images map[string]bool
-		seen   map[string]bool
+		seen   map[string]int
 	}
 	byRef := map[WorkloadRef]*wAgg{}
 	var order []WorkloadRef
@@ -517,29 +554,39 @@ func (j *rollup) workloads(f Filter) []Workload {
 		ref := t.workload
 		a := byRef[ref]
 		if a == nil {
-			a = &wAgg{row: Workload{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}, images: map[string]bool{}, seen: map[string]bool{}}
+			a = &wAgg{row: Workload{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}, images: map[string]bool{}, seen: map[string]int{}}
 			byRef[ref] = a
 			order = append(order, ref)
 		}
-		// A rollout can run two images in one container slot; list both.
+		// A rollout can run two images in one container slot; list both. Two
+		// ReplicaSets running one image share a slot, scanned if either is.
 		slot := t.container + "\x00" + t.image
-		if a.seen[slot] {
+		id, scanned := j.targetImage[t.key]
+		if i, ok := a.seen[slot]; ok {
+			if !scanned || a.row.Containers[i].Scanned {
+				continue
+			}
+		} else {
+			a.seen[slot] = len(a.row.Containers)
+			a.row.Containers = append(a.row.Containers, WorkloadContainer{Name: t.container, Image: t.image})
+		}
+		if !scanned {
 			continue
 		}
-		a.seen[slot] = true
-		c := WorkloadContainer{Name: t.container, Image: t.image}
-		if id, ok := j.targetImage[t.key]; ok {
-			r := j.images[id].report
-			counts, fixable := countFindings(r.findings)
-			ts := r.scannedAt
-			c.Scanned, c.ImageID, c.ScannedAt, c.Counts, c.Fixable = true, id, &ts, &counts, &fixable
-			if !a.images[id] {
-				a.images[id] = true
-				addCounts(&a.row.Counts, counts)
-				addCounts(&a.row.Fixable, fixable)
-			}
+		c := &a.row.Containers[a.seen[slot]]
+		r := j.images[id].report
+		ts := r.scannedAt
+		c.Scanned, c.ImageID, c.ScannedAt, c.FindingsUnread = true, id, &ts, r.unread
+		if r.unread {
+			continue
 		}
-		a.row.Containers = append(a.row.Containers, c)
+		counts, fixable := countFindings(r.findings)
+		c.Counts, c.Fixable = &counts, &fixable
+		if !a.images[id] {
+			a.images[id] = true
+			addCounts(&a.row.Counts, counts)
+			addCounts(&a.row.Fixable, fixable)
+		}
 	}
 	rows := []Workload{}
 	for _, ref := range order {
@@ -730,6 +777,11 @@ func sortedKeys(set map[string]bool) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+func asMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
 }
 
 func str(v any) string {

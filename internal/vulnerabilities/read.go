@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -84,26 +85,25 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		return empty(req.View, resourceapi.Gap{Code: readreason.UserNoNamespaceAccess}), nil
 	}
 
-	readable, gaps, all, err := readableNamespaces(gvr, req, list)
-	if err != nil {
-		return Response{}, err
-	}
+	readable, gaps := readableNamespaces(gvr, req, clusterNamespaces(cache))
 	var items []*unstructured.Unstructured
-	if all != nil {
-		items = filterNamespaces(all, readable)
-	} else {
-		for _, ns := range scopeNamespaces(readable) {
-			got, err := list(ns)
-			if err != nil {
-				return Response{}, err
-			}
-			items = append(items, got...)
+	for _, ns := range scopeNamespaces(readable) {
+		got, err := list(ns)
+		if err != nil {
+			return Response{}, err
 		}
+		items = append(items, got...)
 	}
 
-	targets, ready := liveTargets(cache, readable, req.CanRead)
+	targets, podDenied, ready := liveTargets(cache, readable, req.CanRead)
 	if !ready {
 		return Response{}, ErrNotReady
+	}
+	// Where the caller can't read Pods, what runs is unknown: its reports
+	// would otherwise all read as inactive.
+	if len(podDenied) > 0 {
+		items = withoutNamespaces(items, podDenied)
+		gaps = append(gaps, gap(readreason.UserForbidden, podDenied))
 	}
 	resp, err := build(ctx, items, targets, req.View, req.Filter)
 	if err != nil {
@@ -117,29 +117,19 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 // readableNamespaces is where the caller may list the report kind: the whole
 // ceiling with a cluster-wide grant (or with auth off), else the namespaces a
 // per-namespace check allowed. Asked for every namespace without the
-// cluster-wide grant, it checks the namespaces that hold reports. all is the
-// cluster-wide report list when it was read to find those.
-func readableNamespaces(gvr schema.GroupVersionResource, req Request, list func(string) ([]*unstructured.Unstructured, error)) (readable []string, gaps []resourceapi.Gap, all []*unstructured.Unstructured, err error) {
+// cluster-wide grant, it checks the cluster's namespaces, which the caller
+// may see.
+func readableNamespaces(gvr schema.GroupVersionResource, req Request, clusterNamespaces []string) (readable []string, gaps []resourceapi.Gap) {
 	access := req.ReportAccess
 	if access == nil {
-		return req.Namespaces, nil, nil, nil
+		return req.Namespaces, nil
 	}
 	if allowed, _ := access.ClusterWide(gvr.Group, gvr.Resource); allowed {
-		return req.Namespaces, nil, nil, nil
+		return req.Namespaces, nil
 	}
 	candidates := req.Namespaces
 	if candidates == nil {
-		if all, err = list(""); err != nil {
-			return nil, nil, nil, err
-		}
-		seen := map[string]bool{}
-		for _, u := range all {
-			if ns := u.GetNamespace(); !seen[ns] {
-				seen[ns] = true
-				candidates = append(candidates, ns)
-			}
-		}
-		slices.Sort(candidates)
+		candidates = clusterNamespaces
 	}
 	allowed, unchecked := access.InNamespaces(gvr.Group, gvr.Resource, candidates)
 	var denied []string
@@ -157,7 +147,23 @@ func readableNamespaces(gvr schema.GroupVersionResource, req Request, list func(
 	if allowed == nil {
 		allowed = []string{}
 	}
-	return allowed, gaps, all, nil
+	return allowed, gaps
+}
+
+func clusterNamespaces(cache *k8s.ResourceCache) []string {
+	if cache == nil || cache.Namespaces() == nil {
+		return []string{}
+	}
+	list, err := cache.Namespaces().List(labels.Everything())
+	if err != nil {
+		return []string{}
+	}
+	out := make([]string, 0, len(list))
+	for _, ns := range list {
+		out = append(out, ns.Name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func gap(code readreason.Code, namespaces []string) resourceapi.Gap {
@@ -177,13 +183,10 @@ func empty(view View, g resourceapi.Gap) Response {
 	return resp
 }
 
-func filterNamespaces(items []*unstructured.Unstructured, namespaces []string) []*unstructured.Unstructured {
-	if namespaces == nil {
-		return items
-	}
+func withoutNamespaces(items []*unstructured.Unstructured, namespaces []string) []*unstructured.Unstructured {
 	out := make([]*unstructured.Unstructured, 0, len(items))
 	for _, u := range items {
-		if slices.Contains(namespaces, u.GetNamespace()) {
+		if !slices.Contains(namespaces, u.GetNamespace()) {
 			out = append(out, u)
 		}
 	}
