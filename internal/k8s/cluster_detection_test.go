@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -100,6 +101,17 @@ func TestGetClusterPlatform(t *testing.T) {
 			nodes: corev1.NodeList{Items: []corev1.Node{{
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"cloud.google.com/gke-autopilot": "true"}},
 				Spec:       corev1.NodeSpec{ProviderID: "gce://project/zone/node"},
+			}}},
+			serverVersion: "v1.30.12-gke.300",
+			want:          "gke-autopilot",
+		},
+		{
+			name: "GKE control plane with upstream worker and Autopilot annotation",
+			nodes: corev1.NodeList{Items: []corev1.Node{{
+				Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.30.12"}},
+			}}},
+			pods: corev1.PodList{Items: []corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"autopilot.gke.io/resource-adjustment": "true"}},
 			}}},
 			serverVersion: "v1.30.12-gke.300",
 			want:          "gke-autopilot",
@@ -282,6 +294,86 @@ func TestGetServerVersionRetriesUntilSuccess(t *testing.T) {
 			lastServerVersionFailure = time.Now().Add(-31 * time.Second)
 			serverVersionMu.Unlock()
 		}
+	}
+}
+
+func TestClusterPlatformCancelsServerVersionRead(t *testing.T) {
+	started := make(chan struct{})
+	var reads atomic.Int32
+	var block atomic.Bool
+	block.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/version" {
+			http.NotFound(w, r)
+			return
+		}
+		if reads.Add(1) == 1 {
+			close(started)
+		}
+		if block.Load() {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(version.Info{GitVersion: "v1.32.5-eks-5d4a308"})
+	}))
+	t.Cleanup(server.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ResetResourceCache()
+	InvalidateServerVersionCache()
+	InvalidatePlatformCache()
+	previous := SetTestClient(client)
+	t.Cleanup(func() {
+		SetTestClient(previous)
+		InvalidateServerVersionCache()
+		InvalidatePlatformCache()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan error, 1)
+	go func() {
+		_, err := GetClusterInfo(ctx)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("version request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("GetClusterInfo() error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cluster info did not stop after cancellation")
+	}
+	block.Store(false)
+	if got, err := GetClusterPlatform(context.Background()); err != nil || got != "eks" {
+		t.Fatalf("GetClusterPlatform() after cancellation = %q, %v", got, err)
+	}
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("version requests = %d, want 2", got)
+	}
+
+	InvalidateServerVersionCache()
+	block.Store(true)
+	deadlineCtx, cancelDeadline := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	t.Cleanup(cancelDeadline)
+	if got := getServerVersion(deadlineCtx); got != "" || deadlineCtx.Err() != context.DeadlineExceeded {
+		t.Fatalf("version read at deadline = %q, %v", got, deadlineCtx.Err())
+	}
+	retryCtx, cancelRetry := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancelRetry)
+	if got := getServerVersion(retryCtx); got != "" {
+		t.Fatalf("version after deadline = %q, want empty", got)
+	}
+	if got := reads.Load(); got != 3 {
+		t.Fatalf("version requests after deadline and retry = %d, want 3", got)
 	}
 }
 

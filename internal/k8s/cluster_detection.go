@@ -32,8 +32,18 @@ var (
 // A successful, nonempty version is cached for the lifetime of the context.
 // Failed reads wait 30 seconds before retrying so callers do not queue API requests.
 func GetServerVersion() string {
+	return getServerVersion(context.Background())
+}
+
+func getServerVersion(ctx context.Context) string {
+	if ctx.Err() != nil {
+		return ""
+	}
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
+	if ctx.Err() != nil {
+		return ""
+	}
 	if cachedServerVersion != "" {
 		return cachedServerVersion
 	}
@@ -41,10 +51,10 @@ func GetServerVersion() string {
 		return ""
 	}
 	if client := GetClient(); client != nil {
-		if v, err := client.Discovery().ServerVersion(); err == nil && v != nil {
+		if v, err := client.Discovery().ServerVersionWithContext(ctx); err == nil && v != nil {
 			cachedServerVersion = v.GitVersion
 		}
-		if cachedServerVersion == "" {
+		if cachedServerVersion == "" && ctx.Err() != context.Canceled {
 			lastServerVersionFailure = time.Now()
 		}
 	}
@@ -94,7 +104,10 @@ func (i *ClusterInfo) KubeconfigCluster() string {
 
 // GetClusterInfo returns detected cluster information
 func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
-	platform, _ := GetClusterPlatform(ctx)
+	platform, err := GetClusterPlatform(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	info := &ClusterInfo{
 		Context:   GetContextName(),
@@ -104,7 +117,7 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	// Get version info (cached — only fetched once per context)
-	info.KubernetesVersion = GetServerVersion()
+	info.KubernetesVersion = getServerVersion(ctx)
 
 	// Get counts from cache (listers may be nil when RBAC restricts access)
 	cache := GetResourceCache()
@@ -137,13 +150,20 @@ func GetClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 
 // GetClusterPlatform attempts to detect the Kubernetes platform/provider
 func GetClusterPlatform(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "unknown", err
+	}
 	if isNKP(ctx) {
 		return "nkp", nil
 	}
 
-	if platform := detectPlatformFromServerVersion(GetServerVersion()); platform != "unknown" {
+	version := getServerVersion(ctx)
+	if err := ctx.Err(); err != nil {
+		return "unknown", err
+	}
+	if platform := detectPlatformFromServerVersion(version); platform != "unknown" {
 		if platform == "gke" {
-			if isAutopilot, _ := IsGKEAutopilot(ctx); isAutopilot {
+			if isAutopilot, _ := isGKEAutopilot(ctx, true); isAutopilot {
 				return "gke-autopilot", nil
 			}
 		}
@@ -254,6 +274,10 @@ func InvalidatePlatformCache() {
 
 // IsGKEAutopilot detects if the cluster is GKE Autopilot
 func IsGKEAutopilot(ctx context.Context) (bool, error) {
+	return isGKEAutopilot(ctx, false)
+}
+
+func isGKEAutopilot(ctx context.Context, controlPlaneGKE bool) (bool, error) {
 	var nodes []corev1.Node
 	cache := GetResourceCache()
 	if cache != nil {
@@ -279,7 +303,7 @@ func IsGKEAutopilot(ctx context.Context) (bool, error) {
 		if val, exists := node.Labels["cloud.google.com/gke-autopilot"]; exists && val == "true" {
 			return true, nil
 		}
-		if !k8score.IsNodeGKE(node) {
+		if !controlPlaneGKE && !k8score.IsNodeGKE(node) {
 			return false, nil
 		}
 	}
@@ -329,11 +353,14 @@ func checkAutopilotViaAnnotations(ctx context.Context) (bool, bool) {
 }
 
 func detectPlatformFallback(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "unknown", err
+	}
 	isAutopilot, found := checkAutopilotViaAnnotations(ctx)
 	if found && isAutopilot {
 		return "gke-autopilot", nil
 	}
-	if platform := k8score.DetectPlatformFromVersion(GetServerVersion()); platform != "unknown" {
+	if platform := k8score.DetectPlatformFromVersion(getServerVersion(ctx)); platform != "unknown" {
 		return platform, nil
 	}
 	return "unknown", nil
