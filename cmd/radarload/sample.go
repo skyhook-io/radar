@@ -202,3 +202,21 @@ func pauseDelta(a, b *heapStats) (uint64, error) {
 	}
 	return total, nil
 }
+
+func sampleWindow(ctx context.Context, ticks <-chan time.Time, take func(context.Context) sample) []sample {
+	var samples []sample
+	for {
+		select {
+		case <-ctx.Done():
+			return samples
+		case <-ticks:
+			if ctx.Err() != nil {
+				return samples
+			}
+			s := take(ctx)
+			if ctx.Err() == nil {
+				samples = append(samples, s)
+			}
+		}
+	}
+}

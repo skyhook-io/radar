@@ -37,11 +37,15 @@ coverage are recorded. The testserver has no dynamic discovery or CRD fixtures.
 The tool understands the actual array and coverage-envelope list contracts.
 Lists above the server's 50,000-object limit fail explicitly in inventory; they
 are not silently truncated. `-subjects-from` reuses the prior sampled subjects;
-current inventory is still recorded for comparison. Neighborhood roots are probed
+current inventory is still recorded for comparison. Each fresh or replayed subject
+is GET-probed with the configured identity before measurement. Unreadable subjects
+are excluded and counted by kind and group in `subject_probe_errors`.
+Neighborhood roots are probed
 once before measurement and saved separately: grouped Pods and ordinary Nodes
 can be present in resource lists while absent from the topology. Probe rejection
 counts are recorded. Replay performs the same probes for warmup, preserves the
-saved neighborhood root set, and fails if a saved root is no longer readable.
+saved neighborhood root set after filtering subjects rejected by the resource GET,
+and fails if a remaining saved root is no longer readable as a neighborhood.
 
 A seeded 20-request cycle fixes the offered mix:
 
@@ -67,10 +71,13 @@ and reconnect after errors. The tool does **not** mutate the cluster: a quiet
 cluster has fewer change-driven topology broadcasts. Keep the external change
 workload fixed when comparing builds.
 
-Every two seconds, plus boundary samples, radarload captures RSS (bytes),
+Before the workload and every two seconds while it runs, radarload captures RSS
+(bytes),
 cumulative process CPU (seconds), Go HeapAlloc/HeapInuse/HeapSys/NumGC, and
 goroutine count. `ps` CPU precision is platform-dependent (Linux commonly whole
-seconds). Pprof sampling itself adds overhead, so use identical settings.
+seconds). Samples that finish after the workload window are discarded; the last
+in-window sample supplies the final CPU/GC counters. Pprof sampling itself adds
+overhead, so use identical settings.
 `PauseTotalNs` is parsed when supplied, but standard Go heap text does **not**
 emit it. Run GC pause time is instead calculated from the 256-entry `PauseNs`
 ring and consecutive NumGC values; per-interval pause deltas are saved with samples. If that ring is missing or overwritten

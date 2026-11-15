@@ -293,3 +293,16 @@ func (c *radarClient) neighborhoodSubjects(ctx context.Context, subjects []subje
 	}
 	return valid, rejected
 }
+
+func (c *radarClient) readableSubjects(ctx context.Context, subjects []subject) ([]subject, map[string]int) {
+	var readable []subject
+	rejected := map[string]int{}
+	for _, s := range subjects {
+		if _, err := c.bytes(ctx, resourcePath("/api/resources", s)); err != nil {
+			rejected[s.Kind+"."+s.Group]++
+			continue
+		}
+		readable = append(readable, s)
+	}
+	return readable, rejected
+}

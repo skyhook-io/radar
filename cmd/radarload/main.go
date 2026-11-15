@@ -35,6 +35,7 @@ type config struct {
 }
 
 type result struct {
+	SubjectProbeErrors      map[string]int           `json:"subject_probe_errors"`
 	NeighborhoodSubjects    []subject                `json:"neighborhood_subjects"`
 	NeighborhoodProbeErrors map[string]int           `json:"neighborhood_probe_errors"`
 	Schema                  int                      `json:"schema"`
@@ -154,6 +155,23 @@ func run(ctx context.Context, c config, client *radarClient) error {
 		neighborhoods = old.NeighborhoodSubjects
 		notes = append(notes, "Subjects replayed from "+c.SubjectsFrom)
 	}
+	subjects, subjectProbeErrors := client.readableSubjects(ctx, subjects)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if c.SubjectsFrom != "" {
+		readable := make(map[subject]bool, len(subjects))
+		for _, s := range subjects {
+			readable[s] = true
+		}
+		var retained []subject
+		for _, s := range neighborhoods {
+			if readable[s] {
+				retained = append(retained, s)
+			}
+		}
+		neighborhoods = retained
+	}
 	if len(subjects) == 0 {
 		return errors.New("no readable subjects; inspect identity, inventory permissions and cache readiness")
 	}
@@ -178,7 +196,7 @@ func run(ctx context.Context, c config, client *radarClient) error {
 	if len(initial.Errors) > 0 {
 		return fmt.Errorf("sampling preflight failed: %v; pprofEnabled in internal/server/server.go requires a local listener, auth, or RADAR_PPROF=true (never Cloud)", initial.Errors)
 	}
-	r := result{Schema: 1, Config: c, Build: build, Subjects: subjects, NeighborhoodSubjects: neighborhoods, NeighborhoodProbeErrors: probeErrors, Inventory: inv, Notes: append(notes,
+	r := result{SubjectProbeErrors: subjectProbeErrors, Schema: 1, Config: c, Build: build, Subjects: subjects, NeighborhoodSubjects: neighborhoods, NeighborhoodProbeErrors: probeErrors, Inventory: inv, Notes: append(notes,
 		"PauseTotalNs is absent from standard Go heap text; GC pause deltas use the PauseNs ring (unavailable if more than 256 GCs occur between samples).",
 		"REST and AI neighborhoods share /api/ai/neighborhood; REST uses profile=all&hops=2, AI uses profile=auto&hops=1.",
 		"Read-only load does not generate cluster changes; SSE broadcasts depend on the target's activity.",
@@ -202,25 +220,16 @@ func run(ctx context.Context, c config, client *radarClient) error {
 		profileDone <- client.profile(loadCtx, c.Out, "cpu", "/debug/pprof/profile?seconds=30")
 	}()
 	ticker := time.NewTicker(2 * time.Second)
-	for alive := true; alive; {
-		select {
-		case <-loadCtx.Done():
-			alive = false
-		case <-ticker.C:
-			s := client.sample(loadCtx, r.Started, c.PID)
-			if loadCtx.Err() == nil {
-				r.Samples = append(r.Samples, s)
-			}
-		}
-	}
+	r.Samples = append(r.Samples, sampleWindow(loadCtx, ticker.C, func(ctx context.Context) sample {
+		return client.sample(ctx, r.Started, c.PID)
+	})...)
+	r.Ended = time.Now()
 	ticker.Stop()
 	cancel()
 	<-done
-	r.Ended = time.Now()
 	r.Profiles["cpu"] = <-profileDone
 	finalCtx, finalCancel := context.WithTimeout(ctx, c.Timeout)
 	defer finalCancel()
-	r.Samples = append(r.Samples, client.sample(finalCtx, r.Started, c.PID))
 	r.Profiles["heap"] = client.profile(finalCtx, c.Out, "heap", "/debug/pprof/heap")
 	r.Summary = summarize(r.Samples, counters, r.Ended.Sub(r.Started).Seconds())
 	b, err := json.MarshalIndent(r, "", "  ")
