@@ -340,7 +340,8 @@ type DynamicResourceObservation struct {
 // itself has no imports of any internal/ package.
 type DynamicCacheConfig struct {
 	// RequiredWatchKinds are collection dependencies that must be retried even
-	// without readers. They bypass the small-CRD object-count deferral.
+	// without readers after StartWatchReconciler. They bypass the small-CRD
+	// object-count deferral.
 	RequiredWatchKinds []schema.GroupKind
 
 	// DynamicClient is the dynamic Kubernetes client used to create informers.

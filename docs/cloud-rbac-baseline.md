@@ -40,6 +40,8 @@ grant access to the underlying Role or ClusterRole objects.
 
 | Resources withheld by this add-on | Why / effect |
 |---|---|
+| Kubernetes PodTemplate | Pod templates can contain inline container credentials. Relationship collection adds no caller grants; reading them requires the caller's own Kubernetes RBAC. |
+| Knative JobSink | Newly collected relationship dependency; no default caller grant pending review of inline Job configuration. |
 | OpenTelemetry Collector and Instrumentation | Collector configuration and instrumentation environment values can contain inline credentials. Native visibility adds no default caller grants. |
 | Flagger Canary and MetricTemplate | Canary webhook metadata and MetricTemplate provider headers may contain inline credentials. Collection is separately opt-in; native visibility adds no default caller grants. |
 | Secrets Store CSI SecretProviderClass | `spec.parameters` is free-form provider configuration that the driver does not constrain. SecretProviderClassPodStatus (mount state and object versions only) remains readable, so the Pod drawer still shows whether a volume mounted. |

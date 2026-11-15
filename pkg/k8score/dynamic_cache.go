@@ -123,9 +123,10 @@ type DynamicResourceCache struct {
 	// outside d.mu, so without this a parallel fan-out over N objects of an
 	// unwatched kind would issue N redundant limit=1 list probes before one
 	// caller wins startWatching.
-	watchStarts         singleflight.Group
-	watchRequests       map[schema.GroupVersionResource]bool
-	watchReconcilerOnce sync.Once
+	watchStarts            singleflight.Group
+	watchRequests          map[schema.GroupVersionResource]bool
+	watchReconcilerOnce    sync.Once
+	watchReconcilerStarted atomic.Bool
 
 	// CRD discovery completion callbacks
 	crdCallbacks   []func()
@@ -2837,7 +2838,7 @@ func (d *DynamicResourceCache) markCRDsSeen(keys []string) map[string]struct{} {
 func (d *DynamicResourceCache) crdEventHandler() cache.ResourceEventHandler {
 	return cache.ResourceEventHandlerDetailedFuncs{
 		AddFunc: func(obj any, initial bool) {
-			if initial && len(d.config.RequiredWatchKinds) > 0 {
+			if initial && d.watchReconcilerStarted.Load() {
 				d.reconcileWatches()
 				return
 			}
@@ -2849,8 +2850,7 @@ func (d *DynamicResourceCache) crdEventHandler() cache.ResourceEventHandler {
 }
 
 func (d *DynamicResourceCache) watchLateCRDs() {
-	if len(d.config.RequiredWatchKinds) > 0 {
-		d.StartWatchReconciler()
+	if d.watchReconcilerStarted.Load() {
 		return
 	}
 	handler := d.crdEventHandler()
@@ -2895,6 +2895,9 @@ func (d *DynamicResourceCache) onCRDEvent(obj any) {
 	d.lateCRDMu.Lock()
 	defer d.lateCRDMu.Unlock()
 	if _, seen := d.seenCRDs[key]; seen {
+		if !d.watchReconcilerStarted.Load() {
+			return
+		}
 		required := false
 		for _, k := range d.config.RequiredWatchKinds {
 			if gvr, ok := d.config.Discovery.GetGVRWithGroup(k.Kind, k.Group); ok && key == gvr.Group+"/"+gvr.Resource {

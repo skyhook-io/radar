@@ -26,6 +26,67 @@ func widgetDiscovery(t *testing.T) *ResourceDiscovery {
 	return d
 }
 
+func TestWatchReconcilerRequiresStart(t *testing.T) {
+	for _, required := range []bool{false, true} {
+		t.Run(fmt.Sprintf("required=%t", required), func(t *testing.T) {
+			discovery, err := NewResourceDiscovery(newLockedDiscovery(crdResources, &metav1.APIResourceList{
+				GroupVersion: "example.io/v1", APIResources: []metav1.APIResource{{Name: "widgets", Kind: "Widget", Namespaced: true, Verbs: []string{"get", "list", "watch"}}},
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+				crdGVR: "CustomResourceDefinitionList", deniedWidgets: "WidgetList",
+			})
+			cfg := DynamicCacheConfig{Discovery: discovery, DynamicClient: client}
+			if required {
+				cfg.RequiredWatchKinds = []schema.GroupKind{{Group: "example.io", Kind: "Widget"}}
+			}
+			d, err := NewDynamicResourceCache(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(d.Stop)
+			d.markCRDsSeen([]string{"db.example.com/dbclusters"})
+			crd := crdObject("dbclusters.db.example.com", "db.example.com", "dbclusters")
+			d.reconcileWatches()
+			d.onCRDEvent(crd)
+			d.crdEventHandler().OnAdd(crd, true)
+			d.crdEventHandler().OnUpdate(crd, crd)
+			d.mu.RLock()
+			requests, informers := len(d.watchRequests), len(d.informers)
+			d.mu.RUnlock()
+			if requests != 0 || informers != 0 || len(client.Actions()) != 0 {
+				t.Fatalf("unstarted reconciler activated watches: requests=%d informers=%d actions=%v", requests, informers, client.Actions())
+			}
+			if required {
+				d.StartWatchReconciler()
+				waitUntilTrue(t, "explicit start activates required kind", func() bool { return d.IsSynced(deniedWidgets) })
+			}
+		})
+	}
+}
+
+func TestLateCRDMonitorDoesNotStartWatchReconciler(t *testing.T) {
+	discovery := widgetDiscovery(t)
+	discovery.AddAPIResource(APIResource{Group: crdGVR.Group, Version: crdGVR.Version, Name: crdGVR.Resource, Kind: "CustomResourceDefinition", Verbs: []string{"get", "list", "watch"}})
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		crdGVR: "CustomResourceDefinitionList", deniedWidgets: "WidgetList",
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{Discovery: discovery, DynamicClient: client, RequiredWatchKinds: []schema.GroupKind{{Group: "example.io", Kind: "Widget"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	d.watchLateCRDs()
+	waitUntilTrue(t, "late CRD monitor", func() bool { return d.IsSynced(crdGVR) })
+	if d.watchReconcilerStarted.Load() || d.hasCoveringInformer(deniedWidgets, "") {
+		t.Fatal("late CRD monitoring started the required-watch reconciler")
+	}
+	d.StartWatchReconciler()
+	waitUntilTrue(t, "explicit start after late CRD monitoring", func() bool { return d.IsSynced(deniedWidgets) })
+}
+
 func TestWatchReconcilerRetriesDenialAfterGrant(t *testing.T) {
 	var calls atomic.Int64
 	var granted atomic.Bool

@@ -68,6 +68,7 @@ func (d *DynamicResourceCache) startWatchReconciler(interval time.Duration) {
 		return
 	}
 	d.watchReconcilerOnce.Do(func() {
+		d.watchReconcilerStarted.Store(true)
 		// The initial CRD informer list must not launch the generic small-CRD
 		// scan before the deferred-informer gate opens.
 		if resources, err := d.config.Discovery.GetAPIResources(); err == nil {
@@ -102,7 +103,7 @@ func (d *DynamicResourceCache) startWatchReconciler(interval time.Duration) {
 }
 
 func (d *DynamicResourceCache) reconcileWatches() {
-	if d.config.Discovery == nil || d.isStopped() {
+	if !d.watchReconcilerStarted.Load() || d.config.Discovery == nil || d.isStopped() {
 		return
 	}
 	if d.config.Discovery.SupportsWatchGVR(crdGVR) {

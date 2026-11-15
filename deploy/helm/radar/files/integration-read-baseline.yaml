@@ -3,6 +3,27 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: ""
+    resources: ["podtemplates"]
+    scope: Namespaced
+    collection: ""
+    decision: withhold
+    reason: "Pod templates can contain inline container credentials; relationship collection adds no caller grants. Reading them requires the caller's own Kubernetes RBAC."
+    source: "k8s.io/api/core/v1 (PodTemplate.template.spec.containers[].env)"
+  - group: "eks.amazonaws.com"
+    resources: ["nodeclasses"]
+    scope: Cluster
+    collection: "karpenter"
+    decision: existing
+    reason: "Covered by the existing Karpenter group-wide cluster-read rule and its existing collection/tier gates."
+    source: "deploy/helm/radar/templates/cloud-rbac-cluster-read.yaml"
+  - group: "sinks.knative.dev"
+    resources: ["jobsinks"]
+    scope: Namespaced
+    collection: "knative"
+    decision: withhold
+    reason: "New collection dependency; default caller grant withheld pending review of inline Job configuration. Relationship collection adds no caller grants."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks); pkg/relations/kinds.go (JobSink dependency)"
   - group: "opentelemetry.io"
     resources: ["opentelemetrycollectors", "instrumentations"]
     scope: Namespaced
