@@ -156,3 +156,79 @@ func TestInformerClientsFallBackToRequestClients(t *testing.T) {
 		t.Errorf("GetInformerDynamicClient() = %v, want the request dynamic client", got)
 	}
 }
+
+// Request-triggered reads through the dynamic cache (direct lists, direct
+// GETs, count probes) must not wait behind the informer bucket either.
+func TestDynamicCacheDirectReadsUseTheRequestClient(t *testing.T) {
+	restoreClientGlobals(t)
+	defer ResetDynamicResourceCache()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/namespaces/default" {
+			_, _ = w.Write([]byte(`{"kind":"Namespace","apiVersion":"v1","metadata":{"name":"default"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"kind":"NamespaceList","apiVersion":"v1","metadata":{},"items":[]}`))
+	}))
+	defer srv.Close()
+
+	clients, err := newSharedKubernetesClients(&rest.Config{Host: srv.URL, QPS: 1, Burst: 3})
+	if err != nil {
+		t.Fatalf("newSharedKubernetesClients: %v", err)
+	}
+	clientMu.Lock()
+	k8sClient, dynamicClient, activeClients = clients.clientset, clients.dynamic, clients
+	clientMu.Unlock()
+	ResetDynamicResourceCache()
+	if err := InitDynamicResourceCache(nil); err != nil {
+		t.Fatalf("InitDynamicResourceCache: %v", err)
+	}
+	nsGVR := schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
+	// Three request reads follow, so spend all three informer tokens.
+	for range 3 {
+		if _, err := clients.informerDynamic.Resource(nsGVR).List(context.Background(), metav1.ListOptions{}); err != nil {
+			t.Fatalf("informer dynamic list: %v", err)
+		}
+	}
+
+	dc := GetDynamicResourceCache()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := dc.ListDirect(ctx, nsGVR, ""); err != nil {
+		t.Errorf("ListDirect waited behind the informer client: %v", err)
+	}
+	if _, err := dc.GetDirectPreserveLastApplied(ctx, nsGVR, "", "default"); err != nil {
+		t.Errorf("GetDirectPreserveLastApplied waited behind the informer client: %v", err)
+	}
+	if _, err := dc.CountDirectProbe(ctx, nsGVR, nil, 0, 1); err != nil {
+		t.Errorf("CountDirectProbe waited behind the informer client: %v", err)
+	}
+}
+
+// A permission check a request handler runs goes through the request client;
+// only the startup probe inside InitResourceCache spends the informer bucket.
+func TestRequestPermissionCheckUsesTheRequestClient(t *testing.T) {
+	defer ResetTestState()
+	requestClient, err := kubernetes.NewForConfig(&rest.Config{Host: "http://localhost:1"})
+	if err != nil {
+		t.Fatalf("request client: %v", err)
+	}
+	requestDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, _ string) bool {
+		return gvr.Group == "" && gvr.Resource == "pods"
+	})
+	informerDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, _ string) bool {
+		t.Errorf("request-triggered probe for %s went through the informer dynamic client", gvr.Resource)
+		return false
+	})
+	clientMu.Lock()
+	k8sClient, dynamicClient = requestClient, requestDyn
+	activeClients = &sharedKubernetesClients{clientset: requestClient, dynamic: requestDyn, informerDynamic: informerDyn}
+	clientMu.Unlock()
+
+	InvalidateResourcePermissionsCache()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if result, _ := CheckResourcePermissions(ctx); result == nil || !result.Perms.Pods {
+		t.Fatalf("CheckResourcePermissions = %+v, want pods allowed by the request client", result)
+	}
+}

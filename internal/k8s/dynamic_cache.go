@@ -36,7 +36,7 @@ var (
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 	var initErr error
 	dynamicCacheOnce.Do(func() {
-		client := GetInformerDynamicClient()
+		directClient, client := getDynamicCacheClients()
 		if client == nil {
 			initErr = fmt.Errorf("dynamic client not initialized")
 			return
@@ -83,6 +83,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
 			DynamicClient:               client,
+			DirectClient:                directClient,
 			Discovery:                   sharedDiscovery,
 			Changes:                     changeCh,
 			NamespaceFallback:           nsFallback,

@@ -850,12 +850,19 @@ func informerClientForLocked(client *kubernetes.Clientset) kubernetes.Interface 
 // GetInformerDynamicClient is GetInformerClient for the dynamic informer cache
 // and the startup list probes, falling back to GetDynamicClient().
 func GetInformerDynamicClient() dynamic.Interface {
+	_, informer := getDynamicCacheClients()
+	return informer
+}
+
+// getDynamicCacheClients reads the request and informer dynamic clients in one
+// critical section, for the same reason as getCacheClients.
+func getDynamicCacheClients() (request, informer dynamic.Interface) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	if dynamicClient != nil && activeClients != nil && activeClients.dynamic == dynamicClient && activeClients.informerDynamic != nil {
-		return activeClients.informerDynamic
+		return dynamicClient, activeClients.informerDynamic
 	}
-	return dynamicClient
+	return dynamicClient, dynamicClient
 }
 
 func GetDynamicClientSnapshot() (dynamic.Interface, string) {
