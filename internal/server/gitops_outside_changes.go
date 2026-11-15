@@ -114,8 +114,9 @@ type outsideChangesResponse struct {
 	Coverage     outsideCoverage               `json:"coverage"`
 }
 
-// classifyOutsideObject reads one member's managedFields. Subresource writes
-// (status, scale) are controllers', never a hand edit.
+// classifyOutsideObject reads one member's managedFields. Status writes are
+// controllers'; a scale write records spec.replicas on the object and is
+// classified by its manager, so kubectl scale counts and an HPA doesn't.
 func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.ResourceRef, ownerObj *unstructured.Unstructured) (out outsideObject, harmless []string, otherManagers []string) {
 	group := resourceid.GroupFromAPIVersion(obj.GetAPIVersion())
 	out.Ref = outsideRef{Group: group, Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName()}
@@ -133,7 +134,7 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 		}
 	}
 	for i, mf := range entries {
-		if mf.Subresource != "" {
+		if mf.Subresource == "status" {
 			continue
 		}
 		switch fieldwriters.Classify(mf.Manager, owners, radarWriteManagers) {

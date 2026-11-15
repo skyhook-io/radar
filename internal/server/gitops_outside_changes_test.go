@@ -32,15 +32,15 @@ func withTime(e metav1.ManagedFieldsEntry, at string) metav1.ManagedFieldsEntry 
 }
 
 func TestClassifyOutsideObjectSortsWriters(t *testing.T) {
-	scale := fieldsEntry(t, "kubectl", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}})
-	scale.Subresource = "scale"
+	status := fieldsEntry(t, "kubectl", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:status": map[string]any{"f:replicas": map[string]any{}}})
+	status.Subresource = "status"
 	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{
 		fieldsEntry(t, "helm-controller", metav1.ManagedFieldsOperationApply, map[string]any{"f:spec": map[string]any{"f:template": map[string]any{}}}),
 		withTime(fieldsEntry(t, "kubectl-patch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}}), "2026-11-09T10:00:00Z"),
 		fieldsEntry(t, "kubectl-rollout", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:template": map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{"f:kubectl.kubernetes.io/restartedAt": map[string]any{}}}}}}),
 		fieldsEntry(t, "node-fetch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:metadata": map[string]any{"f:labels": map[string]any{"f:k8slens-edit-resource-version": map[string]any{}}}}),
 		fieldsEntry(t, "kube-controller-manager", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{"f:deployment.kubernetes.io/revision": map[string]any{}}}}),
-		scale,
+		status,
 	})
 	out, harmless, other := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(map[string]any{"mode": "warn"}))
 	want := []outsideChange{{Manager: "kubectl-patch", Tool: "kubectl patch", Operation: "Update", Time: "2026-11-09T10:00:00Z", Paths: []string{"spec.replicas"}, Values: map[string]string{"spec.replicas": "3"}, Outcome: "reported"}}
@@ -52,6 +52,23 @@ func TestClassifyOutsideObjectSortsWriters(t *testing.T) {
 	}
 	if !reflect.DeepEqual(harmless, []string{"kubectl rollout restart", "Lens edit marker"}) || !reflect.DeepEqual(other, []string{"kube-controller-manager"}) {
 		t.Fatalf("harmless = %q, other = %q", harmless, other)
+	}
+}
+
+// kubectl scale writes through the scale subresource; its managedFields entry
+// records spec.replicas on the object like any other write.
+func TestClassifyOutsideObjectCountsAScaleWrite(t *testing.T) {
+	scale := fieldsEntry(t, "kubectl", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}})
+	scale.Subresource = "scale"
+	hpa := fieldsEntry(t, "kube-controller-manager", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}})
+	hpa.Subresource = "scale"
+	out, _, _ := classifyOutsideObject(evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{scale}), helmOwner, fluxHelmOwner(nil))
+	if len(out.Changes) != 1 || !reflect.DeepEqual(out.Changes[0].Paths, []string{"spec.replicas"}) || out.Changes[0].Manager != "kubectl" {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+	out, _, other := classifyOutsideObject(evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{hpa}), helmOwner, fluxHelmOwner(nil))
+	if len(out.Changes) != 0 || !reflect.DeepEqual(other, []string{"kube-controller-manager"}) {
+		t.Fatalf("changes = %+v, other = %q", out.Changes, other)
 	}
 }
 
