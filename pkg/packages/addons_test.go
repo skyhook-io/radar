@@ -70,6 +70,10 @@ func TestClassifyAddon(t *testing.T) {
 			wantAddon: true, wantWhy: "chart=gpu-operator",
 		},
 		{
+			name: "AMD GPU operator by its upstream chart", chart: "gpu-operator-charts-v1.3.0",
+			wantAddon: true, wantWhy: "chart=gpu-operator-charts",
+		},
+		{
 			name: "user chart named like a model platform", chart: "kserve-fraud-1.0.0", wl: "fraud-predictor",
 			wantAddon: false, wantWhy: "",
 		},
@@ -145,6 +149,11 @@ func TestAddonCatalogCoversCRDGroups(t *testing.T) {
 	for _, name := range nameMatchedIntegrations {
 		if !mapped[name] {
 			t.Errorf("nameMatchedIntegrations lists %q, which no crdGroupToChart entry maps to", name)
+		}
+	}
+	for name := range chartlessIntegrations {
+		if !mapped[name] {
+			t.Errorf("chartlessIntegrations lists %q, which no crdGroupToChart entry maps to", name)
 		}
 	}
 }

@@ -137,7 +137,7 @@ var crdGroupToChart = map[string]string{
 	"externaldata.gatekeeper.sh": "gatekeeper",
 
 	// Kubescape serves its reports through an aggregated API
-	"spdx.softwarecomposition.kubescape.io": "kubescape",
+	"spdx.softwarecomposition.kubescape.io": "kubescape-operator",
 
 	// Crossplane
 	"apiextensions.crossplane.io": "crossplane",
@@ -167,7 +167,7 @@ var crdGroupToChart = map[string]string{
 	// GPU operators
 	"nvidia.com":      "gpu-operator",
 	"apps.nvidia.com": "k8s-nim-operator",
-	"amd.com":         "amd-gpu-operator",
+	"amd.com":         "gpu-operator-charts", // AMD's chart name
 
 	// Batch, scheduling and model serving
 	"kueue.x-k8s.io":           "kueue",
@@ -186,6 +186,13 @@ var crdGroupToChart = map[string]string{
 	"trainer.kubeflow.org":     "kubeflow-trainer",
 	"kaito.sh":                 "kaito",
 	"llm-d.ai":                 "llm-d",
+}
+
+// chartlessIntegrations name APIs that no Helm chart installs, so their CRDs
+// keep a row of their own instead of merging into a user's release that
+// happens to share the name.
+var chartlessIntegrations = map[string]bool{
+	"gateway-api": true,
 }
 
 // IntegrationForCRDGroup names the integration a served API group belongs to,
