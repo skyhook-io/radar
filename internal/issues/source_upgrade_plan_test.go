@@ -19,9 +19,11 @@ func upgradePlan(group string, conditions ...any) *unstructured.Unstructured {
 
 func TestUpgradePlanInvalidIssue(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "upgrade.cattle.io", Version: "v1", Resource: "plans"}
-	invalid := map[string]any{"type": "Validated", "status": "False", "reason": "Invalid", "message": "spec.version or spec.channel required", "lastTransitionTime": "2026-11-01T00:00:00Z"}
+	// One of the errors system-upgrade-controller's plan.Validate returns; it
+	// records them as Validated=False with reason Error.
+	invalid := map[string]any{"type": "Validated", "status": "False", "reason": "Error", "message": "spec.drain cannot specify both deleteEmptydirData and deleteLocalData", "lastTransitionTime": "2026-11-01T00:00:00Z"}
 	got := detectCuratedConditionIssues(gvr, "Plan", upgradePlan("upgrade.cattle.io", invalid))
-	if len(got) != 1 || got[0].Severity != SeverityWarning || got[0].Reason != "UpgradePlanInvalid" || !strings.Contains(got[0].Message, "spec.version") || got[0].OnsetUnknown {
+	if len(got) != 1 || got[0].Severity != SeverityWarning || got[0].Reason != "UpgradePlanInvalid" || !strings.Contains(got[0].Message, "spec.drain") || got[0].OnsetUnknown {
 		t.Fatalf("issues = %+v", got)
 	}
 	empty := map[string]any{"type": "Validated", "status": "False"}
@@ -41,6 +43,20 @@ func TestUpgradePlanInvalidIssue(t *testing.T) {
 	deleting.SetDeletionTimestamp(&now)
 	if got := detectUpgradePlanIssues(gvr, deleting); len(got) != 0 {
 		t.Errorf("deleting: %+v", got)
+	}
+}
+
+// A Plan with neither spec.version nor spec.channel passes validation; the
+// controller reports it on LatestResolved instead. Radar raises no Issue for
+// it: the drawer reads "Version not resolved".
+func TestUpgradePlanWithoutVersionIsNotAnInvalidPlanIssue(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "upgrade.cattle.io", Version: "v1", Resource: "plans"}
+	plan := upgradePlan("upgrade.cattle.io",
+		map[string]any{"type": "Validated", "status": "True", "reason": "PlanIsValid"},
+		map[string]any{"type": "LatestResolved", "status": "False", "reason": "Error", "message": "cannot resolve plan: missing channel and version"},
+	)
+	if got := detectCuratedConditionIssues(gvr, "Plan", plan); len(got) != 0 {
+		t.Fatalf("issues = %+v", got)
 	}
 }
 
