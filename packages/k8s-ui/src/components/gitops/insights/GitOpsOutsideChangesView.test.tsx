@@ -77,6 +77,12 @@ describe('GitOpsOutsideChangesView', () => {
     expect(html).toContain('This object is excluded from drift detection; a Helm upgrade or rollback resets this field if the chart sets it')
   })
 
+  it('names members the label list missed', () => {
+    const html = render({ coverage: { listed: 1, unlisted: [{ group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'worker' }], unlistedMore: 2 } })
+    expect(html).toMatch(/incomplete/i)
+    expect(html).toContain('Deployment prod/worker and 2 more')
+  })
+
   it('says when the root applies elsewhere or records no inventory', () => {
     expect(render({ coverage: { listed: 0, remote: true } })).toContain('applies to another cluster')
     expect(render({ coverage: { listed: 0, noInventory: true } })).toContain('Radar can&#x27;t read an inventory in this Kustomization&#x27;s status')

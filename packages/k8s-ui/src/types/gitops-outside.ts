@@ -42,6 +42,10 @@ export interface GitOpsOutsideCoverage {
   // The root applies to another cluster (spec.kubeConfig).
   remote?: boolean
   truncated?: boolean
+  // Tree members a LIST on Flux's labels didn't return, so they weren't
+  // checked; unlistedMore counts those past the server's cap.
+  unlisted?: GitOpsOutsideRef[]
+  unlistedMore?: number
 }
 
 export interface GitOpsOutsideChanges {

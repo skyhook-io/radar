@@ -94,7 +94,13 @@ type outsideCoverage struct {
 	// objects Radar doesn't read.
 	Remote    bool `json:"remote,omitempty"`
 	Truncated bool `json:"truncated,omitempty"`
+	// Unlisted: tree members a LIST on Flux's labels didn't return (the labels
+	// were removed, or the object is gone), so their fields weren't checked.
+	Unlisted     []outsideRef `json:"unlisted,omitempty"`
+	UnlistedMore int          `json:"unlistedMore,omitempty"`
 }
+
+const maxOutsideUnlisted = 20
 
 type outsidePolicy struct {
 	Tool           string `json:"tool"`
@@ -481,6 +487,8 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 	lists := 0
 	for _, g := range groups {
 		cont := ""
+		seen := map[string]bool{}
+		complete := false
 		for {
 			if lists >= limits.Lists || len(out) >= limits.Objects {
 				cov.Truncated = true
@@ -514,6 +522,7 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 				if g.Members != nil && !g.Members[item.GetName()] {
 					continue
 				}
+				seen[item.GetName()] = true
 				if len(out) >= limits.Objects {
 					cov.Truncated = true
 					return out
@@ -522,11 +531,32 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 				cov.Listed++
 			}
 			if cont = list.GetContinue(); cont == "" {
+				complete = true
 				break
 			}
 		}
+		if complete {
+			addUnlisted(cov, g, seen)
+		}
 	}
 	return out
+}
+
+func addUnlisted(cov *outsideCoverage, g outsideListGroup, seen map[string]bool) {
+	var names []string
+	for name := range g.Members {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if len(cov.Unlisted) >= maxOutsideUnlisted {
+			cov.UnlistedMore++
+			continue
+		}
+		cov.Unlisted = append(cov.Unlisted, outsideRef{Group: g.GVR.Group, Kind: g.Kind, Namespace: g.Namespace, Name: name})
+	}
 }
 
 // handleGitOpsOutsideChanges serves GET /api/gitops/outside-changes/{kind}/{namespace}/{name}

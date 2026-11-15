@@ -146,6 +146,10 @@ function outsideCoverageNotes(data: GitOpsOutsideChanges): string[] {
   if (c.remote) notes.push("This root applies to another cluster, whose objects Radar doesn't read.")
   if (c.noInventory) notes.push("Radar can't read an inventory in this Kustomization's status, so it can't tell which objects it applies; Flux records one once an apply succeeds.")
   if (c.labelScan) notes.push("Radar can't read an inventory in this release's status, so it checked common kinds by Flux labels only; Flux records one from version 2.8, at each install or upgrade, so a release installed earlier and not upgraded since has none.")
+  if (c.unlisted?.length) {
+    const more = c.unlistedMore ? ` and ${c.unlistedMore} more` : ''
+    notes.push(`Not checked, because a list by Flux's labels didn't return them (the labels were removed, or the object is gone): ${c.unlisted.map((r) => `${r.kind} ${r.namespace ? `${r.namespace}/` : ''}${r.name}`).join(', ')}${more}.`)
+  }
   if (c.notChecked?.length) notes.push(`Not checked: ${c.notChecked.join(', ')}.`)
   if (c.skipped?.includes('secrets')) notes.push('Secrets are never read: listing them would return their data.')
   return notes
