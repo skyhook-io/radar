@@ -36,6 +36,8 @@ func refOf(obj runtime.Object) resourceid.Ref {
 	return resourceid.Ref{Group: gvk.Group, Kind: gvk.Kind, Namespace: m.GetNamespace(), Name: m.GetName()}
 }
 
+func (cluster) Catalog() *ownership.Catalog { return ownership.NewCatalog(nil, true) }
+
 func (c cluster) Object(ref resourceid.Ref) ownership.ObjectRead {
 	_, read := c.Borrow(ref)
 	return read

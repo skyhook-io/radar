@@ -207,25 +207,39 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	default:
 		return a
 	}
-	// A namespaced target's sources are in its namespace; a cluster-scoped
-	// one's anywhere, read in full (index "") rather than by namespace.
+	// A namespaced target's sources are in its namespace. A cluster-scoped
+	// one's can be anywhere, so, as ownership.View.Children does, the search
+	// covers the namespaces the caller may read something in, each source is
+	// checked where it is, and a gap is kept only if it covers what the
+	// caller may read.
+	clusterTarget := subject.Namespace == ""
 	scope, index, keys := ownership.InNamespace(subject.Namespace), cache.NamespaceIndex, []string{subject.Namespace}
-	if subject.Namespace == "" {
-		scope, index, keys = ownership.SearchScope{AllNamespaces: true, IncludeClusterScoped: true}, "", nil
+	if clusterTarget {
+		namespaces, all := v.access.Namespaces()
+		scope = ownership.SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: true}
+		index, keys = "", nil
+		if !all {
+			// Cluster-scoped sources file under "" in the namespace index.
+			index, keys = cache.NamespaceIndex, append(slices.Clone(namespaces), "")
+		}
+		a.Coverage.Narrowed = v.access != ownership.Unrestricted()
 	}
 	for _, source := range f.Sources {
 		gk := source.Kind
-		if !source.declares(subject.GroupKind()) || !v.mayRead(gk, subject.Namespace, &a.Coverage) {
+		if !source.declares(subject.GroupKind()) || !clusterTarget && !v.mayRead(gk, subject.Namespace, &a.Coverage) {
 			continue
 		}
 		read := v.session.Indexed(gk, index, keys, scope)
 		for _, g := range read.Gaps {
-			a.Coverage.addGap(g)
+			if !clusterTarget || ownership.GapCoversReadable(v.access, v.session.Catalog(), g, scope) {
+				a.Coverage.addGap(g)
+			}
 		}
 		for _, o := range read.Objects {
-			// Read across namespaces for a cluster-scoped target, each source
-			// is checked in its own namespace.
-			if subject.Namespace == "" && o.Ref.Namespace != "" && !v.mayRead(gk, o.Ref.Namespace, &a.Coverage) {
+			// Saying a check failed would say a referrer may be there, so an
+			// undecided one narrows the answer as a denied one does.
+			if clusterTarget && v.decide(gk, o.Ref.Namespace) != ownership.Allowed {
+				a.Coverage.Narrowed = true
 				continue
 			}
 			var paths []string
@@ -235,7 +249,7 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 				}
 			})
 			if err != nil {
-				a.Coverage.addGap(ownership.Gap{Kind: gk, Namespace: subject.Namespace, Reason: readreason.ReadError})
+				a.Coverage.addGap(ownership.Gap{Kind: gk, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
 			if len(paths) > 0 {
 				a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths})

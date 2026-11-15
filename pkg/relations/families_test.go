@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -97,15 +98,31 @@ func TestAClusterTriggerAuthenticationsReferrersAreReadAcrossNamespaces(t *testi
 	inShop := object("keda.sh/v1alpha1", "ScaledObject", "worker", trigger)
 	inTeam := object("keda.sh/v1alpha1", "ScaledObject", "worker", trigger)
 	inTeam.SetNamespace("team")
-	c := allNamespaces{cluster{objects: []runtime.Object{auth, inShop, inTeam}}}
+	c := allNamespaces{cluster: cluster{objects: []runtime.Object{auth, inShop, inTeam}}}
 	subject := resourceid.Ref{Group: "keda.sh", Kind: "ClusterTriggerAuthentication", Name: "shared-creds"}
 	if got := referrerRefs(NewView(c, ownership.Unrestricted()).Referrers(KEDAAuthentication, subject, nil)); len(got) != 2 {
 		t.Errorf("referrers = %v; want the ScaledObjects in both namespaces", got)
 	}
+	// The caller may read ScaledObjects in shop but can't be told about them
+	// cluster-wide, as MCP can't, and team's are still loading.
+	c.gaps = []ownership.Gap{{Kind: kindScaledObject, Namespace: "team", Reason: readreason.KindSyncPending}}
 	shopOnly := NewView(c, namespaceAccess("shop")).Referrers(KEDAAuthentication, subject, nil)
 	if got := referrerRefs(shopOnly); len(got) != 1 || got[0].Namespace != "shop" || !shopOnly.Coverage.Narrowed {
 		t.Errorf("a caller reading only shop got %+v", shopOnly)
 	}
+	if len(shopOnly.Coverage.NotChecked) != 0 {
+		t.Errorf("a caller reading only shop was told of team's gaps: %+v", shopOnly.Coverage.NotChecked)
+	}
+	c.gaps = []ownership.Gap{{Kind: kindScaledObject, Namespace: "shop", Reason: readreason.KindSyncPending}}
+	if got := NewView(c, namespaceAccess("shop")).Referrers(KEDAAuthentication, subject, nil); got.Coverage.Complete() {
+		t.Errorf("shop's ScaledObjects are loading, yet the answer is complete: %+v", got)
+	}
+}
+
+func TestAScaledObjectMayScaleAReplicaSet(t *testing.T) {
+	rs := replicaSet("worker", nil, mounts())
+	so := object("keda.sh/v1alpha1", "ScaledObject", "worker", map[string]any{"scaleTargetRef": map[string]any{"apiVersion": "apps/v1", "kind": "ReplicaSet", "name": "worker"}})
+	checkFamily(t, Autoscalers, []runtime.Object{rs, so}, so, ref("apps", "ReplicaSet", "worker"), "spec.scaleTargetRef")
 }
 
 func TestDeclarationsASourceCannotMakeAreLeftOut(t *testing.T) {
@@ -135,14 +152,19 @@ func TestAnIngressDefaultBackendSaysSo(t *testing.T) {
 }
 
 // allNamespaces is a cluster whose Indexed also answers an empty index with
-// every object, as the cache source does.
-type allNamespaces struct{ cluster }
+// every object, as the cache source does, and reports gaps.
+type allNamespaces struct {
+	cluster
+	gaps []ownership.Gap
+}
 
 func (c allNamespaces) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
 	if index != "" {
-		return c.cluster.Indexed(gk, index, keys, scope)
+		r := c.cluster.Indexed(gk, index, keys, scope)
+		r.Gaps = append(r.Gaps, c.gaps...)
+		return r
 	}
-	var r IndexedRead
+	r := IndexedRead{Gaps: c.gaps}
 	for _, obj := range c.objects {
 		if ref := refOf(obj); ref.GroupKind() == gk {
 			r.Objects = append(r.Objects, IndexedObject{Ref: ref, Object: obj})
@@ -151,12 +173,16 @@ func (c allNamespaces) Indexed(gk resourceid.GroupKind, index string, keys []str
 	return r
 }
 
-// namespaceAccess may read only its namespaces, and anything cluster-scoped.
+// namespaceAccess may read only its namespace and cluster-scoped KEDA kinds.
+// Asked about another kind across the cluster it can't decide, as MCP can't.
 type namespaceAccess string
 
-func (n namespaceAccess) CanRead(_ resourceid.GroupKind, namespace string) ownership.Decision {
-	if namespace == "" || namespace == string(n) {
+func (n namespaceAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	switch {
+	case namespace == string(n), namespace == "" && gk.Kind == "ClusterTriggerAuthentication":
 		return ownership.Allowed
+	case namespace == "":
+		return ownership.Undecided
 	}
 	return ownership.Denied
 }
