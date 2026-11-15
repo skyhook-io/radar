@@ -7,9 +7,11 @@ export function imageTag(image: string): string | undefined {
   return name.slice(colon + 1) || undefined
 }
 
+// Flux Operator counts every unsuspended object as running, failing ones
+// included, so rows carry the total (running + suspended) instead.
 export interface FluxReconcilerRow {
   kind: string
-  running: number
+  total: number
   failing: number
   suspended: number
   totalSize?: string
@@ -24,8 +26,7 @@ export interface FluxReportSummary {
   controllersReady?: number
   failing?: number
   rows: FluxReconcilerRow[]
-  also: Array<{ kind: string; running: number }>
-  reportedAt?: string
+  also: Array<{ kind: string; total: number }>
   needsInventoryNote: boolean
   total: number
 }
@@ -57,20 +58,22 @@ export function summarizeFluxReport(report: any, total: number): FluxReportSumma
     tag: c?.image ? imageTag(String(c.image)) : undefined,
     ready: c?.ready === true,
   }))
-  const all: FluxReconcilerRow[] = (Array.isArray(spec.reconcilers) ? spec.reconcilers : []).map((r: any) => ({
-    kind: String(r?.kind ?? ''),
-    running: Number(r?.stats?.running) || 0,
-    failing: Number(r?.stats?.failing) || 0,
-    suspended: Number(r?.stats?.suspended) || 0,
-    totalSize: r?.stats?.totalSize || undefined,
-  }))
-  const counted = all.filter((r) => r.running + r.failing + r.suspended > 0)
-  const folded = (r: FluxReconcilerRow) => r.failing === 0 && r.suspended === 0 && r.running < FOLD_BELOW
+  const all: FluxReconcilerRow[] = (Array.isArray(spec.reconcilers) ? spec.reconcilers : []).map((r: any) => {
+    const suspended = Number(r?.stats?.suspended) || 0
+    return {
+      kind: String(r?.kind ?? ''),
+      total: (Number(r?.stats?.running) || 0) + suspended,
+      failing: Number(r?.stats?.failing) || 0,
+      suspended,
+      totalSize: r?.stats?.totalSize || undefined,
+    }
+  })
+  const counted = all.filter((r) => r.total + r.failing > 0)
+  const folded = (r: FluxReconcilerRow) => r.failing === 0 && r.suspended === 0 && r.total < FOLD_BELOW
   const rows = counted
     .filter((r) => !folded(r))
-    .sort((a, b) => b.failing - a.failing || b.suspended - a.suspended || b.running - a.running)
+    .sort((a, b) => b.failing - a.failing || b.suspended - a.suspended || b.total - a.total)
   const helmReleases = all.find((r) => r.kind === 'HelmRelease')
-  const ready = (report?.status?.conditions ?? []).find((c: any) => c?.type === 'Ready')
   return {
     version: spec.distribution?.version,
     operatorVersion: spec.operator?.version,
@@ -79,11 +82,10 @@ export function summarizeFluxReport(report: any, total: number): FluxReportSumma
     controllersReady: controllers.length > 0 ? controllers.filter((c: { ready: boolean }) => c.ready).length : undefined,
     failing: all.length > 0 ? all.reduce((n, r) => n + r.failing, 0) : undefined,
     rows,
-    also: counted.filter(folded).map((r) => ({ kind: r.kind, running: r.running })),
-    reportedAt: ready?.lastTransitionTime,
-    needsInventoryNote:
-      fluxVersionAtLeast(spec.distribution?.version, 2, 8) === false &&
-      !!helmReleases && helmReleases.running + helmReleases.failing + helmReleases.suspended > 0,
+    also: counted.filter(folded).map((r) => ({ kind: r.kind, total: r.total })),
+    // From 2.8 too: helm-controller records the inventory only at an install
+    // or upgrade, so a release not upgraded since has none.
+    needsInventoryNote: !!helmReleases && helmReleases.total + helmReleases.failing > 0,
     total,
   }
 }

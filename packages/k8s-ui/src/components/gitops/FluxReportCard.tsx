@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import type { FluxReportSummary } from '../../utils/flux-report'
-import { formatRelativeAgeTime } from '../../utils/format'
+import { fluxVersionAtLeast, type FluxReportSummary } from '../../utils/flux-report'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { StatusDot } from '../ui/status-tone'
 import { AlertBanner } from '../ui/drawer-components'
@@ -54,9 +53,8 @@ export function FluxReportCard({
         <span className="font-medium text-theme-text-primary">
           Flux {version} ·{' '}
           {summary.controllersReady === undefined ? 'controllers unknown' : `${summary.controllersReady} of ${summary.controllers.length} controllers ready`}
-          {summary.failing !== undefined && ` · ${summary.failing} failing`}
+          {summary.failing !== undefined && ` · Flux Operator reports ${summary.failing} failing`}
         </span>
-        {summary.reportedAt && <span className="text-xs text-theme-text-tertiary">reported {formatRelativeAgeTime(summary.reportedAt)}</span>}
         {summary.total > 1 && <span className="text-xs text-theme-text-tertiary">1 of {summary.total}</span>}
       </button>
       <Collapse open={open} id={disclosure.panelId}>
@@ -84,9 +82,13 @@ export function FluxReportCard({
           {summary.needsInventoryNote && (
             <AlertBanner
               variant="info"
-              title="Inventory needs Flux 2.8"
+              title="HelmRelease inventory"
               className="mb-0"
-              message={`HelmRelease inventory needs Flux 2.8. This cluster runs ${version}, so Radar attributes HelmRelease resources by Flux labels and shows "Tracked by".`}
+              message={
+                fluxVersionAtLeast(summary.version, 2, 8) === false
+                  ? `This cluster runs ${version}, whose helm-controller records no HelmRelease inventory, so Radar attributes HelmRelease resources by Flux labels and shows "Tracked by".`
+                  : 'Flux records a HelmRelease inventory from version 2.8, at each install or upgrade, so a release installed earlier and not upgraded since has none. Radar attributes its resources by Flux labels and shows "Tracked by".'
+              }
             />
           )}
           <div className="grid gap-4 md:grid-cols-2">
@@ -108,7 +110,7 @@ export function FluxReportCard({
                 <thead>
                   <tr className="text-left text-theme-text-tertiary">
                     <th className="py-0.5 pr-2 font-medium">Kind</th>
-                    <th className="py-0.5 pr-2 font-medium">Running</th>
+                    <th className="py-0.5 pr-2 font-medium">Total</th>
                     <th className="py-0.5 pr-2 font-medium">Failing</th>
                     <th className="py-0.5 font-medium">Suspended</th>
                   </tr>
@@ -117,7 +119,7 @@ export function FluxReportCard({
                   {summary.rows.map((r) => (
                     <tr key={r.kind} className="border-t border-theme-border/60">
                       <td className="py-0.5 pr-2 text-theme-text-primary">{r.kind}</td>
-                      <td className="py-0.5 pr-2 text-theme-text-secondary">{r.running}</td>
+                      <td className="py-0.5 pr-2 text-theme-text-secondary">{r.total}</td>
                       <td className="py-0.5 pr-2 text-theme-text-secondary">{r.failing}</td>
                       <td className="py-0.5 text-theme-text-secondary">{r.suspended}</td>
                     </tr>
@@ -126,9 +128,10 @@ export function FluxReportCard({
               </table>
               {summary.also.length > 0 && (
                 <div className="mt-1 text-xs text-theme-text-tertiary">
-                  Also: {summary.also.map((a) => `${a.kind} ${a.running}`).join(', ')}
+                  Also: {summary.also.map((a) => `${a.kind} ${a.total}`).join(', ')}
                 </div>
               )}
+              <div className="mt-1 text-xs text-theme-text-tertiary">Counts as Flux Operator reports them; a kind it can't list reads as zero.</div>
             </div>
           </div>
         </div>

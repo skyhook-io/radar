@@ -150,7 +150,7 @@ export function FluxReportRenderer({ data }: Props) {
           <thead>
             <tr className="text-left text-xs text-theme-text-tertiary">
               <th className="py-1 pr-3 font-medium">Kind</th>
-              <th className="py-1 pr-3 font-medium">Running</th>
+              <th className="py-1 pr-3 font-medium">Total</th>
               <th className="py-1 pr-3 font-medium">Failing</th>
               <th className="py-1 pr-3 font-medium">Suspended</th>
               <th className="py-1 font-medium">Size</th>
@@ -160,7 +160,7 @@ export function FluxReportRenderer({ data }: Props) {
             {reconcilers.map((r, i) => (
               <tr key={i} className="border-t border-theme-border/60">
                 <td className="py-1 pr-3 text-theme-text-primary">{r.kind}</td>
-                <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.running ?? '-'}</td>
+                <td className="py-1 pr-3 text-theme-text-secondary">{typeof r.stats?.running === 'number' ? r.stats.running + (Number(r.stats.suspended) || 0) : '-'}</td>
                 <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.failing ?? '-'}</td>
                 <td className="py-1 pr-3 text-theme-text-secondary">{r.stats?.suspended ?? '-'}</td>
                 <td className="py-1 text-theme-text-secondary">{r.stats?.totalSize || '-'}</td>
@@ -168,6 +168,7 @@ export function FluxReportRenderer({ data }: Props) {
             ))}
           </tbody>
         </table>
+        <p className="mt-1 text-xs text-theme-text-tertiary">Counts as Flux Operator reports them; a kind it can't list reads as zero.</p>
       </Section>
       <ConditionsSection conditions={data.status?.conditions} />
     </>

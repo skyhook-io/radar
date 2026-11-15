@@ -40,26 +40,28 @@ describe('pickFluxReport', () => {
 })
 
 describe('summarizeFluxReport', () => {
-  it('orders failing, then suspended, then running; drops empty kinds; folds small running kinds', () => {
+  it('orders failing, then suspended, then total; drops empty kinds; folds small healthy kinds', () => {
     const s = summarizeFluxReport(report('v2.7.5', [
       rec('GitRepository', 1), rec('Bucket'), rec('HelmRelease', 140, 0, 3), rec('Kustomization', 20, 2), rec('ArtifactGenerator', 1), rec('OCIRepository', 30),
     ]), 1)
     expect(s.rows.map((r) => r.kind)).toEqual(['Kustomization', 'HelmRelease', 'OCIRepository'])
-    expect(s.also).toEqual([{ kind: 'GitRepository', running: 1 }, { kind: 'ArtifactGenerator', running: 1 }])
+    // Flux Operator's running is every unsuspended object, failing ones included.
+    expect(s.rows.map((r) => r.total)).toEqual([20, 143, 30])
+    expect(s.also).toEqual([{ kind: 'GitRepository', total: 1 }, { kind: 'ArtifactGenerator', total: 1 }])
     expect(s.failing).toBe(2)
     expect(s.controllersReady).toBe(1)
     expect(s.controllers[0]).toEqual({ name: 'helm-controller', tag: 'v1.4.5', ready: true })
-    expect(s.reportedAt).toBe('2026-11-12T09:00:00Z')
     expect(s.version).toBe('v2.7.5')
     expect(s.operatorVersion).toBe('v0.62.1')
   })
 
-  it('notes the 2.8 inventory requirement only for older Flux with HelmReleases', () => {
+  it('notes the HelmRelease inventory whenever there are HelmReleases', () => {
     expect(summarizeFluxReport(report('v2.7.5', [rec('HelmRelease', 1)]), 1).needsInventoryNote).toBe(true)
     expect(summarizeFluxReport(report('v2.7.5', [rec('HelmRelease', 0, 0, 1)]), 1).needsInventoryNote).toBe(true)
-    expect(summarizeFluxReport(report('v2.8.0', [rec('HelmRelease', 1)]), 1).needsInventoryNote).toBe(false)
+    // A release installed before 2.8 and not upgraded since has none on 2.8 either.
+    expect(summarizeFluxReport(report('v2.8.0', [rec('HelmRelease', 1)]), 1).needsInventoryNote).toBe(true)
+    expect(summarizeFluxReport(report('dev', [rec('HelmRelease', 1)]), 1).needsInventoryNote).toBe(true)
     expect(summarizeFluxReport(report('v2.7.5', [rec('Kustomization', 4)]), 1).needsInventoryNote).toBe(false)
-    expect(summarizeFluxReport(report('dev', [rec('HelmRelease', 1)]), 1).needsInventoryNote).toBe(false)
   })
 
   it('carries the report count', () => {

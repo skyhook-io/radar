@@ -26,7 +26,9 @@ describe('Flux Operator drawers', () => {
         reconcilers: [{ kind: 'HelmRelease', stats: { running: 143, failing: 1, suspended: 0, totalSize: '' } }, { kind: 'Bucket', stats: { running: 0, failing: 0, suspended: 0 } }] },
       status: ready,
     }} />))
-    for (const want of ['v2.7.5', 'flux-operator', 'v0.62.1', 'v1.33.4+k3s1', 'helm-controller', 'v1.4.5', 'HelmRelease', '143', 'Reconcilers']) expect(html).toContain(want)
+    for (const want of ['v2.7.5', 'flux-operator', 'v0.62.1', 'v1.33.4+k3s1', 'helm-controller', 'v1.4.5', 'HelmRelease', '143', 'Reconcilers', '>Total<']) expect(html).toContain(want)
+    expect(html).not.toContain('>Running<')
+    expect(html).toContain('a kind it can&#x27;t list reads as zero')
   })
 
   it('ResourceSet: inputs, providers, dependencies, inventory', () => {
