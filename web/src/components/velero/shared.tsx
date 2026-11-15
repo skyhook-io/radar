@@ -6,7 +6,7 @@ import {
   PaneLoader,
   RadarUpgradeAction,
   getRadarUpgradeRequirement,
-  issueReasonTitle,
+  issueTitle,
   radarUpgradeDetail,
   radarUpgradeHeadline,
   type VeleroIssue,
@@ -107,15 +107,11 @@ export function VeleroCoverageNotice({ data, kinds }: { data: VeleroWorkspaceRes
   )
 }
 
-function reasonWords(reason: string): string {
-  const words = reason.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
-  return words[0] ? words[0].toUpperCase() + words.slice(1) : reason
-}
-
 /** An Issues row as a workspace problem, with the canonical tone for its severity. */
 export function veleroIssueProblem(issue: VeleroIssue): WorkspaceProblem {
   const message = issue.message?.trim()
-  const title = issueReasonTitle(issue.reason) ?? reasonWords(issue.reason)
+  // The title the Issues page gives the same row.
+  const title = issueTitle(issue)
   return {
     id: issue.id,
     category: issue.category,

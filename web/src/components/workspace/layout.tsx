@@ -168,11 +168,20 @@ export function SectionTable<T>({
                 {rows.map((row) => {
                   const res = rowResource?.(row) ?? null
                   const active = !!res && sameSelectedResource(inspected, res)
+                  const open = res && onInspect ? () => onInspect(res) : undefined
                   return (
                     <tr
                       key={rowKey(row)}
-                      onClick={res && onInspect ? () => onInspect(res) : undefined}
-                      className={clsx(res && onInspect && 'cursor-pointer', ROW_HOVER, active && 'selection')}
+                      onClick={open}
+                      // Keyboard users open a row the way a click does; keys on a
+                      // control inside the row stay that control's.
+                      tabIndex={open ? 0 : undefined}
+                      onKeyDown={open ? (e) => {
+                        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+                        e.preventDefault()
+                        open()
+                      } : undefined}
+                      className={clsx(open && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent', ROW_HOVER, active && 'selection')}
                       aria-selected={res ? active : undefined}
                     >
                       {columns.map((c, i) => (

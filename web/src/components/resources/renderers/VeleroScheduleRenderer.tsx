@@ -6,7 +6,7 @@ import { useVeleroScheduleActivity } from '../../../api/velero'
 import { RefreshFailedNotice } from '../../workspace/layout'
 
 /**
- * Host wrapper adding "Schedule activity" to a Velero Schedule: the server's
+ * Host wrapper leading a Velero Schedule with "Schedule activity": the server's
  * reading of it against the controller's rules and its recent runs. A Radar
  * that predates the reading shows the package renderer alone.
  */
@@ -16,19 +16,14 @@ export function VeleroScheduleRenderer({ data, onNavigate }: { data: any; onNavi
   const { support } = useRadarFeature('veleroWorkspace')
   const activity = useVeleroScheduleActivity(namespace, name, { enabled: support === 'supported' })
   const reading = activity.data?.reading
-  return (
+  const activitySection = support === 'supported' && reading ? (
     <>
-      <BaseVeleroScheduleRenderer data={data} onNavigate={onNavigate} />
-      {support === 'supported' && reading && (
-        <>
-          {/* A failed refresh keeps the last reading; say how old it is rather than present it as current. */}
-          <RefreshFailedNotice queries={[activity]} className="px-4 pb-2" />
-          <VeleroScheduleActivity reading={reading} created={data?.metadata?.creationTimestamp} onNavigate={onNavigate} />
-        </>
-      )}
-      {support === 'supported' && !reading && activity.error && (
-        <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />
-      )}
+      {/* A failed refresh keeps the last reading; say how old it is rather than present it as current. */}
+      <RefreshFailedNotice queries={[activity]} className="px-4 pb-2" />
+      <VeleroScheduleActivity reading={reading} created={data?.metadata?.creationTimestamp} onNavigate={onNavigate} />
     </>
-  )
+  ) : support === 'supported' && activity.error ? (
+    <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />
+  ) : undefined
+  return <BaseVeleroScheduleRenderer data={data} onNavigate={onNavigate} activity={activitySection} />
 }

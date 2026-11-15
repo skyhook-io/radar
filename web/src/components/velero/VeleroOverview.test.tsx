@@ -53,14 +53,54 @@ describe('Velero overview', () => {
     expect(html.toLowerCase()).not.toContain('all healthy')
   })
 
-  it('puts schedule readings first and folds a long list', () => {
+  it('groups what needs attention by what it is about, and folds a long group', () => {
     const issues = Array.from({ length: 10 }, (_, i) => ({
       id: `i${i}`, severity: 'critical' as const, category: 'backup', kind: 'Backup', group: 'velero.io', namespace: 'velero', name: `run-${i}`, reason: 'BackupFailed', message: 'boom',
     }))
     const late = schedule({ name: 'late-one', state: 'late', attention: true, missedRuns: 2 })
     const html = text(render(workspace({ issues, schedules: [late] })))
     expect(html.indexOf('late-one')).toBeLessThan(html.indexOf('run-0'))
-    expect(html).toContain('Show 3 more')
+    expect(html.indexOf('Schedules <span')).toBeLessThan(html.indexOf('Backups and restores'))
+    expect(html).toContain('Show 6 more')
+  })
+
+  it('answers "is Velero working?" in one line before the detail', () => {
+    const late = schedule({ name: 'late-one', state: 'late', attention: true, missedRuns: 2, reason: 'serverDown' })
+    const html = text(render(workspace({
+      schedules: [late, schedule({ name: 'ok', runs: { read: 'full', kept: 1, newestCompleted: { name: 'ok-1', phase: 'Completed', created: hoursAgo(3), ranAt: hoursAgo(3) } } })],
+      installations: [{ namespace: 'velero', server: { source: 'deployment', deployment: 'velero', replicas: 0 }, defaultSource: 'spec' }],
+      locations: [location(), location({ name: 'dr', phase: 'Unavailable' })],
+    })))
+    expect(html).toContain('Velero server:</dt><dd class="font-medium text-theme-text-primary">not running')
+    expect(html).toContain('1 of 2 need attention')
+    expect(html).toContain('2h ago')
+    expect(html).toContain('1 of 2 locations available')
+    expect(html.indexOf('Velero at a glance')).toBeLessThan(html.indexOf('Needs attention'))
+  })
+
+  it('never reads unread kinds as none in the headline', () => {
+    const denied = { state: 'denied' as const }
+    const full = { state: 'full' as const }
+    const html = text(render(workspace({
+      coverage: { schedules: denied, backups: full, backupStorageLocations: denied, restores: full, backupRepositories: full },
+      schedules: [],
+      locations: [],
+    })))
+    expect(html).toContain('Schedules:</dt><dd class="font-medium text-theme-text-primary">unknown — not read')
+    expect(html).toContain('Storage:</dt><dd class="font-medium text-theme-text-primary">unknown — not read')
+    expect(html).not.toContain('no locations')
+  })
+
+  it('does not call a schedule fine when Radar cannot read its cron', () => {
+    const html = text(render(workspace({ schedules: [schedule({ state: 'unknown', attention: false })] })))
+    expect(html).toContain('1, 1 with a cron Radar can’t read')
+    expect(html).not.toContain('none need attention')
+  })
+
+  it('never reads unread backups as no successful backup', () => {
+    const html = text(render(workspace({ schedules: [schedule({ runs: { read: 'unknown', kept: 0 } })] })))
+    expect(html).toContain('unknown — no access to backups')
+    expect(html).not.toContain('none kept</dd>')
   })
 
   it('names a stopped Velero server first, and as the cause of late schedules', () => {

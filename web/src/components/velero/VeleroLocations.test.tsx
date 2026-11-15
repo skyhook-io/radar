@@ -23,7 +23,7 @@ describe('Velero storage locations', () => {
     expect(html).toContain('Unknown — no access to backups')
     expect(html).toContain('Unknown — no access to schedules')
     expect(html).toContain('frequency unknown')
-    expect(html).toContain('>Unknown<')
+    expect(html).toContain('default unknown')
     expect(html).not.toMatch(/font-mono">0</)
     expect(html).toContain('Some Velero data used on this screen was not read.')
   })
@@ -52,5 +52,13 @@ describe('Velero storage locations', () => {
   it('says when Velero never validated a location', () => {
     const html = text(render(workspace({ locations: [location({ neverValidated: true, attention: true, lastValidation: undefined })] })))
     expect(html).toContain('Not validated yet')
+  })
+
+  it('marks the default location and folds a long schedule list into a count', () => {
+    const schedules = ['a', 'b', 'c', 'd', 'e'].map((name) => ({ name }))
+    const html = render(workspace({ locations: [location({ schedules })] }))
+    expect(html).toContain('>default<')
+    expect(html).toContain('and 2 more')
+    expect(html).not.toContain('>d<')
   })
 })

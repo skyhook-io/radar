@@ -143,7 +143,8 @@ export function categoryLabel(category: string): string {
 }
 
 // Reasons filed under a category whose label names a different operation:
-// CNPG archiving and an unanswered scheduled run sit under backup_failed.
+// CNPG archiving, an unanswered scheduled run, and Velero restores and
+// rejected specs sit under backup_failed.
 const REASON_TITLE: Record<string, string> = {
   NodeCertificateExpiry: 'Node certificates need attention',
   FlaggerCanaryFailed: "Canary rollout failed",
@@ -159,6 +160,14 @@ const REASON_TITLE: Record<string, string> = {
   CNPGInstanceReadinessMismatch: "Instance Pods contradict Cluster readiness",
   CNPGPrimaryLabelMismatch: "Primary Pod label contradicts Cluster status",
   CNPGScheduledRunNoBackup: "No successful backup since a scheduled run",
+  BackupPartiallyFailed: 'Backup partially failed',
+  BackupValidationFailed: 'Backup rejected by Velero',
+  RestoreFailed: 'Restore failed',
+  RestorePartiallyFailed: 'Restore partially failed',
+  RestoreValidationFailed: 'Restore rejected by Velero',
+  ScheduleValidationFailed: 'Schedule rejected by Velero',
+  BackupRepositoryNotReady: 'Backup repository not ready',
+  VeleroRunStalled: 'Velero run not progressing',
   KueueAdmissionCheckRejected: 'Admission check rejected the run',
   KueueClusterQueueInactive: 'ClusterQueue admits nothing',
   KueueClusterQueueMissing: 'ClusterQueue missing',

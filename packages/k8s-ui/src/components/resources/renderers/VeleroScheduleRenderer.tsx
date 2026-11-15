@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Clock, Archive } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import {
@@ -15,9 +16,14 @@ interface VeleroScheduleRendererProps {
   data: any
   /** The location every backup this schedule creates will be written to. */
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
+  /**
+   * What the schedule is doing, from a host that can read it. Shown before the
+   * spec: the phase below says only that Velero accepted the schedule.
+   */
+  activity?: ReactNode
 }
 
-export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRendererProps) {
+export function VeleroScheduleRenderer({ data, onNavigate, activity }: VeleroScheduleRendererProps) {
   const status = data.status || {}
   const conditions = status.conditions || []
 
@@ -55,10 +61,12 @@ export function VeleroScheduleRenderer({ data, onNavigate }: VeleroScheduleRende
         />
       )}
 
+      {activity}
+
       {/* Schedule section */}
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
-          <Property label="Status" value={
+          <Property label="Phase" value={
             <VeleroPhaseValue status={scheduleStatus} phase={status.phase || ''} />
           } />
           <Property label="Cron Schedule" value={
