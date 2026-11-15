@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -233,14 +234,32 @@ func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc c
 }
 
 // istioQueryFailure describes a failed query for the viewer without the
-// query itself. The request URL carries it, and a store's error message may
-// quote it; when it names the cluster's ambient namespaces, including ones the
-// viewer cannot see, only a generic reason is shown. The server log keeps the
-// full error.
+// request URL, which carries the query. When the query names the cluster's
+// ambient namespaces, including ones the viewer cannot see, the store's own
+// message is left out too, since some stores quote the query in it; its error
+// type, a fixed vocabulary, still says what kind of failure it was. The server
+// log keeps the full error.
 func istioQueryFailure(err error, namesAmbient bool) string {
 	var httpErr *prom.HTTPError
 	if errors.As(err, &httpErr) {
-		return fmt.Sprintf("Prometheus answered HTTP %d", httpErr.StatusCode)
+		var body struct {
+			ErrorType string `json:"errorType"`
+			Error     string `json:"error"`
+		}
+		parsed := json.Unmarshal(httpErr.Body, &body) == nil
+		switch {
+		case namesAmbient && parsed && body.ErrorType != "":
+			return fmt.Sprintf("Prometheus answered HTTP %d (%s)", httpErr.StatusCode, body.ErrorType)
+		case namesAmbient:
+			return fmt.Sprintf("Prometheus answered HTTP %d", httpErr.StatusCode)
+		case parsed && body.Error != "":
+			return fmt.Sprintf("Prometheus answered HTTP %d: %s", httpErr.StatusCode, body.Error)
+		}
+		detail := strings.TrimSpace(strings.ToValidUTF8(string(httpErr.Body), ""))
+		if len(detail) > 512 {
+			detail = strings.ToValidUTF8(detail[:512], "") + "…"
+		}
+		return strings.TrimSuffix(fmt.Sprintf("Prometheus answered HTTP %d: %s", httpErr.StatusCode, detail), ": ")
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
@@ -348,7 +367,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, istioReporterSelector, "TCP connections aren't shown on this map.")
 	}
 	if ambientOverBudget {
-		response.Warning = strings.TrimSpace("Requests into ambient namespaces that no waypoint reported aren't shown: this cluster has too many ambient namespaces for Radar to name in one query. " + response.Warning)
+		response.Warning = strings.TrimSpace("Requests into ambient workloads that no waypoint observes aren't shown: this cluster has more ambient namespaces than Radar can include in its Prometheus query. " + response.Warning)
 		if response.WarningKind != WarningTransient {
 			response.WarningKind = WarningIncomplete
 		}

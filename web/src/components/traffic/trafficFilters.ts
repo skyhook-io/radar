@@ -72,6 +72,16 @@ export function errorRateOf(flow: Pick<AggregatedFlow, 'errorRate' | 'errorCount
 }
 
 /**
+ * An edge's protocol as "application / transport", or one name when the two
+ * are the same: a mesh source reports HTTP as both, and "HTTP / HTTP" reads as
+ * two protocols.
+ */
+export function protocolLabel(l7Protocol: string | undefined, protocol: string): string {
+  if (!l7Protocol || l7Protocol.toLowerCase() === protocol.toLowerCase()) return l7Protocol || protocol
+  return `${l7Protocol} / ${protocol}`
+}
+
+/**
  * The volume shown for an edge. For a rate-based source `connections` is its
  * request rate rounded with a floor of one — the graph sizes, sorts and filters
  * on that integer — so what is printed is the unrounded rate where the edge has

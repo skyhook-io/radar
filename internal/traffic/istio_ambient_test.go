@@ -343,7 +343,33 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 	if n := len(httpScopeSelectors); n == 0 || httpScopeSelectors[n-1] != istioReporterSelector {
 		t.Errorf("HTTP scope last checked with %v, want the receiving-side selector once client reports are skipped", httpScopeSelectors)
 	}
-	if len(resp.Flows) != 1 || !strings.Contains(resp.Warning, "too many ambient namespaces") || resp.WarningKind != WarningIncomplete {
+	if len(resp.Flows) != 1 || !strings.Contains(resp.Warning, "more ambient namespaces than Radar can include") || resp.WarningKind != WarningIncomplete {
 		t.Errorf("want the waypoint flow and an incomplete warning, got flows %+v warning %q kind %q", resp.Flows, resp.Warning, resp.WarningKind)
+	}
+}
+
+// Prometheus's own explanation is what an operator acts on; it is withheld only
+// while the query names ambient namespaces.
+func TestIstioQueryFailureKeepsPrometheusExplanation(t *testing.T) {
+	tooMany := &prom.HTTPError{StatusCode: 422, URL: "http://prom/api/v1/query?query=x",
+		Body: []byte(`{"status":"error","errorType":"execution","error":"query processing would load too many samples into memory"}`)}
+	echoing := &prom.HTTPError{StatusCode: 422, URL: "http://prom/api/v1/query?query=x",
+		Body: []byte(`{"status":"error","errorType":"422","error":"error when executing query=\"rate(m{destination_workload_namespace=~\\\"secret-ns\\\"})\""}`)}
+	plain := &prom.HTTPError{StatusCode: 502, URL: "http://prom/api/v1/query?query=x", Body: []byte("bad gateway")}
+	for _, tc := range []struct {
+		err          error
+		namesAmbient bool
+		want         string
+	}{
+		{tooMany, false, "Prometheus answered HTTP 422: query processing would load too many samples into memory"},
+		{tooMany, true, "Prometheus answered HTTP 422 (execution)"},
+		{echoing, true, "Prometheus answered HTTP 422 (422)"},
+		{plain, false, "Prometheus answered HTTP 502: bad gateway"},
+		{plain, true, "Prometheus answered HTTP 502"},
+		{&prom.HTTPError{StatusCode: 503}, false, "Prometheus answered HTTP 503"},
+	} {
+		if got := istioQueryFailure(tc.err, tc.namesAmbient); got != tc.want {
+			t.Errorf("istioQueryFailure(%v, ambient=%v) = %q, want %q", tc.err, tc.namesAmbient, got, tc.want)
+		}
 	}
 }
