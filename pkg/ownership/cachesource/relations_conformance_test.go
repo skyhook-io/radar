@@ -134,8 +134,8 @@ func (e expected) observed(subject resourceid.Ref, c *relations.Coverage) bool {
 	return false
 }
 
-func (e expected) consumers(subject resourceid.Ref) relations.ConfigConsumersAnswer {
-	var a relations.ConfigConsumersAnswer
+func (e expected) consumers(subject resourceid.Ref) relations.ReferrersAnswer {
+	var a relations.ReferrersAnswer
 	if !e.observed(subject, &a.Coverage) {
 		return a
 	}
@@ -152,19 +152,19 @@ func (e expected) consumers(subject resourceid.Ref) relations.ConfigConsumersAns
 		}
 		for _, found := range read.Objects {
 			if slices.Contains(e.object(found.Ref).Declares, subject) {
-				a.Consumers = append(a.Consumers, relations.ConfigConsumer{Ref: found.Ref, Paths: []string{declaredPath[subject.Kind]}})
+				a.Referrers = append(a.Referrers, relations.Referrer{Ref: found.Ref, Paths: []string{declaredPath[subject.Kind]}})
 			}
 		}
 	}
-	slices.SortStableFunc(a.Consumers, func(x, y relations.ConfigConsumer) int {
+	slices.SortStableFunc(a.Referrers, func(x, y relations.Referrer) int {
 		return cmp.Or(cmp.Compare(slices.Index(consumerKinds, x.Ref.GroupKind()), slices.Index(consumerKinds, y.Ref.GroupKind())), cmp.Compare(x.Ref.Name, y.Ref.Name))
 	})
 	return a
 }
 
-func (e expected) references(subject resourceid.Ref) relations.ConfigReferencesAnswer {
-	var a relations.ConfigReferencesAnswer
-	if !e.observed(subject, &a.Coverage) || !slices.Contains(declaringKinds, subject.GroupKind()) {
+func (e expected) references(subject resourceid.Ref) relations.ReferencesAnswer {
+	var a relations.ReferencesAnswer
+	if !slices.Contains(declaringKinds, subject.GroupKind()) || !e.observed(subject, &a.Coverage) {
 		return a
 	}
 	targets := slices.Clone(e.object(subject).Declares)
@@ -234,17 +234,17 @@ func conformRelations(t *testing.T, w ownershiptest.World, got relations.Session
 		}{{"scan", scan}, {"cache", got}} {
 			v := relations.NewView(session.s, access)
 			for _, target := range targets {
-				answer := v.ConfigConsumers(target, nil)
+				answer := v.Referrers(relations.ConfigReferences, target, nil)
 				if e := want.consumers(target); !reflect.DeepEqual(answer, e) {
 					t.Errorf("%s %T ConfigConsumers(%v):\ngot  %+v\nwant %+v", session.name, access, target, answer, e)
 				}
 				if session.name != "cache" {
 					continue
 				}
-				if len(answer.Consumers) > 0 {
+				if len(answer.Referrers) > 0 {
 					seen.consumers++
 				}
-				if slices.ContainsFunc(answer.Consumers, func(c relations.ConfigConsumer) bool { return c.Ref.GroupKind() == ownershiptest.ArgoRollout }) {
+				if slices.ContainsFunc(answer.Referrers, func(c relations.Referrer) bool { return c.Ref.GroupKind() == ownershiptest.ArgoRollout }) {
 					seen.rollouts++
 				}
 				if len(answer.Coverage.NotChecked) > 0 {
@@ -255,7 +255,7 @@ func conformRelations(t *testing.T, w ownershiptest.World, got relations.Session
 				}
 			}
 			for _, o := range w.Objects {
-				if answer, e := v.ConfigReferences(o.Ref, nil), want.references(o.Ref); !reflect.DeepEqual(answer, e) {
+				if answer, e := v.References(relations.ConfigReferences, o.Ref, nil), want.references(o.Ref); !reflect.DeepEqual(answer, e) {
 					t.Errorf("%s %T ConfigReferences(%v):\ngot  %+v\nwant %+v", session.name, access, o.Ref, answer, e)
 				}
 			}

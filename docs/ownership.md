@@ -66,25 +66,32 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
 
 `pkg/relations` answers the relations that aren't ownership or management from the same caches, through the same
 session, `Access` and gaps: a `relations.Session` is an ownership session that also reads index lookups (`Indexed`)
-and lends cached objects (`Borrow`), which the cache source implements. Relations move off Radar's all-namespace
-relationship graph one family at a time; until all have, Related Resources combines both.
+and lends cached objects (`Borrow`), which the cache source implements.
 
-**Config references** (`config_references.go`) are the ConfigMaps, Secrets, PersistentVolumeClaims and
+A **family** (`family.go`) is one way objects name others: the kinds that declare (each optionally narrowed to the
+target kinds it can declare), the kinds a declaration can name, and a function that visits what an object declares
+with the path declaring it. The `View` answers every family the same way:
+
+- `References(family, subject)`: each target the subject declares, every path declaring it, and what reading it
+  found: present, absent, unread (with its gap) or withheld from the caller.
+- `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A family's
+  targets are always in the declarer's namespace, so the answer reads that namespace's objects of each declaring kind
+  through the namespace index and evaluates what each declares; an index of every declaration cost about 1.4 KB per
+  Pod and made a Pod relist about five times as long
+  ([measurements](loadtest.md#relationship-cost-baselines)).
+- Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
+  denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
+
+**Config references** (`config_references.go`) is the first family: the ConfigMaps, Secrets, PersistentVolumeClaims and
 ServiceAccount a Pod, a pod-template workload (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo
 Rollout) or an Ingress's TLS declares, extracted by `pkg/configrefs` (`ObjectReferences`), which the topology builder
-also uses.
+also uses. ReplicaSets scaled explicitly to zero declare nothing: they are old revisions.
 
-- `ConfigReferences(subject)`: each declared target, every path declaring it, and what reading it found: present,
-  absent, unread (with its gap) or withheld from the caller.
-- `ConfigConsumers(subject)`: what declares a ConfigMap, Secret, PersistentVolumeClaim or ServiceAccount, as the
-  caller may read it, up to 500 with a total. A declaration always names its declarer's namespace, so the answer
-  reads that namespace's objects of each declaring kind through the namespace index and evaluates what each declares;
-  an index of every declaration cost about 1.4 KB per Pod and made a Pod relist about five times as long
-  ([measurements](loadtest.md#relationship-cost-baselines)). A caller who may not read the subject gets nothing.
-- ReplicaSets scaled explicitly to zero declare nothing: they are old revisions.
+Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
+one change that also removes the graph.
 
 The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
-worlds whose objects declare references (`ownershiptest.Object.Declares`).
+worlds whose objects declare references (`ownershiptest.Object.Declares`), and through histories of changes.
 
 ## What manages an object
 
