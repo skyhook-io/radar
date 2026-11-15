@@ -37,6 +37,7 @@ import { RolloutRenderer } from '../components/resources/renderers/RolloutRender
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
 import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRenderer'
+import { LonghornVolumeRenderer } from '../components/resources/renderers/LonghornVolumeRenderer'
 import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBackupRenderer'
 import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
@@ -66,6 +67,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
   { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
+  { id: 'longhorn', renderers: { LonghornVolumeRenderer } },
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
   { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },

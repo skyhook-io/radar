@@ -62,3 +62,26 @@ describe('resource actions use the loaded API group', () => {
   })
 
 })
+
+describe('node actions are for the core Node only', () => {
+  const nodeActions = (apiVersion: string) => renderToString(
+    <ResourceActionsBar
+      resource={{ kind: 'nodes', name: 'n1', namespace: '' }}
+      data={{ apiVersion, metadata: { name: 'n1' } }}
+      onCordonNode={noop}
+      onUncordonNode={noop}
+      onDrainNode={noop}
+      canNodeWrite
+    />,
+  )
+
+  it('offers Cordon on a core Node', () => {
+    expect(nodeActions('v1')).toContain('Cordon')
+  })
+
+  it('offers no node actions on a Longhorn Node', () => {
+    const html = nodeActions('longhorn.io/v1beta2')
+    expect(html).not.toContain('Cordon')
+    expect(html).not.toContain('Drain')
+  })
+})

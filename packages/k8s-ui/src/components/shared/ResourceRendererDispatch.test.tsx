@@ -1282,3 +1282,47 @@ describe('Gateway API route plural collision', () => {
     }
   })
 })
+
+describe('Longhorn kind collisions', () => {
+  const nodeOverride: RendererOverrides = { NodeRenderer: () => <span>CORE-NODE-RENDERER</span> }
+  const renderNode = (apiVersion: string | undefined) => renderToString(
+    <ResourceRendererDispatch
+      resource={{ kind: 'nodes', namespace: '', name: 'n1' }}
+      data={{ apiVersion, kind: 'Node', metadata: { name: 'n1' }, spec: { collisionProbe: COLLISION_PROBE }, status: {} }}
+      onCopy={() => {}}
+      copied={null}
+      showCommonSections={false}
+      rendererOverrides={nodeOverride}
+    />,
+  )
+
+  it('keeps the core Node renderer and status for a core Node', () => {
+    expect(renderNode('v1')).toContain('CORE-NODE-RENDERER')
+    expect(renderNode(undefined)).toContain('CORE-NODE-RENDERER')
+    const ready = { apiVersion: 'v1', kind: 'Node', metadata: { name: 'n1' }, status: { conditions: [{ type: 'Ready', status: 'True' }] } }
+    expect(getResourceStatus('nodes', ready)?.text).toBe('Ready')
+  })
+
+  it('gives a Longhorn Node neither the core Node renderer nor its status', () => {
+    const html = renderNode('longhorn.io/v1beta2')
+    expect(html).not.toContain('CORE-NODE-RENDERER')
+    expect(html).toContain(COLLISION_PROBE)
+    const lhNode = { apiVersion: 'longhorn.io/v1beta2', kind: 'Node', metadata: { name: 'n1' }, spec: { unschedulable: true }, status: { conditions: [{ type: 'Ready', status: 'True' }] } }
+    const coreReading = getResourceStatus('nodes', { ...lhNode, apiVersion: 'v1' })?.text
+    expect(getResourceStatus('nodes', lhNode)?.text).toBe(getGenericResourceStatus(lhNode)?.text)
+    expect(getResourceStatus('nodes', lhNode)?.text).not.toBe(coreReading)
+  })
+
+  it('renders a Longhorn Volume with its own drawer and status', () => {
+    const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { size: '10737418240', numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'degraded', currentNodeID: 'worker-1' } }
+    const html = renderToString(
+      <ResourceRendererDispatch resource={{ kind: 'volumes', namespace: 'longhorn-system', name: 'pvc-1' }} data={volume} onCopy={() => {}} copied={null} showCommonSections={false} />,
+    )
+    expect(html).toContain('Robustness')
+    expect(getResourceStatus('volumes', volume)?.text).toBe('Degraded')
+  })
+
+  it('leaves another group\'s volumes kind generic', () => {
+    expect(renderCollidingKind('volumes', 'storage.example.com/v1')).toContain(COLLISION_PROBE)
+  })
+})

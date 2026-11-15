@@ -361,6 +361,13 @@ function readinessGateOOMRecovery(pod: any): string | null {
   return null
 }
 
+// Longhorn (and any other operator) can serve a `nodes` plural of its own; only
+// the core Node gets the Node drawer, status and node actions. Data without an
+// apiVersion is a core Node from a typed read.
+export function isCoreNode(data: any): boolean {
+  return !data?.apiVersion || data.apiVersion === 'v1'
+}
+
 export function getPodStatus(pod: any): StatusBadge {
   const phase = pod.status?.phase || 'Unknown'
   const containerStatuses = pod.status?.containerStatuses || []
