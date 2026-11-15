@@ -3276,7 +3276,9 @@ export async function runDeltaSyncFetch(deps: {
       `${path}${queryString ? "&" : "?"}since_seq=${cursor}`,
       signal,
     );
-    if (delta.epoch && delta.epoch === meta!.epoch) {
+    // The server pages deltas oldest first, so a full page means newer events
+    // may still be waiting. A full fetch returns the newest `limit` instead.
+    if (delta.epoch && delta.epoch === meta!.epoch && delta.events.length < limit) {
       meta!.highWaterSeq = Math.max(
         meta!.highWaterSeq,
         delta.maxSeq,
@@ -3287,8 +3289,9 @@ export async function runDeltaSyncFetch(deps: {
         ? mergeDeltaEvents(cached!, delta.events, limit)
         : cached!;
     }
-    // Epoch changed — the store restarted and seq numbering reset, so the
-    // cursor is meaningless. Fall through to a full resync.
+    // Epoch changed (the store restarted and seq numbering reset, so the
+    // cursor is meaningless) or the delta was capped. Fall through to a full
+    // resync.
   }
   const full = await fetchChangesPage(path, signal);
   metaStore.set(metaKey, {

@@ -135,6 +135,28 @@ describe('runDeltaSyncFetch (useChanges delta orchestration)', () => {
     expect(second).toBe(first)
   })
 
+  it('a capped delta falls back to a full fetch, which returns the newest rows', async () => {
+    const metaStore = new Map<string, ChangesDeltaMeta>()
+    responder = () => ({ events: [mk('a', 5, 0)], epoch: 'e1', maxSeq: 5 })
+    const first = await run(metaStore, undefined, 1_000)
+
+    // More than LIMIT events arrived since seq 5. The delta page holds the
+    // OLDEST of them (ascending seq), so trusting it would hide the newest.
+    const burst = Array.from({ length: LIMIT + 1 }, (_, i) => mk(`n${i}`, 6 + i, 1_000 + i))
+    const newestFirst = [...burst].reverse()
+    responder = (url) =>
+      sinceSeqOf(url) != null
+        ? { events: burst.slice(0, LIMIT), epoch: 'e1', maxSeq: 6 + LIMIT }
+        : { events: newestFirst.slice(0, LIMIT), epoch: 'e1', maxSeq: 6 + LIMIT }
+    const second = await run(metaStore, first, 2_000)
+
+    expect(sinceSeqOf(fetchedUrls[fetchedUrls.length - 2])).toBe(5)
+    expect(sinceSeqOf(lastUrl())).toBeNull()
+    expect(second[0].id).toBe(`n${LIMIT}`)
+    expect(metaStore.get(META_KEY)!.highWaterSeq).toBe(6 + LIMIT)
+    expect(metaStore.get(META_KEY)!.lastFullMs).toBe(2_000)
+  })
+
   it('an epoch change between polls forces a full resync: cursor reset, list replaced', async () => {
     const metaStore = new Map<string, ChangesDeltaMeta>()
     responder = () => ({ events: [mk('old', 9, 0)], epoch: 'e1', maxSeq: 9 })

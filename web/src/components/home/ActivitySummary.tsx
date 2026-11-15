@@ -75,7 +75,7 @@ const KIND_SHORT: Record<string, string> = {
 
 export function ActivitySummary({ namespaces, topology, onNavigate }: ActivitySummaryProps) {
   const hasLimitedAccess = useHasLimitedAccess()
-  const { data: events, isLoading, error } = useChanges({
+  const { data: events, dataUpdatedAt, isLoading, error } = useChanges({
     namespaces,
     timeRange: '1h',
     includeK8sEvents: true,
@@ -86,10 +86,11 @@ export function ActivitySummary({ namespaces, topology, onNavigate }: ActivitySu
     deltaSync: true,
   })
 
-  // Intentionally re-sample 'now' only when events refresh (not every render),
-  // so the timeline window stays stable between data updates.
+  // Re-sample 'now' on each completed fetch (not every render), so the window
+  // stays stable between fetches but still slides when a delta brings nothing
+  // new and the events array keeps its identity.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const now = useMemo(() => Date.now(), [events])
+  const now = useMemo(() => Date.now(), [dataUpdatedAt])
   const spanMs = SPAN_MINUTES * 60 * 1000
   const startTime = now - spanMs
 
