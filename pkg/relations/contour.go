@@ -13,6 +13,7 @@ var kindHTTPProxy = resourceid.GroupKind{Group: configrefs.ContourGroup, Kind: "
 // traffic to and the HTTPProxies it includes, which may be in another
 // namespace.
 var ContourBackends = &Family{
+	ScanAccepted:   "Representative include: 1763 ns and 928 B per Indexer.Update exceed the 512 B bar.",
 	Name:           "contourBackends",
 	Sources:        []Source{{Kind: kindHTTPProxy}},
 	Targets:        []resourceid.GroupKind{kindService, kindHTTPProxy},
@@ -31,6 +32,7 @@ var ContourBackends = &Family{
 // for TLS, client validation and upstream or JWKS validation, which a
 // delegated name places in another namespace.
 var ContourSecrets = &Family{
+	ScanAccepted:   "Representative TLS reference: 2302 ns and 808 B per Indexer.Update exceed the 2 us / 512 B bar.",
 	Name:           "contourSecrets",
 	Sources:        []Source{{Kind: kindHTTPProxy}},
 	Targets:        []resourceid.GroupKind{kindSecret},

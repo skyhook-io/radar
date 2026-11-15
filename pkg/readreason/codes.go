@@ -99,6 +99,9 @@ const (
 	// trusted and may now reach a different cluster.
 	ConnectionChanged Code = "connection_changed"
 
+	// IndexMissing: a loaded store lacks the reverse index this answer needs.
+	IndexMissing Code = "index_missing"
+
 	// ReadError: an unclassified read or discovery failure; the explanation
 	// carries the cause.
 	ReadError Code = "read_error"
@@ -153,6 +156,7 @@ var actions = map[Code]Action{
 	ClusterDisconnected:        ActionRadarConfig,
 	ConnectionChanged:          ActionCheckTarget,
 	ReadError:                  ActionRetry,
+	IndexMissing:               ActionRadarConfig,
 }
 
 // ActionFor reports what resolves c, and false for an undeclared code.
@@ -204,7 +208,7 @@ var precedence = []Code{
 	UserForbidden, UserNoNamespaceAccess, UserNamespaceNotVisible, NamespaceNotFound,
 	OutsideNamespacePin,
 	RadarCredentialsRejected, RadarForbidden, RadarKindNotCollected,
-	KindSyncTimedOut, RadarNamespaceNotCollected, FilterEvalFailed, FindingsScanIncomplete, ReadError,
+	KindSyncTimedOut, RadarNamespaceNotCollected, FilterEvalFailed, FindingsScanIncomplete, IndexMissing, ReadError,
 	ObjectNotFound,
 }
 

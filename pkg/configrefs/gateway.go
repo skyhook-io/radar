@@ -147,38 +147,48 @@ var GatewayRouteKinds = []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute
 // GatewayRouteParents returns the Gateways a route's parentRefs attach it to,
 // in their namespaces.
 func GatewayRouteParents(route *unstructured.Unstructured) []PathRef {
-	parents, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
 	var refs []PathRef
+	VisitGatewayRouteParents(route, func(ref PathRef) { refs = append(refs, ref) })
+	return refs
+}
+
+// VisitGatewayRouteParents visits references without retaining a slice.
+func VisitGatewayRouteParents(route *unstructured.Unstructured, visit func(PathRef)) {
+	parents, _, _ := borrowedSlice(route.Object, "spec", "parentRefs")
 	for _, p := range parents {
 		m, ok := p.(map[string]any)
 		name, _ := m["name"].(string)
 		if !ok || name == "" || !GatewayParentIsGateway(m) {
 			continue
 		}
-		refs = append(refs, PathRef{Ref: resourceid.Ref{Group: GatewayAPIGroup, Kind: "Gateway", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.parentRefs"})
+		visit(PathRef{Ref: resourceid.Ref{Group: GatewayAPIGroup, Kind: "Gateway", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.parentRefs"})
 	}
-	return refs
 }
 
 // GatewayRouteBackendServices returns the Services a route's rules send
 // traffic to, in their namespaces. A backend in another namespace is listed
 // whether or not a ReferenceGrant permits it.
 func GatewayRouteBackendServices(route *unstructured.Unstructured) []PathRef {
-	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
 	var refs []PathRef
+	VisitGatewayRouteBackendServices(route, func(ref PathRef) { refs = append(refs, ref) })
+	return refs
+}
+
+// VisitGatewayRouteBackendServices visits references without retaining a slice.
+func VisitGatewayRouteBackendServices(route *unstructured.Unstructured, visit func(PathRef)) {
+	rules, _, _ := borrowedSlice(route.Object, "spec", "rules")
 	for _, rule := range rules {
 		r, _ := rule.(map[string]any)
-		backends, _, _ := unstructured.NestedSlice(r, "backendRefs")
+		backends, _, _ := borrowedSlice(r, "backendRefs")
 		for _, b := range backends {
 			m, ok := b.(map[string]any)
 			name, _ := m["name"].(string)
 			if !ok || name == "" || !GatewayBackendIsService(m) {
 				continue
 			}
-			refs = append(refs, PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.rules[].backendRefs"})
+			visit(PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: GatewayRefNamespace(m, route.GetNamespace()), Name: name}, Path: "spec.rules[].backendRefs"})
 		}
 	}
-	return refs
 }
 
 // GatewayClassOf returns the GatewayClass a Gateway names.

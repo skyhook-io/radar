@@ -85,7 +85,8 @@ var Autoscalers = &Family{
 // ClusterTriggerAuthentications a KEDA ScaledObject or ScaledJob's triggers
 // use.
 var KEDAAuthentication = &Family{
-	Name: "kedaAuthentication",
+	ReferrersIndex: referrersIndex("kEDAAuthentication"),
+	Name:           "kedaAuthentication",
 	Sources: []Source{
 		{Kind: kindScaledObject},
 		{Kind: resourceid.GroupKind{Group: "keda.sh", Kind: "ScaledJob"}},
@@ -155,15 +156,14 @@ var CertificateSecrets = &Family{
 // GatewayParents is the family of the Gateways a Gateway API route attaches
 // to, which may be in another namespace.
 var GatewayParents = &Family{
+	ReferrersIndex: referrersIndex("gatewayParents"),
 	Name:           "gatewayParents",
 	Sources:        gatewayRoutes,
 	Targets:        []resourceid.GroupKind{kindGateway},
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
-			for _, r := range configrefs.GatewayRouteParents(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitGatewayRouteParents(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -173,15 +173,14 @@ var GatewayParents = &Family{
 // traffic to, which may be in another namespace. A cross-namespace backend is
 // declared whether or not a ReferenceGrant permits it.
 var GatewayBackends = &Family{
+	ReferrersIndex: referrersIndex("gatewayBackends"),
 	Name:           "gatewayBackends",
 	Sources:        gatewayRoutes,
 	Targets:        []resourceid.GroupKind{kindService},
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
-			for _, r := range configrefs.GatewayRouteBackendServices(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitGatewayRouteBackendServices(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -189,9 +188,10 @@ var GatewayBackends = &Family{
 
 // GatewayClasses is the family of the GatewayClass a Gateway names.
 var GatewayClasses = &Family{
-	Name:    "gatewayClasses",
-	Sources: []Source{{Kind: kindGateway}},
-	Targets: []resourceid.GroupKind{{Group: configrefs.GatewayAPIGroup, Kind: "GatewayClass"}},
+	ReferrersIndex: referrersIndex("gatewayClasses"),
+	Name:           "gatewayClasses",
+	Sources:        []Source{{Kind: kindGateway}},
+	Targets:        []resourceid.GroupKind{{Group: configrefs.GatewayAPIGroup, Kind: "GatewayClass"}},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, kindGateway); ok {
 			if r, ok := configrefs.GatewayClassOf(u); ok {
@@ -206,7 +206,8 @@ var GatewayClasses = &Family{
 // cert-manager Certificate, CertificateRequest, ACME Order or Challenge
 // names.
 var CertManagerIssuers = &Family{
-	Name: "certManagerIssuers",
+	ReferrersIndex: referrersIndex("certManagerIssuers"),
+	Name:           "certManagerIssuers",
 	Sources: []Source{
 		{Kind: kindCertificate},
 		{Kind: resourceid.GroupKind{Group: configrefs.CertManagerGroup, Kind: "CertificateRequest"}},
@@ -234,7 +235,8 @@ func fluxSource(kind string) resourceid.GroupKind {
 // namespace. An inline HelmRelease also declares the HelmChart the controller
 // recorded for it.
 var FluxSources = &Family{
-	Name: "fluxSources",
+	ScanAccepted: "Representative sourceRef: 1159 ns and 672 B per Indexer.Update exceed the 512 B bar.",
+	Name:         "fluxSources",
 	Sources: []Source{
 		{Kind: resourceid.GroupKind{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization"}, Targets: []resourceid.GroupKind{fluxSource("GitRepository"), fluxSource("OCIRepository"), fluxSource("Bucket"), fluxSource("ExternalArtifact")}},
 		{Kind: resourceid.GroupKind{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}},
@@ -256,8 +258,9 @@ var FluxSources = &Family{
 // are launched from, whichever provider defines it: a Karpenter provider's,
 // or EKS Auto Mode's NodeClass.
 var NodeClasses = &Family{
-	Name:    "nodeClasses",
-	Sources: []Source{{Kind: resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}}},
+	ReferrersIndex: referrersIndex("nodeClasses"),
+	Name:           "nodeClasses",
+	Sources:        []Source{{Kind: resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}}},
 	IsTarget: func(gk resourceid.GroupKind) bool {
 		return karpenter.IsNodeClassKind(gk.Group, gk.Kind) || gk == resourceid.GroupKind{Group: "eks.amazonaws.com", Kind: "NodeClass"}
 	},
@@ -274,6 +277,7 @@ var NodeClasses = &Family{
 // ClusterClasses is the family of the ClusterClass a Cluster API Cluster's
 // topology is built from, which may be in another namespace.
 var ClusterClasses = &Family{
+	ReferrersIndex: referrersIndex("clusterClasses"),
 	Name:           "clusterClasses",
 	Sources:        []Source{{Kind: resourceid.GroupKind{Group: configrefs.CAPIGroup, Kind: "Cluster"}}},
 	Targets:        []resourceid.GroupKind{{Group: configrefs.CAPIGroup, Kind: "ClusterClass"}},
@@ -317,17 +321,16 @@ var knativeEventSources = func() []Source {
 // such as JobSink, rather than every kind there is, which would make every
 // object's answer depend on Knative's stores.
 var KnativeEventDestinations = &Family{
-	Name:    "knativeEventDestinations",
-	Sources: knativeEventSources,
+	ReferrersIndex: referrersIndex("knativeEventDestinations"),
+	Name:           "knativeEventDestinations",
+	Sources:        knativeEventSources,
 	IsTarget: func(gk resourceid.GroupKind) bool {
 		return gk == kindService || gk.Group == "knative.dev" || strings.HasSuffix(gk.Group, ".knative.dev")
 	},
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := obj.(*unstructured.Unstructured); ok {
-			for _, r := range configrefs.KnativeEventDestinations(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitKnativeEventDestinations(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -336,6 +339,7 @@ var KnativeEventDestinations = &Family{
 // KnativeTriggerBrokers is the family of the Broker a Knative Trigger
 // subscribes to, which its brokerRef may name in another namespace.
 var KnativeTriggerBrokers = &Family{
+	ReferrersIndex: referrersIndex("knativeTriggerBrokers"),
 	Name:           "knativeTriggerBrokers",
 	Sources:        []Source{{Kind: kindTrigger}},
 	Targets:        []resourceid.GroupKind{kindBroker},
@@ -374,15 +378,14 @@ var (
 // IstioGateways is the family of the Istio Gateways a VirtualService binds
 // to, which may be in another namespace.
 var IstioGateways = &Family{
+	ReferrersIndex: referrersIndex("istioGateways"),
 	Name:           "istioGateways",
 	Sources:        []Source{{Kind: kindVirtualService}},
 	Targets:        []resourceid.GroupKind{{Group: configrefs.IstioNetworkingGroup, Kind: "Gateway"}},
 	CrossNamespace: true,
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, kindVirtualService); ok {
-			for _, r := range configrefs.IstioVirtualServiceGateways(u) {
-				visitPathRef(visit, r)
-			}
+			configrefs.VisitIstioVirtualServiceGateways(u, func(r configrefs.PathRef) { visitPathRef(visit, r) })
 		}
 		return nil
 	},
@@ -393,8 +396,11 @@ var IstioGateways = &Family{
 // with the mesh's domain (configrefs.IstioServiceDomain), which comes from
 // istiod rather than from the objects, so the family is made for it.
 func IstioServiceHosts(domain string) *Family {
+	index := referrersIndex("istioServiceHosts")
+	index.Candidates = istioHostCandidates
 	return &Family{
 		Name:           "istioServiceHosts",
+		ReferrersIndex: index,
 		Sources:        []Source{{Kind: kindVirtualService}, {Kind: kindDestinationRule}},
 		Targets:        []resourceid.GroupKind{kindService},
 		CrossNamespace: true,
@@ -423,9 +429,10 @@ var (
 // ClusterWorkflowTemplates an Argo Workflow or CronWorkflow uses, through its
 // workflowTemplateRef or a task's or step's templateRef.
 var ArgoWorkflowTemplates = &Family{
-	Name:    "argoWorkflowTemplates",
-	Sources: []Source{{Kind: kindWorkflow}, {Kind: kindCronWorkflow}},
-	Targets: []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "WorkflowTemplate"}, {Group: configrefs.ArgoGroup, Kind: "ClusterWorkflowTemplate"}},
+	ScanAccepted: "Representative workflowTemplateRef plus task templateRef: 2958 ns and 2000 B per Indexer.Update exceed the 2 us / 512 B bar.",
+	Name:         "argoWorkflowTemplates",
+	Sources:      []Source{{Kind: kindWorkflow}, {Kind: kindCronWorkflow}},
+	Targets:      []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "WorkflowTemplate"}, {Group: configrefs.ArgoGroup, Kind: "ClusterWorkflowTemplate"}},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		fields := []string{"spec"}
 		u, ok := unstructuredOf(obj, kindWorkflow)

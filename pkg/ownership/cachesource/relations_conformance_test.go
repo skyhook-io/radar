@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -343,3 +344,19 @@ func (betaUndecided) CanRead(_ resourceid.GroupKind, namespace string) ownership
 	return ownership.Allowed
 }
 func (betaUndecided) Namespaces() ([]string, bool) { return nil, true }
+
+func TestIndexedReadReportsMissingIndex(t *testing.T) {
+	f := newFixture(t, k8score.CacheConfig{}, nil)
+	f.watch(t, widgets)
+	read, err := f.source().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := read.(relations.Session)
+	for _, gk := range []resourceid.GroupKind{{Kind: "Pod"}, {Group: "example.io", Kind: "Widget"}} {
+		got := s.Indexed(gk, "missing", []string{"key"}, ownership.InNamespace("alpha"))
+		if len(got.Objects) != 0 || !slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Reason == readreason.IndexMissing }) {
+			t.Errorf("%v: %+v; want index_missing", gk, got)
+		}
+	}
+}

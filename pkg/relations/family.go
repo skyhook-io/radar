@@ -35,11 +35,13 @@ type Family struct {
 	// namespace, as a Gateway API route may name a Gateway.
 	CrossNamespace bool
 	// ReferrersIndex, when set, finds the sources that may name a target
-	// through a store index keyed by the target, in every namespace, instead
+	// through a store index keyed by the target and referrer namespace, instead
 	// of reading every source in scope: for a family whose sources are many
 	// and cross namespaces, as Pods naming their Node are. What each source
 	// found declares is still evaluated.
 	ReferrersIndex *ReferrersIndex
+	// ScanAccepted explains why a reverse search deliberately reads every source.
+	ScanAccepted string
 	// Declared visits what obj declares, each with the path declaring it.
 	// It returns an error when part of obj couldn't be read, after visiting
 	// what could.
@@ -50,7 +52,10 @@ type Family struct {
 // it files them under for a target.
 type ReferrersIndex struct {
 	Name string
-	Key  func(target resourceid.Ref) string
+	// Key uses namespace "*" only as a query for every namespace bucket.
+	Key func(target resourceid.Ref, namespace string) string
+	// Candidates can index a superset when resolution depends on request-time state.
+	Candidates func(runtime.Object, func(Declaration)) error
 }
 
 // Source is a kind that declares. Targets narrows the family's Targets to
@@ -293,10 +298,9 @@ func (v *View) resolvesTo(candidates []resourceid.Ref, subject resourceid.Ref, c
 // subject as the host read it, or nil: a subject the host read that the
 // cache doesn't hold yet leaves the answer incomplete rather than empty.
 //
-// Objects are read through the namespace index every store keeps and
-// evaluated as asked, rather than kept in an index of every
-// declaration: for config references on a Pod store such an index cost
-// about 1.4 KB a Pod and made a relist about five times as long.
+// Candidates come from the family's index, or from the namespace index for
+// a local or explicitly accepted scan. Every candidate is re-evaluated as
+// asked, including alternative-group and mesh-domain resolution.
 func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferrersAnswer {
 	var a ReferrersAnswer
 	if !f.target(subject.GroupKind()) {
@@ -307,9 +311,19 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	}
 	// A namespaced target's sources are in its namespace; a cluster-scoped
 	// one's, or a CrossNamespace family's, can be anywhere.
-	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace || f.ReferrersIndex != nil, &a.Coverage)
+	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace, &a.Coverage)
 	if f.ReferrersIndex != nil {
-		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject)}
+		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject, "*")}
+		if !s.scope.AllNamespaces {
+			s.keys = nil
+			namespaces := slices.Clone(s.scope.Namespaces)
+			if s.scope.IncludeClusterScoped {
+				namespaces = append(namespaces, "")
+			}
+			for _, ns := range namespaces {
+				s.keys = append(s.keys, f.ReferrersIndex.Key(subject, ns))
+			}
+		}
 	}
 	for _, source := range f.Sources {
 		if !source.declares(subject.GroupKind()) {

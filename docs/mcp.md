@@ -1126,6 +1126,7 @@ a miss needs a complete read.
 | `cluster_connecting` | Radar is still connecting. | Retry shortly |
 | `cluster_disconnected` | Radar has no working cluster connection; the explanation says why. | Radar's connection |
 | `connection_changed` | Radar's cluster connection changed during the read. | Confirm which cluster Radar is on, then retry |
+| `index_missing` | A loaded store lacks the reverse index a relationship answer needs. | Whoever runs Radar must restore its index registration and restart it |
 | `read_error` | An unexpected failure; the explanation says what. | Retry, or investigate |
 
 The same table, as the action each code calls for, is

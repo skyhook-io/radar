@@ -5,13 +5,13 @@ import (
 	"strconv"
 	"strings"
 
-	corev1 "k8s.io/api/core/v1"
-	apiMeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	apiMeta "k8s.io/apimachinery/pkg/api/meta"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -106,8 +106,9 @@ func NodeClassRefForNodeClaim(claim *unstructured.Unstructured) (NodeClassRef, b
 }
 
 func nodeClassRef(obj *unstructured.Unstructured, fields ...string) (NodeClassRef, bool) {
-	ref, found, err := unstructured.NestedMap(obj.Object, fields...)
-	if err != nil || !found {
+	raw, found, err := unstructured.NestedFieldNoCopy(obj.Object, fields...)
+	ref, isMap := raw.(map[string]any)
+	if err != nil || !found || !isMap {
 		return NodeClassRef{}, false
 	}
 	kind, _ := ref["kind"].(string)

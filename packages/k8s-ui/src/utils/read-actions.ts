@@ -15,6 +15,7 @@ export const READ_ACTIONS: Record<string, ReadAction> = {
   connection_changed: 'check_target',
   filter_eval_failed: 'change_request',
   findings_scan_incomplete: 'change_request',
+  index_missing: 'radar_config',
   kind_not_watchable: 'change_request',
   kind_not_searchable: 'change_request',
   kind_sync_pending: 'retry',
@@ -61,6 +62,8 @@ export function gapReasonText(reason: string): string {
     case 'radar_kind_not_collected':
     case 'radar_namespace_not_collected':
       return "Radar doesn't collect it"
+    case 'index_missing':
+      return 'Radar lacks the required index'
     case 'kind_sync_pending':
       return 'still loading'
     case 'kind_sync_timed_out':

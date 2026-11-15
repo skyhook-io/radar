@@ -78,8 +78,14 @@ func IstioHostService(host, defaultNamespace, domain string) (name, namespace st
 // binds to, as namespace/name or a name in its own namespace. The mesh
 // keyword binds sidecars, not a Gateway.
 func IstioVirtualServiceGateways(vs *unstructured.Unstructured) []PathRef {
-	gateways, _, _ := unstructured.NestedStringSlice(vs.Object, "spec", "gateways")
 	var refs []PathRef
+	VisitIstioVirtualServiceGateways(vs, func(ref PathRef) { refs = append(refs, ref) })
+	return refs
+}
+
+// VisitIstioVirtualServiceGateways visits references without retaining a slice.
+func VisitIstioVirtualServiceGateways(vs *unstructured.Unstructured, visit func(PathRef)) {
+	gateways, _, _ := unstructured.NestedStringSlice(vs.Object, "spec", "gateways")
 	for _, gw := range gateways {
 		if gw == "mesh" {
 			continue
@@ -91,9 +97,8 @@ func IstioVirtualServiceGateways(vs *unstructured.Unstructured) []PathRef {
 		if name == "" {
 			continue
 		}
-		refs = append(refs, PathRef{Ref: resourceid.NewRef(IstioNetworkingGroup, "Gateway", namespace, name), Path: "spec.gateways"})
+		visit(PathRef{Ref: resourceid.NewRef(IstioNetworkingGroup, "Gateway", namespace, name), Path: "spec.gateways"})
 	}
-	return refs
 }
 
 // IstioVirtualServiceDestinations returns the Services a VirtualService's
@@ -101,24 +106,36 @@ func IstioVirtualServiceGateways(vs *unstructured.Unstructured) []PathRef {
 // mesh's domain (see IstioHostService).
 func IstioVirtualServiceDestinations(vs *unstructured.Unstructured, domain string) []PathRef {
 	var refs []PathRef
-	for _, protocol := range []string{"http", "tcp", "tls"} {
-		routes, _, _ := unstructured.NestedSlice(vs.Object, "spec", protocol)
+	VisitIstioVirtualServiceHosts(vs, func(host, path string) {
+		if name, namespace := IstioHostService(host, vs.GetNamespace(), domain); name != "" {
+			refs = append(refs, PathRef{Ref: resourceid.NewRef("", "Service", namespace, name), Path: path})
+		}
+	})
+	return refs
+}
+
+// VisitIstioVirtualServiceHosts leaves domain-dependent resolution to its caller.
+func VisitIstioVirtualServiceHosts(vs *unstructured.Unstructured, visit func(host, path string)) {
+	for _, field := range []struct{ protocol, path string }{
+		{"http", "spec.http[].route[].destination.host"},
+		{"tcp", "spec.tcp[].route[].destination.host"},
+		{"tls", "spec.tls[].route[].destination.host"},
+	} {
+		raw, _, _ := unstructured.NestedFieldNoCopy(vs.Object, "spec", field.protocol)
+		routes, _ := raw.([]any)
 		for _, route := range routes {
 			r, _ := route.(map[string]any)
-			destinations, _, _ := unstructured.NestedSlice(r, "route")
+			raw, _, _ := unstructured.NestedFieldNoCopy(r, "route")
+			destinations, _ := raw.([]any)
 			for _, d := range destinations {
 				dm, _ := d.(map[string]any)
 				host, _, _ := unstructured.NestedString(dm, "destination", "host")
-				if host == "" {
-					continue
-				}
-				if name, namespace := IstioHostService(host, vs.GetNamespace(), domain); name != "" {
-					refs = append(refs, PathRef{Ref: resourceid.NewRef("", "Service", namespace, name), Path: "spec." + protocol + "[].route[].destination.host"})
+				if host != "" {
+					visit(host, field.path)
 				}
 			}
 		}
 	}
-	return refs
 }
 
 // IstioDestinationRuleService returns the Service a DestinationRule's host

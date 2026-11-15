@@ -46,6 +46,7 @@ func traefikDeclared(extract func(*unstructured.Unstructured) []configrefs.PathR
 // Traefik route sends traffic to, or a TraefikService balances or mirrors
 // to, which may be in another namespace.
 var TraefikBackends = &Family{
+	ScanAccepted:   "Representative TraefikService alternative: 2245 ns and 1472 B per Indexer.Update exceed the 2 us / 512 B bar.",
 	Name:           "traefikBackends",
 	Sources:        traefikSources(append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...), "IngressRoute", "IngressRouteTCP", "IngressRouteUDP", "TraefikService"),
 	Targets:        append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...),
@@ -58,7 +59,8 @@ var TraefikBackends = &Family{
 // TLSOption, and the Middlewares a chain Middleware runs. Each may be in
 // another namespace.
 var TraefikRouteConfig = &Family{
-	Name: "traefikRouteConfig",
+	ScanAccepted: "Representative Middleware alternative: 2673 ns and 1568 B per Indexer.Update exceed the 2 us / 512 B bar.",
+	Name:         "traefikRouteConfig",
 	Sources: append(append(append(append([]Source{},
 		traefikSources(traefikKinds("Middleware", "ServersTransport", "TLSOption"), "IngressRoute")...),
 		traefikSources(traefikKinds("MiddlewareTCP", "ServersTransportTCP", "TLSOption"), "IngressRouteTCP")...),

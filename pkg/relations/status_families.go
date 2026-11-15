@@ -7,7 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -28,9 +27,10 @@ var (
 // caller may read: an index of Pods by Node would cost each Pod relist more
 // than the rare question costs (docs/loadtest.md).
 var PodPlacement = &Family{
-	Name:    "podPlacement",
-	Sources: []Source{{Kind: kindPod}},
-	Targets: []resourceid.GroupKind{kindNode},
+	Name:         "podPlacement",
+	ScanAccepted: "Pod relist amplification outweighs rare Node reverse questions; see docs/loadtest.md relationship-cost-baselines.",
+	Sources:      []Source{{Kind: kindPod}},
+	Targets:      []resourceid.GroupKind{kindNode},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok || pod.Spec.NodeName == "" || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
@@ -46,15 +46,18 @@ var PodPlacement = &Family{
 // which may be in another namespace. A source's mirrors are found through the
 // stores' index of that annotation.
 var Reflections = &Family{
-	Name: "reflections",
+	Name:           "reflections",
+	CrossNamespace: true,
 	Sources: []Source{
 		{Kind: kindSecret, Targets: []resourceid.GroupKind{kindSecret}},
 		{Kind: kindConfigMap, Targets: []resourceid.GroupKind{kindConfigMap}},
 	},
 	Targets: []resourceid.GroupKind{kindSecret, kindConfigMap},
 	ReferrersIndex: &ReferrersIndex{
-		Name: k8score.ReflectsIndex,
-		Key:  func(source resourceid.Ref) string { return k8score.ReflectsKey(source.Namespace, source.Name) },
+		Name: "reflects",
+		Key: func(source resourceid.Ref, namespace string) string {
+			return source.Namespace + "/" + source.Name + "\x00" + namespace
+		},
 	},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		var kind string
@@ -78,7 +81,8 @@ var Reflections = &Family{
 // and class: a PersistentVolumeClaim's bound PersistentVolume and
 // StorageClass, and a PersistentVolume's claimRef and StorageClass.
 var Storage = &Family{
-	Name: "storage",
+	ScanAccepted: "Representative volume and class: PVC 1398 ns / 960 B, PV 1207 ns / 976 B per Indexer.Update exceed the 512 B bar.",
+	Name:         "storage",
 	Sources: []Source{
 		{Kind: kindPVC, Targets: []resourceid.GroupKind{kindPV, kindStorageClass}},
 		{Kind: kindPV, Targets: []resourceid.GroupKind{kindPVC, kindStorageClass}},
@@ -111,9 +115,10 @@ var Storage = &Family{
 // MachineNodes is the family of the Node a Karpenter NodeClaim or a Cluster
 // API Machine launched, as its status records it.
 var MachineNodes = &Family{
-	Name:    "machineNodes",
-	Sources: []Source{{Kind: kindNodeClaim}, {Kind: kindMachine}},
-	Targets: []resourceid.GroupKind{kindNode},
+	ReferrersIndex: referrersIndex("machineNodes"),
+	Name:           "machineNodes",
+	Sources:        []Source{{Kind: kindNodeClaim}, {Kind: kindMachine}},
+	Targets:        []resourceid.GroupKind{kindNode},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if u, ok := unstructuredOf(obj, kindNodeClaim); ok {
 			if name := karpenter.ClaimNodeName(u); name != "" {

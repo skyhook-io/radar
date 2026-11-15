@@ -35,7 +35,7 @@ func BenchmarkNodePods(b *testing.B) {
 		s := stores{byKind: map[resourceid.GroupKind]cache.Indexer{kindPod: indexed}}
 		node := resourceid.Ref{Kind: "Node", Name: "node-0007"}
 		index := *PodPlacement
-		index.ReferrersIndex = &ReferrersIndex{Name: "podNode", Key: func(node resourceid.Ref) string { return node.Name }}
+		index.ReferrersIndex = &ReferrersIndex{Name: "podNode", Key: func(node resourceid.Ref, _ string) string { return node.Name }}
 		for name, f := range map[string]*Family{"scan": PodPlacement, "index": &index} {
 			b.Run(pop.name+"/"+name, func(b *testing.B) {
 				v := NewView(s, ownership.Unrestricted())

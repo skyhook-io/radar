@@ -54,7 +54,7 @@ func TraefikBackendReferences(obj *unstructured.Unstructured) []PathRef {
 		}
 	}
 	addList := func(raw map[string]any, field, path string) {
-		items, _, _ := unstructured.NestedSlice(raw, field)
+		items, _, _ := borrowedSlice(raw, field)
 		for _, item := range items {
 			if m, ok := item.(map[string]any); ok {
 				add(m, path)
@@ -63,7 +63,7 @@ func TraefikBackendReferences(obj *unstructured.Unstructured) []PathRef {
 	}
 	switch obj.GetKind() {
 	case "IngressRoute", "IngressRouteTCP", "IngressRouteUDP":
-		routes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "routes")
+		routes, _, _ := borrowedSlice(obj.Object, "spec", "routes")
 		for _, route := range routes {
 			if m, ok := route.(map[string]any); ok {
 				addList(m, "services", "spec.routes[].services[]")
@@ -71,10 +71,10 @@ func TraefikBackendReferences(obj *unstructured.Unstructured) []PathRef {
 		}
 	case "TraefikService":
 		for _, field := range []string{"weighted", "highestRandomWeight"} {
-			raw, _, _ := unstructured.NestedMap(obj.Object, "spec", field)
+			raw, _, _ := borrowedMap(obj.Object, "spec", field)
 			addList(raw, "services", "spec."+field+".services[]")
 		}
-		raw, _, _ := unstructured.NestedMap(obj.Object, "spec", "mirroring")
+		raw, _, _ := borrowedMap(obj.Object, "spec", "mirroring")
 		add(raw, "spec.mirroring")
 		addList(raw, "mirrors", "spec.mirroring.mirrors[]")
 	}
@@ -94,7 +94,7 @@ func TraefikRouteConfigReferences(obj *unstructured.Unstructured) []PathRef {
 		}
 	}
 	if obj.GetKind() == "Middleware" {
-		chain, _, _ := unstructured.NestedSlice(obj.Object, "spec", "chain", "middlewares")
+		chain, _, _ := borrowedSlice(obj.Object, "spec", "chain", "middlewares")
 		for _, item := range chain {
 			if m, ok := item.(map[string]any); ok {
 				add(m, "Middleware", "spec.chain.middlewares[]")
@@ -106,10 +106,10 @@ func TraefikRouteConfigReferences(obj *unstructured.Unstructured) []PathRef {
 	if obj.GetKind() == "IngressRouteTCP" {
 		mwKind, stKind = "MiddlewareTCP", "ServersTransportTCP"
 	}
-	routes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "routes")
+	routes, _, _ := borrowedSlice(obj.Object, "spec", "routes")
 	for _, route := range routes {
 		m, _ := route.(map[string]any)
-		services, _, _ := unstructured.NestedSlice(m, "services")
+		services, _, _ := borrowedSlice(m, "services")
 		for _, service := range services {
 			svc, _ := service.(map[string]any)
 			backend, ok := traefikNamedRef(obj, svc, "Service", "")
@@ -124,7 +124,7 @@ func TraefikRouteConfigReferences(obj *unstructured.Unstructured) []PathRef {
 			}
 			add(map[string]any{"name": name, "namespace": ns}, stKind, "spec.routes[].services[].serversTransport")
 		}
-		middlewares, _, _ := unstructured.NestedSlice(m, "middlewares")
+		middlewares, _, _ := borrowedSlice(m, "middlewares")
 		for _, item := range middlewares {
 			if mw, ok := item.(map[string]any); ok {
 				add(mw, mwKind, "spec.routes[].middlewares[]")
@@ -132,7 +132,7 @@ func TraefikRouteConfigReferences(obj *unstructured.Unstructured) []PathRef {
 		}
 	}
 	if obj.GetKind() != "IngressRouteUDP" {
-		options, _, _ := unstructured.NestedMap(obj.Object, "spec", "tls", "options")
+		options, _, _ := borrowedMap(obj.Object, "spec", "tls", "options")
 		add(options, "TLSOption", "spec.tls.options")
 	}
 	return refs
@@ -155,9 +155,9 @@ func TraefikSecretReferences(obj *unstructured.Unstructured) []PathRef {
 		if obj.GetKind() == "ServersTransportTCP" {
 			base = append(base, "tls")
 		}
-		raw, _, _ := unstructured.NestedMap(obj.Object, base...)
+		raw, _, _ := borrowedMap(obj.Object, base...)
 		prefix := strings.Join(base, ".")
-		rootCAs, _, _ := unstructured.NestedSlice(raw, "rootCAs")
+		rootCAs, _, _ := borrowedSlice(raw, "rootCAs")
 		for _, item := range rootCAs {
 			ca, _ := item.(map[string]any)
 			secret, _ := ca["secret"].(string)
@@ -183,7 +183,7 @@ func TraefikSecretReferences(obj *unstructured.Unstructured) []PathRef {
 	case "TLSStore":
 		name, _, _ := unstructured.NestedString(obj.Object, "spec", "defaultCertificate", "secretName")
 		add("Secret", name, "spec.defaultCertificate.secretName")
-		certs, _, _ := unstructured.NestedSlice(obj.Object, "spec", "certificates")
+		certs, _, _ := borrowedSlice(obj.Object, "spec", "certificates")
 		for _, item := range certs {
 			if cert, ok := item.(map[string]any); ok {
 				name, _ := cert["secretName"].(string)

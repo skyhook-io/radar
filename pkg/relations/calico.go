@@ -4,6 +4,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/lru"
 
 	"github.com/skyhook-io/radar/pkg/netpol"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -33,7 +35,7 @@ func calicoSelectors(staged bool) []Selector {
 	for _, group := range calicoGroups {
 		for _, k := range calicoPolicyKinds {
 			if k.staged == staged {
-				out = append(out, Selector{Kind: resourceid.GroupKind{Group: group, Kind: k.kind}, Selection: calicoSelection(k.namespaced, k.staged)})
+				out = append(out, Selector{Kind: resourceid.GroupKind{Group: group, Kind: k.kind}, SameNamespace: k.namespaced, Selection: calicoSelection(k.namespaced, k.staged)})
 			}
 		}
 	}
@@ -61,7 +63,7 @@ func calicoSelection(namespaced, staged bool) func(runtime.Object) (Selection, b
 		if !ok || staged && !netpol.CalicoStagedActionPreviewsProtection(policy) {
 			return Selection{}, false, nil
 		}
-		matcher := netpol.CompileCalicoPolicyMatcher(policy)
+		matcher := compiledCalicoMatcher(policy)
 		_, _, raw := matcher.Needs()
 		return Selection{AnyNamespace: !namespaced, Matches: func(c Candidate, lookup Lookup) (bool, bool) {
 			serviceAccount := c.ServiceAccount
@@ -111,4 +113,25 @@ var CalicoStagedPolicies = &SelectorFamily{
 	Selectables:    []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
 	CrossNamespace: true,
 	Identity:       calicoIdentity,
+}
+
+var calicoMatchers = lru.New(4096)
+
+type calicoMatcherKey struct {
+	uid     types.UID
+	version string
+	kind    string
+}
+
+func compiledCalicoMatcher(policy *unstructured.Unstructured) *netpol.CalicoPolicyMatcher {
+	key := calicoMatcherKey{policy.GetUID(), policy.GetResourceVersion(), policy.GetKind()}
+	if key.uid == "" || key.version == "" {
+		return netpol.CompileCalicoPolicyMatcher(policy)
+	}
+	if cached, ok := calicoMatchers.Get(key); ok {
+		return cached.(*netpol.CalicoPolicyMatcher)
+	}
+	matcher := netpol.CompileCalicoPolicyMatcher(policy)
+	calicoMatchers.Add(key, matcher)
+	return matcher
 }

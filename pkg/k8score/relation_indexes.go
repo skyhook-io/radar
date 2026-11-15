@@ -1,43 +1,71 @@
 package k8score
 
 import (
-	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/relations"
 )
 
-// ReflectsIndex files Secrets and ConfigMaps by the namespace/name of the
-// source their Reflector annotation names, so a source's mirrors, which can
-// be in any namespace, are found without reading every Secret. Only mirrors
-// get a key, so it holds next to nothing: an index that files every object
-// of a busy kind, such as Pods by Node, costs each relist more than reading
-// the kind costs the rare question it answers (docs/loadtest.md).
 const ReflectsIndex = "reflects"
 
-// ReflectsKey is the ReflectsIndex key for a source in namespace.
-func ReflectsKey(namespace, name string) string { return namespace + "/" + name }
+// ReflectsKey asks for a source's mirrors in every collected namespace.
+func ReflectsKey(namespace, name string) string { return namespace + "/" + name + "\x00*" }
 
-var relationIndexers = map[string]cache.Indexers{
-	Secrets:    {ReflectsIndex: reflectedSource("Secret")},
-	ConfigMaps: {ReflectsIndex: reflectedSource("ConfigMap")},
+func referrerIndexers(gr schema.GroupResource) cache.Indexers {
+	out := cache.Indexers{}
+	for name, fn := range relations.ReferrerIndexers[gr] {
+		out[name] = func(obj any) ([]string, error) {
+			if q, ok := obj.(indexQuery); ok {
+				return q, nil
+			}
+			return fn(obj)
+		}
+	}
+	return out
 }
 
-func reflectedSource(kind string) cache.IndexFunc {
-	return func(obj any) ([]string, error) {
-		var ns, name string
-		var annotations map[string]string
-		switch o := obj.(type) {
-		case *corev1.Secret:
-			ns, name, annotations = o.Namespace, o.Name, o.Annotations
-		case *corev1.ConfigMap:
-			ns, name, annotations = o.Namespace, o.Name, o.Annotations
-		default:
-			return nil, nil
-		}
-		if source, ok := configrefs.ReflectedSource(kind, ns, name, annotations); ok {
-			return []string{ReflectsKey(source.Namespace, source.Name)}, nil
-		}
-		return nil, nil
+var relationIndexers = map[string]cache.Indexers{
+	Secrets:                referrerIndexers(schema.GroupResource{Resource: "secrets"}),
+	ConfigMaps:             referrerIndexers(schema.GroupResource{Resource: "configmaps"}),
+	PersistentVolumes:      referrerIndexers(schema.GroupResource{Resource: "persistentvolumes"}),
+	PersistentVolumeClaims: referrerIndexers(schema.GroupResource{Resource: "persistentvolumeclaims"}),
+}
+
+var dynamicRelationIndexers = func() map[schema.GroupResource]cache.Indexers {
+	out := map[schema.GroupResource]cache.Indexers{}
+	for gr := range relations.ReferrerIndexers {
+		out[gr] = referrerIndexers(gr)
 	}
+	return out
+}()
+
+// TypedIndexMissing distinguishes a missing index from an incomplete store.
+func (rc *ResourceCache) TypedIndexMissing(resource, index string) bool {
+	if index == "" {
+		return false
+	}
+	for _, st := range rc.kindStores[resource] {
+		if st.synced() && st.indexer.GetIndexers()[index] == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// DynamicIndexMissing checks only the ready stores serving this scope.
+func (d *DynamicResourceCache) DynamicIndexMissing(gvr schema.GroupVersionResource, namespace, index string) bool {
+	if index == "" {
+		return false
+	}
+	entries, ok := d.servedEntries(gvr, namespace)
+	if !ok {
+		return false
+	}
+	for _, e := range entries {
+		if e.informer.GetIndexer().GetIndexers()[index] == nil {
+			return true
+		}
+	}
+	return false
 }

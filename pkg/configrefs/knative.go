@@ -63,6 +63,13 @@ func KnativeTriggerBrokerReference(raw map[string]any) (resourceid.Ref, bool) {
 // Trigger's subscriber, an event source's sink, or the backing channel a
 // Channel's status records. A destination may name another namespace.
 func KnativeEventDestinations(obj *unstructured.Unstructured) []PathRef {
+	var refs []PathRef
+	VisitKnativeEventDestinations(obj, func(ref PathRef) { refs = append(refs, ref) })
+	return refs
+}
+
+// VisitKnativeEventDestinations visits references without retaining a slice.
+func VisitKnativeEventDestinations(obj *unstructured.Unstructured, visit func(PathRef)) {
 	group := resourceid.GroupFromAPIVersion(obj.GetAPIVersion())
 	var fields []string
 	switch {
@@ -73,24 +80,24 @@ func KnativeEventDestinations(obj *unstructured.Unstructured) []PathRef {
 	case group == KnativeMessagingGroup && (obj.GetKind() == "Channel" || obj.GetKind() == "InMemoryChannel"):
 		fields = []string{"status", "channel"}
 	default:
-		return nil
+		return
 	}
-	raw, present, err := unstructured.NestedMap(obj.Object, fields...)
+	raw, present, err := borrowedMap(obj.Object, fields...)
 	if err != nil || !present {
-		return nil
+		return
 	}
 	ref, ok := KnativeReference(raw, obj.GetNamespace())
 	if !ok {
-		return nil
+		return
 	}
-	return []PathRef{{Ref: ref, Path: strings.Join(fields, ".")}}
+	visit(PathRef{Ref: ref, Path: strings.Join(fields, ".")})
 }
 
 // KnativeTriggerBroker returns the Broker a Trigger subscribes to: its
 // brokerRef, which names the Broker's namespace, or else the older
 // spec.broker in the Trigger's namespace.
 func KnativeTriggerBroker(trigger *unstructured.Unstructured) (PathRef, bool) {
-	if raw, present, _ := unstructured.NestedMap(trigger.Object, "spec", "brokerRef"); present {
+	if raw, present, _ := borrowedMap(trigger.Object, "spec", "brokerRef"); present {
 		ref, ok := KnativeTriggerBrokerReference(raw)
 		return PathRef{Ref: ref, Path: "spec.brokerRef"}, ok
 	}
@@ -104,7 +111,7 @@ func KnativeTriggerBroker(trigger *unstructured.Unstructured) (PathRef, bool) {
 // KnativeRouteRevisions returns the Revisions a Knative Route sends traffic
 // to, as its status resolves them: spec.traffic may name a Configuration.
 func KnativeRouteRevisions(route *unstructured.Unstructured) []PathRef {
-	targets, _, _ := unstructured.NestedSlice(route.Object, "status", "traffic")
+	targets, _, _ := borrowedSlice(route.Object, "status", "traffic")
 	var refs []PathRef
 	for _, t := range targets {
 		m, _ := t.(map[string]any)

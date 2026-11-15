@@ -2,12 +2,14 @@ package relations
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -74,5 +76,59 @@ func TestACalicoPolicyThatRulesAWorkloadOutNeedsNoNamespace(t *testing.T) {
 	c := allNamespaces{cluster: cluster{objects: []runtime.Object{api, global}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "Namespace"}: readreason.KindSyncPending}}}
 	if got := NewView(c, ownership.Unrestricted()).SelectedBy(CalicoPolicies, refOf(api), nil); len(got.Matches) != 0 || !got.Coverage.Complete() {
 		t.Errorf("a policy whose selector rules the workload out answered %+v; want none, complete", got)
+	}
+}
+
+type calicoReads struct {
+	allNamespaces
+	t                       *testing.T
+	localReads, globalReads int
+}
+
+func (s *calicoReads) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
+	if slices.Contains(calicoGroups, gk.Group) {
+		if strings.Contains(gk.Kind, "Global") {
+			s.globalReads++
+		} else {
+			s.localReads++
+			if index != cache.NamespaceIndex || !slices.Equal(keys, []string{"shop"}) || scope.AllNamespaces {
+				s.t.Errorf("namespaced policy read widely: %s %q %+v", index, keys, scope)
+			}
+		}
+	}
+	return s.allNamespaces.Indexed(gk, index, keys, scope)
+}
+
+func TestCalicoReverseReadsNamespacedPoliciesOnlyInSubjectNamespace(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	for _, family := range []*SelectorFamily{CalicoPolicies, CalicoStagedPolicies} {
+		s := &calicoReads{allNamespaces: allNamespaces{cluster: cluster{objects: []runtime.Object{web}}}, t: t}
+		NewView(s, ownership.Unrestricted()).SelectedBy(family, refOf(web), nil)
+		if s.localReads == 0 || s.globalReads == 0 {
+			t.Fatalf("missing policy scope: local %d global %d", s.localReads, s.globalReads)
+		}
+	}
+}
+
+func TestCalicoMatcherMemoTracksUIDAndResourceVersion(t *testing.T) {
+	p := calicoPolicy("projectcalico.org", "NetworkPolicy", "shop", "memo", map[string]any{"selector": "app == 'web'"})
+	p.SetUID("memo-uid")
+	p.SetResourceVersion("1")
+	first := compiledCalicoMatcher(p)
+	if first != compiledCalicoMatcher(p.DeepCopy()) {
+		t.Fatal("same UID/version was recompiled")
+	}
+	p.SetResourceVersion("2")
+	if first == compiledCalicoMatcher(p) {
+		t.Fatal("new version reused old matcher")
+	}
+	p.SetResourceVersion("1")
+	p.SetUID("new-memo-uid")
+	if first == compiledCalicoMatcher(p) {
+		t.Fatal("new UID reused old matcher")
+	}
+	p.SetUID("")
+	if compiledCalicoMatcher(p) == compiledCalicoMatcher(p) {
+		t.Fatal("identity-free policy was memoized")
 	}
 }

@@ -85,10 +85,15 @@ with the path declaring it. The `View` answers every family the same way:
   may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
-- A family whose sources are many and in every namespace can find a target's referrers through a store index
-  keyed by the target (`ReferrersIndex`) instead of reading every source; what each one declares is still
-  evaluated. Only `Reflections` does: an index of a busy kind costs every relist
-  ([measurements](loadtest.md#relationship-cost-baselines)).
+- Every family whose reverse question crosses namespaces or can name a cluster-scoped target declares a
+  `ReferrersIndex` or a measured `ScanAccepted` reason. Index keys pair the referenced identity with the referrer
+  namespace. Restricted searches read only their namespace buckets; unrestricted searches enumerate the store's
+  namespace-index values, then read those target buckets together. Indexes contain every alternative API group,
+  and Istio host keys are a domain-independent superset: each candidate is still resolved with the current mesh
+  domain on ask. A loaded store missing its required index reports `index_missing`, never a complete empty answer.
+  Index registration is generated from the family registry for each source GroupResource and applies to every
+  served version. The existing [measurements](loadtest.md#relationship-cost-baselines) explain why busy kinds can
+  deliberately remain scans.
 - A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
   reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
   names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
@@ -139,7 +144,9 @@ match depends on but never lists, such as that template or a Namespace's labels,
 relationship graph reads it (`Lookup`). `Selected(family, selector)` lists what a selector chooses and
 `SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
 `Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
-PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. A match Radar
+PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. Namespaced Calico policy kinds are searched only in the subject's namespace; global kinds are searched separately.
+Compiled Calico matchers are shared through a bounded 4096-entry LRU keyed by UID, resourceVersion and kind;
+objects without a UID or version bypass it. A match Radar
 can't judge, such as a Cilium selector on Namespace labels, leaves the answer incomplete (`filter_eval_failed`)
 rather than reading as no match.
 
