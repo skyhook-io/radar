@@ -52,7 +52,8 @@ type ResourceDiscovery struct {
 
 	// complete records that the discovery request that set resources returned
 	// no error; see DiscoveryCatalog.
-	complete bool
+	complete   bool
+	generation uint64
 }
 
 type groupResourceKey struct {
@@ -223,6 +224,7 @@ func (d *ResourceDiscovery) refresh() error {
 		d.mu.Lock()
 		d.lastRefresh = time.Now()
 		d.refreshFailed = true
+		d.generation++
 		d.mu.Unlock()
 		return err
 	}
@@ -278,6 +280,7 @@ func (d *ResourceDiscovery) refresh() error {
 	d.failedGroup = failedGroups
 	d.refreshFailed = false
 	d.complete = err == nil
+	d.generation++
 	log.Printf("Discovered %d API resources (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
 
 	return nil
@@ -356,6 +359,7 @@ func (d *ResourceDiscovery) AddAPIResource(resource APIResource) {
 func (d *ResourceDiscovery) addResourceLocked(resource APIResource) {
 	d.upsertResourceLocked(resource)
 	d.rebuildGroupResourceMapLocked()
+	d.generation++
 }
 
 func (d *ResourceDiscovery) upsertResourceLocked(resource APIResource) {
