@@ -42,6 +42,22 @@ func TestClassifyAddon(t *testing.T) {
 			name: "empty", wantAddon: false, wantWhy: "",
 		},
 		{
+			name: "user service named like Gateway API", wl: "gateway-api-v2",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "user model server deployed with the llm-d chart", chart: "llm-d-modelservice-0.2.1", wl: "ms-llama-decode",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "Gateway API inference extension still matches its own entry", wl: "gateway-api-inference-extension-epp",
+			wantAddon: true, wantWhy: "name=gateway-api-inference-extension-epp (gateway-api-inference-extension)",
+		},
+		{
+			name: "operator known only by its CRD group", wl: "gpu-operator",
+			wantAddon: true, wantWhy: "name=gpu-operator",
+		},
+		{
 			// The upstream addon-manager label is the platform declaring
 			// "managed addon" — wins regardless of catalog coverage.
 			name: "addonmanager label (GKE-managed component)", wl: "networking-dra-driver", addonMgr: "Reconcile",
@@ -83,12 +99,23 @@ func TestClassifyAddon(t *testing.T) {
 	}
 }
 
-// Every canonical chart name crdGroupToChart resolves to must classify as an
-// add-on — the catalog is derived from it, so a new CRD group joins for free.
+// Every chart name crdGroupToChart resolves to must classify as an add-on —
+// the catalog is derived from it, so a new CRD group joins for free — except
+// the names integrationsNotAddons holds back.
 func TestAddonCatalogCoversCRDGroups(t *testing.T) {
 	for group, chart := range crdGroupToChart {
-		if addon, _ := ClassifyAddon(chart, "", "", "", "", ""); !addon {
-			t.Errorf("crdGroupToChart[%q]=%q not classified as add-on", group, chart)
+		addon, _ := ClassifyAddon(chart, "", "", "", "", "")
+		if want := !integrationsNotAddons[chart]; addon != want {
+			t.Errorf("crdGroupToChart[%q]=%q classified as add-on=%v, want %v", group, chart, addon, want)
+		}
+	}
+	for name := range integrationsNotAddons {
+		found := false
+		for _, chart := range crdGroupToChart {
+			found = found || chart == name
+		}
+		if !found {
+			t.Errorf("integrationsNotAddons lists %q, which no crdGroupToChart entry maps to", name)
 		}
 	}
 }

@@ -9,9 +9,12 @@ package packages
 // (FromCRDGroup field set), so we don't lose visibility on operators
 // we haven't seen before.
 //
-// When adding a new group, also consider whether the chart name we use
-// matches the canonical Helm chart name (the one that would appear in
-// Helm release secrets) — that's how rows merge.
+// The name is also the integration's name in usage reports and an entry in
+// the add-on catalog (addons.go), which matches workload, label and chart
+// names by it. Prefer the canonical Helm chart name, which is how package
+// rows merge, unless it is generic enough to tag user apps as add-ons (KAITO's
+// chart is "workspace"). A name that identifies an integration but must not
+// classify workloads goes in integrationsNotAddons.
 var crdGroupToChart = map[string]string{
 	// Cert-manager
 	"cert-manager.io":      "cert-manager",

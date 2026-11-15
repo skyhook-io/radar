@@ -13,12 +13,10 @@ import "strings"
 //     so (1) can't catch them.
 //
 // The Applications and Add-ons surfaces share this classifier rather than each
-// carrying a private allowlist. The frontend's interim KNOWN_ADDON_CHARTS
-// (radar-hub-web packagesModel.ts) mirrors this list until the hub forwards the
-// classification on the wire; keep the two in sync until then.
+// carrying a private allowlist. Radar Hub reads the resulting category from
+// the applications response rather than keeping its own copy.
 
 // addonChartsExtra lists add-on charts not keyed by a crdGroupToChart entry.
-// Kept in lockstep with radar-hub-web's KNOWN_ADDON_CHARTS extras.
 var addonChartsExtra = []string{
 	// Argo family beyond the argoproj.io→argo-cd catalog entry
 	"argocd", "argo-rollouts", "argo-workflows", "argo-events", "flux2", "capi",
@@ -59,6 +57,17 @@ var genericAddonNames = map[string]bool{
 	"alloy": true, "contour": true, "kong": true, "vault": true, "vector": true,
 }
 
+// integrationsNotAddons are crdGroupToChart names that identify an integration
+// but must not classify workloads, because the name or a chart prefixed with it
+// belongs to the user's own apps.
+var integrationsNotAddons = map[string]bool{
+	// Upstream CRDs with no workload of their own; "gateway-api-*" is a common
+	// name for a team's own API gateway service.
+	"gateway-api": true,
+	// Users deploy their model servers with the llm-d-modelservice chart.
+	"llm-d": true,
+}
+
 var addonImageRepos = map[string][]string{
 	"alloy":   {"grafana/alloy"},
 	"contour": {"projectcontour/contour"},
@@ -70,7 +79,9 @@ var addonImageRepos = map[string][]string{
 func buildAddonCatalog() map[string]bool {
 	m := make(map[string]bool, len(crdGroupToChart)+len(addonChartsExtra))
 	for _, chart := range crdGroupToChart {
-		m[chart] = true
+		if !integrationsNotAddons[chart] {
+			m[chart] = true
+		}
 	}
 	for _, chart := range addonChartsExtra {
 		m[chart] = true
