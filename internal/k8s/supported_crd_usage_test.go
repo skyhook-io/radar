@@ -20,6 +20,7 @@ var supportedGroupsNotReported = map[string]string{
 	"k8s.cni.cncf.io":              "NetworkAttachmentDefinition, a standard several CNIs serve besides Multus",
 	"helm.crossplane.io":           "a Crossplane provider package; Crossplane's own groups already report it",
 	"kubernetes.crossplane.io":     "a Crossplane provider package; Crossplane's own groups already report it",
+	"helm.cattle.io":               "the helm-controller built into k3s and RKE2, not an installed add-on",
 }
 
 func TestSupportedCRDGroupsAreReportedOrExcluded(t *testing.T) {
