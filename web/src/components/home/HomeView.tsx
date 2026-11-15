@@ -11,7 +11,7 @@ import { CertificateHealthCard } from './CertificateHealthCard'
 import { NetworkPolicyCoverageCard } from './NetworkPolicyCoverageCard'
 import { CostCard } from './CostCard'
 import { GitOpsControllersCard } from './GitOpsControllersCard'
-import { VulnerabilitiesCard } from './VulnerabilitiesCard'
+import { useVulnerabilitiesRow } from './useVulnerabilitiesRow'
 import { CapacityCard } from './CapacityCard'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
@@ -70,6 +70,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const capacityCardPossible =
     karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
+  const vulnerabilitiesRow = useVulnerabilitiesRow(namespaces)
   const { connection } = useConnection()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError, refetch: refetchIssues } = useIssues(namespaces)
   const issues = issuesData?.issues ?? []
@@ -260,14 +261,12 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                     <CapacityCard onNavigate={() => onNavigateToView('capacity')} />
                   </BandItem>
                 )}
-                <BandItem>
-                  <VulnerabilitiesCard namespaces={namespaces} />
-                </BandItem>
                 {data.audit && (
                   <BandItem>
                     <AuditCard
                       data={data.audit}
                       onNavigate={() => onNavigateToView('checks')}
+                      vulnerabilities={vulnerabilitiesRow}
                     />
                   </BandItem>
                 )}

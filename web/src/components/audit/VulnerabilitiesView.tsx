@@ -39,7 +39,9 @@ import {
   SeverityCounts,
   distinctNamespaces,
   FindingTotal,
+  ImageName,
   findingsCertainty,
+  imageParts,
   gapSentence,
   workloadLabel,
   workloadSummary,
@@ -306,8 +308,8 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
             summary={
               <div className="grid flex-1 grid-cols-[minmax(0,2.4fr)_minmax(0,2fr)_80px_minmax(0,2fr)_100px] items-center gap-4 text-sm">
                 <span className="flex min-w-0 flex-col">
-                  <WithTooltip tip={img.image}><span className="truncate font-mono text-theme-text-primary">{img.image}</span></WithTooltip>
-                  <span className="truncate font-mono text-xs text-theme-text-tertiary">{img.digest ? `${img.digest.slice(0, 19)}…` : 'no digest recorded'}{img.os ? ` · ${img.os}` : ''}</span>
+                  <ImageName image={img.image} className="text-theme-text-primary" />
+                  <span className="truncate font-mono text-xs text-theme-text-tertiary">{[imageParts(img.image).path, img.digest ? `${img.digest.slice(0, 19)}…` : 'no digest recorded', img.os].filter(Boolean).join(' · ')}</span>
                 </span>
                 {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityBar counts={img.counts} />}
                 <span className="font-mono text-xs text-theme-text-secondary">{img.findingsUnread ? '—' : img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown}</span>
@@ -398,7 +400,7 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                 <div className="overflow-hidden rounded-md border border-theme-border">
                   {c.affected.map((a) => (
                     <div key={a.imageId} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,2fr)] items-start gap-3 border-b border-theme-border bg-theme-base px-3 py-2 text-xs last:border-0">
-                      <WithTooltip tip={a.image}><span className="truncate font-mono text-theme-text-primary">{a.image}</span></WithTooltip>
+                      <ImageName image={a.image} className="text-theme-text-primary" />
                       <span className="flex min-w-0 flex-col">
                         {a.packages.map((p) => (
                           <span key={`${p.package}/${p.installedVersion}`} className="truncate font-mono text-theme-text-tertiary">
@@ -443,7 +445,7 @@ function WorkloadTable({ workloads, onOpen }: { workloads: VulnerabilityWorkload
             <ul className="flex min-w-0 flex-col gap-1">
               {w.containers.map((c) => (
                 <li key={`${c.name}/${c.image}`} className="flex min-w-0 flex-col text-xs">
-                  <span className="truncate"><span className="text-theme-text-secondary">{c.name}</span> <span className="font-mono text-theme-text-tertiary">{c.image}</span></span>
+                  <span className="flex min-w-0 gap-1"><span className="shrink-0 text-theme-text-secondary">{c.name}</span> <ImageName image={c.image} className="text-theme-text-tertiary" /></span>
                   {c.scanned && c.counts ? <SeverityCounts counts={c.counts} /> : c.findingsUnread ? <span className="text-warning-text">Too many findings to read here</span> : <span className="text-warning-text">Not scanned yet</span>}
                 </li>
               ))}
@@ -485,7 +487,7 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
         <ul className="flex flex-col gap-2">
           {data.unscanned.map((u) => (
             <li key={u.image} className="flex flex-col gap-1">
-              <span className="font-mono text-xs text-theme-text-primary">{u.image}</span>
+              <span className="truncate font-mono text-xs text-theme-text-primary">{u.image}</span>
               <WorkloadLinks workloads={u.workloads} onOpen={onOpen} />
               {u.workloadsTotal > u.workloads.length && <span className="text-xs text-theme-text-tertiary">and {u.workloadsTotal - u.workloads.length} more</span>}
             </li>

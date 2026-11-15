@@ -37,6 +37,26 @@ export function SeverityBar({ counts, className }: { counts: VulnerabilityCounts
   )
 }
 
+/**
+ * An image reference split for display: the last path segment with its tag
+ * (what tells images apart) and the registry/repository path before it.
+ */
+export function imageParts(ref: string): { name: string; path: string } {
+  const bare = ref.split('@')[0]
+  const slash = bare.lastIndexOf('/')
+  return slash < 0 ? { name: bare, path: '' } : { name: bare.slice(slash + 1), path: bare.slice(0, slash) }
+}
+
+/** An image's name and tag, with the full reference on hover. */
+export function ImageName({ image, className }: { image: string; className?: string }) {
+  const { name } = imageParts(image)
+  return (
+    <WithTooltip tip={image}>
+      <span className={clsx('truncate font-mono', className)}>{name}</span>
+    </WithTooltip>
+  )
+}
+
 export function SeverityCounts({ counts }: { counts: VulnerabilityCounts }) {
   if (totalFindings(counts) === 0) {
     return <span className="text-xs text-theme-text-tertiary">No known CVEs</span>
@@ -50,6 +70,11 @@ export function SeverityCounts({ counts }: { counts: VulnerabilityCounts }) {
           </span>
         </WithTooltip>
       ))}
+      {counts.unknown > 0 && (
+        <WithTooltip tip={`${counts.unknown} not yet rated by the scanner`}>
+          <span className="text-theme-text-tertiary">? {counts.unknown}</span>
+        </WithTooltip>
+      )}
     </span>
   )
 }
@@ -106,24 +131,20 @@ export function gapSentence(gaps: VulnerabilityGap[]): string | null {
  * report, or reports the caller can't read, make the totals lower bounds;
  * with nothing scanned they are unknown, never zero.
  */
-export function findingsCertainty(data: Pick<VulnerabilitiesResponse, 'summary' | 'coverage'>): Certainty {
+export function findingsCertainty(data: Pick<VulnerabilitiesResponse, 'summary' | 'coverage'>): 'exact' | 'lower_bound' | 'unknown' {
   const partial = data.summary.imagesUnscanned > 0 || !data.coverage.complete
   if (data.summary.imagesScanned === 0 && partial) return 'unknown'
   return partial ? 'lower_bound' : 'exact'
 }
 
 /** A finding total under its certainty: "—" when unknown, "≥ n" when a bound. */
-// plain renders the bound as text, for use inside a button where a
-// focusable glyph would nest one control in another.
-export function FindingTotal({ value, certainty, className, plain }: { value: number; certainty: Certainty; className?: string; plain?: boolean }) {
+export function FindingTotal({ value, certainty, className }: { value: number; certainty: Certainty; className?: string }) {
   if (certainty === 'unknown') {
     return <span className={clsx('font-mono text-theme-text-tertiary', className)}>—</span>
   }
   return (
     <span className={clsx('inline-flex items-baseline gap-1.5', className)}>
-      {certainty === 'lower_bound' && (plain
-        ? <span className="text-theme-text-tertiary">≥</span>
-        : <CertaintyGlyph certainty="lower_bound" title="At least: some running images have no report, or some reports aren't readable" />)}
+      {certainty === 'lower_bound' && <CertaintyGlyph certainty="lower_bound" title="At least: some running images have no report, or some reports aren't readable" />}
       <span className="font-mono">{value}</span>
     </span>
   )

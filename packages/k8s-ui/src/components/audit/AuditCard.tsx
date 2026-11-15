@@ -1,4 +1,4 @@
-import { ClipboardCheck, ArrowRight, Check, AlertTriangle } from 'lucide-react'
+import { ClipboardCheck, ArrowRight, Check, AlertTriangle, ShieldAlert } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../utils/badge-colors'
 import { SEVERITY_FILL_CLASS, SEVERITY_TEXT_CLASS } from '../checks/severity'
@@ -13,9 +13,23 @@ export interface AuditCardData {
   categories: Record<string, { passing: number; warning: number; danger: number }>
 }
 
+/**
+ * Known CVEs in running images, shown as a row of the Checks card when the
+ * host has them (Radar: Trivy Operator reports). Totals are lower bounds
+ * when some running images aren't scanned or some reports aren't readable,
+ * and unknown when nothing is scanned.
+ */
+export interface AuditCardVulnerabilities {
+  imagesWithCritical: number
+  fixableCriticalHigh: number
+  certainty: 'exact' | 'lower_bound' | 'unknown'
+  onNavigate: () => void
+}
+
 interface AuditCardProps {
   data: AuditCardData
   onNavigate: () => void
+  vulnerabilities?: AuditCardVulnerabilities
 }
 
 type SeverityLevel = 'success' | 'high' | 'medium' | 'neutral'
@@ -34,7 +48,7 @@ const ACCENT_BG: Record<SeverityLevel, string> = {
   medium: 'bg-yellow-500/10',
 }
 
-export function AuditCard({ data, onNavigate }: AuditCardProps) {
+export function AuditCard({ data, onNavigate, vulnerabilities }: AuditCardProps) {
   const total = data.passing + data.warning + data.danger
   const issueCount = data.warning + data.danger
   const incomplete = (data.missingInputs?.length ?? 0) > 0
@@ -43,11 +57,7 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
   const accentColor = level === 'neutral' ? 'text-theme-text-secondary' : level === 'success' ? SEVERITY_TEXT.success : SEVERITY_TEXT_CLASS[level]
   const accentBg = ACCENT_BG[level]
 
-  return (
-    <button
-      onClick={onNavigate}
-      className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up"
-    >
+  const body = (
       <div className="flex flex-col h-full w-full">
         <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
           <div className="flex items-center gap-2">
@@ -138,6 +148,47 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
           </span>
         </div>
       </div>
+  )
+
+  if (!vulnerabilities) {
+    return (
+      <button
+        onClick={onNavigate}
+        className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up"
+      >
+        {body}
+      </button>
+    )
+  }
+
+  // Two destinations on one card: the checks body and the vulnerabilities
+  // row are sibling buttons, never one inside the other.
+  return (
+    <div className="flex h-[260px] flex-col overflow-hidden rounded-xl bg-theme-surface shadow-theme-sm hover:shadow-theme-md transition-shadow duration-200 animate-fade-in-up">
+      <button onClick={onNavigate} className="group min-h-0 flex-1 text-left hover:bg-theme-hover/40 transition-colors">
+        {body}
+      </button>
+      <VulnerabilitiesRow {...vulnerabilities} />
+    </div>
+  )
+}
+
+function VulnerabilitiesRow({ imagesWithCritical, fixableCriticalHigh, certainty, onNavigate }: AuditCardVulnerabilities) {
+  const bound = certainty === 'lower_bound' ? '≥ ' : ''
+  const tone = certainty !== 'unknown' && imagesWithCritical > 0 ? SEVERITY_TEXT_CLASS.high : 'text-theme-text-secondary'
+  return (
+    <button
+      onClick={onNavigate}
+      className="group/vuln flex min-h-11 items-center gap-2 border-t border-theme-border/50 px-4 py-2 text-left hover:bg-theme-hover/40 transition-colors"
+    >
+      <ShieldAlert className={clsx('h-3.5 w-3.5 shrink-0', tone)} aria-hidden />
+      <span className="text-xs text-theme-text-secondary">Vulnerabilities</span>
+      <span className={clsx('ml-auto text-xs font-semibold tabular-nums', tone)}>
+        {certainty === 'unknown'
+          ? 'No running image scanned yet'
+          : `${bound}${imagesWithCritical} ${imagesWithCritical === 1 ? 'image' : 'images'} with Critical · ${bound}${fixableCriticalHigh} fixable`}
+      </span>
+      <ArrowRight className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform group-hover/vuln:translate-x-0.5" aria-hidden />
     </button>
   )
 }

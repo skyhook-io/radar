@@ -336,3 +336,15 @@ func TestRolloutWithImageAliasesStaysScanned(t *testing.T) {
 		t.Fatalf("unscanned: %+v", resp.Unscanned)
 	}
 }
+
+// Trivy Operator records a digest-pinned Pod's tag as "name:tag"; the image
+// still reads as people write it.
+func TestArtifactImageWithNameInTag(t *testing.T) {
+	img, digest := artifactImage(map[string]any{
+		"registry": map[string]any{"server": "index.docker.io"},
+		"artifact": map[string]any{"repository": "library/busybox", "tag": "busybox:1.38.0", "digest": "sha256:dc2d"},
+	})
+	if img != "busybox:1.38.0" || digest != "sha256:dc2d" {
+		t.Fatalf("%q %q", img, digest)
+	}
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { hasVulnerabilityReports, vulnerabilitiesPath } from '../../api/vulnerabilities'
-import { gapSentence, workloadSummary } from './parts'
+import { gapSentence, imageParts, workloadSummary } from './parts'
 
 describe('vulnerabilities helpers', () => {
   it('builds the request from filters', () => {
@@ -20,6 +20,13 @@ describe('vulnerabilities helpers', () => {
     expect(gapSentence([])).toBeNull()
     expect(gapSentence([{ code: 'user_forbidden', namespaces: { count: 2, names: ['a', 'b'] } }]))
       .toBe("Your access doesn't include the reports in 2 namespaces (a, b). Counts cover the rest.")
+  })
+
+  it('leads an image with the part that tells images apart', () => {
+    expect(imageParts('us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo/currencyservice:v0.10.7'))
+      .toEqual({ name: 'currencyservice:v0.10.7', path: 'us-central1-docker.pkg.dev/online-boutique-ci/microservices-demo' })
+    expect(imageParts('redis:alpine')).toEqual({ name: 'redis:alpine', path: '' })
+    expect(imageParts('ghcr.io/acme/app:1@sha256:abc').name).toBe('app:1')
   })
 
   it('summarizes workloads by distinct name', () => {

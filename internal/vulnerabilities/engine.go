@@ -126,8 +126,10 @@ func artifactImage(body map[string]any) (image, digest string) {
 	default:
 		image = server + "/" + repo
 	}
+	// For a Pod that pins a digest, Trivy Operator records the tag as
+	// "name:tag" (busybox:1.38.0); keep only the tag.
 	if tag := str(artifact["tag"]); tag != "" {
-		image += ":" + tag
+		image += ":" + tag[strings.LastIndex(tag, ":")+1:]
 	}
 	return image, digest
 }

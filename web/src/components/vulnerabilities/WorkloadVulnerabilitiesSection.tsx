@@ -7,7 +7,7 @@ import { useAPIResources } from '../../api/apiResources'
 import { ApiError, useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { hasVulnerabilityReports, useVulnerabilities, type VulnerabilityFinding } from '../../api/vulnerabilities'
-import { SeverityBadge, SeverityCounts, gapSentence } from './parts'
+import { ImageName, SeverityBadge, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
   kind: string
@@ -66,7 +66,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
             <div key={img.id} className="flex flex-col gap-1 rounded-md border border-theme-border bg-theme-surface px-3 py-2">
               <span className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium text-theme-text-primary">{[...new Set(img.workloads.filter(isThis).map((w) => w.container))].join(', ')}</span>
-                <WithTooltip tip={img.image}><span className="truncate font-mono text-xs text-theme-text-tertiary">{img.image}</span></WithTooltip>
+                <ImageName image={img.image} className="text-xs text-theme-text-tertiary" />
               </span>
               <span className="flex flex-wrap items-center gap-x-3">
                 {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityCounts counts={img.counts} />}
@@ -79,7 +79,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
             <div key={u.image} className="flex flex-col gap-0.5 rounded-md border border-theme-border bg-theme-surface px-3 py-2">
               <span className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium text-theme-text-primary">{u.workloads.map((w) => w.container).join(', ')}</span>
-                <span className="truncate font-mono text-xs text-theme-text-tertiary">{u.image}</span>
+                <ImageName image={u.image} className="text-xs text-theme-text-tertiary" />
               </span>
               <span className="text-xs text-warning-text">No report yet: Trivy hasn't scanned this image.</span>
             </div>
