@@ -145,7 +145,7 @@ func substratePoolCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "readiness", title: "Ready and desired workers", unit: "workers", seriesBy: "series",
+			id: "readiness", title: "Ready and desired workers", unit: "count", seriesBy: "series",
 			population: "The pool's desired and ready worker counts as Substrate's controller recorded them over time.",
 			source:     "ate_workerpool_desired_workers, ate_workerpool_ready_workers",
 			family:     substrateFamily{metric: "ate_workerpool_desired_workers"},

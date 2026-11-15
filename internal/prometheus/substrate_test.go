@@ -363,3 +363,16 @@ func TestSubstrateNodeScopeIgnoresAbsentFamilies(t *testing.T) {
 		t.Fatalf("paired check = %s, want mismatch", check.state)
 	}
 }
+
+// Ready and desired workers are the controller's whole-number counts; worker
+// states are averaged across API replicas and can be fractional.
+func TestSubstrateChartUnits(t *testing.T) {
+	units := map[string]string{}
+	for _, d := range append(substratePoolCharts(), substrateNodeCharts()...) {
+		units[d.id] = d.unit
+	}
+	if units["readiness"] != "count" || units["overdueUploads"] != "count" || units["workers"] == "count" {
+		t.Fatalf("units = %v", units)
+	}
+}
+
