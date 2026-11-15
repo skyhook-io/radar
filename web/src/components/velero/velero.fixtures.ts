@@ -15,7 +15,7 @@ export function schedule(overrides: Partial<VeleroScheduleReading> = {}): Velero
     lastSubmitted: hoursAgo(2),
     nextRun: hoursAhead(22),
     nextRunCertain: true,
-    runs: { read: 'full', kept: 1, newest: { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2) }, newestCompleted: { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2) } },
+    runs: { read: 'full', kept: 1, newest: { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2), ranAt: hoursAgo(2) }, newestCompleted: { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2), ranAt: hoursAgo(2) } },
     location: { name: 'default' },
     ...overrides,
   }

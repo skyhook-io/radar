@@ -63,8 +63,8 @@ function RunLine({ run, namespace, onNavigate }: { run: VeleroRun; namespace: st
     <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
       <RefLink refTo={veleroBackupRef(namespace, run.name)} onNavigate={onNavigate} mono />
       <VeleroRunPhase phase={run.phase} />
-      <Tooltip content={veleroLocalTime(run.created)}>
-        <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.created)}</span>
+      <Tooltip content={veleroLocalTime(run.ranAt)}>
+        <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
       </Tooltip>
     </span>
   )

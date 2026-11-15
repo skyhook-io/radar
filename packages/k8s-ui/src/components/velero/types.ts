@@ -59,6 +59,8 @@ export interface VeleroRun {
   name: string
   phase?: string
   created: string
+  /** When the run started, else when it was created; backup sync recreates old runs with a fresh creation time. */
+  ranAt: string
   started?: string
   completed?: string
   expires?: string

@@ -358,6 +358,25 @@ func TestReadLocation(t *testing.T) {
 	}
 }
 
+func TestRunsRecreatedByBackupSyncKeepTheirRunTime(t *testing.T) {
+	started := func(at time.Time) func(map[string]any) {
+		return func(o map[string]any) { o["status"].(map[string]any)["startTimestamp"] = ts(at) }
+	}
+	runs := []*unstructured.Unstructured{
+		// The genuinely newer run, created when it ran.
+		backup("nightly-20261115090000", "nightly", "Completed", at("09:00"), started(at("09:00"))),
+		// Two days old, but its CR was recreated by backup sync a minute ago.
+		backup("nightly-20261113090000", "nightly", "Completed", at("11:59"), started(at("09:00").Add(-48*time.Hour))),
+	}
+	r := ReadSchedule(ScheduleInput{Schedule: schedule("nightly", "0 9 * * *", lastBackup(at("09:00"))), Backups: runs, BackupsRead: true, Server: ServerConfig{Source: ServerUnread}, Now: at("12:00")})
+	if r.Runs.NewestCompleted == nil || r.Runs.NewestCompleted.Name != "nightly-20261115090000" {
+		t.Fatalf("newest completed %+v, want the run that happened last, not the CR created last", r.Runs.NewestCompleted)
+	}
+	if r.Zone.Source != ZoneInferred || r.Zone.Name != "UTC+00:00" {
+		t.Fatalf("zone %+v: a recreated CR's creation time must not feed the inferred offset", r.Zone)
+	}
+}
+
 func TestUnknownZoneWithUnreadBackupsKeepsTheHiddenRunCaveat(t *testing.T) {
 	r := ReadSchedule(ScheduleInput{
 		Schedule: schedule("nightly", "0 * * * *", lastBackup(at("11:00").Add(-48*time.Hour))),

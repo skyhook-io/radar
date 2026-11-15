@@ -95,9 +95,14 @@ const (
 
 // Run is one Backup a Schedule submitted.
 type Run struct {
-	Name      string     `json:"name"`
-	Phase     string     `json:"phase,omitempty"`
-	Created   time.Time  `json:"created"`
+	Name    string    `json:"name"`
+	Phase   string    `json:"phase,omitempty"`
+	Created time.Time `json:"created"`
+	// RanAt is when the run started (startTimestamp), else when it was created.
+	// Velero's backup sync recreates Backups from object storage with a fresh
+	// creationTimestamp but their original startTimestamp, so creation is not
+	// when a run happened.
+	RanAt     time.Time  `json:"ranAt"`
 	Started   *time.Time `json:"started,omitempty"`
 	Completed *time.Time `json:"completed,omitempty"`
 	Expires   *time.Time `json:"expires,omitempty"`
@@ -364,6 +369,10 @@ func inferOffset(name string, runs []Run) (time.Duration, bool) {
 		if err != nil {
 			continue
 		}
+		if run.Started != nil && run.Started.Before(run.Created) {
+			// Recreated by backup sync: its creationTimestamp is the sync.
+			continue
+		}
 		offset := local.Sub(run.Created.UTC().Truncate(time.Second))
 		offset = offset.Round(15 * time.Minute)
 		if offset < -12*time.Hour || offset > 14*time.Hour {
@@ -408,8 +417,8 @@ func runsOf(schedule string, backups []*unstructured.Unstructured) []Run {
 		runs = append(runs, runFrom(b))
 	}
 	sort.Slice(runs, func(i, j int) bool {
-		if !runs[i].Created.Equal(runs[j].Created) {
-			return runs[i].Created.After(runs[j].Created)
+		if !runs[i].RanAt.Equal(runs[j].RanAt) {
+			return runs[i].RanAt.After(runs[j].RanAt)
 		}
 		return runs[i].Name > runs[j].Name
 	})
@@ -420,6 +429,10 @@ func runFrom(b *unstructured.Unstructured) Run {
 	run := Run{Name: b.GetName(), Created: b.GetCreationTimestamp().UTC()}
 	run.Phase, _, _ = unstructured.NestedString(b.Object, "status", "phase")
 	run.Started = timeField(b, "status", "startTimestamp")
+	run.RanAt = run.Created
+	if run.Started != nil {
+		run.RanAt = *run.Started
+	}
 	run.Completed = timeField(b, "status", "completionTimestamp")
 	run.Expires = timeField(b, "status", "expiration")
 	run.Errors, _, _ = unstructured.NestedInt64(b.Object, "status", "errors")

@@ -28,12 +28,12 @@ const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '
 
 describe('VeleroScheduleActivity', () => {
   it('names the unstarted blocker holding a schedule and lists recent runs as links', () => {
-    const blocker = { name: 'nightly-20261115020000', phase: 'New', created: ago(30) }
+    const blocker = { name: 'nightly-20261115020000', phase: 'New', created: ago(30), ranAt: ago(30) }
     const html = text(renderToStaticMarkup(
       <VeleroScheduleActivity
         reading={reading({
           state: 'held', reason: 'unstartedBlocker', attention: true, blocker,
-          runs: { read: 'full', kept: 2, newest: blocker, newestCompleted: { name: 'nightly-20261114020000', phase: 'Completed', created: ago(1440) }, recent: [blocker, { name: 'nightly-20261114020000', phase: 'Completed', created: ago(1440) }] },
+          runs: { read: 'full', kept: 2, newest: blocker, newestCompleted: { name: 'nightly-20261114020000', phase: 'Completed', created: ago(1440), ranAt: ago(1440) }, recent: [blocker, { name: 'nightly-20261114020000', phase: 'Completed', created: ago(1440), ranAt: ago(1440) }] },
         })}
         onNavigate={() => {}}
       />,

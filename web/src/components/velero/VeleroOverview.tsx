@@ -112,7 +112,7 @@ function NewestRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: 
       className="flex flex-col items-start gap-0.5 text-left"
     >
       <VeleroRunPhase phase={run.phase} />
-      <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.created)}</span>
+      <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
     </button>
   )
 }
@@ -227,7 +227,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
         const newest = veleroNewestSuccessfulText(s.runs)
         if (newest.run) {
           return (
-            <Tooltip content={veleroLocalTime(newest.run.created)}>
+            <Tooltip content={veleroLocalTime(newest.run.completed ?? newest.run.ranAt)}>
               <span>{newest.text}</span>
             </Tooltip>
           )

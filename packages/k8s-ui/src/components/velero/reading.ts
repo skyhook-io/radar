@@ -205,7 +205,7 @@ export const VELERO_NONE_KEPT_SHORT = 'None kept'
 export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: string; run?: VeleroRun } {
   if (runs.read === 'unknown') return { text: VELERO_RUNS_UNKNOWN }
   if (!runs.newestCompleted) return { text: VELERO_NONE_KEPT }
-  return { text: formatRelativeAgeTime(runs.newestCompleted.created), run: runs.newestCompleted }
+  return { text: formatRelativeAgeTime(runs.newestCompleted.completed ?? runs.newestCompleted.ranAt), run: runs.newestCompleted }
 }
 
 export const VELERO_COMPLETED_NOTE = 'Completed is what Velero reports. It is not a test of a restore.'
