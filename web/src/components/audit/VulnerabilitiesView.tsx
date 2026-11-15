@@ -23,6 +23,7 @@ import {
   useVulnerabilities,
   type VulnerabilitiesResponse,
   type VulnerabilityCVE,
+  type VulnerabilityFix,
   type VulnerabilitySeverity,
   type VulnerabilityView,
   type VulnerabilityWorkload,
@@ -54,6 +55,7 @@ interface VulnerabilitiesViewProps {
 
 const VIEWS: { key: VulnerabilityView; label: string }[] = [
   { key: 'image', label: 'By image' },
+  { key: 'fix', label: 'By fix' },
   { key: 'cve', label: 'By CVE' },
   { key: 'workload', label: 'By workload' },
 ]
@@ -104,7 +106,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   }
 
   const filtered = severities.length > 0 || fixableOnly || query !== ''
-  const rows = view === 'cve' ? data.cves ?? [] : view === 'workload' ? data.workloads ?? [] : data.images ?? []
+  const rows = view === 'cve' ? data.cves ?? [] : view === 'workload' ? data.workloads ?? [] : view === 'fix' ? data.fixes ?? [] : data.images ?? []
 
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
@@ -147,10 +149,12 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
             )
           })}
         </div>
-        <label className="flex min-h-9 items-center gap-1.5 text-sm text-theme-text-secondary">
-          <input type="checkbox" checked={fixableOnly} onChange={(e) => update((p) => (e.target.checked ? p.set('fixable', '1') : p.delete('fixable')))} className="h-4 w-4 accent-[var(--accent)]" />
-          Has a fix
-        </label>
+        {view !== 'fix' && (
+          <label className="flex min-h-9 items-center gap-1.5 text-sm text-theme-text-secondary">
+            <input type="checkbox" checked={fixableOnly} onChange={(e) => update((p) => (e.target.checked ? p.set('fixable', '1') : p.delete('fixable')))} className="h-4 w-4 accent-[var(--accent)]" />
+            Has a fix
+          </label>
+        )}
         <div role="group" aria-label="Group by" className="ml-auto flex rounded-md border border-theme-border bg-theme-elevated p-0.5">
           {VIEWS.map((v) => (
             <button
@@ -173,6 +177,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           headline={filtered ? 'Nothing matches these filters' : data.summary.imagesScanned === 0 ? 'No scanned images run in this scope' : `No known CVEs in the ${data.summary.imagesScanned} scanned ${data.summary.imagesScanned === 1 ? 'image' : 'images'} that run`}
           body={filtered ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && data.unscanned.length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
         />
+      ) : view === 'fix' ? (
+        <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
       ) : view === 'cve' ? (
         <CVETable cves={data.cves ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
       ) : view === 'workload' ? (
@@ -189,7 +195,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         <p className="text-xs text-theme-text-tertiary">{data.coverage.rowsOmitted} more rows not shown. Narrow with a filter or the namespace picker.</p>
       )}
 
-      {!severities.length && !fixableOnly && view !== 'cve' && (
+      {!severities.length && !fixableOnly && (view === 'image' || view === 'workload') && (
         <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
       )}
       <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
@@ -372,6 +378,70 @@ function FindingsList({ findings, total }: { findings: VulnerableImage['findings
           </span>
         </div>
       ))}
+    </div>
+  )
+}
+
+function FixTable({ fixes, onOpen }: { fixes: VulnerabilityFix[]; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+  return (
+    <div className="flex shrink-0 flex-col gap-2">
+      <p className="text-xs text-theme-text-tertiary">
+        Each row is one package upgrade and every CVE it clears. The target is the smallest fixed release above what's installed, read with the package's own versioning; where Radar can't order the versions it shows the scanner's list.
+      </p>
+      <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
+        <div className="min-w-[900px]">
+          <div className="grid grid-cols-[minmax(0,1.3fr)_minmax(0,1.8fr)_minmax(0,1.4fr)_70px_90px] gap-4 border-b border-theme-border py-2 pl-10 pr-3 text-[11px] font-semibold uppercase tracking-wider text-theme-text-tertiary">
+            <span>Package</span><span>Upgrade</span><span>Clears</span><span>Images</span><span>Workloads</span>
+          </div>
+          {fixes.map((f) => (
+            <Disclosure
+              key={`${f.package}/${f.to ?? (f.listed ?? []).join('|')}`}
+              summary={
+                <div className="grid flex-1 grid-cols-[minmax(0,1.3fr)_minmax(0,1.8fr)_minmax(0,1.4fr)_70px_90px] items-center gap-4 text-sm">
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
+                    {f.packageType && <span className="text-xs text-theme-text-tertiary">{f.packageType}</span>}
+                  </span>
+                  <span className="min-w-0 truncate font-mono text-xs text-theme-text-secondary">
+                    {f.from.join(', ')} →{' '}
+                    {f.to
+                      ? <span className="text-emerald-700 dark:text-emerald-400">{f.to}</span>
+                      : <span className="text-theme-text-tertiary">fixed in {(f.listed ?? []).join('; ')}</span>}
+                  </span>
+                  <SeverityCounts counts={f.counts} />
+                  <span className="font-mono text-xs text-theme-text-secondary">{f.images}</span>
+                  <span className="font-mono text-xs font-medium text-theme-text-primary">{f.workloads}</span>
+                </div>
+              }
+            >
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                <div className="flex min-w-0 flex-col gap-2">
+                  <span className="text-xs font-medium text-theme-text-secondary">{f.cvesTotal} {f.cvesTotal === 1 ? 'CVE' : 'CVEs'} cleared</span>
+                  <span className="flex flex-wrap gap-1.5">
+                    {f.cves.map((id) => <span key={id} className="badge-sm bg-theme-elevated font-mono text-theme-text-secondary">{id}</span>)}
+                    {f.cvesTotal > f.cves.length && <span className="text-xs text-theme-text-tertiary">and {f.cvesTotal - f.cves.length} more</span>}
+                  </span>
+                  {!f.to && <span className="text-xs text-warning-text">Radar couldn't order this package's versions, so it shows the scanner's fixed releases instead of picking one.</span>}
+                </div>
+                <div className="overflow-hidden rounded-md border border-theme-border">
+                  {f.affected.map((a) => (
+                    <div key={a.imageId} className="grid grid-cols-[minmax(0,1.5fr)_minmax(0,0.8fr)_minmax(0,2fr)] items-start gap-3 border-b border-theme-border bg-theme-base px-3 py-2 text-xs last:border-0">
+                      <ImageName image={a.image} className="text-theme-text-primary" />
+                      <span className="truncate font-mono text-theme-text-tertiary">{a.installedVersion}</span>
+                      <span className="flex flex-wrap gap-x-2">
+                        {a.workloads.map((w) => (
+                          <button key={`${w.namespace}/${w.name}`} type="button" onClick={() => onOpen(w)} className="text-accent-text hover:underline">{workloadLabel(w)}</button>
+                        ))}
+                        {a.workloadsTotal > a.workloads.length && <span className="text-theme-text-tertiary">and {a.workloadsTotal - a.workloads.length} more</span>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Disclosure>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

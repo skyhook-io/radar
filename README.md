@@ -427,7 +427,7 @@ See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgra
 
 ### Vulnerabilities in Deployed Images
 
-With [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) installed, **Checks → Vulnerabilities** rolls its VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which have a fix, and which workloads and namespaces run them, by image, by CVE or by workload. Reports about older revisions are left out, an image used by many workloads is one row, and running images without a report are listed as not scanned rather than clean. The tab appears only when the cluster serves Trivy's VulnerabilityReport kind. See [Trivy Operator](docs/integrations.md#trivy-operator).
+With [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) installed, **Checks → Vulnerabilities** rolls its VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which have a fix, and which workloads and namespaces run them, by image, by CVE or by workload. **By fix** turns the fixable findings into a list of package upgrades: each row says what to upgrade to and every CVE that clears. Reports about older revisions are left out, an image used by many workloads is one row, and running images without a report are listed as not scanned rather than clean. The tab appears only when the cluster serves Trivy's VulnerabilityReport kind. See [Trivy Operator](docs/integrations.md#trivy-operator).
 
 ### Access Control (RBAC visibility)
 

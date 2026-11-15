@@ -25,6 +25,7 @@ type report struct {
 	image     string
 	digest    string
 	os        string
+	osFamily  string
 	scannedAt time.Time
 	findings  []Finding
 	// unread is true when the findings budget ran out before this report.
@@ -57,7 +58,8 @@ func reportHeader(u *unstructured.Unstructured) (report, bool) {
 		return report{}, false
 	}
 	if osInfo, _ := body["os"].(map[string]any); osInfo != nil {
-		r.os = strings.TrimSpace(str(osInfo["family"]) + " " + str(osInfo["name"]))
+		r.osFamily = str(osInfo["family"])
+		r.os = strings.TrimSpace(r.osFamily + " " + str(osInfo["name"]))
 	}
 	if ts, err := time.Parse(time.RFC3339, str(body["updateTimestamp"])); err == nil {
 		r.scannedAt = ts
@@ -84,6 +86,7 @@ func parseFindings(u *unstructured.Unstructured) []Finding {
 			FixedVersion:     str(v["fixedVersion"]),
 			Title:            str(v["title"]),
 			Link:             str(v["primaryLink"]),
+			PackageType:      str(v["packageType"]),
 		}
 		if f.ID == "" {
 			continue
@@ -293,6 +296,12 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 			return Response{}, err
 		}
 		resp.CVEs, resp.Coverage.RowsOmitted = capRows(cves)
+	case ViewFix:
+		fixes, err := j.fixes(ctx, f)
+		if err != nil {
+			return Response{}, err
+		}
+		resp.Fixes, resp.Coverage.RowsOmitted = capRows(fixes)
 	case ViewWorkload:
 		rows, clean := j.workloads(f)
 		resp.Workloads, resp.Coverage.RowsOmitted = capRows(rows)
@@ -821,10 +830,10 @@ func ParseView(s string) (View, error) {
 	switch v := View(strings.ToLower(strings.TrimSpace(s))); v {
 	case "", ViewImage:
 		return ViewImage, nil
-	case ViewCVE, ViewWorkload:
+	case ViewCVE, ViewWorkload, ViewFix:
 		return v, nil
 	}
-	return "", fmt.Errorf("unknown view %q (want image, cve or workload)", s)
+	return "", fmt.Errorf("unknown view %q (want image, cve, workload or fix)", s)
 }
 
 // ParseSeverities reads a comma-separated severity list.

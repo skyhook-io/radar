@@ -17,6 +17,7 @@ const (
 	ViewImage    View = "image"
 	ViewCVE      View = "cve"
 	ViewWorkload View = "workload"
+	ViewFix      View = "fix"
 )
 
 // Severity is a scanner's severity, lower-cased. Anything a scanner reports
@@ -61,6 +62,44 @@ type Finding struct {
 	FixedVersion string `json:"fixedVersion,omitempty"`
 	Title        string `json:"title,omitempty"`
 	Link         string `json:"link,omitempty"`
+	// PackageType is the scanner's ecosystem for the package (npm, jar,
+	// debian, …), which decides how its versions are ordered.
+	PackageType string `json:"packageType,omitempty"`
+}
+
+// Fix is one package upgrade and what it clears: every fixable CVE in that
+// package, in every image that has it at the same versions.
+type Fix struct {
+	Package     string `json:"package"`
+	PackageType string `json:"packageType,omitempty"`
+	// To is the version that clears every listed CVE: for each CVE the
+	// smallest fixed version above the installed one, read with the
+	// package's own version ordering, and the highest of those. Empty when
+	// some version couldn't be ordered; Listed then holds the scanner's
+	// fixed versions as written.
+	To     string   `json:"to,omitempty"`
+	Listed []string `json:"listed,omitempty"`
+	// From are the installed versions it replaces.
+	From     []string `json:"from"`
+	Severity Severity `json:"severity"`
+	// Counts are the CVEs it clears, by severity, each counted once.
+	Counts Counts `json:"counts"`
+	// CVEs lists at most MaxCVEsPerFix of CVEsTotal, worst first.
+	CVEs      []string `json:"cves"`
+	CVEsTotal int      `json:"cvesTotal"`
+	Images    int      `json:"images"`
+	Workloads int      `json:"workloads"`
+	// Affected lists at most MaxAffectedPerCVE images, widest first.
+	Affected []FixImage `json:"affected"`
+}
+
+// FixImage is one image a fix applies to.
+type FixImage struct {
+	ImageID          string        `json:"imageId"`
+	Image            string        `json:"image"`
+	InstalledVersion string        `json:"installedVersion"`
+	Workloads        []WorkloadRef `json:"workloads"`
+	WorkloadsTotal   int           `json:"workloadsTotal"`
 }
 
 // Image is one scanned image (by digest when the scanner recorded one) and
@@ -209,7 +248,7 @@ type Coverage struct {
 }
 
 // Response is GET /api/vulnerabilities and the MCP list_vulnerabilities
-// answer. Exactly one of Images, CVEs and Workloads is set, by View.
+// answer. Exactly one of Images, CVEs, Workloads and Fixes is set, by View.
 type Response struct {
 	Source    string     `json:"source"`
 	View      View       `json:"view"`
@@ -217,6 +256,7 @@ type Response struct {
 	Images    []Image    `json:"images,omitempty"`
 	CVEs      []CVE      `json:"cves,omitempty"`
 	Workloads []Workload `json:"workloads,omitempty"`
+	Fixes     []Fix      `json:"fixes,omitempty"`
 	// Clean lists the scanned images with no findings (image view), and
 	// CleanWorkloads the workloads whose every container is one (workload
 	// view). They are kept out of the rows unless a search names them.
@@ -246,6 +286,8 @@ const (
 	MaxFindingsPerImage = 200
 	// MaxAffectedPerCVE bounds the images listed per CVE row.
 	MaxAffectedPerCVE = 50
+	// MaxCVEsPerFix bounds the CVE IDs listed per fix row.
+	MaxCVEsPerFix = 50
 	// MaxRows bounds the rows of one pivot.
 	MaxRows = 2000
 	// MaxWorkloadsPerRow bounds the workloads listed per image row.

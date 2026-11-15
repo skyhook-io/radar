@@ -376,3 +376,52 @@ func TestCleanImagesListedApart(t *testing.T) {
 		t.Fatalf("workloads %+v clean %+v", w.Workloads, w.CleanWorkloads)
 	}
 }
+
+// By fix: one row per upgrade, to the version that clears every fixable CVE
+// of the package; images needing the same upgrade share it; a package whose
+// versions can't be ordered keeps the scanner's list.
+func TestFixView(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+			{"CVE-1", "CRITICAL", "protobufjs", "6.11.4", "8.0.1, 7.5.5, 6.11.6"},
+			{"CVE-2", "HIGH", "protobufjs", "6.11.4", "7.5.6, 6.11.7"},
+			{"CVE-3", "LOW", "bash", "5.2", ""},
+		}}),
+		vulnReport(reportSpec{name: "w", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/worker", tag: "1", digest: "sha256:w", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+			{"CVE-1", "CRITICAL", "protobufjs", "6.11.4", "8.0.1, 7.5.5, 6.11.6"},
+			{"CVE-2", "HIGH", "protobufjs", "6.11.4", "7.5.6, 6.11.7"},
+			{"CVE-9", "MEDIUM", "libfoo", "1.0", "1.1"},
+		}}),
+	}
+	for _, u := range items {
+		vs := u.Object["report"].(map[string]any)["vulnerabilities"].([]any)
+		for _, v := range vs {
+			m := v.(map[string]any)
+			if m["resource"] == "protobufjs" {
+				m["packageType"] = "npm"
+			} else {
+				m["packageType"] = "conan"
+			}
+		}
+	}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/worker:1", "", worker),
+	}
+	resp := mustBuild(t, items, targets, ViewFix, Filter{})
+	if len(resp.Fixes) != 2 {
+		t.Fatalf("fixes: %+v", resp.Fixes)
+	}
+	top := resp.Fixes[0]
+	if top.Package != "protobufjs" || top.To != "6.11.7" || top.CVEsTotal != 2 || top.Counts.Critical != 1 || top.Counts.High != 1 || top.Images != 2 || top.Workloads != 2 {
+		t.Fatalf("one bump clears both CVEs in both images: %+v", top)
+	}
+	other := resp.Fixes[1]
+	if other.Package != "libfoo" || other.To != "" || len(other.Listed) != 1 || other.Listed[0] != "1.1" {
+		t.Fatalf("an ecosystem Radar can't order keeps the scanner's list: %+v", other)
+	}
+	crit := mustBuild(t, items, targets, ViewFix, Filter{Severities: []Severity{SeverityCritical}})
+	if len(crit.Fixes) != 1 || crit.Fixes[0].To != "6.11.6" {
+		t.Fatalf("filtered to Critical, the bump is the one Critical needs: %+v", crit.Fixes)
+	}
+}

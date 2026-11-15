@@ -15,7 +15,7 @@ import (
 )
 
 type listVulnerabilitiesInput struct {
-	View      string `json:"view,omitempty" jsonschema:"image (default), cve or workload"`
+	View      string `json:"view,omitempty" jsonschema:"image (default), cve, workload or fix"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"limit to one namespace"`
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical, high, medium, low, unknown"`
 	Fixable   bool   `json:"fixable,omitempty" jsonschema:"keep only findings with a fixed version"`
@@ -107,6 +107,13 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	}
 	for i := range resp.CVEs {
 		resp.CVEs[i].Affected = resp.CVEs[i].Affected[:min(len(resp.CVEs[i].Affected), vulnerabilityDetailsPerRow)]
+	}
+	if len(resp.Fixes) > limit {
+		omitted, resp.Fixes = len(resp.Fixes)-limit, resp.Fixes[:limit]
+	}
+	for i := range resp.Fixes {
+		resp.Fixes[i].Affected = resp.Fixes[i].Affected[:min(len(resp.Fixes[i].Affected), vulnerabilityDetailsPerRow)]
+		resp.Fixes[i].CVEs = resp.Fixes[i].CVEs[:min(len(resp.Fixes[i].CVEs), vulnerabilityDetailsPerRow)]
 	}
 	if len(resp.Workloads) > limit {
 		omitted, resp.Workloads = len(resp.Workloads)-limit, resp.Workloads[:limit]

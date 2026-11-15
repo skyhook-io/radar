@@ -375,8 +375,8 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "list_vulnerabilities",
 		Description: "Which running images carry known CVEs and which workloads run them, from vulnerability " +
-			"scanner reports (Trivy Operator). view=image ranks images; view=cve ranks CVEs by severity, fix " +
-			"and workloads affected, for what to fix first; view=workload lists containers. Only images a Pod " +
+			"scanner reports (Trivy Operator). view=image ranks images; view=fix ranks package upgrades by what they " +
+			"clear (target version per ecosystem); view=cve ranks CVEs; view=workload lists containers. Only images a Pod " +
 			"or unsuspended CronJob runs count. unscanned: running images with no report yet, unknown not " +
 			"clean. coverage.gaps names namespaces whose reports you can't read.",
 		Annotations: readOnly,

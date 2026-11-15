@@ -5,7 +5,7 @@ import { shouldRetryRadarQuery } from './radarFeatures'
 
 // Mirrors internal/vulnerabilities/types.go.
 
-export type VulnerabilityView = 'image' | 'cve' | 'workload'
+export type VulnerabilityView = 'image' | 'fix' | 'cve' | 'workload'
 export type VulnerabilitySeverity = 'critical' | 'high' | 'medium' | 'low' | 'unknown'
 
 export interface VulnerabilityCounts {
@@ -74,6 +74,23 @@ export interface VulnerabilityCVE {
   affected: VulnerabilityCVEImage[]
 }
 
+export interface VulnerabilityFix {
+  package: string
+  packageType?: string
+  /** The version that clears every listed CVE; absent when Radar couldn't order this ecosystem's versions. */
+  to?: string
+  /** The scanner's fixed versions, when there is no target. */
+  listed?: string[]
+  from: string[]
+  severity: VulnerabilitySeverity
+  counts: VulnerabilityCounts
+  cves: string[]
+  cvesTotal: number
+  images: number
+  workloads: number
+  affected: { imageId: string; image: string; installedVersion: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
+}
+
 export interface VulnerabilityWorkloadContainer {
   name: string
   image: string
@@ -121,6 +138,7 @@ export interface VulnerabilitiesResponse {
   images?: VulnerableImage[]
   cves?: VulnerabilityCVE[]
   workloads?: VulnerabilityWorkload[]
+  fixes?: VulnerabilityFix[]
   /** Scanned images with no findings, kept out of the rows unless searched for. */
   clean?: { id: string; image: string; scannedAt: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number; report: VulnerableImage['report'] }[]
   /** Workloads whose every container is scanned and clean. */
