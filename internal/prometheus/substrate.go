@@ -99,6 +99,9 @@ type substrateChartDef struct {
 	also []substrateFamily
 	queries                                        func(sel, window string) []substrateQuery
 	emptyReason                                    string
+	// presence: the series the chart's queries actually read, when that is
+	// not family (a quantile reads _bucket; family is _count).
+	presence string
 }
 
 func substrateRateWindow(step time.Duration) string {
@@ -156,7 +159,7 @@ func substratePoolCharts() []substrateChartDef {
 			emptyReason: "Substrate's controller exported no worker counts in this range",
 		},
 		{
-			id: "resumeTime", title: "Resume time", unit: "seconds", seriesBy: "series",
+			id: "resumeTime", presence: "ate_actor_lifecycle_operation_duration_seconds_bucket", title: "Resume time", unit: "seconds", seriesBy: "series",
 			population:  "Successful resumes of actors placed on this pool. A resume that failed before a worker was assigned carries no pool and is not counted.",
 			source:      "ate_actor_lifecycle_operation_duration_seconds",
 			family:      lifecycle,
@@ -180,7 +183,7 @@ func substratePoolCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "placementTime", title: "Placement time", unit: "seconds", seriesBy: "series",
+			id: "placementTime", presence: "ate_scheduler_assignment_duration_seconds_bucket", title: "Placement time", unit: "seconds", seriesBy: "series",
 			population:  "How long the scheduler took to place an actor on a worker of this pool. Placements that found no capacity name no pool, so they are not counted here.",
 			source:      "ate_scheduler_assignment_duration_seconds",
 			family:      assignment,
@@ -226,7 +229,7 @@ func substrateNodeCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "uploadTime", title: "Snapshot upload time", unit: "seconds", seriesBy: "series",
+			id: "uploadTime", presence: "atelet_snapshot_upload_duration_seconds_bucket", title: "Snapshot upload time", unit: "seconds", seriesBy: "series",
 			population:  "Successful snapshot uploads from this node to object storage.",
 			source:      "atelet_snapshot_upload_duration_seconds",
 			family:      substrateFamily{metric: "atelet_snapshot_upload_duration_seconds_count", additive: true},
@@ -246,7 +249,7 @@ func substrateNodeCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "restoreTime", title: "Restore and checkpoint time", unit: "seconds", seriesBy: "series",
+			id: "restoreTime", presence: "ate_actor_restore_duration_seconds_bucket", title: "Restore and checkpoint time", unit: "seconds", seriesBy: "series",
 			population:  "Whole restores and checkpoints of actors on this node. The two overlap in time and are not added together.",
 			source:      "ate_actor_restore_duration_seconds, ate_actor_checkpoint_duration_seconds",
 			family:      substrateFamily{metric: "ate_actor_restore_duration_seconds_count", additive: true},
@@ -407,11 +410,15 @@ func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrat
 
 func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef, sel, w string, start, end time.Time, step time.Duration, c *SubstrateChart) {
 	series := []prom.Series{}
+	var missing []string
 	for _, query := range d.queries(sel, w) {
 		res, err := q.QueryRange(ctx, query.expr, start, end, step)
 		if err != nil {
 			c.State, c.Reason, c.Series = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200), []prom.Series{}
 			return
+		}
+		if query.label != "" && !hasSample(res.Series) {
+			missing = append(missing, query.label)
 		}
 		for _, s := range res.Series {
 			series = append(series, prom.Series{Labels: substrateSeriesLabels(d, query, s.Labels), DataPoints: s.DataPoints})
@@ -433,18 +440,51 @@ func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef
 	c.Series, c.Covered = series, len(covered)
 	if c.Covered > 0 {
 		c.State = SubstrateChartOK
+		// A chart of several series must not pass for complete with one missing.
+		if len(missing) > 0 {
+			c.Reason = "no data for " + strings.Join(missing, ", ")
+		}
 		return
 	}
 	c.Series = []prom.Series{}
-	res, err := q.Query(ctx, "count(last_over_time("+d.family.metric+"{"+sel+"}["+end.Sub(start).String()+"]))")
+	window := end.Sub(start).String()
+	present := func(metric string) (bool, error) {
+		res, err := q.Query(ctx, "count(last_over_time("+metric+"{"+sel+"}["+window+"]))")
+		return err == nil && len(res.Series) > 0, err
+	}
+	presence := d.family.metric
+	if d.presence != "" {
+		presence = d.presence
+	}
+	found, err := present(presence)
+	if err == nil && !found && presence != d.family.metric {
+		// Observations without classic buckets: a native-histogram pipeline,
+		// or one that dropped the buckets. Not the same as no activity.
+		var counted bool
+		if counted, err = present(d.family.metric); err == nil && counted {
+			c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has "+d.family.metric+" but no "+presence+" series; Radar reads classic histogram buckets"
+			return
+		}
+	}
 	switch {
 	case err != nil:
 		c.State, c.Reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
-	case len(res.Series) > 0:
+	case found:
 		c.State, c.Reason = SubstrateChartEmpty, d.emptyReason
 	default:
 		c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has no "+d.source+" series for this in the range"
 	}
+}
+
+func hasSample(series []prom.Series) bool {
+	for _, s := range series {
+		for _, p := range s.DataPoints {
+			if !math.IsNaN(p.Value) && !math.IsInf(p.Value, 0) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // substrateSeriesLabels keeps one display label per series.
@@ -467,13 +507,29 @@ func substrateSeriesLabels(d substrateChartDef, query substrateQuery, labels map
 // substrateResponseStatus folds the charts into one status. Nothing found
 // anywhere is notFound; a node whose atelet series exist only for other nodes
 // is notOnNode.
-func substrateResponseStatus(charts []SubstrateChart) string {
+func substrateResponseStatus(charts []SubstrateChart) (string, string) {
+	notFound, failed := true, true
+	reason := ""
 	for _, c := range charts {
-		if c.State != SubstrateChartNoSeries {
-			return SubstrateAvailable
+		switch c.State {
+		case SubstrateChartNoSeries:
+			failed = false
+		case SubstrateChartError, SubstrateChartAmbiguous, SubstrateChartMismatch:
+			notFound = false
+			if reason == "" {
+				reason = c.Reason
+			}
+		default:
+			notFound, failed = false, false
 		}
 	}
-	return SubstrateNotFound
+	switch {
+	case len(charts) > 0 && notFound:
+		return SubstrateNotFound, ""
+	case len(charts) > 0 && failed:
+		return SubstrateChartError, reason
+	}
+	return SubstrateAvailable, ""
 }
 
 func substratePoolSelector(namespace, name string) string {
@@ -486,10 +542,30 @@ func substrateNodeSelector(node string) string {
 
 // substrateNodeAttribution decides whether atelet's series can be attributed
 // to nodes at all, and to this node, over the window.
+// substrateNodeFamilies are the per-node families atelet exports that the
+// node charts read.
+var substrateNodeFamilies = []string{
+	"atelet_snapshot_undurable_age_max_seconds",
+	"atelet_snapshot_upload_overdue_actors",
+	"atelet_snapshot_upload_duration_seconds_count",
+	"ate_actor_restore_duration_seconds_count",
+	"ate_actor_checkpoint_duration_seconds_count",
+}
+
+// anyNodeFamily selects any of atelet's node families. Each is evaluated on
+// its own before the union: a range function drops metric names, and series
+// that differed only by name would collide.
+func anyNodeFamily(sel string, window time.Duration) string {
+	parts := make([]string, len(substrateNodeFamilies))
+	for i, f := range substrateNodeFamilies {
+		parts[i] = "last_over_time(" + f + "{" + sel + "}[" + window.String() + "])"
+	}
+	return strings.Join(parts, " or ")
+}
+
 func substrateNodeAttribution(ctx context.Context, q seriesQuerier, matchers, node string, window time.Duration) (string, string, error) {
-	const family = "atelet_snapshot_undurable_age_max_seconds"
 	count := func(sel string) (bool, error) {
-		res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+family+"{"+withScope(sel, matchers)+"}["+window.String()+"]))")
+		res, err := strictQuerier{q}.Query(ctx, "count("+anyNodeFamily(withScope(sel, matchers), window)+")")
 		if err != nil {
 			return false, err
 		}
@@ -523,6 +599,23 @@ func substrateNodeAttribution(ctx context.Context, q seriesQuerier, matchers, no
 		return SubstrateNotOnNode, "", nil
 	}
 	return SubstrateAvailable, "", nil
+}
+
+// markUnattributedNodeCharts explains a node chart with no series of its own
+// when its family is exported without a node label: those series could be
+// this node's.
+func markUnattributedNodeCharts(ctx context.Context, q seriesQuerier, matchers string, window time.Duration, charts []SubstrateChart) {
+	defs := substrateNodeCharts()
+	for i := range charts {
+		if charts[i].State != SubstrateChartNoSeries {
+			continue
+		}
+		res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+defs[i].family.metric+"{"+withScope(`node=""`, matchers)+"}["+window.String()+"]))")
+		if err == nil && len(res.Series) > 0 {
+			charts[i].State = SubstrateChartNotAttributable
+			charts[i].Reason = defs[i].family.metric + " is exported without a node label, so Radar cannot tell which node reported it"
+		}
+	}
 }
 
 func substrateRequestBounds(r *http.Request) (string, time.Time, time.Time, time.Duration) {
@@ -559,7 +652,8 @@ func handleSubstrateWorkerPool(w http.ResponseWriter, r *http.Request) {
 	}
 	serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
 		charts := querySubstrateCharts(ctx, q, resolve, substrateRequest{sel: substratePoolSelector(namespace, name), charts: substratePoolCharts(), rangeName: rangeName, start: start, end: end, step: step})
-		return SubstrateHealthResponse{Status: substrateResponseStatus(charts), Range: rangeName, Charts: charts}
+		status, reason := substrateResponseStatus(charts)
+		return SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
 	})
 }
 
@@ -575,7 +669,11 @@ func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 		// Attribution is decided within this cluster's series: another
 		// cluster's node labels say nothing about this one's.
 		window := substrateProbeWindow(start, end, step)
-		scope := checkSubstrateFamilies(ctx, q, resolve, []substrateFamily{{metric: "atelet_snapshot_undurable_age_max_seconds"}}, "", window)
+		families := make([]substrateFamily, len(substrateNodeFamilies))
+		for i, f := range substrateNodeFamilies {
+			families[i] = substrateFamily{metric: f}
+		}
+		scope := checkSubstrateFamilies(ctx, q, resolve, families, "", window)
 		if scope.state != "" {
 			return SubstrateHealthResponse{Status: SubstrateChartError, Reason: scope.reason, Range: rangeName, Charts: []SubstrateChart{}}
 		}
@@ -587,6 +685,7 @@ func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 			return SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: []SubstrateChart{}}
 		}
 		charts := querySubstrateCharts(ctx, q, resolve, substrateRequest{sel: substrateNodeSelector(node), charts: substrateNodeCharts(), rangeName: rangeName, start: start, end: end, step: step})
+		markUnattributedNodeCharts(ctx, q, scope.matchers, window, charts)
 		return SubstrateHealthResponse{Status: SubstrateAvailable, Range: rangeName, Charts: charts}
 	})
 }

@@ -1,5 +1,6 @@
 import { Info, LineChart, Lock } from 'lucide-react'
-import { AlertBanner, RadarUpgradeNote, Tooltip } from '@skyhook-io/k8s-ui'
+import { clsx } from 'clsx'
+import { AlertBanner, RadarUpgradeNote, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
 import { AreaChart, SeriesLegend, formatMetricValue } from '@skyhook-io/k8s-ui/components/charts'
 import { isForbiddenError, useAutoPromConnect, usePrometheusStatus } from '../../api/client'
 import { useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type SubstrateTarget } from '../../api/substrateHealth'
@@ -71,7 +72,7 @@ function Frame({ children }: { children: React.ReactNode }) {
 }
 
 function Muted({ children, tone }: { children: React.ReactNode; tone?: 'warning' }) {
-  return <p className={tone === 'warning' ? 'text-xs text-amber-600 dark:text-amber-400' : 'text-xs text-theme-text-tertiary'}>{children}</p>
+  return <p className={clsx('text-xs', tone === 'warning' ? toneTextClass('degraded') : 'text-theme-text-tertiary')}>{children}</p>
 }
 
 function Charts({ health }: { health: SubstrateHealth }) {
@@ -158,6 +159,7 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
           {series.length > 1 && <SeriesLegend series={series} color="var(--accent)" seriesLabels={seriesLabels} />}
           {series.length > 1 && <LatestValues series={series} labels={seriesLabels} unit={chart.unit} since={since} />}
           {chart.omitted ? <Muted>{chart.omitted} more series not shown.</Muted> : null}
+          {chart.reason ? <Muted>{capitalize(chart.reason)}.</Muted> : null}
         </>
       ) : (
         <Muted tone={chart.state === 'empty' || chart.state === 'noSeries' ? undefined : 'warning'}>{chartReason(chart)}</Muted>
@@ -175,6 +177,10 @@ function LatestValues({ series, labels, unit, since }: { series: { dataPoints: {
       Now: {values.map(v => `${v.label} ${formatMetricValue(v.value!, unit)}`).join(' · ')}
     </p>
   )
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 function chartReason(chart: SubstrateChart): string {

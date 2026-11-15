@@ -104,7 +104,7 @@ func TestSubstratePoolCharts(t *testing.T) {
 			t.Fatalf("queried no_capacity, which names no pool: %s", q)
 		}
 	}
-	if substrateResponseStatus(charts) != SubstrateAvailable {
+	if status, _ := substrateResponseStatus(charts); status != SubstrateAvailable {
 		t.Fatal("status should be available")
 	}
 }
@@ -264,6 +264,69 @@ func TestSubstrateWorkerAverageCollapsesHACopies(t *testing.T) {
 		if strings.Contains(q, "avg by") && !strings.Contains(q, "(max without (prometheus, prometheus_replica, replica) (ate_workerpool_workers{") {
 			t.Fatalf("worker average without HA collapse: %s", q)
 		}
+	}
+}
+
+func TestSubstrateResponseStatus(t *testing.T) {
+	chart := func(state, reason string) SubstrateChart { return SubstrateChart{State: state, Reason: reason} }
+	for _, tc := range []struct {
+		name   string
+		charts []SubstrateChart
+		want   string
+	}{
+		{"nothing scraped", []SubstrateChart{chart(SubstrateChartNoSeries, ""), chart(SubstrateChartNoSeries, "")}, SubstrateNotFound},
+		{"every chart failed", []SubstrateChart{chart(SubstrateChartError, "boom"), chart(SubstrateChartAmbiguous, "two clusters")}, SubstrateChartError},
+		{"some drawn", []SubstrateChart{chart(SubstrateChartError, "boom"), chart(SubstrateChartOK, "")}, SubstrateAvailable},
+	} {
+		if got, reason := substrateResponseStatus(tc.charts); got != tc.want || (got == SubstrateChartError && reason != "boom") {
+			t.Fatalf("%s: got %s %q, want %s", tc.name, got, reason, tc.want)
+		}
+	}
+}
+
+func TestSubstrateChartGaps(t *testing.T) {
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		// Desired is reported, ready is not.
+		{"max(ate_workerpool_desired_workers", result(series(nil, 5))},
+		// Resumes counted, but no classic buckets.
+		{"count(last_over_time(ate_actor_lifecycle_operation_duration_seconds_count", result(series(nil, 4))},
+	}}
+	charts := querySubstrateCharts(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts()))
+	if c := chartByID(charts, "readiness"); c.State != SubstrateChartOK || c.Reason != "no data for ready" {
+		t.Fatalf("readiness = %s %q, want ok noting the missing ready series", c.State, c.Reason)
+	}
+	if c := chartByID(charts, "resumeTime"); c.State != SubstrateChartNoSeries || !strings.Contains(c.Reason, "no ate_actor_lifecycle_operation_duration_seconds_bucket") {
+		t.Fatalf("resumeTime = %s %q, want missing buckets named", c.State, c.Reason)
+	}
+}
+
+func TestSubstrateNodeChartsWithoutNodeLabels(t *testing.T) {
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		{`count(last_over_time(atelet_snapshot_upload_duration_seconds_count{node=""}`, result(series(nil, 1))},
+	}}
+	charts := []SubstrateChart{}
+	for _, d := range substrateNodeCharts() {
+		charts = append(charts, SubstrateChart{ID: d.id, State: SubstrateChartNoSeries})
+	}
+	markUnattributedNodeCharts(context.Background(), f, "", time.Hour, charts)
+	if c := chartByID(charts, "uploadTime"); c.State != SubstrateChartNotAttributable {
+		t.Fatalf("uploadTime = %s, want notAttributable", c.State)
+	}
+	if c := chartByID(charts, "unsavedSnapshotAge"); c.State != SubstrateChartNoSeries {
+		t.Fatalf("unsavedSnapshotAge = %s, want noSeries", c.State)
+	}
+}
+
+// Any of atelet's node families shows the node runs Substrate, not just one.
+func TestSubstrateNodePresenceUsesEveryFamily(t *testing.T) {
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		{`last_over_time(atelet_snapshot_upload_overdue_actors{node="worker-1"}`, result(series(nil, 1))},
+		{`last_over_time(atelet_snapshot_upload_overdue_actors{node!=""}`, result(series(nil, 1))},
+		{`last_over_time(atelet_snapshot_upload_overdue_actors{}`, result(series(nil, 1))},
+	}}
+	got, _, err := substrateNodeAttribution(context.Background(), f, "", "worker-1", time.Hour)
+	if err != nil || got != SubstrateAvailable {
+		t.Fatalf("got %s, %v; want available", got, err)
 	}
 }
 

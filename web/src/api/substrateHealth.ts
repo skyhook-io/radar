@@ -29,7 +29,7 @@ export interface SubstrateChart {
 }
 
 export interface SubstrateHealth {
-  /** available · notFound (no Substrate series at all) · notOnNode · notAttributable · error */
+  /** available · notFound (no Substrate series at all) · notOnNode · notAttributable · error (every chart failed) */
   status: 'available' | 'notFound' | 'notOnNode' | 'notAttributable' | 'error'
   reason?: string
   range: string
