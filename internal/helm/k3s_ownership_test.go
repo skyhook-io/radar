@@ -23,13 +23,36 @@ func TestK3sHelmChartKeys(t *testing.T) {
 	got := k3sHelmChartKeys(true,
 		[]*unstructured.Unstructured{
 			k3sObj("HelmChart", "kube-system", "traefik", map[string]any{"chart": "traefik"}),
-			k3sObj("HelmChart", "kube-system", "app", map[string]any{"targetNamespace": "apps"}),
+			k3sObj("HelmChart", "kube-system", "app", map[string]any{"chartContent": "H4sI", "targetNamespace": "apps"}),
 		},
 		[]*unstructured.Unstructured{k3sObj("HelmChartConfig", "kube-system", "traefik", nil)},
 	)
 	want := map[string]k3sOwner{
 		"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik", configKnown: true},
 		"apps/app":            {chart: "kube-system/app", configKnown: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("keys = %+v, want %+v", got, want)
+	}
+}
+
+// helm-controller's shouldManage skips these, so nothing installs their release.
+func TestK3sHelmChartKeysSkipsChartsHelmControllerIgnores(t *testing.T) {
+	annotated := func(name string, annotations map[string]string) *unstructured.Unstructured {
+		u := k3sObj("HelmChart", "kube-system", name, map[string]any{"chart": name})
+		u.SetAnnotations(annotations)
+		return u
+	}
+	got := k3sHelmChartKeys(true, []*unstructured.Unstructured{
+		annotated("unmanaged", map[string]string{"helmcharts.helm.cattle.io/unmanaged": "true"}),
+		annotated("other", map[string]string{"helmcharts.cattle.io/managed-by": "custom-controller"}),
+		k3sObj("HelmChart", "kube-system", "empty", map[string]any{"targetNamespace": "apps"}),
+		annotated("claimed", map[string]string{"helmcharts.cattle.io/managed-by": "helm-controller"}),
+		annotated("unclaimed", nil),
+	}, nil)
+	want := map[string]k3sOwner{
+		"kube-system/claimed":   {chart: "kube-system/claimed", configKnown: true},
+		"kube-system/unclaimed": {chart: "kube-system/unclaimed", configKnown: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("keys = %+v, want %+v", got, want)
@@ -62,8 +85,8 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 // release is credited to neither, as for two Flux HelmReleases.
 func TestK3sHelmChartKeysCreditNeitherOfTwoCharts(t *testing.T) {
 	got := k3sHelmChartKeys(true, []*unstructured.Unstructured{
-		k3sObj("HelmChart", "kube-system", "app", map[string]any{"targetNamespace": "apps"}),
-		k3sObj("HelmChart", "team", "app", map[string]any{"targetNamespace": "apps"}),
+		k3sObj("HelmChart", "kube-system", "app", map[string]any{"chart": "app", "targetNamespace": "apps"}),
+		k3sObj("HelmChart", "team", "app", map[string]any{"chart": "app", "targetNamespace": "apps"}),
 	}, nil)
 	if _, ok := got["apps/app"]; ok {
 		t.Fatalf("keys = %+v, want apps/app credited to neither", got)
@@ -73,7 +96,7 @@ func TestK3sHelmChartKeysCreditNeitherOfTwoCharts(t *testing.T) {
 // The observed scan links a HelmChartConfig to its HelmChart whichever the
 // caller's read returns first; only objects the scan saw count.
 func TestObservedScanLinksK3sChartAndConfigInEitherOrder(t *testing.T) {
-	chart := k3sObj("HelmChart", "kube-system", "app", map[string]any{"targetNamespace": "apps"})
+	chart := k3sObj("HelmChart", "kube-system", "app", map[string]any{"chart": "app", "targetNamespace": "apps"})
 	config := k3sObj("HelmChartConfig", "kube-system", "app", nil)
 	for name, order := range map[string][]*unstructured.Unstructured{"chart first": {chart, config}, "config first": {config, chart}} {
 		scan := &stampScan{seen: map[string]bool{}}
@@ -154,8 +177,8 @@ func TestValuesRefExistsIsTriState(t *testing.T) {
 	if e := exists(k3sOwner{chart: "kube-system/a"}); e != nil {
 		t.Errorf("unknown: %v", *e)
 	}
-	unknown := k3sHelmChartKeys(false, []*unstructured.Unstructured{k3sObj("HelmChart", "kube-system", "a", nil)}, nil)
-	if unknown["kube-system/a"].configKnown {
+	unknown := k3sHelmChartKeys(false, []*unstructured.Unstructured{k3sObj("HelmChart", "kube-system", "a", map[string]any{"chart": "a"})}, nil)
+	if o, ok := unknown["kube-system/a"]; !ok || o.configKnown {
 		t.Error("configs not read: existence unknown")
 	}
 }

@@ -35,6 +35,7 @@ func TestManageHelmRefusesK3sManagedRelease(t *testing.T) {
 		return &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "helm.cattle.io/v1", "kind": kind,
 			"metadata": map[string]any{"name": "demo", "namespace": "kube-system"},
+			"spec":     map[string]any{"chart": "demo"},
 		}}
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{charts: "HelmChartList", configs: "HelmChartConfigList"}, k3sObj("HelmChart"), k3sObj("HelmChartConfig"))

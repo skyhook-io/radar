@@ -1620,6 +1620,26 @@ func k3sTarget(u *unstructured.Unstructured) releaseKey {
 	return releaseKey{namespace: ns, name: u.GetName()}
 }
 
+// k3sHelmControllerManages mirrors helm-controller's shouldManage: it skips a
+// HelmChart with no chart, one marked unmanaged, and one another controller
+// claimed. "helm-controller" is the name k3s, RKE2 and the standalone
+// controller register by default; a chart not yet claimed will be.
+func k3sHelmControllerManages(u *unstructured.Unstructured) bool {
+	chart, _, _ := unstructured.NestedString(u.Object, "spec", "chart")
+	content, _, _ := unstructured.NestedString(u.Object, "spec", "chartContent")
+	if chart == "" && content == "" {
+		return false
+	}
+	annotations := u.GetAnnotations()
+	if _, ok := annotations["helmcharts.helm.cattle.io/unmanaged"]; ok {
+		return false
+	}
+	if by, ok := annotations["helmcharts.cattle.io/managed-by"]; ok && by != "helm-controller" {
+		return false
+	}
+	return true
+}
+
 // k3sHelmChartKeys maps "targetNamespace/name" to the HelmChart (and its
 // same-named HelmChartConfig) that installs that release.
 func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
@@ -1633,6 +1653,9 @@ func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstruc
 	out := make(map[string]k3sOwner, len(charts))
 	ambiguous := map[string]bool{}
 	for _, c := range charts {
+		if !k3sHelmControllerManages(c) {
+			continue
+		}
 		target := k3sTarget(c)
 		key := target.namespace + "/" + target.name
 		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), configKnown: configsKnown}
