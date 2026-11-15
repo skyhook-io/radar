@@ -99,8 +99,7 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
         title="Back up now"
         message={`Create a backup now with schedule ${name}'s settings.`}
         confirmLabel="Back up now"
-        variant="warning"
-        showWarning={false}
+        variant="default"
         isLoading={backupNow.isPending}
         confirmDisabled={changed}
       >
