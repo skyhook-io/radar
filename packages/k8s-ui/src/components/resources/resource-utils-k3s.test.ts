@@ -23,6 +23,10 @@ describe('k3s HelmChart utils', () => {
   it('summarises values as counts and key names only', () => {
     expect(k3sValuesSummary({ valuesContent: 'a: 1\nb: 2\n', set: { 'x.y': 'SECRET' } })).toEqual({ lines: 2, setKeys: ['x.y'], valuesKeys: 0 })
     expect(k3sValuesSummary({ values: { auth: { password: 'SECRET' }, replicas: 2 } })).toEqual({ lines: 0, setKeys: [], valuesKeys: 2 })
+    // Many newlines followed by text: a trailing-newline regex backtracks quadratically here.
+    const start = performance.now()
+    expect(k3sValuesSummary({ valuesContent: '\n'.repeat(100_000) + 'a: 1' }).lines).toBe(100_001)
+    expect(performance.now() - start).toBeLessThan(500)
     expect(k3sValuesSummary({})).toEqual({ lines: 0, setKeys: [], valuesKeys: 0 })
   })
 
