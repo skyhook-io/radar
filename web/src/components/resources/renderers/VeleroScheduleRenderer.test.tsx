@@ -39,4 +39,11 @@ describe('Velero Schedule drawer', () => {
     }
     expect(renderToStaticMarkup(<VeleroScheduleRenderer data={data} />)).not.toContain('Last refresh failed')
   })
+
+  it('offers Back up now even when the activity cannot be read', () => {
+    activity.current = { data: undefined, error: new Error('Forbidden'), isRefetchError: false, dataUpdatedAt: 0 }
+    const withVersion = { ...data, metadata: { ...data.metadata, resourceVersion: '7' }, spec: { template: {} } }
+    const html = renderToStaticMarkup(<VeleroScheduleRenderer data={withVersion} />)
+    expect(html).toContain('Back up now')
+  })
 })

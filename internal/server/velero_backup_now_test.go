@@ -109,6 +109,15 @@ func TestVeleroBackupNow(t *testing.T) {
 		if err != nil || len(list.Items) != 1 {
 			t.Fatalf("backups = %d (%v), want exactly one", len(list.Items), err)
 		}
+		// The schedule was edited after the backup was made: the replay still
+		// gets that backup rather than a refusal.
+		edited := backupNowSchedule("nightly", "9")
+		if _, err := dyn.Resource(veleroScheduleGVR).Namespace("velero").Update(t.Context(), edited, metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if after := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", body, nil); after.Code != http.StatusOK {
+			t.Fatalf("replay after an edit: %d %s", after.Code, after.Body.String())
+		}
 	})
 
 	t.Run("refuses a name that is not this schedule's", func(t *testing.T) {

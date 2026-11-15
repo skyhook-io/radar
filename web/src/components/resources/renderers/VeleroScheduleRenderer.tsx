@@ -22,10 +22,12 @@ export function VeleroScheduleRenderer({ data, onNavigate }: { data: any; onNavi
       {/* A failed refresh keeps the last reading; say how old it is rather than present it as current. */}
       <RefreshFailedNotice queries={[activity]} className="px-4 pb-2" />
       <VeleroScheduleActivity reading={reading} created={data?.metadata?.creationTimestamp} onNavigate={onNavigate} />
-      <VeleroBackupNow schedule={data} reading={reading} onNavigate={onNavigate} />
     </>
   ) : support === 'supported' && activity.error ? (
     <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />
   ) : undefined
-  return <BaseVeleroScheduleRenderer data={data} onNavigate={onNavigate} activity={activitySection} />
+  // Backing up needs only the schedule and `create backups`, not the activity
+  // read, so it does not wait on or depend on that.
+  const actions = <VeleroBackupNow schedule={data} reading={reading} onNavigate={onNavigate} />
+  return <BaseVeleroScheduleRenderer data={data} onNavigate={onNavigate} activity={<>{activitySection}{actions}</>} />
 }

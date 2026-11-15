@@ -461,3 +461,20 @@ func TestLocationValidation(t *testing.T) {
 		})
 	}
 }
+
+// During a migration a stopped server Deployment can sit beside its running
+// replacement. Whichever lists first, Velero is running.
+func TestServerConfigPrefersTheRunningServer(t *testing.T) {
+	stopped := veleroDeployment(nil, nil)
+	stopped.Name = "velero-old"
+	zero := int32(0)
+	stopped.Spec.Replicas = &zero
+	stopped.Status.Replicas, stopped.Status.UpdatedReplicas = 0, 0
+	running := veleroDeployment(nil, nil)
+	for _, order := range [][]*appsv1.Deployment{{stopped, running}, {running, stopped}} {
+		cfg := ServerConfigFromDeployments(order, true)
+		if cfg.Down() || cfg.Deployment != "velero" {
+			t.Fatalf("order %s,%s: %+v, want the running server", order[0].Name, order[1].Name, cfg)
+		}
+	}
+}

@@ -89,6 +89,15 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "could not read the schedule")
 		return
 	}
+	// The same confirmation sent again after its answer was lost: the backup
+	// it asked for exists, so say so, even if the schedule has changed since.
+	if req.Name != "" && backupNowName(name).MatchString(req.Name) {
+		if existing, getErr := client.Resource(veleroBackupGVR).Namespace(namespace).Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil &&
+			existing.GetLabels()[veleropkg.ScheduleNameLabel] == name {
+			s.writeJSON(w, VeleroBackupNowResponse{Namespace: existing.GetNamespace(), Name: existing.GetName()})
+			return
+		}
+	}
 	if schedule.GetResourceVersion() != req.ResourceVersion {
 		s.writeError(w, http.StatusConflict, "the schedule changed since you opened it; review it again before backing up")
 		return

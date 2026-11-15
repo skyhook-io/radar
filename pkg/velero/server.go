@@ -77,6 +77,11 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 	if !read {
 		return ServerConfig{Source: ServerUnread}
 	}
+	// Several Deployments can run `velero server` during a migration, one
+	// scaled to zero beside its running replacement. The running one is the
+	// server; list order must not decide that Velero is stopped.
+	var server *appsv1.Deployment
+	var container corev1.Container
 	for _, d := range deployments {
 		if d == nil {
 			continue
@@ -85,6 +90,12 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 		if !ok {
 			continue
 		}
+		if server == nil || (server.Status.Replicas == 0 && d.Status.Replicas > 0) {
+			server, container = d, c
+		}
+	}
+	if server != nil {
+		d, c := server, container
 		replicas := d.Status.Replicas
 		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, Replicas: &replicas}
 		if !rolloutComplete(d) {

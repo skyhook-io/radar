@@ -83,7 +83,7 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
           >
             {created.name}
           </button>{' '}
-          created. Velero starts it within moments{serverDown ? ' once its server is running' : ''}.
+          created{serverDown ? '; it waits until the Velero server is running' : ''}.
         </span>
       )}
       <ConfirmDialog

@@ -83,6 +83,7 @@ The Velero Issues the Problems surface raises, computed by the same detector (`i
 
 - **Completed is not restorable.** "Completed, not expired" is what Velero reports; it does not say the data is in the bucket or that a restore would succeed.
 - **An uncertain zone is not daylight-saving safe.** A weekly schedule at a local hour skipped by a daylight-saving change can exceed the uncertain margin and read "probably late". Readable Deployments avoid it.
+- **An installation needs a storage location for its readings to become Issues.** The derived Issues are raised per namespace holding a BackupStorageLocation. Without one, every backup is already rejected and raised as such, but a stopped server there is shown only on these views.
 - **Runs are matched by schedule name.** A recreated or edited schedule's older runs still count as its runs.
 - **Velero 1.16–1.18.** 1.16 and 1.17 do not count an empty-phase run as holding; Radar does.
 
