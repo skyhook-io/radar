@@ -82,17 +82,23 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	}
 	base = append(base, "-c", fmt.Sprintf("model_reasoning_effort=%q", effort))
 
+	// The prompt goes over stdin ("-"), not as an argument. It is unbounded (the
+	// saved story and every claim on an explanation turn), and one argument is
+	// capped at 128 KiB on Linux and a whole command line at 32K characters on
+	// Windows. An npm install on Windows is also a .cmd shim, and cmd.exe would
+	// re-parse an argument: it stops at the first newline and acts on & and %.
 	var args []string
 	if s.sessionID != "" {
 		// resume lacks --sandbox; set sandbox via -c (cwd via cmd.Dir below).
 		args = append([]string{"exec", "resume"}, base...)
-		args = append(args, "-c", `sandbox_mode="read-only"`, s.sessionID, prompt)
+		args = append(args, "-c", `sandbox_mode="read-only"`, s.sessionID, "-")
 	} else {
 		args = append([]string{"exec"}, base...)
-		args = append(args, "--sandbox", "read-only", prompt)
+		args = append(args, "--sandbox", "read-only", "-")
 	}
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
+	cmd.Stdin = strings.NewReader(prompt)
 
 	cleanup := func() {}
 	if s.profile == ExecutionProfileSafeguarded {

@@ -77,13 +77,19 @@ func DetectPlatformFromVersion(gitVersion string) string {
 }
 
 // DetectByProviderID detects the platform from a node's ProviderID field.
+// An aws:// ID only says the node is an EC2 instance: the AWS cloud controller
+// sets it on self-managed clusters too (kubeadm, Cluster API, kops), so it
+// counts as EKS only when the kubelet is an EKS build.
 func DetectByProviderID(node corev1.Node) string {
 	providerID := node.Spec.ProviderID
 	switch {
 	case strings.HasPrefix(providerID, "gce://") || strings.HasPrefix(providerID, "gke://"):
 		return "gke"
 	case strings.HasPrefix(providerID, "aws://"):
-		return "eks"
+		if isEKSKubeletVersion(node.Status.NodeInfo.KubeletVersion) {
+			return "eks"
+		}
+		return "unknown"
 	case strings.HasPrefix(providerID, "azure://"):
 		return "aks"
 	case strings.HasPrefix(providerID, "kind://"):
@@ -95,6 +101,12 @@ func DetectByProviderID(node corev1.Node) string {
 	}
 }
 
+// isEKSKubeletVersion reports whether a kubelet version is an EKS build, such
+// as v1.31.4-eks-2d5f260. Upstream kubelets report a plain v1.31.4.
+func isEKSKubeletVersion(version string) bool {
+	return strings.Contains(version, "-eks-")
+}
+
 // DetectByLabels detects the platform from a node's labels.
 func DetectByLabels(node corev1.Node) string {
 	if IsNodeGKE(node) {
@@ -104,6 +116,9 @@ func DetectByLabels(node corev1.Node) string {
 		return "eks"
 	}
 	if _, exists := node.Labels["eks.amazonaws.com/capacityType"]; exists {
+		return "eks"
+	}
+	if _, exists := node.Labels["eks.amazonaws.com/compute-type"]; exists {
 		return "eks"
 	}
 	for label := range node.Labels {
