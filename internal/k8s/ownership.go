@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -154,6 +155,34 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 		// A cluster switch mid-answer: it may mix two clusters.
 		topology.OwnershipUnavailable(rel, string(readreason.ConnectionChanged))
 	}
+}
+
+// AnswerRelationships is a fetched object's Related Resources answered from
+// the caches in one session: the relation families projected as the
+// relationship graph's edges are (topology.RelationsAnswer), then ownership,
+// with one ownership view whose searches both share. It answers nil when the
+// caches aren't ready or are replaced mid-answer.
+func AnswerRelationships(fetched ownership.Observation, obj runtime.Object, owner metav1.Object, access func(*ownership.Catalog) ownership.Access, istioDomain string, provider topology.ResourceProvider, dp topology.DynamicProvider) (*topology.Relationships, map[string]relations.Coverage) {
+	session, err := ownershipSource.Begin()
+	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
+		return nil, nil
+	}
+	rs, ok := session.(relations.Session)
+	if !ok {
+		return nil, nil
+	}
+	acc := access(session.Catalog())
+	ov := ownership.NewView(session, acc)
+	rel, coverage := topology.RelationsAnswer(rs, acc, ov, fetched.Ref, obj, istioDomain, provider, dp)
+	if rel == nil {
+		rel = &topology.Relationships{}
+	}
+	topology.ApplyOwnership(rel, ov, fetched)
+	splitHistory(fetched.Ref, owner)(rel, ov, session)
+	if session.ValidateCaches() != nil {
+		return nil, nil
+	}
+	return rel, coverage
 }
 
 // OwnershipObservation is what ownership reads from a fetched object, whose
