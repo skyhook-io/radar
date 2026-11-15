@@ -16,7 +16,7 @@ export function routeFactsProps(query: { data?: TraefikRoutesResponse; isError: 
 
 /** Host wrapper: adds each rule's request path to the IngressRoute drawer. */
 export function TraefikIngressRouteRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
-  const query = useTraefikRouteFacts(data?.metadata?.namespace ?? '', data?.metadata?.name ?? '', String(data?.apiVersion ?? '').split('/')[0])
-  const props = useMemo(() => routeFactsProps(query), [query.data, query.isError, query.support])
+  const { data: facts, isError, support } = useTraefikRouteFacts(data?.metadata?.namespace ?? '', data?.metadata?.name ?? '', String(data?.apiVersion ?? '').split('/')[0])
+  const props = useMemo(() => routeFactsProps({ data: facts, isError, support }), [facts, isError, support])
   return <BaseTraefikIngressRouteRenderer data={data} onNavigate={onNavigate} {...props} />
 }

@@ -668,12 +668,14 @@ func TestTraefikVersion(t *testing.T) {
 		"traefik:v3":                {3, -1},
 		"traefik:3.10.0-rc1":        {3, 10},
 		"docker.io/traefik:v2.11.0": {2, 11},
+
 		"rancher/mirrored-library-traefik:2.10.5": {2, 10},
 		"rancher/mirrored-library-traefik:3.3.6":  {3, 3},
 		"registry:5000/traefik:3.1@sha256:abc":    {3, 1},
-		"traefik:latest":                          {0, -1},
-		"traefik":                                 {0, -1},
-		"registry:5000/traefik":                   {0, -1},
+
+		"traefik:latest":        {0, -1},
+		"traefik":               {0, -1},
+		"registry:5000/traefik": {0, -1},
 	} {
 		if major, minor := traefikVersion(image); major != want[0] || minor != want[1] {
 			t.Errorf("traefikVersion(%q) = %d.%d, want %d.%d", image, major, minor, want[0], want[1])

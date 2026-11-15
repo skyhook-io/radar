@@ -17,7 +17,7 @@ export function middlewareUsers(query: { data?: TraefikRoutesResponse; isError: 
 
 /** Host wrapper: adds which IngressRoutes use the Middleware. */
 export function TraefikMiddlewareRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
-  const query = useTraefikMiddlewareUsers(data?.metadata?.namespace ?? '', data?.metadata?.name ?? '')
-  const usedBy = useMemo(() => middlewareUsers(query), [query.data, query.isError, query.support])
+  const { data: users, isError, support } = useTraefikMiddlewareUsers(data?.metadata?.namespace ?? '', data?.metadata?.name ?? '')
+  const usedBy = useMemo(() => middlewareUsers({ data: users, isError, support }), [users, isError, support])
   return <BaseTraefikMiddlewareRenderer data={data} onNavigate={onNavigate} usedBy={usedBy} />
 }
