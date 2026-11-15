@@ -42,6 +42,7 @@ function conditions(c: any): string[] {
   if (c?.container_names?.length) out.push(`container in ${list(c.container_names)}`)
   if (c?.hosts?.length) out.push(`node in ${list(c.hosts)}`)
   if (c?.namespaces?.length) out.push(`namespace in ${list(c.namespaces)}`)
+  if (c?.namespaces_regex?.length) out.push(`namespace matching ${list(c.namespaces_regex)}`)
   out.push(...Object.entries(c?.namespace_labels ?? {}).map(([k, v]) => `namespace label ${k}=${v}`))
   return out
 }
@@ -58,6 +59,15 @@ export function getLoggingFlowRules(data: any): { exclude: boolean; conditions: 
     ...(m?.select ? [{ exclude: false, conditions: conditions(m.select) }] : []),
     ...(m?.exclude ? [{ exclude: true, conditions: conditions(m.exclude) }] : []),
   ])
+}
+
+// getLoggingFlowInvalid mirrors the operator's rejection of a Flow or
+// ClusterFlow, which it then never renders; null when valid.
+export function getLoggingFlowInvalid(data: any): string | null {
+  const spec = data?.spec ?? {}
+  if (spec.match != null && spec.selectors != null) return 'match and selectors are both set'
+  if ((spec.match ?? []).some((m: any) => m?.select != null && m?.exclude != null)) return 'a match entry sets both select and exclude'
+  return null
 }
 
 export function getLoggingStatus(data: any): StatusBadge {

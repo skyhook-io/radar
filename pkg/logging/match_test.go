@@ -10,6 +10,7 @@ type containers []string
 type hosts []string
 type namespaces []string
 type nsLabels map[string]string
+type nsRegex []string
 
 func rule(exclude bool, conds ...any) Rule {
 	r := Rule{Exclude: exclude}
@@ -25,6 +26,8 @@ func rule(exclude bool, conds ...any) Rule {
 			r.Namespaces = v
 		case nsLabels:
 			r.NamespaceLabels = v
+		case nsRegex:
+			r.NamespacesRegex = v
 		}
 	}
 	return r
@@ -73,6 +76,11 @@ func TestSelects(t *testing.T) {
 		{"exclude not matching falls through to select", rules(excl(labels{"tier": "debug"}), sel()), pod{}, Decision{Selected: true, Rule: 1}},
 		{"hosts", rules(sel(hosts{"node-1"})), pod{node: "node-2"}, Decision{Rule: -1, Unmet: []string{"node in [node-1]"}}},
 		{"cluster flow namespaces", clusterRules(sel(namespaces{"x"})), pod{ns: "y"}, Decision{Rule: -1, Unmet: []string{"namespace in [x]"}}},
+		{"namespaces_regex matches unanchored", clusterRules(sel(nsRegex{"^prod", "eam"})), pod{ns: "team"}, Decision{Selected: true, Rule: 0}},
+		{"namespaces_regex unmet", clusterRules(sel(nsRegex{"^prod-"})), pod{ns: "team"}, Decision{Rule: -1, Unmet: []string{"namespace matching [^prod-]"}}},
+		{"namespaces_regex exclude", clusterRules(excl(nsRegex{"^kube-"}), sel()), pod{ns: "kube-system"}, Decision{Rule: 0}},
+		{"namespaces_regex RE2 can't compile is uncertain", clusterRules(sel(nsRegex{"(?<=x)team"})), pod{ns: "team"}, Decision{Uncertain: true, Rule: 0}},
+		{"namespaces_regex with a comma is uncertain", clusterRules(sel(nsRegex{"te{1,2}am"})), pod{ns: "team"}, Decision{Uncertain: true, Rule: 0}},
 		{"namespace_labels deciding is uncertain", clusterRules(sel(labels{"app": "a"}, nsLabels{"team": "t"})), pod{labels: labels{"app": "a"}}, Decision{Uncertain: true, Rule: 0}},
 		{"namespace_labels with an unmet condition does not decide", clusterRules(sel(labels{"app": "a"}, nsLabels{"team": "t"}), sel()), pod{}, Decision{Selected: true, Rule: 1}},
 		{"legacy selectors when match empty", Flow{Namespace: "a", LegacySelector: map[string]string{"app": "x"}}, pod{ns: "a", labels: labels{"app": "x"}}, Decision{Selected: true, Rule: -1}},

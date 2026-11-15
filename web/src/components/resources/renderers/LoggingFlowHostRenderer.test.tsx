@@ -12,6 +12,9 @@ describe('controlNamespacesOf', () => {
     expect(controlNamespacesOf(undefined, true)).toBeUndefined()
     expect(controlNamespacesOf([{ spec: { controlNamespace: 'a' } }], false)).toBeUndefined()
   })
+  it('is undefined when a Logging takes cluster resources from every namespace', () => {
+    expect(controlNamespacesOf([{ spec: { controlNamespace: 'a', allowClusterResourcesFromAllNamespaces: true } }], true)).toBeUndefined()
+  })
 })
 
 describe('loggingsReadComplete', () => {

@@ -32,8 +32,9 @@ describe('Logging operator drawers', () => {
   })
   it('ClusterFlow outside the control namespace is marked', () => {
     const html = text(renderToString(<LoggingFlowRenderer data={{ ...flow, metadata: { name: 'stray', namespace: 'team' } }} controlNamespaces={['logging-system']} />))
-    expect(html).toContain('Not counted: outside the Logging control namespace')
-    expect(text(renderToString(<LoggingFlowRenderer data={flow} controlNamespaces={['logging-system']} />))).not.toContain('Not counted')
+    expect(html).toContain('Outside every Logging&#x27;s control namespace')
+    expect(html).not.toContain('forwards nothing')
+    expect(text(renderToString(<LoggingFlowRenderer data={flow} controlNamespaces={['logging-system']} />))).not.toContain('Outside every Logging')
   })
   it('links a namespaced Flow to a ClusterOutput only when its namespace is known', () => {
     const nsFlow = { ...flow, kind: 'Flow', metadata: { name: 'app', namespace: 'team' } }
@@ -47,7 +48,21 @@ describe('Logging operator drawers', () => {
   it('says when Loggings could not be read', () => {
     const html = text(renderToString(<LoggingFlowRenderer data={flow} loggingsUnreadable />))
     expect(html).toContain('Could not read Loggings')
-    expect(html).not.toContain('Not counted')
+    expect(html).not.toContain('Outside every Logging')
+  })
+  it('marks deprecated outputRefs as ignored, not as outputs', () => {
+    const html = text(renderToString(<LoggingFlowRenderer data={{ ...flow, kind: 'Flow', metadata: { name: 'app', namespace: 'team' }, spec: { outputRefs: ['old'] } }} />))
+    expect(html).toContain('outputRefs old: deprecated, ignored by the operator.')
+    expect(html).toContain('No outputs: selected logs go nowhere.')
+    expect(html).not.toContain('Output old')
+  })
+  it('says the operator rejects a Flow with match and selectors', () => {
+    const html = text(renderToString(<LoggingFlowRenderer data={{ ...flow, spec: { ...flow.spec, selectors: { app: 'x' } } }} />))
+    expect(html).toContain('Rejected by the Logging operator')
+    expect(html).toContain('match and selectors are both set')
+  })
+  it('lists namespaces_regex conditions', () => {
+    expect(text(renderToString(<LoggingFlowRenderer data={{ ...flow, spec: { match: [{ select: { namespaces_regex: ['^team-'] } }] } }} />))).toContain('namespace matching [^team-]')
   })
   it('Logging drawer shows the control namespace', () => {
     const html = text(renderToString(<LoggingRenderer data={{ apiVersion: 'logging.banzaicloud.io/v1beta1', kind: 'Logging', metadata: { name: 'root' }, spec: { controlNamespace: 'logging-system', fluentd: {} } }} />))

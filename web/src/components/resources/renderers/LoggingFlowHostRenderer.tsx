@@ -6,9 +6,11 @@ import { useResources } from '../../../api/client'
 
 // controlNamespacesOf is undefined unless every Logging was read: a partial,
 // failed or unknown read must not mark a ClusterFlow "not counted". A complete
-// read that found none is [], and then no ClusterFlow is counted.
+// read that found none is [], and then no ClusterFlow is counted. A Logging that
+// takes cluster resources from every namespace counts ClusterFlows anywhere, so
+// it too leaves the drawer claiming nothing.
 export function controlNamespacesOf(items: any[] | undefined, complete: boolean): string[] | undefined {
-  if (!items || !complete) return undefined
+  if (!items || !complete || items.some((l) => l?.spec?.allowClusterResourcesFromAllNamespaces)) return undefined
   return [...new Set(items.map((l) => l?.spec?.controlNamespace).filter(Boolean))]
 }
 

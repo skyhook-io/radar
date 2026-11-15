@@ -2,7 +2,7 @@ import { Badge } from '../../ui/Badge'
 import { healthToSeverity } from '../../../utils/badge-colors'
 import { Section, Property, PropertyList, ResourceLink, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import type { ResourceRef } from '../../../types'
-import { LOGGING_GROUP, getLoggingFlowRules, getLoggingOutputAddress, getLoggingOutputType, getLoggingStatus } from '../resource-utils-logging'
+import { LOGGING_GROUP, getLoggingFlowInvalid, getLoggingFlowRules, getLoggingOutputAddress, getLoggingOutputType, getLoggingStatus } from '../resource-utils-logging'
 
 interface Props { data: any; onNavigate?: (ref: ResourceRef) => void }
 
@@ -56,14 +56,17 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
   const rules = getLoggingFlowRules(data)
   const filters: any[] = data.spec?.filters ?? []
   const globalRefs: string[] = data.spec?.globalOutputRefs ?? []
-  const localRefs: string[] = [...(data.spec?.localOutputRefs ?? []), ...(data.spec?.outputRefs ?? [])]
+  const localRefs: string[] = data.spec?.localOutputRefs ?? []
+  const deprecatedRefs: string[] = data.spec?.outputRefs ?? []
+  const invalid = getLoggingFlowInvalid(data)
   const notCounted = cluster && controlNamespaces !== undefined && !controlNamespaces.includes(ns)
   // ClusterOutputs live in the Logging's control namespace: a ClusterFlow's own,
   // or for a Flow the single known one (several Loggings: no link rather than a wrong one).
   const outputNamespace = cluster ? ns : controlNamespaces?.length === 1 ? controlNamespaces[0] : undefined
   return <>
     {cluster && loggingsUnreadable && <AlertBanner variant="info" title="Could not read Loggings" message="Radar can't tell whether this ClusterFlow is in a Logging's control namespace, so whether the operator counts it is unknown." />}
-    {notCounted && <AlertBanner variant="warning" title="Not counted: outside the Logging control namespace" message="The Logging operator only processes ClusterFlows in a Logging's control namespace; this one forwards nothing." />}
+    {notCounted && <AlertBanner variant="warning" title="Outside every Logging's control namespace" message="The Logging operator processes a ClusterFlow only in its Logging's control namespace, unless that Logging sets allowClusterResourcesFromAllNamespaces. No Logging Radar read does." />}
+    {invalid && <AlertBanner variant="warning" title="Rejected by the Logging operator" message={`${invalid}; the operator doesn't render this ${data.kind}.`} />}
     <Problems data={data} />
     <Section title={cluster ? 'Cluster flow' : 'Flow'} defaultExpanded>
       <PropertyList>
@@ -84,6 +87,7 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
       <p className="mt-2 text-xs text-theme-text-tertiary">Per container, the first rule whose conditions all hold decides; no matching rule means not selected.</p>
     </Section>
     <Section title="Outputs" defaultExpanded>
+      {deprecatedRefs.length > 0 && <p className="mb-1 text-sm text-theme-text-secondary">outputRefs {deprecatedRefs.join(', ')}: deprecated, ignored by the operator.</p>}
       {globalRefs.length + localRefs.length === 0
         ? <p className="text-sm text-theme-text-secondary">No outputs: selected logs go nowhere.</p>
         : <ul className="space-y-1 text-sm">

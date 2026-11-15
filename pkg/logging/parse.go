@@ -15,16 +15,22 @@ func FlowFrom(u *unstructured.Unstructured) Flow {
 	f.LoggingRef, _, _ = unstructured.NestedString(u.Object, "spec", "loggingRef")
 	f.LegacySelector, _, _ = unstructured.NestedStringMap(u.Object, "spec", "selectors")
 	f.GlobalOutputs, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "globalOutputRefs")
-	local, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "localOutputRefs")
-	legacy, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "outputRefs")
-	f.LocalOutputs = append(local, legacy...)
+	f.LocalOutputs, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "localOutputRefs")
+	f.DeprecatedOutputs, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "outputRefs")
 	filters, _, _ := unstructured.NestedSlice(u.Object, "spec", "filters")
 	f.HasFilters = len(filters) > 0
 	match, _, _ := unstructured.NestedSlice(u.Object, "spec", "match")
+	spec, _, _ := unstructured.NestedMap(u.Object, "spec")
+	if spec["match"] != nil && spec["selectors"] != nil {
+		f.Invalid = "match and selectors are both set"
+	}
 	for _, raw := range match {
 		entry, ok := raw.(map[string]any)
 		if !ok {
 			continue
+		}
+		if entry["select"] != nil && entry["exclude"] != nil {
+			f.Invalid = "a match entry sets both select and exclude"
 		}
 		for _, key := range []string{"select", "exclude"} {
 			cond, ok := entry[key].(map[string]any)
@@ -36,6 +42,7 @@ func FlowFrom(u *unstructured.Unstructured) Flow {
 			r.ContainerNames, _, _ = unstructured.NestedStringSlice(cond, "container_names")
 			r.Hosts, _, _ = unstructured.NestedStringSlice(cond, "hosts")
 			r.Namespaces, _, _ = unstructured.NestedStringSlice(cond, "namespaces")
+			r.NamespacesRegex, _, _ = unstructured.NestedStringSlice(cond, "namespaces_regex")
 			r.NamespaceLabels, _, _ = unstructured.NestedStringMap(cond, "namespace_labels")
 			f.Match = append(f.Match, r)
 		}
@@ -47,6 +54,17 @@ type Logging struct {
 	Name, LoggingRef, ControlNamespace string
 	WatchNamespaces                    []string // spec.watchNamespaces; empty: all
 	WatchSelector                      bool     // spec.watchNamespaceSelector is set (not evaluated)
+	// ClusterResourcesFromAllNamespaces: spec.allowClusterResourcesFromAllNamespaces,
+	// ClusterFlows and ClusterOutputs count from any namespace.
+	ClusterResourcesFromAllNamespaces bool
+	DefaultFlow                       *DefaultFlow // spec.defaultFlow
+}
+
+// DefaultFlow receives what no Flow of its Logging selects.
+type DefaultFlow struct {
+	GlobalOutputs     []string // spec.defaultFlow.globalOutputRefs
+	DeprecatedOutputs []string // spec.defaultFlow.outputRefs, which the operator doesn't render
+	HasFilters        bool
 }
 
 func LoggingFrom(u *unstructured.Unstructured) Logging {
@@ -56,15 +74,25 @@ func LoggingFrom(u *unstructured.Unstructured) Logging {
 	l.WatchNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "watchNamespaces")
 	selector, _, _ := unstructured.NestedMap(u.Object, "spec", "watchNamespaceSelector")
 	l.WatchSelector = len(selector) > 0
+	l.ClusterResourcesFromAllNamespaces, _, _ = unstructured.NestedBool(u.Object, "spec", "allowClusterResourcesFromAllNamespaces")
+	if df, found, _ := unstructured.NestedMap(u.Object, "spec", "defaultFlow"); found && df != nil {
+		d := &DefaultFlow{}
+		d.GlobalOutputs, _, _ = unstructured.NestedStringSlice(df, "globalOutputRefs")
+		d.DeprecatedOutputs, _, _ = unstructured.NestedStringSlice(df, "outputRefs")
+		filters, _, _ := unstructured.NestedSlice(df, "filters")
+		d.HasFilters = len(filters) > 0
+		l.DefaultFlow = d
+	}
 	return l
 }
 
 // Counted reports whether the operator processes the flow: a Logging with the
 // flow's loggingRef exists and, for a ClusterFlow, the flow lives in that
-// Logging's control namespace.
+// Logging's control namespace or the Logging takes cluster resources from
+// every namespace.
 func Counted(flow Flow, loggings []Logging) bool {
 	for _, l := range loggings {
-		if l.LoggingRef == flow.LoggingRef && (!flow.Cluster || flow.Namespace == l.ControlNamespace) {
+		if l.LoggingRef == flow.LoggingRef && (!flow.Cluster || l.ClusterResourcesFromAllNamespaces || flow.Namespace == l.ControlNamespace) {
 			return true
 		}
 	}

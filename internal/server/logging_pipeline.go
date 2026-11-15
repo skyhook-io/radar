@@ -351,7 +351,7 @@ func wireWorkloads(ws []logging.Workload) []logWorkload {
 // neither ignored nor certain, so its pods count only as "may be selected".
 func pipelineCandidate(f logging.Flow, loggings []logging.Logging, loggingsUnread bool) logging.Candidate {
 	if loggingsUnread {
-		return logging.Candidate{Flow: f, OnlyMaybe: true}
+		return logging.Candidate{Flow: f, Ignored: f.Invalid != "", OnlyMaybe: true}
 	}
 	return loggingCandidate(f, loggings)
 }
