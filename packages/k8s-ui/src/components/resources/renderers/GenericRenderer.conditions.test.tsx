@@ -66,6 +66,23 @@ describe('GenericRenderer conditions', () => {
     return chip?.[1] ?? ''
   }
 
+  it.each([
+    { conditions: [cond('ResourcesUpToDate', 'True'), cond('RolloutProgressing', 'True')], expected: 'Progressing' },
+    { conditions: [cond('ResourcesUpToDate', 'True'), cond('ErrorOccurred', 'True')], expected: 'Error' },
+    { conditions: [cond('ResourcesUpToDate', 'True')], health: { status: 'Unknown' }, expected: 'Unknown' },
+    { conditions: [cond('ResourcesUpToDate', 'True')], health: { status: 'Degraded' }, expected: 'Error' },
+  ])('uses ApplicationSet health for the banner: $expected', ({ conditions, health, expected }) => {
+    const html = renderToString(<GenericRenderer data={{ ...appSet, status: { conditions, health } }} />)
+    const banner = html.slice(0, html.indexOf('Conditions ('))
+    expect(banner).toContain(`>${expected}<`)
+    expect(banner).not.toContain('>ResourcesUpToDate<')
+  })
+
+  it('leaves a foreign ApplicationSet banner generic', () => {
+    const html = render([cond('ResourcesUpToDate', 'True'), cond('RolloutProgressing', 'True')], { ...appSet, apiVersion: 'example.com/v1' })
+    expect(html.slice(0, html.indexOf('Conditions ('))).toContain('>ResourcesUpToDate<')
+  })
+
   it('renders invalid rollout configuration as a problem independently of progress', () => {
     const html = render([cond('InvalidRolloutConfig', 'True'), cond('RolloutProgressing', 'True')], appSet)
     expect(chipClass(html, 'InvalidRolloutConfig', 'True')).toContain('status-red')

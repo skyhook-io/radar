@@ -1,3 +1,5 @@
+import { getGenericResourceStatus } from '../resources/generic-status'
+import { getResourceStatus } from '../shared/ResourceRendererDispatch'
 import { describe, test, expect } from 'vitest'
 import { getArgoApplicationSetStatus } from '../resources/resource-utils-argo'
 import { getGitOpsResourceStatus } from './detail-helpers'
@@ -244,9 +246,11 @@ describe('ApplicationSet health across resource and GitOps views', () => {
     { name: 'reported unknown stays unknown', status: { conditions: [ready], health: { status: 'Unknown', message: 'Waiting' } }, health: 'Unknown', badge: 'Unknown', message: 'Waiting' },
     { name: 'no status yet', status: {}, health: 'Unknown', badge: 'Unknown', message: 'Status cannot be determined' },
   ])('$name', ({ status, health, badge, message }) => {
-    const resource = { ...listGeneratorSet, status }
+    const resource = { ...listGeneratorSet, apiVersion: 'argoproj.io/v1alpha1', kind: 'ApplicationSet', status }
     expect(getGitOpsResourceStatus('applicationsets', resource)).toMatchObject({ health, message, sync: 'Unknown' })
     expect(normalizeArgoApplicationSet(resource).health).toBe(health)
     expect(getArgoApplicationSetStatus(resource).text).toBe(badge)
+    expect(getGenericResourceStatus(resource)?.text).toBe(badge)
+    expect(getResourceStatus('applicationsets', resource)?.text).toBe(badge)
   })
 })
