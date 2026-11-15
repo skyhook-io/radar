@@ -1,0 +1,74 @@
+package configrefs
+
+import (
+	"strings"
+
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
+
+// PathRef is an object a field names, and the field.
+type PathRef struct {
+	Ref  resourceid.Ref
+	Path string
+}
+
+// HPAScaleTarget returns the workload a HorizontalPodAutoscaler scales, in
+// its own namespace.
+func HPAScaleTarget(hpa *autoscalingv2.HorizontalPodAutoscaler) (PathRef, bool) {
+	t := hpa.Spec.ScaleTargetRef
+	if t.Name == "" || t.Kind == "" {
+		return PathRef{}, false
+	}
+	return PathRef{Ref: resourceid.Ref{Group: resourceid.GroupFromAPIVersion(t.APIVersion), Kind: t.Kind, Namespace: hpa.Namespace, Name: t.Name}, Path: "spec.scaleTargetRef"}, true
+}
+
+// VPATarget returns the workload a VerticalPodAutoscaler sizes, in its own
+// namespace.
+func VPATarget(vpa *unstructured.Unstructured) (PathRef, bool) {
+	name, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "name")
+	kind, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "kind")
+	if name == "" || kind == "" {
+		return PathRef{}, false
+	}
+	apiVersion, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "apiVersion")
+	return PathRef{Ref: resourceid.Ref{Group: resourceid.GroupFromAPIVersion(apiVersion), Kind: kind, Namespace: vpa.GetNamespace(), Name: name}, Path: "spec.targetRef"}, true
+}
+
+// KEDAScaleTargetRef is KEDAScaleTarget as a reference in the ScaledObject's
+// namespace.
+func KEDAScaleTargetRef(so *unstructured.Unstructured) (PathRef, bool) {
+	apiVersion, kind, name, ok := KEDAScaleTarget(so)
+	if !ok {
+		return PathRef{}, false
+	}
+	return PathRef{Ref: resourceid.Ref{Group: resourceid.GroupFromAPIVersion(apiVersion), Kind: kind, Namespace: so.GetNamespace(), Name: name}, Path: "spec.scaleTargetRef"}, true
+}
+
+// RolloutServices returns the Services an Argo Rollout's strategy names:
+// canary and stable for a canary rollout, active and preview for blue-green.
+func RolloutServices(rollout *unstructured.Unstructured) []PathRef {
+	var refs []PathRef
+	for _, field := range [][]string{
+		{"spec", "strategy", "canary", "canaryService"},
+		{"spec", "strategy", "canary", "stableService"},
+		{"spec", "strategy", "blueGreen", "activeService"},
+		{"spec", "strategy", "blueGreen", "previewService"},
+	} {
+		if name, _, _ := unstructured.NestedString(rollout.Object, field...); name != "" {
+			refs = append(refs, PathRef{Ref: resourceid.Ref{Kind: "Service", Namespace: rollout.GetNamespace(), Name: name}, Path: strings.Join(field, ".")})
+		}
+	}
+	return refs
+}
+
+// CertificateSecret returns the Secret a cert-manager Certificate writes.
+func CertificateSecret(cert *unstructured.Unstructured) (PathRef, bool) {
+	name, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+	if name == "" {
+		return PathRef{}, false
+	}
+	return PathRef{Ref: resourceid.Ref{Kind: "Secret", Namespace: cert.GetNamespace(), Name: name}, Path: "spec.secretName"}, true
+}
