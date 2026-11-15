@@ -712,6 +712,7 @@ The viewer reads `GET /api/loki/pods/{namespace}/{name}/logs?container=&since=1h
 - **Only Jobs Kubernetes still holds:** the run's own time bounds the window, from its start to its completion or last failure (or now) with a minute on each side, at most 7 days; `start`/`end` override it. A Job that is gone returns 404.
 - **Gate:** the workload logs gate (namespace access, `get jobs`, `list pods`, `get pods/log`), plus the same limits without authentication and under `--namespace-scope` as pod History, before Loki is contacted.
 - **Selecting the run's pods:** by a Job stream label when Loki has one (`job_name`, `batch_kubernetes_io_job_name`), else by the names Kubernetes gives the Job's pods: `<job>-<random>`, or for an Indexed Job `<job>-<index>-<random>`. So a Job never reads the pods of another Job whose name extends it, such as a CronJob's runs. Kubernetes shortens a long Job name in its pods' names; then lines from another Job with the same prefix may be included, and the answer says so. When Loki carries a Job label on some streams but not this run's (a Loki shared by several pipelines), the run reads as empty.
+- **Containers:** listed in the Job template's run order, with init containers and native sidecars (init containers with `restartPolicy: Always`) marked as they are live. A container the template doesn't name, such as one a webhook injected, follows unmarked.
 - If Loki can't answer, the viewer keeps Kubernetes' message and adds why Loki didn't answer.
 - If Loki holds nothing for the run, the viewer keeps Kubernetes' message.
 

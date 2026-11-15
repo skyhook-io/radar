@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,11 +27,17 @@ var (
 // seedJob puts one finished Job (nightly-29905990 in team) in the cache.
 func seedJob(t *testing.T) {
 	t.Helper()
+	seedJobWithSpec(t, batchv1.JobSpec{})
+}
+
+func seedJobWithSpec(t *testing.T, spec batchv1.JobSpec) {
+	t.Helper()
 	restoreFixtureCache(t)
 	k8s.ResetResourceCache()
 	start, end := metav1.NewTime(jobStart), metav1.NewTime(jobEnd)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "nightly-29905990"},
+		Spec:       spec,
 		Status:     batchv1.JobStatus{StartTime: &start, CompletionTime: &end},
 	}
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team"}}
@@ -134,5 +141,33 @@ func TestLokiJobLogsSharedListener(t *testing.T) {
 	radarCanReadPodLogs = func(context.Context, string) bool { return false }
 	if resp, _, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs"); resp.StatusCode != http.StatusForbidden || rec.count() != 0 {
 		t.Fatalf("no-auth without Radar's access: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestLokiJobLogsMarksInitAndSidecarsInTemplateOrder(t *testing.T) {
+	always := corev1.ContainerRestartPolicyAlways
+	seedJobWithSpec(t, batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		InitContainers: []corev1.Container{{Name: "proxy", RestartPolicy: &always}, {Name: "migrate"}},
+		Containers:     []corev1.Container{{Name: "job"}},
+	}}})
+	newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"job"},"values":[["1763002800000000003","c"]]},
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"extra"},"values":[["1763002800000000004","d"]]},
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"migrate"},"values":[["1763002800000000001","a"]]},
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"proxy"},"values":[["1763002800000000002","b"]]}]}}`)
+	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs")
+	if resp.StatusCode != 200 || len(got.Pods) != 1 {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	p := got.Pods[0]
+	if want := []string{"proxy", "migrate", "job", "extra"}; strings.Join(p.Containers, ",") != strings.Join(want, ",") {
+		t.Fatalf("containers = %v, want %v", p.Containers, want)
+	}
+	roles := map[string]string{}
+	for _, cs := range p.ContainerStatuses {
+		roles[cs.Name] = map[bool]string{true: "init"}[cs.Init] + map[bool]string{true: "+sidecar"}[cs.Sidecar]
+	}
+	if roles["proxy"] != "init+sidecar" || roles["migrate"] != "init" || roles["job"] != "" || len(roles) != 3 {
+		t.Fatalf("roles = %v (%s)", roles, raw)
 	}
 }

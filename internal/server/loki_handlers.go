@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/loki"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	"github.com/skyhook-io/radar/internal/readscope"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -152,6 +153,9 @@ type lokiJobPod struct {
 	Name       string   `json:"name"`
 	Containers []string `json:"containers"`
 	Ready      bool     `json:"ready"`
+	// Roles only, from the Job's template, so init containers and native
+	// sidecars read as they do live; a gone pod has no runtime state.
+	ContainerStatuses []podlogs.ContainerInfo `json:"containerStatuses,omitempty"`
 }
 
 type lokiJobLine struct {
@@ -273,16 +277,40 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 		containers[l.Pod][c] = true
 		resp.Logs = append(resp.Logs, lokiJobLine{Pod: l.Pod, Container: c, Timestamp: l.Time.Format(lokiTimeLayout), Content: l.Text})
 	}
+	template := templateContainers(job.Spec.Template.Spec)
 	for pod, cs := range containers {
 		p := lokiJobPod{Name: pod, Containers: []string{}}
-		for c := range cs {
-			p.Containers = append(p.Containers, c)
+		for _, t := range template {
+			if cs[t.Name] {
+				p.Containers = append(p.Containers, t.Name)
+				p.ContainerStatuses = append(p.ContainerStatuses, t)
+				delete(cs, t.Name)
+			}
 		}
-		sort.Strings(p.Containers)
+		// Containers the template doesn't name (injected by a webhook) have no known role.
+		var rest []string
+		for c := range cs {
+			rest = append(rest, c)
+		}
+		sort.Strings(rest)
+		p.Containers = append(p.Containers, rest...)
 		resp.Pods = append(resp.Pods, p)
 	}
 	sort.Slice(resp.Pods, func(i, j int) bool { return resp.Pods[i].Name < resp.Pods[j].Name })
 	s.writeJSON(w, resp)
+}
+
+// templateContainers lists a pod template's containers in run order, init
+// containers first, with their role.
+func templateContainers(spec corev1.PodSpec) []podlogs.ContainerInfo {
+	out := make([]podlogs.ContainerInfo, 0, len(spec.InitContainers)+len(spec.Containers))
+	for _, c := range spec.InitContainers {
+		out = append(out, podlogs.ContainerInfo{Name: c.Name, Init: true, Sidecar: c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways})
+	}
+	for _, c := range spec.Containers {
+		out = append(out, podlogs.ContainerInfo{Name: c.Name})
+	}
+	return out
 }
 
 func lokiLimit(raw string) (int, error) {
