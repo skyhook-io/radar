@@ -2,7 +2,10 @@ package traffic
 
 import (
 	"context"
+	"sync"
 	"testing"
+
+	promclient "github.com/skyhook-io/radar/internal/prometheus"
 )
 
 func istioSeries(metric, reporter, srcNs, src, dstNs, dst, code string, value float64) istioRawSeries {
@@ -215,5 +218,62 @@ func TestIstioGetFlows_AmbientClientReportsHonorTheNamespaceFilter(t *testing.T)
 	got := flowsByPair(resp.Flows)
 	if _, ok := got["http side/curl -> amb/httpbin"]; len(got) != 1 || !ok {
 		t.Errorf("namespace amb: want only side/curl -> amb/httpbin, got %+v", got)
+	}
+}
+
+// A waypoint's counter for a series stays present after the series' requests
+// stop reaching it; with no requests counted in the window, the client's
+// report is the one read.
+func TestIstioGetFlows_IdleReceiverDoesNotHideClientReports(t *testing.T) {
+	raw := []istioRawSeries{
+		istioSeries("istio_requests_total", "waypoint", "side", "curl", "amb", "httpbin", "200", 0),
+		istioSeries("istio_requests_total", "source", "side", "curl", "amb", "httpbin", "200", 2),
+		istioSeries("istio_requests_total", "source", "side", "curl", "amb", "httpbin", "503", 0.5),
+	}
+	s := newTestIstio(fakeIstioProm(raw, nil))
+	s.ambientNamespaceFn = func() []string { return []string{"amb"} }
+	resp, err := s.GetFlows(context.Background(), DefaultFlowOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, ok := flowsByPair(resp.Flows)["http side/curl -> amb/httpbin"]
+	if !ok || !approx(f.RequestRate, 2.5) || !approx(f.ErrorRate, 0.5) {
+		t.Errorf("want the client's 2.5 req/s with 0.5 errors, got %+v", resp.Flows)
+	}
+}
+
+// While client reports into ambient namespaces are read, the HTTP cluster
+// check covers them too, so they cannot bring another cluster's traffic in.
+func TestIstioScopeCheckCoversClientReportsWhenAmbient(t *testing.T) {
+	useConfiguredStore(t)
+	var mu sync.Mutex
+	selectors := map[string]string{}
+	prev := resolveTrafficScope
+	resolveTrafficScope = func(_ context.Context, metric, selector string) (string, promclient.SeriesIsolation, error) {
+		mu.Lock()
+		selectors[metric] = selector
+		mu.Unlock()
+		return `cluster="a"`, promclient.SeriesIsolation{Labels: map[string]string{"cluster": "a"}}, nil
+	}
+	t.Cleanup(func() { resolveTrafficScope = prev })
+
+	for _, tc := range []struct {
+		ambient  []string
+		wantHTTP string
+	}{
+		{nil, istioReporterSelector},
+		{[]string{"amb"}, istioAllReportsSelector},
+	} {
+		s := newTestIstio(fakeIstioProm(nil, nil))
+		s.ambientNamespaceFn = func() []string { return tc.ambient }
+		if _, err := s.GetFlows(context.Background(), DefaultFlowOptions()); err != nil {
+			t.Fatal(err)
+		}
+		if selectors["istio_requests_total"] != tc.wantHTTP {
+			t.Errorf("ambient %v: HTTP scope checked with %q, want %q", tc.ambient, selectors["istio_requests_total"], tc.wantHTTP)
+		}
+		if selectors[istioTCPMetric] != istioReporterSelector {
+			t.Errorf("ambient %v: TCP scope checked with %q, want %q", tc.ambient, selectors[istioTCPMetric], istioReporterSelector)
+		}
 	}
 }

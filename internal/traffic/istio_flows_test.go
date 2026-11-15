@@ -22,9 +22,8 @@ type istioRawSeries struct {
 }
 
 var (
-	istioSumByRe   = regexp.MustCompile(`^sum by \(([^)]*)\) \(rate\(([a-z_]+)\{([^}]*)\}\[5m\]\)\)$`)
-	promMatcherRe  = regexp.MustCompile(`([a-z_]+)(=~|!=|=)"([^"]*)"`)
-	fakeIstioOpers = []string{" or ", " unless "} // lowest precedence first
+	istioSumByRe  = regexp.MustCompile(`^sum by \(([^)]*)\) \(rate\(([a-z_]+)\{([^}]*)\}\[5m\]\)\)$`)
+	promMatcherRe = regexp.MustCompile(`([a-z_]+)(=~|!=|=)"([^"]*)"`)
 )
 
 // fakeVector is an instant vector keyed by its full label set.
@@ -51,6 +50,26 @@ func (v fakeVector) or(o fakeVector) fakeVector {
 	for _, k := range o.order {
 		if _, ok := v.series[k]; !ok {
 			out.add(k, o.series[k])
+		}
+	}
+	return out
+}
+
+func (v fakeVector) and(o fakeVector) fakeVector {
+	out := fakeVector{}
+	for _, k := range v.order {
+		if _, ok := o.series[k]; ok {
+			out.add(k, v.series[k])
+		}
+	}
+	return out
+}
+
+func (v fakeVector) positive() fakeVector {
+	out := fakeVector{}
+	for _, k := range v.order {
+		if v.series[k].DataPoints[0].Value > 0 {
+			out.add(k, v.series[k])
 		}
 	}
 	return out
@@ -87,23 +106,30 @@ func lastTopLevel(q, op string) int {
 }
 
 // evalIstioExpr evaluates the PromQL subset the Istio source sends:
-// sum-by-rate leaves with label matchers, combined by or / unless and
-// parentheses, with PromQL's precedence (unless binds tighter than or).
+// sum-by-rate leaves with label matchers, combined by or / and / unless and
+// `> 0`, with PromQL's precedence (comparison, then and/unless, then or).
 func evalIstioExpr(raw []istioRawSeries, q string) fakeVector {
 	q = strings.TrimSpace(q)
-	for _, op := range fakeIstioOpers {
-		if i := lastTopLevel(q, op); i >= 0 {
-			l, r := evalIstioExpr(raw, q[:i]), evalIstioExpr(raw, q[i+len(op):])
-			if op == " or " {
-				return l.or(r)
-			}
-			return l.unless(r)
-		}
+	if i := lastTopLevel(q, " or "); i >= 0 {
+		return evalIstioExpr(raw, q[:i]).or(evalIstioExpr(raw, q[i+len(" or "):]))
+	}
+	and, unless := lastTopLevel(q, " and "), lastTopLevel(q, " unless ")
+	if and > unless {
+		return evalIstioExpr(raw, q[:and]).and(evalIstioExpr(raw, q[and+len(" and "):]))
+	}
+	if unless >= 0 {
+		return evalIstioExpr(raw, q[:unless]).unless(evalIstioExpr(raw, q[unless+len(" unless "):]))
+	}
+	if strings.HasSuffix(q, " > 0") {
+		return evalIstioExpr(raw, strings.TrimSuffix(q, " > 0")).positive()
 	}
 	if strings.HasPrefix(q, "(") && strings.HasSuffix(q, ")") {
 		return evalIstioExpr(raw, q[1:len(q)-1])
 	}
 	m := istioSumByRe.FindStringSubmatch(q)
+	if m == nil && !strings.HasPrefix(q, "sum by") {
+		return fakeVector{} // cluster identity probes: no series
+	}
 	if m == nil {
 		panic(fmt.Sprintf("fake Prometheus cannot evaluate %q", q))
 	}

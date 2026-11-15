@@ -155,6 +155,11 @@ func (s *IstioSource) defaultQuery(ctx context.Context, query string) (*prom.Que
 // never report the same request.
 const istioReporterSelector = `reporter=~"destination|waypoint"`
 
+// istioAllReportsSelector also takes client proxies' reports. The HTTP scope
+// checks use it while client reports into ambient namespaces are read, so
+// those too are kept to this cluster's series.
+const istioAllReportsSelector = `reporter=~"destination|waypoint|source"`
+
 const istioTCPMetric = "istio_tcp_connections_opened_total"
 
 // istioScopes keeps each Istio metric family to this cluster's series: HTTP
@@ -163,6 +168,8 @@ const istioTCPMetric = "istio_tcp_connections_opened_total"
 // the cluster label does not empty the other.
 type istioScopes struct {
 	http, tcp clusterScope
+	// httpSelector is the reporter selector the HTTP scope was checked with.
+	httpSelector string
 	// tcpUnchecked is set when Radar could not check which cluster the TCP
 	// series belong to. They are left out and named as missing, as a failed
 	// TCP query is, rather than drawn unchecked.
@@ -172,14 +179,18 @@ type istioScopes struct {
 // resolveScopes decides each family's cluster scope. Filtering applies only to
 // a configured metrics store: one Radar discovered in the cluster holds this
 // cluster's metrics.
-func (s *IstioSource) resolveScopes(ctx context.Context) (istioScopes, error) {
+func (s *IstioSource) resolveScopes(ctx context.Context, ambientNamespaces []string) (istioScopes, error) {
 	url, _ := metricsConfig()
-	http, err := scopeForMetric(ctx, "istio_requests_total", istioReporterSelector, url != "")
+	httpSelector := istioReporterSelector
+	if len(ambientNamespaces) > 0 {
+		httpSelector = istioAllReportsSelector
+	}
+	http, err := scopeForMetric(ctx, "istio_requests_total", httpSelector, url != "")
 	if err != nil {
 		return istioScopes{}, err
 	}
 	tcp, err := scopeForMetric(ctx, istioTCPMetric, istioReporterSelector, url != "")
-	return istioScopes{http: http, tcp: tcp, tcpUnchecked: err != nil}, nil
+	return istioScopes{http: http, tcp: tcp, httpSelector: httpSelector, tcpUnchecked: err != nil}, nil
 }
 
 func (s *IstioSource) identityRows(ctx context.Context, query string) ([]map[string]string, error) {
@@ -196,12 +207,12 @@ func (s *IstioSource) identityRows(ctx context.Context, query string) ([]map[str
 
 // familyMismatch explains why the cluster matchers left a family with no
 // series: it looks at the family's series present in the window without them.
-func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc clusterScope, metric string) string {
+func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc clusterScope, metric, reporters string) string {
 	if sc.matchers == "" {
 		return ""
 	}
 	present := func(more string) string {
-		return fmt.Sprintf(`last_over_time(%s{%s%s}[5m])`, metric, istioReporterSelector, more)
+		return fmt.Sprintf(`last_over_time(%s{%s%s}[5m])`, metric, reporters, more)
 	}
 	selector := present("")
 	if opts.Namespace != "" {
@@ -228,12 +239,13 @@ var errIstioTCPUnchecked = errors.New("could not check which cluster the TCP ser
 func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
 	var missing []string
 
-	scopes, err := s.resolveScopes(ctx)
+	ambientNamespaces := s.ambientNamespaceFn()
+	scopes, err := s.resolveScopes(ctx, ambientNamespaces)
 	if err != nil {
 		return scopeCheckFailed("istio"), nil
 	}
 
-	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, s.ambientNamespaceFn(), &missing)
+	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, ambientNamespaces, &missing)
 	if errors.Is(err, errIstioPrometheusUnavailable) {
 		return &FlowsResponse{
 			Source:    "istio",
@@ -294,15 +306,15 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	mismatch := ""
 	switch {
 	case len(httpFlows) == 0:
-		if mismatch = s.familyMismatch(ctx, opts, scopes.http, "istio_requests_total"); mismatch == "" && tcpErr == nil {
-			mismatch = s.familyMismatch(ctx, opts, scopes.tcp, istioTCPMetric)
+		if mismatch = s.familyMismatch(ctx, opts, scopes.http, "istio_requests_total", scopes.httpSelector); mismatch == "" && tcpErr == nil {
+			mismatch = s.familyMismatch(ctx, opts, scopes.tcp, istioTCPMetric, istioReporterSelector)
 		}
 	case httpCount == 0:
 		// TCP connections drew, but the cluster filter may have removed every
 		// HTTP series. Say so, or the map reads as carrying no requests.
-		s.noteFamilyMismatch(ctx, opts, response, scopes.http, "istio_requests_total", "HTTP requests aren't shown on this map.")
+		s.noteFamilyMismatch(ctx, opts, response, scopes.http, "istio_requests_total", scopes.httpSelector, "HTTP requests aren't shown on this map.")
 	case len(tcpFlows) == 0 && tcpErr == nil:
-		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, "TCP connections aren't shown on this map.")
+		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, istioReporterSelector, "TCP connections aren't shown on this map.")
 	}
 	applyClusterScopeWarning(response, mismatch, scopes.http.mixed || scopes.tcp.mixed)
 	return response, nil
@@ -311,8 +323,8 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 // noteFamilyMismatch adds why one family is missing while the other drew.
 // Its edges are missing, not figures on the edges shown, so the warning holds
 // whatever a viewer's filters leave, as missing TCP connections do.
-func (s *IstioSource) noteFamilyMismatch(ctx context.Context, opts FlowOptions, response *FlowsResponse, sc clusterScope, metric, lead string) {
-	reason := s.familyMismatch(ctx, opts, sc, metric)
+func (s *IstioSource) noteFamilyMismatch(ctx context.Context, opts FlowOptions, response *FlowsResponse, sc clusterScope, metric, reporters, lead string) {
+	reason := s.familyMismatch(ctx, opts, sc, metric, reporters)
 	if reason == "" {
 		return
 	}
@@ -364,8 +376,11 @@ func istioRateQuery(groupBy, metric, selector, namespace string, sc clusterScope
 // the requests. Requests into an ambient namespace that no receiving proxy
 // reported (a sidecar or ingress gateway calling a workload with no waypoint,
 // or one that skipped it) are read from the client proxy instead, as Kiali
-// does. A series takes the client's figures only when the receiving side
-// reported none of its requests, so the two reports never add up.
+// does. Every figure of a series comes from one side: the receiving side's
+// when it counted any of the series' requests in the window, the client's
+// otherwise, so the two reports never add up. The test is on the request
+// rate, not on presence: a receiver's counter that stopped moving is still
+// present.
 func istioHTTPQuery(metric, extra, namespace string, sc clusterScope, ambientNamespaces []string) string {
 	received := istioRateQuery(istioHTTPGroupBy, metric, istioReporterSelector+extra, namespace, sc)
 	if len(ambientNamespaces) == 0 {
@@ -373,8 +388,8 @@ func istioHTTPQuery(metric, extra, namespace string, sc clusterScope, ambientNam
 	}
 	intoAmbient := fmt.Sprintf(`reporter="source", destination_workload_namespace=~"%s"`, strings.Join(ambientNamespaces, "|"))
 	sent := istioRateQuery(istioHTTPGroupBy, metric, intoAmbient+extra, namespace, sc)
-	anyReceived := istioRateQuery(istioHTTPGroupBy, "istio_requests_total", istioReporterSelector, namespace, sc)
-	return fmt.Sprintf(`(%s) or ((%s) unless (%s))`, received, sent, anyReceived)
+	receivedAny := fmt.Sprintf(`(%s) > 0`, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", istioReporterSelector, namespace, sc))
+	return fmt.Sprintf(`((%s) and (%s)) or ((%s) unless (%s))`, received, receivedAny, sent, receivedAny)
 }
 
 func istioSeriesKeyFrom(labels map[string]string) istioSeriesKey {
