@@ -76,8 +76,10 @@ with the path declaring it. The `View` answers every family the same way:
   found: present, absent, unread (with its gap) or withheld from the caller.
 - `Referrers(family, subject)`: what declares the subject, as the caller may read it, up to 500 with a total. A
   family's namespaced targets are always in the declarer's namespace, so the answer reads that namespace's objects of
-  each declaring kind through the namespace index and evaluates what each declares; for a cluster-scoped target it
-  reads every namespace, checking the caller's access in each. An index of every declaration cost about 1.4 KB per Pod
+  each declaring kind through the namespace index and evaluates what each declares. A cluster-scoped target is answered
+  as `Children` answers a cluster-scoped owner: the namespaces the caller may read something in are searched, each
+  declarer is checked where it is, and a gap is kept only if it covers what the caller may read
+  (`ownership.GapCoversReadable`). An index of every declaration cost about 1.4 KB per Pod
   and made a Pod relist about five times as long ([measurements](loadtest.md#relationship-cost-baselines)).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
@@ -89,7 +91,7 @@ The families so far:
 | Family | Sources → targets | File |
 |---|---|---|
 | `ConfigReferences` | Pods, pod-template workloads (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo Rollout), Ingress TLS → ConfigMaps, Secrets, PersistentVolumeClaims, ServiceAccounts. ReplicaSets scaled explicitly to zero declare nothing: they are old revisions | `config_references.go` |
-| `Autoscalers` | HorizontalPodAutoscalers, VerticalPodAutoscalers, KEDA ScaledObjects → the workloads they scale, per source as each controller accepts them | `families.go` |
+| `Autoscalers` | HorizontalPodAutoscalers and KEDA ScaledObjects → Deployments, StatefulSets, ReplicaSets, Rollouts; VerticalPodAutoscalers → those and DaemonSets | `families.go` |
 | `KEDAAuthentication` | ScaledObjects, ScaledJobs → TriggerAuthentications, ClusterTriggerAuthentications | `families.go` |
 | `IngressBackends` | Ingresses → their default and rule backend Services | `families.go` |
 | `RolloutServices` | Argo Rollouts → the canary, stable, active and preview Services their strategy names | `families.go` |
