@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/labels"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -98,11 +97,12 @@ type report struct {
 	// A user who may read half the namespaces and everything cluster-scoped,
 	// asked about the objects they may read: today's per-user graph copy
 	// against the families answering with their access.
-	RestrictedNamespaces int                `json:"restrictedNamespaces"`
-	RestrictedTimings    map[string]*timing `json:"restrictedTimings"`
-	RestrictedEqual      int                `json:"restrictedEqual"`
-	RestrictedDiffer     int                `json:"restrictedDiffer"`
-	RestrictedDiffs      []diffGroup        `json:"restrictedDiffs"`
+	RestrictedSkippedReason string             `json:"restrictedSkippedReason,omitempty"`
+	RestrictedNamespaces    int                `json:"restrictedNamespaces"`
+	RestrictedTimings       map[string]*timing `json:"restrictedTimings"`
+	RestrictedEqual         int                `json:"restrictedEqual"`
+	RestrictedDiffer        int                `json:"restrictedDiffer"`
+	RestrictedDiffs         []diffGroup        `json:"restrictedDiffs"`
 
 	ManagedBy                      map[string]int      `json:"managedBy"`
 	Examples                       map[string][]string `json:"managedByExamples"`
@@ -150,6 +150,22 @@ func withholdNamespaces(rel *topology.Relationships, namespaces []string) {
 	rel.Consumers = slices.DeleteFunc(rel.Consumers, func(c topology.ResourceRef) bool {
 		return c.Kind == "PersistentVolumeClaim" && c.Group == "" && !slices.Contains(namespaces, c.Namespace)
 	})
+}
+
+func comparisonNamespaces(p topology.NamespaceProvider) ([]string, string) {
+	nss, err := p.Namespaces()
+	if err != nil {
+		return nil, fmt.Sprintf("cannot enumerate namespaces: %v", err)
+	}
+	if len(nss) == 0 {
+		return nil, "no cached namespaces to compare"
+	}
+	names := make([]string, 0, len(nss))
+	for _, ns := range nss {
+		names = append(names, ns.Name)
+	}
+	slices.Sort(names)
+	return names, ""
 }
 
 func main() {
@@ -276,13 +292,8 @@ func main() {
 	}
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 
-	var allNamespaces []string
-	if nss, err := cache.Namespaces().List(labels.Everything()); err == nil {
-		for _, ns := range nss {
-			allNamespaces = append(allNamespaces, ns.Name)
-		}
-	}
-	slices.Sort(allNamespaces)
+	allNamespaces, reason := comparisonNamespaces(provider.(topology.NamespaceProvider))
+	rep.RestrictedSkippedReason = reason
 	var half namespacesAccess
 	for i := 0; i < len(allNamespaces); i += 2 {
 		half = append(half, allNamespaces[i])
@@ -334,7 +345,10 @@ func main() {
 	before := measurePass(subjects, *repeats, rep.Timings, &rep.Pooled, false, beforeAnswer(false))
 	runtime.GC()
 	after := measurePass(subjects, *repeats, rep.Timings, &rep.Pooled, true, afterAnswer(unrestricted))
-	restrictedSubjects := slices.DeleteFunc(slices.Clone(subjects), func(s subject) bool { return s.ref.Namespace != "" && !slices.Contains(half, s.ref.Namespace) })
+	var restrictedSubjects []subject
+	if rep.RestrictedSkippedReason == "" {
+		restrictedSubjects = slices.DeleteFunc(slices.Clone(subjects), func(s subject) bool { return s.ref.Namespace != "" && !slices.Contains(half, s.ref.Namespace) })
+	}
 	runtime.GC()
 	restrictedBefore := measurePass(restrictedSubjects, *repeats, rep.RestrictedTimings, &rep.RestrictedPooled, false, beforeAnswer(true))
 	runtime.GC()
@@ -408,6 +422,9 @@ func main() {
 		if err := os.WriteFile(*out, data, 0o644); err != nil {
 			log.Fatalf("write report: %v", err)
 		}
+	}
+	if rep.RestrictedSkippedReason != "" {
+		fmt.Printf("restricted comparison skipped: %s\n", rep.RestrictedSkippedReason)
 	}
 	fmt.Printf("%s: %d objects, %d equal, %d differ, %d diff groups; restricted user (%d of %d namespaces): %d equal, %d differ, %d groups\n", rep.Context, rep.Objects, rep.SubjectsEqual, rep.SubjectsDiffer, len(rep.Diffs), len(half), len(allNamespaces), rep.RestrictedEqual, rep.RestrictedDiffer, len(rep.RestrictedDiffs))
 	fmt.Printf("pooled p50/p95/p99 (µs): before %v, after %v; unexplained ManagedBy losses: %d unrestricted, %d restricted\n", rep.Pooled.BeforeUS, rep.Pooled.AfterUS, rep.ManagedByUnexplained, rep.RestrictedManagedByUnexplained)
