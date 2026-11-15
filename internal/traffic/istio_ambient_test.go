@@ -312,7 +312,7 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 		istioSeries("istio_requests_total", "waypoint", "ns-0002", "curl", "ns-0002", "httpbin", "200", 1),
 	}
 	var many []string
-	for i := 0; len(url.QueryEscape(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many))) <= istioQueryBudget; i++ {
+	for i := 0; len(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many)) <= istioQueryBudget; i++ {
 		many = append(many, fmt.Sprintf("ns-%04d", i))
 	}
 	useConfiguredStore(t)
@@ -396,5 +396,80 @@ func TestIstioQueryFailureTransportErrorsWithAmbientNamespaces(t *testing.T) {
 	}
 	if got := istioQueryFailure(redirect, false); !strings.Contains(got, "Location") {
 		t.Errorf("without ambient namespaces the transport detail is kept, got %q", got)
+	}
+}
+
+func TestIstioGetFlows_SaysWhenZtunnelIsNotScraped(t *testing.T) {
+	waypointFlow := istioSeries("istio_requests_total", "waypoint", "amb", "curl", "amb", "httpbin", "200", 1)
+	sidecarIntoAmbient := istioSeries("istio_requests_total", "source", "side", "curl", "amb", "httpbin", "200", 1)
+	sidecarOnly := istioSeries("istio_requests_total", "destination", "side", "curl", "side", "httpbin", "200", 1)
+	ztunnelTCP := istioSeries(istioTCPMetric, "destination", "side", "curl", "amb", "db", "", 1)
+	ztunnelHop := istioSeries(istioTCPMetric, "destination", "amb", "waypoint", "amb", "httpbin", "", 1)
+	ztunnelIdle := istioSeries(istioTCPMetric, "destination", "side", "curl", "amb", "db", "", 0)
+	ztunnelBuild := istioRawSeries{"istio_build", map[string]string{"component": "ztunnel", "tag": "1.30.3"}, 1}
+	proxyBuild := istioRawSeries{"istio_build", map[string]string{"component": "proxy", "tag": "1.30.3"}, 1}
+	for _, tc := range []struct {
+		name       string
+		raw        []istioRawSeries
+		ambient    []string
+		namespaces []string
+		probe      func(*prom.QueryResult) (*prom.QueryResult, error)
+		tcpFails   bool
+		want       bool
+	}{
+		{name: "ambient namespaces, no ztunnel metrics", raw: []istioRawSeries{waypointFlow, proxyBuild}, ambient: []string{"amb"}, want: true},
+		{name: "viewing an ambient namespace", raw: []istioRawSeries{waypointFlow}, ambient: []string{"amb"}, namespaces: []string{"amb"}, want: true},
+		{name: "viewing a client namespace that calls into one", raw: []istioRawSeries{sidecarIntoAmbient, sidecarOnly}, ambient: []string{"amb"}, namespaces: []string{"side"}, want: true},
+		{name: "ztunnel build info present", raw: []istioRawSeries{waypointFlow, ztunnelBuild}, ambient: []string{"amb"}},
+		{name: "ztunnel TCP drawn without build info", raw: []istioRawSeries{waypointFlow, ztunnelTCP}, ambient: []string{"amb"}},
+		{name: "an idle ztunnel TCP series without build info", raw: []istioRawSeries{waypointFlow, ztunnelIdle}, ambient: []string{"amb"}},
+		{name: "only a waypoint hop reported by ztunnel", raw: []istioRawSeries{waypointFlow, ztunnelHop}, ambient: []string{"amb"}},
+		{name: "no ambient namespaces", raw: []istioRawSeries{waypointFlow}},
+		{name: "a view with no ambient traffic", raw: []istioRawSeries{waypointFlow, sidecarOnly}, ambient: []string{"amb"}, namespaces: []string{"side", "other"}},
+		{name: "the TCP read failed", raw: []istioRawSeries{waypointFlow}, ambient: []string{"amb"}, tcpFails: true},
+		{name: "the check failed", raw: []istioRawSeries{waypointFlow}, ambient: []string{"amb"},
+			probe: func(*prom.QueryResult) (*prom.QueryResult, error) { return nil, errors.New("boom") }},
+		{name: "a partial answer", raw: []istioRawSeries{waypointFlow}, ambient: []string{"amb"},
+			probe: func(r *prom.QueryResult) (*prom.QueryResult, error) { r.Annotations.Partial = true; return r, nil }},
+		{name: "an answer with warnings", raw: []istioRawSeries{waypointFlow}, ambient: []string{"amb"},
+			probe: func(r *prom.QueryResult) (*prom.QueryResult, error) {
+				r.Annotations.Warnings = []string{"store down"}
+				return r, nil
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var fail map[string]error
+			if tc.tcpFails {
+				fail = map[string]error{istioTCPMetric: errors.New("boom")}
+			}
+			fake := fakeIstioProm(tc.raw, fail)
+			s := newTestIstio(func(ctx context.Context, q string) (*prom.QueryResult, error) {
+				r, err := fake(ctx, q)
+				if q == istioZtunnelProbe && tc.probe != nil {
+					return tc.probe(r)
+				}
+				return r, err
+			})
+			s.ambientNamespaceFn = func() []string { return tc.ambient }
+			s.waypointsFn = func() map[istioWorkload]bool { return map[istioWorkload]bool{{"amb", "waypoint"}: true} }
+			opts := DefaultFlowOptions()
+			opts.Namespaces = tc.namespaces
+			if len(tc.namespaces) == 1 {
+				opts.Namespace = tc.namespaces[0]
+			}
+			resp, err := s.GetFlows(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(resp.Warning, istioZtunnelUnscrapedNote); got != tc.want {
+				t.Fatalf("note shown = %v, want %v (warning %q, flows %+v)", got, tc.want, resp.Warning, resp.Flows)
+			}
+			if tc.want && resp.WarningKind != WarningIncomplete {
+				t.Errorf("kind = %q, want incomplete", resp.WarningKind)
+			}
+			if len(resp.Flows) == 0 {
+				t.Errorf("the note must not cost the flows")
+			}
+		})
 	}
 }

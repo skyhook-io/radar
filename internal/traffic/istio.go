@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -149,7 +150,7 @@ func (s *IstioSource) defaultQuery(ctx context.Context, query string) (*prom.Que
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", errIstioPrometheusUnavailable, err)
 	}
-	return client.Query(ctx, query)
+	return client.QueryPost(ctx, query)
 }
 
 // istioReporterSelector picks the receiving side's report of each request:
@@ -292,12 +293,13 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	var missing []string
 
 	ambientNamespaces := s.ambientNamespaceFn()
+	ambientKnown := ambientNamespaces
 	scopes, err := s.resolveScopes(ctx, ambientNamespaces)
 	if err != nil {
 		return scopeCheckFailed("istio"), nil
 	}
 	longest := istioHTTPQuery("istio_requests_total", istio5xxSelector, opts.Namespace, scopes.http, ambientNamespaces)
-	ambientOverBudget := len(ambientNamespaces) > 0 && len(url.QueryEscape(longest)) > istioQueryBudget
+	ambientOverBudget := len(ambientNamespaces) > 0 && len(longest) > istioQueryBudget
 	if ambientOverBudget {
 		log.Printf("[istio] %d ambient namespaces are too many to name in one query; client reports into them are not read", len(ambientNamespaces))
 		ambientNamespaces = nil
@@ -330,8 +332,11 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	httpFlows = withoutWaypointHops(httpFlows, waypoints)
 	httpCount := len(httpFlows)
 	tcpFlows, tcpErr := []Flow(nil), errIstioTCPUnchecked
+	ztunnelReported := false
 	if !scopes.tcpUnchecked {
-		tcpFlows, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
+		var reportedInto []string
+		tcpFlows, reportedInto, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
+		ztunnelReported = slices.ContainsFunc(reportedInto, func(ns string) bool { return slices.Contains(ambientKnown, ns) })
 		tcpFlows = withoutWaypointHops(tcpFlows, waypoints)
 	}
 	if tcpErr != nil {
@@ -378,6 +383,14 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	case len(tcpFlows) == 0 && tcpErr == nil:
 		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, istioReporterSelector, "TCP connections aren't shown on this map.")
 	}
+	// Without a TCP read there is no evidence either way, and the TCP
+	// warning already says so.
+	if tcpErr == nil && !ztunnelReported && ambientInView(opts, ambientKnown, httpFlows) && !s.ztunnelScraped(ctx) {
+		response.Warning = strings.TrimSpace(istioZtunnelUnscrapedNote + " " + response.Warning)
+		if response.WarningKind != WarningTransient {
+			response.WarningKind = WarningIncomplete
+		}
+	}
 	if ambientOverBudget {
 		response.Warning = strings.TrimSpace("Requests into ambient workloads that no waypoint observes aren't shown: this cluster has more ambient namespaces than Radar can include in its Prometheus query. " + response.Warning)
 		if response.WarningKind != WarningTransient {
@@ -386,6 +399,51 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	}
 	applyClusterScopeWarning(response, mismatch, scopes.http.mixed || scopes.tcp.mixed)
 	return response, nil
+}
+
+// istioZtunnelProbe finds ztunnel's build info, which it exports whether or
+// not it carries traffic, under a label ztunnel sets itself rather than one a
+// scrape config adds. It is not kept to this cluster: another cluster's
+// ztunnel can only hide the note, never raise it falsely.
+const istioZtunnelProbe = `count(istio_build{component="ztunnel"})`
+
+const istioZtunnelUnscrapedNote = "Radar found no metrics from ztunnel, Istio's ambient node proxy, so TCP traffic into ambient workloads without a waypoint can't be shown. Check that Prometheus scrapes the ztunnel pods (port 15020) and keeps their metrics."
+
+// ambientInView reports whether the view can hold traffic of an ambient
+// namespace: the caller's namespaces include one, or a flow from them goes
+// into one. No namespaces means the whole cluster.
+func ambientInView(opts FlowOptions, ambient []string, flows []Flow) bool {
+	if len(ambient) == 0 {
+		return false
+	}
+	if len(opts.Namespaces) == 0 && opts.Namespace == "" {
+		return true
+	}
+	inView := opts.Namespaces
+	if len(inView) == 0 {
+		inView = []string{opts.Namespace}
+	}
+	if slices.ContainsFunc(inView, func(ns string) bool { return slices.Contains(ambient, ns) }) {
+		return true
+	}
+	return slices.ContainsFunc(flows, func(f Flow) bool {
+		return slices.Contains(inView, f.Source.Namespace) && slices.Contains(ambient, f.Destination.Namespace)
+	})
+}
+
+// ztunnelScraped reports whether Prometheus holds ztunnel's metrics. A check
+// that fails, or whose answer the store marks partial or warns about, counts
+// as scraped, so the note is only raised on a complete answer.
+func (s *IstioSource) ztunnelScraped(ctx context.Context) bool {
+	result, err := s.queryFn(ctx, istioZtunnelProbe)
+	if err != nil {
+		log.Printf("[istio] Could not check whether ztunnel is scraped: %v", err)
+		return true
+	}
+	if result == nil || result.Annotations.Partial || len(result.Annotations.Warnings) > 0 {
+		return true
+	}
+	return len(result.Series) > 0
 }
 
 // noteFamilyMismatch adds why one family is missing while the other drew.
@@ -440,11 +498,11 @@ func istioRateQuery(groupBy, metric, selector, namespace string, sc clusterScope
 		sum(fmt.Sprintf(`, destination_workload_namespace="%s"`, safeNS))
 }
 
-// istioQueryBudget bounds the URL-encoded HTTP query once it names the
-// ambient namespaces. Queries are sent as GET, and a longer one risks the URL
-// limit of a proxy in front of the store (nginx's default is 8 KiB), which
-// would fail the whole HTTP query rather than only the client reports.
-const istioQueryBudget = 6 << 10
+// istioQueryBudget bounds the HTTP query once it names the ambient namespaces.
+// It is sent in a POST body, but stores limit query length too
+// (VictoriaMetrics' default is 16 KiB), and a longer query would fail the whole
+// HTTP query rather than only the client reports.
+const istioQueryBudget = prom.MaxWorkloadQueryBytes
 
 const istio5xxSelector = `, response_code=~"5.."`
 
@@ -603,18 +661,22 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc c
 	return flows, nil
 }
 
-// queryTCPFlows queries istio_tcp_connections_opened_total for TCP traffic
-func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) ([]Flow, error) {
+// queryTCPFlows queries istio_tcp_connections_opened_total for TCP traffic.
+// reportedInto is every destination namespace a series names, idle ones
+// included: a long-lived connection opens none in the window, yet its series
+// shows the reporting proxy is scraped.
+func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) (flows []Flow, reportedInto []string, err error) {
 	query := istioRateQuery("source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name", istioTCPMetric, istioReporterSelector, opts.Namespace, sc)
 
 	result, err := s.queryFn(ctx, query)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	flows := make([]Flow, 0, len(result.Series))
+	flows = make([]Flow, 0, len(result.Series))
 	for _, series := range result.Series {
 		labels := series.Labels
+		reportedInto = append(reportedInto, labels["destination_workload_namespace"])
 
 		if len(series.DataPoints) == 0 {
 			continue
@@ -667,7 +729,7 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc cl
 		flows = append(flows, flow)
 	}
 
-	return flows, nil
+	return flows, reportedInto, nil
 }
 
 // StreamFlows returns a channel of flows for real-time updates

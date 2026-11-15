@@ -23,6 +23,7 @@ type istioRawSeries struct {
 
 var (
 	istioSumByRe  = regexp.MustCompile(`^sum by \(([^)]*)\) \(rate\(([a-z_]+)\{([^}]*)\}\[5m\]\)\)$`)
+	istioCountRe  = regexp.MustCompile(`^count\(([a-z_]+)\{([^}]*)\}\)$`)
 	promMatcherRe = regexp.MustCompile(`([a-z_]+)(=~|!=|=)"([^"]*)"`)
 )
 
@@ -125,6 +126,21 @@ func evalIstioExpr(raw []istioRawSeries, q string) fakeVector {
 	}
 	if strings.HasPrefix(q, "(") && strings.HasSuffix(q, ")") {
 		return evalIstioExpr(raw, q[1:len(q)-1])
+	}
+	if c := istioCountRe.FindStringSubmatch(q); c != nil {
+		matchers := promMatcherRe.FindAllStringSubmatch(c[2], -1)
+		n := 0
+		for _, r := range raw {
+			if r.metric == c[1] && matchesAll(r.labels, matchers) {
+				n++
+			}
+		}
+		if n == 0 {
+			return fakeVector{}
+		}
+		out := fakeVector{}
+		out.add("", prom.Series{Labels: map[string]string{}, DataPoints: []prom.DataPoint{{Value: float64(n)}}})
+		return out
 	}
 	m := istioSumByRe.FindStringSubmatch(q)
 	if m == nil && !strings.HasPrefix(q, "sum by") {
