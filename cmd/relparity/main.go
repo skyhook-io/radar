@@ -15,7 +15,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/pprof"
@@ -27,7 +26,6 @@ import (
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/client-go/util/homedir"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/configrefs"
@@ -199,8 +197,11 @@ func main() {
 	rep.TimingMethod = "Per-kind: median of per-subject medians; pooled: all repeated samples, nearest-rank p50/p95/p99; separate passes with GC between them"
 	rep.AllocationMethod = "Process-wide MemStats Mallocs and TotalAlloc deltas per answer, averaged over repeats; includes concurrent informer/background allocations"
 
-	kubeconfig := cmp.Or(os.Getenv("KUBECONFIG"), filepath.Join(homedir.HomeDir(), ".kube", "config"))
-	if err := k8s.Initialize(k8s.InitOptions{KubeconfigPath: kubeconfig, PreferredContext: k8s.ContextRef{Name: *contextName, SourceFile: kubeconfig, InFileName: *contextName}}); err != nil {
+	preferred, err := k8s.ResolveContextSource(k8s.InitOptions{}, *contextName)
+	if err != nil {
+		log.Fatalf("resolve context: %v", err)
+	}
+	if err := k8s.Initialize(k8s.InitOptions{PreferredContext: preferred}); err != nil {
 		log.Fatalf("initialize: %v", err)
 	}
 	if got := k8s.GetContextName(); got != *contextName {

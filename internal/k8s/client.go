@@ -146,6 +146,25 @@ type kubeconfigSources struct {
 	directoryPaths             []string
 }
 
+// ResolveContextSource resolves a requested display name from the configured
+// kubeconfig sources before initialization, without building clients or contacting
+// a cluster. Each file is loaded in isolation, as it is during Initialize.
+func ResolveContextSource(opts InitOptions, name string) (ContextRef, error) {
+	sources, err := resolveKubeconfigSources(opts, os.Getenv("KUBECONFIG"), homedir.HomeDir())
+	if err != nil {
+		return ContextRef{}, err
+	}
+	registry, configs := buildContextRegistry(sources.paths)
+	entry, ok := registry[name]
+	if !ok {
+		return ContextRef{}, fmt.Errorf("%w: %q", errKubeconfigContextNotFound, name)
+	}
+	if err := clientcmd.ConfirmUsable(*configs[entry.SourceFile], entry.InFileName); err != nil {
+		return ContextRef{}, err
+	}
+	return ContextRef{Name: name, SourceFile: entry.SourceFile, InFileName: entry.InFileName}, nil
+}
+
 // Initialize initializes the K8s client with the given options
 func Initialize(opts InitOptions) error {
 	initOnce.Do(func() {
