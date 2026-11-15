@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/health"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -58,9 +57,10 @@ func detectSandboxSuspensionBlocked(gvr schema.GroupVersionResource, kind string
 	if r.Verdict.Reason != "PodNotOwned" {
 		return nil
 	}
-	suspended, _ := conditions.FindFalseConditionWithTime(u, "Suspended")
+	// Suspended stays False from the running state into the refusal, so its
+	// transition time predates the refusal: the onset is unknown.
 	message := "Suspension is blocked: " + r.Verdict.Message
-	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, r.Verdict.Reason, message, suspended.LastTransitionTime, suspended.HasLastTransitionTime, "", u.GetCreationTimestamp().Time)}
+	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, r.Verdict.Reason, message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}
 }
 
 // detectWorkerPoolIssues reports each sandbox class of an Agent Substrate

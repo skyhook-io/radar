@@ -74,7 +74,8 @@ func TestAgentSandboxReadyReasons(t *testing.T) {
 		}
 	}
 	// A refused suspension is reported at once, under the Suspended condition's reason.
-	if foreign := got["foreign-pod"]; foreign.Reason != "PodNotOwned" || !strings.HasPrefix(foreign.Message, "Suspension is blocked: ") {
+	// Suspended was False before the refusal too, so its time is not the onset.
+	if foreign := got["foreign-pod"]; foreign.Reason != "PodNotOwned" || !strings.HasPrefix(foreign.Message, "Suspension is blocked: ") || !foreign.OnsetUnknown {
 		t.Errorf("foreign-pod = %+v", foreign)
 	}
 }
