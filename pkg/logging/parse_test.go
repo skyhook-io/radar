@@ -71,6 +71,23 @@ func TestFlowFromNamespacesRegexAndInvalid(t *testing.T) {
 	}
 }
 
+// The operator tells "match: []" (a route with no match rules, which the
+// label router never selects) from no match key (select everything).
+func TestFlowFromMatchSet(t *testing.T) {
+	if f := FlowFrom(obj("Flow", "team", "empty", map[string]any{"match": []any{}}, nil)); !f.MatchSet {
+		t.Errorf("match: [] → MatchSet false")
+	}
+	if f := FlowFrom(obj("Flow", "team", "none", map[string]any{}, nil)); f.MatchSet {
+		t.Errorf("no match key → MatchSet true")
+	}
+}
+
+func TestOutputFromLoggingRef(t *testing.T) {
+	if o := OutputFrom(obj("Output", "team", "out", map[string]any{"loggingRef": "second", "loki": map[string]any{}}, nil)); o.LoggingRef != "second" {
+		t.Errorf("LoggingRef = %q", o.LoggingRef)
+	}
+}
+
 func TestLoggingFromDefaultFlowAndClusterResources(t *testing.T) {
 	l := LoggingFrom(obj("Logging", "", "default", map[string]any{
 		"controlNamespace":                       "logging-system",

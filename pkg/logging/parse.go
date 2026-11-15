@@ -21,7 +21,8 @@ func FlowFrom(u *unstructured.Unstructured) Flow {
 	f.HasFilters = len(filters) > 0
 	match, _, _ := unstructured.NestedSlice(u.Object, "spec", "match")
 	spec, _, _ := unstructured.NestedMap(u.Object, "spec")
-	if spec["match"] != nil && spec["selectors"] != nil {
+	f.MatchSet = spec["match"] != nil
+	if f.MatchSet && spec["selectors"] != nil {
 		f.Invalid = "match and selectors are both set"
 	}
 	for _, raw := range match {
@@ -128,6 +129,7 @@ func Watched(flow Flow, loggings []Logging) (watched, certain bool) {
 // redacted address, never the rest of its configuration.
 type OutputSummary struct {
 	Name, Namespace, Type, Address string
+	LoggingRef                     string // the operator only resolves a ref to an output with the Flow's loggingRef
 	Cluster                        bool
 	Active                         *bool // nil: the operator reported no state
 	ProblemsCount                  int
@@ -139,6 +141,7 @@ var outputCommonKeys = map[string]bool{"loggingRef": true, "protected": true, "e
 func OutputFrom(u *unstructured.Unstructured) OutputSummary {
 	out := OutputSummary{Name: u.GetName(), Namespace: u.GetNamespace(), Cluster: u.GetKind() == "ClusterOutput"}
 	spec, _, _ := unstructured.NestedMap(u.Object, "spec")
+	out.LoggingRef, _ = spec["loggingRef"].(string)
 	var types []string
 	for k := range spec {
 		if !outputCommonKeys[k] {

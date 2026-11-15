@@ -19,10 +19,28 @@ export function loggingsReadComplete(read: { isError: boolean; coverage?: { stat
   return !read.isError && read.coverage?.status === 'complete'
 }
 
-/** Host wrapper: tells Flow and ClusterFlow drawers where the Loggings' control namespaces are. */
+// missingOutputRefs names the refs the operator can't resolve, so it rejects
+// the Flow: no output of the ref's kind with that name and the Flow's
+// loggingRef. undefined outputs: that kind wasn't read completely, so its refs
+// are never called missing.
+export function missingOutputRefs(flow: any, clusterOutputs: any[] | undefined, outputs: any[] | undefined): string[] {
+  const ref = flow?.spec?.loggingRef ?? ''
+  const has = (items: any[], name: string) => items.some((o) => o?.metadata?.name === name && (o?.spec?.loggingRef ?? '') === ref)
+  const missing: string[] = []
+  if (clusterOutputs) for (const name of flow?.spec?.globalOutputRefs ?? []) if (!has(clusterOutputs, name)) missing.push(`ClusterOutput ${name}`)
+  if (outputs) for (const name of flow?.spec?.localOutputRefs ?? []) if (!has(outputs.filter((o) => o?.metadata?.namespace === flow?.metadata?.namespace), name)) missing.push(`Output ${name}`)
+  return missing
+}
+
+/** Host wrapper: tells Flow and ClusterFlow drawers where the Loggings' control namespaces are, and which output refs don't resolve. */
 export function LoggingFlowHostRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
   const loggings = useResources<any>('loggings', '', LOGGING_GROUP)
+  const clusterOutputs = useResources<any>('clusteroutputs', '', LOGGING_GROUP)
+  const outputs = useResources<any>('outputs', data?.metadata?.namespace ?? '', LOGGING_GROUP, { enabled: data?.kind === 'Flow' })
   const complete = loggingsReadComplete(loggings)
   const controlNamespaces = useMemo(() => controlNamespacesOf(loggings.data, complete), [loggings.data, complete])
-  return <LoggingFlowRenderer data={data} onNavigate={onNavigate} controlNamespaces={controlNamespaces} loggingsUnreadable={!!loggings.error || loggings.coverage?.status === 'partial'} />
+  const clusterOutputsRead = loggingsReadComplete(clusterOutputs) ? clusterOutputs.data : undefined
+  const outputsRead = loggingsReadComplete(outputs) ? outputs.data : undefined
+  const missingOutputs = useMemo(() => missingOutputRefs(data, clusterOutputsRead, outputsRead), [data, clusterOutputsRead, outputsRead])
+  return <LoggingFlowRenderer data={data} onNavigate={onNavigate} controlNamespaces={controlNamespaces} missingOutputs={missingOutputs} loggingsUnreadable={!!loggings.error || loggings.coverage?.status === 'partial'} />
 }

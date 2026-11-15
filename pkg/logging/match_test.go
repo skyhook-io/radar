@@ -83,6 +83,7 @@ func TestSelects(t *testing.T) {
 		{"namespaces_regex with a comma is uncertain", clusterRules(sel(nsRegex{"te{1,2}am"})), pod{ns: "team"}, Decision{Uncertain: true, Rule: 0}},
 		{"namespace_labels deciding is uncertain", clusterRules(sel(labels{"app": "a"}, nsLabels{"team": "t"})), pod{labels: labels{"app": "a"}}, Decision{Uncertain: true, Rule: 0}},
 		{"namespace_labels with an unmet condition does not decide", clusterRules(sel(labels{"app": "a"}, nsLabels{"team": "t"}), sel()), pod{}, Decision{Selected: true, Rule: 1}},
+		{"an empty match list selects nothing", Flow{Namespace: "a", MatchSet: true}, pod{ns: "a"}, Decision{Rule: -1, Unmet: []string{"a match rule"}}},
 		{"legacy selectors when match empty", Flow{Namespace: "a", LegacySelector: map[string]string{"app": "x"}}, pod{ns: "a", labels: labels{"app": "x"}}, Decision{Selected: true, Rule: -1}},
 		{"legacy selector unmet", Flow{Namespace: "a", LegacySelector: map[string]string{"app": "x"}}, pod{ns: "a"}, Decision{Rule: -1, Unmet: []string{"label app=x"}}},
 		{"legacy ignored when match present", Flow{Namespace: "a", LegacySelector: map[string]string{"app": "x"}, Match: []Rule{sel(labels{"app": "y"})}}, pod{ns: "a", labels: labels{"app": "x"}}, Decision{Rule: -1, Unmet: []string{"label app=y"}}},

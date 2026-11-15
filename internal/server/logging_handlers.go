@@ -187,10 +187,13 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			row.Active = &active
 		}
 		for _, ref := range f.GlobalOutputs {
-			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[f.LoggingRef], ref))
+			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[f.LoggingRef], f.LoggingRef, ref))
 		}
 		for _, ref := range f.LocalOutputs {
-			row.Destinations = append(row.Destinations, outputRef(outputs, "Output", f.Namespace, ref))
+			row.Destinations = append(row.Destinations, outputRef(outputs, "Output", f.Namespace, f.LoggingRef, ref))
+		}
+		if reason := missingOutput(row.Destinations, outputsUnread); row.Invalid == "" && reason != "" {
+			row.Invalid, row.Ignored, row.Selected, row.Uncertain = reason, true, false, false
 		}
 		row.Excluded = !row.Ignored && d.Rule >= 0 && !d.Selected && !d.Uncertain
 		if row.Selected {
@@ -216,7 +219,7 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		row.Uncertain = maybeBy[l.LoggingRef] || flowsUnread
 		row.Selected = !row.Uncertain
 		for _, ref := range l.DefaultFlow.GlobalOutputs {
-			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], ref))
+			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], l.LoggingRef, ref))
 		}
 		if row.Selected {
 			row.Delivers = loggingDelivers(row, outputsUnread)
@@ -253,22 +256,36 @@ func loggingPodFacts(pod *corev1.Pod) logging.PodFacts {
 	return facts
 }
 
-// outputRef finds a named output. A ClusterOutput with namespace "" may be in
-// any namespace; like the operator, the first by namespace wins.
-func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, name string) logDestination {
+// outputRef finds a named output carrying the Flow's loggingRef, as the
+// operator resolves refs only among its Logging's outputs. A ClusterOutput with
+// namespace "" may be in any namespace; like the operator, the first by
+// namespace wins.
+func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, loggingRef, name string) logDestination {
 	ref := logDestination{Kind: kind, Namespace: namespace, Name: name}
 	if kind == "ClusterOutput" && namespace == "" {
 		for key, o := range outputs {
-			if key[0] == kind && key[2] == name && (!ref.Found || o.Namespace < ref.Namespace) {
+			if key[0] == kind && key[2] == name && o.LoggingRef == loggingRef && (!ref.Found || o.Namespace < ref.Namespace) {
 				ref.Namespace, ref.Type, ref.Found, ref.Active = o.Namespace, o.Type, true, o.Active
 			}
 		}
 		return ref
 	}
-	if o, ok := outputs[[3]string{kind, namespace, name}]; ok {
+	if o, ok := outputs[[3]string{kind, namespace, name}]; ok && o.LoggingRef == loggingRef {
 		ref.Type, ref.Found, ref.Active = o.Type, true, o.Active
 	}
 	return ref
+}
+
+// missingOutput is why the operator rejects a Flow naming an output it can't
+// resolve; empty when every named output was found, or one wasn't and Radar
+// didn't read its kind.
+func missingOutput(dests []logDestination, unread map[string]bool) string {
+	for _, d := range dests {
+		if !d.Found && !unread[d.Kind] {
+			return "it names " + d.Kind + " " + d.Name + ", which Radar didn't find for its Logging"
+		}
+	}
+	return ""
 }
 
 // loggingDelivers decides whether a selecting Flow's logs reach an output:

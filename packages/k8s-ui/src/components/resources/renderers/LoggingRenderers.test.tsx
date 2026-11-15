@@ -61,6 +61,15 @@ describe('Logging operator drawers', () => {
     expect(html).toContain('Rejected by the Logging operator')
     expect(html).toContain('match and selectors are both set')
   })
+  it('says the operator rejects a Flow naming an output Radar did not find', () => {
+    const html = text(renderToString(<LoggingFlowRenderer data={flow} missingOutputs={['ClusterOutput gone']} />))
+    expect(html).toContain('Rejected by the Logging operator')
+    expect(html).toContain('ClusterOutput gone')
+  })
+  it('tells an empty match list from no match', () => {
+    expect(text(renderToString(<LoggingFlowRenderer data={{ ...flow, spec: { match: [] } }} />))).toContain('Empty match: the operator selects no pod.')
+    expect(text(renderToString(<LoggingFlowRenderer data={{ ...flow, spec: {} }} />))).toContain('No rules: every pod in scope is selected.')
+  })
   it('lists namespaces_regex conditions', () => {
     expect(text(renderToString(<LoggingFlowRenderer data={{ ...flow, spec: { match: [{ select: { namespaces_regex: ['^team-'] } }] } }} />))).toContain('namespace matching [^team-]')
   })

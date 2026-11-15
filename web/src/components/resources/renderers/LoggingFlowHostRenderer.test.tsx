@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { controlNamespacesOf, loggingsReadComplete } from './LoggingFlowHostRenderer'
+import { controlNamespacesOf, loggingsReadComplete, missingOutputRefs } from './LoggingFlowHostRenderer'
 
 describe('controlNamespacesOf', () => {
   it('lists each Logging control namespace once', () => {
@@ -14,6 +14,17 @@ describe('controlNamespacesOf', () => {
   })
   it('is undefined when a Logging takes cluster resources from every namespace', () => {
     expect(controlNamespacesOf([{ spec: { controlNamespace: 'a', allowClusterResourcesFromAllNamespaces: true } }], true)).toBeUndefined()
+  })
+})
+
+describe('missingOutputRefs', () => {
+  const flow = { kind: 'Flow', metadata: { name: 'app', namespace: 'team' }, spec: { globalOutputRefs: ['loki'], localOutputRefs: ['out'] } }
+  it('names refs no output of the Flow\'s Logging backs', () => {
+    expect(missingOutputRefs(flow, [{ metadata: { name: 'loki', namespace: 'logging' }, spec: { loggingRef: 'other' } }], [{ metadata: { name: 'out', namespace: 'team' }, spec: {} }])).toEqual(['ClusterOutput loki'])
+    expect(missingOutputRefs(flow, [{ metadata: { name: 'loki', namespace: 'logging' }, spec: {} }], [{ metadata: { name: 'out', namespace: 'other' }, spec: {} }])).toEqual(['Output out'])
+  })
+  it('never calls a ref missing when its kind was not read completely', () => {
+    expect(missingOutputRefs(flow, undefined, undefined)).toEqual([])
   })
 })
 
