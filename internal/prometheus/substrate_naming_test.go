@@ -113,6 +113,18 @@ func TestResolveSubstrateSpelling(t *testing.T) {
 		t.Fatalf("dotted series of another cluster: %+v %q %v", sp, amb, err)
 	}
 
+	// The suffixed name is another cluster's; the unsuffixed one is this pool's.
+	onlyUnsuffixed := func(_ context.Context, p scopeProbe) (string, SeriesIsolation, error) {
+		if strings.Contains(p.metric, "_seconds_count") {
+			return "", SeriesIsolation{}, ErrScopeMismatch
+		}
+		return "", SeriesIsolation{}, nil
+	}
+	sp, amb, err = resolveSubstrateSpelling(context.Background(), &fakeSubstrateProm{names: suffixes, rules: []fakeRule{{"count(", result(series(nil, 1))}}}, onlyUnsuffixed, substratePoolInstruments, base, time.Hour)
+	if err != nil || amb != "" || sp.stem(instLifecycle) != "ate_actor_lifecycle_operation_duration" {
+		t.Fatalf("per-name scope: %+v %q %v", sp, amb, err)
+	}
+
 	if _, _, err = resolve(&fakeSubstrateProm{namesErr: errors.New("boom")}); err == nil {
 		t.Fatal("a failed name lookup must be an error")
 	}

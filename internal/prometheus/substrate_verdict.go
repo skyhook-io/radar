@@ -159,12 +159,12 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	// five minutes. A maximum, so a lagging replica cannot raise it.
 	actual := "sum(max by (ate_worker_state, ate_sandbox_class) (" + x.norm(x.vec(instWorkers, "", schedulable...), "ate.worker.state", "ate.sandbox.class") + "))"
 	desired := "min(min_over_time(" + x.vec(instDesired, "") + "[5m]))"
-	// Held means true at every one-minute point of the last five minutes,
-	// with every point present, and true now: a minimum over whatever points
-	// exist would call one minute of history, or a recovery since the last
-	// point, five minutes short.
+	// Held means true at every one-minute point of the last six minutes, all
+	// six present (the earliest is at least five minutes old), and true now:
+	// a minimum over whatever points exist would call one minute of history,
+	// or a recovery since the last point, five minutes short.
 	cond := "(" + actual + " < bool " + desired + ")"
-	short, err := instantValue(r.ctx, r.q, "min_over_time("+cond+"[5m:1m]) * (count_over_time("+cond+"[5m:1m]) >= bool 5) * "+cond)
+	short, err := instantValue(r.ctx, r.q, "min_over_time("+cond+"[6m:1m]) * (count_over_time("+cond+"[6m:1m]) >= bool 6) * "+cond)
 	if err != nil {
 		v.Reason, freeFact.Reason = queryFailed(err), queryFailed(err)
 		return v

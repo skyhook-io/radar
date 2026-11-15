@@ -177,6 +177,7 @@ func (c *Client) LabelValuesWithWarnings(ctx context.Context, label string, matc
 		ErrorType string   `json:"errorType"`
 		Data      []string `json:"data"`
 		Warnings  []string `json:"warnings"`
+		IsPartial bool     `json:"isPartial"`
 	}
 	if err := json.Unmarshal(body, &pr); err != nil {
 		return nil, nil, fmt.Errorf("prom: parse label values from %s: %w", c.t.Address(), err)
@@ -184,7 +185,11 @@ func (c *Client) LabelValuesWithWarnings(ctx context.Context, label string, matc
 	if pr.Status != "success" {
 		return nil, nil, fmt.Errorf("prom: label values error from %s: %s (%s)", c.t.Address(), pr.Error, pr.ErrorType)
 	}
-	return pr.Data, pr.Warnings, nil
+	warnings := pr.Warnings
+	if pr.IsPartial {
+		warnings = append(warnings, "the backend marked the response partial")
+	}
+	return pr.Data, warnings, nil
 }
 
 // MetricMetadata describes one metric as reported by /api/v1/metadata.

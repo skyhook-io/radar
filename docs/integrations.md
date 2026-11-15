@@ -2250,7 +2250,7 @@ The verdict line reads now, and its facts over the charts' hour:
 
 | Resource | Verdict | Means | Facts |
 |---|---|---|---|
-| WorkerPool | **Short of workers** (amber) | Substrate's own `SubstrateWorkerPoolCapacityNotDelivered` condition has held at every minute of the last five, and holds now: the most schedulable workers any API replica reports is below the fewest desired | Free workers of schedulable (averaged across replicas, shown as approximate when fractional); resume p95, failed resumes and crashes over the hour |
+| WorkerPool | **Short of workers** (amber) | Substrate's own `SubstrateWorkerPoolCapacityNotDelivered` condition has held at every minute for the last five (six one-minute points), and holds now: the most schedulable workers any API replica reports is below the fewest desired | Free workers of schedulable (averaged across replicas, shown as approximate when fractional); resume p95, failed resumes and crashes over the hour |
 | WorkerPool | **Full** (neutral) | No API replica sees a free (idle or partial) worker | |
 | WorkerPool | Serving, No workers | Free workers exist; or no schedulable worker and none short | |
 | Node | **Uploads behind** (amber) | Some actor's snapshot upload to object storage is overdue | Overdue uploads by band, worst first; oldest snapshot not yet in storage |

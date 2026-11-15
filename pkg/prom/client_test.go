@@ -562,4 +562,10 @@ func TestClient_LabelValuesWithWarnings_ReturnsWarnings(t *testing.T) {
 	if err != nil || len(vals) != 1 || len(warnings) != 1 || warnings[0] != "store 2 unavailable" {
 		t.Fatalf("vals=%v warnings=%v err=%v", vals, warnings, err)
 	}
+	tr = fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"success","isPartial":true,"data":["up"]}`))
+	})
+	if _, warnings, _ := NewClient(tr).LabelValuesWithWarnings(context.Background(), "__name__", nil, time.Time{}, time.Time{}, 0); len(warnings) != 1 {
+		t.Fatalf("partial response warnings = %v, want one", warnings)
+	}
 }

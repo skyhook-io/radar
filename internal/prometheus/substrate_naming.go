@@ -278,27 +278,20 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve subs
 		if len(candidates) == 0 {
 			return out, nil
 		}
-		sp := substrateSpelling{dotted: dotted}
-		sel := base(sp)
-		var first string
-		for _, inst := range instruments {
-			if stems := candidates[inst.name]; len(stems) > 0 {
-				first = stems[0] + inst.probeSuffix()
-				break
-			}
-		}
-		matchers, _, err := resolve(ctx, scopeProbe{metric: first, selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true})
-		switch {
-		case errors.Is(err, ErrScopeMismatch):
-			// These series are another cluster's.
-			return out, nil
-		case errors.Is(err, ErrScopeAmbiguous):
-			matchers = ""
-		case err != nil:
-			return nil, err
-		}
+		sel := base(substrateSpelling{dotted: dotted})
 		for _, inst := range instruments {
 			for _, stem := range candidates[inst.name] {
+				// Each name is scoped on its own: one held only by another
+				// cluster says nothing about the others.
+				matchers, _, err := resolve(ctx, scopeProbe{metric: stem + inst.probeSuffix(), selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true})
+				switch {
+				case errors.Is(err, ErrScopeMismatch):
+					continue
+				case errors.Is(err, ErrScopeAmbiguous):
+					matchers = ""
+				case err != nil:
+					return nil, err
+				}
 				res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+vectorSelector(stem+inst.probeSuffix(), withScope(sel, matchers))+"["+window.String()+"]))")
 				if err != nil {
 					return nil, err

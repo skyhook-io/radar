@@ -66,7 +66,7 @@ func TestSubstrateShortRequiresAFullHold(t *testing.T) {
 	_, f := poolVerdict(t, nil, okCharts())
 	for _, q := range f.queries {
 		if strings.Contains(q, verdictShort) {
-			if !strings.Contains(q, "count_over_time(") || !strings.Contains(q, ">= bool 5") || strings.Count(q, "< bool") != 3 {
+			if !strings.Contains(q, "count_over_time(") || !strings.Contains(q, ">= bool 6") || strings.Count(q, "< bool") != 3 {
 				t.Fatalf("short query = %s", q)
 			}
 			return
