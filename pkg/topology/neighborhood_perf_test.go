@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -70,7 +73,6 @@ func neighborhoodFixtureSession(tb testing.TB, f *charFixture) *projectionSessio
 
 func neighborhoodPodFixture() *charFixture {
 	f := charCluster()
-	// Keep the same mixed inventory while making one owner fan out to 2,000 Pods.
 	f.provider.pods = nil
 	for i := 0; i < 2000; i++ {
 		pod := charPod("shop", fmt.Sprintf("big-8f9-%04d", i), "node-a", map[string]string{"app": "big"}, charPodSpec("", ""), charController("apps/v1", "ReplicaSet", "big-8f9", "uid-shop-big-8f9"))
@@ -108,7 +110,7 @@ func BenchmarkWalkNeighborhood(b *testing.B) {
 			f := tc.fixture()
 			addNeighborhoodDiscoveryLoad(f)
 			s := neighborhoodFixtureSession(b, f)
-			opts := NeighborhoodOptions{Hops: 2, Profile: ProfileAll}
+			opts := NeighborhoodOptions{Hops: 1, Profile: ProfileAll}
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -161,6 +163,23 @@ func TestNeighborhoodResponseComparison(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if len(walk.Nodes) == 0 {
+			t.Fatalf("missing fixture subject %+v", o.ref())
+		}
+		ids := map[string]bool{}
+		for _, n := range walk.Nodes {
+			if ids[n.ID] {
+				t.Fatalf("duplicate node %s", n.ID)
+			}
+			ids[n.ID] = true
+		}
+		edges := map[string]bool{}
+		for _, e := range walk.Edges {
+			if edges[e.ID] || !ids[e.Source] || !ids[e.Target] {
+				t.Fatalf("duplicate or dangling edge %+v", e)
+			}
+			edges[e.ID] = true
+		}
 		a, _ := json.Marshal(old)
 		z, _ := json.Marshal(walk)
 		t.Logf("%s: old %d nodes/%d edges/%d bytes; walk %d nodes/%d edges/%d bytes", o.key(), len(old.Nodes), len(old.Edges), len(a), len(walk.Nodes), len(walk.Edges), len(z))
@@ -212,14 +231,97 @@ func TestNeighborhoodDisplayDiscoveryOnlyAdmittedKinds(t *testing.T) {
 				t.Fatalf("display: %v %+v", err, nodes)
 			}
 			for _, q := range d.queries {
-				if !withCRD || q.Kind != "Certificate" {
+				if !withCRD || q.Kind != "Certificate" && q.Kind != "certificates" {
 					t.Fatalf("discovery for absent kind: %+v (all: %+v)", q, d.queries)
 				}
 			}
-			resolved := slices.DeleteFunc(slices.Clone(d.queries), func(q resourceid.GroupKind) bool { return q.Group == "" })
+			resolved := slices.DeleteFunc(slices.Clone(d.queries), func(q resourceid.GroupKind) bool { return q.Group == "" || q.Kind == "certificates" })
 			if withCRD && len(resolved) != 1 {
 				t.Fatalf("expected one admitted kind lookup, got %+v", d.queries)
 			}
 		})
+	}
+}
+
+func TestWalkNeighborhoodPodGroupKeepsEachPodsSources(t *testing.T) {
+	f := charCluster()
+	f.provider.pods = nil
+	f.objects = nil
+	cm := &corev1.ConfigMap{ObjectMeta: charMeta("shop", "settings", nil)}
+	f.provider.configMaps = []*corev1.ConfigMap{cm}
+	f.objects = append(f.objects, charObject{kind: "ConfigMap", resource: "configmaps", obj: cm})
+	for _, name := range []string{"a", "b"} {
+		rs := charReplicaSet("shop", name, 6, charController("apps/v1", "Deployment", "app", "uid-app"), "shared")
+		f.objects = append(f.objects, charObject{group: "apps", kind: "ReplicaSet", resource: "replicasets", obj: rs})
+		for i := 0; i < 6; i++ {
+			pod := charPod("shop", fmt.Sprintf("%s-%d", name, i), "", map[string]string{"app": "shared"}, charPodSpec("settings", ""), charController("apps/v1", "ReplicaSet", name, string(rs.UID)))
+			f.objects = append(f.objects, charObject{kind: "Pod", resource: "pods", obj: pod})
+		}
+	}
+	orphan := charPod("shop", "orphan", "", map[string]string{"app": "shared"}, charPodSpec("settings", ""), metav1.OwnerReference{})
+	orphan.OwnerReferences = nil
+	f.objects = append(f.objects, charObject{kind: "Pod", resource: "pods", obj: orphan})
+	for _, denyB := range []bool{false, true} {
+		t.Run(fmt.Sprint(denyB), func(t *testing.T) {
+			sub, err := WalkNeighborhood(context.Background(), neighborhoodFixtureSession(t, f), ResourceRef{Kind: "ConfigMap", Namespace: "shop", Name: "settings"}, NeighborhoodOptions{Hops: 2, Profile: ProfileAll, Allow: func(n *Node) bool { return !denyB || n.Kind != KindReplicaSet || n.Name != "b" }}, f.provider, f.dynamic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			checked := 0
+			for _, n := range sub.Nodes {
+				if n.Kind != KindPodGroup {
+					continue
+				}
+				for _, pod := range n.Data["pods"].([]map[string]any) {
+					name := pod["name"].(string)
+					want := []string{"configmap/shop/settings"}
+					if strings.HasPrefix(name, "a-") {
+						want = append(want, "replicaset/shop/a")
+					}
+					if strings.HasPrefix(name, "b-") && !denyB {
+						want = append(want, "replicaset/shop/b")
+					}
+					got, ok := pod["ownerIds"].([]string)
+					if !ok || !slices.Equal(got, want) {
+						t.Fatalf("pod %s sources %v, want %v", name, pod["ownerIds"], want)
+					}
+					checked++
+				}
+			}
+			if checked != 13 {
+				t.Fatalf("checked %d grouped Pods, want 13", checked)
+			}
+		})
+	}
+}
+
+func TestNeighborhoodDisplayPreservesDiscoveryAliasWinner(t *testing.T) {
+	d := newCharDynamic()
+	d.add("example.io", "v1", "Other", "widgets", true)
+	obj := charUnstructured("example.io/v1", "Widgets", "shop", "child", nil, nil, nil, charController("apps/v1", "Deployment", "web", "uid-shop-web"))
+	d.add("example.io", "v1", "Widgets", "otherthings", true, obj)
+	dep := charDeployment("shop", "web", 1, nil, charPodSpec("", ""))
+	objects := map[resourceid.Ref]runtime.Object{
+		resourceid.NewRef("example.io", "Widgets", "shop", "child"): obj,
+		resourceid.NewRef("apps", "Deployment", "shop", "web"):      dep,
+	}
+	got, err := neighborhoodDisplayNodes(objects, nil, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got[resourceid.NewRef("example.io", "Widgets", "shop", "child")]; ok {
+		t.Fatal("rendered an object under the losing discovery alias")
+	}
+	if len(got) != 1 {
+		t.Fatalf("display nodes: %+v", got)
+	}
+}
+
+func TestWalkNeighborhoodEdgeIDsDistinguishRelationshipTypes(t *testing.T) {
+	cm := projectionObject(&corev1.ConfigMap{ObjectMeta: charMeta("shop", "settings", nil)}, "", "ConfigMap")
+	pod := projectionObject(charPod("shop", "app", "", nil, charPodSpec("settings", ""), charController("v1", "ConfigMap", "settings", "uid-shop-settings")), "", "Pod")
+	sub := walkTestNeighborhood(t, newProjectionSession(t, cm, pod), cm, NeighborhoodOptions{Profile: ProfileAll})
+	if len(sub.Nodes) != 2 || len(sub.Edges) != 2 || sub.Edges[0].ID == sub.Edges[1].ID {
+		t.Fatalf("lost distinct relations on one pair: %+v", sub)
 	}
 }

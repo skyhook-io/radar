@@ -284,6 +284,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	}
 
 	seen := map[string]bool{}
+	podSources := map[resourceid.Ref][]string{}
 	refs := map[string]resourceid.Ref{}
 	for r := range graph.nodes {
 		refs[familyNodeID(r)] = r
@@ -297,11 +298,38 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		if !sok || !tok || source == target {
 			continue
 		}
+		if r := refs[e.Target]; grouped[r] != "" {
+			podSources[r] = append(podSources[r], source)
+		}
 		e.Source, e.Target = source, target
 		e.ID = source + "-" + string(e.Type) + "-" + target
 		if !seen[e.ID] {
 			seen[e.ID] = true
 			sub.Edges = append(sub.Edges, e)
+		}
+	}
+	for _, node := range sub.Nodes {
+		if node.Kind != KindPodGroup {
+			continue
+		}
+		pods := node.Data["pods"].([]map[string]any)
+		sources := make([][]string, len(pods))
+		mixed := false
+		for i, pod := range pods {
+			r := resourceid.NewRef("", "Pod", pod["namespace"].(string), pod["name"].(string))
+			ids := podSources[r]
+			slices.Sort(ids)
+			sources[i] = slices.Compact(ids)
+			if i > 0 && !slices.Equal(sources[0], sources[i]) {
+				mixed = true
+			}
+		}
+		if mixed {
+			// Without per-member sources, expanding a mixed group connects
+			// every Pod to every source, including another Pod's controller.
+			for i, pod := range pods {
+				pod["ownerIds"] = append([]string{}, sources[i]...)
+			}
 		}
 	}
 	slices.SortFunc(sub.Edges, func(a, b Edge) int { return strings.Compare(a.ID, b.ID) })

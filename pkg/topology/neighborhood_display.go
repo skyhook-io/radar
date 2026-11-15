@@ -214,8 +214,10 @@ func newNeighborhoodDisplayDynamic(objects map[resourceid.Ref]runtime.Object, or
 			p.aliases[alias], p.names[name] = true, true
 			if gvr, ok := dp.GetGVRWithGroup(gk.Kind, gk.Group); ok {
 				p.gvrs[alias] = gvr
-				p.kinds[gvr] = gk.Kind
-				p.watched = append(p.watched, gvr)
+				if _, known := p.kinds[gvr]; !known {
+					p.kinds[gvr] = dp.GetKindForGVR(gvr)
+					p.watched = append(p.watched, gvr)
+				}
 				p.aliases[resourceid.GroupKind{Group: gk.Group, Kind: strings.ToLower(gvr.Resource)}] = true
 				p.names[strings.ToLower(gvr.Resource)] = true
 			}
