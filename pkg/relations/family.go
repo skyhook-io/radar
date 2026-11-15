@@ -237,7 +237,9 @@ func (v *View) served(candidates []resourceid.Ref) []resourceid.Ref {
 	}
 	var out []resourceid.Ref
 	for _, r := range candidates {
-		if _, known := catalog.Kind(r.GroupKind()); known {
+		// An ambiguous kind is served, just not readable: it stays, so its
+		// read stops the resolution.
+		if _, known := catalog.Kind(r.GroupKind()); known || catalog.Ambiguous(r.GroupKind()) {
 			out = append(out, r)
 		}
 	}

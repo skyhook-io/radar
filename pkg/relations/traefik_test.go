@@ -259,3 +259,34 @@ func TestAnUnservedTraefikGroupShadowsNothing(t *testing.T) {
 		t.Errorf("on a legacy-only cluster the TraefikService's referrers are %+v; want the route", got)
 	}
 }
+
+// ambiguousTraefik is a cluster whose complete discovery serves
+// traefik.io's TraefikService through two resources, so Radar can't tell
+// which one a reference means.
+type ambiguousTraefik struct{ allNamespaces }
+
+func (ambiguousTraefik) Catalog() *ownership.Catalog {
+	served := []ownership.ServedResource{
+		{Group: "traefik.containo.us", Version: "v1alpha1", Kind: "IngressRoute", Resource: "ingressroutes", Namespaced: true, Verbs: []string{"list", "watch", "get"}},
+		{Group: "traefik.containo.us", Version: "v1alpha1", Kind: "TraefikService", Resource: "traefikservices", Namespaced: true, Verbs: []string{"list", "watch", "get"}},
+		{Group: "traefik.io", Version: "v1alpha1", Kind: "TraefikService", Resource: "traefikservices", Namespaced: true, Verbs: []string{"list", "watch", "get"}},
+		{Group: "traefik.io", Version: "v1alpha1", Kind: "TraefikService", Resource: "traefikservicesalt", Namespaced: true, Verbs: []string{"list", "watch", "get"}},
+	}
+	return ownership.NewCatalog(served, true)
+}
+
+func TestAnAmbiguousPreferredGroupStillStopsTheResolution(t *testing.T) {
+	route := object("traefik.containo.us/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"kind": "TraefikService", "name": "split"}}}}})
+	split := object("traefik.containo.us/v1alpha1", "TraefikService", "split", nil)
+	c := ambiguousTraefik{allNamespaces{cluster: cluster{objects: []runtime.Object{route, split}, unread: map[resourceid.GroupKind]readreason.Code{{Group: "traefik.io", Kind: "TraefikService"}: readreason.ReadError}}}}
+	if !c.Catalog().Ambiguous(resourceid.GroupKind{Group: "traefik.io", Kind: "TraefikService"}) {
+		t.Fatal("the fixture's traefik.io TraefikService isn't ambiguous")
+	}
+	v := NewView(c, ownership.Unrestricted())
+	if got := v.References(TraefikBackends, refOf(route), route); len(got.Declared) != 1 || got.Declared[0].State != TargetUnread {
+		t.Errorf("with traefik.io's TraefikService ambiguous the route's backend reads as %+v; want unread, not the legacy one", got.Declared)
+	}
+	if got := v.Referrers(TraefikBackends, refOf(split), nil); len(got.Referrers) != 0 || got.Coverage.Complete() {
+		t.Errorf("the legacy TraefikService's referrers are %+v; want none, incomplete", got)
+	}
+}

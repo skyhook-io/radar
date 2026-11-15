@@ -10,7 +10,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// IstioNetworkingGroup is Istio's networking API group.
 const IstioNetworkingGroup = "networking.istio.io"
 
 // IstioServiceDomain is the domain Istio's service registry builds FQDNs

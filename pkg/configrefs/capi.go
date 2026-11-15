@@ -6,7 +6,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// CAPIGroup is Cluster API's group.
 const CAPIGroup = "cluster.x-k8s.io"
 
 // CAPIClusterClass returns the ClusterClass a Cluster API Cluster's topology

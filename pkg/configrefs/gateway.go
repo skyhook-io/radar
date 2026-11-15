@@ -12,7 +12,6 @@ import (
 // mesh parentRef to a Service or a backendRef to a same-named custom kind must
 // never be joined to a Gateway or core Service that happens to share the name.
 
-// GatewayAPIGroup is the Gateway API's group.
 const GatewayAPIGroup = "gateway.networking.k8s.io"
 
 // GatewayBackendIsService reports whether a route backendRef names a core Service.
