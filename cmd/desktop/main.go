@@ -88,6 +88,10 @@ func main() {
 		os.Exit(0)
 	}
 
+	if handOffToRunningInstance() {
+		return
+	}
+
 	mcpMode, err := mcpFlags.Resolve()
 	if err != nil {
 		log.Fatal(err)
