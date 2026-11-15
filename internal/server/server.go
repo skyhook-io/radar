@@ -678,6 +678,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)
 			r.Get("/cnpg/poolers/{namespace}/{name}/pgbouncer-state", s.handleCNPGPgBouncerState)
 			r.Post("/cnpg/poolers/{namespace}/{name}/actions/{action}", s.handleCNPGPoolerAction)
+			r.Get("/velero/workspace", s.handleVeleroWorkspace)
+			r.Get("/velero/schedules/{namespace}/{name}/activity", s.handleVeleroScheduleActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.
@@ -1504,6 +1506,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		WorkloadHistory:          true,
 		CNPGWorkspace:            true,
 		CNPGProtectionSetup:      true,
+		VeleroWorkspace:          true,
 		ServiceEndpointSlices:    true,
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,

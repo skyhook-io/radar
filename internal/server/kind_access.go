@@ -93,9 +93,12 @@ func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k 
 // apiserver, as well as waiting for it to sync. Once it is spent, or the
 // request is cancelled, a namespace that has not synced is unread.
 type syncBudget struct {
-	ctx          context.Context
-	deadline     time.Time
-	bound        bool
+	ctx      context.Context
+	deadline time.Time
+	bound    bool
+	// readOnly lists a synced namespace without copying its objects. The
+	// caller must neither mutate nor retain them past the request.
+	readOnly     bool
 	discovery    *k8s.ResourceDiscovery
 	dynamicCache *k8s.DynamicResourceCache
 }
@@ -119,6 +122,9 @@ func (b *syncBudget) listBlocking(dc *k8s.DynamicResourceCache, gvr schema.Group
 		return dc.ListBlocking(gvr, namespace, dynamicSyncWait)
 	}
 	if dc.IsNamespaceSynced(gvr, namespace) {
+		if b.readOnly {
+			return dc.ListReadOnly(gvr, namespace)
+		}
 		return dc.ListBlocking(gvr, namespace, 0)
 	}
 	if b.ctx.Err() != nil {
