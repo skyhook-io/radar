@@ -40,6 +40,8 @@ export type ProblemProvenance =
   | { source: 'issue'; origin?: ProblemOrigin; measuredBy?: never; sourceDetail?: never }
   | { source: 'audit'; sourceDetail?: string; origin?: never; measuredBy?: never }
   | { source: 'measurement'; measuredBy?: string; sourceDetail?: string; origin?: never }
+  /** A workspace's own reading of cached objects that the Issues engine does not raise. */
+  | { source: 'reading'; origin: ProblemOrigin; measuredBy?: never; sourceDetail?: never }
 
 export type WorkspaceProblem<C extends string = string> = ProblemDetails<C> & ProblemProvenance & { tone: Exclude<HealthLevel, 'healthy'> }
 
@@ -50,6 +52,8 @@ export function problemOriginLabel(problem: WorkspaceProblem): ProblemOrigin {
       return { label: 'Best-practice check', detail: problem.sourceDetail }
     case 'measurement':
       return { label: problem.measuredBy ? `Measured by ${problem.measuredBy}` : 'Measured', detail: problem.sourceDetail }
+    case 'reading':
+      return problem.origin
   }
   return problem.origin ?? { label: 'Detected by Radar' }
 }

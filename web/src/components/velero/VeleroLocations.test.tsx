@@ -1,0 +1,52 @@
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
+import type { VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
+import { VeleroLocations } from './VeleroLocations'
+import { VeleroOverview } from './VeleroOverview'
+import { hoursAgo, location, workspace } from './velero.fixtures'
+
+const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+
+function render(data: VeleroWorkspaceResponse) {
+  return text(renderToStaticMarkup(
+    <VeleroLocations data={data} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} />,
+  ))
+}
+
+describe('Velero storage locations', () => {
+  it('shows unread backups and schedules as unknown, never as zero or none', () => {
+    const html = render(workspace({
+      coverage: { schedules: { state: 'denied' }, backups: { state: 'denied' }, backupStorageLocations: { state: 'full' }, restores: { state: 'full' }, backupRepositories: { state: 'full' } },
+      installations: [{ namespace: 'velero', server: { source: 'unread' }, defaultSource: 'unknown' }],
+      locations: [location({ backups: null, schedules: null, default: false, defaultSource: 'unknown', frequency: undefined })],
+    }))
+    expect(html).toContain('Unknown — no access to backups')
+    expect(html).toContain('Unknown — no access to schedules')
+    expect(html).toContain('frequency unknown')
+    expect(html).toContain('>Unknown<')
+    expect(html).not.toMatch(/font-mono">0</)
+    expect(html).toContain('Some Velero data used on this screen was not read.')
+  })
+
+  it('counts the backups each location is named by, flags overdue validation and states unassigned backups', () => {
+    const data = workspace({
+      installations: [{ namespace: 'velero', server: { source: 'deployment' }, defaultLocation: 'default', defaultSource: 'spec', unassignedBackups: 2 }],
+      locations: [location({ validationOverdue: true, attention: true, lastValidation: hoursAgo(2), schedules: [{ name: 'nightly' }, { name: 'weekly', viaDefault: true }] })],
+    })
+    const html = render(data)
+    expect(html).toContain('overdue')
+    expect(html).toContain('(via default)')
+    expect(html).toContain('2 backups not yet assigned a location.')
+    expect(html).toContain('every 1m · server flag')
+
+    const overview = text(renderToStaticMarkup(
+      <VeleroOverview data={data} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} />,
+    ))
+    expect(overview).toContain('Velero last validated this location 2h ago; it validates every 1m.')
+  })
+
+  it('says validation is disabled when its frequency is zero', () => {
+    const html = render(workspace({ locations: [location({ frequency: { seconds: 0, source: 'spec', disabled: true } })] }))
+    expect(html).toContain('validation disabled')
+  })
+})

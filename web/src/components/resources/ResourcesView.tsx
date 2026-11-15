@@ -13,6 +13,8 @@ import { getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
+import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
+import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
@@ -124,6 +126,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return result
   }, [issuesData])
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, withMetrics: selectedKind?.group === 'postgresql.cnpg.io' })
+  const veleroSidebarWorkspace = useVeleroSidebarWorkspace({ apiResources })
+  const sidebarCategoryWorkspaces = useMergedSidebarWorkspaces(cnpgSidebarWorkspace, veleroSidebarWorkspace)
   const workloadWrites = namespaces.length === 0
     ? capabilities?.workloadWrites
     : namespaces.length === 1
@@ -395,7 +399,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         ? { kind: selectedKind.name, reason: 'too-many', count: typeof selectedKindQuery.error.data?.count === 'number' ? selectedKindQuery.error.data.count : undefined, limit: selectedKindRowLimit, namespaces }
         : largeListGuard}
       onSelectedKindChange={setSelectedKind}
-      sidebarCategoryWorkspaces={cnpgSidebarWorkspace}
+      sidebarCategoryWorkspaces={sidebarCategoryWorkspaces}
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}

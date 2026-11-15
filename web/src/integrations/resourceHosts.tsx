@@ -6,6 +6,7 @@ import type { RenderDiagnoseAction } from '../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { SelectedResource } from '../types'
 import { cnpgResourceHost } from '../components/cnpg/host'
+import { veleroResourceHost } from '../components/velero/host'
 import { crdResourceHost } from '../components/resources/crd/host'
 import {
   composeDetailSlots, composeResourceHosts, hostsForResource, hostSupport, resourceHostForSlot,
@@ -36,9 +37,6 @@ import { HTTPRouteRenderer } from '../components/resources/renderers/HTTPRouteRe
 import { RolloutRenderer } from '../components/resources/renderers/RolloutRenderer'
 import { KyvernoPolicyCoverage } from '../components/resources/renderers/KyvernoPolicyCoverage'
 import { KyvernoPolicyQueued } from '../components/resources/renderers/KyvernoPolicyQueued'
-import { VeleroBSLRenderer } from '../components/resources/renderers/VeleroBSLRenderer'
-import { VeleroBackupRenderer } from '../components/resources/renderers/VeleroBackupRenderer'
-import { VeleroRestoreRenderer } from '../components/resources/renderers/VeleroRestoreRenderer'
 import { FluxHelmReleaseRenderer } from '../components/resources/renderers/FluxHelmReleaseRenderer'
 import { SecretProviderClassRenderer } from '../components/resources/renderers/SecretProviderClassRenderer'
 import {
@@ -65,7 +63,7 @@ export const resourceHosts: readonly ResourceHost[] = [
   { id: 'crossplane', renderers: { CompositeRenderer } },
   { id: 'rollouts', renderers: { RolloutRenderer } },
   { id: 'kyverno', renderers: { KyvernoPolicyCoverage, KyvernoPolicyQueued } },
-  { id: 'velero', renderers: { VeleroBSLRenderer, VeleroBackupRenderer, VeleroRestoreRenderer } },
+  veleroResourceHost,
   { id: 'flux', renderers: { FluxHelmReleaseRenderer } },
   { id: 'secrets-store-csi', renderers: { SecretProviderClassRenderer } },
   { id: 'admission-policy', renderers: { ValidatingAdmissionPolicyRenderer, ValidatingAdmissionPolicyBindingRenderer } },
@@ -107,8 +105,9 @@ export function ResourceDrawerNavigation({ resource }: { resource: SelectedResou
 
 export function useResourceHostFeatures(): HostFeatures {
   // Hook order is fixed here; selected adapters mount components that own their data hooks.
-  const { support } = useRadarFeature('cnpgWorkspace')
-  return useMemo(() => ({ cnpgWorkspace: support }), [support])
+  const { support: cnpgWorkspace } = useRadarFeature('cnpgWorkspace')
+  const { support: veleroWorkspace } = useRadarFeature('veleroWorkspace')
+  return useMemo(() => ({ cnpgWorkspace, veleroWorkspace }), [cnpgWorkspace, veleroWorkspace])
 }
 
 

@@ -122,6 +122,7 @@ type ScheduleLocation struct {
 type ScheduleReading struct {
 	Namespace        string        `json:"namespace"`
 	Name             string        `json:"name"`
+	Created          time.Time     `json:"created"`
 	Cron             string        `json:"cron"`
 	Zone             Zone          `json:"zone"`
 	State            ScheduleState `json:"state"`
@@ -160,7 +161,7 @@ type ScheduleInput struct {
 // so callers may pass the whole namespace.
 func ReadSchedule(in ScheduleInput) ScheduleReading {
 	s := in.Schedule
-	r := ScheduleReading{Namespace: s.GetNamespace(), Name: s.GetName()}
+	r := ScheduleReading{Namespace: s.GetNamespace(), Name: s.GetName(), Created: s.GetCreationTimestamp().UTC()}
 	r.Cron, _, _ = unstructured.NestedString(s.Object, "spec", "schedule")
 	r.Paused, _, _ = unstructured.NestedBool(s.Object, "spec", "paused")
 	r.ValidationErrors, _, _ = unstructured.NestedStringSlice(s.Object, "status", "validationErrors")
