@@ -129,6 +129,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// backup supersession is a property of the series, not of one object.
 		if gvr.Group == VeleroGroup {
 			out = append(out, detectVeleroIssues(gvr, kind, items, ownedSubjects)...)
+			// Every installation has a storage location, so its list is where
+			// the server, its schedules and its validation are read together.
+			if kind == "BackupStorageLocation" {
+				out = append(out, detectVeleroReadingIssues(p, gvr, items, time.Now())...)
+			}
 			continue
 		}
 		// A schedule's outcome is read against the cluster's backups, so it is

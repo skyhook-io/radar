@@ -62,7 +62,7 @@ First match wins.
 
 Storage locations need attention when **validation is overdue**: the interval is known and more than three intervals plus 5 minutes have passed since the last validation (Radar's threshold). An Unavailable location is already an Issue (`BackupStorageLocationUnavailable`).
 
-Attention rows are not Issues: they do not reach `/api/issues`, MCP or Diagnose. Raising them as Issues is separate work that should reuse `pkg/velero`.
+The certain readings are also Issues, raised by the Problems surface from the same rules, so they reach `/api/issues`, MCP and Diagnose: a stopped server, and schedules that are late, cannot run, held or not validated, and overdue validation. Estimates ("probably late", "late or held") stay readings here. See the Velero section of [integrations.md](integrations.md). These views keep showing their own readings, which need no Pod or Deployment access, and do not list those Issues twice.
 
 ## Issues on these views
 

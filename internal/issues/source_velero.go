@@ -518,6 +518,9 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 	var out []Issue
 	for _, u := range items {
 		if veleroPhase(u) != "NotReady" {
+			if iss, ok := veleroMaintenanceIssue(gvr, kind, u); ok {
+				out = append(out, iss)
+			}
 			continue
 		}
 		message := veleroFailureMessage(u, "backup repository is NotReady — filesystem and data-mover backups to it will fail")
@@ -525,6 +528,52 @@ func veleroRepositoryIssues(gvr schema.GroupVersionResource, kind string, items 
 			SeverityWarning, ReasonVeleroRepositoryNotReady, message, u.GetCreationTimestamp().Time))
 	}
 	return out
+}
+
+// veleroMaintenanceIssue: the newest maintenance run Velero recorded for a
+// repository failed. Maintenance (pruning and compacting the repository) runs
+// as a Job in Velero's namespace; when it keeps failing, the Job's pods show up
+// as a generic crash loop with nothing saying which repository suffers. A
+// NotReady repository already raises its own Issue, so this is raised only
+// for one Velero still reports usable.
+func veleroMaintenanceIssue(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) (Issue, bool) {
+	runs, _, _ := unstructured.NestedSlice(u.Object, "status", "recentMaintenance")
+	type run struct {
+		result, message string
+		start           time.Time
+	}
+	var all []run
+	for _, r := range runs {
+		m, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		result, _, _ := unstructured.NestedString(m, "result")
+		message, _, _ := unstructured.NestedString(m, "message")
+		started, _, _ := unstructured.NestedString(m, "startTimestamp")
+		at, _ := time.Parse(time.RFC3339, started)
+		all = append(all, run{result: result, message: strings.TrimSpace(message), start: at})
+	}
+	if len(all) == 0 {
+		return Issue{}, false
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].start.Before(all[j].start) })
+	newest := all[len(all)-1]
+	if newest.result != "Failed" {
+		return Issue{}, false
+	}
+	failed := 0
+	for _, r := range all {
+		if r.result == "Failed" {
+			failed++
+		}
+	}
+	message := fmt.Sprintf("Velero's last maintenance of this repository failed (%d of the last %d runs).", failed, len(all))
+	if newest.message != "" {
+		message += " " + newest.message
+	}
+	message += fmt.Sprintf(" Maintenance runs as Jobs in namespace %s; without it the repository is not pruned or checked.", u.GetNamespace())
+	return veleroStateIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, ReasonVeleroRepositoryMaintenanceFails, message, u.GetCreationTimestamp().Time), true
 }
 
 func veleroPhase(u *unstructured.Unstructured) string {
