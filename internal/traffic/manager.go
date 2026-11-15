@@ -323,17 +323,16 @@ func (m *Manager) detectClusterInfo(ctx context.Context) (*ClusterInfo, error) {
 	}
 
 	// Detect platform from nodes
-	nodes, err := m.k8sClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+	node, err := k8score.FindPlatformNode(ctx, m.k8sClient)
 	if err != nil {
 		log.Printf("[traffic] Warning: failed to list nodes: %v", err)
-	} else if len(nodes.Items) == 0 {
+	} else if node == nil {
 		log.Printf("[traffic] Warning: no nodes found in cluster")
 	} else {
-		node := nodes.Items[0]
 		providerID := node.Spec.ProviderID
 		log.Printf("[traffic] Node providerID: %q", providerID)
 
-		platform := k8score.DetectNodePlatform(node)
+		platform := k8score.DetectNodePlatform(*node)
 		if platform == "unknown" {
 			log.Printf("[traffic] Unknown node platform, platform remains generic")
 		} else if info.Platform == "generic" {

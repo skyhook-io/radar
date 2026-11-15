@@ -32,14 +32,12 @@ func DetectClusterPlatform(ctx context.Context, client kubernetes.Interface) (st
 		return "nkp", nil
 	}
 
-	nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
-	if err != nil || len(nodeList.Items) == 0 {
+	node, err := FindPlatformNode(ctx, client)
+	if err != nil || node == nil {
 		return "unknown", err
 	}
 
-	node := nodeList.Items[0]
-
-	platform := DetectNodePlatform(node)
+	platform := DetectNodePlatform(*node)
 	if platform != "unknown" {
 		if platform == "gke" {
 			if isAutopilot, _ := detectAutopilot(ctx, client); isAutopilot {
@@ -50,6 +48,22 @@ func DetectClusterPlatform(ctx context.Context, client kubernetes.Interface) (st
 	}
 
 	return "generic", nil
+}
+
+// FindPlatformNode samples up to 100 nodes and returns the first with a
+// recognizable platform, or the first sampled node if none is recognizable.
+// An empty cluster returns nil. The sample bounds API cost on generic clusters.
+func FindPlatformNode(ctx context.Context, client kubernetes.Interface) (*corev1.Node, error) {
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 100})
+	if err != nil || len(nodes.Items) == 0 {
+		return nil, err
+	}
+	for i := range nodes.Items {
+		if DetectNodePlatform(nodes.Items[i]) != "unknown" {
+			return &nodes.Items[i], nil
+		}
+	}
+	return &nodes.Items[0], nil
 }
 
 // DetectNodePlatform classifies a sampled node. Distribution markers take
@@ -116,6 +130,9 @@ func DetectByLabels(node corev1.Node) string {
 		return "eks"
 	}
 	if _, exists := node.Labels["eks.amazonaws.com/capacityType"]; exists {
+		return "eks"
+	}
+	if _, exists := node.Labels["eks.amazonaws.com/compute-type"]; exists {
 		return "eks"
 	}
 	for label := range node.Labels {

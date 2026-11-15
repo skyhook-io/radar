@@ -72,6 +72,17 @@ func TestDetectClusterInfoFallsBackToRKE2ServerVersion(t *testing.T) {
 	}
 }
 
+func TestDetectClusterInfoSkipsUnknownNode(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "a-custom"}, Spec: corev1.NodeSpec{ProviderID: "aws:///zone/custom"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "b-eks", Labels: map[string]string{"eks.amazonaws.com/compute-type": "auto"}}},
+	)
+	info, err := (&Manager{k8sClient: client}).detectClusterInfo(context.Background())
+	if err != nil || info.Platform != "eks" {
+		t.Fatalf("detectClusterInfo() = %+v, %v; want eks", info, err)
+	}
+}
+
 func TestDetectClusterInfoPrefersNKPOverNodeProvider(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}, Spec: corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0123"}},
