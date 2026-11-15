@@ -2,6 +2,7 @@ package relations
 
 import (
 	"slices"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -15,6 +16,7 @@ import (
 // evidence is in the two readable endpoints, even before a Secret is created.
 type Composition struct {
 	Name          string
+	Projection    Disposition
 	Producer      *Family
 	Consumers     []*Family
 	ConsumerKinds []resourceid.GroupKind
@@ -24,6 +26,7 @@ type Composition struct {
 // that name their output Secret, as the display graph does.
 var CertificateRoutes = &Composition{
 	Name:          "certificateRoutes",
+	Projection:    project("configures", false, "Consumers", "ConfigRefs"),
 	Producer:      CertificateSecrets,
 	Consumers:     []*Family{TraefikSecrets, ContourSecrets},
 	ConsumerKinds: append(traefikKinds("IngressRoute", "IngressRouteTCP", "IngressRouteUDP"), kindHTTPProxy),
@@ -127,10 +130,10 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 		}
 	}
 	slices.SortFunc(a.Edges, func(a, b ComposedEdge) int {
-		if n := compareCompositionRef(a.Producer, b.Producer); n != 0 {
+		if n := strings.Compare(a.Producer.Key(), b.Producer.Key()); n != 0 {
 			return n
 		}
-		return compareCompositionRef(a.Consumer, b.Consumer)
+		return strings.Compare(a.Consumer.Key(), b.Consumer.Key())
 	})
 	if v.limit > 0 && len(a.Edges) > v.limit {
 		a.Coverage.Truncated = true
@@ -140,22 +143,13 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 	return a
 }
 
-func compareCompositionRef(a, b resourceid.Ref) int {
-	if a.Key() < b.Key() {
-		return -1
-	}
-	if a.Key() > b.Key() {
-		return 1
-	}
-	return 0
-}
-
 // SealedSecretConsumers joins the SealedSecret's own namespace/name to
 // consumers declaring that Secret, including when unsealing has not succeeded.
 var SealedSecretConsumers = &Composition{
-	Name:      "sealedSecretConsumers",
-	Producer:  SealedSecrets,
-	Consumers: []*Family{ConfigReferences},
+	Name:       "sealedSecretConsumers",
+	Projection: project("configures", false, "Consumers", "ConfigRefs"),
+	Producer:   SealedSecrets,
+	Consumers:  []*Family{ConfigReferences},
 }
 
 // Compositions are the explicit joins over logical coordinates.

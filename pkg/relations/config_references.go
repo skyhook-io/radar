@@ -13,7 +13,8 @@ import (
 // an Ingress's TLS declares, as pkg/configrefs reads them. A ReplicaSet
 // scaled explicitly to zero declares nothing: it is an old revision.
 var ConfigReferences = &Family{
-	Name: "configReferences",
+	Name:       "configReferences",
+	Projection: project("configures", true, "ConfigRefs", "Consumers").whenTarget(kindPVC, "uses", true, "StorageRefs", "Consumers").whenTarget(resourceid.GroupKind{Kind: "ServiceAccount"}, "configures", true, "ServiceAccount", "Consumers"),
 	Sources: []Source{
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}},
 		{Kind: resourceid.GroupKind{Group: configrefs.ArgoGroup, Kind: "Rollout"}},

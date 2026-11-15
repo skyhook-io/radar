@@ -47,6 +47,7 @@ func traefikDeclared(extract func(*unstructured.Unstructured) []configrefs.PathR
 // to, which may be in another namespace.
 var TraefikBackends = &Family{
 	Name:           "traefikBackends",
+	Projection:     project("exposes", false, "Backends", "Routes").whenSource(resourceid.GroupKind{Group: configrefs.TraefikGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom").whenSource(resourceid.GroupKind{Group: configrefs.TraefikLegacyGroup, Kind: "TraefikService"}, "exposes", false, "Backends", "RoutedFrom"),
 	Sources:        traefikSources(append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...), "IngressRoute", "IngressRouteTCP", "IngressRouteUDP", "TraefikService"),
 	Targets:        append([]resourceid.GroupKind{kindService}, traefikKinds("TraefikService")...),
 	CrossNamespace: true,
@@ -58,7 +59,8 @@ var TraefikBackends = &Family{
 // TLSOption, and the Middlewares a chain Middleware runs. Each may be in
 // another namespace.
 var TraefikRouteConfig = &Family{
-	Name: "traefikRouteConfig",
+	Name:       "traefikRouteConfig",
+	Projection: project("configures", true, "ConfigRefs", "Consumers"),
 	Sources: append(append(append(append([]Source{},
 		traefikSources(traefikKinds("Middleware", "ServersTransport", "TLSOption"), "IngressRoute")...),
 		traefikSources(traefikKinds("MiddlewareTCP", "ServersTransportTCP", "TLSOption"), "IngressRouteTCP")...),
@@ -72,7 +74,8 @@ var TraefikRouteConfig = &Family{
 // TraefikSecrets is the family of the Secrets and ConfigMaps a Traefik
 // transport, TLSOption, TLSStore or route reads, in its own namespace.
 var TraefikSecrets = &Family{
-	Name: "traefikSecrets",
+	Name:       "traefikSecrets",
+	Projection: project("configures", true, "ConfigRefs", "Consumers"),
 	Sources: append(
 		traefikSources([]resourceid.GroupKind{kindSecret, {Kind: "ConfigMap"}}, "ServersTransport", "ServersTransportTCP"),
 		traefikSources([]resourceid.GroupKind{kindSecret}, "TLSOption", "TLSStore", "IngressRoute", "IngressRouteTCP")...),

@@ -22,67 +22,46 @@ type relationEdge struct {
 	edge    EdgeType
 	reverse bool
 	label   string
+	partial bool
 }
 
-// familyEdges are the edges the topology builder draws for each family, so a
-// subject's family answers project onto Relationships exactly as its graph
-// edges do. Storage and PodPlacement are answered by the direct reads
-// GetRelationshipsWithObject already makes.
-var familyEdges = map[string]relationEdge{
-	"fluxHelmOrigins":          {EdgeManages, true, ""},
-	"cronWorkflowRuns":         {EdgeManages, true, ""},
-	"configReferences":         {EdgeConfigures, true, ""},
-	"reflections":              {EdgeConfigures, true, reflectionEdgeLabel},
-	"sealedSecrets":            {EdgeManages, false, ""},
-	"autoscalers":              {EdgeUses, false, ""},
-	"kedaAuthentication":       {EdgeConfigures, true, ""},
-	"ingressBackends":          {EdgeRoutesTo, false, ""},
-	"rolloutServices":          {EdgeExposes, true, ""},
-	"gatewayParents":           {EdgeRoutesTo, true, ""},
-	"gatewayBackends":          {EdgeRoutesTo, false, ""},
-	"gatewayClasses":           {EdgeManages, true, ""},
-	"istioGateways":            {EdgeExposes, true, ""},
-	"istioServiceHosts":        {EdgeExposes, false, ""},
-	"traefikBackends":          {EdgeExposes, false, ""},
-	"traefikRouteConfig":       {EdgeConfigures, true, ""},
-	"traefikSecrets":           {EdgeConfigures, true, ""},
-	"contourBackends":          {EdgeExposes, false, ""},
-	"contourSecrets":           {EdgeConfigures, true, ""},
-	"knativeEventDestinations": {EdgeExposes, false, ""},
-	"knativeTriggerBrokers":    {EdgeExposes, true, ""},
-	"knativeRouteRevisions":    {EdgeExposes, false, ""},
-	"certificateSecrets":       {EdgeManages, false, ""},
-	"certManagerIssuers":       {EdgeUses, false, ""},
-	"fluxSources":              {EdgeConfigures, true, ""},
-	"nodeClasses":              {EdgeConfigures, true, ""},
-	"clusterClasses":           {EdgeConfigures, true, ""},
-	"argoWorkflowTemplates":    {EdgeConfigures, true, ""},
-	"machineNodes":             {EdgeManages, false, ""},
-	"analysisRuns":             {EdgeManages, false, ""},
-}
-
-// selectorEdges are the edges the builder draws from a selector to what it
-// chooses.
-var selectorEdges = map[string]relationEdge{
-	"serviceSelectors":     {EdgeExposes, false, ""},
-	"disruptionBudgets":    {EdgeProtects, false, ""},
-	"networkPolicies":      {EdgeProtects, false, ""},
-	"calicoPolicies":       {EdgeProtects, false, ""},
-	"calicoStagedPolicies": {EdgeProtects, false, ""},
-	"monitors":             {EdgeConfigures, false, ""},
-}
-
-// edgeFor is the edge a family draws for one declaration, which for a few
-// families depends on the kinds at its ends.
-func edgeFor(family string, source, target resourceid.Ref) (relationEdge, bool) {
-	e, ok := familyEdges[family]
-	switch {
-	case family == "configReferences" && target.Kind == "PersistentVolumeClaim" && target.Group == "":
-		e = relationEdge{EdgeUses, true, ""}
-	case family == "istioServiceHosts" && source.Kind == "DestinationRule":
-		e = relationEdge{EdgeConfigures, false, ""}
+// familyEdges and selectorEdges are generated from each producer's declared
+// field disposition. The graph projection tests check both endpoints.
+var familyEdges = func() map[string]relations.Disposition {
+	out := map[string]relations.Disposition{}
+	for _, f := range relations.Families("") {
+		out[f.Name] = f.Projection
 	}
-	return e, ok
+	return out
+}()
+var selectorEdges = func() map[string]relations.Disposition {
+	out := map[string]relations.Disposition{}
+	for _, f := range relations.SelectorFamilies() {
+		out[f.Name] = f.Projection
+	}
+	return out
+}()
+
+func projectedEdge(d relations.Disposition, source, target resourceid.Ref) (relationEdge, bool) {
+	for _, r := range d.Rules {
+		if r.Matches(source.GroupKind(), target.GroupKind()) {
+			return relationEdge{edge: EdgeType(r.Edge), reverse: r.Reverse, label: r.Label, partial: r.Partial}, true
+		}
+	}
+	return relationEdge{}, false
+}
+
+func edgeFor(family string, source, target resourceid.Ref) (relationEdge, bool) {
+	return projectedEdge(familyEdges[family], source, target)
+}
+
+func routingDisposition(d relations.Disposition) bool {
+	for _, r := range d.Rules {
+		if r.Edge == string(EdgeExposes) || r.Edge == string(EdgeRoutesTo) {
+			return true
+		}
+	}
+	return false
 }
 
 func (n *neighborhood) projectFamily(session relations.Session, name string, target resourceid.Ref) bool {
@@ -137,7 +116,7 @@ func (n *neighborhood) edge(from, to resourceid.Ref, e relationEdge, partial boo
 		return
 	}
 	n.edges[id] = true
-	n.topo.Edges = append(n.topo.Edges, Edge{ID: id, Source: s, Target: t, Type: e.edge, Label: e.label, Partial: partial})
+	n.topo.Edges = append(n.topo.Edges, Edge{ID: id, Source: s, Target: t, Type: e.edge, Label: e.label, Partial: partial || e.partial})
 }
 
 func (n *neighborhood) cover(name string, c relations.Coverage) {
@@ -158,8 +137,8 @@ func (n *neighborhood) cover(name string, c relations.Coverage) {
 func (n *neighborhood) answer(session relations.Session, v *relations.View, families []*relations.Family, selectors []*relations.SelectorFamily, subject resourceid.Ref, obj runtime.Object, routingOnly bool) {
 	gk := subject.GroupKind()
 	for _, f := range families {
-		e, mapped := familyEdges[f.Name]
-		if !mapped || !f.Covers(gk) || routingOnly && e.edge != EdgeExposes && e.edge != EdgeRoutesTo {
+		disposition := familyEdges[f.Name]
+		if len(disposition.Rules) == 0 || !f.Covers(gk) || routingOnly && !routingDisposition(disposition) {
 			continue
 		}
 		refs := v.References(f, subject, obj)
@@ -184,20 +163,23 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 	}
 	for _, f := range selectors {
-		e, mapped := selectorEdges[f.Name]
-		if !mapped || !f.Covers(gk) || routingOnly && e.edge != EdgeExposes {
+		disposition := selectorEdges[f.Name]
+		if len(disposition.Rules) == 0 || !f.Covers(gk) || routingOnly && !routingDisposition(disposition) {
 			continue
 		}
-		partial := f.Name == "calicoStagedPolicies"
 		chosen := v.Selected(f, subject, obj)
 		n.cover(f.Name, chosen.Coverage)
 		for _, m := range chosen.Matches {
-			n.edge(subject, m, e, partial)
+			if e, ok := projectedEdge(disposition, subject, m); ok {
+				n.edge(subject, m, e, false)
+			}
 		}
 		by := v.SelectedBy(f, subject, obj)
 		n.cover(f.Name, by.Coverage)
 		for _, m := range by.Matches {
-			n.edge(m, subject, e, partial)
+			if e, ok := projectedEdge(disposition, m, subject); ok {
+				n.edge(m, subject, e, false)
+			}
 		}
 	}
 }
@@ -219,7 +201,9 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 		joined := v.Composed(f, subject, obj)
 		n.cover(f.Name, joined.Coverage)
 		for _, edge := range joined.Edges {
-			n.edge(edge.Producer, edge.Consumer, relationEdge{edge: EdgeConfigures}, false)
+			if e, ok := projectedEdge(f.Projection, edge.Producer, edge.Consumer); ok {
+				n.edge(edge.Producer, edge.Consumer, e, false)
+			}
 		}
 	}
 
@@ -315,6 +299,20 @@ func (n *neighborhood) management(session relations.Session, ov *ownership.View,
 	}
 	if pool, ok := n.nodePool(session, r); ok {
 		n.edge(pool, r, manages, false)
+	}
+	if r.GroupKind() == (resourceid.GroupKind{Group: karpenter.Group, Kind: "NodePool"}) {
+		provider := relationDirectProvider{session: session, n: n}
+		claims, _ := provider.objects(resourceid.GroupKind{Group: karpenter.Group, Kind: "NodeClaim"})
+		for _, obj := range claims {
+			m, err := apimeta.Accessor(obj)
+			if err != nil {
+				continue
+			}
+			claim := resourceid.NewRef(karpenter.Group, "NodeClaim", "", m.GetName())
+			if pool, ok := n.nodePool(session, claim); ok && pool == r {
+				n.edge(r, claim, manages, false)
+			}
+		}
 	}
 }
 

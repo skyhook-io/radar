@@ -97,6 +97,7 @@ func calicoSelection(namespaced, staged bool) func(runtime.Object) (Selection, b
 // GlobalNetworkPolicies apply to.
 var CalicoPolicies = &SelectorFamily{
 	Name:           "calicoPolicies",
+	Projection:     project("protects", false, "Protects", "NetworkPolicies"),
 	Selectors:      calicoSelectors(false),
 	Selectables:    []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
 	CrossNamespace: true,
@@ -107,6 +108,7 @@ var CalicoPolicies = &SelectorFamily{
 // policies would apply to once promoted.
 var CalicoStagedPolicies = &SelectorFamily{
 	Name:           "calicoStagedPolicies",
+	Projection:     project("protects", false, "Protects", "StagedPolicies").partial(),
 	Selectors:      calicoSelectors(true),
 	Selectables:    []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
 	CrossNamespace: true,

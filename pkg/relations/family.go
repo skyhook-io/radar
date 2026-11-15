@@ -22,7 +22,8 @@ import (
 // may read.
 type Family struct {
 	// Name keys the family's coverage on the wire.
-	Name string
+	Name       string
+	Projection Disposition
 	// Sources are the kinds that declare, in the order answers list them.
 	Sources []Source
 	// Targets are the kinds a declaration can name.

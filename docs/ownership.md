@@ -131,6 +131,7 @@ The families so far:
 | `MachineNodes` | Karpenter NodeClaims and Cluster API Machines → the Node their status records | `status_families.go` |
 | `AnalysisRuns` | Argo Rollouts → the AnalysisRuns their status points at | `status_families.go` |
 | `FluxHelmOrigins` | Origin labels on Deployment, Service, StatefulSet, DaemonSet, Job, CronJob and Rollout → Flux HelmRelease; the dark projection uses these only for local releases with no readable inventory | `management_families.go` |
+| `ArgoWorkflowPods` | Pods → Argo Workflow through the workflow label, preserving the graph’s label-only management path | `management_families.go` |
 | `CronWorkflowRuns` | Argo Workflow → CronWorkflow, preferring the controller reference to the cron-workflow label fallback | `management_families.go` |
 | `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
 
@@ -159,6 +160,10 @@ rather than reading as no match.
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families can't read a reference differently.
+
+Each declared, selector and composition family carries its Related Resources `Projection` disposition beside its extraction rule. It names the fields in both declaration directions and the graph encoding, or explains the direct read / intentional non-projection. `relations_answer.go` generates its edge maps from these declarations. `TestEveryFamilyProjectsExactlyItsDeclaredFields` projects one isolated synthetic edge for every supported kind pair and checks the exact fields after ownership; legacy `ManagedBy` and ownership coverage are checked separately.
+
+The independent 72-family cutover inventory is `pkg/topology/testdata/relationship-family-inventory.tsv`. Each direction names registered or direct producers, or a reason it does not project. Its notes preserve the remaining held-target differences for synthetic AnalysisRun and Secret/ConfigMap nodes; these are not parity claims. `TestRelationshipFamilyInventoryHasBothDirections` rejects an unaccounted family or unknown producer.
 
 Families are built here while Related Resources still reads the relationship graph; readers switch to the families in
 one change that also removes the graph.

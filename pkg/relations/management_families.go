@@ -5,6 +5,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -14,6 +15,7 @@ import (
 // inventory and destination before treating a claim as management.
 var FluxHelmOrigins = &Family{
 	Name:           "fluxHelmOrigins",
+	Projection:     project("manages", true, "Managers", "Manages"),
 	Sources:        []Source{{Kind: kindDeployment}, {Kind: kindService}, {Kind: kindStatefulSet}, {Kind: kindDaemonSet}, {Kind: kindJob}, {Kind: kindCronJob}, {Kind: kindRollout}},
 	Targets:        []resourceid.GroupKind{{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease"}},
 	CrossNamespace: true,
@@ -32,26 +34,37 @@ var FluxHelmOrigins = &Family{
 // CronWorkflowRuns preserves Argo's controller reference before its cron-workflow
 // label fallback, using the same producer rule as the display graph.
 var CronWorkflowRuns = &Family{
-	Name:    "cronWorkflowRuns",
-	Sources: []Source{{Kind: kindWorkflow}},
-	Targets: []resourceid.GroupKind{kindCronWorkflow},
+	Name:       "cronWorkflowRuns",
+	Projection: project("manages", true, "Managers", "Manages"),
+	Sources:    []Source{{Kind: kindWorkflow}},
+	Targets:    []resourceid.GroupKind{kindCronWorkflow},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		u, ok := obj.(*unstructured.Unstructured)
 		if !ok {
 			return nil
 		}
-		var name string
-		for _, r := range u.GetOwnerReferences() {
-			if r.Kind == "CronWorkflow" && resourceid.GroupFromAPIVersion(r.APIVersion) == "argoproj.io" && r.Name != "" && r.Controller != nil && *r.Controller {
-				name = r.Name
-				break
-			}
-		}
-		if name == "" {
-			name = u.GetLabels()["workflows.argoproj.io/cron-workflow"]
-		}
+		name := configrefs.ArgoWorkflowCronOwnerName(u)
 		if name != "" {
 			visit(Declaration{Target: resourceid.NewRef("argoproj.io", "CronWorkflow", u.GetNamespace(), name), Path: "metadata"})
+		}
+		return nil
+	},
+}
+
+// ArgoWorkflowPods preserves Workflow management declared by a Pod's workflow
+// label, including Pods whose owner reference is unavailable.
+var ArgoWorkflowPods = &Family{
+	Name:       "argoWorkflowPods",
+	Projection: project("manages", true, "Managers", "Manages"),
+	Sources:    []Source{{Kind: kindPod}},
+	Targets:    []resourceid.GroupKind{kindWorkflow},
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		m, err := apimeta.Accessor(obj)
+		if err != nil {
+			return err
+		}
+		if name := m.GetLabels()["workflows.argoproj.io/workflow"]; name != "" {
+			visit(Declaration{Target: resourceid.NewRef("argoproj.io", "Workflow", m.GetNamespace(), name), Path: "metadata.labels[workflows.argoproj.io/workflow]"})
 		}
 		return nil
 	},

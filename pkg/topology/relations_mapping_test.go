@@ -3,17 +3,22 @@ package topology
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/skyhook-io/radar/pkg/ownership"
-	"github.com/skyhook-io/radar/pkg/readreason"
-	"github.com/skyhook-io/radar/pkg/relations"
-	"github.com/skyhook-io/radar/pkg/resourceid"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
-	"slices"
-	"testing"
+
+	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 func projectionOwnedAnswer(t *testing.T, s *projectionSession, obj runtime.Object, access ownership.Access) *Relationships {
@@ -201,4 +206,89 @@ func (s *logicalSecretSession) Borrow(r resourceid.Ref) (runtime.Object, ownersh
 func (s *logicalSecretSession) Object(r resourceid.Ref) ownership.ObjectRead {
 	_, read := s.Borrow(r)
 	return read
+}
+
+func TestRelationsAnswerInventoryLabelFallbacks(t *testing.T) {
+	pool := projectionCR("karpenter.sh", "NodePool", "", "pool", nil)
+	pool.SetUID("pool-uid")
+	claim := projectionCR("karpenter.sh", "NodeClaim", "", "claim", nil)
+	claim.SetLabels(map[string]string{"karpenter.sh/nodepool": "pool"})
+	wf := projectionCR("argoproj.io", "Workflow", "shop", "run", nil)
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "step", Labels: map[string]string{"workflows.argoproj.io/workflow": "run"}}}, "", "Pod")
+	s := newProjectionSession(t, pool, claim, wf, pod)
+	a := ownership.Unrestricted()
+	requireProjectionRefs(t, projectionOwnedAnswer(t, s, pool, a).Manages, claim)
+	requireProjectionRefs(t, projectionOwnedAnswer(t, s, claim, a).Managers, pool)
+	requireProjectionRefs(t, projectionOwnedAnswer(t, s, wf, a).Manages, pod)
+	requireProjectionRefs(t, projectionOwnedAnswer(t, s, pod, a).Managers, wf)
+	requireProjectionRefs(t, projectionOwnedAnswer(t, s, pool, projectionAccess{denied: []string{"NodeClaim"}}).Manages)
+	requireProjectionRefs(t, projectionOwnedAnswer(t, s, wf, projectionAccess{denied: []string{"Pod"}}).Manages)
+	claim.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "karpenter.sh/v1", Kind: "NodePool", Name: "pool", UID: "replaced"}})
+	s = newProjectionSession(t, pool, claim)
+	requireProjectionRefs(t, projectionOwnedAnswer(t, s, pool, a).Manages)
+}
+
+func TestRelationsMappingsAgainstTheOldGraph(t *testing.T) {
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "stable"}}, "", "Service")
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "app", Labels: map[string]string{"helm.toolkit.fluxcd.io/name": "release", "helm.toolkit.fluxcd.io/namespace": "flux"}}}, "apps", "Deployment")
+	cert := projectionCR("cert-manager.io", "Certificate", "shop", "cert", map[string]any{"spec": map[string]any{"secretName": "tls"}})
+	traefik := projectionCR("traefik.io", "IngressRoute", "shop", "traefik", map[string]any{"spec": map[string]any{"tls": map[string]any{"secretName": "tls"}}})
+	contour := projectionCR("projectcontour.io", "HTTPProxy", "shop", "contour", map[string]any{"spec": map[string]any{"virtualhost": map[string]any{"tls": map[string]any{"secretName": "tls"}}}})
+	rollout := projectionCR("argoproj.io", "Rollout", "shop", "rollout", map[string]any{"spec": map[string]any{"strategy": map[string]any{"canary": map[string]any{"stableService": "stable"}}}})
+	class := projectionCR("gateway.networking.k8s.io", "GatewayClass", "", "implementation", nil)
+	gw := projectionCR("gateway.networking.k8s.io", "Gateway", "shop", "gateway", map[string]any{"spec": map[string]any{"gatewayClassName": "implementation"}})
+	route := projectionCR("gateway.networking.k8s.io", "HTTPRoute", "shop", "route", map[string]any{"spec": map[string]any{"parentRefs": []any{map[string]any{"name": "gateway"}}}})
+	istio := projectionCR("networking.istio.io", "Gateway", "shop", "istio", nil)
+	vs := projectionCR("networking.istio.io", "VirtualService", "shop", "vs", map[string]any{"spec": map[string]any{"gateways": []any{"istio"}}})
+	broker := projectionCR("eventing.knative.dev", "Broker", "shop", "broker", nil)
+	trigger := projectionCR("eventing.knative.dev", "Trigger", "shop", "trigger", map[string]any{"spec": map[string]any{"broker": "broker"}})
+	cluster := projectionCR("cluster.x-k8s.io", "Cluster", "shop", "cluster", nil)
+	cluster.SetUID("cluster-uid")
+	mhc := projectionCR("cluster.x-k8s.io", "MachineHealthCheck", "shop", "check", nil)
+	mhc.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "cluster.x-k8s.io/v1", Kind: "Cluster", Name: "cluster", UID: cluster.GetUID()}})
+	hr := projectionCR("helm.toolkit.fluxcd.io", "HelmRelease", "flux", "release", nil)
+	cron := projectionCR("argoproj.io", "CronWorkflow", "shop", "cron", nil)
+	workflow := projectionCR("argoproj.io", "Workflow", "shop", "run", nil)
+	workflow.SetLabels(map[string]string{"workflows.argoproj.io/cron-workflow": "cron"})
+	objects := []runtime.Object{svc, deployment, cert, traefik, contour, rollout, class, gw, route, istio, vs, broker, trigger, cluster, mhc, hr, cron, workflow}
+	dynamic := newCharDynamic()
+	for _, obj := range objects {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			g := u.GroupVersionKind()
+			dynamic.add(g.Group, g.Version, g.Kind, strings.ToLower(g.Kind)+"s", u.GetNamespace() != "", u)
+		}
+	}
+	provider := &mockProvider{services: []*corev1.Service{svc.(*corev1.Service)}, deployments: []*appsv1.Deployment{deployment.(*appsv1.Deployment)}}
+	graph, err := NewBuilder(provider).WithDynamic(dynamic).Build(RelationshipBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph.StripSecretsExcept(map[SARTuple]bool{})
+	access := projectionAccess{denied: []string{"Secret"}}
+	s := newProjectionSession(t, objects...)
+	for _, tc := range []struct {
+		obj   runtime.Object
+		field string
+		want  []runtime.Object
+	}{
+		{cert, "Consumers", []runtime.Object{traefik, contour}}, {traefik, "ConfigRefs", []runtime.Object{cert}}, {contour, "ConfigRefs", []runtime.Object{cert}},
+		{rollout, "Services", []runtime.Object{svc}}, {svc, "Backends", []runtime.Object{rollout}},
+		{class, "Manages", []runtime.Object{gw}}, {gw, "Managers", []runtime.Object{class}},
+		{gw, "Backends", []runtime.Object{route}}, {route, "Gateways", []runtime.Object{gw}},
+		{istio, "Backends", []runtime.Object{vs}}, {vs, "RoutedFrom", []runtime.Object{istio}},
+		{broker, "Backends", []runtime.Object{trigger}}, {trigger, "RoutedFrom", []runtime.Object{broker}},
+		{mhc, "Dependencies", []runtime.Object{cluster}}, {cluster, "HealthChecks", []runtime.Object{mhc}},
+		{hr, "Manages", []runtime.Object{deployment}}, {deployment, "Managers", []runtime.Object{hr}},
+		{cron, "Manages", []runtime.Object{workflow}}, {workflow, "Managers", []runtime.Object{cron}},
+	} {
+		ref := projectionRef(tc.obj)
+		t.Run(ref.String()+"/"+tc.field, func(t *testing.T) {
+			old := GetRelationshipsWithObject(ref.Kind, ref.Namespace, ref.Name, tc.obj, graph, provider, dynamic, nil)
+			m, _ := apimeta.Accessor(tc.obj)
+			ApplyOwnership(old, ownership.NewView(s, access), ownership.Observe(ref, m))
+			next := projectionOwnedAnswer(t, s, tc.obj, access)
+			requireProjectionRefs(t, reflect.ValueOf(old).Elem().FieldByName(tc.field).Interface().([]ResourceRef), tc.want...)
+			requireProjectionRefs(t, reflect.ValueOf(next).Elem().FieldByName(tc.field).Interface().([]ResourceRef), tc.want...)
+		})
+	}
 }

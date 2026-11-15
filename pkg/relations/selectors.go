@@ -19,7 +19,8 @@ import (
 // and evaluate on ask.
 type SelectorFamily struct {
 	// Name keys the family's coverage on the wire.
-	Name string
+	Name       string
+	Projection Disposition
 	// Selectors are the kinds that choose, in the order answers list them.
 	Selectors []Selector
 	// Selectables are the kinds that can be chosen, in the order answers
