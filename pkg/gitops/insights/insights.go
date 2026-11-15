@@ -2224,7 +2224,7 @@ func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
 		Reason:   "StuckDriftLoop",
 		Message:  "Sync succeeded but the application is still OutOfSync. A controller or admission webhook is likely mutating resources after each apply.",
 		Cause:    "Auto-sync ran successfully and the controller's last reconcile is recent, but live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (e.g. Karpenter, Istio, cert-manager) writes back into spec; the Git manifest uses a deprecated API schema that the conversion webhook rewrites.",
-		Action:   "Open Changes to see the per-resource drift. Match the diff against your Git manifest, the resource's controller, and any mutating webhooks.",
+		Action:   "Open Resources to see the per-resource drift. Match the diff against your Git manifest, the resource's controller, and any mutating webhooks.",
 		Stuck:    true,
 	}
 }
@@ -2339,7 +2339,7 @@ func detectAutoDriftSelfHealOff(root *unstructured.Unstructured, syncHazard stri
 		Scope:    ScopeOperation,
 		Reason:   "SelfHealDisabled",
 		Message:  "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster, so it will stay OutOfSync until you sync.",
-		Action:   "Open Changes to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
+		Action:   "Open Resources to review the per-resource diff, then click Sync. Enable self-heal on the sync policy if you want Argo to auto-correct drift going forward.",
 	}
 	if syncHazard != "" {
 		issue.Message = "Application is OutOfSync and self-heal is disabled — auto-sync deploys new Git revisions but won't correct drift in the live cluster."
