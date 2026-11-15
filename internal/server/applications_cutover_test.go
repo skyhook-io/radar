@@ -59,7 +59,8 @@ func TestApplicationsStructuralPrecedenceGolden(t *testing.T) {
 		objects []ownershiptest.Object
 		links   [][2]int
 	}{
-		{"shared managers", []ownershiptest.Object{workload, argo, other}, [][2]int{{1, 0}, {2, 0}}},
+		// The previous shared-manager key depended on informer order; pin the sorted-first recorder.
+		{"shared managers", []ownershiptest.Object{workload, argo, other}, [][2]int{{2, 0}, {1, 0}}},
 		{"disagreeing manager and claim", []ownershiptest.Object{workload, argo, other}, [][2]int{{1, 0}}},
 		{"labels without inventory", []ownershiptest.Object{workload, release}, [][2]int{{1, 0}}},
 		{"app of apps", []ownershiptest.Object{workload, argo, parent}, [][2]int{{1, 0}, {2, 1}}},
