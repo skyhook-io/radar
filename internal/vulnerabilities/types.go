@@ -147,11 +147,14 @@ type CVE struct {
 	Score    *float64 `json:"score,omitempty"`
 	Packages []string `json:"packages"`
 	// Fixable is true when some affected image has a fixed version.
-	Fixable   bool   `json:"fixable"`
-	Title     string `json:"title,omitempty"`
-	Link      string `json:"link,omitempty"`
-	Images    int    `json:"images"`
-	Workloads int    `json:"workloads"`
+	Fixable bool `json:"fixable"`
+	// FixableImages counts the affected images where every package the CVE
+	// is in has a fixed version: of Images, the ones an upgrade clears.
+	FixableImages int    `json:"fixableImages"`
+	Title         string `json:"title,omitempty"`
+	Link          string `json:"link,omitempty"`
+	Images        int    `json:"images"`
+	Workloads     int    `json:"workloads"`
 	// Affected lists the images, worst exposure first, at most
 	// MaxAffectedPerCVE of them.
 	Affected []CVEImage `json:"affected"`

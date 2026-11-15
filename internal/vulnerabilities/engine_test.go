@@ -326,6 +326,33 @@ func TestCVEInTwoPackagesIsOneImage(t *testing.T) {
 	}
 }
 
+// An image counts as fixed for a CVE only when every package the CVE is in
+// there has a fixed version.
+func TestCVEFixableImages(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+			{"CVE-A", "HIGH", "libssl3", "3.0", "3.1"},
+			{"CVE-A", "HIGH", "openssl", "3.0", ""},
+		}}),
+		vulnReport(reportSpec{name: "w", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/worker", tag: "1", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+			{"CVE-A", "HIGH", "libssl3", "3.0", "3.1"},
+		}}),
+	}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/worker:1", "", worker),
+	}
+	resp := mustBuild(t, items, targets, ViewCVE, Filter{})
+	if len(resp.CVEs) != 1 || resp.CVEs[0].Images != 2 || resp.CVEs[0].FixableImages != 1 || !resp.CVEs[0].Fixable {
+		t.Fatalf("%+v", resp.CVEs)
+	}
+	// Narrowed to findings with a fix, checkout's unfixed openssl still
+	// keeps the upgrade from clearing the CVE there.
+	if resp := mustBuild(t, items, targets, ViewCVE, Filter{FixableOnly: true}); resp.CVEs[0].FixableImages != 1 {
+		t.Fatalf("filtered: %+v", resp.CVEs)
+	}
+}
+
 // Two ReplicaSets of one Deployment spelling the same Docker Hub image
 // differently share the scanned slot: neither reads as unscanned.
 func TestRolloutWithImageAliasesStaysScanned(t *testing.T) {

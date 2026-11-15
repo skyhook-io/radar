@@ -75,7 +75,7 @@ const CHIP_OFF = 'border-theme-border text-theme-text-secondary hover:bg-theme-h
 // tracks; the text columns take the rest.
 const IMAGE_COLS = 'grid-cols-[minmax(220px,1.6fr)_minmax(180px,1.2fr)_88px_minmax(0,2fr)_72px]'
 const FIX_COLS = 'grid-cols-[minmax(200px,1.2fr)_minmax(220px,1.5fr)_120px_minmax(0,1.6fr)_64px_80px]'
-const CVE_COLS = 'grid-cols-[minmax(260px,1.6fr)_80px_48px_minmax(200px,1.6fr)_48px_64px_80px]'
+const CVE_COLS = 'grid-cols-[minmax(260px,1.6fr)_80px_48px_minmax(200px,1.6fr)_56px_64px_80px]'
 const WORKLOAD_COLS = 'grid-cols-[minmax(200px,1.4fr)_minmax(180px,1.2fr)_minmax(0,2.4fr)]'
 const HEAD = 'grid gap-4 border-b border-theme-border py-2 pl-10 pr-3 text-[11px] font-semibold uppercase tracking-wider text-theme-text-tertiary'
 const FOLD_ROW = 'grid grid-cols-[minmax(220px,1.6fr)_minmax(0,4fr)] items-baseline gap-4 py-1.5 pl-10 pr-3 text-xs'
@@ -325,6 +325,7 @@ function CoverageNotes({ data }: { data: VulnerabilitiesResponse }) {
     <div className="flex flex-col gap-1.5 text-xs">
       <p className="text-theme-text-tertiary">
         From Trivy Operator's VulnerabilityReports{scan ? ` · ${scan}` : ''}. A report lists what was known when the image was scanned, after the scanner's own filters.
+        {" A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy's own reports."}
         {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about workloads that don't run now (older revisions, scaled to zero or removed) and isn't counted.`}
       </p>
       {gaps && <p className="text-warning-text">{gaps}</p>}
@@ -550,7 +551,7 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                   <SeverityBadge severity={c.severity} />
                   <Num>{c.score?.toFixed(1) ?? '—'}</Num>
                   <span className="truncate font-mono text-xs text-theme-text-secondary">{c.packages.join(', ')}</span>
-                  <span className={clsx('text-xs', c.fixable ? 'text-emerald-700 dark:text-emerald-400' : 'text-theme-text-tertiary')}>{c.fixable ? 'Yes' : 'No'}</span>
+                  <CVEFix cve={c} />
                   <Num>{c.images}</Num>
                   <Num strong>{c.workloads}</Num>
                 </div>
@@ -630,6 +631,20 @@ function WorkloadTable({ workloads, severities, query, namespaces, onOpen, onSho
         ))}
       </div>
     </div>
+  )
+}
+
+// Whether an upgrade clears the CVE: in every image, some, or none.
+function CVEFix({ cve: c }: { cve: VulnerabilityCVE }) {
+  const all = c.fixableImages >= c.images
+  const text = c.fixableImages === 0 ? 'No' : all ? 'Yes' : `${c.fixableImages} of ${c.images}`
+  return (
+    <span
+      title={c.fixableImages > 0 && !all ? `A fixed release is reported in ${c.fixableImages} of the ${c.images} images` : undefined}
+      className={clsx('text-xs', c.fixableImages === 0 ? 'text-theme-text-tertiary' : all ? 'text-emerald-700 dark:text-emerald-400' : 'text-theme-text-secondary')}
+    >
+      {text}
+    </span>
   )
 }
 

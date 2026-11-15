@@ -23,6 +23,8 @@ export interface AuditCardVulnerabilities {
   imagesWithCritical: number
   fixableCriticalHigh: number
   certainty: 'exact' | 'lower_bound' | 'unknown'
+  /** The read failed: the row says so instead of showing counts. */
+  readFailed?: boolean
   onNavigate: () => void
 }
 
@@ -173,9 +175,9 @@ export function AuditCard({ data, onNavigate, vulnerabilities }: AuditCardProps)
   )
 }
 
-function VulnerabilitiesRow({ imagesWithCritical, fixableCriticalHigh, certainty, onNavigate }: AuditCardVulnerabilities) {
+function VulnerabilitiesRow({ imagesWithCritical, fixableCriticalHigh, certainty, readFailed, onNavigate }: AuditCardVulnerabilities) {
   const bound = certainty === 'lower_bound' ? '≥ ' : ''
-  const tone = certainty !== 'unknown' && imagesWithCritical > 0 ? SEVERITY_TEXT_CLASS.high : 'text-theme-text-secondary'
+  const tone = readFailed ? 'text-theme-text-tertiary' : certainty !== 'unknown' && imagesWithCritical > 0 ? SEVERITY_TEXT_CLASS.high : 'text-theme-text-secondary'
   return (
     <button
       onClick={onNavigate}
@@ -184,7 +186,9 @@ function VulnerabilitiesRow({ imagesWithCritical, fixableCriticalHigh, certainty
       <ShieldAlert className={clsx('h-3.5 w-3.5 shrink-0', tone)} aria-hidden />
       <span className="text-xs text-theme-text-secondary">Vulnerabilities</span>
       <span className={clsx('ml-auto text-xs font-semibold tabular-nums', tone)}>
-        {certainty === 'unknown'
+        {readFailed
+          ? "Couldn't read the reports"
+          : certainty === 'unknown'
           ? 'No running image scanned yet'
           : `${bound}${imagesWithCritical} ${imagesWithCritical === 1 ? 'image' : 'images'} with Critical · ${bound}${fixableCriticalHigh} fixable`}
       </span>

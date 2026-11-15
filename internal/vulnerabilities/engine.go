@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -529,7 +530,9 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 type cveAgg struct {
 	row      CVE
 	packages map[string]bool
-	images   map[string]bool
+	// images holds each affected image, true while every package the CVE
+	// is in there has a fixed version.
+	images map[string]bool
 }
 
 // keepAffected keeps the MaxAffectedPerCVE most widely run images, so a CVE
@@ -582,6 +585,13 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		imageWorkloads[r.imageID] = workloads
 		listed := m.listed(workloads, MaxWorkloadsPerAffected)
 		rowMatched := m.rowMatches(r.image, workloads)
+		// Whether an upgrade clears each CVE here: every package it's in has
+		// a fixed version, whichever findings the filters keep.
+		fixedHere := map[string]bool{}
+		for _, fd := range r.findings {
+			fixed, seen := fixedHere[fd.ID]
+			fixedHere[fd.ID] = (fixed || !seen) && fd.FixedVersion != ""
+		}
 		for _, fd := range r.findings {
 			if !m.findingMatches(fd, rowMatched) {
 				continue
@@ -601,7 +611,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			c.row.Link = cmp.Or(c.row.Link, fd.Link)
 			c.row.Fixable = c.row.Fixable || fd.FixedVersion != ""
 			c.packages[fd.Package] = true
-			c.images[r.imageID] = true
+			c.images[r.imageID] = fixedHere[fd.ID]
 			c.keepAffected(CVEImage{
 				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest),
 				Packages:  []AffectedPackage{{Package: fd.Package, InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion, FixTarget: fd.FixTarget}},
@@ -615,7 +625,12 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		ids := sortedKeys(c.images)
+		ids := slices.Sorted(maps.Keys(c.images))
+		for _, fixed := range c.images {
+			if fixed {
+				c.row.FixableImages++
+			}
+		}
 		setKey := strings.Join(ids, "\x00")
 		n, ok := workloadsBySet[setKey]
 		if !ok {

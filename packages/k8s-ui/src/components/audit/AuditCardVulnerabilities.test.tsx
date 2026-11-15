@@ -28,4 +28,11 @@ describe('AuditCard vulnerabilities row', () => {
     expect(html).toContain('No running image scanned yet')
     expect(html).not.toContain('0 images')
   })
+
+  it('says the read failed rather than hiding', () => {
+    const html = renderToStaticMarkup(
+      <AuditCard data={data} onNavigate={() => {}} vulnerabilities={{ imagesWithCritical: 0, fixableCriticalHigh: 0, certainty: 'unknown', readFailed: true, onNavigate: () => {} }} />,
+    )
+    expect(html).toContain("Couldn&#x27;t read the reports")
+  })
 })

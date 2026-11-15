@@ -71,6 +71,8 @@ export interface VulnerabilityCVE {
   score?: number
   packages: string[]
   fixable: boolean
+  /** Of `images`, the ones where every package the CVE is in has a fixed version. */
+  fixableImages: number
   title?: string
   link?: string
   images: number
