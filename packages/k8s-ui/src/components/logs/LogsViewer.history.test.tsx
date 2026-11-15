@@ -139,3 +139,8 @@ it('labels init containers like Live and keeps the given order, appending contai
   await render({ containers: ['migrate', 'web'], initContainers: ['migrate'], fetchHistory, initialMode: 'history' })
   expect([...element.querySelectorAll('option')].map(o => o.textContent).filter(t => !/hour|day/i.test(t ?? ''))).toEqual(['migrate (init)', 'web', 'istio-proxy'])
 })
+
+it('says History matches by pod name, so an earlier pod with the same name is included', async () => {
+  await render({ fetchHistory: async () => result(), initialMode: 'history' })
+  expect(element.textContent).toContain('matched by pod name')
+})

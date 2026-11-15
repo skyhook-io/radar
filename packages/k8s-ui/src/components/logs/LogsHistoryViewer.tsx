@@ -100,7 +100,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, initC
     <div className="flex h-full min-h-0 flex-col">
       {result && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-1.5 text-xs text-theme-text-secondary">
-          From Loki, {windowLabel}
+          From Loki, {windowLabel}, matched by pod name (lines from an earlier pod with the same name are included)
           {result.wholePod && ', all containers (Loki has no container label)'}
           {result.truncated && `, the newest ${result.limit.toLocaleString()} lines (the limit; older lines in this window may be missing)`}.
         </div>
