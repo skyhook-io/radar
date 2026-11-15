@@ -405,3 +405,82 @@ func TestRelationsAnswerKnativePrivateServiceNeedsNoRevision(t *testing.T) {
 		}
 	}
 }
+
+type hiddenNetworkAccess struct{ ownership.Access }
+
+func (a hiddenNetworkAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.Decision {
+	if gk.Kind == "Service" || gk.Kind == "HTTPRoute" || gk.Kind == "Gateway" && ns == "shop" {
+		return ownership.Denied
+	}
+	return a.Access.CanRead(gk, ns)
+}
+
+func TestRelationsAnswerNetworkingHiddenHopsHaveNoOutputLimit(t *testing.T) {
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	hiddenGateway := projectionCR("gateway.networking.k8s.io", "Gateway", "shop", "hidden", map[string]any{})
+	gateway := projectionCR("gateway.networking.k8s.io", "Gateway", "public", "front", map[string]any{})
+	for _, manyServices := range []bool{false, true} {
+		t.Run(fmt.Sprintf("manyServices=%v", manyServices), func(t *testing.T) {
+			objects := []runtime.Object{deployment, hiddenGateway, gateway}
+			for i := 0; i <= relations.DefaultLimit; i++ {
+				service := "web"
+				if manyServices {
+					service = fmt.Sprintf("web-%04d", i)
+				}
+				if manyServices || i == 0 {
+					objects = append(objects, projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: service}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "Service"))
+				}
+				parent := map[string]any{"name": "hidden"}
+				if i == relations.DefaultLimit {
+					parent = map[string]any{"name": "front", "namespace": "public"}
+				}
+				objects = append(objects, projectionCR("gateway.networking.k8s.io", "HTTPRoute", "shop", fmt.Sprintf("route-%04d", i), map[string]any{"spec": map[string]any{"parentRefs": []any{parent}, "rules": []any{map[string]any{"backendRefs": []any{map[string]any{"name": service}}}}}}))
+			}
+			s := newProjectionSession(t, objects...)
+			emit := hiddenNetworkAccess{ownership.Unrestricted()}
+			captured, ok := relations.CaptureSubject(s, projectionRef(deployment), deployment)
+			if !ok {
+				t.Fatal("capture failed")
+			}
+			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, "", nil, nil)
+			if !slices.Equal(rel.Gateways, []ResourceRef{refOf(projectionRef(gateway))}) || len(rel.Services)+len(rel.Routes) != 0 {
+				t.Fatalf("gateways %v, services %v, routes %v", rel.Gateways, rel.Services, rel.Routes)
+			}
+			for name, c := range coverage {
+				if c.Total != 0 || c.Truncated {
+					t.Fatalf("%s leaked hidden-hop count or truncated traversal: %+v", name, c)
+				}
+			}
+		})
+	}
+}
+
+func TestRelationsAnswerNetworkingHiddenStoreGaps(t *testing.T) {
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "Service")
+	route := projectionCR("gateway.networking.k8s.io", "HTTPRoute", "shop", "web", map[string]any{})
+	for _, gk := range []resourceid.GroupKind{projectionRef(svc).GroupKind(), projectionRef(route).GroupKind()} {
+		t.Run(gk.Kind, func(t *testing.T) {
+			s := newProjectionSession(t, deployment, svc, route)
+			gap := ownership.Gap{Kind: gk, Namespace: "shop", Reason: readreason.KindSyncPending}
+			s.gaps = map[resourceid.GroupKind]ownership.Gap{gk: gap}
+			emit := hiddenNetworkAccess{ownership.Unrestricted()}
+			captured, ok := relations.CaptureSubject(s, projectionRef(deployment), deployment)
+			if !ok {
+				t.Fatal("capture failed")
+			}
+			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, "", nil, nil)
+			key := relations.GatewayParents.Name
+			if gk.Kind == "Service" {
+				key = relations.ServiceSelectors.Name
+			}
+			c, found := coverage[key]
+			if !found || c.Complete() || c.Total != 0 || !slices.Contains(c.NotChecked, gap) {
+				t.Fatalf("missing count-free intermediate gap: %+v", coverage)
+			}
+			if len(rel.Gateways)+len(rel.Services)+len(rel.Routes) != 0 {
+				t.Fatalf("unreadable hops emitted: %+v", rel)
+			}
+		})
+	}
+}

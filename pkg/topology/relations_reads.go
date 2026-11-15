@@ -119,8 +119,11 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 	if subject.GroupKind() == (resourceid.GroupKind{Kind: "Service"}) {
 		services = append(services, subject)
 	} else {
-		v := relations.NewView(s, traverse)
-		services = v.SelectedBy(relations.ServiceSelectors, subject, obj).Matches
+		v := relations.NewView(s, traverse).WithLimit(0)
+		selected := v.SelectedBy(relations.ServiceSelectors, subject, obj)
+		selected.Coverage.Total = 0
+		n.cover(relations.ServiceSelectors.Name, selected.Coverage)
+		services = selected.Matches
 	}
 	add := func(r resourceid.Ref) {
 		if !n.allowed(r) {
@@ -161,7 +164,9 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 			{relations.GatewayBackends, relations.GatewayParents},
 			{relations.IstioServiceHosts(istioDomain), relations.IstioGateways},
 		} {
-			routes := relations.NewView(s, traverse).Referrers(composition.backends, svc, nil)
+			routes := relations.NewView(s, traverse).WithLimit(0).Referrers(composition.backends, svc, nil)
+			routes.Coverage.Total = 0
+			n.cover(composition.parents.Name, routes.Coverage)
 			for _, route := range routes.Referrers {
 				parents := relations.NewView(s, intermediateAccess{Access: emit, ref: route.Ref, traverse: traverse}).References(composition.parents, route.Ref, nil)
 				n.cover(composition.parents.Name, parents.Coverage)
