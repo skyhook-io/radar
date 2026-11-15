@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	// Schedules and the Velero server name IANA zones; without zoneinfo on the
+	// host every one of them would read as unknown.
+	_ "time/tzdata"
 
 	"github.com/robfig/cron/v3"
 )

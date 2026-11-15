@@ -68,8 +68,10 @@ func (s *Server) handleVeleroScheduleActivity(w http.ResponseWriter, r *http.Req
 	switch {
 	case !readable && resp.Coverage["schedules"].State == integration.KindCoverageDenied:
 		s.writeError(w, http.StatusForbidden, "no access to Velero schedules")
-	case !readable:
+	case !readable && resp.Coverage["schedules"].State == integration.KindCoverageSyncing:
 		s.writeError(w, http.StatusServiceUnavailable, "Velero schedules are still loading")
+	case !readable:
+		s.writeError(w, http.StatusServiceUnavailable, "Radar could not read Velero schedules in this namespace")
 	case !found:
 		s.writeError(w, http.StatusNotFound, "schedule not found")
 	default:
