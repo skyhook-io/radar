@@ -12,6 +12,7 @@ import (
 	"log"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -338,6 +339,10 @@ type DynamicResourceObservation struct {
 // All application-specific behavior is injected via callbacks — the cache
 // itself has no imports of any internal/ package.
 type DynamicCacheConfig struct {
+	// RequiredWatchKinds are collection dependencies that must be retried even
+	// without readers. They bypass the small-CRD object-count deferral.
+	RequiredWatchKinds []schema.GroupKind
+
 	// DynamicClient is the dynamic Kubernetes client used to create informers.
 	DynamicClient dynamic.Interface
 

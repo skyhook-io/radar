@@ -82,6 +82,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		recordClusterContext := ActiveClusterContext()
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
+			RequiredWatchKinds:          relationshipWatchKinds(),
 			DynamicClient:               client,
 			Discovery:                   sharedDiscovery,
 			Changes:                     changeCh,

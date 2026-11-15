@@ -62,6 +62,23 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
   in at the session's first look, and turns every unread kind or namespace into a gap. Dependent searches reuse the
   session's unwatched-kind gaps; watched stores are still read each time, so a loading store can become available.
 
+## Collection activation
+
+`relations.Kinds()` declares the bounded source, target, lookup and projection dependencies. Radar removes the kinds
+served by typed informers using `k8score.AllKindListers()` and gives the rest to each new dynamic cache's watch reconciler.
+It starts before the deferred-informer warmup gate, reacts to discovery refreshes and CRD add/update events, and retries
+every 75 seconds (after the 60-second denial memory expires). A context switch, reconnect or namespace rescope creates
+and starts a new reconciler; stopping a cache cancels its requests and unregisters its discovery subscription.
+`DynamicResourceCache.RequestWatch(gvr)` is the non-blocking, singleflight entry point for readers recording collection gaps.
+
+Both Calico groups and both Traefik groups are activated because families read both. Open-ended Knative destinations
+use named Serving, Broker, Channel, flow and JobSink targets, and NodeClasses use the four supported providers; discovery
+alone never expands them into watches of Knative internals or arbitrary providers. Crossplane composites/claims and
+arbitrary ownership kinds retain their existing behavior: they are read from watches already active, without eagerly
+watching every installed provider/XRD kind. The fallback catalog supplies the versions, plurals and scope for recovery;
+`TestRelationshipKindsHaveFallbacks` and the chart-RBAC check keep it aligned with the declaration. The recording builder
+test pins every activation absent from the graph's cold listing, including targets otherwise started by common warmup.
+
 ## Beyond ownership: other relations
 
 `pkg/relations` answers the relations that aren't ownership or management from the same caches, through the same

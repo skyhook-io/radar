@@ -52,6 +52,9 @@ type ResourceDiscovery struct {
 	// complete records that the discovery request that set resources returned
 	// no error; see DiscoveryCatalog.
 	complete bool
+
+	refreshListenersMu sync.Mutex
+	refreshListeners   map[chan struct{}]struct{}
 }
 
 // DiscoveryOption is a functional option for NewResourceDiscovery.
@@ -198,6 +201,7 @@ func (d *ResourceDiscovery) Refresh() error {
 }
 
 func (d *ResourceDiscovery) refresh() error {
+	defer d.notifyRefresh()
 	if d == nil || d.client == nil {
 		return fmt.Errorf("discovery not initialized")
 	}
@@ -339,6 +343,7 @@ func (d *ResourceDiscovery) GroupHadPartialDiscovery(group string) bool {
 // AddAPIResource registers a resource that was proven accessible without
 // server discovery returning it, such as under restricted discovery RBAC.
 func (d *ResourceDiscovery) AddAPIResource(resource APIResource) {
+	defer d.notifyRefresh()
 	if d == nil {
 		return
 	}

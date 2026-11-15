@@ -123,7 +123,9 @@ type DynamicResourceCache struct {
 	// outside d.mu, so without this a parallel fan-out over N objects of an
 	// unwatched kind would issue N redundant limit=1 list probes before one
 	// caller wins startWatching.
-	watchStarts singleflight.Group
+	watchStarts         singleflight.Group
+	watchRequests       map[schema.GroupVersionResource]bool
+	watchReconcilerOnce sync.Once
 
 	// CRD discovery completion callbacks
 	crdCallbacks   []func()
@@ -2715,7 +2717,7 @@ type crdWatchStats struct {
 const maxEagerResources = 100
 
 // watchSmallCRDs probes each GVR that isn't watched yet and starts watching
-// the ones with at most maxEagerResources objects.
+// the ones with at most maxEagerResources objects, plus required kinds at any size.
 func (d *DynamicResourceCache) watchSmallCRDs(gvrs []schema.GroupVersionResource) crdWatchStats {
 	var stats crdWatchStats
 
@@ -2725,13 +2727,21 @@ func (d *DynamicResourceCache) watchSmallCRDs(gvrs []schema.GroupVersionResource
 		watched[k.gvr] = struct{}{}
 	}
 	stats.alreadyWatching = len(watched)
-	var remaining []schema.GroupVersionResource
+	var remaining, required []schema.GroupVersionResource
 	for _, gvr := range gvrs {
 		if _, exists := watched[gvr]; !exists {
+			if d.requiredWatch(gvr) {
+				required = append(required, gvr)
+				continue
+			}
 			remaining = append(remaining, gvr)
 		}
 	}
 	d.mu.RUnlock()
+	for _, gvr := range required {
+		d.RequestWatch(gvr)
+	}
+	stats.eager = len(required)
 
 	if len(remaining) == 0 {
 		return stats
@@ -2783,7 +2793,7 @@ func (d *DynamicResourceCache) watchSmallCRDs(gvrs []schema.GroupVersionResource
 			}
 		}
 	}
-	stats.eager = len(eager)
+	stats.eager += len(eager)
 
 	if len(eager) > 0 {
 		d.WarmupParallel(eager, 30*time.Second)
@@ -2824,15 +2834,26 @@ func (d *DynamicResourceCache) markCRDsSeen(keys []string) map[string]struct{} {
 	return fresh
 }
 
-// watchLateCRDs subscribes to CRD events so CRDs installed after startup get
-// the same watch decision as DiscoverAllCRDs gave the ones already present,
-// and their resources' changes reach the timeline from install on.
-func (d *DynamicResourceCache) watchLateCRDs() {
-	handler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { d.onCRDEvent(obj) },
+func (d *DynamicResourceCache) crdEventHandler() cache.ResourceEventHandler {
+	return cache.ResourceEventHandlerDetailedFuncs{
+		AddFunc: func(obj any, initial bool) {
+			if initial && len(d.config.RequiredWatchKinds) > 0 {
+				d.reconcileWatches()
+				return
+			}
+			d.onCRDEvent(obj)
+		},
 		UpdateFunc: func(_, obj any) { d.onCRDEvent(obj) },
 		DeleteFunc: func(obj any) { d.forgetCRD(obj) },
 	}
+}
+
+func (d *DynamicResourceCache) watchLateCRDs() {
+	if len(d.config.RequiredWatchKinds) > 0 {
+		d.StartWatchReconciler()
+		return
+	}
+	handler := d.crdEventHandler()
 	if err := d.AddGVRChangeHandler(crdGVR, handler); err == nil {
 		return
 	}
@@ -2863,17 +2884,27 @@ func crdKey(obj any) (string, bool) {
 }
 
 // onCRDEvent schedules a scan for a CRD that hasn't had a watch decision yet.
-// Updates to known CRDs (cert-manager's cainjector rewrites CRD CA bundles
-// regularly) don't trigger one: a scan refreshes discovery, which is costly.
+// Known relationship dependencies also refresh discovery: an update can change
+// the served version even after the first watch decision.
 func (d *DynamicResourceCache) onCRDEvent(obj any) {
 	key, ok := crdKey(obj)
 	if !ok {
 		return
 	}
+	d.reconcileWatches()
 	d.lateCRDMu.Lock()
 	defer d.lateCRDMu.Unlock()
 	if _, seen := d.seenCRDs[key]; seen {
-		return
+		required := false
+		for _, k := range d.config.RequiredWatchKinds {
+			if gvr, ok := d.config.Discovery.GetGVRWithGroup(k.Kind, k.Group); ok && key == gvr.Group+"/"+gvr.Resource {
+				required = true
+				break
+			}
+		}
+		if !required {
+			return
+		}
 	}
 	if _, pending := d.pendingCRDs[key]; !pending {
 		// A newly pending CRD gets the full retry budget, even if it arrives
@@ -3237,6 +3268,10 @@ func (d *DynamicResourceCache) GetInformerCount() int {
 // be non-blocking. A panic in the handler is contained by the upstream
 // informer machinery (no impact on other handlers).
 func (d *DynamicResourceCache) AddGVRChangeHandler(gvr schema.GroupVersionResource, handler cache.ResourceEventHandler) error {
+	return d.addGVRChangeHandler(gvr, handler, false)
+}
+
+func (d *DynamicResourceCache) addGVRChangeHandler(gvr schema.GroupVersionResource, handler cache.ResourceEventHandler, allowUnwatched bool) error {
 	if d == nil {
 		return fmt.Errorf("dynamic resource cache not initialized")
 	}
@@ -3250,7 +3285,7 @@ func (d *DynamicResourceCache) AddGVRChangeHandler(gvr schema.GroupVersionResour
 			entries = append(entries, e)
 		}
 	}
-	if len(entries) == 0 {
+	if len(entries) == 0 && !allowUnwatched {
 		return fmt.Errorf("no informer for %s.%s/%s; warm up the resource before registering a handler", gvr.Resource, gvr.Group, gvr.Version)
 	}
 
