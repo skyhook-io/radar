@@ -23,23 +23,31 @@ var (
 )
 
 var (
-	cachedServerVersion string
-	serverVersionOnce   = new(sync.Once)
-	serverVersionMu     sync.Mutex
+	cachedServerVersion      string
+	lastServerVersionFailure time.Time
+	serverVersionMu          sync.Mutex
 )
 
 // GetServerVersion returns the cached Kubernetes server version.
-// The version is fetched once and cached for the lifetime of the context.
+// A successful, nonempty version is cached for the lifetime of the context.
+// Failed reads wait 30 seconds before retrying so callers do not queue API requests.
 func GetServerVersion() string {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
-	serverVersionOnce.Do(func() {
-		if client := GetClient(); client != nil {
-			if v, err := client.Discovery().ServerVersion(); err == nil {
-				cachedServerVersion = v.GitVersion
-			}
+	if cachedServerVersion != "" {
+		return cachedServerVersion
+	}
+	if time.Since(lastServerVersionFailure) < 30*time.Second {
+		return ""
+	}
+	if client := GetClient(); client != nil {
+		if v, err := client.Discovery().ServerVersion(); err == nil && v != nil {
+			cachedServerVersion = v.GitVersion
 		}
-	})
+		if cachedServerVersion == "" {
+			lastServerVersionFailure = time.Now()
+		}
+	}
 	return cachedServerVersion
 }
 
@@ -49,14 +57,14 @@ func InvalidateServerVersionCache() {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
-	serverVersionOnce = new(sync.Once)
+	lastServerVersionFailure = time.Time{}
 }
 
 // ClusterInfo contains detected cluster information
 type ClusterInfo struct {
 	Context            string `json:"context"`  // kubeconfig context name
 	Cluster            string `json:"cluster"`  // cluster name from kubeconfig
-	Platform           string `json:"platform"` // nkp, rke2, gke, gke-autopilot, eks, aks, nutanix, minikube, kind, docker-desktop, openshift, rancher, generic
+	Platform           string `json:"platform"` // nkp, rke2, k3s, gke, gke-autopilot, eks, aks, nutanix, minikube, kind, docker-desktop, openshift, rancher, generic
 	KubernetesVersion  string `json:"kubernetesVersion"`
 	NodeCount          int    `json:"nodeCount"`
 	PodCount           int    `json:"podCount"`
@@ -133,6 +141,15 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 		return "nkp", nil
 	}
 
+	if platform := detectPlatformFromServerVersion(GetServerVersion()); platform != "unknown" {
+		if platform == "gke" {
+			if isAutopilot, _ := IsGKEAutopilot(ctx); isAutopilot {
+				return "gke-autopilot", nil
+			}
+		}
+		return platform, nil
+	}
+
 	var node *corev1.Node
 	cache := GetResourceCache()
 	if cache != nil {
@@ -174,6 +191,21 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 	}
 
 	return "generic", nil
+}
+
+func detectPlatformFromServerVersion(version string) string {
+	switch {
+	case strings.Contains(version, "+rke2r"):
+		return "rke2"
+	case strings.Contains(version, "-eks-"):
+		return "eks"
+	case strings.Contains(version, "-gke."):
+		return "gke"
+	case strings.Contains(version, "+k3s"):
+		return "k3s"
+	default:
+		return "unknown"
+	}
 }
 
 // isNKP trusts the namespace cache only once it holds namespaces: an empty
