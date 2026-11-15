@@ -11,6 +11,7 @@ import { CertificateHealthCard } from './CertificateHealthCard'
 import { NetworkPolicyCoverageCard } from './NetworkPolicyCoverageCard'
 import { CostCard } from './CostCard'
 import { GitOpsControllersCard } from './GitOpsControllersCard'
+import { VulnerabilitiesCard } from './VulnerabilitiesCard'
 import { CapacityCard } from './CapacityCard'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { Tooltip } from '../ui/Tooltip'
@@ -259,6 +260,9 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                     <CapacityCard onNavigate={() => onNavigateToView('capacity')} />
                   </BandItem>
                 )}
+                <BandItem>
+                  <VulnerabilitiesCard namespaces={namespaces} />
+                </BandItem>
                 {data.audit && (
                   <BandItem>
                     <AuditCard

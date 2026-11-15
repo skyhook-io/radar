@@ -710,6 +710,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/policy/policies/{policy}", s.handlePolicyCoverage)
 			r.Get("/policy/policies/{policy}/queued", s.handlePolicyQueued)
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
+			// Scanner findings rolled up to the images that run now.
+			r.Get("/vulnerabilities", s.handleVulnerabilities)
 
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
@@ -1519,6 +1521,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
+		Vulnerabilities:          true,
 	}
 }
 

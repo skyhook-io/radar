@@ -425,6 +425,10 @@ Open **Checks → Upgrade impact** before upgrading the control plane. Radar com
 
 See the [Kubernetes upgrade impact guide](https://radarhq.io/docs/features/upgrade-impact) for the check catalog, coverage semantics, and RBAC notes.
 
+### Vulnerabilities in Deployed Images
+
+With [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) installed, **Checks → Vulnerabilities** rolls its VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which have a fix, and which workloads and namespaces run them, by image, by CVE or by workload. Reports about older revisions are left out, an image used by many workloads is one row, and running images without a report are listed as not scanned rather than clean. The tab appears only when the cluster serves Trivy's VulnerabilityReport kind. See [Trivy Operator](docs/integrations.md#trivy-operator).
+
 ### Access Control (RBAC visibility)
 
 Inspect what any ServiceAccount can actually do — without three `kubectl describe` calls.

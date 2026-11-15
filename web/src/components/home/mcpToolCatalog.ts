@@ -162,6 +162,19 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'list_vulnerabilities',
+    desc: 'Which running images carry known CVEs and which workloads run them, from Trivy Operator reports: by image, by CVE (what to fix first), or by workload. Running images without a report are listed as unscanned, not clean.',
+    params: [
+      { arg: 'view', desc: 'image (default), cve, or workload' },
+      { arg: 'namespace', desc: 'limit to one namespace' },
+      { arg: 'severity', desc: 'comma-separated: critical, high, medium, low, unknown' },
+      { arg: 'fixable', desc: 'only findings with a fixed version' },
+      { arg: 'query', desc: 'image, CVE ID, package, or workload substring' },
+      { arg: 'workload', desc: 'one workload as Kind/namespace/name' },
+      { arg: 'limit', desc: 'max rows (default 20, max 100)' },
+    ],
+  },
+  {
     name: 'get_runtime_versions',
     desc: 'Which running workloads use which runtime version (PHP, Node, Python, Go, Java, …), read from the version each running image declares in its config, for runtime CVEs. Declared, not proof; misses runtimes installed from distro packages.',
     params: [

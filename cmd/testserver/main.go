@@ -59,6 +59,7 @@ func main() {
 	adminPort := flag.Int("admin-port", 0, "load-test: admin listener port for live scaling (0 = <port>+1)")
 	censusProfile := flag.String("census", "", "load-test: seed a named census profile (e.g. large-eks) instead of -pods")
 	censusScale := flag.Float64("census-scale", 1.0, "load-test: scale factor applied to -census counts")
+	vulnReports := flag.Bool("vulnerability-reports", false, "seed Trivy Operator VulnerabilityReports and the workloads they describe (with the default fixture)")
 	flag.Parse()
 
 	// Isolate config/settings writes to a temp directory so e2e tests
@@ -98,7 +99,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Seeding %d pods across %d apps / %d namespaces / %d nodes (%d objects, %s)\n",
 			cfg.Pods, gen.AppCount(), cfg.Namespaces, cfg.Nodes, len(objs), time.Since(start).Round(time.Millisecond))
 	} else {
-		fakeClient = fake.NewClientset(seedObjects()...)
+		objs := seedObjects()
+		if *vulnReports {
+			typed, _ := vulnerabilityFixture()
+			objs = append(objs, typed...)
+		}
+		fakeClient = fake.NewClientset(objs...)
 	}
 
 	// --- Initialize subsystems ---
@@ -111,6 +117,13 @@ func main() {
 		}
 	} else if err := k8s.InitTestResourceCache(fakeClient); err != nil {
 		log.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	if *vulnReports {
+		_, reports := vulnerabilityFixture()
+		if err := initVulnerabilityReports(reports); err != nil {
+			log.Fatalf("initVulnerabilityReports: %v", err)
+		}
 	}
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{

@@ -1,0 +1,255 @@
+package vulnerabilities
+
+import (
+	"context"
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+type vuln struct{ id, sev, pkg, installed, fixed string }
+
+type reportSpec struct {
+	name, ns, ownerKind, ownerName, container string
+	uid                                       types.UID
+	registry, repo, tag, digest, scanned      string
+	vulns                                     []vuln
+}
+
+func vulnReport(s reportSpec) *unstructured.Unstructured {
+	vs := make([]any, 0, len(s.vulns))
+	for _, v := range s.vulns {
+		vs = append(vs, map[string]any{"vulnerabilityID": v.id, "severity": v.sev, "resource": v.pkg, "installedVersion": v.installed, "fixedVersion": v.fixed, "score": 7.5})
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "aquasecurity.github.io/v1alpha1",
+		"kind":       "VulnerabilityReport",
+		"metadata": map[string]any{
+			"name": s.name, "namespace": s.ns,
+			"labels": map[string]any{"trivy-operator.container.name": s.container},
+		},
+		"report": map[string]any{
+			"registry":        map[string]any{"server": s.registry},
+			"artifact":        map[string]any{"repository": s.repo, "tag": s.tag, "digest": s.digest},
+			"os":              map[string]any{"family": "debian", "name": "11"},
+			"updateTimestamp": s.scanned,
+			"vulnerabilities": vs,
+		},
+	}}
+	controller := true
+	u.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "apps/v1", Kind: s.ownerKind, Name: s.ownerName, UID: s.uid, Controller: &controller}})
+	return u
+}
+
+func liveTarget(ns, kind, name, container, image string, uid types.UID, workload WorkloadRef) target {
+	return target{key: targetKey{namespace: ns, kind: kind, name: name, container: container, image: image}, uid: uid, image: image, workload: workload, container: container}
+}
+
+var (
+	checkout = WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "checkout"}
+	worker   = WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "worker"}
+	db       = WorkloadRef{Kind: "StatefulSet", Group: "apps", Namespace: "shop", Name: "db"}
+)
+
+func mustBuild(t *testing.T, items []*unstructured.Unstructured, targets []target, view View, f Filter) Response {
+	t.Helper()
+	resp, err := build(context.Background(), items, targets, view, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// A Deployment's report is about its live ReplicaSet; an older revision's
+// report is left out and counted as inactive, and a recreated ReplicaSet
+// with the same name is not the object that was scanned.
+func TestOnlyLiveRevisionsCount(t *testing.T) {
+	findings := []vuln{{"CVE-1", "CRITICAL", "zlib", "1.0", "1.1"}}
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "rs-new", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-new", uid: "uid-new", container: "app", repo: "acme/checkout", tag: "2.0", digest: "sha256:new", scanned: "2026-11-10T10:00:00Z", vulns: findings}),
+		vulnReport(reportSpec{name: "rs-old", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-old", uid: "uid-old", container: "app", repo: "acme/checkout", tag: "1.0", digest: "sha256:old", scanned: "2026-11-01T10:00:00Z", vulns: findings}),
+		vulnReport(reportSpec{name: "rs-recreated", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-abc", uid: "uid-gone", container: "app", repo: "acme/worker", tag: "1.0", digest: "sha256:w", scanned: "2026-11-10T10:00:00Z", vulns: findings}),
+	}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-new", "app", "acme/checkout:2.0", "uid-new", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-abc", "app", "acme/worker:1.0", "uid-current", worker),
+	}
+	resp := mustBuild(t, items, targets, ViewImage, Filter{})
+	if len(resp.Images) != 1 || resp.Images[0].ID != "sha256:new" {
+		t.Fatalf("images: %+v", resp.Images)
+	}
+	if resp.Coverage.InactiveReports != 2 {
+		t.Fatalf("inactive: %d", resp.Coverage.InactiveReports)
+	}
+	if len(resp.Unscanned) != 1 || resp.Unscanned[0].Image != "acme/worker:1.0" {
+		t.Fatalf("the recreated ReplicaSet's image has no report of its own: %+v", resp.Unscanned)
+	}
+}
+
+// A StatefulSet mid-rollout runs two images under one owner and container:
+// the report is about the image it names, and the other revision stays
+// unscanned rather than borrowing its findings.
+func TestRolloutRevisionsKeepTheirOwnImage(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "sts-db", ns: "shop", ownerKind: "StatefulSet", ownerName: "db", uid: "uid-db", container: "pg", registry: "index.docker.io", repo: "library/postgres", tag: "16.4", scanned: "2026-11-10T10:00:00Z", vulns: []vuln{{"CVE-2", "HIGH", "openssl", "3.0", ""}}}),
+	}
+	targets := []target{
+		liveTarget("shop", "StatefulSet", "db", "pg", "postgres:16.4", "uid-db", db),
+		liveTarget("shop", "StatefulSet", "db", "pg", "postgres:16.3", "uid-db", db),
+	}
+	resp := mustBuild(t, items, targets, ViewWorkload, Filter{})
+	if len(resp.Workloads) != 1 {
+		t.Fatalf("workloads: %+v", resp.Workloads)
+	}
+	var scanned, unscanned int
+	for _, c := range resp.Workloads[0].Containers {
+		if c.Scanned {
+			scanned++
+			if c.Image != "postgres:16.4" || c.Counts == nil || c.Counts.High != 1 {
+				t.Fatalf("scanned container: %+v", c)
+			}
+		} else {
+			unscanned++
+			if c.Counts != nil {
+				t.Fatalf("an unscanned container's counts are unknown, not zero: %+v", c)
+			}
+		}
+	}
+	if scanned != 1 || unscanned != 1 || len(resp.Unscanned) != 1 || resp.Unscanned[0].Image != "postgres:16.3" {
+		t.Fatalf("containers %+v, unscanned %+v", resp.Workloads[0].Containers, resp.Unscanned)
+	}
+}
+
+// An owner running one image matches its report however the reference is
+// spelled; a pinned digest must match the report's digest.
+func TestSameImage(t *testing.T) {
+	r := &report{image: "index.docker.io/library/nginx:1.23.4", digest: "sha256:abc"}
+	for _, pod := range []string{"nginx:1.23.4", "docker.io/library/nginx:1.23.4", "nginx@sha256:abc"} {
+		if !sameImage(pod, r) {
+			t.Errorf("%s should match", pod)
+		}
+	}
+	for _, pod := range []string{"nginx:1.23.5", "nginx@sha256:def", "ghcr.io/x/nginx:1.23.4"} {
+		if sameImage(pod, r) {
+			t.Errorf("%s should not match", pod)
+		}
+	}
+	if !sameImage("redis", &report{image: "index.docker.io/library/redis:latest"}) {
+		t.Error("an untagged reference is :latest")
+	}
+}
+
+// One image run by two workloads is one row. The newest report's findings
+// win whole: a CVE fixed in the newer scan doesn't linger from the older one.
+func TestOneRowPerImageNewestReportWins(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/base", tag: "1", digest: "sha256:base", scanned: "2026-11-01T00:00:00Z", vulns: []vuln{{"CVE-OLD", "CRITICAL", "zlib", "1", "2"}}}),
+		vulnReport(reportSpec{name: "b", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/base", tag: "1", digest: "sha256:base", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{{"CVE-NEW", "HIGH", "curl", "7", ""}}}),
+	}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/base:1", "", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/base:1", "", worker),
+	}
+	resp := mustBuild(t, items, targets, ViewImage, Filter{})
+	if len(resp.Images) != 1 {
+		t.Fatalf("images: %+v", resp.Images)
+	}
+	img := resp.Images[0]
+	if len(img.Workloads) != 2 || img.Counts.Critical != 0 || img.Counts.High != 1 || img.Report.Name != "b" {
+		t.Fatalf("image: %+v", img)
+	}
+	if resp.Summary.ImagesScanned != 1 || resp.Summary.Workloads != 2 || resp.Summary.WorkloadsAffected != 2 {
+		t.Fatalf("summary: %+v", resp.Summary)
+	}
+}
+
+func filterFixture() ([]*unstructured.Unstructured, []target) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+			{"CVE-A", "CRITICAL", "zlib", "1", "2"},
+			{"CVE-B", "HIGH", "curl", "7", ""},
+			{"CVE-C", "LOW", "bash", "5", "6"},
+		}}),
+		vulnReport(reportSpec{name: "w", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/worker", tag: "1", digest: "sha256:w", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+			{"CVE-A", "CRITICAL", "zlib", "1", "2"},
+			{"CVE-D", "MEDIUM", "tar", "1", ""},
+		}}),
+	}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/worker:1", "", worker),
+	}
+	return items, targets
+}
+
+// Filters narrow the rows and the findings listed; counts and the summary
+// still describe everything.
+func TestFilters(t *testing.T) {
+	items, targets := filterFixture()
+	resp := mustBuild(t, items, targets, ViewImage, Filter{Severities: []Severity{SeverityCritical, SeverityHigh}, FixableOnly: true})
+	if len(resp.Images) != 2 {
+		t.Fatalf("both images carry a fixable Critical: %+v", resp.Images)
+	}
+	for _, img := range resp.Images {
+		if img.Matching != 1 || len(img.Findings) != 1 || img.Findings[0].ID != "CVE-A" {
+			t.Fatalf("matching findings: %+v", img)
+		}
+	}
+	if resp.Images[0].Counts.Low+resp.Images[1].Counts.Low != 1 || resp.Summary.Counts.Medium != 1 {
+		t.Fatalf("counts stay whole: %+v / %+v", resp.Images, resp.Summary)
+	}
+	if resp.Summary.FixableCriticalHighCVEs != 1 || resp.Summary.ImagesWithCritical != 2 {
+		t.Fatalf("summary: %+v", resp.Summary)
+	}
+
+	byCVE := mustBuild(t, items, targets, ViewImage, Filter{Query: "cve-d"})
+	if len(byCVE.Images) != 1 || byCVE.Images[0].Image != "acme/worker:1" || len(byCVE.Images[0].Findings) != 1 {
+		t.Fatalf("a CVE query keeps the findings it names: %+v", byCVE.Images)
+	}
+	byName := mustBuild(t, items, targets, ViewImage, Filter{Query: "checkout"})
+	if len(byName.Images) != 1 || len(byName.Images[0].Findings) != 3 {
+		t.Fatalf("a workload query keeps the row's findings whole: %+v", byName.Images)
+	}
+	one := mustBuild(t, items, targets, ViewImage, Filter{Workload: &WorkloadRef{Kind: "Deployment", Namespace: "shop", Name: "worker"}})
+	if len(one.Images) != 1 || one.Images[0].Image != "acme/worker:1" {
+		t.Fatalf("workload filter: %+v", one.Images)
+	}
+}
+
+// By CVE, a CVE counts the images and workloads it is in, each image once,
+// and the worst, fixable, most widespread CVEs come first.
+func TestCVEView(t *testing.T) {
+	items, targets := filterFixture()
+	resp := mustBuild(t, items, targets, ViewCVE, Filter{})
+	if len(resp.CVEs) != 4 {
+		t.Fatalf("cves: %+v", resp.CVEs)
+	}
+	top := resp.CVEs[0]
+	if top.ID != "CVE-A" || top.Images != 2 || top.Workloads != 2 || !top.Fixable || len(top.Affected) != 2 {
+		t.Fatalf("top: %+v", top)
+	}
+	if resp.CVEs[1].ID != "CVE-B" || resp.CVEs[1].Fixable {
+		t.Fatalf("second: %+v", resp.CVEs[1])
+	}
+	fixable := mustBuild(t, items, targets, ViewCVE, Filter{FixableOnly: true})
+	if len(fixable.CVEs) != 2 {
+		t.Fatalf("fixable cves: %+v", fixable.CVEs)
+	}
+}
+
+// Findings past MaxFindings are not read; the answer says so instead of
+// reading as clean.
+func TestFindingsBudget(t *testing.T) {
+	vs := make([]vuln, MaxFindings+1)
+	for i := range vs {
+		vs[i] = vuln{"CVE-X", "LOW", "p", "1", ""}
+	}
+	items := []*unstructured.Unstructured{vulnReport(reportSpec{name: "big", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/big", tag: "1", scanned: "2026-11-10T00:00:00Z", vulns: vs})}
+	targets := []target{liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/big:1", "", checkout)}
+	resp := mustBuild(t, items, targets, ViewImage, Filter{})
+	if !resp.Coverage.Truncated {
+		t.Fatal("want truncated")
+	}
+}
