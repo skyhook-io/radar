@@ -91,6 +91,34 @@ describe('getDefaultLogContainerName', () => {
     expect(getDefaultLogContainerName(pod)).toBe('app')
   })
 
+  it('picks a failed init container after kubelet stops the sidecar ahead of it', () => {
+    const pod = initializingPod([
+      { name: 'migrate', state: { terminated: { exitCode: 0 } } },
+      { name: 'mesh', started: false, state: { terminated: { exitCode: 137, reason: 'Error' } } },
+      { name: 'seed', state: { terminated: { exitCode: 1, reason: 'Error' } } },
+    ], undefined, { phase: 'Failed', conditions: [{ type: 'Initialized', status: 'False' }] })
+    expect(getDefaultLogContainerName(pod)).toBe('seed')
+  })
+
+  it('picks an init container that runs again in a recreated sandbox while Initialized stays True', () => {
+    const pod = initializingPod([
+      { name: 'migrate', state: { running: {} } },
+      { name: 'mesh', state: { waiting: { reason: 'PodInitializing' } } },
+      { name: 'seed', state: { waiting: { reason: 'PodInitializing' } } },
+    ], 'app', initialized('Running'))
+    expect(getDefaultLogContainerName(pod)).toBe('migrate')
+  })
+
+  // Table rows (?include=summary) drop `started`.
+  it('reads a running sidecar in a table row as started', () => {
+    const pod = initializingPod([
+      { name: 'migrate', state: { terminated: { exitCode: 0 } } },
+      { name: 'mesh', state: { running: {} } },
+      { name: 'seed', state: { waiting: { reason: 'CrashLoopBackOff' } } },
+    ])
+    expect(getDefaultLogContainerName(pod)).toBe('seed')
+  })
+
   it('falls back to the default container before any init status exists', () => {
     expect(getDefaultLogContainerName(initializingPod([]))).toBe('app')
   })

@@ -438,3 +438,10 @@ it('labels init containers in the container selector', async () => {
   const select = [...element.querySelectorAll('select')].find((s) => s.value === 'migrate')!
   expect([...select.options].map((o) => o.textContent)).toEqual(['migrate (init)', 'app'])
 })
+
+it('keeps a selection that is still listed when the preferred container changes', async () => {
+  const fetchLogs = await renderPod(['migrate', 'app'], 'migrate', ['migrate'])
+  await renderPod(['migrate', 'app'], 'app', ['migrate'], fetchLogs)
+  expect(fetchLogs).toHaveBeenLastCalledWith(expect.objectContaining({ container: 'migrate' }))
+  expect(fetchLogs).not.toHaveBeenCalledWith(expect.objectContaining({ container: 'app' }))
+})

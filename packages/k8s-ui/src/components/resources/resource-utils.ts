@@ -878,23 +878,30 @@ export function getLogContainerNames(pod: any): string[] {
 /**
  * The container to open logs on. While a pod is stuck initializing, its regular
  * containers wait in PodInitializing and have no logs, so this picks the first
- * init container that hasn't completed, or the first native sidecar that hasn't
- * started. Once the pod is initialized it falls back to getDefaultContainerName:
- * sidecars routinely exit non-zero when a finished pod stops them, and one that
- * fails later doesn't override the pod's default container.
+ * init container that hasn't exited 0, or a native sidecar that hasn't started
+ * while the pod is still initializing. Otherwise it falls back to
+ * getDefaultContainerName.
+ *
+ * Sidecars are only candidates during initialization: kubelet routinely stops
+ * them with a non-zero exit when a pod finishes, and one that fails after
+ * initialization doesn't override the pod's default container. Regular init
+ * containers need no such gate; they have all exited 0 in an initialized pod,
+ * except when a recreated sandbox runs them again while Initialized stays True.
+ * Table rows carry no `started`, so a running sidecar counts as started there.
  */
 export function getDefaultLogContainerName(pod: any): string | undefined {
-  const initialized = (pod?.status?.conditions || []).some((c: any) => c.type === 'Initialized' && c.status === 'True')
-  if (!initialized) {
-    const sidecars = new Set(
-      (pod?.spec?.initContainers || []).filter((c: any) => c.restartPolicy === 'Always').map((c: any) => c.name),
-    )
-    const stuck = (pod?.status?.initContainerStatuses || []).find((s: any) =>
-      sidecars.has(s.name) ? !s.started : s.state?.terminated?.exitCode !== 0,
-    )
-    if (stuck?.name) return stuck.name
-  }
-  return getDefaultContainerName(pod)
+  const phase = pod?.status?.phase
+  const initializing = phase !== 'Succeeded' && phase !== 'Failed' &&
+    !(pod?.status?.conditions || []).some((c: any) => c.type === 'Initialized' && c.status === 'True')
+  const sidecars = new Set(
+    (pod?.spec?.initContainers || []).filter((c: any) => c.restartPolicy === 'Always').map((c: any) => c.name),
+  )
+  const stuck = (pod?.status?.initContainerStatuses || []).find((s: any) =>
+    sidecars.has(s.name)
+      ? initializing && !(s.started ?? Boolean(s.state?.running))
+      : s.state?.terminated?.exitCode !== 0,
+  )
+  return stuck?.name || getDefaultContainerName(pod)
 }
 
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
