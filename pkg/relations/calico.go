@@ -51,7 +51,8 @@ func calicoIdentity(r resourceid.Ref) resourceid.Ref {
 // calicoSelection is a Calico policy's selection, as Calico matches it
 // (netpol.CompileCalicoPolicyMatcher): its selector over the endpoint labels
 // Calico adds to a workload's pods, narrowed by its namespace and
-// ServiceAccount selectors, whose labels are read only when it has them. A
+// ServiceAccount selectors, whose labels are read (see Lookup) only once the
+// selectors before them match. A
 // global policy chooses in every namespace. A staged policy that previews no
 // protection, as a staged deletion doesn't, chooses nothing.
 func calicoSelection(namespaced, staged bool) func(runtime.Object) (Selection, bool, error) {

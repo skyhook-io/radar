@@ -81,9 +81,12 @@ type Candidate struct {
 	ServiceAccount string
 }
 
-// Lookup reads another object an answer depends on, as the caller may read
-// it, recording in the answer's coverage why it couldn't. ok is false when
-// the object isn't there to read.
+// Lookup reads another object an answer depends on but never lists, such as
+// the Namespace whose labels a Calico selector names, recording in the
+// answer's coverage why it couldn't. ok is false when the object isn't there
+// to read. Like the relationship graph it replaces, it reads with Radar's
+// identity, not the caller's: what it reads decides a match the caller may
+// see, and is never itself in an answer.
 type Lookup func(ref resourceid.Ref) (obj runtime.Object, ok bool)
 
 // Selectable is a kind that can be chosen. Candidate returns obj as a
@@ -122,9 +125,6 @@ type MatchesAnswer struct {
 // lookup reads objects for an answer whose coverage is c.
 func (v *View) lookup(c *Coverage) Lookup {
 	return func(ref resourceid.Ref) (runtime.Object, bool) {
-		if !v.mayRead(ref.GroupKind(), ref.Namespace, c) {
-			return nil, false
-		}
 		obj, read := v.session.Borrow(ref)
 		switch read.State {
 		case ownership.Present:

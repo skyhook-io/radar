@@ -76,8 +76,8 @@ var (
 var rolloutWorkloadGroups = map[string]string{"Deployment": "apps", "ReplicaSet": "apps", "PodTemplate": ""}
 
 // rolloutCandidate is a Rollout's pods: its own template, or, for a Rollout
-// whose workloadRef names one, the referenced workload's, read as the
-// caller may read it.
+// whose workloadRef names one, the referenced workload's (an auxiliary read:
+// see Lookup).
 func rolloutCandidate(obj runtime.Object, lookup Lookup) (Candidate, bool) {
 	u, ok := unstructuredOf(obj, kindRollout)
 	if !ok {

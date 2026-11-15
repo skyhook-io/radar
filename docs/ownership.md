@@ -134,8 +134,9 @@ The families so far:
 
 A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
 that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
-workload is seen as the pods its template makes; a Rollout with a `workloadRef` as its referenced workload's, read as
-the caller may read it). `Selected(family, selector)` lists what a selector chooses and
+workload is seen as the pods its template makes; a Rollout with a `workloadRef` as its referenced workload's). What a
+match depends on but never lists, such as that template or a Namespace's labels, is read with Radar's identity, as the
+relationship graph reads it (`Lookup`). `Selected(family, selector)` lists what a selector chooses and
 `SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
 `Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
 PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. A match Radar
@@ -148,7 +149,7 @@ rather than reading as no match.
 | `DisruptionBudgets` | PodDisruptionBudgets → Deployments, StatefulSets, DaemonSets |
 | `NetworkPolicies` | NetworkPolicies and CiliumNetworkPolicies → Deployments, StatefulSets, DaemonSets; Cilium policies match as Cilium does (`netpol.CiliumSelects`: every spec, label sources, identity labels) |
 | `Monitors` | ServiceMonitors → Services; PodMonitors → workloads; in the namespaces their `namespaceSelector` names |
-| `CalicoPolicies`, `CalicoStagedPolicies` | Calico NetworkPolicies and GlobalNetworkPolicies, and their staged kinds that preview protection → Deployments, StatefulSets, DaemonSets, matched as Calico does (`netpol.CompileCalicoPolicyMatcher`), reading Namespace and ServiceAccount labels only for a policy that selects on them; a policy both Calico groups serve is listed once |
+| `CalicoPolicies`, `CalicoStagedPolicies` | Calico NetworkPolicies and GlobalNetworkPolicies, and their staged kinds that preview protection → Deployments, StatefulSets, DaemonSets, matched as Calico does (`netpol.CompileCalicoPolicyMatcher`), reading Namespace and ServiceAccount labels, with Radar's identity as the graph does (they decide a match but are never listed), only once a policy's other selectors match; a policy both Calico groups serve is listed once |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families can't read a reference differently.
