@@ -28,7 +28,11 @@ function controllerLabel(c: HelmReleaseController): string {
 const refOf = (o: { namespace: string; name: string }) => `${o.namespace}/${o.name}`
 
 export function controllerManagedText(c: HelmReleaseController): string {
-  const head = `Managed by ${controllerLabel(c)}. ${c.kind} ${refOf(c)} reinstalls this release from its own definition, so an upgrade or rollback here is reverted.`
+  // helm-controller re-runs its install Job only when the Job's config hash changes.
+  const effect = c.tool === 'k3s'
+    ? 'an upgrade or rollback here is overwritten the next time helm-controller runs the install Job (when the HelmChart or its HelmChartConfig changes).'
+    : `an upgrade or rollback here can be overwritten by that ${c.kind}.`
+  const head = `Managed by ${controllerLabel(c)}. ${c.kind} ${refOf(c)} installs this release from its own definition, so ${effect}`
   const v = c.valuesRef
   if (!v) return `${head} Change it through that ${c.kind}.`
   if (v.exists === true) return `${head} Change values in ${v.kind} ${refOf(v)}.`

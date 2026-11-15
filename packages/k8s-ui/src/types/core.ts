@@ -1046,7 +1046,7 @@ export interface HelmRelease {
   // reverted at the next reconcile. Format: "namespace/name".
   managedByFluxHelmRelease?: string
   // The controller that installs this release from its own definition (Flux,
-  // k3s, …); a Helm change made here is reverted. Older Radar sends only
+  // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
   // managedByFluxHelmRelease.
   controller?: HelmReleaseController
 }
@@ -1128,7 +1128,7 @@ export interface HelmReleaseDetail {
   // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
   managedByFluxHelmRelease?: string
   // The controller that installs this release from its own definition (Flux,
-  // k3s, …); a Helm change made here is reverted. Older Radar sends only
+  // k3s, …); a Helm change made here can be overwritten by it. Older Radar sends only
   // managedByFluxHelmRelease.
   controller?: HelmReleaseController
 }

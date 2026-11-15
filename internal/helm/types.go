@@ -39,7 +39,7 @@ type HelmRelease struct {
 	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
 	// Controller is the controller that installs this release from its own
 	// definition (a Flux HelmRelease, a k3s HelmChart, …), so a Helm change
-	// made here is reverted at its next reconcile. Set for Flux alongside
+	// made here can be overwritten by it. Set for Flux alongside
 	// ManagedByFluxHelmRelease, which older consumers read. Like that field it
 	// comes from Radar's own read (names only); observed rows use only what
 	// the caller can read.

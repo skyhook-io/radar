@@ -26,7 +26,7 @@ import (
 )
 
 // A release a k3s HelmChart installs is refused for every write, before Helm
-// runs: helm-controller reinstalls it from the HelmChart at its next reconcile.
+// runs: helm-controller overwrites it the next time it runs the install Job.
 func TestManageHelmRefusesK3sManagedRelease(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	charts := schema.GroupVersionResource{Group: "helm.cattle.io", Version: "v1", Resource: "helmcharts"}

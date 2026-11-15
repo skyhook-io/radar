@@ -79,11 +79,11 @@ describe('release controller', () => {
   })
 
   it('words any controller, naming where values change', () => {
-    expect(controllerManagedText(k3s(true))).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Change values in HelmChartConfig kube-system/traefik.')
-    expect(controllerManagedText(k3s(false))).toBe('Managed by k3s. HelmChart kube-system/traefik reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Create a HelmChartConfig kube-system/traefik to change its values.')
+    expect(controllerManagedText(k3s(true))).toBe('Managed by k3s. HelmChart kube-system/traefik installs this release from its own definition, so an upgrade or rollback here is overwritten the next time helm-controller runs the install Job (when the HelmChart or its HelmChartConfig changes). Change values in HelmChartConfig kube-system/traefik.')
+    expect(controllerManagedText(k3s(false))).toBe('Managed by k3s. HelmChart kube-system/traefik installs this release from its own definition, so an upgrade or rollback here is overwritten the next time helm-controller runs the install Job (when the HelmChart or its HelmChartConfig changes). Create a HelmChartConfig kube-system/traefik to change its values.')
     expect(controllerManagedText(k3s(undefined))).toContain('(create it if it does not exist)')
     const fleet = { tool: 'fleet', kind: 'Bundle', group: 'fleet.cattle.io', namespace: 'fleet-local', name: 'app' }
-    expect(controllerManagedText(fleet)).toBe('Managed by fleet. Bundle fleet-local/app reinstalls this release from its own definition, so an upgrade or rollback here is reverted. Change it through that Bundle.')
+    expect(controllerManagedText(fleet)).toBe('Managed by fleet. Bundle fleet-local/app installs this release from its own definition, so an upgrade or rollback here can be overwritten by that Bundle. Change it through that Bundle.')
   })
 })
 
