@@ -208,3 +208,25 @@ func chartGrantedAPIGroups(t *testing.T) map[string]bool {
 	}
 	return groups
 }
+
+func TestRelationshipChartGrantsPodTemplatesAndKnativeSinks(t *testing.T) {
+	role := renderCollectorClusterRole(t, "")
+	for _, target := range []struct{ group, resource string }{{"", "podtemplates"}, {"sinks.knative.dev", "jobsinks"}} {
+		granted := false
+		for _, rule := range role.Rules {
+			if slices.Contains(rule.APIGroups, target.group) && (slices.Contains(rule.Resources, target.resource) || slices.Contains(rule.Resources, "*")) && slices.Contains(rule.Verbs, "get") && slices.Contains(rule.Verbs, "list") && slices.Contains(rule.Verbs, "watch") {
+				granted = true
+				break
+			}
+		}
+		if !granted {
+			t.Errorf("default chart does not grant collection of %s/%s", target.group, target.resource)
+		}
+	}
+	role = renderCollectorClusterRole(t, "rbac.crdGroups.knative=false")
+	for _, rule := range role.Rules {
+		if slices.Contains(rule.APIGroups, "sinks.knative.dev") {
+			t.Fatal("Knative sink grant ignored the Knative toggle")
+		}
+	}
+}

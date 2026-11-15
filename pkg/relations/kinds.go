@@ -54,9 +54,7 @@ func Kinds() []resourceid.GroupKind {
 	for _, kind := range []string{"Service", "Configuration", "DomainMapping", "Revision", "Route"} {
 		add(knative("serving.knative.dev", kind))
 	}
-	for _, kind := range []string{"Broker"} {
-		add(knative("eventing.knative.dev", kind))
-	}
+	add(knative("eventing.knative.dev", "Broker"))
 	for _, kind := range []string{"Channel", "InMemoryChannel"} {
 		add(knative("messaging.knative.dev", kind))
 	}
@@ -69,6 +67,9 @@ func Kinds() []resourceid.GroupKind {
 	}
 	add(resourceid.GroupKind{Group: "controlplane.cluster.x-k8s.io", Kind: "KubeadmControlPlane"})
 	add(resourceid.GroupKind{Group: "argoproj.io", Kind: "Application"})
+	add(resourceid.GroupKind{Group: "jobset.x-k8s.io", Kind: "JobSet"},
+		resourceid.GroupKind{Group: "cilium.io", Kind: "CiliumClusterwideNetworkPolicy"},
+		resourceid.GroupKind{Group: "policy.networking.k8s.io", Kind: "ClusterNetworkPolicy"})
 	add(resourceid.GroupKind{Group: "karpenter.k8s.aws", Kind: "EC2NodeClass"},
 		resourceid.GroupKind{Group: "karpenter.azure.com", Kind: "AKSNodeClass"},
 		resourceid.GroupKind{Group: "karpenter.k8s.gcp", Kind: "GCENodeClass"},

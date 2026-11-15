@@ -183,6 +183,8 @@ type supportedCRDResource struct {
 // drift checks. Only installed catalog entries are warmed, so watch identities
 // stay bounded even when discovery exposes an unbounded CRD set.
 var supportedCRDFallbacks = []supportedCRDResource{
+	{Group: "cilium.io", Versions: []string{"v2"}, Resource: "ciliumclusterwidenetworkpolicies", Kind: "CiliumClusterwideNetworkPolicy", Namespaced: false},
+	{Group: "policy.networking.k8s.io", Versions: []string{"v1alpha1"}, Resource: "clusternetworkpolicies", Kind: "ClusterNetworkPolicy", Namespaced: false},
 	{Group: "", Versions: []string{"v1"}, Resource: "podtemplates", Kind: "PodTemplate", Namespaced: true},
 	{Group: "cilium.io", Versions: []string{"v2"}, Resource: "ciliumnetworkpolicies", Kind: "CiliumNetworkPolicy", Namespaced: true},
 	{Group: "eks.amazonaws.com", Versions: []string{"v1"}, Resource: "nodeclasses", Kind: "NodeClass", Namespaced: false},

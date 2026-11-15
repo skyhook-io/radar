@@ -36,6 +36,7 @@ rules:
       - persistentvolumes
       - persistentvolumeclaims
       - serviceaccounts
+      - podtemplates
       - endpoints
       - limitranges
       - resourcequotas
