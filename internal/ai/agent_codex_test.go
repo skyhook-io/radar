@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
@@ -229,6 +230,36 @@ func TestResolveAgentCodex(t *testing.T) {
 	for bin, want := range cases {
 		if got := resolveAgent(bin).Name(); got != want {
 			t.Errorf("resolveAgent(%q).Name() = %q, want %q", bin, got, want)
+		}
+	}
+}
+
+func TestCodexPromptGoesOverStdin(t *testing.T) {
+	a := &codexAgent{bin: "codex"}
+	prompt := "line one\nline two & 100% \"quoted\""
+	for _, session := range []string{"", "0199-session"} {
+		cmd, cleanup, err := a.command(context.Background(), turnSpec{
+			mcpURL: "http://localhost:1/mcp-readonly", prompt: prompt, systemPrompt: "framing",
+			sessionID: session, profile: ExecutionProfileFullLocal,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+		if last := cmd.Args[len(cmd.Args)-1]; last != "-" {
+			t.Errorf("session %q: last arg = %q, want - (read the prompt from stdin)", session, last)
+		}
+		for _, arg := range cmd.Args {
+			if strings.Contains(arg, "line one") {
+				t.Errorf("session %q: prompt leaked into argv: %q", session, arg)
+			}
+		}
+		if cmd.Stdin == nil {
+			t.Fatalf("session %q: no stdin", session)
+		}
+		b, _ := io.ReadAll(cmd.Stdin)
+		if got, want := string(b), "framing\n\n"+prompt; got != want {
+			t.Errorf("session %q: stdin = %q, want %q", session, got, want)
 		}
 	}
 }
