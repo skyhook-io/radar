@@ -31,7 +31,12 @@ const instanceMutexName = `Local\RadarDesktop`
 // the process exits.
 var instanceMutex windows.Handle
 
-const predecessorWait = 30 * time.Second
+// An updated Radar waits this long for the version it replaces to exit, then
+// this long again for anything else still holding the lock.
+const (
+	predecessorWait = 30 * time.Second
+	lockRetryWait   = 5 * time.Second
+)
 
 var (
 	user32                  = windows.NewLazySystemDLL("user32.dll")
@@ -48,19 +53,26 @@ const (
 
 // handOffToRunningInstance reports whether another Radar is running, after
 // bringing its window to the front.
+//
+// A Radar started by an update never takes that path: the version it replaces
+// is exiting, and nothing would start Radar again. It waits for the lock and
+// starts without it if the lock stays taken, since two Radars are better than
+// none.
 func handOffToRunningInstance() bool {
-	waitForUpdatedPredecessor()
-	h, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(instanceMutexName))
-	if err == nil {
-		instanceMutex = h
-		writeInstancePID()
+	if waitForUpdatedPredecessor() {
+		deadline := time.Now().Add(lockRetryWait)
+		for !takeInstanceLock() {
+			if time.Now().After(deadline) {
+				log.Printf("Single-instance lock still held after an update; starting anyway")
+				return false
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
 		return false
 	}
-	if err != windows.ERROR_ALREADY_EXISTS {
-		log.Printf("Single-instance check failed, starting anyway: %v", err)
+	if takeInstanceLock() {
 		return false
 	}
-	windows.CloseHandle(h)
 	log.Printf("Radar is already running; bringing its window to the front")
 	if pid := readInstancePID(); pid != 0 {
 		focusProcessWindow(pid)
@@ -68,26 +80,49 @@ func handOffToRunningInstance() bool {
 	return true
 }
 
-// waitForUpdatedPredecessor lets the version being replaced by an update exit
-// first, releasing the lock and the port.
-func waitForUpdatedPredecessor() {
+// takeInstanceLock reports false only when another Radar holds the lock.
+// Access denied means it does: an elevated Radar's mutex can't be opened for
+// full access from a normal one.
+func takeInstanceLock() bool {
+	h, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(instanceMutexName))
+	switch err {
+	case nil:
+		instanceMutex = h
+		writeInstancePID()
+		return true
+	case windows.ERROR_ALREADY_EXISTS:
+		windows.CloseHandle(h)
+		return false
+	case windows.ERROR_ACCESS_DENIED:
+		return false
+	default:
+		log.Printf("Single-instance check failed, starting anyway: %v", err)
+		return true
+	}
+}
+
+// waitForUpdatedPredecessor reports whether an update started this process,
+// after letting the version it replaces exit first, releasing the lock and the
+// port.
+func waitForUpdatedPredecessor() bool {
 	v := os.Getenv(updater.RelaunchAfterPIDEnv)
 	if v == "" {
-		return
+		return false
 	}
 	os.Unsetenv(updater.RelaunchAfterPIDEnv)
 	pid, err := strconv.ParseUint(v, 10, 32)
 	if err != nil {
-		return
+		return true
 	}
 	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
 	if err != nil {
-		return // already gone
+		return true // already gone
 	}
 	defer windows.CloseHandle(h)
 	if ev, _ := windows.WaitForSingleObject(h, uint32(predecessorWait.Milliseconds())); ev == uint32(windows.WAIT_TIMEOUT) {
-		log.Printf("Previous Radar (pid %d) still running after %s; starting anyway", pid, predecessorWait)
+		log.Printf("Previous Radar (pid %d) still running after %s", pid, predecessorWait)
 	}
+	return true
 }
 
 func instancePIDPath() string {
@@ -95,7 +130,13 @@ func instancePIDPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".radar", "desktop.pid")
+	// Per Windows session, like the lock: the same user can be signed in at
+	// the console and over Remote Desktop at once.
+	var session uint32
+	if err := windows.ProcessIdToSessionId(uint32(os.Getpid()), &session); err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".radar", "desktop-"+strconv.FormatUint(uint64(session), 10)+".pid")
 }
 
 func writeInstancePID() {
