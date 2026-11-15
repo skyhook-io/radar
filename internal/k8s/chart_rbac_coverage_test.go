@@ -135,6 +135,11 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 			watched[c.Group] = "supportedCRDFallbacks (internal/k8s/dynamic_cache.go)"
 		}
 	}
+	for _, k := range relationshipWatchKinds() {
+		if k.Group != "" {
+			watched[k.Group] = "relations.Kinds (pkg/relations/kinds.go)"
+		}
+	}
 	for _, e := range topology.ClusterScopedKinds {
 		if e.Group != "" {
 			watched[e.Group] = "topology.ClusterScopedKinds (pkg/topology/cluster_scoped_kinds.go)"
