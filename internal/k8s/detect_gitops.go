@@ -386,10 +386,10 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			dd := gitopsProblem(now, "Application", argoGroup, ns, name, "warning", "OutOfSyncManual",
 				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", timeutil.FormatAgeShort(manualDriftFor)), createdAt)
 			setDetectionOnset(&dd, now, outOfSyncAt)
-			dd.Action = "Review the diff in Changes and the sync policy before deciding whether to sync."
+			dd.Action = "Review the diff in Resources and the sync policy before deciding whether to sync."
 			if revision, _ := gitops.ArgoSuccessfulRollback(app); revision != "" {
 				dd.Message = "Last rollback deployed " + revision + "; the live state differs from the desired state and auto-sync is off."
-				dd.Action = "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source before syncing again. Review Changes for later edits."
+				dd.Action = "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source before syncing again. Review Resources for later edits."
 			}
 			if hazard := argoSyncHazardAction(app); hazard != "" {
 				dd.Action = hazard

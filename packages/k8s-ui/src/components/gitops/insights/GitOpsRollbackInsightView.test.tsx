@@ -71,3 +71,12 @@ it('keeps Missing health explanations rollback-aware without a confirmed missing
   expect(html).toContain('Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.')
   expect(html).not.toContain('Declared in Git but not present in the cluster. Review the diff and sync policy before deciding whether to sync.')
 })
+
+it('asks for refresh when reported Missing health conflicts with Synced', () => {
+  const data = insight(false)
+  data.changes![0].sync = 'Synced'
+  data.changes![0].health = 'Missing'
+  const html = renderToString(<GitOpsChangesView insight={data} />)
+  expect(html).toContain('Refresh the application to check its status.')
+  expect(html).not.toContain('before deciding whether to sync')
+})
