@@ -284,3 +284,40 @@ func TestRelationsAnswerScalars(t *testing.T) {
 		t.Fatalf("Istio domain: %+v", rel)
 	}
 }
+
+func TestRelationsAnswerManagedByControllerTop(t *testing.T) {
+	controller := true
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "deployment"}}, "apps", "Deployment")
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "rs", UID: "rs", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "deployment", Controller: &controller}}}}, "apps", "ReplicaSet")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod", UID: "pod", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs", UID: "rs", Controller: &controller}}}}, "", "Pod").(*corev1.Pod)
+	for _, tc := range []struct {
+		name   string
+		denied []string
+		want   string
+	}{{"top", nil, "web"}, {"stop at unreadable owner", []string{"Deployment"}, "rs"}, {"no readable owner", []string{"ReplicaSet"}, ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newProjectionSession(t, pod, rs, deployment)
+			rel := projectionAnswer(t, s, pod, projectionAccess{denied: tc.denied}, ownership.Unrestricted())
+			if tc.want == "" {
+				if len(rel.ManagedBy) != 0 {
+					t.Fatalf("ManagedBy: %+v", rel.ManagedBy)
+				}
+				return
+			}
+			if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != tc.want {
+				t.Fatalf("ManagedBy: %+v", rel.ManagedBy)
+			}
+		})
+	}
+	pod.Labels = map[string]string{"helm.toolkit.fluxcd.io/name": "release", "helm.toolkit.fluxcd.io/namespace": "gitops"}
+	s := newProjectionSession(t, pod, rs, deployment)
+	rel := projectionAnswer(t, s, pod, ownership.Unrestricted(), ownership.Unrestricted())
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != "release" {
+		t.Fatalf("metadata precedence: %+v", rel.ManagedBy)
+	}
+	s = newProjectionSession(t, pod, rs, deployment)
+	rel = projectionAnswer(t, s, pod, projectionAccess{denied: []string{"HelmRelease"}}, ownership.Unrestricted())
+	if len(rel.ManagedBy) != 0 {
+		t.Fatalf("hidden metadata manager: %+v", rel.ManagedBy)
+	}
+}

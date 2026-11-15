@@ -186,16 +186,10 @@ func (n *neighborhood) answer(v *relations.View, families []*relations.Family, s
 	}
 }
 
-// RelationsAnswer is subject's Related Resources from the relation families
-// and the ownership view, projected exactly as GetRelationshipsWithObject
-// projects the relationship graph's edges: the families' answers around the
-// subject become a graph of their own, with the controller chain the graph's
-// ManagedBy walks, the routes in front of each Service the subject's
-// entrypoints come from, and the Crossplane and MachineHealthCheck links read
-// from the objects at either end. The direct reads (the storage chain, a
-// Node's Pods, a Pod's spec) are made as before through provider. ov is the
-// ownership view the caller answers ownership with, whose searches it
-// shares. The coverage is keyed by family and holds only incomplete answers.
+// RelationsAnswer projects caller-readable family and ownership answers onto
+// Related Resources. Traverse is used only for intermediate networking hops;
+// all emitted references, including ownership, use access. Coverage is keyed
+// by family and includes only incomplete answers.
 func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
 	if obj == nil || access.CanRead(subject.GroupKind(), subject.Namespace) != ownership.Allowed {
 		return &Relationships{}, nil
@@ -206,16 +200,7 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	n.node(subject)
 	n.answer(v, families, selectors, subject, obj, false)
 
-	n.above(session, ov, subject)
-	for _, e := range slices.Clone(n.topo.Edges) {
-		if e.Type == EdgeManages && e.Target == familyNodeID(subject) {
-			for r := range n.nodes {
-				if familyNodeID(r) == e.Source {
-					n.above(session, ov, r)
-				}
-			}
-		}
-	}
+	n.management(session, ov, subject)
 	children := ov.Children(subject)
 	for _, c := range children.Children {
 		n.edge(subject, c.Ref, relationEdge{edge: EdgeManages}, false)
@@ -257,46 +242,31 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 			}
 		}
 	}
+	if m, err := apimeta.Accessor(obj); err == nil {
+		if meta := ManagedByFromMeta(m); meta != nil {
+			if n.allowedRef(*meta) {
+				rel.ManagedBy = []ResourceRef{*meta}
+			}
+		} else if top := ChainOf(ov.ControllerChain(subject)).Top(); top != nil {
+			rel.ManagedBy = []ResourceRef{*top}
+		}
+	}
 	return rel, n.coverage
 }
 
-// maxAbove bounds the walk up from a subject: owner chains in practice are
-// a handful of objects deep.
-const maxAbove = 16
-
-// above adds what manages r and what manages those, as the graph draws it and
-// its ManagedBy walks it: every owner reference ownership resolves, not only
-// controllers, the GitOps managers whose member lists name each object, and a
-// Karpenter NodeClaim's NodePool.
-func (n *neighborhood) above(session relations.Session, ov *ownership.View, r resourceid.Ref) {
+func (n *neighborhood) management(session relations.Session, ov *ownership.View, r resourceid.Ref) {
 	manages := relationEdge{edge: EdgeManages}
-	seen := map[resourceid.Ref]bool{r: true}
-	frontier := []resourceid.Ref{r}
-	for depth := 0; depth < maxAbove && len(frontier) > 0; depth++ {
-		var next []resourceid.Ref
-		for _, x := range frontier {
-			var up []resourceid.Ref
-			_, owners := ov.References(x)
-			for _, o := range owners {
-				if o.State == ownership.OwnerFound {
-					up = append(up, o.Ref)
-				}
-			}
-			for _, m := range ov.RecordingManagers(x).Managers {
-				up = append(up, m.Ref)
-			}
-			if pool, ok := n.nodePool(session, x); ok {
-				up = append(up, pool)
-			}
-			for _, u := range up {
-				n.edge(u, x, manages, false)
-				if !seen[u] {
-					seen[u] = true
-					next = append(next, u)
-				}
-			}
+	_, owners := ov.References(r)
+	for _, owner := range owners {
+		if owner.State == ownership.OwnerFound {
+			n.edge(owner.Ref, r, manages, false)
 		}
-		frontier = next
+	}
+	for _, manager := range ov.RecordingManagers(r).Managers {
+		n.edge(manager.Ref, r, manages, false)
+	}
+	if pool, ok := n.nodePool(session, r); ok {
+		n.edge(pool, r, manages, false)
 	}
 }
 

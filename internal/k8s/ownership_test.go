@@ -432,8 +432,8 @@ func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
 	t.Cleanup(func() { ownershipSource = previous })
 	captured := &ResourceCache{ResourceCache: typed}
 	obj := deployment.DeepCopy()
-	obj.SetAPIVersion("apps/v1")
-	obj.SetKind("Deployment")
+	obj.APIVersion = "apps/v1"
+	obj.Kind = "Deployment"
 	obj.UID = "new-incarnation"
 	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 	rel, coverage := AnswerRelationships(captured, obj, access, access, "")

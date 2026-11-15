@@ -842,8 +842,10 @@ func getRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if m, ok := queriedObj.(metav1.Object); ok {
 		managedByMeta = m
 	}
-	if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 && readable(mb[0]) {
-		rel.ManagedBy = mb
+	if allow == nil {
+		if mb := synthesizeManagedByFromNode(managedByMeta, nodeID, topo, dp, idx); len(mb) > 0 {
+			rel.ManagedBy = mb
+		}
 	}
 
 	// Return nil if no relationships found

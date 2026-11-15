@@ -91,11 +91,9 @@ type report struct {
 	RestrictedDiffer     int                `json:"restrictedDiffer"`
 	RestrictedDiffs      []diffGroup        `json:"restrictedDiffs"`
 
-	// ManagedBy, subject by subject: gained (the graph named none), replaced
-	// (the graph's answer is on the controller chain below the new one), or
-	// lost and unrelated, which would be regressions.
-	ManagedBy map[string]int      `json:"managedBy"`
-	Examples  map[string][]string `json:"managedByExamples"`
+	ManagedBy            map[string]int      `json:"managedBy"`
+	Examples             map[string][]string `json:"managedByExamples"`
+	ManagedByUnexplained int                 `json:"managedByUnexplained"`
 }
 
 // namespacesAccess may read the namespaces it lists and anything
@@ -310,53 +308,14 @@ func main() {
 			a, _ := json.MarshalIndent(after, "", "  ")
 			fmt.Printf("BEFORE %s\n%s\nAFTER\n%s\n", s.ref.Key(), b, a)
 		}
-		if b, a := refSet(reflect.ValueOf(before.ManagedBy)), refSet(reflect.ValueOf(after.ManagedBy)); !b.Equal(a) {
-			outcome := "replaced"
-			switch {
-			case b.Len() == 0:
-				outcome = "gained"
-			case a.Len() == 0:
-				outcome = "lost"
-			default:
-				session, err := k8s.BeginOwnershipRead(cache)
-				if err != nil {
-					log.Fatalf("session: %v", err)
-				}
-				// Everything above the subject: any owner reference and any
-				// GitOps manager, transitively, as the graph's walk follows.
-				onChain := sets.New[string]()
-				v := ownership.NewView(session, ownership.Unrestricted())
-				frontier := []resourceid.Ref{s.ref}
-				for depth := 0; depth < 16 && len(frontier) > 0; depth++ {
-					var next []resourceid.Ref
-					for _, x := range frontier {
-						_, owners := v.References(x)
-						var up []resourceid.Ref
-						for _, o := range owners {
-							if o.State == ownership.OwnerFound {
-								up = append(up, o.Ref)
-							}
-						}
-						for _, m := range v.RecordingManagers(x).Managers {
-							up = append(up, m.Ref)
-						}
-						for _, u := range up {
-							key := u.Group + "/" + u.Kind + "/" + u.Namespace + "/" + u.Name
-							if !onChain.Has(key) {
-								onChain.Insert(key)
-								next = append(next, u)
-							}
-						}
-					}
-					frontier = next
-				}
-				if !onChain.IsSuperset(b.Difference(a)) {
-					outcome = "unrelated"
-				}
-			}
+		outcome := managedByOutcome(cache, topo, ownership.Unrestricted(), s, before.ManagedBy, after.ManagedBy)
+		if outcome != "" {
 			rep.ManagedBy[outcome]++
-			if len(rep.Examples[outcome]) < 5 {
-				rep.Examples[outcome] = append(rep.Examples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), sets.List(b), sets.List(a)))
+			if outcome == "lost" {
+				rep.ManagedByUnexplained++
+			}
+			if outcome == "lost" || outcome == "lateral" || len(rep.Examples[outcome]) < 5 {
+				rep.Examples[outcome] = append(rep.Examples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), before.ManagedBy, after.ManagedBy))
 			}
 		}
 		if compare(kind, s.ref, before, after, diffs) {
@@ -419,6 +378,97 @@ func main() {
 		}
 	}
 	fmt.Printf("%s: %d objects, %d equal, %d differ, %d diff groups; restricted user (%d of %d namespaces): %d equal, %d differ, %d groups\n", rep.Context, rep.Objects, rep.SubjectsEqual, rep.SubjectsDiffer, len(rep.Diffs), len(half), len(allNamespaces), rep.RestrictedEqual, rep.RestrictedDiffer, len(rep.RestrictedDiffs))
+}
+
+func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access ownership.Access, subject subject, before, after []topology.ResourceRef) string {
+	b, a := refSet(reflect.ValueOf(before)), refSet(reflect.ValueOf(after))
+	m, _ := meta.Accessor(subject.obj)
+	if b.Equal(a) {
+		if ref := topology.ManagedByFromMeta(m); ref != nil && a.Has(ref.Group+"/"+ref.Kind+"/"+ref.Namespace+"/"+ref.Name) {
+			return "meta-same"
+		}
+		return ""
+	}
+	if len(after) == 0 {
+		return "lost"
+	}
+	if len(before) == 0 {
+		return "gained"
+	}
+	session, err := k8s.BeginOwnershipRead(cache)
+	if err != nil {
+		log.Fatalf("ManagedBy session: %v", err)
+	}
+
+	nodes := map[string]resourceid.Ref{}
+	parents := map[resourceid.Ref][]resourceid.Ref{}
+	for i := range graph.Nodes {
+		node := &graph.Nodes[i]
+		if node.Kind == topology.KindPodGroup {
+			continue
+		}
+		nodes[node.ID] = resourceid.ResolveCurrent(topology.NodeReference(node), nil).Ref
+	}
+	for _, edge := range graph.Edges {
+		if edge.Type != topology.EdgeManages {
+			continue
+		}
+		source, hasSource := nodes[edge.Source]
+		target, hasTarget := nodes[edge.Target]
+		if hasSource && hasTarget {
+			parents[target] = append(parents[target], source)
+		}
+	}
+	v := ownership.NewView(session, access)
+	ancestor := func(above, below topology.ResourceRef) bool {
+		target := resourceid.NewRef(above.Group, above.Kind, above.Namespace, above.Name)
+		frontier := []resourceid.Ref{resourceid.NewRef(below.Group, below.Kind, below.Namespace, below.Name)}
+		seen := map[resourceid.Ref]bool{}
+		for depth := 0; depth < 16 && len(frontier) > 0; depth++ {
+			var next []resourceid.Ref
+			for _, ref := range frontier {
+				if ref == target {
+					return true
+				}
+				if seen[ref] {
+					continue
+				}
+				seen[ref] = true
+				if access.CanRead(ref.GroupKind(), ref.Namespace) != ownership.Allowed {
+					continue
+				}
+				for _, parent := range parents[ref] {
+					if access.CanRead(parent.GroupKind(), parent.Namespace) == ownership.Allowed {
+						next = append(next, parent)
+					}
+				}
+				_, owners := v.References(ref)
+				for _, owner := range owners {
+					if owner.State == ownership.OwnerFound {
+						next = append(next, owner.Ref)
+					}
+				}
+				for _, manager := range v.RecordingManagers(ref).Managers {
+					next = append(next, manager.Ref)
+				}
+			}
+			frontier = next
+		}
+		return false
+	}
+	related := false
+	for _, b := range before {
+		for _, a := range after {
+			related = related || ancestor(a, b) || ancestor(b, a)
+		}
+	}
+	if err := session.ValidateCaches(); err != nil {
+		log.Fatalf("ManagedBy caches: %v", err)
+	}
+	if related {
+		return "reached-top"
+	}
+	return "lateral"
 }
 
 // percentiles are the p50, p95 and max of ns, in microseconds.
