@@ -91,17 +91,14 @@ export function SeverityBadge({ severity }: { severity: VulnerabilitySeverity })
  */
 export function FixVersion({ installed, fixed, target, showInstalled = true, className }: { installed: string; fixed?: string; target?: string; showInstalled?: boolean; className?: string }) {
   const to = target || fixed
+  const tip = to ? `${installed} → ${to}${target && fixed && fixed !== target ? ` (fixed releases: ${fixed})` : ''}` : undefined
   return (
-    <span className={clsx('min-w-0 truncate font-mono', className)}>
-      {showInstalled && <span className="text-theme-text-tertiary">{installed} → </span>}
-      {to ? (
-        <WithTooltip tip={target && fixed && fixed !== target ? `Fixed releases: ${fixed}` : undefined}>
-          <span className="text-emerald-700 dark:text-emerald-400">{to}</span>
-        </WithTooltip>
-      ) : (
-        <span className="text-theme-text-tertiary">no fix yet</span>
-      )}
-    </span>
+    <WithTooltip tip={tip}>
+      <span className={clsx('min-w-0 truncate font-mono', className)}>
+        {showInstalled && <span className="text-theme-text-tertiary">{installed} → </span>}
+        {to ? <span className="text-emerald-700 dark:text-emerald-400">{to}</span> : <span className="text-theme-text-tertiary">no fix yet</span>}
+      </span>
+    </WithTooltip>
   )
 }
 
