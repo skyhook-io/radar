@@ -81,8 +81,9 @@ func fluxReleaseVersion(entry map[string]any) int64 {
 	return version
 }
 
-// FluxReconcileEntry is one Kustomization status.history entry: one
-// revision Flux applied, with its run count and the last run's outcome.
+// FluxReconcileEntry is one Kustomization status.history entry: one rendered
+// manifest set and outcome. Flux keys entries on (manifest digest, status) and
+// overwrites the recorded revision, so one entry can span several revisions.
 type FluxReconcileEntry struct {
 	Revision, Digest, FirstReconciled, LastReconciled, Duration, Status string
 	Runs                                                                int64

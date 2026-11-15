@@ -11,7 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// BuildFluxActivity lists the revisions Flux remembers in status.history and
+// BuildFluxActivity lists the manifest sets Flux remembers in status.history and
 // the root's notable events. Without history it keeps the condition rows, so
 // an older Flux still shows something.
 func BuildFluxActivity(root *unstructured.Unstructured, resolver Resolver) []HistoryItem {

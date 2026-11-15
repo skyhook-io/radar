@@ -61,9 +61,9 @@ describe('Flux revision chain', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-10T10:05:00Z')) })
   afterEach(() => vi.useRealTimers())
 
-  it('says when the source is ahead of what is applied', () => {
+  it('says when the source is ahead of the last successful apply', () => {
     const html = render({ sourceRevision: 'main@sha1:bbbbbbb1234567890', sourceFetchedAt: '2026-11-10T10:04:00Z', appliedRevision: 'main@sha1:aaaaaaa1234567890', pending: true, objects: 3 })
-    expect(html).toContain('Pending: source is ahead of what is applied')
+    expect(html).toContain('Pending: source is ahead of the last successful apply')
     expect(html).toContain('bbbbbbb')
     expect(html).toContain('aaaaaaa')
     expect(html).toContain('3 objects')
@@ -91,6 +91,14 @@ describe('Flux revision chain', () => {
     expect(html).toContain('2 objects')
     expect(html).not.toContain('Applied')
     expect(html).not.toContain('Revision:')
+  })
+
+  it('keeps the revision line when Radar cannot read what a HelmRelease deployed', () => {
+    // A deployed release without an OCI digest (ExternalArtifact chart, older release) leaves appliedRevision empty.
+    const html = render({ kind: 'HelmRelease', lastRevision: '5.5.0', sourceRevision: 'latest@sha256:53884aebf2e5aa' })
+    expect(html).toContain('Revision:')
+    expect(html).toContain('5.5.0')
+    expect(html).not.toContain('Pending')
   })
 
   it('names the deployed chart beside a HelmRelease digest', () => {

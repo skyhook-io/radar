@@ -89,7 +89,9 @@ export function GitOpsStatusStrip({ insight, loading, renderRevisionMeta }: GitO
     (i) => i.severity === 'critical' && i.scope === 'operation' && i.stuck,
   )
   const operationTooltipMessage = summary.rawOperationMessage || summary.operationMessage
-  const fluxChain = summary.tool === 'fluxcd' && !!(summary.appliedRevision || summary.sourceRevision)
+  // A source alone only before the first apply: once Flux recorded an applied
+  // revision that Radar can't match to the source, the plain revision line stays.
+  const fluxChain = summary.tool === 'fluxcd' && !!(summary.appliedRevision || (summary.sourceRevision && !summary.lastRevision))
   return (
     <div className="border-b border-theme-border bg-theme-base px-4 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
@@ -196,7 +198,7 @@ function FluxRevisionChain({ summary, renderRevisionMeta }: { summary: GitOpsIns
           <span>{summary.objects} objects</span>
         </>
       ) : null}
-      {summary.pending && <Badge severity="warning" size="sm">Pending: source is ahead of what is applied</Badge>}
+      {summary.pending && <Badge severity="warning" size="sm">Pending: source is ahead of the last successful apply</Badge>}
     </span>
   )
 }
