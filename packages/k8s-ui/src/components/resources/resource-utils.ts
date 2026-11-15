@@ -878,18 +878,23 @@ export function getLogContainerNames(pod: any): string[] {
 /**
  * The container to open logs on. While a pod is stuck initializing, its regular
  * containers wait in PodInitializing and have no logs, so this picks the first
- * init container that hasn't completed. A running native sidecar keeps running
- * for the pod's lifetime and is skipped; a failing one is what holds the pod.
- * Otherwise it falls back to getDefaultContainerName.
+ * init container that hasn't completed, or the first native sidecar that hasn't
+ * started. Once the pod is initialized it falls back to getDefaultContainerName:
+ * sidecars routinely exit non-zero when a finished pod stops them, and one that
+ * fails later doesn't override the pod's default container.
  */
 export function getDefaultLogContainerName(pod: any): string | undefined {
-  const sidecars = new Set(
-    (pod?.spec?.initContainers || []).filter((c: any) => c.restartPolicy === 'Always').map((c: any) => c.name),
-  )
-  const stuck = (pod?.status?.initContainerStatuses || []).find(
-    (s: any) => !(sidecars.has(s.name) && s.state?.running) && s.state?.terminated?.exitCode !== 0,
-  )
-  return stuck?.name || getDefaultContainerName(pod)
+  const initialized = (pod?.status?.conditions || []).some((c: any) => c.type === 'Initialized' && c.status === 'True')
+  if (!initialized) {
+    const sidecars = new Set(
+      (pod?.spec?.initContainers || []).filter((c: any) => c.restartPolicy === 'Always').map((c: any) => c.name),
+    )
+    const stuck = (pod?.status?.initContainerStatuses || []).find((s: any) =>
+      sidecars.has(s.name) ? !s.started : s.state?.terminated?.exitCode !== 0,
+    )
+    if (stuck?.name) return stuck.name
+  }
+  return getDefaultContainerName(pod)
 }
 
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
