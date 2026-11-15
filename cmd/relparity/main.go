@@ -140,6 +140,7 @@ func main() {
 	contextName := flag.String("context", "", "kubeconfig context to read")
 	out := flag.String("out", "", "write the JSON report here")
 	perKind := flag.Int("max-per-kind", 0, "answer at most this many objects of each kind (0: all)")
+	only := flag.String("only", "", "answer only objects of these kinds, comma-separated (Kind or Kind.group)")
 	cpuprofile := flag.String("cpuprofile", "", "write a CPU profile of the answers (both ways) here")
 	explain := flag.String("explain", "", "print both answers for the subject with this resource key (group|Kind|namespace|name)")
 	flag.Parse()
@@ -225,6 +226,16 @@ func main() {
 	log.Printf("graph: %d nodes, %d edges, built in %v ms, holds %.1f MiB", rep.GraphNodes, rep.GraphEdges, rep.GraphBuildMS, rep.GraphHeldMiB)
 
 	subjects := collect(provider, dc, crds, crdKind, *perKind)
+	if *only != "" {
+		kinds := strings.Split(*only, ",")
+		subjects = slices.DeleteFunc(subjects, func(s subject) bool {
+			kind := s.ref.Kind
+			if s.ref.Group != "" {
+				kind += "." + s.ref.Group
+			}
+			return !slices.Contains(kinds, kind) && !slices.Contains(kinds, s.ref.Kind)
+		})
+	}
 	rep.Objects = len(subjects)
 	istioDomain := ""
 	if deployments, err := provider.Deployments(); err == nil {
