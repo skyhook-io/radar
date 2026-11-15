@@ -70,6 +70,14 @@ func TestClassifyAddon(t *testing.T) {
 			wantAddon: true, wantWhy: "chart=gpu-operator",
 		},
 		{
+			name: "user chart named like a model platform", chart: "kserve-fraud-1.0.0", wl: "fraud-predictor",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "user chart named like a workload API", chart: "lws-storage-sample-0.1.0",
+			wantAddon: false, wantWhy: "",
+		},
+		{
 			name: "integration that accepts name matching", wl: "argo-cd-server",
 			wantAddon: true, wantWhy: "name=argo-cd-server (argo-cd)",
 		},

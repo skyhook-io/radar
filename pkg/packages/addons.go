@@ -52,8 +52,9 @@ var knownAddonCharts = buildAddonCatalog()
 
 // Name-only evidence (a workload name or app.kubernetes.io label that matches a
 // catalog entry) is weak: a user can name their own app "kserve-fraud" or
-// "lws-storage-sample". Only the entries below accept it; every other catalog
-// entry needs chart, add-on manager or image evidence.
+// "lws-storage-sample". So is a prefix hit in any field. Only the entries below
+// accept either; every other catalog entry needs an exact chart, add-on manager
+// or image match.
 //
 // nameMatchedIntegrations are the crdGroupToChart names that matched by name
 // before name matching became opt-in. addonChartsExtra entries also accept it.
@@ -223,6 +224,11 @@ func classifyAddonValue(field, value string, strong bool) (bool, string) {
 	}
 	base, ok := matchAddonChart(v)
 	if !ok || (!strong && !nameMatchedAddons[base]) {
+		return false, ""
+	}
+	// A prefix hit ("kserve-fraud" on "kserve") is as weak as a name match,
+	// so it needs the same opt-in, whichever field it came from.
+	if base != v && !nameMatchedAddons[base] && !genericAddonNames[base] {
 		return false, ""
 	}
 	if base == v {
