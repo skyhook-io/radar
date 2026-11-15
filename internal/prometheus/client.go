@@ -954,7 +954,11 @@ func (c *Client) MetricNames(ctx context.Context, matches []string, start, end t
 	if p == nil {
 		return nil, errors.New("prometheus connection was reset")
 	}
-	return p.LabelValues(ctx, "__name__", matches, start, end, 2000)
+	names, warnings, err := p.LabelValuesWithWarnings(ctx, "__name__", matches, start, end, 2000)
+	if err == nil && len(warnings) > 0 {
+		return nil, fmt.Errorf("Prometheus returned an incomplete list of metric names: %s", truncate(strings.Join(warnings, "; "), 200))
+	}
+	return names, err
 }
 
 func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, error) {

@@ -61,6 +61,20 @@ func TestSubstratePoolVerdictStates(t *testing.T) {
 	}
 }
 
+// Short needs every point of the five minutes, and the condition now.
+func TestSubstrateShortRequiresAFullHold(t *testing.T) {
+	_, f := poolVerdict(t, nil, okCharts())
+	for _, q := range f.queries {
+		if strings.Contains(q, verdictShort) {
+			if !strings.Contains(q, "count_over_time(") || !strings.Contains(q, ">= bool 5") || strings.Count(q, "< bool") != 3 {
+				t.Fatalf("short query = %s", q)
+			}
+			return
+		}
+	}
+	t.Fatal("no short query")
+}
+
 func TestSubstratePoolVerdictFreeWorkers(t *testing.T) {
 	v, _ := poolVerdict(t, []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, okCharts())
 	free := fact(v, "freeWorkers")
@@ -140,8 +154,13 @@ func TestSubstrateNodeVerdict(t *testing.T) {
 	}
 
 	f = &fakeSubstrateProm{rules: []fakeRule{{"max by (ate_snapshot_upload_overdue_band)", result(series(band("under_1m"), 0))}}}
-	if v := nodeRun(f).nodeVerdict(charts); v.State != SubstrateVerdictCurrent {
+	v = nodeRun(f).nodeVerdict(charts)
+	if v.State != SubstrateVerdictCurrent {
 		t.Fatalf("all bands zero = %+v", v)
+	}
+	// The age gauge has data in the range and none now: unknown, not "None".
+	if oldest := fact(v, "oldestUnsaved"); oldest.State != SubstrateFactUnavailable {
+		t.Fatalf("stopped age gauge = %+v", oldest)
 	}
 
 	// The chart has series in the range, none now: atelet stopped reporting.

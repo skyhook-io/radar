@@ -1332,8 +1332,9 @@ export function WorkloadView({
               name={n}
               resource={resource}
               expanded={expanded}
+              fill={!(isNode && servesSubstrate)}
             />
-            {isNode && servesSubstrate && <div className="px-4 pt-2 pb-4"><SubstrateHealthCharts target={{ kind: 'node', name: n }} /></div>}
+            {isNode && servesSubstrate && <div className="pt-4"><SubstrateHealthCharts target={{ kind: 'node', name: n }} /></div>}
           </>
         )}
         renderCostTab={({ kind, namespace: ns, name: n }) => (
@@ -2248,14 +2249,18 @@ function MetricsTabContent({
   name,
   resource,
   expanded,
+  fill = true,
 }: {
   kind: string
   namespace: string
   name: string
   resource: any
   expanded: boolean
+  /** False when content follows, so the tab scrolls everything as one. */
+  fill?: boolean
 }) {
   if (expanded) {
+    if (!fill) return <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} fill={false} />
     return (
       <div className="flex flex-col h-full">
         <div className="flex-1 min-h-0">

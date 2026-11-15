@@ -2,6 +2,8 @@ package prometheus
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -221,11 +223,13 @@ type substrateNameLister interface {
 
 const substrateNameMatch = `{__name__=~"(ate|atelet)[._].+"}`
 
-// resolveSubstrateSpelling picks the spelling this Prometheus holds the
-// instruments under over the window. When it holds both, the one with series
-// for this pool or node wins; with both of those it is ambiguous, since the
-// same activity could be counted under either name.
-func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpelling, string, error) {
+// resolveSubstrateSpelling picks the spelling, and each instrument's name in
+// it, that this Prometheus holds over the window. A name list holding one
+// candidate per instrument, in one spelling, is taken as it is. Otherwise each
+// candidate is checked for series of this pool or node within this cluster's
+// scope: the one with series wins, and two with series are ambiguous, since
+// the same activity could be counted under either name.
+func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpelling, string, error) {
 	lister, ok := q.(substrateNameLister)
 	if !ok {
 		return substrateSpelling{}, "", nil
@@ -239,67 +243,125 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, instruments 
 	for _, n := range names {
 		held[n] = true
 	}
-	build := func(dotted bool) (substrateSpelling, bool) {
-		sp := substrateSpelling{dotted: dotted, stems: map[string]string{}}
-		// An instrument not found is named in the style of those found (with
-		// or without suffixes), so "not found" names what this pipeline would
-		// have produced.
-		style := 0
-		styled, anyFound := false, false
-		var missing []substrateInstrument
+	// present: per spelling, per instrument, the candidate stems the name list holds.
+	present := func(dotted bool) map[string][]string {
+		out := map[string][]string{}
 		for _, inst := range instruments {
-			stems := inst.stems(dotted)
-			found := false
-			for i, stem := range stems {
+			for _, stem := range inst.stems(dotted) {
 				if held[stem+inst.probeSuffix()] {
-					sp.stems[inst.name] = stem
-					found, anyFound = true, true
-					// Only an instrument with suffixes to add or drop shows the style.
-					if !styled && len(stems) > 1 {
-						style, styled = i, true
-					}
-					break
+					out[inst.name] = append(out[inst.name], stem)
 				}
 			}
-			if !found {
-				missing = append(missing, inst)
+		}
+		return out
+	}
+	escaped, dotted := present(false), present(true)
+	unique := func(p map[string][]string) bool {
+		for _, stems := range p {
+			if len(stems) > 1 {
+				return false
 			}
 		}
-		for _, inst := range missing {
-			stems := inst.stems(dotted)
-			sp.stems[inst.name] = stems[min(style, len(stems)-1)]
-		}
-		return sp, anyFound
+		return true
 	}
-	escaped, escapedFound := build(false)
-	dotted, dottedFound := build(true)
 	switch {
-	case !dottedFound:
-		return escaped, "", nil
-	case !escapedFound:
-		return dotted, "", nil
+	case len(dotted) == 0 && unique(escaped):
+		return spellingFrom(false, escaped, instruments), "", nil
+	case len(escaped) == 0 && unique(dotted):
+		return spellingFrom(true, dotted, instruments), "", nil
 	}
-	has := func(sp substrateSpelling) (bool, error) {
-		parts := make([]string, len(instruments))
-		for i, inst := range instruments {
-			parts[i] = "last_over_time(" + vectorSelector(sp.probe(inst), base(sp)) + "[" + window.String() + "])"
+
+	// live narrows each spelling's candidates to those with series for this
+	// subject in this cluster.
+	live := func(dotted bool, candidates map[string][]string) (map[string][]string, error) {
+		out := map[string][]string{}
+		if len(candidates) == 0 {
+			return out, nil
 		}
-		res, err := strictQuerier{q}.Query(ctx, "count("+strings.Join(parts, " or ")+")")
-		return err == nil && len(res.Series) > 0, err
+		sp := substrateSpelling{dotted: dotted}
+		sel := base(sp)
+		var first string
+		for _, inst := range instruments {
+			if stems := candidates[inst.name]; len(stems) > 0 {
+				first = stems[0] + inst.probeSuffix()
+				break
+			}
+		}
+		matchers, _, err := resolve(ctx, scopeProbe{metric: first, selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true})
+		switch {
+		case errors.Is(err, ErrScopeMismatch):
+			// These series are another cluster's.
+			return out, nil
+		case errors.Is(err, ErrScopeAmbiguous):
+			matchers = ""
+		case err != nil:
+			return nil, err
+		}
+		for _, inst := range instruments {
+			for _, stem := range candidates[inst.name] {
+				res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+vectorSelector(stem+inst.probeSuffix(), withScope(sel, matchers))+"["+window.String()+"]))")
+				if err != nil {
+					return nil, err
+				}
+				if len(res.Series) > 0 {
+					out[inst.name] = append(out[inst.name], stem)
+				}
+			}
+		}
+		return out, nil
 	}
-	inEscaped, err := has(escaped)
+	liveEscaped, err := live(false, escaped)
 	if err != nil {
 		return substrateSpelling{}, "", err
 	}
-	inDotted, err := has(dotted)
+	liveDotted, err := live(true, dotted)
 	if err != nil {
 		return substrateSpelling{}, "", err
 	}
+	const switched = "After a pipeline changes how it names metrics, this lasts until the range no longer spans the change"
 	switch {
-	case inEscaped && inDotted:
-		return substrateSpelling{}, "these series appear under both the underscore and the dotted (UTF-8) metric names in this range, so Radar cannot tell which holds the whole answer. After a pipeline switches between them, this lasts until the range no longer spans the switch", nil
-	case inDotted:
-		return dotted, "", nil
+	case len(liveEscaped) > 0 && len(liveDotted) > 0:
+		return substrateSpelling{}, "these series appear under both the underscore and the dotted (UTF-8) metric names in this range, so Radar cannot tell which holds the whole answer. " + switched, nil
 	}
-	return escaped, "", nil
+	isDotted, chosen, candidates := len(liveDotted) > 0 || (len(liveEscaped) == 0 && len(escaped) == 0), liveEscaped, escaped
+	if isDotted {
+		chosen, candidates = liveDotted, dotted
+	}
+	for _, inst := range instruments {
+		if stems := chosen[inst.name]; len(stems) > 1 {
+			return substrateSpelling{}, inst.name + " appears as both " + strings.Join(stems, " and ") + " for this in the range, so Radar cannot tell which holds the whole answer. " + switched, nil
+		}
+	}
+	// Instruments with no series here fall back to a name the list holds.
+	for name, stems := range candidates {
+		if _, ok := chosen[name]; !ok {
+			chosen[name] = stems[:1]
+		}
+	}
+	return spellingFrom(isDotted, chosen, instruments), "", nil
+}
+
+// spellingFrom builds a spelling from one stem found per instrument. An
+// instrument not found is named in the style of those found (with or without
+// suffixes), so "not found" names what this pipeline would have produced.
+func spellingFrom(dotted bool, found map[string][]string, instruments []substrateInstrument) substrateSpelling {
+	sp := substrateSpelling{dotted: dotted, stems: map[string]string{}}
+	style := 0
+	for _, inst := range instruments {
+		stems := inst.stems(dotted)
+		if got := found[inst.name]; len(got) > 0 && len(stems) > 1 {
+			// Only an instrument with suffixes to add or drop shows the style.
+			style = slices.Index(stems, got[0])
+			break
+		}
+	}
+	for _, inst := range instruments {
+		if got := found[inst.name]; len(got) > 0 {
+			sp.stems[inst.name] = got[0]
+			continue
+		}
+		stems := inst.stems(dotted)
+		sp.stems[inst.name] = stems[min(style, len(stems)-1)]
+	}
+	return sp
 }

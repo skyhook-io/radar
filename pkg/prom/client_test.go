@@ -553,3 +553,13 @@ func TestQueryAnnotations(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_LabelValuesWithWarnings_ReturnsWarnings(t *testing.T) {
+	tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"success","data":["up"],"warnings":["store 2 unavailable"]}`))
+	})
+	vals, warnings, err := NewClient(tr).LabelValuesWithWarnings(context.Background(), "__name__", nil, time.Time{}, time.Time{}, 0)
+	if err != nil || len(vals) != 1 || len(warnings) != 1 || warnings[0] != "store 2 unavailable" {
+		t.Fatalf("vals=%v warnings=%v err=%v", vals, warnings, err)
+	}
+}

@@ -1,6 +1,6 @@
 import { Badge, Tooltip } from '@skyhook-io/k8s-ui'
 import { formatMetricValue } from '@skyhook-io/k8s-ui/components/charts'
-import { usePrometheusStatus } from '../../api/client'
+import { isForbiddenError, usePrometheusStatus } from '../../api/client'
 import { useSubstrateHealth, type SubstrateFact, type SubstrateTarget, type SubstrateVerdict } from '../../api/substrateHealth'
 
 const OVERDUE_BANDS: Record<string, string> = {
@@ -19,8 +19,14 @@ const OVERDUE_BANDS: Record<string, string> = {
  */
 export function SubstrateVerdictLine({ target, onOpenMetrics }: { target: SubstrateTarget; onOpenMetrics?: () => void }) {
   const { data: status } = usePrometheusStatus()
-  const { data } = useSubstrateHealth(target, '1h', status?.connected === true && Boolean(target.name))
-  const verdict = data?.status === 'available' ? data.verdict : undefined
+  const connected = status?.connected === true
+  const { data, error } = useSubstrateHealth(target, '1h', connected && Boolean(target.name))
+  // A failed refresh leaves the last answer cached; it must not keep asserting it.
+  const verdict: SubstrateVerdict | undefined = !connected || isForbiddenError(error)
+    ? undefined
+    : error
+      ? { state: 'unknown', reason: `Radar could not read Prometheus: ${error.message}`, facts: [] }
+      : data?.status === 'available' ? data.verdict : undefined
   if (!verdict) return null
   const title = target.kind === 'workerpool' ? 'Capacity' : 'Snapshots'
   return (

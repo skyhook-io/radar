@@ -98,6 +98,10 @@ func (r *substrateRun) chartFact(chart SubstrateChart, def substrateChartDef, id
 	switch {
 	case err != nil:
 		return unavailableFact(id, label, unit, queryFailed(err))
+	case v == nil && chart.State == SubstrateChartOK:
+		// The range has data and now has none: the series stopped, which says
+		// nothing about the value.
+		return unavailableFact(id, label, unit, "Prometheus has no current value for this; the series stopped reporting")
 	case v == nil:
 		return SubstrateFact{ID: id, Label: label, Unit: unit, State: SubstrateFactEmpty, Reason: def.emptyReason}
 	}
@@ -155,7 +159,12 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	// five minutes. A maximum, so a lagging replica cannot raise it.
 	actual := "sum(max by (ate_worker_state, ate_sandbox_class) (" + x.norm(x.vec(instWorkers, "", schedulable...), "ate.worker.state", "ate.sandbox.class") + "))"
 	desired := "min(min_over_time(" + x.vec(instDesired, "") + "[5m]))"
-	short, err := instantValue(r.ctx, r.q, "min_over_time(("+actual+" < bool "+desired+")[5m:1m])")
+	// Held means true at every one-minute point of the last five minutes,
+	// with every point present, and true now: a minimum over whatever points
+	// exist would call one minute of history, or a recovery since the last
+	// point, five minutes short.
+	cond := "(" + actual + " < bool " + desired + ")"
+	short, err := instantValue(r.ctx, r.q, "min_over_time("+cond+"[5m:1m]) * (count_over_time("+cond+"[5m:1m]) >= bool 5) * "+cond)
 	if err != nil {
 		v.Reason, freeFact.Reason = queryFailed(err), queryFailed(err)
 		return v

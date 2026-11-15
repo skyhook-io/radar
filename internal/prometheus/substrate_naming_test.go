@@ -56,7 +56,7 @@ var gmpNames = []string{
 func TestResolveSubstrateSpelling(t *testing.T) {
 	base := func(sp substrateSpelling) string { return substratePoolSelector(sp, "agents", "pool") }
 	resolve := func(f *fakeSubstrateProm) (substrateSpelling, string, error) {
-		return resolveSubstrateSpelling(context.Background(), f, substratePoolInstruments, base, time.Hour)
+		return resolveSubstrateSpelling(context.Background(), f, unverifiedScope, substratePoolInstruments, base, time.Hour)
 	}
 
 	sp, amb, err := resolve(&fakeSubstrateProm{})
@@ -87,6 +87,30 @@ func TestResolveSubstrateSpelling(t *testing.T) {
 	_, amb, _ = resolve(&fakeSubstrateProm{names: both, rules: []fakeRule{{"count(", result(series(nil, 1))}}})
 	if amb == "" {
 		t.Fatal("both spellings with series for this pool must be ambiguous")
+	}
+
+	// Two suffix styles of one instrument, both with series for this pool.
+	suffixes := []string{"ate_actor_lifecycle_operation_duration_seconds_count", "ate_actor_lifecycle_operation_duration_count"}
+	_, amb, _ = resolve(&fakeSubstrateProm{names: suffixes, rules: []fakeRule{{"count(", result(series(nil, 1))}}})
+	if !strings.Contains(amb, "appears as both") {
+		t.Fatalf("two suffix styles with series = %q, want ambiguous", amb)
+	}
+	// Only one of them has series for this pool: it is read.
+	sp, amb, _ = resolve(&fakeSubstrateProm{names: suffixes, rules: []fakeRule{{"ate_actor_lifecycle_operation_duration_count{", result(series(nil, 1))}}})
+	if amb != "" || sp.stem(instLifecycle) != "ate_actor_lifecycle_operation_duration" {
+		t.Fatalf("one suffix style live = %+v %q", sp, amb)
+	}
+
+	// The dotted series belong to another cluster: this pool reads the escaped ones.
+	otherCluster := func(_ context.Context, p scopeProbe) (string, SeriesIsolation, error) {
+		if strings.Contains(p.metric, ".") {
+			return "", SeriesIsolation{}, ErrScopeMismatch
+		}
+		return "", SeriesIsolation{}, nil
+	}
+	sp, amb, err = resolveSubstrateSpelling(context.Background(), &fakeSubstrateProm{names: both, rules: []fakeRule{{"count(", result(series(nil, 1))}}}, otherCluster, substratePoolInstruments, base, time.Hour)
+	if err != nil || amb != "" || sp.dotted {
+		t.Fatalf("dotted series of another cluster: %+v %q %v", sp, amb, err)
 	}
 
 	if _, _, err = resolve(&fakeSubstrateProm{namesErr: errors.New("boom")}); err == nil {

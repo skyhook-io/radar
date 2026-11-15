@@ -2,11 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateFact, SubstrateHealth, SubstrateVerdict } from '../../api/substrateHealth'
 
-let health: { data?: SubstrateHealth } = {}
+let health: { data?: SubstrateHealth; error?: Error } = {}
+let connected = true
 
 vi.mock('../../api/client', async (orig) => ({
   ...(await orig<typeof import('../../api/client')>()),
-  usePrometheusStatus: () => ({ data: { connected: true } }),
+  usePrometheusStatus: () => ({ data: { connected } }),
 }))
 vi.mock('../../api/substrateHealth', async (orig) => ({
   ...(await orig<typeof import('../../api/substrateHealth')>()),
@@ -71,6 +72,18 @@ describe('SubstrateVerdictLine', () => {
     expect(html).toContain('Snapshots')
     expect(html).toContain('Uploads behind')
     expect(html).toContain('3 (over 15m: 1, 1–5m: 2)')
+  })
+
+  it('does not keep asserting a cached verdict after a failed refresh or a disconnect', () => {
+    withVerdict({ state: 'serving', facts: [] })
+    health = { ...health, error: new Error('timeout') }
+    const html = render(pool)
+    expect(html).toContain('Unknown')
+    expect(html).not.toContain('Serving')
+    health = { data: health.data }
+    connected = false
+    expect(render(pool)).toBe('')
+    connected = true
   })
 
   it('renders nothing without a verdict', () => {

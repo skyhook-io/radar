@@ -650,7 +650,7 @@ func collectSubstratePool(ctx context.Context, q seriesQuerier, resolve substrat
 		return SubstrateHealthResponse{Status: SubstrateChartError, Reason: reason, Range: rangeName, Charts: []SubstrateChart{}}
 	}
 	base := func(sp substrateSpelling) string { return substratePoolSelector(sp, namespace, name) }
-	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, substratePoolInstruments, base, substrateProbeWindow(start, end, step))
+	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, resolve, substratePoolInstruments, base, substrateProbeWindow(start, end, step))
 	switch {
 	case err != nil:
 		return failed(queryFailed(err))
@@ -686,7 +686,7 @@ func collectSubstrateNode(ctx context.Context, q seriesQuerier, resolve substrat
 	}
 	window := substrateProbeWindow(start, end, step)
 	base := func(sp substrateSpelling) string { return substrateNodeSelector(sp, node) }
-	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, substrateNodeFamilies, base, window)
+	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, resolve, substrateNodeFamilies, base, window)
 	switch {
 	case err != nil:
 		return failed(SubstrateChartError, queryFailed(err))

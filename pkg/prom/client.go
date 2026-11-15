@@ -145,6 +145,13 @@ func (c *Client) issueQuery(ctx context.Context, method, path string, params url
 // match entries are PromQL series selectors; zero start/end skip the window
 // params; limit <= 0 skips the limit param.
 func (c *Client) LabelValues(ctx context.Context, label string, matches []string, start, end time.Time, limit int) ([]string, error) {
+	values, _, err := c.LabelValuesWithWarnings(ctx, label, matches, start, end, limit)
+	return values, err
+}
+
+// LabelValuesWithWarnings is LabelValues with the response's warnings, for a
+// caller that must not read a partial list as a complete one.
+func (c *Client) LabelValuesWithWarnings(ctx context.Context, label string, matches []string, start, end time.Time, limit int) ([]string, []string, error) {
 	params := url.Values{}
 	for _, m := range matches {
 		params.Add("match[]", m)
@@ -161,7 +168,7 @@ func (c *Client) LabelValues(ctx context.Context, label string, matches []string
 
 	body, err := c.t.Do(ctx, "GET", "/api/v1/label/"+url.PathEscape(label)+"/values", params)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var pr struct {
@@ -169,14 +176,15 @@ func (c *Client) LabelValues(ctx context.Context, label string, matches []string
 		Error     string   `json:"error"`
 		ErrorType string   `json:"errorType"`
 		Data      []string `json:"data"`
+		Warnings  []string `json:"warnings"`
 	}
 	if err := json.Unmarshal(body, &pr); err != nil {
-		return nil, fmt.Errorf("prom: parse label values from %s: %w", c.t.Address(), err)
+		return nil, nil, fmt.Errorf("prom: parse label values from %s: %w", c.t.Address(), err)
 	}
 	if pr.Status != "success" {
-		return nil, fmt.Errorf("prom: label values error from %s: %s (%s)", c.t.Address(), pr.Error, pr.ErrorType)
+		return nil, nil, fmt.Errorf("prom: label values error from %s: %s (%s)", c.t.Address(), pr.Error, pr.ErrorType)
 	}
-	return pr.Data, nil
+	return pr.Data, pr.Warnings, nil
 }
 
 // MetricMetadata describes one metric as reported by /api/v1/metadata.
