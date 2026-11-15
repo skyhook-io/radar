@@ -104,3 +104,39 @@ func TestApplicationsControllerOnlyCutoverBlocker(t *testing.T) {
 	}
 	t.Logf("cutover blocked: existing key %q, ControllerChain top with no manager would key %q", key, "prod/Job/run")
 }
+
+func TestApplicationsSharedManagerGraphOrderHasNoOwnershipEquivalent(t *testing.T) {
+	workload := appTestObject("apps", "Deployment", "prod", "api")
+	shop := appTestObject("argoproj.io", "Application", "argocd", "shop")
+	other := appTestObject("argoproj.io", "Application", "argocd", "other")
+	for _, manager := range []*ownershiptest.Object{&shop, &other} {
+		manager.Membership = ownership.MembersRecorded
+		manager.Members = []resourceid.Ref{workload.Ref}
+	}
+	objects := []ownershiptest.Object{workload, shop, other}
+	view := appManagerView(t, objects...)
+	answer := view.Manager(workload.Ref)
+	if answer.State != ownership.ManagerShared || answer.Lead != nil {
+		t.Fatalf("manager answer = %+v, want shared without a lead", answer)
+	}
+	var recorders []resourceid.Ref
+	for _, manager := range view.RecordingManagers(workload.Ref).Managers {
+		recorders = append(recorders, manager.Ref)
+	}
+	if want := []resourceid.Ref{other.Ref, shop.Ref}; !reflect.DeepEqual(recorders, want) {
+		t.Fatalf("recorders = %v, want %v", recorders, want)
+	}
+	for _, tc := range []struct {
+		links [][2]int
+		want  string
+	}{
+		{[][2]int{{1, 0}, {2, 0}}, "argocd/Application/shop"},
+		{[][2]int{{2, 0}, {1, 0}}, "argocd/Application/other"},
+	} {
+		root, key := applicationRootRow(applicationRootFixture(objects, tc.links), workload.Ref)
+		if root != tc.want || key != tc.want {
+			t.Fatalf("links=%v: root=%q key=%q, want %q", tc.links, root, key, tc.want)
+		}
+		t.Logf("identical ownership evidence, incoming edges %v: root and key %q", tc.links, key)
+	}
+}
