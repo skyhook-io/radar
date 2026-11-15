@@ -1107,7 +1107,7 @@ func probeResourcePermissions(ctx context.Context, bypassCache bool) permissionP
 	// network calls would block InvalidateResourcePermissionsCache() during
 	// context switch.
 
-	dyn := GetDynamicClient()
+	dyn := GetInformerDynamicClient()
 	if GetClient() == nil || dyn == nil {
 		log.Printf("Warning: K8s client not initialized, returning no resource permissions")
 		// Current: nothing superseded this, there is simply nothing to probe.

@@ -36,7 +36,7 @@ var (
 func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 	var initErr error
 	dynamicCacheOnce.Do(func() {
-		client := GetDynamicClient()
+		client := GetInformerDynamicClient()
 		if client == nil {
 			initErr = fmt.Errorf("dynamic client not initialized")
 			return
@@ -482,7 +482,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 
 func RegisterSupportedCRDFallbacks() {
 	discovery := GetResourceDiscovery()
-	client := GetDynamicClient()
+	client := GetInformerDynamicClient()
 	if discovery == nil || client == nil {
 		return
 	}

@@ -38,6 +38,7 @@ var (
 	k8sConfig                    *rest.Config
 	discoveryClient              *discovery.DiscoveryClient
 	dynamicClient                dynamic.Interface
+	activeClients                *sharedKubernetesClients
 	initOnce                     sync.Once
 	initErr                      error
 	kubeconfigPath               string
@@ -344,6 +345,7 @@ func doInit(opts InitOptions) error {
 	k8sClient = clients.clientset
 	discoveryClient = clients.discovery
 	dynamicClient = clients.dynamic
+	activeClients = clients
 	activeClientGeneration = clients.generation
 
 	return nil
@@ -797,6 +799,53 @@ func GetDiscoveryClient() *discovery.DiscoveryClient {
 func GetDynamicClient() dynamic.Interface {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
+	return dynamicClient
+}
+
+// GetInformerClient returns the clientset the informer cache lists and watches
+// through. It shares GetClient()'s http.Client (transport, auth observer,
+// request deadlines) but has its own client-side rate limiter, so informer
+// LIST/WATCH traffic never delays request handlers. Falls back to GetClient()
+// when the active client set has no informer client, e.g. a test that installed
+// only the request client.
+func GetInformerClient() kubernetes.Interface {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return informerClientForLocked(k8sClient)
+}
+
+// InformerClientFor maps a request clientset to the informer clientset of the
+// same client set, so a holder of GetClient() can tell whether the resource
+// cache (whose Client() is the informer client) describes its connection.
+func InformerClientFor(client kubernetes.Interface) kubernetes.Interface {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if c, ok := client.(*kubernetes.Clientset); ok {
+		return informerClientForLocked(c)
+	}
+	return client
+}
+
+func informerClientForLocked(client *kubernetes.Clientset) kubernetes.Interface {
+	if client == nil {
+		return nil
+	}
+	// Matching on the request client keeps an informer client from another
+	// client set (a previous cluster) from ever being handed out.
+	if activeClients != nil && activeClients.clientset == client && activeClients.informerClientset != nil {
+		return activeClients.informerClientset
+	}
+	return client
+}
+
+// GetInformerDynamicClient is GetInformerClient for the dynamic informer cache
+// and the startup list probes, falling back to GetDynamicClient().
+func GetInformerDynamicClient() dynamic.Interface {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if dynamicClient != nil && activeClients != nil && activeClients.dynamic == dynamicClient && activeClients.informerDynamic != nil {
+		return activeClients.informerDynamic
+	}
 	return dynamicClient
 }
 
@@ -2030,6 +2079,7 @@ func installPreparedContext(p *preparedContext) {
 	k8sClient = p.clients.clientset
 	discoveryClient = p.clients.discovery
 	dynamicClient = p.clients.dynamic
+	activeClients = p.clients
 	activeClientGeneration = p.clients.generation
 	contextName = p.name
 	contextBinding = newContextBinding

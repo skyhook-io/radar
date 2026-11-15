@@ -389,7 +389,8 @@ func InitResourceCache(ctx context.Context) error {
 	once, gen := claimCacheInit()
 	once.Do(func() {
 		client := GetClient()
-		if client == nil {
+		informerClient := GetInformerClient()
+		if client == nil || informerClient == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
@@ -443,7 +444,7 @@ func InitResourceCache(ctx context.Context) error {
 		cronJobScheduleObservations := newCronJobScheduleObservationTracker()
 
 		cfg := k8score.CacheConfig{
-			Client:                  client,
+			Client:                  informerClient,
 			ResourceScopes:          scopes,
 			ResourceScopeNamespaces: permResult.ScopeNamespaces,
 			DeferredTypes:           deferredResources,
