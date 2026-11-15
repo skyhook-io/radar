@@ -165,6 +165,17 @@ export interface VulnerabilitiesParams {
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
 
+/** A workload as the tab's `workload` URL filter writes it: Kind/namespace/name. */
+export function workloadParam(w: { kind: string; namespace: string; name: string }): string {
+  return `${w.kind}/${w.namespace}/${w.name}`
+}
+
+export function parseWorkloadParam(value: string | null): { kind: string; namespace: string; name: string } | undefined {
+  const parts = (value ?? '').split('/')
+  if (parts.length !== 3 || parts.some((p) => p === '')) return undefined
+  return { kind: parts[0], namespace: parts[1], name: parts[2] }
+}
+
 // Trivy Operator's VulnerabilityReport is the one source the rollup reads;
 // the Vulnerabilities tab, Home tile and drawer section show only when the
 // cluster serves it.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasVulnerabilityReports, vulnerabilitiesPath } from '../../api/vulnerabilities'
+import { hasVulnerabilityReports, parseWorkloadParam, vulnerabilitiesPath, workloadParam } from '../../api/vulnerabilities'
 import { gapSentence, imageParts, workloadSummary } from './parts'
 
 describe('vulnerabilities helpers', () => {
@@ -8,6 +8,14 @@ describe('vulnerabilities helpers', () => {
       .toBe('/vulnerabilities?view=cve&namespaces=shop%2Cprod&severity=critical%2Chigh&fixable=1&q=zlib')
     expect(vulnerabilitiesPath({ view: 'image', workload: { kind: 'Deployment', namespace: 'shop', name: 'web' } }))
       .toBe('/vulnerabilities?view=image&workloadKind=Deployment&workloadNamespace=shop&workloadName=web')
+  })
+
+  it('round-trips the workload filter and rejects anything else', () => {
+    const w = { kind: 'Deployment', namespace: 'shop', name: 'checkout' }
+    expect(parseWorkloadParam(workloadParam(w))).toEqual(w)
+    expect(parseWorkloadParam('checkout')).toBeUndefined()
+    expect(parseWorkloadParam('Deployment//checkout')).toBeUndefined()
+    expect(parseWorkloadParam(null)).toBeUndefined()
   })
 
   it('detects the report kind by group and plural, not by kind name alone', () => {

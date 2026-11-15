@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { AlertTriangle, CircleDashed, ExternalLink, Search, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, CircleDashed, ExternalLink, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -21,6 +21,8 @@ import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { ApiError } from '../../api/client'
 import {
   useVulnerabilities,
+  parseWorkloadParam,
+  workloadParam,
   type VulnerabilitiesResponse,
   type VulnerabilityCVE,
   type VulnerabilityFix,
@@ -39,6 +41,7 @@ import {
   SeverityBar,
   SeverityCounts,
   distinctNamespaces,
+  totalFindings,
   FindingTotal,
   ImageName,
   FixVersion,
@@ -88,6 +91,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const severities = (params.get('severity') ?? '').split(',').filter((s): s is VulnerabilitySeverity => SEVERITIES.some((x) => x.key === s))
   const fixableOnly = params.get('fixable') === '1'
   const queryDraft = params.get('q') ?? ''
+  const workload = parseWorkloadParam(params.get('workload'))
   const query = useDebouncedValue(queryDraft.trim(), 300)
   const { connection } = useConnection()
 
@@ -96,7 +100,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     mutate(next)
     setParams(next, { replace: true })
   }
-  const { data, isLoading, isFetching, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query })
+  const { data, isLoading, isFetching, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query, workload })
 
   const toggleSeverity = (s: VulnerabilitySeverity) => update((p) => {
     const next = severities.includes(s) ? severities.filter((x) => x !== s) : [...severities, s]
@@ -121,7 +125,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     )
   }
 
-  const filtered = severities.length > 0 || fixableOnly || query !== ''
+  const filtered = severities.length > 0 || fixableOnly || query !== '' || !!workload
   const rows = view === 'cve' ? data.cves ?? [] : view === 'workload' ? data.workloads ?? [] : view === 'fix' ? data.fixes ?? [] : data.images ?? []
 
   return (
@@ -149,6 +153,15 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
             className="w-full bg-transparent text-sm text-theme-text-primary outline-none placeholder:text-theme-text-tertiary"
           />
         </label>
+        {workload && (
+          <span className={clsx(CHIP, CHIP_ON, 'inline-flex items-center gap-1.5 pr-1.5')}>
+            {workload.name}
+            <span className="font-normal text-theme-text-tertiary">{workload.kind} · {workload.namespace}</span>
+            <button type="button" aria-label="Show every workload" onClick={() => update((p) => p.delete('workload'))} className="rounded-full p-0.5 hover:bg-theme-hover">
+              <X className="h-3 w-3" aria-hidden />
+            </button>
+          </span>
+        )}
         <div role="group" aria-label="Severity" className="flex flex-wrap gap-1.5">
           {SEVERITIES.map((s) => {
             const on = severities.includes(s.key)
@@ -205,7 +218,13 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       ) : view === 'cve' ? (
         <CVETable cves={data.cves ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
       ) : view === 'workload' ? (
-        <WorkloadTable workloads={data.workloads ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
+        <WorkloadTable
+          workloads={data.workloads ?? []}
+          severities={severities}
+          query={query}
+          onOpen={(w) => onNavigateToResource(toResource(w))}
+          onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') })}
+        />
       ) : (
         <ImageTable
           images={data.images ?? []}
@@ -546,7 +565,13 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
   )
 }
 
-function WorkloadTable({ workloads, onOpen }: { workloads: VulnerabilityWorkload[]; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+function WorkloadTable({ workloads, severities, query, onOpen, onShow }: {
+  workloads: VulnerabilityWorkload[]
+  severities: VulnerabilitySeverity[]
+  query: string
+  onOpen: (w: VulnerabilityWorkloadRef) => void
+  onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
+}) {
   return (
     <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
       <div className="min-w-[760px]">
@@ -554,25 +579,95 @@ function WorkloadTable({ workloads, onOpen }: { workloads: VulnerabilityWorkload
           <span>Workload</span><span>Findings across its images</span><span>Containers</span>
         </div>
         {workloads.map((w) => (
-          <div key={`${w.namespace}/${w.kind}/${w.name}`} className={clsx('grid items-start gap-4 border-b border-theme-border py-2.5 pl-10 pr-3 text-sm last:border-0', WORKLOAD_COLS)}>
-            <button type="button" onClick={() => onOpen(w)} className="group flex min-w-0 flex-col items-start text-left">
-              <span className="truncate text-accent-text group-hover:underline">{w.name}</span>
-              <span className="text-xs text-theme-text-tertiary">{w.kind} · {w.namespace}</span>
-            </button>
-            <WorkloadFindings workload={w} />
-            <ul className="flex min-w-0 flex-col gap-1">
-              {w.containers.map((c) => (
-                <li key={`${c.name}/${c.image}`} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs">
-                  <span className="shrink-0 text-theme-text-secondary">{c.name}</span>
-                  <ImageName image={c.image} className="text-theme-text-tertiary" />
-                  {c.scanned && c.counts ? <SeverityCounts counts={c.counts} /> : c.findingsUnread ? <span className="text-warning-text">too many findings to read here</span> : <span className="text-warning-text">not scanned yet</span>}
-                </li>
-              ))}
-            </ul>
-          </div>
+          <Disclosure
+            key={`${w.namespace}/${w.kind}/${w.name}`}
+            flush
+            summary={
+              <div className={clsx('grid flex-1 items-start gap-4 text-sm', WORKLOAD_COLS)}>
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-theme-text-primary">{w.name}</span>
+                  <span className="text-xs text-theme-text-tertiary">{w.kind} · {w.namespace}</span>
+                </span>
+                <WorkloadFindings workload={w} />
+                <ul className="flex min-w-0 flex-col gap-1">
+                  {w.containers.map((c) => (
+                    <li key={`${c.name}/${c.image}`} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs">
+                      <span className="shrink-0 text-theme-text-secondary">{c.name}</span>
+                      <ImageName image={c.image} className="text-theme-text-tertiary" />
+                      {c.scanned && c.counts ? <SeverityCounts counts={c.counts} /> : c.findingsUnread ? <span className="text-warning-text">too many findings to read here</span> : <span className="text-warning-text">not scanned yet</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            }
+          >
+            <WorkloadUpgrades workload={w} severities={severities} query={query} onOpen={onOpen} onShow={onShow} />
+          </Disclosure>
         ))}
       </div>
     </div>
+  )
+}
+
+const MAX_WORKLOAD_UPGRADES = 8
+
+// What a workload's owner changes: the By fix rows narrowed to this
+// workload, read when the row opens.
+function WorkloadUpgrades({ workload: w, severities, query, onOpen, onShow }: {
+  workload: VulnerabilityWorkload
+  severities: VulnerabilitySeverity[]
+  query: string
+  onOpen: (w: VulnerabilityWorkloadRef) => void
+  onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
+}) {
+  const ref = { kind: w.kind, group: w.group, namespace: w.namespace, name: w.name }
+  const { data, isLoading, error } = useVulnerabilities({ view: 'fix', namespaces: [w.namespace], severities, query, workload: ref })
+  const total = totalFindings(w.counts)
+  const fixable = totalFindings(w.fixable)
+  const fixes = data?.fixes ?? []
+  const several = w.containers.length > 1
+  const actions = (
+    <span className="flex flex-wrap gap-x-4">
+      <button type="button" onClick={() => onOpen(ref)} className="text-accent-text hover:underline">Open {w.name}</button>
+      {total > 0 && <button type="button" onClick={() => onShow(ref, 'image')} className="text-accent-text hover:underline">All {total} findings</button>}
+      {fixes.length > MAX_WORKLOAD_UPGRADES && <button type="button" onClick={() => onShow(ref, 'fix')} className="text-accent-text hover:underline">All {fixes.length} upgrades</button>}
+    </span>
+  )
+  let lead: React.ReactNode
+  if (isLoading) lead = <span className="text-theme-text-tertiary">Reading its upgrades…</span>
+  else if (error) lead = <span className="text-warning-text">Couldn't read its upgrades: {error instanceof Error ? error.message : 'request failed'}.</span>
+  else if (total === 0) lead = <span className="text-theme-text-tertiary">Nothing to upgrade: no findings were read for its containers.</span>
+  else if (fixes.length === 0) lead = <span className="text-theme-text-tertiary">None of its {total} findings{severities.length > 0 || query ? ' that match' : ''} has a fixed release yet.</span>
+  else lead = (
+    <span className="text-theme-text-secondary">
+      {fixes.length} {fixes.length === 1 ? 'upgrade clears' : 'upgrades clear'} {fixable} of its {total} findings
+      {total > fixable && <span className="text-theme-text-tertiary">; {total - fixable} have no fix yet</span>}
+    </span>
+  )
+  return (
+    <>
+      <div className={clsx(SUB, WORKLOAD_COLS)}>
+        <span className="col-span-3">{lead}</span>
+      </div>
+      {fixes.slice(0, MAX_WORKLOAD_UPGRADES).map((f) => (
+        <div key={`${f.package}/${f.to ?? (f.listed ?? []).join('|')}`} className={clsx(SUB, WORKLOAD_COLS)}>
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
+            {f.packageType && <span className="truncate text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
+          </span>
+          <span className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-baseline gap-2">
+            <SeverityCounts counts={f.counts} />
+            {f.to
+              ? <FixVersion installed={f.from.join(', ')} target={f.to} />
+              : <span className="truncate font-mono text-theme-text-secondary">one of {(f.listed ?? []).join(', ')}</span>}
+          </span>
+          <span className="flex min-w-0 flex-wrap gap-x-3">
+            {several && f.affected.map((a) => <ImageName key={a.imageId} image={a.image} className="text-theme-text-tertiary" />)}
+          </span>
+        </div>
+      ))}
+      <div className={clsx(SUB, 'flex')}>{actions}</div>
+    </>
   )
 }
 

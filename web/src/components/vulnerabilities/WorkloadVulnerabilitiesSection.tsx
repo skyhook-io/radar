@@ -6,7 +6,7 @@ import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { useAPIResources } from '../../api/apiResources'
 import { ApiError, useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
-import { hasVulnerabilityReports, useVulnerabilities, type VulnerabilityFinding } from '../../api/vulnerabilities'
+import { hasVulnerabilityReports, useVulnerabilities, workloadParam, type VulnerabilityFinding } from '../../api/vulnerabilities'
 import { FixVersion, ImageName, SeverityBadge, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
@@ -55,7 +55,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
     }
   }
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
-  const open = () => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ q: name, namespaces: namespace }).toString() })
+  const open = () => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), namespaces: namespace }).toString() })
 
   return (
     <Section title={critical > 0 ? `Vulnerabilities · ${critical} critical` : 'Vulnerabilities'} icon={Shield}>
