@@ -41,8 +41,8 @@ export function GenericRenderer({ data }: GenericRendererProps) {
       {/* Health Status Banner (if determinable) */}
       {healthStatus && (
         <AlertBanner
-          variant={BANNER_VARIANT[healthStatus.type]}
-          icon={BANNER_ICON[healthStatus.type]}
+          variant={BANNER_VARIANT[healthStatus.level]}
+          icon={BANNER_ICON[healthStatus.level]}
           title={healthStatus.label}
           message={healthStatus.message}
         />
@@ -119,40 +119,42 @@ export function GenericRenderer({ data }: GenericRendererProps) {
 // HEALTH STATUS DETECTION
 // ============================================================================
 
-type HealthType = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
-
 interface HealthStatusResult {
-  type: HealthType
+  level: HealthLevel
   label: string
   message?: string
 }
 
-// This renderer's banner has four tones, while the shared derivation speaks the
-// full HealthLevel vocabulary. `alert` folds into unhealthy and `neutral` into
-// unknown — the banner has no distinct treatment for either.
-const BANNER_TYPE: Record<HealthLevel, HealthType> = {
-  healthy: 'healthy',
-  degraded: 'degraded',
-  alert: 'unhealthy',
-  unhealthy: 'unhealthy',
+// The shared banner carries light and dark pairs for each tone. `alert` keeps
+// its own orange step between degraded and unhealthy; `neutral` reads like
+// unknown.
+const BANNER_VARIANT = {
+  healthy: 'success',
+  degraded: 'warning',
+  alert: 'alert',
+  unhealthy: 'error',
   neutral: 'unknown',
   unknown: 'unknown',
+} as const satisfies Record<HealthLevel, string>
+const BANNER_ICON: Record<HealthLevel, typeof Info> = {
+  healthy: CheckCircle,
+  degraded: AlertCircle,
+  alert: AlertCircle,
+  unhealthy: XCircle,
+  neutral: Info,
+  unknown: Info,
 }
-
-// The shared banner carries light and dark pairs for each tone.
-const BANNER_VARIANT = { healthy: 'success', degraded: 'warning', unhealthy: 'error', unknown: 'unknown' } as const
-const BANNER_ICON = { healthy: CheckCircle, degraded: AlertCircle, unhealthy: XCircle, unknown: Info }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
   if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && isInferenceServiceStopRequested(resource)) {
     const status = getInferenceServiceStatus(resource)
-    if (status.level === 'neutral') return { type: 'unknown', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
-    return { type: BANNER_TYPE[status.level], label: status.text }
+    if (status.level === 'neutral') return { level: 'neutral', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
+    return { level: status.level, label: status.text }
   }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
   if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
-  return { type: BANNER_TYPE[derived.tone], label: derived.text, message: derived.reason }
+  return { level: derived.tone, label: derived.text, message: derived.reason }
 }
 
 // ============================================================================
