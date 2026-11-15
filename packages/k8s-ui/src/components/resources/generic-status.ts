@@ -1,3 +1,4 @@
+import { argoApplicationSetConditionsToGitOpsStatus } from '../../types/gitops'
 import { getArgoApplicationSetStatus } from './resource-utils-argo'
 import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from './resource-utils-strimzi'
@@ -96,7 +97,8 @@ function fromCondition(cond: any, polarityKnown: boolean): GenericStatus | null 
 export function getGenericResourceStatus(resource: any): GenericStatus | null {
   if (resource?.kind === 'ApplicationSet' && isApiGroup(resource.apiVersion, 'argoproj.io')) {
     const native = getArgoApplicationSetStatus(resource)
-    return { text: native.text, tone: native.level }
+    const { message } = argoApplicationSetConditionsToGitOpsStatus(resource.status?.conditions ?? [], resource.status?.health)
+    return { text: native.text, tone: native.level, reason: native.level === 'healthy' ? undefined : message }
   }
   if (resource?.kind === 'CustomResourceDefinition' && isApiGroup(resource.apiVersion, 'apiextensions.k8s.io')) return getCRDStatus(resource)
   if (resource?.kind === 'KafkaConnector' && isApiGroup(resource.apiVersion, 'kafka.strimzi.io')) {

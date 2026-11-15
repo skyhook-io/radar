@@ -78,6 +78,15 @@ describe('GenericRenderer conditions', () => {
     expect(banner).not.toContain('>ResourcesUpToDate<')
   })
 
+  it.each([
+    { status: { health: { status: 'Unknown', message: 'Controller has not evaluated rollout health' }, conditions: [cond('ResourcesUpToDate', 'True')] }, message: 'Controller has not evaluated rollout health' },
+    { status: { health: { status: 'Degraded', message: 'Template rendering failed' } }, message: 'Template rendering failed' },
+    { status: { conditions: [{ ...cond('RolloutProgressing', 'True'), message: 'Waiting for the next rollout step' }] }, message: 'Waiting for the next rollout step' },
+  ])('explains the ApplicationSet banner: $message', ({ status, message }) => {
+    const html = renderToString(<GenericRenderer data={{ ...appSet, status }} />)
+    expect(html.slice(0, html.indexOf('</div></div>'))).toContain(message)
+  })
+
   it('leaves a foreign ApplicationSet banner generic', () => {
     const html = render([cond('ResourcesUpToDate', 'True'), cond('RolloutProgressing', 'True')], { ...appSet, apiVersion: 'example.com/v1' })
     expect(html.slice(0, html.indexOf('Conditions ('))).toContain('>ResourcesUpToDate<')

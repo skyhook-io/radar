@@ -72,7 +72,7 @@ Operation history with deploy timestamps, the git revision deployed, who initiat
 
 ### ApplicationSet health
 
-ApplicationSet fleet/detail health, resource badges and drawer banners use the controller's `status.health.status` and message when populated. When health is absent or empty (older controllers, or status not yet rewritten after an upgrade), conditions resolve in order: `ErrorOccurred=True`, `RolloutProgressing=True`, `ResourcesUpToDate=True`, then Unknown. Generation success does not imply a progressive rollout has finished. Health is controller-reported state, not proof the controller is currently running.
+ApplicationSet fleet/detail health, resource badges and drawer banners use the controller's `status.health.status` when populated. GitOps health tooltips and non-healthy drawer banners preserve its message. When health is absent or empty (older controllers, or status not yet rewritten after an upgrade), conditions resolve in order: `ErrorOccurred=True`, `RolloutProgressing=True`, `ResourcesUpToDate=True`, then Unknown. Generation success does not imply a progressive rollout has finished. Health is controller-reported state, not proof the controller is currently running.
 
 In resource conditions, `InvalidRolloutConfig=True` is a problem independently of overall health. `RolloutProgressing` describes activity: neither True nor False is rendered as a failed condition.
 
