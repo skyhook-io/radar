@@ -52,6 +52,9 @@ type IndexedObject struct {
 
 // Coverage says what an answer couldn't cover.
 type Coverage struct {
+	// SubjectState is "replaced" when the cache holds another incarnation.
+	SubjectState string
+
 	// NotChecked are the kinds and namespaces Radar couldn't read, and why.
 	NotChecked []ownership.Gap
 	// Truncated: the answer lists the first Limit of Total.
@@ -66,7 +69,7 @@ type Coverage struct {
 // Complete reports whether the answer lists everything it found in all it
 // set out to read.
 func (c Coverage) Complete() bool {
-	return len(c.NotChecked) == 0 && !c.Truncated
+	return c.SubjectState == "" && len(c.NotChecked) == 0 && !c.Truncated
 }
 
 // View answers for one caller from one session. Like ownership.View it is

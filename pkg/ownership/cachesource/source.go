@@ -11,6 +11,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -70,6 +71,9 @@ var typedKinds = func() map[resourceid.GroupKind]resourceid.Builtin {
 }()
 
 type session struct {
+	subjectRef resourceid.Ref
+	subject    apiruntime.Object
+
 	caches  Caches
 	current func() Caches
 	catalog *ownership.Catalog
@@ -122,6 +126,13 @@ func SessionCaches(s ownership.ReadSession) (Caches, bool) {
 	return cs.caches, true
 }
 
+// CaptureSubject also pins status reads such as a manager's recorded members.
+func (s *session) CaptureSubject(ref resourceid.Ref, obj apiruntime.Object) relations.Session {
+	captured := *s
+	captured.subjectRef, captured.subject = ref, obj
+	return &captured
+}
+
 func (s *session) Catalog() *ownership.Catalog {
 	return s.catalog
 }
@@ -145,6 +156,13 @@ func (s *session) readObject(ref resourceid.Ref, borrow func(apiruntime.Object))
 	}
 	if ownership.IsEvent(ref.GroupKind()) {
 		return ownership.ObjectRead{State: ownership.Excluded}
+	}
+	if s.subject != nil && ref == s.subjectRef {
+		read := observe(ref, s.subject)
+		if borrow != nil && read.State == ownership.Present {
+			borrow(s.subject)
+		}
+		return read
 	}
 	if b, ok := typedKinds[ref.GroupKind()]; ok {
 		return s.typedObject(ref, b, borrow)

@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -19,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -386,9 +388,34 @@ func TestRelationshipReadBindsCapturedCache(t *testing.T) {
 		if _, err := BeginOwnershipRead(wrong); !errors.Is(err, ownership.ErrCachesReplaced) {
 			t.Fatalf("wrong cache: %v", err)
 		}
-		answer, _ := AnswerRelationships(wrong, ownership.Observation{}, nil, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, "")
+		answer, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, "")
 		if answer != nil {
 			t.Fatalf("answer after cache mismatch: %+v", answer)
 		}
+	}
+}
+
+func TestRelationshipCaptureIncludesManagerStatus(t *testing.T) {
+	_, _, source, _ := historyFixture(t)
+	session, err := source.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"namespace": "gitops", "name": "web", "uid": "application"},
+		"status": map[string]any{
+			"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "web"}},
+			"sync":      map[string]any{"comparedTo": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "shop"}}},
+		},
+	}}
+	ref := resourceid.NewRef("argoproj.io", "Application", "gitops", "web")
+	captured, ok := relations.CaptureSubject(session.(relations.Session), ref, manager)
+	if !ok {
+		t.Fatal("capture failed")
+	}
+	members := captured.Members(ref)
+	if members.Manager.State != ownership.Present || members.Membership != ownership.MembersRecorded || len(members.Members) != 1 || members.Members[0].Name != "web" {
+		t.Fatalf("captured status not used: %+v", members)
 	}
 }

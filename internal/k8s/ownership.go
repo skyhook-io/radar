@@ -162,7 +162,7 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 // relationship graph's edges are (topology.RelationsAnswer), then ownership,
 // with one ownership view whose searches both share. It answers nil when the
 // caches aren't ready or are replaced mid-answer.
-func AnswerRelationships(cache *ResourceCache, fetched ownership.Observation, obj runtime.Object, owner metav1.Object, access func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage) {
+func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage) {
 	session, err := BeginOwnershipRead(cache)
 	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
 		return nil, nil
@@ -180,8 +180,26 @@ func AnswerRelationships(cache *ResourceCache, fetched ownership.Observation, ob
 	if caches.Dynamic != nil && caches.Discovery != nil {
 		dp = NewTopologyDynamicProvider(&DynamicResourceCache{DynamicResourceCache: caches.Dynamic}, &ResourceDiscovery{ResourceDiscovery: caches.Discovery})
 	}
+	fetched, valid := OwnershipObservation(obj)
+	if !valid {
+		return nil, nil
+	}
+	owner, _ := apimeta.Accessor(obj)
 	acc := access(session.Catalog())
-	ov := ownership.NewView(session, acc)
+	if acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace) != ownership.Allowed {
+		return &topology.Relationships{}, nil
+	}
+	captured, current := relations.CaptureSubject(rs, fetched.Ref, obj)
+	if !current {
+		if session.ValidateCaches() != nil {
+			return nil, nil
+		}
+		rel := &topology.Relationships{}
+		topology.OwnershipUnavailable(rel, string(readreason.ReadError))
+		return rel, map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}
+	}
+	rs = captured
+	ov := ownership.NewView(rs, acc)
 	rel, coverage := topology.RelationsAnswer(rs, acc, ov, fetched.Ref, obj, istioDomain, provider, dp)
 	if rel == nil {
 		rel = &topology.Relationships{}
