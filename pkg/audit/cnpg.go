@@ -125,13 +125,15 @@ func checkCNPGClusterPosture(tr *evalTracker, input *CheckInput) []Finding {
 		if !d.HasDestination() {
 			emit(checkCNPGNoBackupDestination, "This PostgreSQL cluster declares no backup destination, so CNPG can't take a backup of it, on demand or on a schedule. "+
 				"A dump job or storage snapshots outside CNPG may still cover it; this reports what CNPG is configured to do.")
-		} else {
+		} else if !d.WALArchiverUnknown() {
 			// Only a Cluster with a destination is evaluated: without one,
 			// WAL archiving has nowhere to go and the destination finding
-			// already names the cause.
+			// already names the cause. A third-party plugin not marked
+			// isWALArchiver may still archive, so that Cluster isn't judged.
 			tr.record(checkCNPGNoWALArchiving, ns)
 			if !d.ArchivesWAL() {
-				emit(checkCNPGNoWALArchiving, "This PostgreSQL cluster has a backup destination, but CNPG archives no WAL for it, so it can be restored only to a backup, not to a point in time between backups. "+
+				emit(checkCNPGNoWALArchiving, "This PostgreSQL cluster has a backup destination, but CNPG archives no WAL for it, so there is no point-in-time recovery, "+
+					"and an online backup may not be restorable at all: restoring one needs the WAL written while it ran. "+
 					"WAL shipped by a tool outside CNPG isn't visible here; this reports what CNPG is configured to do.")
 			}
 		}
@@ -142,8 +144,11 @@ func checkCNPGClusterPosture(tr *evalTracker, input *CheckInput) []Finding {
 		}
 
 		tr.record(checkCNPGInTreeBackupDeprecated, ns)
-		if _, plugin := d.BarmanPlugin(); d.InTreeDestination != "" && !plugin {
-			emit(checkCNPGInTreeBackupDeprecated, "This PostgreSQL cluster backs up through CNPG's in-tree spec.backup.barmanObjectStore, which CNPG deprecated in 1.26 in favour of the barman-cloud plugin. "+
+		// An enabled barman-cloud plugin doesn't clear it: CNPG accepts the
+		// plugin beside the in-tree block only when it isn't marked
+		// isWALArchiver, so the in-tree block stays the designated archiver.
+		if d.InTreeDestination != "" {
+			emit(checkCNPGInTreeBackupDeprecated, "This PostgreSQL cluster is configured with CNPG's in-tree spec.backup.barmanObjectStore, which CNPG deprecated in 1.26 in favour of the barman-cloud plugin and plans to remove. "+
 				"Its backups keep running for now; this reports the configuration, not a failure.")
 		}
 	}

@@ -1,4 +1,4 @@
-import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
+import { cnpgBackupDeclaration, cnpgBarmanPlugin, cnpgWALArchiverUnknown } from '../../utils/cnpg-backup'
 // CloudNativePG workspace model: pure derivations over the /api/cnpg/workspace
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
@@ -631,17 +631,23 @@ function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   const declaration = cnpgBackupDeclaration(cluster)
-  const plugin = cnpgBarmanPlugin(declaration)
-  const archivers = declaration.plugins.filter((p) => p.enabled && p.isWALArchiver)
-  // Gates only the Failing state: a declared archiver CNPG reports as failing
-  // keeps the operator's message even with no store. Otherwise a store-less
-  // archiver reads "no destination" below, the same as cnpgArchivesWAL.
-  const archiveConfigured = archivers.length > 0 || !!declaration.inTreeDestination
+  // CNPG hands every WAL file to each enabled archive-capable plugin, whatever
+  // isWALArchiver says, so a False condition with any plugin or an in-tree
+  // block is a real archiving failure, store or no store.
+  const archiveConfigured = declaration.plugins.some((p) => p.enabled) || !!declaration.inTreeDestination
   if (c?.status === 'False' && archiveConfigured) {
     return { state: 'failing', text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
   }
-  const destinationKnown = !!(plugin?.isWALArchiver && plugin.barmanObjectName) || !!declaration.inTreeDestination
-  const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
+  const barman = cnpgBarmanPlugin(declaration)
+  const destinationKnown = !!barman?.barmanObjectName || !!declaration.inTreeDestination
+  const customArchiver = declaration.plugins.some((p) => p.enabled && p.isWALArchiver && p.name !== CNPG_BARMAN_PLUGIN_NAME)
+  if (!destinationKnown && cnpgWALArchiverUnknown(declaration)) {
+    return {
+      state: 'unknown', text: 'Not assessed', tone: 'unknown', source: 'Cluster spec',
+      detail: 'A plugin that may archive WAL is enabled but not marked isWALArchiver; whether it keeps WAL is not assessed here.',
+      ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}),
+    }
+  }
   if (!destinationKnown && !customArchiver) {
     return {
       state: 'no_destination', text: CNPG_NO_WAL_ARCHIVE_DESTINATION,

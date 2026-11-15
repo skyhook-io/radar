@@ -19,8 +19,13 @@ it('preserves declared archiver failures and distinguishes backup-only and opaqu
   const barman = { name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true }
   expect(make([barman], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy', detail: 'archive report' })
   expect(make([barman])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
-  expect(make([{ ...barman, isWALArchiver: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
+  // CNPG hands WAL to barman-cloud whether or not it is marked isWALArchiver; with a store it archives.
+  const unflagged = { ...barman, isWALArchiver: false, parameters: { barmanObjectName: 'store' } }
+  expect(make([unflagged])).toMatchObject({ text: 'CNPG reports archiving', tone: 'healthy' })
+  expect(make([unflagged], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy', detail: 'archive report' })
   expect(make([{ name: 'third-party-archive', isWALArchiver: true }])).toMatchObject({ text: 'CNPG reports archiving', detail: 'Archive plugin declared; its destination is not assessed here' })
+  expect(make([{ name: 'third-party-sidecar' }])).toMatchObject({ state: 'unknown', text: 'Not assessed', tone: 'unknown' })
+  expect(make([{ name: 'third-party-sidecar' }], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy' })
   expect(make([{ ...barman, enabled: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
 })
 

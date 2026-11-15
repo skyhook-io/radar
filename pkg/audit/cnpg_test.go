@@ -95,12 +95,16 @@ func TestCNPGDeclarativeBackup_SuspendedScheduleStillCounts(t *testing.T) {
 	sb := cnpgScheduledBackup("pg", "nightly", "protected", "barmanObjectStore")
 	_ = unstructured.SetNestedField(sb.Object, true, "spec", "suspend")
 	input := &CheckInput{
-		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "protected", nil)},
+		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "protected", cnpgInTree())},
 		CNPGScheduledBackups:              []*unstructured.Unstructured{sb},
 		CNPGScheduledBackupsAuthoritative: true,
 	}
-	if findings := checkCNPGDeclarativeBackup(newEvalTracker(), input); len(findings) != 0 {
+	tr := newEvalTracker()
+	if findings := checkCNPGDeclarativeBackup(tr, input); len(findings) != 0 {
 		t.Fatalf("suspended schedule should still count as declared, got %+v", findings)
+	}
+	if tr.counts[checkCNPGNoDeclarativeBackup]["pg"] != 1 {
+		t.Fatalf("the cluster must be evaluated, not skipped: counts %+v", tr.counts)
 	}
 }
 
@@ -119,7 +123,7 @@ func TestCNPGDeclarativeBackup_ScheduleInOtherNamespaceDoesNotCount(t *testing.T
 // inventory may cover a subset of namespaces, so absence proves nothing.
 func TestCNPGDeclarativeBackup_NonAuthoritativeInventoryIsNotEvaluated(t *testing.T) {
 	input := &CheckInput{
-		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "unprotected", nil)},
+		CNPGClusters:                      []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "unprotected", cnpgInTree())},
 		CNPGScheduledBackups:              nil,
 		CNPGScheduledBackupsAuthoritative: false,
 	}
@@ -276,8 +280,14 @@ func TestCNPGClusterPosture_Matrix(t *testing.T) {
 		{"archiver plugin without a store", map[string]any{"instances": int64(2), "plugins": []any{barmanPlugin("", true)}}, []string{checkCNPGNoBackupDestination}},
 		{"snapshots only", map[string]any{"instances": int64(2), "backup": map[string]any{"volumeSnapshot": map[string]any{}}}, []string{checkCNPGNoWALArchiving}},
 		{"in-tree", map[string]any{"instances": int64(2), "backup": inTree}, []string{checkCNPGInTreeBackupDeprecated}},
-		{"in-tree beside the plugin", map[string]any{"instances": int64(2), "backup": inTree, "plugins": []any{barmanPlugin("store", true)}}, nil},
-		{"plugin that does not archive WAL", map[string]any{"instances": int64(2), "plugins": []any{barmanPlugin("store", false)}}, []string{checkCNPGNoWALArchiving}},
+		// CNPG rejects an archiver plugin beside barmanObjectStore and accepts a
+		// non-archiver one, so mid-migration the in-tree block still archives.
+		{"in-tree beside a non-archiving plugin", map[string]any{"instances": int64(2), "backup": inTree, "plugins": []any{barmanPlugin("store", false)}}, []string{checkCNPGInTreeBackupDeprecated}},
+		{"migrated to the plugin", map[string]any{"instances": int64(2), "plugins": []any{barmanPlugin("store", true)}}, nil},
+		// barman-cloud with a store archives WAL whatever isWALArchiver says.
+		{"barman-cloud with a store, not marked isWALArchiver", map[string]any{"instances": int64(2), "plugins": []any{barmanPlugin("store", false)}}, nil},
+		{"third-party plugin not marked isWALArchiver", map[string]any{"instances": int64(2), "plugins": []any{map[string]any{"name": "custom"}}}, nil},
+		{"third-party plugin marked isWALArchiver beside snapshots", map[string]any{"instances": int64(2), "backup": map[string]any{"volumeSnapshot": map[string]any{}}, "plugins": []any{map[string]any{"name": "custom", "isWALArchiver": true}}}, nil},
 		{"one instance", map[string]any{"instances": int64(1), "plugins": []any{barmanPlugin("store", true)}}, []string{checkCNPGSingleInstance}},
 		{"empty in-tree block", map[string]any{"instances": int64(2), "backup": map[string]any{"barmanObjectStore": map[string]any{}}}, []string{checkCNPGNoBackupDestination}},
 		{"snapshots beside an archiver plugin without a store", map[string]any{"instances": int64(2), "backup": map[string]any{"volumeSnapshot": map[string]any{}}, "plugins": []any{barmanPlugin("", true)}}, []string{checkCNPGNoWALArchiving}},
@@ -363,5 +373,21 @@ func TestCNPGClusterPosture_RegistryAndCounts(t *testing.T) {
 	}
 	if got := results.CheckCounts[checkCNPGSingleInstance]; got.Evaluated != 1 || got.Passed != 1 {
 		t.Errorf("an ignored Cluster should leave the tally too: %+v, want Evaluated 1 / Passed 1", got)
+	}
+}
+
+// A third-party plugin not marked isWALArchiver may archive WAL, so the WAL
+// rule neither flags that Cluster nor counts it as passing.
+func TestCNPGNoWALArchiving_UnknownArchiverIsNotEvaluated(t *testing.T) {
+	tr := newEvalTracker()
+	spec := map[string]any{"instances": int64(2), "plugins": []any{map[string]any{"name": "custom"}}}
+	if findings := checkCNPGClusterPosture(tr, &CheckInput{CNPGClusters: []*unstructured.Unstructured{cnpgObj("Cluster", "pg", "c", spec)}}); len(findings) != 0 {
+		t.Fatalf("findings = %+v, want none", findings)
+	}
+	if n := tr.counts[checkCNPGNoWALArchiving]["pg"]; n != 0 {
+		t.Fatalf("WAL rule evaluated %d clusters, want 0", n)
+	}
+	if n := tr.counts[checkCNPGNoBackupDestination]["pg"]; n != 1 {
+		t.Fatalf("destination rule evaluated %d clusters, want 1", n)
 	}
 }

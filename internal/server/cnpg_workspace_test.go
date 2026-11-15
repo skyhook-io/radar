@@ -24,6 +24,7 @@ import (
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -493,6 +494,27 @@ func TestCNPGWorkspace_AuditCoversEveryClusterRule(t *testing.T) {
 	}
 }
 
+// The workspace shows the same CNPG findings as Checks: a check disabled in
+// the audit settings, or a namespace they ignore, leaves the workspace too.
+func TestCNPGWorkspace_AuditFollowsAuditSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := settings.Update(func(s *settings.Settings) {
+		s.Audit = &settings.AuditConfig{DisabledChecks: []string{"cnpgSingleInstance"}, IgnoredNamespaces: []string{"scratch"}}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pg", "bare", nil, nil),
+		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "scratch", "tmp", nil, nil),
+	)
+	var got []string
+	for _, f := range getWorkspaceNoAuth(t, "").Audit {
+		got = append(got, f.Namespace+"/"+f.Name+":"+f.CheckID)
+	}
+	if want := []string{"pg/bare:cnpgNoBackupDestination"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("audit = %v, want %v", got, want)
+	}
+}
 func withUID(u *unstructured.Unstructured, uid string) *unstructured.Unstructured {
 	u.SetUID(types.UID(uid))
 	return u

@@ -455,8 +455,8 @@ var CheckRegistry = map[string]CheckMeta{
 		ID:          checkCNPGNoWALArchiving,
 		Title:       "PostgreSQL cluster has a backup destination but no WAL archiving",
 		Category:    CategoryReliability,
-		Description: "The CloudNativePG cluster has a backup destination, but nothing CNPG runs archives its WAL: only volume snapshots are configured, or the backup plugin is not marked isWALArchiver. Without archived WAL the cluster can be restored only to a backup, not to a point in time between backups. CNPG may still report ContinuousArchiving as working: with no archiver it accepts each WAL file without keeping it.",
-		Remediation: "Set isWALArchiver: true on the barman-cloud plugin entry in spec.plugins (it needs an ObjectStore), or configure an in-tree destination while you still use it.",
+		Description: "The CloudNativePG cluster has a backup destination, but nothing archives its WAL, typically because only volume snapshots are configured. Without archived WAL there is no point-in-time recovery, and an online backup (an online volume snapshot or a Barman base backup) may not be restorable at all, because restoring it needs the WAL written while it ran; only a cold (offline) snapshot restores without it. CNPG may still report ContinuousArchiving as working: with no archiver it accepts each WAL file without keeping it. The barman-cloud plugin with an ObjectStore counts as archiving whether or not it is marked isWALArchiver; a third-party plugin not marked isWALArchiver is not judged, since it may archive too.",
+		Remediation: "Add the barman-cloud plugin to spec.plugins with an ObjectStore (barmanObjectName) and isWALArchiver: true. Volume snapshots alone keep no WAL.",
 		References:  []Reference{refCNPGBackup, refCNPGBarmanPlugin},
 	},
 	checkCNPGSingleInstance: {
@@ -471,8 +471,8 @@ var CheckRegistry = map[string]CheckMeta{
 		ID:          checkCNPGInTreeBackupDeprecated,
 		Title:       "PostgreSQL cluster uses the deprecated in-tree Barman backup",
 		Category:    CategoryReliability,
-		Description: "The CloudNativePG cluster backs up through spec.backup.barmanObjectStore and has no enabled barman-cloud plugin. CNPG deprecated the in-tree Barman integration in 1.26 in favour of the barman-cloud plugin, and plans to remove it.",
-		Remediation: "Move the cluster to the barman-cloud plugin: create an ObjectStore from the barmanObjectStore block, add the plugin to spec.plugins with isWALArchiver: true, then remove spec.backup.barmanObjectStore.",
+		Description: "The CloudNativePG cluster is configured with spec.backup.barmanObjectStore and a destinationPath. CNPG deprecated the in-tree Barman integration in 1.26 in favour of the barman-cloud plugin, and plans to remove it. An enabled barman-cloud plugin beside it does not clear the finding: CNPG accepts the plugin there only when it is not marked isWALArchiver, so the deprecated in-tree block is still the cluster's designated WAL archiver.",
+		Remediation: "Move the cluster to the barman-cloud plugin: create an ObjectStore from the barmanObjectStore block, moving any spec.backup.retentionPolicy to the ObjectStore's spec.retentionPolicy. Then, in a single change to the Cluster, remove spec.backup.barmanObjectStore and its retentionPolicy, and add the plugin to spec.plugins with barmanObjectName and isWALArchiver: true (CNPG rejects an archiver plugin while barmanObjectStore is set). Finally switch each of its ScheduledBackups to method: plugin with pluginConfiguration.name: barman-cloud.cloudnative-pg.io.",
 		References:  []Reference{refCNPGBarmanPlugin, refCNPGBackup},
 	},
 

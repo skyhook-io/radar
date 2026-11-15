@@ -51,10 +51,17 @@ export function cnpgHasBackupDestination(declaration: CNPGBackupDeclaration): bo
   return !!declaration.inTreeDestination || declaration.snapshotsConfigured || !!cnpgDestinationPlugin(declaration)
 }
 
-// Mirrors Go BackupDeclaration.ArchivesWAL: an in-tree destinationPath, or an enabled
-// WAL-archiver plugin with somewhere to write (barman-cloud only with an ObjectStore).
+// Mirrors Go BackupDeclaration.ArchivesWAL: an in-tree destinationPath, the barman-cloud
+// plugin with an ObjectStore (it archives whether or not it is marked isWALArchiver), or
+// another enabled plugin marked isWALArchiver.
 export function cnpgArchivesWAL(declaration: CNPGBackupDeclaration): boolean {
-  return !!declaration.inTreeDestination || declaration.plugins.some((p) => p.enabled && p.isWALArchiver && (p.name !== CNPG_BARMAN_PLUGIN_NAME || !!p.barmanObjectName))
+  return !!declaration.inTreeDestination || declaration.plugins.some((p) => p.enabled && (p.name === CNPG_BARMAN_PLUGIN_NAME ? !!p.barmanObjectName : p.isWALArchiver))
+}
+
+// Mirrors Go BackupDeclaration.WALArchiverUnknown: no declared archiving path, but an
+// enabled non-barman plugin CNPG may still hand WAL to.
+export function cnpgWALArchiverUnknown(declaration: CNPGBackupDeclaration): boolean {
+  return !cnpgArchivesWAL(declaration) && declaration.plugins.some((p) => p.enabled && p.name !== CNPG_BARMAN_PLUGIN_NAME)
 }
 
 export interface CNPGBackupBlocker {

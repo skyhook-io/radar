@@ -177,15 +177,13 @@ export function CNPGBackupsTab({
   )
 }
 
-const CLUSTER_POSTURE_CHECKS = ['cnpgSingleInstance', 'cnpgNoBackupDestination', 'cnpgNoWALArchiving', 'cnpgInTreeBackupDeprecated']
-
 export function CNPGInvestigationAction({ namespace, name, render, context }: {
   namespace: string; name: string; render: RenderDiagnoseAction; context: Parameters<RenderDiagnoseAction>[0]
 }): ReactNode {
   const { row, dimensions } = useCNPGClusterAssessment(namespace, name)
-  // The Cluster posture checks (one instance, no destination, WAL, in-tree)
-  // describe the setup and carry no problem mark; other posture still counts.
-  const problem = !!row?.problems.some((p) => p.severity !== 'posture' || !CLUSTER_POSTURE_CHECKS.some((id) => p.id.startsWith(`audit:${id}:`))) || dimensions?.some((d) => ['degraded', 'alert', 'unhealthy'].includes(d.tone))
+  // Posture findings describe the setup, as they do everywhere in the
+  // workspace (no attention, no category); a degraded dimension still counts.
+  const problem = !!row?.problems.some((p) => p.severity !== 'posture') || dimensions?.some((d) => ['degraded', 'alert', 'unhealthy'].includes(d.tone))
   const assessed = !!row && !!dimensions && dimensions.every((d) => d.tone !== 'unknown')
   return render({ ...context, health: problem ? 'problem' : assessed ? 'healthy' : 'unknown' })
 }

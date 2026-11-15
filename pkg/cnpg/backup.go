@@ -99,16 +99,42 @@ func (d BackupDeclaration) HasDestination() bool {
 	return d.InTreeDestination != "" || d.SnapshotsConfigured || d.DestinationPlugin() != ""
 }
 
-// ArchivesWAL reports whether the Cluster declares a WAL archiver that has
-// somewhere to write: an in-tree destinationPath, or an enabled plugin marked
-// isWALArchiver (the barman-cloud plugin only with an ObjectStore, as in
-// DestinationPlugin).
+// ArchivesWAL reports whether the Cluster declares a WAL archiving path: an
+// in-tree destinationPath, the barman-cloud plugin with an ObjectStore, or
+// another enabled plugin marked isWALArchiver. CNPG hands every WAL file to
+// each enabled archive-capable plugin, and barman-cloud archives it whether or
+// not it is marked isWALArchiver; the flag only makes it the designated
+// archiver. This describes configuration, not whether WAL is being kept.
 func (d BackupDeclaration) ArchivesWAL() bool {
 	if d.InTreeDestination != "" {
 		return true
 	}
 	for _, p := range d.Plugins {
-		if p.Enabled && p.WALArchiver && (p.Name != BarmanPluginName || p.ObjectStore != "") {
+		if !p.Enabled {
+			continue
+		}
+		if p.Name == BarmanPluginName {
+			if p.ObjectStore != "" {
+				return true
+			}
+			continue
+		}
+		if p.WALArchiver {
+			return true
+		}
+	}
+	return false
+}
+
+// WALArchiverUnknown reports whether, with no declared archiving path, an
+// enabled plugin other than barman-cloud may still archive WAL: CNPG sends WAL
+// to it if it is archive-capable, which the Cluster spec doesn't record.
+func (d BackupDeclaration) WALArchiverUnknown() bool {
+	if d.ArchivesWAL() {
+		return false
+	}
+	for _, p := range d.Plugins {
+		if p.Enabled && p.Name != BarmanPluginName {
 			return true
 		}
 	}

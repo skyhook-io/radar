@@ -17,24 +17,35 @@ it('labels investigation for any CNPG problem or degraded dimension including a 
   expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'unknown', name: 'payments' }))
 })
 
-it('honors the requested any-problem rule for posture and degraded protection without altering fleet attention', () => {
-  const render = vi.fn(() => null)
-  state.row = { attention: false, problems: [{ id: 'audit:cnpgNoDeclarativeBackup', severity: 'posture' }] }
-  state.dimensions = [{ tone: 'healthy' }]
-  renderToStaticMarkup(<CNPGInvestigationAction namespace="db" name="payments" render={render} context={{ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'payments', health: 'healthy' }} />)
-  expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'problem' }))
-  expect(state.row.attention).toBe(false)
-  state.row = { attention: false, problems: [] }; state.dimensions = [{ tone: 'degraded' }]
-  renderToStaticMarkup(<CNPGInvestigationAction namespace="db" name="payments" render={render} context={{ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'payments', health: 'healthy' }} />)
-  expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'problem' }))
-})
+const draw = (render: any) => renderToStaticMarkup(<CNPGInvestigationAction namespace="db" name="payments" render={render} context={{ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'payments', health: 'healthy' }} />)
+const POSTURE_CHECKS = ['cnpgNoDeclarativeBackup', 'cnpgSingleInstance', 'cnpgNoBackupDestination', 'cnpgNoWALArchiving', 'cnpgInTreeBackupDeprecated']
 
-it('keeps the Cluster posture checks (single instance, backup destination, WAL, in-tree) without a problem mark', () => {
+it('leaves every posture check without a problem mark, as the rest of the workspace does', () => {
   const render = vi.fn(() => null)
   state.dimensions = [{ tone: 'healthy' }]
-  for (const id of ['cnpgSingleInstance', 'cnpgNoBackupDestination', 'cnpgNoWALArchiving', 'cnpgInTreeBackupDeprecated']) {
+  for (const id of POSTURE_CHECKS) {
     state.row = { attention: false, problems: [{ id: `audit:${id}:db/payments`, severity: 'posture' }] }
-    renderToStaticMarkup(<CNPGInvestigationAction namespace="db" name="payments" render={render} context={{ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'payments', health: 'healthy' }} />)
+    draw(render)
     expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'healthy' }))
   }
+  state.row = { attention: false, problems: POSTURE_CHECKS.map((id) => ({ id: `audit:${id}:db/payments`, severity: 'posture' })) }
+  draw(render)
+  expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'healthy' }))
+})
+
+it('still investigates posture beside a degraded dimension or a real problem, and stays unknown when unassessed', () => {
+  const render = vi.fn(() => null)
+  const posture = { id: 'audit:cnpgNoBackupDestination:db/payments', severity: 'posture' }
+  state.row = { attention: false, problems: [posture] }
+  state.dimensions = [{ tone: 'healthy' }, { tone: 'degraded' }]
+  draw(render)
+  expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'problem' }))
+  state.row = { attention: true, problems: [posture, { id: 'issue:x', severity: 'warning' }] }
+  state.dimensions = [{ tone: 'healthy' }]
+  draw(render)
+  expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'problem' }))
+  state.row = { attention: false, problems: [posture] }
+  state.dimensions = [{ tone: 'unknown' }]
+  draw(render)
+  expect(render).toHaveBeenLastCalledWith(expect.objectContaining({ health: 'unknown' }))
 })

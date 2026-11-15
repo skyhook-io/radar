@@ -13,7 +13,8 @@
     "blockerCode": "no_destination",
     "destinationPlugin": "",
     "barman": null,
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "in-tree empty",
@@ -33,7 +34,8 @@
     "blockerCode": "no_destination",
     "destinationPlugin": "",
     "barman": null,
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "in-tree",
@@ -55,7 +57,8 @@
     "blockerCode": "",
     "destinationPlugin": "",
     "barman": null,
-    "archivesWAL": true
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "snapshots",
@@ -75,7 +78,8 @@
     "blockerCode": "",
     "destinationPlugin": "",
     "barman": null,
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "snapshot method mismatch",
@@ -95,7 +99,8 @@
     "blockerCode": "method_destination_missing",
     "destinationPlugin": "",
     "barman": null,
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "disabled Barman",
@@ -121,7 +126,8 @@
     "blockerCode": "no_destination",
     "destinationPlugin": "",
     "barman": null,
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "Barman without store",
@@ -147,7 +153,8 @@
       "objectStore": "",
       "serverName": "pg"
     },
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": false
   },
   {
     "name": "enabled Barman",
@@ -175,7 +182,8 @@
       "objectStore": "store",
       "serverName": "pg"
     },
-    "archivesWAL": false
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "enabled Barman archiver",
@@ -204,7 +212,8 @@
       "objectStore": "store",
       "serverName": "pg"
     },
-    "archivesWAL": true
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "Barman with explicit server",
@@ -233,7 +242,8 @@
       "objectStore": "store",
       "serverName": "archive"
     },
-    "archivesWAL": false
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "opaque plugin",
@@ -255,7 +265,32 @@
     "blockerCode": "",
     "destinationPlugin": "custom",
     "barman": null,
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": true
+  },
+  {
+    "name": "opaque WAL archiver",
+    "cluster": {
+      "metadata": {
+        "name": "pg"
+      },
+      "spec": {
+        "plugins": [
+          {
+            "name": "custom",
+            "isWALArchiver": true
+          }
+        ]
+      }
+    },
+    "method": "plugin",
+    "plugin": "custom",
+    "hasDestination": true,
+    "blockerCode": "",
+    "destinationPlugin": "custom",
+    "barman": null,
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   },
   {
     "name": "plugin name mismatch",
@@ -277,7 +312,8 @@
     "blockerCode": "method_destination_missing",
     "destinationPlugin": "custom",
     "barman": null,
-    "archivesWAL": false
+    "archivesWAL": false,
+    "walArchiverUnknown": true
   },
   {
     "name": "disabled then enabled plugin",
@@ -309,6 +345,7 @@
       "objectStore": "store",
       "serverName": "pg"
     },
-    "archivesWAL": false
+    "archivesWAL": true,
+    "walArchiverUnknown": false
   }
 ]
