@@ -1536,7 +1536,9 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 		// After a context switch the LIST can time out behind informer and
 		// discovery traffic on the shared client; the synced cluster-wide
 		// namespace informer holds the same list.
-		if names, ok := cachedNamespaceNames(); ok {
+		// Only while the client that failed is still current: a LIST that
+		// outlived a context switch must not borrow the new cluster's cache.
+		if names, ok := cachedNamespaceNames(); ok && GetClient() == client {
 			log.Printf("[k8s] GetAccessibleNamespaces: listing namespaces failed: %v (using the synced namespace cache)", err)
 			return names, NamespaceListCluster
 		}
