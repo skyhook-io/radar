@@ -13,6 +13,9 @@ import (
 type PathRef struct {
 	Ref  resourceid.Ref
 	Path string
+	// Or are the same reference in other API groups the controller also
+	// resolves it from, as Traefik 2 reads both of its groups.
+	Or []resourceid.Ref
 }
 
 // targetGroup is the API group a reference names: from its apiVersion, or,

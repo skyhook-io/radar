@@ -85,6 +85,9 @@ with the path declaring it. The `View` answers every family the same way:
   may read (`ownership.GapCoversReadable`).
 - A declaration counts only if its kind is one of the family's targets and its source may declare that kind (an HPA
   doesn't scale a DaemonSet).
+- A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
+  reads, as Traefik 2.10 reads both `traefik.io` and `traefik.containo.us`. `References` names whichever exists, and
+  `Referrers` matches any of them.
 - Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
   denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
 
@@ -111,6 +114,11 @@ The families so far:
 | `IstioGateways` | Istio VirtualServices → the Istio Gateways they bind to, in any namespace (`mesh` binds sidecars, not a Gateway) | `families.go` |
 | `IstioServiceHosts(domain)` | Istio VirtualServices (HTTP, TCP, TLS routes) and DestinationRules → the Services their hosts name, in any namespace. Made per request with the mesh's domain from istiod (`configrefs.IstioServiceDomain`): an FQDN resolves only with it | `families.go` |
 | `ArgoWorkflowTemplates` | Argo Workflows and CronWorkflows → the WorkflowTemplates and ClusterWorkflowTemplates their `workflowTemplateRef` and task or step `templateRef`s use | `families.go` |
+| `TraefikBackends` | Traefik IngressRoutes (HTTP, TCP, UDP) and TraefikServices → the Services and TraefikServices they route, balance or mirror to, in any namespace | `traefik.go` |
+| `TraefikRouteConfig` | Traefik routes → their Middlewares (MiddlewareTCP), ServersTransports (ServersTransportTCP) and TLSOption, and chain Middlewares → the Middlewares they run, in any namespace | `traefik.go` |
+| `TraefikSecrets` | Traefik transports, TLSOptions, TLSStores and routes → the Secrets and ConfigMaps they read | `traefik.go` |
+| `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include, in any namespace | `contour.go` |
+| `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families can't read a reference differently.

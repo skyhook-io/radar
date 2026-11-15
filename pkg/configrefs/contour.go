@@ -3,9 +3,10 @@ package configrefs
 import (
 	"strings"
 
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // ContourSecretRef resolves a Secret reference in an HTTPProxy, such as
@@ -38,6 +39,16 @@ func ContourSecretReference(raw, defaultNamespace string) (resourceid.Ref, bool)
 // upstream TLS/JWKS validation bundles using the same delegated-name contract.
 func ContourSecretReferences(obj *unstructured.Unstructured) []resourceid.Ref {
 	var refs []resourceid.Ref
+	for _, r := range ContourSecretPathReferences(obj) {
+		refs = append(refs, r.Ref)
+	}
+	return refs
+}
+
+// ContourSecretPathReferences is ContourSecretReferences with the field
+// naming each Secret.
+func ContourSecretPathReferences(obj *unstructured.Unstructured) []PathRef {
+	var refs []PathRef
 	for _, path := range [][]string{
 		{"spec", "virtualhost", "tls", "secretName"},
 		{"spec", "virtualhost", "tls", "clientValidation", "caSecret"},
@@ -45,39 +56,81 @@ func ContourSecretReferences(obj *unstructured.Unstructured) []resourceid.Ref {
 	} {
 		name, _, _ := unstructured.NestedString(obj.Object, path...)
 		if ref, ok := ContourSecretReference(name, obj.GetNamespace()); ok {
-			refs = append(refs, ref)
+			refs = append(refs, PathRef{Ref: ref, Path: strings.Join(path, ".")})
 		}
 	}
-	addValidation := func(raw map[string]any) {
+	addValidation := func(raw map[string]any, path string) {
 		name, _, _ := unstructured.NestedString(raw, "validation", "caSecret")
 		if ref, ok := ContourSecretReference(name, obj.GetNamespace()); ok {
-			refs = append(refs, ref)
+			refs = append(refs, PathRef{Ref: ref, Path: path + ".validation.caSecret"})
 		}
 	}
-	addServices := func(raw map[string]any) {
+	addServices := func(raw map[string]any, path string) {
 		services, _, _ := unstructured.NestedSlice(raw, "services")
 		for _, service := range services {
 			if m, ok := service.(map[string]any); ok {
-				addValidation(m)
+				addValidation(m, path+".services[]")
 			}
 		}
 	}
 	routes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "routes")
 	for _, route := range routes {
 		if m, ok := route.(map[string]any); ok {
-			addServices(m)
+			addServices(m, "spec.routes[]")
 		}
 	}
 	if tcp, _, _ := unstructured.NestedMap(obj.Object, "spec", "tcpproxy"); tcp != nil {
-		addServices(tcp)
+		addServices(tcp, "spec.tcpproxy")
 	}
 	providers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "virtualhost", "jwtProviders")
 	for _, provider := range providers {
 		if m, ok := provider.(map[string]any); ok {
 			if jwks, _, _ := unstructured.NestedMap(m, "remoteJWKS"); jwks != nil {
-				addValidation(jwks)
+				addValidation(jwks, "spec.virtualhost.jwtProviders[].remoteJWKS")
 			}
 		}
 	}
+	return refs
+}
+
+// ContourGroup is Contour's API group.
+const ContourGroup = "projectcontour.io"
+
+// ContourBackendReferences returns the Services an HTTPProxy's routes and
+// TCP proxy send to, in its namespace, and the HTTPProxies it includes,
+// which may be in another namespace.
+func ContourBackendReferences(obj *unstructured.Unstructured) []PathRef {
+	var refs []PathRef
+	addServices := func(raw map[string]any, path string) {
+		services, _, _ := unstructured.NestedSlice(raw, "services")
+		for _, item := range services {
+			m, _ := item.(map[string]any)
+			name, _ := m["name"].(string)
+			if name != "" {
+				refs = append(refs, PathRef{Ref: resourceid.NewRef("", "Service", obj.GetNamespace(), name), Path: path + ".services[]"})
+			}
+		}
+	}
+	routes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "routes")
+	for _, route := range routes {
+		if m, ok := route.(map[string]any); ok {
+			addServices(m, "spec.routes[]")
+		}
+	}
+	includes, _, _ := unstructured.NestedSlice(obj.Object, "spec", "includes")
+	for _, item := range includes {
+		m, _ := item.(map[string]any)
+		name, _ := m["name"].(string)
+		if name == "" {
+			continue
+		}
+		ns, _ := m["namespace"].(string)
+		if ns == "" {
+			ns = obj.GetNamespace()
+		}
+		refs = append(refs, PathRef{Ref: resourceid.NewRef(ContourGroup, "HTTPProxy", ns, name), Path: "spec.includes[]"})
+	}
+	tcp, _, _ := unstructured.NestedMap(obj.Object, "spec", "tcpproxy")
+	addServices(tcp, "spec.tcpproxy")
 	return refs
 }

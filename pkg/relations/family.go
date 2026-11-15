@@ -68,6 +68,21 @@ func (f *Family) source(gk resourceid.GroupKind) int {
 type Declaration struct {
 	Target resourceid.Ref
 	Path   string
+	// Or are the same reference in other API groups the controller also
+	// resolves it from: the declaration names whichever of them exists.
+	Or []resourceid.Ref
+}
+
+// candidates are the refs d may name that f's source may declare: Target
+// first, then each of Or.
+func (d Declaration) candidates(f *Family, source Source) []resourceid.Ref {
+	var out []resourceid.Ref
+	for _, r := range append([]resourceid.Ref{d.Target}, d.Or...) {
+		if f.target(r.GroupKind()) && source.declares(r.GroupKind()) && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // Covers reports whether f says anything about an object of gk: a kind it
@@ -146,15 +161,18 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 		}
 	}
 	byTarget := map[resourceid.Ref]int{}
+	var candidates [][]resourceid.Ref
 	err := f.Declared(obj, func(d Declaration) {
-		if !f.target(d.Target.GroupKind()) || !source.declares(d.Target.GroupKind()) {
+		c := d.candidates(f, source)
+		if len(c) == 0 {
 			return
 		}
-		i, seen := byTarget[d.Target]
+		i, seen := byTarget[c[0]]
 		if !seen {
 			i = len(a.Declared)
-			byTarget[d.Target] = i
-			a.Declared = append(a.Declared, Declared{Ref: d.Target})
+			byTarget[c[0]] = i
+			a.Declared = append(a.Declared, Declared{Ref: c[0]})
+			candidates = append(candidates, c)
 		}
 		if !slices.Contains(a.Declared[i].Paths, d.Path) {
 			a.Declared[i].Paths = append(a.Declared[i].Paths, d.Path)
@@ -163,35 +181,54 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 	if err != nil {
 		a.Coverage.addGap(ownership.Gap{Kind: subject.GroupKind(), Namespace: subject.Namespace, Reason: readreason.ReadError})
 	}
+	for j := range a.Declared {
+		v.readTarget(&a.Declared[j], candidates[j], &a.Coverage)
+	}
 	slices.SortFunc(a.Declared, func(x, y Declared) int {
 		return cmp.Or(cmp.Compare(x.Ref.Group, y.Ref.Group), cmp.Compare(x.Ref.Kind, y.Ref.Kind), cmp.Compare(x.Ref.Name, y.Ref.Name))
 	})
-	for j := range a.Declared {
-		d := &a.Declared[j]
-		switch v.decide(d.Ref.GroupKind(), d.Ref.Namespace) {
+	return a
+}
+
+// readTarget reads what d declares: the first of candidates the caller may
+// read that Radar holds. Failing that, d is unread if a candidate couldn't
+// be read or checked, withheld if the caller may not read one, and otherwise
+// absent, named by its first candidate.
+func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage) {
+	d.State = TargetAbsent
+	var unread, withheld bool
+	var gap ownership.Gap
+	for _, r := range candidates {
+		switch v.decide(r.GroupKind(), r.Namespace) {
 		case ownership.Allowed:
 		case ownership.Undecided:
-			d.State = TargetUnread
-			d.Gap = ownership.Gap{Kind: d.Ref.GroupKind(), Namespace: d.Ref.Namespace, Reason: readreason.UserPermissionCheckFailed}
-			a.Coverage.addGap(d.Gap)
+			if !unread {
+				unread, gap = true, ownership.Gap{Kind: r.GroupKind(), Namespace: r.Namespace, Reason: readreason.UserPermissionCheckFailed}
+			}
 			continue
 		default:
-			d.State = TargetWithheld
-			a.Coverage.Narrowed = true
+			withheld = true
 			continue
 		}
-		switch read := v.session.Object(d.Ref); read.State {
+		switch read := v.session.Object(r); read.State {
 		case ownership.Present:
-			d.State = TargetPresent
+			d.Ref, d.State = r, TargetPresent
+			return
 		case ownership.Absent:
-			d.State = TargetAbsent
 		default:
-			d.State = TargetUnread
-			d.Gap = read.Gap
-			a.Coverage.addGap(read.Gap)
+			if !unread {
+				unread, gap = true, read.Gap
+			}
 		}
 	}
-	return a
+	switch {
+	case unread:
+		d.State, d.Gap = TargetUnread, gap
+		c.addGap(gap)
+	case withheld:
+		d.State = TargetWithheld
+		c.Narrowed = true
+	}
 }
 
 // Referrers answers what declares subject in f, among the objects of f's
@@ -261,7 +298,7 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 			}
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
-				if d.Target == subject && !slices.Contains(paths, d.Path) {
+				if (d.Target == subject || slices.Contains(d.Or, subject)) && !slices.Contains(paths, d.Path) {
 					paths = append(paths, d.Path)
 				}
 			})

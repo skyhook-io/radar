@@ -44,7 +44,7 @@ func unstructuredOf(obj runtime.Object, gk resourceid.GroupKind) (*unstructured.
 }
 
 func visitPathRef(visit func(Declaration), r configrefs.PathRef) {
-	visit(Declaration{Target: r.Ref, Path: r.Path})
+	visit(Declaration{Target: r.Ref, Path: r.Path, Or: r.Or})
 }
 
 // Autoscalers is the family of the workloads a HorizontalPodAutoscaler,
