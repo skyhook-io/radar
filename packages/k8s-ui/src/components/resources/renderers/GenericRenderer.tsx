@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
+import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
 import { isApiGroup } from '../resource-utils-cnpg'
@@ -40,32 +40,12 @@ export function GenericRenderer({ data }: GenericRendererProps) {
       {acknowledgedPause && <CrossplanePauseNotice data={data} />}
       {/* Health Status Banner (if determinable) */}
       {healthStatus && (
-        <div className={clsx(
-          'mb-4 p-3 rounded-lg border flex items-center gap-3',
-          healthStatus.type === 'healthy' && 'bg-green-500/10 border-green-500/30',
-          healthStatus.type === 'degraded' && 'bg-yellow-500/10 border-yellow-500/30',
-          healthStatus.type === 'unhealthy' && 'bg-red-500/10 border-red-500/30',
-          healthStatus.type === 'unknown' && 'bg-slate-500/10 border-slate-500/30'
-        )}>
-          {healthStatus.type === 'healthy' && <CheckCircle className="w-5 h-5 text-green-400 shrink-0" />}
-          {healthStatus.type === 'degraded' && <AlertCircle className="w-5 h-5 text-yellow-400 shrink-0" />}
-          {healthStatus.type === 'unhealthy' && <XCircle className="w-5 h-5 text-red-400 shrink-0" />}
-          {healthStatus.type === 'unknown' && <Info className="w-5 h-5 text-slate-400 shrink-0" />}
-          <div>
-            <div className={clsx(
-              'text-sm font-medium',
-              healthStatus.type === 'healthy' && 'text-green-400',
-              healthStatus.type === 'degraded' && 'text-yellow-400',
-              healthStatus.type === 'unhealthy' && 'text-red-400',
-              healthStatus.type === 'unknown' && 'text-slate-400'
-            )}>
-              {healthStatus.label}
-            </div>
-            {healthStatus.message && (
-              <div className="text-xs text-theme-text-secondary mt-0.5">{healthStatus.message}</div>
-            )}
-          </div>
-        </div>
+        <AlertBanner
+          variant={BANNER_VARIANT[healthStatus.type]}
+          icon={BANNER_ICON[healthStatus.type]}
+          title={healthStatus.label}
+          message={healthStatus.message}
+        />
       )}
 
       {/* Empty state hint */}
@@ -158,6 +138,10 @@ const BANNER_TYPE: Record<HealthLevel, HealthType> = {
   neutral: 'unknown',
   unknown: 'unknown',
 }
+
+// The shared banner carries light and dark pairs for each tone.
+const BANNER_VARIANT = { healthy: 'success', degraded: 'warning', unhealthy: 'error', unknown: 'unknown' } as const
+const BANNER_ICON = { healthy: CheckCircle, degraded: AlertCircle, unhealthy: XCircle, unknown: Info }
 
 function getHealthStatus(resource: any): HealthStatusResult | null {
   if (resource?.kind === 'InferenceService' && isApiGroup(resource?.apiVersion, 'serving.kserve.io') && isInferenceServiceStopRequested(resource)) {
