@@ -117,7 +117,8 @@
             "tekton": { "type": "boolean" },
             "traefik": { "type": "boolean" },
             "trivy": { "type": "boolean" },
-            "velero": { "type": "boolean" }
+            "velero": { "type": "boolean" },
+            "volumeSnapshots": { "type": "boolean" }
           }
         },
         "additionalCrdGroups": {

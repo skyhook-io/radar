@@ -31,6 +31,20 @@ entries:
     decision: grant
     reason: "Mount state only: Pod and class names, node, target path and provider object IDs/versions. No secret values or provider parameters."
     source: "https://github.com/kubernetes-sigs/secrets-store-csi-driver/tree/v1.6.1/apis/v1"
+  - group: "snapshot.storage.k8s.io"
+    resources: ["volumesnapshots"]
+    scope: Namespaced
+    collection: "volumeSnapshots"
+    decision: grant
+    reason: "Source PVC or content name, class name, readiness, restore size and the controller's error message, which the API asks not to carry sensitive information."
+    source: "https://github.com/kubernetes-csi/external-snapshotter/blob/v8.6.0/client/apis/volumesnapshot/v1/types.go"
+  - group: "snapshot.storage.k8s.io"
+    resources: ["volumesnapshotcontents", "volumesnapshotclasses"]
+    scope: Cluster
+    collection: "volumeSnapshots"
+    decision: grant
+    reason: "Driver, deletion policy, storage handles and bound snapshot reference, like the PersistentVolumes and StorageClasses cluster read already grants. Class parameters name CSI credential Secrets but do not hold their values."
+    source: "https://github.com/kubernetes-csi/external-snapshotter/blob/v8.6.0/client/apis/volumesnapshot/v1/types.go"
   - group: "core.strimzi.io"
     resources: ["strimzipodsets"]
     scope: Namespaced

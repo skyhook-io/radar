@@ -1,5 +1,6 @@
 import { getCRDStatus } from './resource-utils-crd'
 import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from './resource-utils-strimzi'
+import { getVolumeSnapshotStatus, getVolumeSnapshotErrorMessage, isVolumeSnapshot, isVolumeSnapshotContent } from './resource-utils-volumesnapshot'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from './resource-utils-opentelemetry'
 import { getFlaggerCanaryStatus } from './resource-utils-flagger'
 import { isApiGroup } from './resource-utils-cnpg'
@@ -101,6 +102,10 @@ export function getGenericResourceStatus(resource: any): GenericStatus | null {
   if (isStrimziKafka(resource) || isStrimziKafkaNodePool(resource)) {
     const native = getStrimziClusterStatus(resource)
     return { text: native.text, tone: native.level }
+  }
+  if (isVolumeSnapshot(resource) || isVolumeSnapshotContent(resource)) {
+    const native = getVolumeSnapshotStatus(resource)
+    return { text: native.text, tone: native.level, reason: native.text === 'Error' ? getVolumeSnapshotErrorMessage(resource) : undefined }
   }
   if (isApiGroup(resource?.apiVersion, 'opentelemetry.io')) {
     const native = resource.kind === 'OpenTelemetryCollector' ? getOpenTelemetryCollectorStatus(resource)

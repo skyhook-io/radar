@@ -1,6 +1,7 @@
 import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
+import { getVolumeSnapshotColumnValue } from './resource-utils-volumesnapshot'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
 // Utility functions for resource display in tables
 
@@ -2560,6 +2561,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (connectorValue !== undefined) return connectorValue
   const strimziClusterValue = getStrimziClusterColumnValue(resource, column)
   if (strimziClusterValue !== undefined) return strimziClusterValue
+  const volumeSnapshotValue = getVolumeSnapshotColumnValue(resource, column)
+  if (volumeSnapshotValue !== undefined) return volumeSnapshotValue
   const otelValue = getOpenTelemetryColumnValue(resource, column)
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
