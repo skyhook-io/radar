@@ -31,6 +31,9 @@ export interface VulnerabilityFinding {
   package: string
   installedVersion: string
   fixedVersion?: string
+  /** The smallest fixed version above the installed one, when Radar can order the package's versions. */
+  fixTarget?: string
+  packageType?: string
   title?: string
   link?: string
 }
@@ -56,7 +59,7 @@ export interface VulnerableImage {
 export interface VulnerabilityCVEImage {
   imageId: string
   image: string
-  packages: { package: string; installedVersion: string; fixedVersion?: string }[]
+  packages: { package: string; installedVersion: string; fixedVersion?: string; fixTarget?: string }[]
   workloads: VulnerabilityWorkloadRef[]
   workloadsTotal: number
 }

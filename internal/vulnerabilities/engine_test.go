@@ -424,4 +424,21 @@ func TestFixView(t *testing.T) {
 	if len(crit.Fixes) != 1 || crit.Fixes[0].To != "6.11.6" {
 		t.Fatalf("filtered to Critical, the bump is the one Critical needs: %+v", crit.Fixes)
 	}
+
+	// Every view names the same per-finding target, so By image and By CVE
+	// don't show the scanner's branch list where By fix shows one version.
+	byImage := mustBuild(t, items, targets, ViewImage, Filter{})
+	got := map[string]string{}
+	for _, f := range byImage.Images[0].Findings {
+		got[f.ID] = f.FixTarget
+	}
+	if got["CVE-1"] != "6.11.6" || got["CVE-2"] != "6.11.7" || got["CVE-3"] != "" {
+		t.Fatalf("finding targets: %+v", got)
+	}
+	byCVE := mustBuild(t, items, targets, ViewCVE, Filter{})
+	for _, c := range byCVE.CVEs {
+		if c.ID == "CVE-1" && c.Affected[0].Packages[0].FixTarget != "6.11.6" {
+			t.Fatalf("CVE view target: %+v", c.Affected[0].Packages)
+		}
+	}
 }

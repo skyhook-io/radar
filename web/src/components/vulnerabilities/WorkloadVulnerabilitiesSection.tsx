@@ -7,7 +7,7 @@ import { useAPIResources } from '../../api/apiResources'
 import { ApiError, useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { hasVulnerabilityReports, useVulnerabilities, type VulnerabilityFinding } from '../../api/vulnerabilities'
-import { ImageName, SeverityBadge, SeverityCounts, gapSentence } from './parts'
+import { FixVersion, ImageName, SeverityBadge, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
   kind: string
@@ -107,9 +107,13 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
               <span className="text-xs font-medium text-theme-text-secondary">Fix first</span>
               {fixFirst.slice(0, 3).map((f) => (
                 <div key={f.id} className="grid grid-cols-[136px_70px_minmax(0,1fr)] items-center gap-2 text-xs">
-                  <WithTooltip tip={f.title}><span className="truncate font-mono text-theme-text-primary">{f.id}</span></WithTooltip>
+                  <WithTooltip tip={f.title}>
+                    {f.link
+                      ? <a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline">{f.id}</a>
+                      : <span className="truncate font-mono text-theme-text-primary">{f.id}</span>}
+                  </WithTooltip>
                   <SeverityBadge severity={f.severity} />
-                  <span className="truncate font-mono text-theme-text-tertiary">{f.package} → <span className="text-emerald-700 dark:text-emerald-400">{f.fixedVersion}</span></span>
+                  <span className="flex min-w-0 gap-1.5"><span className="shrink-0 font-mono text-theme-text-secondary">{f.package}</span><FixVersion installed={f.installedVersion} fixed={f.fixedVersion} target={f.fixTarget} showInstalled={false} /></span>
                 </div>
               ))}
             </div>

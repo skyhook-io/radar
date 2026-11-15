@@ -71,7 +71,7 @@ func reportHeader(u *unstructured.Unstructured) (report, bool) {
 
 // parseFindings reads a report's findings, one per (CVE, package, installed
 // version), worst first.
-func parseFindings(u *unstructured.Unstructured) []Finding {
+func parseFindings(u *unstructured.Unstructured, osFamily string) []Finding {
 	body, _ := u.Object["report"].(map[string]any)
 	vulns, _ := body["vulnerabilities"].([]any)
 	findings := make([]Finding, 0, len(vulns))
@@ -99,6 +99,7 @@ func parseFindings(u *unstructured.Unstructured) []Finding {
 		if score, ok := number(v["score"]); ok {
 			f.Score = &score
 		}
+		f.FixTarget, _ = fixTarget(f.PackageType, osFamily, f.InstalledVersion, f.FixedVersion)
 		findings = append(findings, f)
 	}
 	slices.SortFunc(findings, compareFindings)
@@ -257,7 +258,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			continue
 		}
 		read += n
-		agg.report.findings = parseFindings(agg.report.u)
+		agg.report.findings = parseFindings(agg.report.u, agg.report.osFamily)
 	}
 	scannedSlot := map[slotKey]bool{}
 	for _, t := range targets {
@@ -567,7 +568,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			c.images[r.imageID] = true
 			c.keepAffected(CVEImage{
 				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest),
-				Packages:  []AffectedPackage{{Package: fd.Package, InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion}},
+				Packages:  []AffectedPackage{{Package: fd.Package, InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion, FixTarget: fd.FixTarget}},
 				Workloads: listed, WorkloadsTotal: len(workloads),
 			})
 		}

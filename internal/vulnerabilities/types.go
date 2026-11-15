@@ -65,6 +65,11 @@ type Finding struct {
 	// PackageType is the scanner's ecosystem for the package (npm, jar,
 	// debian, …), which decides how its versions are ordered.
 	PackageType string `json:"packageType,omitempty"`
+	// FixTarget is the one version to move to: the smallest listed fixed
+	// version above the installed one, under the package's own version
+	// ordering. Empty when there is no fix or Radar can't order the versions;
+	// FixedVersion then stands as the scanner wrote it.
+	FixTarget string `json:"fixTarget,omitempty"`
 }
 
 // Fix is one package upgrade and what it clears: every fixable CVE in that
@@ -163,6 +168,7 @@ type AffectedPackage struct {
 	Package          string `json:"package"`
 	InstalledVersion string `json:"installedVersion"`
 	FixedVersion     string `json:"fixedVersion,omitempty"`
+	FixTarget        string `json:"fixTarget,omitempty"`
 }
 
 // Workload is one running workload and what its containers' images carry.

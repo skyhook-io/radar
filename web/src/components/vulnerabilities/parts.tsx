@@ -61,13 +61,12 @@ export function SeverityCounts({ counts }: { counts: VulnerabilityCounts }) {
   if (totalFindings(counts) === 0) {
     return <span className="text-xs text-theme-text-tertiary">No known CVEs</span>
   }
+  // Zeros are left out: "H 1" reads faster than "C 0 H 1 M 0 L 0".
   return (
-    <span className="flex flex-wrap gap-x-3 font-mono text-xs">
-      {SEVERITIES.map(({ key, letter, label }) => (
+    <span className="flex flex-wrap gap-x-2.5 font-mono text-xs tabular-nums">
+      {SEVERITIES.filter(({ key }) => counts[key] > 0).map(({ key, letter, label }) => (
         <WithTooltip key={key} tip={`${counts[key]} ${label}`}>
-          <span className={counts[key] > 0 ? VULN_SEVERITY_TEXT[upper(key)] : 'text-theme-text-disabled'}>
-            {letter} {counts[key]}
-          </span>
+          <span className={VULN_SEVERITY_TEXT[upper(key)]}>{letter}&thinsp;{counts[key]}</span>
         </WithTooltip>
       ))}
       {counts.unknown > 0 && (
@@ -84,8 +83,43 @@ export function SeverityBadge({ severity }: { severity: VulnerabilitySeverity })
   return <span className={clsx('badge-sm w-fit justify-self-start border', VULN_SEVERITY_BADGE[upper(severity)])}>{label}</span>
 }
 
-export function workloadLabel(w: VulnerabilityWorkloadRef): string {
-  return `${w.namespace}/${w.name}`
+/**
+ * An installed version and the one to move to. The scanner lists one fix
+ * per maintained branch ("v0.38.0, v0.36.1"); the target is the smallest
+ * above the installed version, with the full list on hover. Without a
+ * target the list stands as the scanner wrote it.
+ */
+export function FixVersion({ installed, fixed, target, showInstalled = true, className }: { installed: string; fixed?: string; target?: string; showInstalled?: boolean; className?: string }) {
+  const to = target || fixed
+  return (
+    <span className={clsx('min-w-0 truncate font-mono', className)}>
+      {showInstalled && <span className="text-theme-text-tertiary">{installed} → </span>}
+      {to ? (
+        <WithTooltip tip={target && fixed && fixed !== target ? `Fixed releases: ${fixed}` : undefined}>
+          <span className="text-emerald-700 dark:text-emerald-400">{to}</span>
+        </WithTooltip>
+      ) : (
+        <span className="text-theme-text-tertiary">no fix yet</span>
+      )}
+    </span>
+  )
+}
+
+const ECOSYSTEMS: Record<string, string> = {
+  debian: 'Debian package', ubuntu: 'Ubuntu package', alpine: 'Alpine package', wolfi: 'Wolfi package', chainguard: 'Chainguard package',
+  redhat: 'RPM package', centos: 'RPM package', rocky: 'RPM package', alma: 'RPM package', amazon: 'RPM package', oracle: 'RPM package',
+  fedora: 'RPM package', suse: 'RPM package', 'cbl-mariner': 'RPM package', azurelinux: 'RPM package', photon: 'RPM package',
+  gobinary: 'Go module, compiled in', gomod: 'Go module', npm: 'npm package', 'node-pkg': 'npm package', yarn: 'npm package', pnpm: 'npm package', bun: 'npm package',
+  'python-pkg': 'Python package', pip: 'Python package', pipenv: 'Python package', poetry: 'Python package', uv: 'Python package',
+  jar: 'Java library', pom: 'Java library', gradle: 'Java library', sbt: 'Java library',
+  gemspec: 'Ruby gem', bundler: 'Ruby gem', cargo: 'Rust crate', 'rust-binary': 'Rust crate, compiled in',
+  composer: 'PHP package', nuget: '.NET package', 'dotnet-core': '.NET package',
+}
+
+/** The scanner's package type in words ("gobinary" → "Go module, compiled in"). */
+export function ecosystemLabel(packageType?: string): string | undefined {
+  if (!packageType) return undefined
+  return ECOSYSTEMS[packageType.toLowerCase()] ?? packageType
 }
 
 /** "checkout, worker +4" for a list of workloads, each named once. */
