@@ -57,7 +57,7 @@ func redactUnstructuredSecrets(obj map[string]any) {
 }
 
 // stripK3sHelmValues replaces a k3s HelmChart's or HelmChartConfig's inline
-// values with their size: valuesContent and set carry chart values, which can
+// values with their size: valuesContent, values and set carry chart values, which can
 // hold credentials in any key, so pattern redaction is not enough.
 func stripK3sHelmValues(obj map[string]any) {
 	apiVersion, _ := obj["apiVersion"].(string)
@@ -79,6 +79,13 @@ func stripK3sHelmValues(obj map[string]any) {
 			delete(annotations, "objectset.rio.cattle.io/applied")
 			delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
 		}
+	}
+	switch values := spec["values"].(type) {
+	case nil:
+	case map[string]any:
+		spec["values"] = fmt.Sprintf("[%d top-level keys omitted]", len(values))
+	default:
+		spec["values"] = "[values omitted]"
 	}
 	if set, ok := spec["set"].(map[string]any); ok {
 		keys := make(map[string]any, len(set))

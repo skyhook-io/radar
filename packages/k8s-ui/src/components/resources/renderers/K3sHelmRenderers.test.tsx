@@ -24,6 +24,13 @@ describe('k3s Helm drawers', () => {
     expect(config).toContain('reinstall')
   })
 
+  it('counts structured spec.values without rendering them', () => {
+    const html = text(renderToString(<K3sHelmChartConfigRenderer data={{ apiVersion: 'helm.cattle.io/v1', kind: 'HelmChartConfig', metadata: { name: 'traefik', namespace: 'kube-system' }, spec: { values: { auth: { password: 'hunter2' }, replicas: 2 } } }} />))
+    expect(html).not.toContain('hunter2')
+    expect(html).toContain('2 top-level keys')
+    expect(html).toContain('not shown here')
+  })
+
   it('links the install Job and the HelmChartConfig target', () => {
     const refs: any[] = []
     const onNavigate = (r: any) => refs.push(r)

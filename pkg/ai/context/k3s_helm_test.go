@@ -17,6 +17,7 @@ func k3sHelmObject(kind string) *unstructured.Unstructured {
 			"chart":         "traefik",
 			"valuesContent": "a: 1\npassword: VALUES-SENTINEL\n",
 			"set":           map[string]any{"auth.token": "SET-SENTINEL"},
+			"values":        map[string]any{"auth": map[string]any{"password": "hunter2"}, "extraArgs": "--endpoint=STRUCTURED-SENTINEL"},
 		},
 	}}
 }
@@ -35,7 +36,7 @@ func TestK3sHelmValuesNeverReachAIContext(t *testing.T) {
 	}
 	detail, _ := MinifyUnstructured(k3sHelmObject("HelmChart"), LevelDetail).(map[string]any)
 	spec, _ := detail["spec"].(map[string]any)
-	if spec["valuesContent"] != "[2 lines omitted]" || !reflect.DeepEqual(spec["set"], map[string]any{"auth.token": "[omitted]"}) {
+	if spec["valuesContent"] != "[2 lines omitted]" || !reflect.DeepEqual(spec["set"], map[string]any{"auth.token": "[omitted]"}) || spec["values"] != "[2 top-level keys omitted]" {
 		t.Fatalf("detail spec = %#v", spec)
 	}
 

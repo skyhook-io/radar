@@ -7,14 +7,15 @@ import { K3S_HELM_GROUP, getK3sHelmChartStatus, k3sHelmChartSource, k3sHelmTarge
 interface Props { data: any; onNavigate?: (ref: ResourceRef) => void }
 
 function Values({ spec }: { spec: any }) {
-  const { lines, setKeys } = k3sValuesSummary(spec)
+  const { lines, setKeys, valuesKeys } = k3sValuesSummary(spec)
   return (
     <Section title="Values" defaultExpanded={true}>
       <PropertyList>
         <Property label="valuesContent" value={lines ? `${lines} lines` : 'none'} />
+        {valuesKeys > 0 && <Property label="values" value={`${valuesKeys} top-level keys`} />}
         {setKeys.length > 0 && <Property label="set" value={setKeys.join(', ')} />}
       </PropertyList>
-      {(lines > 0 || setKeys.length > 0) && <div className="mt-2 text-xs text-theme-text-tertiary">Values can hold credentials, so they are not shown here; see the YAML tab.</div>}
+      {(lines > 0 || valuesKeys > 0 || setKeys.length > 0) && <div className="mt-2 text-xs text-theme-text-tertiary">Values can hold credentials, so they are not shown here; see the YAML tab.</div>}
     </Section>
   )
 }

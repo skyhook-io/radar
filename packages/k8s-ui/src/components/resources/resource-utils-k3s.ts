@@ -36,10 +36,11 @@ export function k3sHelmChartSource(data: any): { chart: string; version?: string
 }
 
 // Values can hold credentials, so only their size and the set keys are shown.
-export function k3sValuesSummary(spec: any): { lines: number; setKeys: string[] } {
+export function k3sValuesSummary(spec: any): { lines: number; setKeys: string[]; valuesKeys: number } {
   const content = typeof spec?.valuesContent === 'string' ? spec.valuesContent.replace(/\n+$/, '') : ''
   const set = spec?.set && typeof spec.set === 'object' ? Object.keys(spec.set).sort() : []
-  return { lines: content ? content.split('\n').length : 0, setKeys: set }
+  const values = spec?.values && typeof spec.values === 'object' ? Object.keys(spec.values).length : 0
+  return { lines: content ? content.split('\n').length : 0, setKeys: set, valuesKeys: values }
 }
 
 export function getK3sHelmChartColumnValue(data: any, column: string): string | undefined {

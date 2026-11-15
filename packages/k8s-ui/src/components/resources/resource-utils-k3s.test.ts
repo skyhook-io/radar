@@ -21,8 +21,9 @@ describe('k3s HelmChart utils', () => {
   })
 
   it('summarises values as counts and key names only', () => {
-    expect(k3sValuesSummary({ valuesContent: 'a: 1\nb: 2\n', set: { 'x.y': 'SECRET' } })).toEqual({ lines: 2, setKeys: ['x.y'] })
-    expect(k3sValuesSummary({})).toEqual({ lines: 0, setKeys: [] })
+    expect(k3sValuesSummary({ valuesContent: 'a: 1\nb: 2\n', set: { 'x.y': 'SECRET' } })).toEqual({ lines: 2, setKeys: ['x.y'], valuesKeys: 0 })
+    expect(k3sValuesSummary({ values: { auth: { password: 'SECRET' }, replicas: 2 } })).toEqual({ lines: 0, setKeys: [], valuesKeys: 2 })
+    expect(k3sValuesSummary({})).toEqual({ lines: 0, setKeys: [], valuesKeys: 0 })
   })
 
   it('claims only helm.cattle.io columns', () => {
