@@ -326,7 +326,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                 <span className="text-xs font-medium text-theme-text-secondary">
                   {img.matching === img.findingsTotal ? 'Findings, worst first' : `${img.matching} of ${img.findingsTotal} findings match`}
                 </span>
-                <FindingsList findings={img.findings} />
+                <FindingsList findings={img.findings} total={img.findingsTotal} />
                 {img.matching > img.findings.length && <span className="text-xs text-theme-text-tertiary">{img.matching - img.findings.length} more in the report.</span>}
                 <button type="button" onClick={() => onOpenReport(img)} className="self-start text-xs text-accent-text hover:underline">Open the scan report</button>
               </div>
@@ -349,8 +349,10 @@ function namespaceCount(img: VulnerableImage): string {
   return `${partial ? 'at least ' : ''}${n} ${n === 1 ? 'namespace' : 'namespaces'}`
 }
 
-function FindingsList({ findings }: { findings: VulnerableImage['findings'] }) {
-  if (findings.length === 0) return <span className="text-xs text-theme-text-tertiary">No findings match.</span>
+function FindingsList({ findings, total }: { findings: VulnerableImage['findings']; total: number }) {
+  if (findings.length === 0) {
+    return <span className="text-xs text-theme-text-tertiary">{total === 0 ? 'No known CVEs in this image.' : 'No findings match the filters.'}</span>
+  }
   return (
     <div className="overflow-hidden rounded-md border border-theme-border">
       {findings.map((f) => (
