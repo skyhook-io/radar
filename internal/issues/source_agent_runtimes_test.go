@@ -60,12 +60,14 @@ func TestAgentSandboxReadyReasons(t *testing.T) {
 		readyFalse("erroring", "ReconcilerError", time.Minute),
 		readyFalse("invalid", "InvalidConfiguration", time.Minute),
 	)
-	for _, quiet := range []string{"suspended", "expired", "finished", "provisioning", "just-resumed"} {
+	// A suspension's start is unknown, and a Pod that never terminates is reported
+	// as a stuck deletion instead.
+	for _, quiet := range []string{"suspended", "stuck-suspending", "expired", "finished", "provisioning", "just-resumed"} {
 		if issue, ok := got[quiet]; ok {
 			t.Errorf("%s: unexpected issue %q", quiet, issue.Reason)
 		}
 	}
-	for _, loud := range []string{"stuck", "stuck-suspending", "failed", "erroring", "invalid"} {
+	for _, loud := range []string{"stuck", "failed", "erroring", "invalid"} {
 		if _, ok := got[loud]; !ok {
 			t.Errorf("%s: expected an issue, got %v", loud, got)
 		}

@@ -54,21 +54,20 @@ func TestAgentSandboxResumeTimedFromSuspendedFlip(t *testing.T) {
 	}
 }
 
-// A suspension changes Suspended's reason without changing its status, so its
-// transition time can be days old; Ready's fresh flip marks the start.
-func TestAgentSandboxSuspensionTimedFromLatestFlip(t *testing.T) {
-	requested := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+// A suspension can leave both Ready and Suspended False, keeping transition
+// times from before it began, so its start is unknown rather than days old.
+func TestAgentSandboxSuspensionStartUnknown(t *testing.T) {
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "agents.x-k8s.io/v1beta1", "kind": "Sandbox",
 		"metadata": map[string]any{"name": "a", "generation": int64(4)},
 		"spec":     map[string]any{"operatingMode": "Suspended"},
 		"status": map[string]any{"conditions": []any{
-			map[string]any{"type": "Ready", "status": "False", "reason": "SandboxSuspended", "observedGeneration": int64(4), "lastTransitionTime": requested.Format(time.RFC3339)},
+			map[string]any{"type": "Ready", "status": "False", "reason": "SandboxSuspended", "observedGeneration": int64(4), "lastTransitionTime": "2026-11-01T00:00:00Z"},
 			map[string]any{"type": "Suspended", "status": "False", "reason": "PodTerminating", "observedGeneration": int64(4), "lastTransitionTime": "2026-11-01T00:00:00Z"},
 		}},
 	}}
 	r := ReadAgentSandbox(u)
-	if r.Verdict.Reason != "Suspending" || !r.Since.Equal(requested) {
-		t.Fatalf("got %+v, want Suspending since %v", r, requested)
+	if r.Verdict.Reason != "Suspending" || !r.InProgress || r.SinceKnown {
+		t.Fatalf("got %+v, want Suspending with an unknown start", r)
 	}
 }

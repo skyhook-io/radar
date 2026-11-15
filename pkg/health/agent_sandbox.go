@@ -157,7 +157,12 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 			r.Mirrored = isClaim
 			return r
 		}
-		return progress("Suspending", later(ready, suspended))
+		// Both conditions can stay False through a suspension, keeping
+		// transition times from before it began, so none marks its start. A Pod
+		// that never terminates is reported as a stuck deletion instead.
+		r := progress("Suspending", ready)
+		r.Since, r.SinceKnown = time.Time{}, false
+		return r
 	}
 	if text, ok := sandboxSettledReasons[reason]; ok {
 		return AgentSandboxReadiness{Verdict: Verdict{Level: LevelNeutral, Reason: text}, Settled: true, Mirrored: isClaim && !sandboxClaimOwnReasons[reason]}
