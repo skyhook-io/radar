@@ -282,6 +282,8 @@ func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, 
 		}
 	case "postgresql.cnpg.io":
 		return detectCNPGIssues(gvr, kind, u)
+	case agentSandboxGroup:
+		return detectSandboxSuspensionBlocked(gvr, kind, u)
 	case substrateGroup:
 		if kind == "WorkerPool" {
 			return detectWorkerPoolIssues(gvr, kind, u)

@@ -4,34 +4,18 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// SubstrateWorkerPoolReading is how an Agent Substrate WorkerPool (ate.dev)
-// reads. Its only condition, Resolved, sits per sandbox class in
+// SubstrateWorkerPool returns the health of an Agent Substrate WorkerPool
+// (ate.dev) from its per-class Resolved conditions and its desired and ready
+// workers. Its only condition, Resolved, sits per sandbox class in
 // status.sandboxClasses[] and records the generation it was computed for.
-type SubstrateWorkerPoolReading struct {
-	Verdict Verdict
-	// Unresolved is set when a class's spec does not resolve to a usable
-	// SandboxConfig on the current generation.
-	Unresolved bool
-	// Critical: unresolved with workers wanted and none ready, so nothing can
-	// host the pool's actors. Ready workers keep running on the last resolved
-	// config.
-	Critical bool
-}
-
-// SubstrateWorkerPool returns the health of an Agent Substrate WorkerPool.
+// Mirrored by getWorkerPoolStatus in k8s-ui; testdata/substrate_workerpool.json
+// pins both.
 func SubstrateWorkerPool(u *unstructured.Unstructured) Verdict {
-	return ReadSubstrateWorkerPool(u).Verdict
-}
-
-// ReadSubstrateWorkerPool classifies a WorkerPool from its per-class Resolved
-// conditions and its desired and ready workers. Mirrored by getWorkerPoolStatus
-// in k8s-ui; testdata/substrate_workerpool.json pins both.
-func ReadSubstrateWorkerPool(u *unstructured.Unstructured) SubstrateWorkerPoolReading {
 	if u == nil {
-		return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelUnknown, Reason: "Not reported"}}
+		return Verdict{Level: LevelUnknown, Reason: "Not reported"}
 	}
 	if u.GetDeletionTimestamp() != nil {
-		return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelDegraded, Reason: "Terminating"}}
+		return Verdict{Level: LevelDegraded, Reason: "Terminating"}
 	}
 	status, hasStatus, _ := unstructured.NestedMap(u.Object, "status")
 	classes, _, _ := unstructured.NestedSlice(u.Object, "status", "sandboxClasses")
@@ -74,31 +58,32 @@ func ReadSubstrateWorkerPool(u *unstructured.Unstructured) SubstrateWorkerPoolRe
 		}
 		// Reported for an older spec: the controller has not judged the current one.
 		if r.stale {
-			return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelDegraded, Reason: reason}}
+			return Verdict{Level: LevelDegraded, Reason: reason}
 		}
-		critical := hasDesired && desired > 0 && ready == 0
+		// With no worker ready, nothing can host the pool's actors. Ready
+		// workers keep running on the last resolved config.
 		level := LevelDegraded
-		if critical {
+		if hasDesired && desired > 0 && ready == 0 {
 			level = LevelUnhealthy
 		}
-		return SubstrateWorkerPoolReading{Verdict: Verdict{Level: level, Reason: reason}, Unresolved: true, Critical: critical}
+		return Verdict{Level: level, Reason: reason}
 	}
 
 	switch {
 	case hasDesired && desired == 0 && pods > 0:
-		return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelDegraded, Reason: "Scaling down"}}
+		return Verdict{Level: LevelDegraded, Reason: "Scaling down"}
 	case hasDesired && desired == 0:
-		return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelNeutral, Reason: "Scaled to zero"}}
+		return Verdict{Level: LevelNeutral, Reason: "Scaled to zero"}
 	case !hasStatus || len(status) == 0 || len(conds) == 0:
-		return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelDegraded, Reason: "Pending"}}
+		return Verdict{Level: LevelDegraded, Reason: "Pending"}
 	}
 	for _, r := range conds {
 		if r.stale || r.status != "True" {
-			return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelDegraded, Reason: "Resolving"}}
+			return Verdict{Level: LevelDegraded, Reason: "Resolving"}
 		}
 	}
 	if hasDesired && ready >= desired {
-		return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelHealthy, Reason: "Ready"}}
+		return Verdict{Level: LevelHealthy, Reason: "Ready"}
 	}
-	return SubstrateWorkerPoolReading{Verdict: Verdict{Level: LevelDegraded, Reason: "Scaling"}}
+	return Verdict{Level: LevelDegraded, Reason: "Scaling"}
 }

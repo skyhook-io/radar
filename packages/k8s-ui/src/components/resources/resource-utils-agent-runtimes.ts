@@ -53,8 +53,8 @@ function workerPoolResolvedConditions(resource: any): { condition: any; stale: b
 }
 
 /**
- * Mirrors pkg/health ReadSubstrateWorkerPool, which Issues and AI summaries
- * use; pkg/health/testdata/substrate_workerpool.json pins both. The UI shows
+ * Mirrors pkg/health SubstrateWorkerPool, which AI summaries use;
+ * pkg/health/testdata/substrate_workerpool.json pins both. The UI shows
  * `alert` where Go's levels say degraded.
  *
  * WorkerPool has no Ready condition and no top-level observedGeneration. Its
@@ -122,7 +122,10 @@ export function getWorkerPoolSandboxClass(resource: any): string {
   return Array.isArray(classes) && classes[0]?.name ? classes[0].name : '-'
 }
 
-/** The SandboxConfig the controller confirmed for the pool's class, or '-' before it has resolved one. */
+/**
+ * The SandboxConfig of the pool's class: `current → pending` during a switch,
+ * either name alone when only one is reported, '-' when neither is.
+ */
 export function getWorkerPoolSandboxConfig(resource: any): string {
   const specClass = getWorkerPoolSandboxClass(resource)
   const classes: any[] = Array.isArray(resource?.status?.sandboxClasses) ? resource.status.sandboxClasses : []
@@ -173,10 +176,13 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
   if (ready.status !== 'False') return badge('Unknown', 'unknown')
   const reason = typeof ready.reason === 'string' ? ready.reason : ''
   if (reason === 'SandboxSuspended') {
-    // The Suspended condition says when the Pod is actually gone.
-    return isClaim || findCondition(conditions, 'Suspended')?.status === 'True'
-      ? badge('Suspended', 'neutral')
-      : badge('Suspending', 'degraded')
+    // The Suspended condition says when the Pod is actually gone, and whether
+    // the controller refused to delete a Pod with the Sandbox's name that it
+    // does not own.
+    const suspended = findCondition(conditions, 'Suspended')
+    if (isClaim || suspended?.status === 'True') return badge('Suspended', 'neutral')
+    if (suspended?.status === 'False' && suspended.reason === 'PodNotOwned') return badge('PodNotOwned', 'alert')
+    return badge('Suspending', 'degraded')
   }
   if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
   if (reason === 'DependenciesNotReady') {
@@ -279,7 +285,8 @@ export function getAgentRuntimeStatus(resource: any): (StatusBadge & { message?:
     message = workerPoolStatusMessage(resource)
   } else if (kind === 'Sandbox' && isAgentSandboxResource(resource)) {
     status = getSandboxStatus(resource)
-    message = findCondition(resource?.status?.conditions, 'Ready')?.message
+    // Ready keeps its ordinary suspension message when the suspension is refused.
+    message = findCondition(resource?.status?.conditions, status.text === 'PodNotOwned' ? 'Suspended' : 'Ready')?.message
   } else if (kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)) {
     status = getSandboxClaimStatus(resource)
     message = findCondition(resource?.status?.conditions, 'Ready')?.message

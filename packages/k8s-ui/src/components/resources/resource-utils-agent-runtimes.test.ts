@@ -54,6 +54,19 @@ describe('Agent Sandbox status (shared with pkg/health)', () => {
   }
 })
 
+describe('Agent Sandbox refused suspension', () => {
+  it('explains the refusal from the Suspended condition, not Ready', () => {
+    const sandbox = {
+      apiVersion: 'agents.x-k8s.io/v1beta1', kind: 'Sandbox', metadata: { name: 'a', generation: 1 },
+      status: { conditions: [
+        { ...ready('False', 'SandboxSuspended', 'Sandbox is suspending'), observedGeneration: 1 },
+        { type: 'Suspended', status: 'False', reason: 'PodNotOwned', message: 'Refused to delete pod because it is not owned by this sandbox' },
+      ] },
+    }
+    expect(getAgentRuntimeStatus(sandbox)).toMatchObject({ text: 'PodNotOwned', level: 'alert', message: 'Refused to delete pod because it is not owned by this sandbox' })
+  })
+})
+
 describe('Agent Sandbox warm pools and expiry', () => {
   it('reads warm pools from ready versus desired and observed generation', () => {
     const warm = (replicas: number | undefined, readyReplicas: number, generation = 1, observedGeneration = 1) => ({

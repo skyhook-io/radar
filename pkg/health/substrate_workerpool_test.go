@@ -14,20 +14,19 @@ func TestSubstrateWorkerPoolVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	var cases []struct {
-		Name     string
-		Object   unstructured.Unstructured
-		Level    Level
-		Text     string
-		Critical bool
+		Name   string
+		Object unstructured.Unstructured
+		Level  Level
+		Text   string
 	}
 	if err := json.Unmarshal(raw, &cases); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range cases {
 		t.Run(tc.Name, func(t *testing.T) {
-			r := ReadSubstrateWorkerPool(&tc.Object)
-			if r.Verdict.Level != tc.Level || r.Verdict.Reason != tc.Text || r.Critical != tc.Critical {
-				t.Fatalf("got %+v, want level=%s text=%s critical=%v", r, tc.Level, tc.Text, tc.Critical)
+			v := SubstrateWorkerPool(&tc.Object)
+			if v.Level != tc.Level || v.Reason != tc.Text {
+				t.Fatalf("got %+v, want level=%s text=%s", v, tc.Level, tc.Text)
 			}
 		})
 	}

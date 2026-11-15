@@ -157,6 +157,12 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 			r.Mirrored = isClaim
 			return r
 		}
+		// The controller refuses to delete a Pod with the Sandbox's name that the
+		// Sandbox does not own, and waits. Nothing is being torn down, so this
+		// is not a suspension in progress.
+		if suspended.status == "False" && suspended.reason == "PodNotOwned" {
+			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "PodNotOwned", Message: suspended.message}}
+		}
 		// Both conditions can stay False through a suspension, keeping
 		// transition times from before it began, so none marks its start. A Pod
 		// that never terminates is reported as a stuck deletion instead.

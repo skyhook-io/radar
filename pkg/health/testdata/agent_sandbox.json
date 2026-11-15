@@ -113,6 +113,47 @@
     "mirrored": false
   },
   {
+    "name": "suspension refused, the Pod with its name is not its own",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "operatingMode": "Suspended"
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "SandboxSuspended",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          },
+          {
+            "type": "Suspended",
+            "status": "False",
+            "reason": "PodNotOwned",
+            "message": "Refused to delete pod because it is not owned by this sandbox",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "alert",
+    "text": "PodNotOwned",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
     "name": "reconcile error during suspension",
     "object": {
       "apiVersion": "agents.x-k8s.io/v1beta1",

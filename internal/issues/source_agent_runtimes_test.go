@@ -50,6 +50,7 @@ func TestAgentSandboxReadyReasons(t *testing.T) {
 	got := composeOne(sandboxes, "Sandbox",
 		withCondition(readyFalse("suspended", "SandboxSuspended", 72*time.Hour), "Suspended", "True", "PodTerminated", 72*time.Hour),
 		withCondition(readyFalse("stuck-suspending", "SandboxSuspended", 2*time.Hour), "Suspended", "False", "PodTerminating", 2*time.Hour),
+		withCondition(readyFalse("foreign-pod", "SandboxSuspended", time.Minute), "Suspended", "False", "PodNotOwned", time.Minute),
 		// Ready kept its day-old transition time through the resume.
 		withCondition(readyFalse("just-resumed", "DependenciesNotReady", 24*time.Hour), "Suspended", "False", "NotSuspended", 2*time.Minute),
 		readyFalse("expired", "SandboxExpired", 72*time.Hour),
@@ -67,10 +68,14 @@ func TestAgentSandboxReadyReasons(t *testing.T) {
 			t.Errorf("%s: unexpected issue %q", quiet, issue.Reason)
 		}
 	}
-	for _, loud := range []string{"stuck", "failed", "erroring", "invalid"} {
+	for _, loud := range []string{"stuck", "failed", "erroring", "invalid", "foreign-pod"} {
 		if _, ok := got[loud]; !ok {
 			t.Errorf("%s: expected an issue, got %v", loud, got)
 		}
+	}
+	// A refused suspension is reported at once, under the Suspended condition's reason.
+	if foreign := got["foreign-pod"]; foreign.Reason != "PodNotOwned" || !strings.HasPrefix(foreign.Message, "Suspension is blocked: ") {
+		t.Errorf("foreign-pod = %+v", foreign)
 	}
 }
 
@@ -137,5 +142,29 @@ func TestWorkerPoolResolvedIssues(t *testing.T) {
 	stale := got["stale"]
 	if stale.Severity != SeverityWarning || !strings.Contains(stale.Message, "Reported for generation 2; the pool is now at generation 3.") {
 		t.Errorf("stale = %+v", stale)
+	}
+}
+
+func TestWorkerPoolDeploymentNeverCreated(t *testing.T) {
+	pools := schema.GroupVersionResource{Group: substrateGroup, Version: "v1", Resource: "workerpools"}
+	withSelector := workerPool("provisioned", 2, 2, 3, 0, "True", "Resolved")
+	withSelector.Object["status"].(map[string]any)["selector"] = "ate.dev/workerpool=provisioned"
+	fresh := workerPool("just-resolved", 2, 2, 3, 0, "True", "Resolved")
+	fresh.Object["status"].(map[string]any)["sandboxClasses"].([]any)[0].(map[string]any)["conditions"].([]any)[0].(map[string]any)["lastTransitionTime"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	got := composeOne(pools, "WorkerPool",
+		workerPool("rejected", 2, 2, 3, 0, "True", "Resolved"),
+		withSelector,
+		fresh,
+		workerPool("scaled-to-zero", 2, 2, 0, 0, "True", "Resolved"),
+		workerPool("stale-resolution", 3, 2, 3, 0, "True", "Resolved"),
+	)
+	rejected, ok := got["rejected"]
+	if !ok || rejected.Reason != "DeploymentNotCreated" || rejected.Severity != SeverityCritical {
+		t.Fatalf("rejected = %+v, want a critical DeploymentNotCreated", rejected)
+	}
+	for _, quiet := range []string{"provisioned", "just-resolved", "scaled-to-zero", "stale-resolution"} {
+		if issue, ok := got[quiet]; ok {
+			t.Errorf("%s: unexpected issue %+v", quiet, issue)
+		}
 	}
 }

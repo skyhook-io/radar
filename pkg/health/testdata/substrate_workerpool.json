@@ -42,8 +42,7 @@
     },
     "level": "healthy",
     "uiLevel": "healthy",
-    "text": "Ready",
-    "critical": false
+    "text": "Ready"
   },
   {
     "name": "unresolved, no worker ready",
@@ -88,8 +87,7 @@
     },
     "level": "unhealthy",
     "uiLevel": "unhealthy",
-    "text": "SandboxConfigNotFound",
-    "critical": true
+    "text": "SandboxConfigNotFound"
   },
   {
     "name": "unresolved, workers still ready on the last config",
@@ -134,8 +132,7 @@
     },
     "level": "degraded",
     "uiLevel": "alert",
-    "text": "SandboxConfigNotFound",
-    "critical": false
+    "text": "SandboxConfigNotFound"
   },
   {
     "name": "unresolved, Pods exist but none ready",
@@ -180,8 +177,7 @@
     },
     "level": "unhealthy",
     "uiLevel": "unhealthy",
-    "text": "SandboxConfigNotFound",
-    "critical": true
+    "text": "SandboxConfigNotFound"
   },
   {
     "name": "unresolved while scaled to zero",
@@ -226,8 +222,7 @@
     },
     "level": "degraded",
     "uiLevel": "alert",
-    "text": "DefaultConfigNotFound",
-    "critical": false
+    "text": "DefaultConfigNotFound"
   },
   {
     "name": "unresolved with no observed generation",
@@ -272,8 +267,7 @@
     },
     "level": "unhealthy",
     "uiLevel": "unhealthy",
-    "text": "SandboxConfigNotFound",
-    "critical": true
+    "text": "SandboxConfigNotFound"
   },
   {
     "name": "failure reported for an older generation",
@@ -318,8 +312,7 @@
     },
     "level": "degraded",
     "uiLevel": "degraded",
-    "text": "SandboxConfigNotFound",
-    "critical": false
+    "text": "SandboxConfigNotFound"
   },
   {
     "name": "resolution not yet judged for this generation",
@@ -364,8 +357,7 @@
     },
     "level": "degraded",
     "uiLevel": "degraded",
-    "text": "Resolving",
-    "critical": false
+    "text": "Resolving"
   },
   {
     "name": "scaled to zero",
@@ -410,8 +402,7 @@
     },
     "level": "neutral",
     "uiLevel": "neutral",
-    "text": "Scaled to zero",
-    "critical": false
+    "text": "Scaled to zero"
   },
   {
     "name": "scaling down",
@@ -456,8 +447,7 @@
     },
     "level": "degraded",
     "uiLevel": "degraded",
-    "text": "Scaling down",
-    "critical": false
+    "text": "Scaling down"
   },
   {
     "name": "scaling up",
@@ -502,8 +492,7 @@
     },
     "level": "degraded",
     "uiLevel": "degraded",
-    "text": "Scaling",
-    "critical": false
+    "text": "Scaling"
   },
   {
     "name": "no status yet",
@@ -526,7 +515,6 @@
     },
     "level": "degraded",
     "uiLevel": "degraded",
-    "text": "Pending",
-    "critical": false
+    "text": "Pending"
   }
 ]
