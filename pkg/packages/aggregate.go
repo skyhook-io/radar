@@ -183,7 +183,7 @@ func Aggregate(s Sources) []PackageRow {
 		if known {
 			matched := false
 			for k, r := range rows {
-				if k.chart == chartName && !chartlessIntegrations[chartName] {
+				if k.chart == chartName {
 					r.AddContribution(newContribution())
 					matched = true
 				}

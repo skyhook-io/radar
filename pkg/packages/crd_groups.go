@@ -188,9 +188,10 @@ var crdGroupToChart = map[string]string{
 	"llm-d.ai":                 "llm-d",
 }
 
-// chartlessIntegrations name APIs that no Helm chart installs, so their CRDs
-// keep a row of their own instead of merging into a user's release that
-// happens to share the name.
+// chartlessIntegrations name APIs that no Helm chart installs. Usage stats
+// still report them, but the package list treats their groups as unknown, so
+// their CRDs keep the group as their identity instead of colliding with a
+// user's release that shares the name.
 var chartlessIntegrations = map[string]bool{
 	"gateway-api": true,
 }
@@ -208,7 +209,7 @@ func IntegrationForCRDGroup(group string) (string, bool) {
 // known mapping, else (group, false). Callers decide whether to render
 // the group as a standalone row or skip.
 func chartFromCRDGroup(group string) (string, bool) {
-	if c, ok := crdGroupToChart[group]; ok {
+	if c, ok := crdGroupToChart[group]; ok && !chartlessIntegrations[c] {
 		return c, true
 	}
 	return group, false
