@@ -166,18 +166,28 @@ func answerOwnership(source ownership.Source, apply func(*topology.Relationships
 // relationship graph's edges are (topology.RelationsAnswer), then ownership,
 // with one ownership view whose searches both share. It answers nil when the
 // caches aren't ready or are replaced mid-answer.
-func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage) {
+func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	return answerRelationships(cache, obj, access, traverse, istioDomain, false)
+}
+
+// AnswerResourceContextRelationships shares the relation session and access
+// policy with drawer answers, but only asks ownership for owner/manager facts.
+func AnswerResourceContextRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
+	return answerRelationships(cache, obj, access, traverse, istioDomain, true)
+}
+
+func answerRelationships(cache *ResourceCache, obj runtime.Object, access, traverse func(*ownership.Catalog) ownership.Access, istioDomain string, contextOnly bool) (*topology.Relationships, map[string]relations.Coverage, *topology.RelationshipExtras) {
 	session, err := BeginOwnershipRead(cache)
 	if err != nil || len(session.Catalog().DependentKinds()) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	rs, ok := session.(relations.Session)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	caches, ok := cachesource.SessionCaches(session)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
 	if istioDomain == "" {
@@ -190,37 +200,47 @@ func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 	}
 	fetched, valid := OwnershipObservation(obj)
 	if !valid {
-		return nil, nil
+		return nil, nil, nil
 	}
 	owner, _ := apimeta.Accessor(obj)
 	acc := access(session.Catalog())
 	if acc.CanRead(fetched.Ref.GroupKind(), fetched.Ref.Namespace) != ownership.Allowed {
 		if session.ValidateCaches() != nil {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return &topology.Relationships{}, nil
+		return &topology.Relationships{}, nil, nil
 	}
 	captured, current := relations.CaptureSubject(rs, fetched.Ref, obj)
 	if !current {
 		if session.ValidateCaches() != nil {
-			return nil, nil
+			return nil, nil, nil
 		}
 		rel := &topology.Relationships{}
 		topology.OwnershipUnavailable(rel, string(readreason.ReadError))
-		return rel, map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}
+		return rel, map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}, &topology.RelationshipExtras{Fields: map[string]relations.Coverage{"subject": {SubjectState: "replaced"}}}
 	}
 	rs = captured
 	ov := ownership.NewView(rs, acc)
-	rel, coverage := topology.RelationsAnswer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, istioDomain, provider, dp)
+	answer := topology.RelationsAnswerWithExtras
+	if contextOnly {
+		answer = topology.RelationsContextAnswer
+	}
+	rel, extras := answer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, istioDomain, provider, dp)
 	if rel == nil {
 		rel = &topology.Relationships{}
 	}
-	topology.ApplyOwnership(rel, ov, fetched)
-	splitHistory(fetched.Ref, owner, acc)(rel, ov, session)
-	if session.ValidateCaches() != nil {
-		return nil, nil
+	if contextOnly {
+		topology.ApplyOwner(rel, ov, fetched)
+		generators, incomplete := topology.RelationSpecGenerators(rs, acc, ov, fetched.Ref, obj)
+		rel.Managers, rel.OtherManagersIncomplete = generators, incomplete
+	} else {
+		topology.ApplyOwnership(rel, ov, fetched)
+		splitHistory(fetched.Ref, owner, acc)(rel, ov, session)
 	}
-	return rel, coverage
+	if session.ValidateCaches() != nil {
+		return nil, nil, nil
+	}
+	return rel, extras.Coverage, extras
 }
 
 // OwnershipObservation is what ownership reads from a fetched object, whose

@@ -38,7 +38,7 @@ func TestBuild_NodePlacementReusesLookupAndMarksUnavailable(t *testing.T) {
 			if withTopology {
 				opts.Topology = &topology.Topology{}
 			}
-			rc := Build(context.Background(), node, opts)
+			rc := fixtureContext(context.Background(), node, opts)
 			if calls != 1 {
 				t.Fatalf("topology=%v failed=%v: %d Pod scans", withTopology, failed, calls)
 			}
@@ -63,13 +63,13 @@ func TestBuild_NodePlacementReusesLookupAndMarksUnavailable(t *testing.T) {
 
 	calls := 0
 	provider := nodePlacementProvider{calls: &calls}
-	rc := Build(context.Background(), node, Options{Tier: TierBasic, Provider: provider, Topology: &topology.Topology{}})
+	rc := fixtureContext(context.Background(), node, Options{Tier: TierBasic, Provider: provider, Topology: &topology.Topology{}})
 	if calls != 1 || rc.ReferencedBy != nil || len(rc.Omitted) != 0 {
 		t.Fatalf("empty observation: %d %+v", calls, rc)
 	}
 
 	rel := &topology.Relationships{PodPlacementObserved: true, Pods: []topology.ResourceRef{{Kind: "Pod", Namespace: "prod", Name: "app"}}}
-	rc = Build(context.Background(), node, Options{Tier: TierBasic, Relationships: rel})
+	rc = fixtureContext(context.Background(), node, Options{Tier: TierBasic, Relationships: rel})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 {
 		t.Fatalf("precomputed placement needs another provider: %+v", rc)
 	}
@@ -84,11 +84,11 @@ func TestBuild_NodePlacementReusesLookupAndMarksUnavailable(t *testing.T) {
 
 func TestBuild_NodePlacementWithoutProviderIsUnavailable(t *testing.T) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}
-	rc := Build(context.Background(), node, Options{Tier: TierBasic})
+	rc := fixtureContext(context.Background(), node, Options{Tier: TierBasic})
 	if rc.ReferencedBy != nil || len(rc.Omitted) != 1 || rc.Omitted[0] != (OmittedField{Field: "referencedBy", Reason: OmittedUnavailable}) {
 		t.Fatalf("missing provider context: %+v", rc)
 	}
-	rc = Build(context.Background(), node, Options{Tier: TierBasic, Relationships: &topology.Relationships{PodPlacementObserved: true}})
+	rc = fixtureContext(context.Background(), node, Options{Tier: TierBasic, Relationships: &topology.Relationships{PodPlacementObserved: true}})
 	if rc.ReferencedBy != nil || len(rc.Omitted) != 0 {
 		t.Fatalf("observed empty placement without provider: %+v", rc)
 	}
@@ -109,7 +109,7 @@ func TestBuild_NodePlacementTopologyGuardAndExclusions(t *testing.T) {
 		if custom {
 			obj = &unstructured.Unstructured{Object: map[string]any{"apiVersion": "custom.example/v1", "kind": "Node", "metadata": map[string]any{"name": "worker"}}}
 		}
-		rc := Build(context.Background(), obj, Options{Tier: TierBasic, Topology: &topology.Topology{}, Provider: provider})
+		rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, Topology: &topology.Topology{}, Provider: provider})
 		if custom {
 			if calls != 0 || rc.ReferencedBy != nil {
 				t.Fatalf("custom Node borrowed core placement: calls=%d context=%+v", calls, rc)
@@ -124,7 +124,7 @@ func TestBuild_ReverseReferenceSourceFailureIsExplicit(t *testing.T) {
 	for _, obj := range []runtime.Object{&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "prod"}}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "prod"}}} {
 		calls := 0
 		provider := nodePlacementProvider{calls: &calls, err: errors.New("Pod source unavailable")}
-		rc := Build(context.Background(), obj, Options{Tier: TierBasic, Provider: provider})
+		rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, Provider: provider})
 		if calls != 1 || rc.ReferencedBy != nil {
 			t.Fatalf("failed reverse source: %d %+v", calls, rc)
 		}

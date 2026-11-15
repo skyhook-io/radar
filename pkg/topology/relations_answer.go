@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"math"
 	"slices"
 	"strings"
 
@@ -82,6 +83,7 @@ type neighborhood struct {
 	edges    map[string]bool
 	coverage map[string]relations.Coverage
 	access   ownership.Access
+	extras   *RelationshipExtras
 }
 
 // familyNodeID is a node ID parseNodeID can't read, so a node's identity
@@ -144,6 +146,14 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		refs := v.References(f, subject, obj)
 		n.cover(f.Name, refs.Coverage)
+		n.extras.projectCoverage(disposition, gk, true, refs.Coverage)
+		if f == relations.ConfigReferences && subject == n.extras.Subject {
+			for _, d := range refs.Declared {
+				if d.State != relations.TargetWithheld {
+					n.extras.Declarations = append(n.extras.Declarations, d)
+				}
+			}
+		}
 		for _, d := range refs.Declared {
 			if d.State == relations.TargetPresent {
 				if e, ok := edgeFor(f.Name, subject, d.Ref); ok {
@@ -155,6 +165,10 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		referrers := v.Referrers(f, subject, obj)
 		n.cover(f.Name, referrers.Coverage)
+		n.extras.projectCoverage(disposition, gk, false, referrers.Coverage)
+		if (f == relations.ConfigReferences || f == relations.PodPlacement) && subject == n.extras.Subject {
+			n.extras.Consumers = append(n.extras.Consumers, referrers.Referrers...)
+		}
 		for _, r := range referrers.Referrers {
 			if e, ok := edgeFor(f.Name, r.Ref, subject); ok {
 				if n.projectFamily(session, f.Name, subject) {
@@ -170,6 +184,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		chosen := v.Selected(f, subject, obj)
 		n.cover(f.Name, chosen.Coverage)
+		n.extras.projectCoverage(disposition, gk, true, chosen.Coverage)
 		for _, m := range chosen.Matches {
 			if e, ok := projectedEdge(disposition, subject, m); ok {
 				n.edge(subject, m, e, false)
@@ -177,6 +192,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		by := v.SelectedBy(f, subject, obj)
 		n.cover(f.Name, by.Coverage)
+		n.extras.projectCoverage(disposition, gk, false, by.Coverage)
 		for _, m := range by.Matches {
 			if e, ok := projectedEdge(disposition, m, subject); ok {
 				n.edge(m, subject, e, false)
@@ -190,17 +206,50 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 // all emitted references, including ownership, use access. Coverage is keyed
 // by family and includes only incomplete answers.
 func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
+	rel, extras := RelationsAnswerWithExtras(session, access, traverse, ov, subject, obj, istioDomain, provider, dp)
+	if extras == nil {
+		return rel, nil
+	}
+	return rel, extras.Coverage
+}
+
+// RelationsAnswerWithExtras also preserves declaration provenance and coverage
+// for in-process consumers. Extras must not be serialized as resource data.
+func RelationsAnswerWithExtras(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider) (*Relationships, *RelationshipExtras) {
+	return relationsAnswer(session, access, traverse, ov, subject, obj, istioDomain, provider, dp, false)
+}
+
+// RelationsContextAnswer answers context fields without enumerating ownership
+// children that the context does not expose.
+func RelationsContextAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider) (*Relationships, *RelationshipExtras) {
+	return relationsAnswer(session, access, traverse, ov, subject, obj, istioDomain, provider, dp, true)
+}
+
+func relationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider, contextOnly bool) (*Relationships, *RelationshipExtras) {
 	if obj == nil || access.CanRead(subject.GroupKind(), subject.Namespace) != ownership.Allowed {
 		return &Relationships{}, nil
 	}
 	v := relations.NewView(session, access)
-	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access}
+	if contextOnly {
+		v.WithLimit(math.MaxInt)
+	}
+	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access, extras: &RelationshipExtras{Subject: subject, Fields: map[string]relations.Coverage{}, ScalerManagers: map[resourceid.Ref]resourceid.Ref{}}}
 	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
+	n.contextDirectEvidence(relations.NewView(session, access), subject, obj)
 	n.answer(session, v, families, selectors, subject, obj, false)
 	for _, f := range relations.Compositions() {
 		joined := v.Composed(f, subject, obj)
 		n.cover(f.Name, joined.Coverage)
+		if slices.ContainsFunc(f.Producer.Sources, func(s relations.Source) bool { return s.Kind == subject.GroupKind() }) {
+			n.extras.projectCoverage(f.Projection, subject.GroupKind(), true, joined.Coverage)
+		}
+		for _, consumer := range f.Consumers {
+			if (len(f.ConsumerKinds) == 0 || slices.Contains(f.ConsumerKinds, subject.GroupKind())) && slices.ContainsFunc(consumer.Sources, func(s relations.Source) bool { return s.Kind == subject.GroupKind() }) {
+				n.extras.projectCoverage(f.Projection, subject.GroupKind(), false, joined.Coverage)
+				break
+			}
+		}
 		for _, edge := range joined.Edges {
 			if e, ok := projectedEdge(f.Projection, edge.Producer, edge.Consumer); ok {
 				n.edge(edge.Producer, edge.Consumer, e, false)
@@ -209,7 +258,10 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	}
 
 	n.management(session, ov, subject)
-	children := ov.Children(subject)
+	children := ownership.ChildrenAnswer{}
+	if !contextOnly || subject.GroupKind() == (resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "Cluster"}) {
+		children = ov.Children(subject)
+	}
 	for _, c := range children.Children {
 		n.edge(subject, c.Ref, relationEdge{edge: EdgeManages}, false)
 	}
@@ -262,7 +314,9 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 			rel.ManagedBy = n.ownManagers(rel, ov, subject)
 		}
 	}
-	return rel, n.coverage
+	n.extras.Coverage = n.coverage
+	n.scalerManagers(session, rel)
+	return rel, n.extras
 }
 
 // topManager climbs from subject while something readable is above it: the

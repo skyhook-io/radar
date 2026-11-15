@@ -16,22 +16,32 @@ func RelationSpecGenerators(session relations.Session, access ownership.Access, 
 	incomplete := false
 	for _, family := range relations.Families("") {
 		e, ok := familyEdges[family.Name]
-		if !ok || e.edge != EdgeManages || !family.Covers(subject.GroupKind()) {
+		if !ok || !family.Covers(subject.GroupKind()) {
 			continue
 		}
-		if e.reverse {
-			answer := rv.References(family, subject, obj)
-			incomplete = incomplete || !answer.Coverage.Complete()
-			for _, declared := range answer.Declared {
-				if declared.State == relations.TargetPresent {
-					n.edge(subject, declared.Ref, e, false)
-				}
+		for _, rule := range e.Rules {
+			if rule.Edge != string(EdgeManages) {
+				continue
 			}
-		} else {
-			answer := rv.Referrers(family, subject, obj)
-			incomplete = incomplete || !answer.Coverage.Complete()
-			for _, referrer := range answer.Referrers {
-				n.edge(referrer.Ref, subject, e, false)
+			edge := relationEdge{edge: EdgeManages, reverse: rule.Reverse}
+			if rule.Reverse {
+				answer := rv.References(family, subject, obj)
+				incomplete = incomplete || !answer.Coverage.Complete()
+				for _, declared := range answer.Declared {
+					if declared.State == relations.TargetPresent {
+						if rule.Matches(subject.GroupKind(), declared.Ref.GroupKind()) {
+							n.edge(subject, declared.Ref, edge, false)
+						}
+					}
+				}
+			} else {
+				answer := rv.Referrers(family, subject, obj)
+				incomplete = incomplete || !answer.Coverage.Complete()
+				for _, referrer := range answer.Referrers {
+					if rule.Matches(referrer.Ref.GroupKind(), subject.GroupKind()) {
+						n.edge(referrer.Ref, subject, edge, false)
+					}
+				}
 			}
 		}
 	}

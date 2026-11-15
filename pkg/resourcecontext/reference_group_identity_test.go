@@ -15,7 +15,7 @@ func TestReferencedByPodSpecsOnlyClaimsCoreConfigTargets(t *testing.T) {
 		for _, apiVersion := range []string{"v1", "custom.example.io/v1"} {
 			t.Run(kind+"/"+apiVersion, func(t *testing.T) {
 				obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"namespace": "app", "name": "shared"}}}
-				rc := Build(context.Background(), obj, Options{Tier: TierBasic, Provider: provider, AccessChecker: allowAllChecker{}})
+				rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, Provider: provider, AccessChecker: allowAllChecker{}})
 				if apiVersion == "v1" {
 					if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 {
 						t.Errorf("core target references=%+v", rc.ReferencedBy)

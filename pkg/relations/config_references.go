@@ -2,6 +2,7 @@ package relations
 
 import (
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
@@ -25,12 +26,19 @@ var ConfigReferences = &Family{
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}},
 		{Kind: resourceid.GroupKind{Group: "networking.k8s.io", Kind: "Ingress"}, Targets: []resourceid.GroupKind{{Kind: "Secret"}}},
 		{Kind: resourceid.GroupKind{Kind: "Pod"}},
+		{Kind: resourceid.GroupKind{Kind: "ServiceAccount"}, Targets: []resourceid.GroupKind{{Kind: "Secret"}}},
 	},
 	Targets: []resourceid.GroupKind{
 		{Kind: "ConfigMap"}, {Kind: "Secret"}, {Kind: "PersistentVolumeClaim"}, {Kind: "ServiceAccount"},
 	},
 	Declared: func(obj runtime.Object, visit func(Declaration)) error {
 		if rs, ok := obj.(*appsv1.ReplicaSet); ok && rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+			return nil
+		}
+		if sa, ok := obj.(*corev1.ServiceAccount); ok {
+			for _, r := range configrefs.ServiceAccountSecretReferences(sa) {
+				visit(Declaration{Target: resourceid.Ref{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}, Path: r.Path})
+			}
 			return nil
 		}
 		_, err := configrefs.VisitObjectReferences(obj, func(r configrefs.PodSpecReference) {

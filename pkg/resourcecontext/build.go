@@ -4,10 +4,10 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -60,27 +60,21 @@ type Options struct {
 	// unresolved coordinates within it. Nil skips Build's access checks.
 	AccessChecker RefAccessChecker
 
-	// Topology supplies relationships when Relationships is nil. Without
-	// either source, graph-derived fields are skipped.
-	Topology    *topology.Topology
-	Provider    topology.ResourceProvider
-	DynamicProv topology.DynamicProvider
-
-	// Relationships bypasses graph projection when already computed. It need
-	// not have a Topology; Ownership may mutate it, so do not share it across
-	// concurrent calls.
-	Relationships *topology.Relationships
+	// Provider supplies numeric/status facts for already-authorized HPAs.
+	// Deprecated: supply Relationships and RelationshipExtras. Ignored by Build.
+	Topology *topology.Topology
+	// Deprecated: supply Relationships and RelationshipExtras. Ignored by Build.
+	RelIndex           *topology.RelationshipsIndex
+	Provider           topology.ResourceProvider
+	DynamicProv        topology.DynamicProvider
+	Relationships      *topology.Relationships
+	RelationshipExtras *topology.RelationshipExtras
 
 	// Ownership is required for ManagedBy and Manager enrichment. It must use
 	// topology.ApplyOwner semantics for fetched: Owner and ControllerChain from
 	// owner references, Managers containing only residual spec controllers,
 	// and GitOps/Helm evidence in rel.Ownership.Manager. rel is never nil.
 	Ownership func(rel *topology.Relationships, fetched ownership.Observation)
-
-	// RelIndex is the topology inverted-edge index. Pass a shared instance
-	// (topology.IndexByResource(topo)) for high-fanout callers; nil is fine
-	// for single-resource Build paths — the per-call inline scan is O(E) once.
-	RelIndex *topology.RelationshipsIndex
 
 	// Pre-computed summaries — pass-through into the response.
 	IssueSummary  *IssueSummary
@@ -214,35 +208,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		omitted.add("autoInstrumentation.openTelemetry", OmittedUnavailable)
 	}
 
-	// Topology supplies networking, scaling and spec-declared relations;
-	// the caller's ownership answer supplies controllers and GitOps evidence.
 	rel := opts.Relationships
-	// A StorageClass's volumes and claims come from cache-wide reads, so say
-	// when those inventories were incomplete, even if nothing was found.
-	// Relationships a host supplies carry no inventory state to assess.
-	if rel == nil && opts.Topology != nil && ident.Group == "storage.k8s.io" && ident.Kind == "StorageClass" {
-		if gap := storageClassInventoryGap(opts.Provider); gap != "" {
-			omitted.add("dependents", gap)
-		}
-	}
-	if rel == nil && opts.Topology != nil {
-		// Resolve the topology-pseudo-kind so cross-group CRDs (Knative
-		// serving.knative.dev/Service, CAPI cluster.x-k8s.io/Cluster, …)
-		// look up the right node. Using ident.Kind directly would lower-
-		// case to "service" and resolve to the core Service node, leaking
-		// the wrong resource's relationships into the CRD's resourceContext.
-		// The handler-side pre-computation does this same KindForGVK
-		// resolution; mirror it here so the fallback path doesn't undo it.
-		rel = topology.GetRelationshipsWithObject(
-			topology.KindForGVK(ident.Kind, ident.Group), ident.Namespace, ident.Name, obj,
-			opts.Topology, opts.Provider, opts.DynamicProv, opts.RelIndex,
-		)
-	}
-	// answered: the host's ownership answer stands, even one with nothing to
-	// say, as for an Event, whose owner references ownership doesn't follow.
-	relationshipsAvailable := opts.Topology != nil || opts.Relationships != nil
-	answered := false
-	if m, ok := obj.(metav1.Object); ok && opts.Ownership != nil {
+	relationshipsAvailable := rel != nil
+	addRelationshipOmissions(opts.RelationshipExtras, omitted)
+	answered := rel != nil && rel.Ownership != nil
+	if m, ok := obj.(metav1.Object); ok && opts.Ownership != nil && !answered {
 		if rel == nil {
 			rel = &topology.Relationships{}
 		}
@@ -350,61 +320,16 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 				toContextRefs(rel.Dependents), "dependents", omitted)
 		}
 
-		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
+		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.RelationshipExtras, opts.AccessChecker, omitted)
 	}
 
-	// 3. Pod-specific: RunsOn (Node) + Uses (ConfigMap/Secret/PVC/SA).
-	//
-	// RunsOn and Uses.ServiceAccount come from topology.Relationships when
-	// available (T23 populates them from pod.Spec server-side). We still
-	// scan pod.Spec.Volumes / .EnvFrom directly for the ConfigMap/Secret/PVC
-	// inventory — topology doesn't model those use-edges at the granularity
-	// Build needs.
+	rc.Uses = buildUses(opts.RelationshipExtras)
 	if pod, ok := obj.(*corev1.Pod); ok {
-		rc.Uses = buildUsesFromPod(ctx, pod, opts.AccessChecker, omitted)
 		rc.PodSummary = buildPodSummary(pod)
-
-		// Prefer rel.ServiceAccount over re-reading pod.Spec — same source,
-		// but consolidating through Relationships keeps Build aligned with
-		// how MCP/agents consume the field.
-		if rc.Uses != nil && rc.Uses.ServiceAccount == nil && rel != nil && rel.ServiceAccount != nil {
-			candidate := &ContextRef{
-				Kind:      rel.ServiceAccount.Kind,
-				Group:     rel.ServiceAccount.Group,
-				Namespace: rel.ServiceAccount.Namespace,
-				Name:      rel.ServiceAccount.Name,
-			}
-			if checkRef(ctx, opts.AccessChecker, candidate) {
-				rc.Uses.ServiceAccount = candidate
-			} else {
-				omitted.add("uses.serviceAccount", OmittedRBACDenied)
-			}
-		}
-
-		// RunsOn: prefer the topology-supplied Node ref. Fall back to
-		// pod.Spec.NodeName any time rel.Node is empty — the Node informer
-		// may be cold, the node may not yet be in the topology graph, or
-		// rel itself may be nil. The previous `else if rel == nil` guard
-		// dropped the fallback when topology was built but rel.Node hadn't
-		// been populated yet, leaving RunsOn empty even though the Pod
-		// spec clearly named a node.
-		var nodeName, nodeGroup string
 		if rel != nil && rel.Node != nil {
-			nodeName = rel.Node.Name
-			nodeGroup = rel.Node.Group
-		} else {
-			nodeName = pod.Spec.NodeName
-		}
-		if nodeName != "" {
-			candidate := &ContextRef{
-				Kind:  "Node",
-				Group: nodeGroup,
-				Name:  nodeName,
-			}
-			if checkRef(ctx, opts.AccessChecker, candidate) {
-				rc.RunsOn = candidate
-			} else {
-				omitted.add("runsOn", OmittedRBACDenied)
+			candidate := toContextRef(*rel.Node)
+			if checkRef(ctx, opts.AccessChecker, &candidate) {
+				rc.RunsOn = &candidate
 			}
 		}
 	}
@@ -413,10 +338,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.ServiceSummary = buildServiceSummary(ctx, svc, opts.ServiceBackends, opts.AccessChecker, omitted)
 	}
 	rc.Reflection = buildReflection(ctx, obj, opts.Reflections, opts.AccessChecker, omitted)
-	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, rel, opts.AccessChecker, omitted)
-	if uses := buildUsesFromWorkload(ctx, obj, opts.AccessChecker, omitted); uses != nil {
-		rc.Uses = uses
-	}
+	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.RelationshipExtras, opts.AccessChecker, omitted)
 	rc.WorkloadSummary = buildWorkloadSummary(obj)
 	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, omitted)
 	rc.ServiceAccountSummary = buildServiceAccountSummary(ctx, obj, opts.AccessChecker, omitted)
@@ -594,78 +516,32 @@ func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
 // Uses (Pod-specific)
 // ---------------------------------------------------------------------------
 
-// buildUsesFromPod extracts ConfigMap/Secret/PVC/ServiceAccount references
-// from pod.Spec. Returns nil when the pod uses no configuration.
-//
-// Reference extraction is shared with audit and reverse context, including
-// init/debug containers, image pull credentials and volume-driver credentials.
-// Only the PodSpec's declared references are used; current ServiceAccount pull
-// secrets are not inferred into an already-admitted Pod.
-func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker, omitted *omittedTracker) *UsesBlock {
-	if pod == nil {
+func buildUses(extras *topology.RelationshipExtras) *UsesBlock {
+	if extras == nil {
 		return nil
 	}
-	return buildUsesFromPodSpec(ctx, pod.Namespace, pod.Spec, ac, omitted)
-}
-
-func buildUsesFromPodSpec(ctx context.Context, namespace string, spec corev1.PodSpec, ac RefAccessChecker, omitted *omittedTracker) *UsesBlock {
-	cmSet := newRefSet()
-	secretSet := newRefSet()
-	pvcSet := newRefSet()
-
-	for _, reference := range configrefs.PodSpecReferences(namespace, spec) {
-		switch reference.Kind {
+	gk := extras.Subject.GroupKind()
+	if !((gk.Group == "" && gk.Kind == "Pod") || (gk.Group == "apps" && slices.Contains([]string{"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}, gk.Kind)) || (gk.Group == "batch" && slices.Contains([]string{"Job", "CronJob"}, gk.Kind)) || (gk.Group == "argoproj.io" && gk.Kind == "Rollout")) {
+		return nil
+	}
+	uses := &UsesBlock{}
+	for _, d := range extras.Declarations {
+		r := ContextRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name}
+		switch d.Ref.Kind {
 		case "ConfigMap":
-			cmSet.add(reference.Name, reference.Namespace)
+			uses.ConfigMaps = append(uses.ConfigMaps, r)
 		case "Secret":
-			secretSet.add(reference.Name, reference.Namespace)
+			uses.Secrets = append(uses.Secrets, r)
 		case "PersistentVolumeClaim":
-			pvcSet.add(reference.Name, reference.Namespace)
+			uses.PVCs = append(uses.PVCs, r)
+		case "ServiceAccount":
+			uses.ServiceAccount = &r
 		}
 	}
-
-	uses := &UsesBlock{
-		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", ""), "uses.configMaps", omitted),
-		Secrets:    filterRefs(ctx, ac, secretSet.refs("Secret", ""), "uses.secrets", omitted),
-		PVCs:       filterRefs(ctx, ac, pvcSet.refs("PersistentVolumeClaim", ""), "uses.pvcs", omitted),
-	}
-
-	if sa := spec.ServiceAccountName; sa != "" {
-		candidate := &ContextRef{
-			Kind:      "ServiceAccount",
-			Namespace: namespace,
-			Name:      sa,
-		}
-		if checkRef(ctx, ac, candidate) {
-			uses.ServiceAccount = candidate
-		} else {
-			omitted.add("uses.serviceAccount", OmittedRBACDenied)
-		}
-	}
-
-	if len(uses.ConfigMaps) == 0 && len(uses.Secrets) == 0 && len(uses.PVCs) == 0 && uses.ServiceAccount == nil {
+	if len(uses.ConfigMaps)+len(uses.Secrets)+len(uses.PVCs) == 0 && uses.ServiceAccount == nil {
 		return nil
 	}
 	return uses
-}
-
-func buildUsesFromWorkload(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *UsesBlock {
-	switch v := obj.(type) {
-	case *appsv1.Deployment:
-		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
-	case *appsv1.StatefulSet:
-		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
-	case *appsv1.DaemonSet:
-		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
-	case *appsv1.ReplicaSet:
-		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
-	case *batchv1.Job:
-		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
-	case *batchv1.CronJob:
-		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.JobTemplate.Spec.Template.Spec, ac, omitted)
-	default:
-		return nil
-	}
 }
 
 const (
@@ -673,179 +549,35 @@ const (
 	maxReferencedByPathsPerRef = 8
 )
 
-func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, rel *topology.Relationships, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
-	if node, ok := obj.(*corev1.Node); ok {
-		if rel != nil && rel.PodPlacementObserved {
-			if rel.PodPlacementUnavailable {
-				omitted.add("referencedBy", OmittedUnavailable)
-				return nil
-			}
-			var refs []ReferenceUse
-			for _, pod := range rel.Pods {
-				if pod.Kind == "Pod" && pod.Group == "" {
-					refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
-				}
-			}
-			return filterReferenceUses(ctx, refs, ac, omitted)
-		}
-		if provider == nil {
+func buildReferencedBy(ctx context.Context, obj runtime.Object, extras *topology.RelationshipExtras, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
+	if extras == nil {
+		if _, ok := obj.(*corev1.Node); ok {
 			omitted.add("referencedBy", OmittedUnavailable)
-			return nil
 		}
-		pods, err := provider.Pods()
-		if err != nil {
-			omitted.add("referencedBy", OmittedUnavailable)
-			return nil
-		}
-		var refs []ReferenceUse
-		for _, pod := range pods {
-			if pod == nil || pod.Spec.NodeName != node.Name || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-				continue
-			}
-			refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
-		}
-		return filterReferenceUses(ctx, refs, ac, omitted)
-	}
-	if provider == nil {
 		return nil
 	}
-
-	ident, ok := identityOf(obj)
-	if !ok || ident.Group != "" || ident.Namespace == "" {
-		return nil
-	}
-
-	var target refTarget
-	switch ident.Kind {
-	case "ConfigMap":
-		target = refTarget{kind: "ConfigMap", namespace: ident.Namespace, name: ident.Name}
-	case "Secret", "PersistentVolumeClaim", "ServiceAccount":
-		target = refTarget{kind: ident.Kind, namespace: ident.Namespace, name: ident.Name}
-	default:
-		return nil
-	}
-
 	var refs []ReferenceUse
-	appendRef := func(ref ReferenceUse) {
-		if len(ref.Paths) == 0 || ref.Namespace != target.namespace {
-			return
+	for _, consumer := range extras.Consumers {
+		r := consumer.Ref
+		paths := slices.Clone(consumer.Paths)
+		prefix := ""
+		switch r.Kind {
+		case "Pod":
+			if r.Group == "" {
+				prefix = "spec"
+			}
+		case "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "Rollout":
+			prefix = "spec.template.spec"
+		case "CronJob":
+			prefix = "spec.jobTemplate.spec.template.spec"
 		}
-		refs = append(refs, ref)
+		for i, path := range paths {
+			if prefix != "" && !strings.HasPrefix(path, "spec.") {
+				paths[i] = prefix + "." + path
+			}
+		}
+		refs = append(refs, ReferenceUse{Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name, Paths: paths})
 	}
-
-	if target.kind == "Secret" {
-		if ingresses, err := provider.Ingresses(); err != nil {
-			omitted.add("referencedBy", OmittedUnavailable)
-		} else {
-			for _, ing := range ingresses {
-				if ing == nil || ing.Namespace != target.namespace {
-					continue
-				}
-				for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
-					if ref.Name == target.name {
-						appendRef(ReferenceUse{Kind: "Ingress", Group: "networking.k8s.io", Namespace: ing.Namespace, Name: ing.Name, Paths: []string{"spec.tls[].secretName"}})
-					}
-				}
-			}
-		}
-		if accounts, ok := provider.(topology.ServiceAccountProvider); ok {
-			// Assess before reading: a sync that completes between the two
-			// must not make a partial snapshot look complete.
-			gap := inventoryGap(provider, string(k8score.ServiceAccounts), []string{target.namespace})
-			sas, err := accounts.ServiceAccounts()
-			if err != nil {
-				sas = nil
-				gap = OmittedUnavailable
-			}
-			if gap != "" {
-				omitted.add("referencedBy", gap)
-			}
-			for _, sa := range sas {
-				if sa == nil || sa.Namespace != target.namespace {
-					continue
-				}
-				var paths []string
-				for _, ref := range configrefs.ServiceAccountSecretReferences(sa) {
-					if ref.Name == target.name {
-						paths = append(paths, ref.Path)
-					}
-				}
-				appendRef(ReferenceUse{Kind: "ServiceAccount", Namespace: sa.Namespace, Name: sa.Name, Paths: paths})
-			}
-		}
-	}
-
-	if deployments, err := provider.Deployments(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
-	} else {
-		for _, d := range deployments {
-			if d == nil || d.Namespace != target.namespace {
-				continue
-			}
-			appendRef(referenceUseForPodSpec("Deployment", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
-		}
-	}
-	if statefulSets, err := provider.StatefulSets(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
-	} else {
-		for _, s := range statefulSets {
-			if s == nil || s.Namespace != target.namespace {
-				continue
-			}
-			appendRef(referenceUseForPodSpec("StatefulSet", "apps", s.Namespace, s.Name, s.Spec.Template.Spec, "spec.template.spec", target))
-		}
-	}
-	if daemonSets, err := provider.DaemonSets(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
-	} else {
-		for _, d := range daemonSets {
-			if d == nil || d.Namespace != target.namespace {
-				continue
-			}
-			appendRef(referenceUseForPodSpec("DaemonSet", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
-		}
-	}
-	if replicaSets, err := provider.ReplicaSets(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
-	} else {
-		for _, replicaSet := range replicaSets {
-			if replicaSet == nil || replicaSet.Namespace != target.namespace {
-				continue
-			}
-			appendRef(referenceUseForPodSpec("ReplicaSet", "apps", replicaSet.Namespace, replicaSet.Name, replicaSet.Spec.Template.Spec, "spec.template.spec", target))
-		}
-	}
-	if jobs, err := provider.Jobs(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
-	} else {
-		for _, j := range jobs {
-			if j == nil || j.Namespace != target.namespace {
-				continue
-			}
-			appendRef(referenceUseForPodSpec("Job", "batch", j.Namespace, j.Name, j.Spec.Template.Spec, "spec.template.spec", target))
-		}
-	}
-	if cronJobs, err := provider.CronJobs(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
-	} else {
-		for _, c := range cronJobs {
-			if c == nil || c.Namespace != target.namespace {
-				continue
-			}
-			appendRef(referenceUseForPodSpec("CronJob", "batch", c.Namespace, c.Name, c.Spec.JobTemplate.Spec.Template.Spec, "spec.jobTemplate.spec.template.spec", target))
-		}
-	}
-	if pods, err := provider.Pods(); err != nil {
-		omitted.add("referencedBy", OmittedUnavailable)
-	} else {
-		for _, p := range pods {
-			if p == nil || p.Namespace != target.namespace {
-				continue
-			}
-			appendRef(referenceUseForPodSpec("Pod", "", p.Namespace, p.Name, p.Spec, "spec", target))
-		}
-	}
-
 	return filterReferenceUses(ctx, refs, ac, omitted)
 }
 
@@ -1200,51 +932,6 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	return out
 }
 
-// inventoryCoverage is implemented by providers that can say whether a
-// namespace's inventory of a kind is complete. Without it an empty list can't
-// be told apart from a namespace Radar is still loading, failed to load or
-// doesn't collect.
-type inventoryCoverage interface {
-	AssessKindRead(resource string, namespaces []string) k8score.KindReadAssessment
-}
-
-// inventoryGap says why an empty read of resource in namespaces (nil for every
-// namespace) can't be taken as "none": still loading, or failed, uncollected
-// or unwatched. Call it before reading, so a sync that completes in between
-// can't make a partial read look complete.
-func inventoryGap(provider topology.ResourceProvider, resource string, namespaces []string) OmittedReason {
-	coverage, ok := provider.(inventoryCoverage)
-	if !ok {
-		return ""
-	}
-	assessment := coverage.AssessKindRead(resource, namespaces)
-	switch {
-	case assessment.Complete:
-		return ""
-	case assessment.TargetReadiness() == k8score.KindPending:
-		return OmittedCacheCold
-	default:
-		return OmittedUnavailable
-	}
-}
-
-// storageClassInventoryGap covers a StorageClass's volumes and its claims,
-// which can be in any namespace.
-func storageClassInventoryGap(provider topology.ResourceProvider) OmittedReason {
-	gaps := []OmittedReason{
-		inventoryGap(provider, string(k8score.PersistentVolumes), nil),
-		inventoryGap(provider, string(k8score.PersistentVolumeClaims), nil),
-	}
-	switch {
-	case slices.Contains(gaps, OmittedUnavailable):
-		return OmittedUnavailable
-	case slices.Contains(gaps, OmittedCacheCold):
-		return OmittedCacheCold
-	default:
-		return ""
-	}
-}
-
 func buildServiceAccountSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *ServiceAccountSummary {
 	sa, ok := obj.(*corev1.ServiceAccount)
 	if !ok {
@@ -1457,7 +1144,7 @@ func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 // buildScaledBy gates the scaler refs first and only then looks up the HPA
 // object, so a scaler the caller cannot read never reaches the diagnosis and
 // nothing about it (state, bounds, metric names) can leak through the summary.
-func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider topology.ResourceProvider, ac RefAccessChecker, omitted *omittedTracker) []ScalerRef {
+func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider topology.ResourceProvider, extras *topology.RelationshipExtras, ac RefAccessChecker, omitted *omittedTracker) []ScalerRef {
 	refs := filterRefs(ctx, ac, toContextRefs(scalers), "scaledBy", omitted)
 	if len(refs) == 0 {
 		return nil
@@ -1474,7 +1161,12 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 			}
 			if hpa := hpas[hpaKey(ref.Namespace, ref.Name)]; hpa != nil {
 				entry.HPASummary = buildHPASummary(hpa)
-				entry.ManagedBy = kedaScaledObjectRef(ctx, hpa, ac, omitted)
+			}
+		}
+		if extras != nil {
+			key := resourceid.NewRef(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+			if manager, ok := extras.ScalerManagers[key]; ok {
+				entry.ManagedBy = &ContextRef{Kind: manager.Kind, Group: manager.Group, Namespace: manager.Namespace, Name: manager.Name}
 			}
 		}
 		out = append(out, entry)
@@ -1486,31 +1178,6 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 // without a dynamic provider the group is empty, as it is for core kinds.
 func isHPARef(ref ContextRef) bool {
 	return ref.Kind == "HorizontalPodAutoscaler" && (ref.Group == "" || ref.Group == "autoscaling")
-}
-
-// KEDA owns the HPAs it creates and also labels them with the ScaledObject
-// name; either is enough to attribute the HPA. The pointer is gated like any
-// other ref so a ScaledObject the caller cannot read is not named.
-func kedaScaledObjectRef(ctx context.Context, hpa *autoscalingv2.HorizontalPodAutoscaler, ac RefAccessChecker, omitted *omittedTracker) *ContextRef {
-	name := ""
-	for _, owner := range hpa.OwnerReferences {
-		if owner.Kind == "ScaledObject" && resourceid.GroupFromAPIVersion(owner.APIVersion) == "keda.sh" {
-			name = owner.Name
-			break
-		}
-	}
-	if name == "" {
-		name = hpa.Labels["scaledobject.keda.sh/name"]
-	}
-	if name == "" {
-		return nil
-	}
-	ref := &ContextRef{Kind: "ScaledObject", Group: "keda.sh", Namespace: hpa.Namespace, Name: name}
-	if !checkRef(ctx, ac, ref) {
-		omitted.add("scaledBy.managedBy", OmittedRBACDenied)
-		return nil
-	}
-	return ref
 }
 
 // indexHPAs keys the provider's HPAs so each scaler ref is one map lookup.

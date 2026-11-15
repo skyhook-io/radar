@@ -123,6 +123,7 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 		selected := v.SelectedBy(relations.ServiceSelectors, subject, obj)
 		selected.Coverage.Total = 0
 		n.cover(relations.ServiceSelectors.Name, selected.Coverage)
+		n.extras.cover("Entrypoints", selected.Coverage)
 		services = selected.Matches
 	}
 	add := func(r resourceid.Ref) {
@@ -149,6 +150,7 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 		for _, family := range []*relations.Family{relations.IngressBackends, relations.GatewayBackends, relations.IstioServiceHosts(istioDomain), relations.TraefikBackends, relations.ContourBackends} {
 			found := v.Referrers(family, svc, nil)
 			n.cover(family.Name, found.Coverage)
+			n.extras.cover("Entrypoints", found.Coverage)
 			for _, r := range found.Referrers {
 				// A DestinationRule configures traffic to the host; the
 				// family's own projection files it under ConfigRefs.
@@ -170,6 +172,8 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 			for _, route := range routes.Referrers {
 				parents := relations.NewView(s, intermediateAccess{Access: emit, ref: route.Ref, traverse: traverse}).References(composition.parents, route.Ref, nil)
 				n.cover(composition.parents.Name, parents.Coverage)
+				n.extras.cover("Entrypoints", routes.Coverage)
+				n.extras.cover("Entrypoints", parents.Coverage)
 				for _, parent := range parents.Declared {
 					if parent.State == relations.TargetPresent {
 						add(parent.Ref)

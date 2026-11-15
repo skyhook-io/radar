@@ -206,7 +206,7 @@ func TestBuild_Pod_FullEnrichment(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), pod, opts)
+	rc := fixtureContext(context.Background(), pod, opts)
 	if rc == nil {
 		t.Fatal("Build returned nil")
 	}
@@ -288,7 +288,7 @@ func TestBuild_Deployment_OwnerRefHelmRelease(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), dep, Options{
+	rc := fixtureContext(context.Background(), dep, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 	})
@@ -341,7 +341,7 @@ func TestBuild_Deployment_WorkloadSummaryAndTemplateUses(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), dep, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), dep, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.WorkloadSummary == nil || rc.WorkloadSummary.Replicas == nil {
 		t.Fatalf("WorkloadSummary.Replicas: got nil; rc=%+v", rc)
 	}
@@ -381,7 +381,7 @@ func TestBuild_Deployment_RolloutRisk(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), dep, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), dep, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.WorkloadSummary == nil || rc.WorkloadSummary.RolloutRisk == nil {
 		t.Fatalf("WorkloadSummary.RolloutRisk: got nil; rc=%+v", rc)
 	}
@@ -412,7 +412,7 @@ func TestBuild_Deployment_OmitsSafeRolloutRisk(t *testing.T) {
 		},
 	}}
 
-	rc := Build(context.Background(), dep, Options{Tier: TierBasic})
+	rc := fixtureContext(context.Background(), dep, Options{Tier: TierBasic})
 	if rc.WorkloadSummary == nil {
 		t.Fatal("WorkloadSummary: got nil")
 	}
@@ -450,7 +450,7 @@ func TestBuild_Pod_PodSummary(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), pod, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), pod, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.PodSummary == nil {
 		t.Fatal("PodSummary: got nil")
 	}
@@ -482,7 +482,7 @@ func TestBuild_Service_ExposedByIngress(t *testing.T) {
 			{Source: "ingress/prod/api-ingress", Target: "service/prod/api", Type: topology.EdgeRoutesTo},
 		},
 	}
-	rc := Build(context.Background(), svc, Options{
+	rc := fixtureContext(context.Background(), svc, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
@@ -527,7 +527,7 @@ func TestBuild_Service_NoReadyPodsWarning(t *testing.T) {
 			Selector: map[string]string{"app": "api"},
 		},
 	}
-	rc := Build(context.Background(), svc, Options{
+	rc := fixtureContext(context.Background(), svc, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		ServiceBackends: mockServiceBackends{
@@ -568,7 +568,7 @@ func TestBuild_IngressSummary_BackendsTLSAndWarnings(t *testing.T) {
 		}},
 	}
 
-	rc := Build(context.Background(), ing, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), ing, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.IngressSummary == nil {
 		t.Fatal("IngressSummary: got nil")
 	}
@@ -614,7 +614,7 @@ func TestBuild_NodeSummary(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), node, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), node, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.NodeSummary == nil {
 		t.Fatal("NodeSummary: got nil")
 	}
@@ -684,7 +684,7 @@ func TestBuild_PVCSummary(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), pvc, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), pvc, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.PVCSummary == nil {
 		t.Fatal("PVCSummary: got nil")
 	}
@@ -711,7 +711,7 @@ func TestBuild_JobAndCronJobSummary(t *testing.T) {
 		},
 		Status: batchv1.JobStatus{Active: 1, Succeeded: 2, Failed: 1},
 	}
-	rc := Build(context.Background(), job, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), job, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.JobSummary == nil {
 		t.Fatal("JobSummary: got nil")
 	}
@@ -730,7 +730,7 @@ func TestBuild_JobAndCronJobSummary(t *testing.T) {
 			}},
 		},
 	}
-	rc = Build(context.Background(), cj, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc = fixtureContext(context.Background(), cj, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.CronJobSummary == nil {
 		t.Fatal("CronJobSummary: got nil")
 	}
@@ -759,7 +759,7 @@ func TestBuild_NetworkPolicy_OutgoingEdgeNotSurfaced(t *testing.T) {
 			{Source: "networkpolicy/prod/default-deny", Target: "deployment/prod/web", Type: topology.EdgeProtects},
 		},
 	}
-	rc := Build(context.Background(), np, Options{
+	rc := fixtureContext(context.Background(), np, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
@@ -795,7 +795,7 @@ func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
 			{Source: "deployment/prod/web", Target: "configmap/prod/web-config", Type: topology.EdgeManages},
 		},
 	}
-	rc := Build(context.Background(), cm, Options{
+	rc := fixtureContext(context.Background(), cm, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
@@ -820,7 +820,7 @@ func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
 			}},
 		},
 	}
-	rc := Build(context.Background(), pod, Options{
+	rc := fixtureContext(context.Background(), pod, Options{
 		Tier:          TierBasic,
 		AccessChecker: denyChecker{group: "", kind: "Secret", namespace: "prod"},
 	})
@@ -843,7 +843,7 @@ func TestBuild_RBACDenied_AppReferences(t *testing.T) {
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod"},
 	}
-	rc := Build(context.Background(), dep, Options{
+	rc := fixtureContext(context.Background(), dep, Options{
 		Tier:          TierBasic,
 		AccessChecker: denyChecker{group: "", kind: "Service", namespace: "shared"},
 		AppReferences: &AppReferences{ServiceEnv: []ServiceEnvReference{{
@@ -876,7 +876,7 @@ func TestBuild_RBACDenied_ServiceReferencePreservesDuplicateEnv(t *testing.T) {
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod"},
 	}
-	rc := Build(context.Background(), dep, Options{
+	rc := fixtureContext(context.Background(), dep, Options{
 		Tier:          TierBasic,
 		AccessChecker: denyChecker{group: "", kind: "Service", namespace: "shared"},
 		AppReferences: &AppReferences{
@@ -913,7 +913,7 @@ func TestBuild_RBACDenied_ServiceReferencePreservesDuplicateEnv(t *testing.T) {
 func TestBuild_RBACDenied_HistoryAppReferences(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "prod"}}
 	t.Run("removed Service", func(t *testing.T) {
-		rc := Build(context.Background(), pod, Options{
+		rc := fixtureContext(context.Background(), pod, Options{
 			Tier:          TierBasic,
 			AccessChecker: denyChecker{kind: "Service", namespace: "shared"},
 			AppReferences: &AppReferences{RemovedServiceEnv: []RemovedServiceEnvReference{{
@@ -928,7 +928,7 @@ func TestBuild_RBACDenied_HistoryAppReferences(t *testing.T) {
 		}
 	})
 	t.Run("stale Secret", func(t *testing.T) {
-		rc := Build(context.Background(), pod, Options{
+		rc := fixtureContext(context.Background(), pod, Options{
 			Tier:          TierBasic,
 			AccessChecker: denyChecker{kind: "Secret", namespace: "prod"},
 			AppReferences: &AppReferences{StaleSecretEnv: []StaleSecretEnvReference{{
@@ -954,8 +954,8 @@ func hasOmitted(items []OmittedField, field string) bool {
 }
 
 func TestBuild_NilObj(t *testing.T) {
-	if rc := Build(context.Background(), nil, Options{}); rc != nil {
-		t.Errorf("Build(nil) = %+v, want nil", rc)
+	if rc := fixtureContext(context.Background(), nil, Options{}); rc != nil {
+		t.Errorf("fixtureContext(nil) = %+v, want nil", rc)
 	}
 }
 
@@ -975,7 +975,7 @@ func TestBuild_HPA_Identity(t *testing.T) {
 			},
 		},
 	}
-	rc := Build(context.Background(), hpa, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), hpa, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc == nil {
 		t.Fatal("Build returned nil for HPA")
 	}
@@ -1004,7 +1004,7 @@ func TestBuild_PolicyReports_BasicTierCountsOnly(t *testing.T) {
 			{Policy: "no-host-network", Rule: "main", Result: "pass"},
 		},
 	}
-	rc := Build(context.Background(), pod, Options{
+	rc := fixtureContext(context.Background(), pod, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		PolicyReports: reports,
@@ -1033,7 +1033,7 @@ func TestBuild_PolicyReports_DiagnosticTierIncludesTop(t *testing.T) {
 			{Policy: "no-host-network", Rule: "main", Result: "pass"},
 		},
 	}
-	rc := Build(context.Background(), pod, Options{
+	rc := fixtureContext(context.Background(), pod, Options{
 		Tier:          TierDiagnostic,
 		AccessChecker: allowAllChecker{},
 		PolicyReports: reports,
@@ -1076,7 +1076,7 @@ func TestBuild_PDB_OutputJSONShape(t *testing.T) {
 			{Source: "replicaset/prod/rs", Target: "pod/prod/p", Type: topology.EdgeManages},
 		},
 	}
-	rc := Build(context.Background(), pod, Options{
+	rc := fixtureContext(context.Background(), pod, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
@@ -1121,7 +1121,7 @@ func TestBuild_Unstructured_StatusSummary(t *testing.T) {
 		},
 	}}
 
-	rc := Build(context.Background(), obj, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc.StatusSummary == nil {
 		t.Fatal("StatusSummary: got nil")
 	}
@@ -1159,7 +1159,7 @@ func TestBuild_StatusConditionsTruncation(t *testing.T) {
 				}
 			}
 			obj := &unstructured.Unstructured{Object: map[string]any{"status": map[string]any{"conditions": conditions}}}
-			rc := Build(context.Background(), obj, Options{Tier: TierBasic})
+			rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic})
 			got := rc.StatusSummary
 			if got == nil || len(got.Conditions) != tc.wantCount || got.ConditionsTruncated != tc.truncated {
 				t.Fatalf("summary = %+v", got)
@@ -1228,7 +1228,7 @@ func TestBuild_ConfigMapReferencedBy(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), cm, Options{
+	rc := fixtureContext(context.Background(), cm, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Provider:      mockResourceProvider{deploys: []*appsv1.Deployment{other, dep}},
@@ -1297,7 +1297,7 @@ func TestBuild_SecretReferencedByCapsIncludingOwnedPods(t *testing.T) {
 		},
 	}
 
-	rc := Build(context.Background(), secret, Options{
+	rc := fixtureContext(context.Background(), secret, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Provider:      mockResourceProvider{deploys: deploys, pods: []*corev1.Pod{ownedPod}},
@@ -1386,7 +1386,7 @@ func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
 	}
 
 	t.Run("attached when Pod and Job are readable", func(t *testing.T) {
-		rc := Build(context.Background(), cj, Options{
+		rc := fixtureContext(context.Background(), cj, Options{
 			Tier: TierBasic, AccessChecker: allowAllChecker{}, ContainerCompletionSplit: obs,
 		})
 		if rc.CronJobSummary == nil || rc.CronJobSummary.ContainerCompletionSplit == nil {
@@ -1399,7 +1399,7 @@ func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
 		{group: "batch", kind: "Job", namespace: "prod"},
 	} {
 		t.Run("omitted when "+denied.kind+" read is denied", func(t *testing.T) {
-			rc := Build(context.Background(), cj, Options{
+			rc := fixtureContext(context.Background(), cj, Options{
 				Tier: TierBasic, AccessChecker: denied, ContainerCompletionSplit: obs,
 			})
 			if rc.CronJobSummary != nil && rc.CronJobSummary.ContainerCompletionSplit != nil {
@@ -1422,7 +1422,7 @@ func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "audit-log-archiver-1", Namespace: "prod"},
 	}
 	t.Run("attached to Job summary", func(t *testing.T) {
-		rc := Build(context.Background(), job, Options{
+		rc := fixtureContext(context.Background(), job, Options{
 			Tier: TierBasic, AccessChecker: allowAllChecker{}, ContainerCompletionSplit: obs,
 		})
 		if rc.JobSummary == nil || rc.JobSummary.ContainerCompletionSplit == nil {
@@ -1435,7 +1435,7 @@ func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
 		{group: "batch", kind: "Job", namespace: "prod"},
 	} {
 		t.Run("Job summary omitted when "+denied.kind+" read is denied", func(t *testing.T) {
-			rc := Build(context.Background(), job, Options{
+			rc := fixtureContext(context.Background(), job, Options{
 				Tier: TierBasic, AccessChecker: denied, ContainerCompletionSplit: obs,
 			})
 			if rc.JobSummary != nil && rc.JobSummary.ContainerCompletionSplit != nil {
@@ -1559,7 +1559,7 @@ func TestBuild_SchedulingSummaryGatesEveryRelatedReference(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			rc := Build(context.Background(), obj, Options{
+			rc := fixtureContext(context.Background(), obj, Options{
 				Tier: TierBasic, AccessChecker: test.denied, Scheduling: summary,
 			})
 			if rc.Scheduling == nil || len(rc.Scheduling.Observations) != 1 {
@@ -1605,7 +1605,7 @@ func TestBuild_SchedulingSummaryDropsUnreadableObservationSubject(t *testing.T) 
 		}},
 	}}}
 
-	rc := Build(context.Background(), obj, Options{
+	rc := fixtureContext(context.Background(), obj, Options{
 		Tier:          TierBasic,
 		AccessChecker: denyChecker{group: "kueue.x-k8s.io", kind: "Workload", namespace: "prod"},
 		Scheduling:    summary,
@@ -1627,7 +1627,7 @@ func TestBuild_EmptySchedulingSummaryIsOmitted(t *testing.T) {
 		"kind":       "Pod",
 		"metadata":   map[string]any{"name": "trainer-pod", "namespace": "prod"},
 	}}
-	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Scheduling: &SchedulingSummary{}})
+	rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, Scheduling: &SchedulingSummary{}})
 	if rc.Scheduling != nil {
 		t.Fatalf("want empty scheduling summary omitted, got %+v", rc.Scheduling)
 	}
@@ -1688,7 +1688,7 @@ func TestBuild_SchedulingSummaryDeepCopiesNestedData(t *testing.T) {
 		},
 	}}}
 
-	got := Build(context.Background(), obj, Options{Tier: TierBasic, Scheduling: summary}).Scheduling
+	got := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, Scheduling: summary}).Scheduling
 	if got == nil || len(got.Observations) != 1 {
 		t.Fatalf("missing scheduling copy: %+v", got)
 	}
@@ -1777,7 +1777,7 @@ func scaledByFixture(scalerKind topology.NodeKind, scalerID string) (*appsv1.Dep
 
 func TestBuild_Deployment_ScaledByHPA_AttachesSummary(t *testing.T) {
 	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
-	rc := Build(context.Background(), deploy, Options{
+	rc := fixtureContext(context.Background(), deploy, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
@@ -1817,7 +1817,7 @@ func TestBuild_Deployment_ScaledByHPA_AttachesSummary(t *testing.T) {
 
 func TestBuild_Deployment_ScaledByHPA_DeniedHPAIsOmittedWithoutLeak(t *testing.T) {
 	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
-	rc := Build(context.Background(), deploy, Options{
+	rc := fixtureContext(context.Background(), deploy, Options{
 		Tier:          TierBasic,
 		AccessChecker: denyChecker{group: "autoscaling", kind: "HorizontalPodAutoscaler", namespace: "prod"},
 		Topology:      topo,
@@ -1848,7 +1848,7 @@ func TestBuild_Deployment_ScaledByHPA_DeniedHPAIsOmittedWithoutLeak(t *testing.T
 
 func TestBuild_Deployment_NoScaler_HasNoScaledBy(t *testing.T) {
 	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "")
-	rc := Build(context.Background(), deploy, Options{
+	rc := fixtureContext(context.Background(), deploy, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
@@ -1869,7 +1869,7 @@ func TestBuild_Deployment_NoScaler_HasNoScaledBy(t *testing.T) {
 func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
 	deploy, topo, hpa := scaledByFixture(topology.KindScaledObject, "scaledobject/prod/api-scaler")
 	topo.Nodes[1].Data = map[string]any{"apiVersion": "keda.sh/v1alpha1"}
-	rc := Build(context.Background(), deploy, Options{
+	rc := fixtureContext(context.Background(), deploy, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
@@ -1898,7 +1898,7 @@ func TestBuild_Deployment_ScaledByKEDAManagedHPA_NamesTheScaledObject(t *testing
 	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/keda-hpa-api")
 	hpa.Name = "keda-hpa-api"
 	hpa.OwnerReferences = []metav1.OwnerReference{{APIVersion: "keda.sh/v1alpha1", Kind: "ScaledObject", Name: "api"}}
-	rc := Build(context.Background(), deploy, Options{
+	rc := fixtureContext(context.Background(), deploy, Options{
 		Tier: TierBasic, AccessChecker: allowAllChecker{}, Topology: topo,
 		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
 	})
@@ -1911,7 +1911,7 @@ func TestBuild_Deployment_ScaledByKEDAManagedHPA_NamesTheScaledObject(t *testing
 
 	hpa.OwnerReferences = nil
 	hpa.Labels = map[string]string{"scaledobject.keda.sh/name": "api"}
-	rc = Build(context.Background(), deploy, Options{
+	rc = fixtureContext(context.Background(), deploy, Options{
 		Tier: TierBasic, AccessChecker: allowAllChecker{}, Topology: topo,
 		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
 	})
@@ -1919,7 +1919,7 @@ func TestBuild_Deployment_ScaledByKEDAManagedHPA_NamesTheScaledObject(t *testing
 		t.Errorf("label-only attribution: got %+v", rc.ScaledBy[0].ManagedBy)
 	}
 
-	rc = Build(context.Background(), deploy, Options{
+	rc = fixtureContext(context.Background(), deploy, Options{
 		Tier: TierBasic, AccessChecker: denyChecker{group: "keda.sh", kind: "ScaledObject", namespace: "prod"}, Topology: topo,
 		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
 	})
@@ -1954,7 +1954,7 @@ func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
 		Phase:      ExecutionPending,
 		JobSet:     &JobSetExecution{DeclaredRoles: 2, DeclaredJobs: 5},
 	}
-	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Execution: execution})
+	rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, Execution: execution})
 	if rc.Execution != execution {
 		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
 	}
@@ -1969,11 +1969,11 @@ func TestBuildDependencyReferencesAreAuthorized(t *testing.T) {
 		Dependencies: []topology.ResourceRef{{Kind: "Issuer", Group: "cert-manager.io", Namespace: "team", Name: "ca"}},
 		Dependents:   []topology.ResourceRef{{Kind: "CertificateRequest", Group: "cert-manager.io", Namespace: "team", Name: "request"}},
 	}
-	allowed := Build(context.Background(), obj, Options{Relationships: rel})
+	allowed := fixtureContext(context.Background(), obj, Options{Relationships: rel})
 	if len(allowed.Dependencies) != 1 || allowed.Dependencies[0].Group != "cert-manager.io" || len(allowed.Dependents) != 1 {
 		t.Fatalf("authorized dependency context = %+v", allowed)
 	}
-	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "cert-manager.io", kind: "Issuer", namespace: "team"}})
+	denied := fixtureContext(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "cert-manager.io", kind: "Issuer", namespace: "team"}})
 	if len(denied.Dependencies) != 0 || len(denied.Dependents) != 1 {
 		t.Fatalf("denied dependency context = %+v", denied)
 	}
@@ -1991,11 +1991,11 @@ func TestProjectionDirectionalRoutingContext(t *testing.T) {
 	backend := topology.ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "demo", Name: "web"}
 	pod := topology.ResourceRef{Kind: "Pod", Namespace: "demo", Name: "web-pod"}
 	rel := &topology.Relationships{Ingresses: []topology.ResourceRef{upstream}, Backends: []topology.ResourceRef{backend}, Pods: []topology.ResourceRef{pod}}
-	rc := Build(context.Background(), obj, Options{Relationships: rel})
+	rc := fixtureContext(context.Background(), obj, Options{Relationships: rel})
 	if len(rc.ExposedBy) != 1 || rc.ExposedBy[0].Kind != "Ingress" || len(rc.Backends) != 2 || len(rc.Exposes) != 3 {
 		t.Fatalf("directional routing context = %+v", rc)
 	}
-	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "apps", kind: "Deployment", namespace: "demo"}})
+	denied := fixtureContext(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "apps", kind: "Deployment", namespace: "demo"}})
 	if len(denied.ExposedBy) != 1 || len(denied.Backends) != 1 || len(denied.Exposes) != 2 {
 		t.Fatalf("routing refs ignored permissions: %+v", denied)
 	}
@@ -2007,7 +2007,7 @@ func TestProjectionDirectionalRoutingContext(t *testing.T) {
 		t.Fatalf("missing routing omissions: %+v", denied.Omitted)
 	}
 	for _, obj := range []runtime.Object{&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}}, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}} {
-		rc := Build(context.Background(), obj, Options{Relationships: &topology.Relationships{Pods: []topology.ResourceRef{pod}}})
+		rc := fixtureContext(context.Background(), obj, Options{Relationships: &topology.Relationships{Pods: []topology.ResourceRef{pod}}})
 		if len(rc.Backends) != 0 {
 			t.Fatalf("containment Pods became backends: %+v", rc.Backends)
 		}
@@ -2018,11 +2018,11 @@ func TestProjectionContextMonitoringAndPolicyPermissions(t *testing.T) {
 	obj := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}}
 	ref := topology.ResourceRef{Kind: "Widget", Group: "example.io", Namespace: "demo", Name: "subject"}
 	rel := &topology.Relationships{Monitors: []topology.ResourceRef{ref}, MonitorTargets: []topology.ResourceRef{ref}, Protects: []topology.ResourceRef{ref}, HealthChecks: []topology.ResourceRef{ref}, StagedPolicies: []topology.ResourceRef{ref}, RoutedFrom: []topology.ResourceRef{ref}}
-	rc := Build(context.Background(), obj, Options{Relationships: rel})
+	rc := fixtureContext(context.Background(), obj, Options{Relationships: rel})
 	if len(rc.Monitors) != 1 || len(rc.MonitorTargets) != 1 || len(rc.Protects) != 1 || len(rc.HealthChecks) != 1 || len(rc.StagedPolicies) != 1 || len(rc.ExposedBy) != 1 || len(rc.SelectedBy) != 0 {
 		t.Fatalf("context projection = %+v", rc)
 	}
-	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "example.io", kind: "Widget", namespace: "demo"}})
+	denied := fixtureContext(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "example.io", kind: "Widget", namespace: "demo"}})
 	if len(denied.Monitors)+len(denied.MonitorTargets)+len(denied.Protects)+len(denied.HealthChecks)+len(denied.StagedPolicies)+len(denied.ExposedBy) != 0 {
 		t.Fatalf("new context refs ignored permissions: %+v", denied)
 	}
@@ -2098,7 +2098,7 @@ func TestBuild_PodSpecConsumersRequireCoreTargetGroup(t *testing.T) {
 		t.Run(ref.Kind+"/"+ref.Name, func(t *testing.T) {
 			for _, version := range []string{"v1", "foreign.example/v1"} {
 				obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": version, "kind": ref.Kind, "metadata": map[string]any{"name": ref.Name, "namespace": "team"}}}
-				rc := Build(context.Background(), obj, Options{Tier: TierBasic, Provider: provider})
+				rc := fixtureContext(context.Background(), obj, Options{Tier: TierBasic, Provider: provider})
 				if version != "v1" {
 					if rc.ReferencedBy != nil {
 						t.Fatalf("foreign target acquired core consumers: %+v", rc.ReferencedBy)
@@ -2125,11 +2125,11 @@ func TestBuild_UsesDeclaredPodReferencesAcrossAllContainerAndVolumeSources(t *te
 			{Name: "disk", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}},
 		},
 	}}
-	rc := Build(context.Background(), pod, Options{AccessChecker: allowAllChecker{}})
+	rc := fixtureContext(context.Background(), pod, Options{AccessChecker: allowAllChecker{}})
 	if rc.Uses == nil || len(rc.Uses.ConfigMaps) != 1 || rc.Uses.ConfigMaps[0].Name != "debug-config" || len(rc.Uses.Secrets) != 2 || len(rc.Uses.PVCs) != 1 || (rc.Uses.ServiceAccount == nil || rc.Uses.ServiceAccount.Name != "runner") {
 		t.Fatalf("declared Pod dependencies = %+v", rc.Uses)
 	}
-	denied := Build(context.Background(), pod, Options{AccessChecker: denyChecker{kind: "Secret", namespace: "team"}})
+	denied := fixtureContext(context.Background(), pod, Options{AccessChecker: denyChecker{kind: "Secret", namespace: "team"}})
 	if denied.Uses == nil || len(denied.Uses.Secrets) != 0 || !hasOmitted(denied.Omitted, "uses.secrets") {
 		t.Fatalf("denied credential identities = %+v omitted=%+v", denied.Uses, denied.Omitted)
 	}
@@ -2154,7 +2154,7 @@ func TestBuild_ReverseReferencesRetainAdmittedPodsAndReplicaSetTemplates(t *test
 		{&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}}, []string{"Deployment", "Pod", "ReplicaSet"}},
 		{&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "team"}}, []string{"Deployment", "Pod", "ReplicaSet"}},
 	} {
-		rc := Build(context.Background(), test.obj, Options{Provider: provider, AccessChecker: allowAllChecker{}})
+		rc := fixtureContext(context.Background(), test.obj, Options{Provider: provider, AccessChecker: allowAllChecker{}})
 		if rc.ReferencedBy == nil || rc.ReferencedBy.Total != len(test.wantKinds) {
 			t.Fatalf("%T reverse references = %+v", test.obj, rc.ReferencedBy)
 		}
@@ -2164,13 +2164,13 @@ func TestBuild_ReverseReferencesRetainAdmittedPodsAndReplicaSetTemplates(t *test
 			}
 		}
 	}
-	denied := Build(context.Background(), &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "team"}}, Options{Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "team"}})
+	denied := fixtureContext(context.Background(), &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "team"}}, Options{Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "team"}})
 	if denied.ReferencedBy == nil || denied.ReferencedBy.Total != 2 || len(denied.ReferencedBy.Items) != 2 || !hasOmitted(denied.Omitted, "referencedBy") {
 		t.Fatalf("visible-only identity consumer count = %+v omitted=%+v", denied.ReferencedBy, denied.Omitted)
 	}
 	for _, target := range []struct{ kind, name string }{{"PersistentVolumeClaim", "data"}, {"ServiceAccount", "runner"}} {
 		custom := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": target.kind, "metadata": map[string]any{"name": target.name, "namespace": "team"}}}
-		if rc := Build(context.Background(), custom, Options{Provider: provider}); rc.ReferencedBy != nil {
+		if rc := fixtureContext(context.Background(), custom, Options{Provider: provider}); rc.ReferencedBy != nil {
 			t.Fatalf("foreign %s borrowed core declarations: %+v", target.kind, rc.ReferencedBy)
 		}
 	}
@@ -2188,7 +2188,7 @@ func TestBuild_ReferencedByCapPreservesTemplateAndPodKinds(t *testing.T) {
 	for i := 0; i < maxReferencedByItems+5; i++ {
 		provider.pods = append(provider.pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("pod-%02d", i), Namespace: "prod"}, Spec: spec})
 	}
-	rc := Build(context.Background(), cm, Options{Tier: TierBasic, Provider: provider})
+	rc := fixtureContext(context.Background(), cm, Options{Tier: TierBasic, Provider: provider})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != len(provider.pods)+3 || !rc.ReferencedBy.Truncated || len(rc.ReferencedBy.Items) != maxReferencedByItems {
 		t.Fatalf("capped refs: %+v", rc.ReferencedBy)
 	}
@@ -2201,7 +2201,7 @@ func TestBuild_ReferencedByCapPreservesTemplateAndPodKinds(t *testing.T) {
 			t.Fatalf("missing %s evidence: %+v", kind, rc.ReferencedBy.Items)
 		}
 	}
-	rc = Build(context.Background(), cm, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "prod"}})
+	rc = fixtureContext(context.Background(), cm, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "prod"}})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 3 || len(rc.ReferencedBy.Items) != 3 || rc.ReferencedBy.Truncated {
 		t.Fatalf("denied Pod population affected sampling: %+v", rc.ReferencedBy)
 	}
@@ -2215,7 +2215,7 @@ func TestBuild_NodeAssignedPods(t *testing.T) {
 	owned := pod("b", "controlled", "worker", corev1.PodRunning)
 	owned.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web", Controller: ptrBool(true)}}
 	provider := mockResourceProvider{pods: []*corev1.Pod{nil, owned, pod("a", "pending", "worker", corev1.PodPending), pod("a", "other", "other", corev1.PodRunning), pod("a", "unscheduled", "", corev1.PodPending), pod("a", "done", "worker", corev1.PodSucceeded), pod("a", "failed", "worker", corev1.PodFailed)}}
-	rc := Build(context.Background(), node, Options{Tier: TierBasic, Provider: provider})
+	rc := fixtureContext(context.Background(), node, Options{Tier: TierBasic, Provider: provider})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 2 || rc.ReferencedBy.Truncated {
 		t.Fatalf("assigned pods: %+v", rc.ReferencedBy)
 	}
@@ -2225,12 +2225,12 @@ func TestBuild_NodeAssignedPods(t *testing.T) {
 			t.Fatalf("pod reference: %+v", ref)
 		}
 	}
-	rc = Build(context.Background(), node, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "b"}})
+	rc = fixtureContext(context.Background(), node, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "b"}})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 || len(rc.ReferencedBy.Items) != 1 || !hasOmitted(rc.Omitted, "referencedBy") {
 		t.Fatalf("gated context: %+v", rc)
 	}
 	custom := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "custom.example/v1", "kind": "Node", "metadata": map[string]interface{}{"name": "worker"}}}
-	if got := Build(context.Background(), custom, Options{Tier: TierBasic, Provider: provider}).ReferencedBy; got != nil {
+	if got := fixtureContext(context.Background(), custom, Options{Tier: TierBasic, Provider: provider}).ReferencedBy; got != nil {
 		t.Fatalf("custom Node matched core placement: %+v", got)
 	}
 }
@@ -2241,7 +2241,7 @@ func TestBuild_NodeAssignedPodsBounded(t *testing.T) {
 	for i := range pods {
 		pods[i] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "visible", Name: fmt.Sprintf("pod-%02d", len(pods)-i)}, Spec: corev1.PodSpec{NodeName: "worker"}}
 	}
-	rc := Build(context.Background(), node, Options{Tier: TierBasic, Provider: mockResourceProvider{pods: pods}})
+	rc := fixtureContext(context.Background(), node, Options{Tier: TierBasic, Provider: mockResourceProvider{pods: pods}})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != len(pods) || len(rc.ReferencedBy.Items) != maxReferencedByItems || !rc.ReferencedBy.Truncated {
 		t.Fatalf("bounded context: %+v", rc.ReferencedBy)
 	}
@@ -2266,17 +2266,17 @@ func TestBuildCrossNamespaceGraphDependenciesAreAuthorized(t *testing.T) {
 			{ID: "source", Source: "helmrepository/shared/repo/source.toolkit.fluxcd.io", Target: "helmchart/shared/chart/source.toolkit.fluxcd.io", Type: topology.EdgeConfigures},
 		},
 	}
-	allowed := Build(context.Background(), obj, Options{Topology: topo})
+	allowed := fixtureContext(context.Background(), obj, Options{Topology: topo})
 	if len(allowed.Dependencies) != 1 || allowed.Dependencies[0].Namespace != "shared" || allowed.Dependencies[0].Group != "source.toolkit.fluxcd.io" {
 		t.Fatalf("cross-namespace dependency lost: %+v", allowed)
 	}
 	chart := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmChart", "metadata": map[string]any{"namespace": "shared", "name": "chart"}}}
-	chartContext := Build(context.Background(), chart, Options{Topology: topo})
+	chartContext := fixtureContext(context.Background(), chart, Options{Topology: topo})
 	if chartContext.Owner != nil || len(chartContext.Dependencies) != 1 || chartContext.Dependencies[0].Kind != "HelmRepository" || chartContext.Dependencies[0].Namespace != "shared" {
 		t.Fatalf("generated chart source context lost or presented as owner: %+v", chartContext)
 	}
 
-	denied := Build(context.Background(), obj, Options{Topology: topo, AccessChecker: denyChecker{group: "source.toolkit.fluxcd.io", kind: "HelmChart", namespace: "shared"}})
+	denied := fixtureContext(context.Background(), obj, Options{Topology: topo, AccessChecker: denyChecker{group: "source.toolkit.fluxcd.io", kind: "HelmChart", namespace: "shared"}})
 	if len(denied.Dependencies) != 0 {
 		t.Fatalf("denied target leaked: %+v", denied)
 	}
@@ -2310,8 +2310,8 @@ func TestFluxConfigurationEdgesPreserveResourceContext(t *testing.T) {
 	}
 	for _, node := range topo.Nodes {
 		obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": node.Data["apiVersion"], "kind": string(node.Kind), "metadata": map[string]any{"namespace": node.Data["namespace"], "name": node.Name}}}
-		before := Build(context.Background(), obj, Options{Topology: topo})
-		after := Build(context.Background(), obj, Options{Topology: &upstream})
+		before := fixtureContext(context.Background(), obj, Options{Topology: topo})
+		after := fixtureContext(context.Background(), obj, Options{Topology: &upstream})
 		if !reflect.DeepEqual(before, after) {
 			t.Fatalf("%s context changed:\nbefore=%+v\nafter=%+v", node.ID, before, after)
 		}
@@ -2346,7 +2346,7 @@ func TestBuild_Service_WorkloadBreakdown(t *testing.T) {
 	message := "Service frontend routes to 2 different applications (frontend, search); search's pods don't declare port 5000"
 	build := func(ac RefAccessChecker, grouping ServiceBackendGrouping) (*ResourceContext, []string) {
 		var grouped []string
-		rc := Build(context.Background(), svc, Options{
+		rc := fixtureContext(context.Background(), svc, Options{
 			Tier:          TierBasic,
 			AccessChecker: ac,
 			ServiceBackends: groupingServiceBackends{

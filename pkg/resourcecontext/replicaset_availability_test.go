@@ -15,7 +15,7 @@ import (
 func TestBuild_ReplicaSetConsumerSourceUnavailable(t *testing.T) {
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "settings"}}
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "previous"}, Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}}}}}}}
-	rc := Build(context.Background(), cm, Options{Tier: TierBasic, Provider: unavailableConsumerProvider{mockResourceProvider: mockResourceProvider{replicaSets: []*appsv1.ReplicaSet{rs}}, failedKind: "ReplicaSet"}})
+	rc := fixtureContext(context.Background(), cm, Options{Tier: TierBasic, Provider: unavailableConsumerProvider{mockResourceProvider: mockResourceProvider{replicaSets: []*appsv1.ReplicaSet{rs}}, failedKind: "ReplicaSet"}})
 	if rc.ReferencedBy != nil || !slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedUnavailable}) {
 		t.Fatalf("failed consumer list presented as known result: %+v", rc)
 	}
@@ -85,7 +85,7 @@ func TestBuild_EveryConsumerFailureRetainsOtherSources(t *testing.T) {
 	}
 	for _, kind := range []string{"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob", "Pod"} {
 		t.Run(kind, func(t *testing.T) {
-			rc := Build(context.Background(), cm, Options{Tier: TierBasic, Provider: unavailableConsumerProvider{provider, kind}})
+			rc := fixtureContext(context.Background(), cm, Options{Tier: TierBasic, Provider: unavailableConsumerProvider{provider, kind}})
 			if !slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedUnavailable}) || rc.ReferencedBy == nil || rc.ReferencedBy.Total != 6 {
 				t.Fatalf("failed source hid coverage or loaded references: %+v", rc)
 			}
@@ -99,7 +99,7 @@ func TestBuild_EveryConsumerFailureRetainsOtherSources(t *testing.T) {
 }
 func TestBuild_FailedPodSourceWithoutOtherReferences(t *testing.T) {
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "team"}}
-	rc := Build(context.Background(), cm, Options{Tier: TierBasic, Provider: unavailableConsumerProvider{failedKind: "Pod"}})
+	rc := fixtureContext(context.Background(), cm, Options{Tier: TierBasic, Provider: unavailableConsumerProvider{failedKind: "Pod"}})
 	if rc.ReferencedBy != nil || !slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedUnavailable}) {
 		t.Fatalf("failed Pod inventory masqueraded as empty: %+v", rc)
 	}
