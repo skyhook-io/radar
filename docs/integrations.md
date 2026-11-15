@@ -2133,6 +2133,34 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 
 ---
 
+## Agent runtimes (basic support)
+
+Two projects run AI agents on Kubernetes, and Radar reads both: [Agent Sandbox](https://github.com/kubernetes-sigs/agent-sandbox) (Kubernetes SIG Apps) gives each agent its own sandboxed Pod, and [Agent Substrate](https://github.com/agent-substrate/substrate) (CNCF Sandbox) runs many mostly idle agents on a small pool of warm worker Pods. Basic support is status badges, table columns, status filters, Issues and sidebar grouping; drawers use the standard spec/status renderer.
+
+| Resource | Group | Status source |
+|----------|-------|---------------|
+| Sandbox | `agents.x-k8s.io` (v1beta1) | `Ready` condition and its reason; `Suspended` while `spec.operatingMode` is Suspended |
+| SandboxClaim | `extensions.agents.x-k8s.io` (v1beta1) | `Ready` condition and its reason |
+| SandboxWarmPool | `extensions.agents.x-k8s.io` (v1beta1) | ready versus desired sandboxes; `observedGeneration` |
+| SandboxTemplate | `extensions.agents.x-k8s.io` (v1beta1) | — |
+| WorkerPool | `ate.dev` (v1) | per-class `Resolved` condition in `status.sandboxClasses[]`; ready versus desired workers |
+| SandboxConfig, CSIDriverConfig | `ate.dev` (v1, cluster-scoped) | — (printer columns) |
+
+**Ready=False is not always a failure.** Agent Sandbox reports every non-running state as `Ready=False`, so Radar reads the reason:
+
+- **Settled** (neutral, never an Issue): `SandboxSuspended` (Suspended), `SandboxExpired` and a claim's `ClaimExpired` (Expired), `PodSucceeded` (Finished).
+- **In progress** (amber): `DependenciesNotReady` (Provisioning, or the scheduler's reason when `PodScheduled` is False), `PodTerminating`, a claim's `SandboxCreatePending` and `AdoptionConflict` (Binding). These raise no Issue for 30 minutes; one that lasts longer is reported, because a sandbox whose Pod or Service is never created has no other finding to fall back on.
+- **Attention**: `ReconcilerError` (orange; the controller retries it).
+- **Failed** (red, an Issue): any other reason, such as `PodFailed`, `InvalidConfiguration`, `MultiplePods`, or a claim's `TemplateNotFound`, `WarmPoolNotFound` and `VolumeClaimTemplatesError`.
+
+**WorkerPool.** Its only condition, `Resolved`, sits per sandbox class in `status.sandboxClasses[]`, where Radar's generic condition handling never looks. A class that does not resolve to a usable SandboxConfig (`SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, `DefaultConfigNotFound`) is an Issue: **critical** when no worker is ready, otherwise a **warning**, since Substrate keeps ready workers running on the last resolved config. A condition recorded for an older generation is reported as such rather than trusted, and a spec edit is not read as recovery. Workers that are not ready are left to the worker Deployment the pool owns. A SandboxConfig stuck deleting because a pool still uses it is attributed to `ate-controller` (finalizer `sandboxconfig.ate.dev/workerpool-protection`).
+
+**Worker Pods.** A Pod labelled `ate.dev/worker-pool` gets a note in its drawer: Substrate places actors on it in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
+
+**Not covered:** Substrate's actors, actor templates and worker assignments live in Substrate's own control plane (PostgreSQL behind a gRPC API), not in Kubernetes, so Radar does not see them. kagent's `api.kagent.dev` kinds are grouped in the sidebar but otherwise use generic discovery; the chart does not collect them by default. MCP summaries report the raw condition reason. Topology shows the generic owner edges only (WorkerPool → Deployment → Pods; Sandbox → Pod).
+
+**Chart RBAC.** `rbac.crdGroups.agentSandbox` (`agents.x-k8s.io`, `extensions.agents.x-k8s.io`) and `rbac.crdGroups.agentSubstrate` (`ate.dev`) grant read access and are on by default. Sandboxes and SandboxTemplates carry Pod templates, which can hold inline environment values; with authentication on, users see them in namespaces they can read, like the Pods and Deployments there.
+
 ## Local runtime evidence: RabbitMQ, NATS and Vault
 
 When Radar runs locally, MCP clients can use `collect_application_evidence` to read one Pod endpoint after operator approval:

@@ -29,6 +29,7 @@ import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiv
 import { getVolcanoJobStatus as _getVolcanoJobStatus, getVolcanoQueueStatus as _getVolcanoQueueStatus, getVolcanoPodGroupStatus as _getVolcanoPodGroupStatus, getJobFlowStatus as _getJobFlowStatus, getJobTemplateStatus as _getJobTemplateStatus } from './resource-utils-volcano'
 import { getKaiQueueStatus as _getKaiQueueStatus, getKaiPodGroupStatus as _getKaiPodGroupStatus } from './resource-utils-kai'
 import { getKaitoWorkspaceStatus as _getKaitoWorkspaceStatus, getRAGEngineStatus as _getRAGEngineStatus } from './resource-utils-kaito'
+import { getSandboxClaimStatus as _getSandboxClaimStatus, getSandboxStatus as _getSandboxStatus, getSandboxWarmPoolStatus as _getSandboxWarmPoolStatus, getWorkerPoolStatus as _getWorkerPoolStatus } from './resource-utils-agent-runtimes'
 import { getNIMServiceStatus as _getNIMServiceStatus, getNIMCacheStatus as _getNIMCacheStatus, getNIMPipelineStatus as _getNIMPipelineStatus } from './resource-utils-nim'
 import { getAMDDeviceConfigStatus as _getAMDDeviceConfigStatus } from './resource-utils-amd-gpu'
 import { getPyTorchJobStatus as _getPyTorchJobStatus, getTFJobStatus as _getTFJobStatus, getMPIJobStatus as _getMPIJobStatus, getTrainJobStatus as _getTrainJobStatus } from './resource-utils-kubeflow-training'
@@ -2650,6 +2651,10 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'kaiqueues') return _getKaiQueueStatus(resource).text
       if (kindLower === 'kaipodgroups') return _getKaiPodGroupStatus(resource).text
       if (kindLower === 'kaitoworkspaces') return _getKaitoWorkspaceStatus(resource).text
+      if (kindLower === 'substrateworkerpools') return _getWorkerPoolStatus(resource).text
+      if (kindLower === 'agentsandboxes') return _getSandboxStatus(resource).text
+      if (kindLower === 'agentsandboxclaims') return _getSandboxClaimStatus(resource).text
+      if (kindLower === 'agentsandboxwarmpools') return _getSandboxWarmPoolStatus(resource).text
       if (kindLower === 'ragengines') return _getRAGEngineStatus(resource).text
       if (kindLower === 'nimservices') return _getNIMServiceStatus(resource).text
       if (kindLower === 'nimcaches') return _getNIMCacheStatus(resource).text

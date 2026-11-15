@@ -1,0 +1,257 @@
+// Agent runtimes: Agent Substrate (ate.dev) and Agent Sandbox
+// (agents.x-k8s.io, extensions.agents.x-k8s.io).
+
+import type { HealthLevel, StatusBadge } from './resource-utils'
+import { formatDuration, healthColors } from './resource-utils'
+import { isApiGroup } from './resource-utils-cnpg'
+
+export const SUBSTRATE_GROUP = 'ate.dev'
+export const AGENT_SANDBOX_GROUP = 'agents.x-k8s.io'
+export const AGENT_SANDBOX_EXTENSIONS_GROUP = 'extensions.agents.x-k8s.io'
+
+// Set by Substrate's controller on every worker Pod of a WorkerPool. Keys under
+// ate.dev are reserved for Substrate's controllers: WorkerPool validation
+// rejects them in a user-supplied template.
+export const SUBSTRATE_WORKER_POOL_LABEL = 'ate.dev/worker-pool'
+
+export function isSubstrateResource(resource: any): boolean {
+  return isApiGroup(resource?.apiVersion, SUBSTRATE_GROUP)
+}
+
+export function isAgentSandboxResource(resource: any): boolean {
+  return isApiGroup(resource?.apiVersion, AGENT_SANDBOX_GROUP)
+}
+
+export function isAgentSandboxExtensionResource(resource: any): boolean {
+  return isApiGroup(resource?.apiVersion, AGENT_SANDBOX_EXTENSIONS_GROUP)
+}
+
+function badge(text: string, level: HealthLevel): StatusBadge {
+  return { text, color: healthColors[level], level }
+}
+
+function findCondition(conditions: unknown, type: string): any | undefined {
+  return Array.isArray(conditions) ? conditions.find((c: any) => c?.type === type) : undefined
+}
+
+function count(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+// ============================================================================
+// AGENT SUBSTRATE — WorkerPool
+// ============================================================================
+
+function workerPoolResolvedConditions(resource: any): { condition: any; stale: boolean }[] {
+  const classes: any[] = Array.isArray(resource?.status?.sandboxClasses) ? resource.status.sandboxClasses : []
+  const generation = count(resource?.metadata?.generation)
+  return classes.map(sandboxClass => {
+    const condition = findCondition(sandboxClass?.conditions, 'Resolved')
+    const observed = count(condition?.observedGeneration)
+    return { condition, stale: generation !== undefined && observed !== undefined && observed < generation }
+  })
+}
+
+/**
+ * WorkerPool has no Ready condition and no top-level observedGeneration. Its
+ * one condition, Resolved, sits per sandbox class in status.sandboxClasses[]
+ * and records the generation it was computed for. While a class does not
+ * resolve, the controller keeps applying an existing worker Deployment, so
+ * workers that are ready stay up on the last resolved config.
+ */
+export function getWorkerPoolStatus(resource: any): StatusBadge {
+  if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
+  const status = resource?.status
+  const resolved = workerPoolResolvedConditions(resource)
+  const ready = count(status?.readyReplicas) ?? 0
+  const pods = count(status?.replicas) ?? 0
+
+  for (const { condition, stale } of resolved) {
+    if (condition?.status !== 'False') continue
+    // Reported for an older spec: the controller has not judged the current one yet.
+    if (stale) return badge(condition.reason || 'Unresolved', 'degraded')
+    return badge(condition.reason || 'Unresolved', ready > 0 ? 'alert' : 'unhealthy')
+  }
+
+  const desired = count(resource?.spec?.replicas)
+  if (desired === 0) return pods > 0 ? badge('Scaling down', 'degraded') : badge('Scaled to zero', 'neutral')
+  if (!status || resolved.length === 0) return badge('Pending', 'degraded')
+  if (resolved.some(r => r.stale || r.condition?.status !== 'True')) return badge('Resolving', 'degraded')
+  if (desired !== undefined && ready >= desired) return badge('Ready', 'healthy')
+  return badge('Scaling', 'degraded')
+}
+
+function workerPoolStatusMessage(resource: any): string | undefined {
+  const generation = count(resource?.metadata?.generation)
+  for (const { condition, stale } of workerPoolResolvedConditions(resource)) {
+    if (condition?.status !== 'False') continue
+    const message = typeof condition.message === 'string' ? condition.message.trim() : ''
+    if (!stale) return message || undefined
+    const note = `Reported for generation ${condition.observedGeneration}; the pool is now at generation ${generation}.`
+    return message ? `${note} ${message}` : note
+  }
+  return undefined
+}
+
+export function getWorkerPoolWorkers(resource: any): string {
+  const desired = count(resource?.spec?.replicas)
+  const ready = count(resource?.status?.readyReplicas) ?? 0
+  return desired === undefined ? `${ready}` : `${ready}/${desired}`
+}
+
+export function getWorkerPoolSandboxClass(resource: any): string {
+  const classes = resource?.spec?.sandboxClasses
+  return Array.isArray(classes) && classes[0]?.name ? classes[0].name : '-'
+}
+
+/** The SandboxConfig the controller confirmed for the pool's class, or '-' before it has resolved one. */
+export function getWorkerPoolSandboxConfig(resource: any): string {
+  const specClass = getWorkerPoolSandboxClass(resource)
+  const classes: any[] = Array.isArray(resource?.status?.sandboxClasses) ? resource.status.sandboxClasses : []
+  const current = classes.find(c => c?.name === specClass) ?? classes[0]
+  const name = current?.configRef?.name
+  const pending = current?.pendingConfigRef?.name
+  if (name && pending && pending !== name) return `${name} → ${pending}`
+  return name || pending || '-'
+}
+
+// ============================================================================
+// AGENT SANDBOX — Sandbox and SandboxClaim
+// ============================================================================
+
+// Ready=False reasons that describe a state someone chose, not a failure:
+// an administrative suspension, an expiry, a Pod that ran to completion, or a
+// claim whose lifetime ended.
+const SANDBOX_SETTLED_REASONS: Record<string, string> = {
+  SandboxSuspended: 'Suspended',
+  SandboxExpired: 'Expired',
+  PodSucceeded: 'Finished',
+  ClaimExpired: 'Expired',
+}
+
+// Ready=False reasons the controller reports while it is still bringing the
+// sandbox up or tearing it down.
+const SANDBOX_PROGRESS_REASONS: Record<string, string> = {
+  DependenciesNotReady: 'Provisioning',
+  PodTerminating: 'Terminating',
+  SandboxCreatePending: 'Provisioning',
+  AdoptionConflict: 'Binding',
+}
+
+function sandboxReadyStatus(ready: any, podScheduled: any): StatusBadge {
+  if (!ready) return badge('Pending', 'degraded')
+  if (ready.status === 'True') return badge('Ready', 'healthy')
+  if (ready.status !== 'False') return badge('Unknown', 'unknown')
+  const reason = typeof ready.reason === 'string' ? ready.reason : ''
+  if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
+  if (reason === 'DependenciesNotReady' && podScheduled?.status === 'False' && podScheduled.reason) {
+    return badge(podScheduled.reason, 'alert')
+  }
+  if (SANDBOX_PROGRESS_REASONS[reason]) return badge(SANDBOX_PROGRESS_REASONS[reason], 'degraded')
+  // The controller retries these; a persistent one still deserves attention.
+  if (reason === 'ReconcilerError') return badge(reason, 'alert')
+  return badge(reason || 'Not Ready', 'unhealthy')
+}
+
+export function getSandboxStatus(resource: any): StatusBadge {
+  if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
+  const conditions = resource?.status?.conditions
+  const suspended = findCondition(conditions, 'Suspended')
+  if (resource?.spec?.operatingMode === 'Suspended' && suspended?.status === 'True') {
+    return badge('Suspended', 'neutral')
+  }
+  return sandboxReadyStatus(findCondition(conditions, 'Ready'), findCondition(conditions, 'PodScheduled'))
+}
+
+export function getSandboxClaimStatus(resource: any): StatusBadge {
+  if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
+  return sandboxReadyStatus(findCondition(resource?.status?.conditions, 'Ready'), undefined)
+}
+
+export function getSandboxOperatingMode(resource: any): string {
+  return resource?.spec?.operatingMode || 'Running'
+}
+
+export function getSandboxNode(resource: any): string {
+  return resource?.status?.nodeName || '-'
+}
+
+export function getSandboxExpiry(resource: any): string | undefined {
+  const value = resource?.spec?.shutdownTime ?? resource?.spec?.lifecycle?.shutdownTime
+  return typeof value === 'string' && value ? value : undefined
+}
+
+export function getSandboxClaimWarmPool(resource: any): string {
+  return resource?.spec?.warmPoolRef?.name || '-'
+}
+
+export function getSandboxClaimSandbox(resource: any): string {
+  return resource?.status?.sandbox?.name || '-'
+}
+
+// ============================================================================
+// AGENT SANDBOX — SandboxWarmPool
+// ============================================================================
+
+export function getSandboxWarmPoolStatus(resource: any): StatusBadge {
+  if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
+  const status = resource?.status
+  if (!status) return badge('Pending', 'degraded')
+  const generation = count(resource?.metadata?.generation)
+  const observed = count(status.observedGeneration)
+  if (generation !== undefined && observed !== undefined && observed < generation) {
+    return badge('Progressing', 'degraded')
+  }
+  const desired = count(resource?.spec?.replicas)
+  if (desired === 0) return badge('Scaled to zero', 'neutral')
+  const ready = count(status.readyReplicas) ?? 0
+  if (desired === undefined) return ready > 0 ? badge('Ready', 'healthy') : badge('Pending', 'degraded')
+  return ready >= desired ? badge('Ready', 'healthy') : badge('Warming', 'degraded')
+}
+
+export function getSandboxWarmPoolReady(resource: any): string {
+  const desired = count(resource?.spec?.replicas)
+  const ready = count(resource?.status?.readyReplicas) ?? 0
+  return desired === undefined ? `${ready}` : `${ready}/${desired}`
+}
+
+export function getSandboxWarmPoolTemplate(resource: any): string {
+  return resource?.spec?.sandboxTemplateRef?.name || '-'
+}
+
+/** "in 2h" before an expiry, "3h ago" after it, or '-' when none is set. */
+export function formatSandboxExpiry(value: string | undefined, now = Date.now()): string {
+  if (!value) return '-'
+  const time = Date.parse(value)
+  if (!Number.isFinite(time)) return value
+  const diff = time - now
+  return diff >= 0 ? `in ${formatDuration(diff)}` : `${formatDuration(-diff)} ago`
+}
+
+/**
+ * The curated status of an agent runtime object, with the controller's message
+ * when it explains a state that is not healthy; null for any other resource.
+ * The generic renderer's banner reads this so it cannot call a suspended
+ * sandbox a failure while the header calls it Suspended.
+ */
+export function getAgentRuntimeStatus(resource: any): (StatusBadge & { message?: string }) | null {
+  const kind = resource?.kind
+  let status: StatusBadge | null = null
+  let message: string | undefined
+  if (kind === 'WorkerPool' && isSubstrateResource(resource)) {
+    status = getWorkerPoolStatus(resource)
+    message = workerPoolStatusMessage(resource)
+  } else if (kind === 'Sandbox' && isAgentSandboxResource(resource)) {
+    status = getSandboxStatus(resource)
+    message = findCondition(resource?.status?.conditions, 'Ready')?.message
+  } else if (kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)) {
+    status = getSandboxClaimStatus(resource)
+    message = findCondition(resource?.status?.conditions, 'Ready')?.message
+  } else if (kind === 'SandboxWarmPool' && isAgentSandboxExtensionResource(resource)) {
+    status = getSandboxWarmPoolStatus(resource)
+  }
+  if (!status) return null
+  return status.level === 'healthy' || typeof message !== 'string' || !message.trim()
+    ? status
+    : { ...status, message: message.trim() }
+}

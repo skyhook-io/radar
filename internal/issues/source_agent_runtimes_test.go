@@ -1,0 +1,120 @@
+package issues
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+func readyFalse(name, reason string, since time.Duration) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": name, "namespace": "agents"},
+		"status": map[string]any{"conditions": []any{map[string]any{
+			"type": "Ready", "status": "False", "reason": reason, "message": reason + " message",
+			"lastTransitionTime": time.Now().Add(-since).UTC().Format(time.RFC3339),
+		}}},
+	}}
+}
+
+func composeOne(gvr schema.GroupVersionResource, kind string, objects ...*unstructured.Unstructured) map[string]Issue {
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: objects},
+		kinds:      map[schema.GroupVersionResource]string{gvr: kind},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: true},
+	}
+	byName := map[string]Issue{}
+	for _, issue := range Compose(p, Filters{Limit: NoLimit}) {
+		byName[issue.Name] = issue
+	}
+	return byName
+}
+
+func TestAgentSandboxReadyReasons(t *testing.T) {
+	sandboxes := schema.GroupVersionResource{Group: agentSandboxGroup, Version: "v1beta1", Resource: "sandboxes"}
+	got := composeOne(sandboxes, "Sandbox",
+		readyFalse("suspended", "SandboxSuspended", 72*time.Hour),
+		readyFalse("expired", "SandboxExpired", 72*time.Hour),
+		readyFalse("finished", "PodSucceeded", 72*time.Hour),
+		readyFalse("provisioning", "DependenciesNotReady", 5*time.Minute),
+		readyFalse("stuck", "DependenciesNotReady", 2*time.Hour),
+		readyFalse("failed", "PodFailed", time.Minute),
+		readyFalse("erroring", "ReconcilerError", time.Minute),
+		readyFalse("invalid", "InvalidConfiguration", time.Minute),
+	)
+	for _, quiet := range []string{"suspended", "expired", "finished", "provisioning"} {
+		if issue, ok := got[quiet]; ok {
+			t.Errorf("%s: unexpected issue %q", quiet, issue.Reason)
+		}
+	}
+	for _, loud := range []string{"stuck", "failed", "erroring", "invalid"} {
+		if _, ok := got[loud]; !ok {
+			t.Errorf("%s: expected an issue, got %v", loud, got)
+		}
+	}
+}
+
+func TestAgentSandboxClaimReadyReasons(t *testing.T) {
+	claims := schema.GroupVersionResource{Group: agentSandboxExtensionsGroup, Version: "v1beta1", Resource: "sandboxclaims"}
+	got := composeOne(claims, "SandboxClaim",
+		readyFalse("expired", "ClaimExpired", 72*time.Hour),
+		readyFalse("binding", "AdoptionConflict", time.Minute),
+		readyFalse("no-pool", "WarmPoolNotFound", time.Minute),
+		readyFalse("mirrors-sandbox", "SandboxSuspended", 72*time.Hour),
+	)
+	if _, ok := got["no-pool"]; !ok || len(got) != 1 {
+		t.Fatalf("issues = %v, want only no-pool", got)
+	}
+}
+
+// Another project's Sandbox kind keeps the generic reading of Ready=False.
+func TestForeignSandboxKeepsGenericConditions(t *testing.T) {
+	foreign := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "sandboxes"}
+	if got := composeOne(foreign, "Sandbox", readyFalse("other", "SandboxSuspended", time.Hour)); len(got) != 1 {
+		t.Fatalf("issues = %v, want the generic warning", got)
+	}
+}
+
+func workerPool(name string, generation, observedGeneration, desired, ready int64, status, reason string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": name, "namespace": "agents", "generation": generation},
+		"spec":     map[string]any{"replicas": desired},
+		"status": map[string]any{
+			"replicas":      ready,
+			"readyReplicas": ready,
+			"sandboxClasses": []any{map[string]any{
+				"name": "gvisor",
+				"conditions": []any{map[string]any{
+					"type": "Resolved", "status": status, "reason": reason, "message": "SandboxConfig \"gvisor-v2\" not found",
+					"observedGeneration": observedGeneration, "lastTransitionTime": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+				}},
+			}},
+		},
+	}}
+}
+
+func TestWorkerPoolResolvedIssues(t *testing.T) {
+	pools := schema.GroupVersionResource{Group: substrateGroup, Version: "v1", Resource: "workerpools"}
+	got := composeOne(pools, "WorkerPool",
+		workerPool("no-workers", 2, 2, 3, 0, "False", "SandboxConfigNotFound"),
+		workerPool("still-serving", 2, 2, 3, 3, "False", "SandboxConfigNotFound"),
+		workerPool("stale", 3, 2, 3, 0, "False", "SandboxConfigNotFound"),
+		workerPool("healthy", 2, 2, 3, 3, "True", "Resolved"),
+	)
+	if _, ok := got["healthy"]; ok {
+		t.Fatal("a resolved pool reported an issue")
+	}
+	noWorkers := got["no-workers"]
+	if noWorkers.Severity != SeverityCritical || noWorkers.Reason != "SandboxConfigNotFound" || !strings.HasPrefix(noWorkers.Message, "Sandbox class gvisor: ") {
+		t.Errorf("no-workers = %+v", noWorkers)
+	}
+	if got["still-serving"].Severity != SeverityWarning {
+		t.Errorf("still-serving severity = %v, want warning", got["still-serving"].Severity)
+	}
+	stale := got["stale"]
+	if stale.Severity != SeverityWarning || !strings.Contains(stale.Message, "Reported for generation 2; the pool is now at generation 3.") {
+		t.Errorf("stale = %+v", stale)
+	}
+}

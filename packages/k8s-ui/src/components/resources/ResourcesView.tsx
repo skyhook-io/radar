@@ -204,6 +204,7 @@ import { InferencePoolCell, InferenceObjectiveCell } from './renderers/inference
 import { VolcanoJobCell, VolcanoQueueCell, VolcanoPodGroupCell, JobFlowCell, JobTemplateCell } from './renderers/volcano-cells'
 import { KaiQueueCell, KaiPodGroupCell } from './renderers/kai-cells'
 import { KaitoWorkspaceCell, RAGEngineCell } from './renderers/kaito-cells'
+import { SandboxCell, SandboxClaimCell, SandboxWarmPoolCell, WorkerPoolCell } from './renderers/agent-runtime-cells'
 import { NIMServiceCell, NIMCacheCell, NIMPipelineCell } from './renderers/nim-cells'
 import { AMDDeviceConfigCell } from './renderers/amd-gpu-cells'
 import { PyTorchJobCell, TFJobCell, MPIJobCell, TrainJobCell } from './renderers/kubeflow-training-cells'
@@ -1280,6 +1281,41 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'queue', label: 'Queue', width: 'w-32' },
     { key: 'minMember', label: 'Min Member', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  substrateworkerpools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-48' },
+    { key: 'workers', label: 'Workers', width: 'w-24', tooltip: 'Ready worker Pods / desired. Workers are Pods, not actor slots: each hosts many actors in turn.' },
+    { key: 'sandboxClass', label: 'Sandbox', width: 'w-24', tooltip: 'Sandbox runtime family the workers run (gVisor or microVM)' },
+    { key: 'sandboxConfig', label: 'Config', width: 'w-44', tooltip: 'SandboxConfig the controller resolved for this pool; an arrow marks a switch it is still confirming.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxes: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36' },
+    { key: 'operatingMode', label: 'Mode', width: 'w-24', tooltip: 'Requested operating mode. Ready, in Status, is what the controller observed.' },
+    { key: 'sandboxNode', label: 'Node', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'shutdownTime: when the controller tears the sandbox down' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxclaims: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-44' },
+    { key: 'warmPool', label: 'Warm pool', width: 'w-40' },
+    { key: 'claimedSandbox', label: 'Sandbox', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'lifecycle.shutdownTime: when the claim and its sandbox expire' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  agentsandboxwarmpools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'warmReady', label: 'Ready', width: 'w-20', tooltip: 'Ready, unclaimed sandboxes / desired' },
+    { key: 'template', label: 'Template', width: 'w-44' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   kaitoworkspaces: [
@@ -2810,6 +2846,14 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   podgroup: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
   podgroups: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
   workspace: { 'kaito.sh': 'kaitoworkspaces' },
+  workerpool: { 'ate.dev': 'substrateworkerpools' },
+  workerpools: { 'ate.dev': 'substrateworkerpools' },
+  sandbox: { 'agents.x-k8s.io': 'agentsandboxes' },
+  sandboxes: { 'agents.x-k8s.io': 'agentsandboxes' },
+  sandboxclaim: { 'extensions.agents.x-k8s.io': 'agentsandboxclaims' },
+  sandboxclaims: { 'extensions.agents.x-k8s.io': 'agentsandboxclaims' },
+  sandboxwarmpool: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
+  sandboxwarmpools: { 'extensions.agents.x-k8s.io': 'agentsandboxwarmpools' },
   workspaces: { 'kaito.sh': 'kaitoworkspaces' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
@@ -3166,6 +3210,10 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   inferenceobjectives: ['inference.networking.x-k8s.io', 'llm-d.ai'],
   jobsets: ['jobset.x-k8s.io'],
   kaitoworkspaces: ['kaito.sh'],
+  substrateworkerpools: ['ate.dev'],
+  agentsandboxes: ['agents.x-k8s.io'],
+  agentsandboxclaims: ['extensions.agents.x-k8s.io'],
+  agentsandboxwarmpools: ['extensions.agents.x-k8s.io'],
   ragengines: ['kaito.sh'],
   admissionchecks: ['kueue.x-k8s.io'],
   clusterqueues: ['kueue.x-k8s.io'],
@@ -8071,6 +8119,15 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <KaiQueueCell resource={resource} column={column} />
     case 'kaipodgroups':
       return <KaiPodGroupCell resource={resource} column={column} />
+    // Agent runtimes
+    case 'substrateworkerpools':
+      return <WorkerPoolCell resource={resource} column={column} />
+    case 'agentsandboxes':
+      return <SandboxCell resource={resource} column={column} />
+    case 'agentsandboxclaims':
+      return <SandboxClaimCell resource={resource} column={column} />
+    case 'agentsandboxwarmpools':
+      return <SandboxWarmPoolCell resource={resource} column={column} />
     // KAITO
     case 'kaitoworkspaces':
       return <KaitoWorkspaceCell resource={resource} column={column} />

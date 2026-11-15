@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { AlertBanner, Section, PropertyList, Property, isInvertedPolarityCondition } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
+import { getAgentRuntimeStatus } from '../resource-utils-agent-runtimes'
 import { isApiGroup } from '../resource-utils-cnpg'
 import { getInferenceServiceStatus, isInferenceServiceStopRequested } from '../resource-utils-kserve'
 import { getCrossplanePauseState, getCrossplaneIndependentStatus, getCrossplaneConditionTone } from '../resource-utils-crossplane'
@@ -151,6 +152,8 @@ function getHealthStatus(resource: any): HealthStatusResult | null {
     if (status.level === 'neutral') return { level: 'neutral', label: 'Stopped', message: "This model is stopped and isn't serving requests." }
     return { level: status.level, label: status.text }
   }
+  const agentRuntime = getAgentRuntimeStatus(resource)
+  if (agentRuntime) return { type: BANNER_TYPE[agentRuntime.level], label: agentRuntime.text, message: agentRuntime.message }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
   if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
