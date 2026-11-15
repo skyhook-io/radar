@@ -16,7 +16,7 @@ export function getFluxOperatorStatus(data: any): StatusBadge {
   return getFluxResourceStatus(data)
 }
 
-const count = (value: unknown): string => String(Array.isArray(value) ? value.length : 0)
+const count = (value: unknown): string => (Array.isArray(value) ? String(value.length) : '')
 
 // Undefined means the column isn't one of these kinds' curated columns.
 export function getFluxOperatorColumnValue(kind: string, data: any, column: string): string | undefined {

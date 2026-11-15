@@ -42,6 +42,12 @@ describe('Flux Operator columns', () => {
     expect(getFluxOperatorColumnValue('resourcesetinputproviders', provider, 'url')).toBe('https://github.com/org/repo')
   })
 
+  it('leaves counts empty when the status has no list', () => {
+    expect(getFluxOperatorColumnValue('fluxinstances', { status: {} }, 'components')).toBe('')
+    expect(getFluxOperatorColumnValue('resourcesets', { status: {} }, 'resources')).toBe('')
+    expect(getFluxOperatorColumnValue('resourcesets', { status: { inventory: { entries: [] } } }, 'resources')).toBe('0')
+  })
+
   it('leaves other columns to the table', () => {
     expect(getFluxOperatorColumnValue('fluxinstances', {}, 'age')).toBeUndefined()
     expect(getFluxOperatorColumnValue('pods', {}, 'version')).toBeUndefined()
