@@ -1,8 +1,12 @@
 package topology
 
 import (
+	"bytes"
+	"encoding/json"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -114,4 +118,87 @@ func TestRelationsAnswerManagementFallbacks(t *testing.T) {
 	hook.Annotations = map[string]string{"helm.sh/hook": "pre-install"}
 	s = newProjectionSession(t, hr, hook)
 	requireProjectionRefs(t, projectionOwnedAnswer(t, s, hr, a).Manages)
+}
+
+func TestRelationsAnswerSealedSecretConsumers(t *testing.T) {
+	sealed := projectionCR("bitnami.com", "SealedSecret", "shop", "db", map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{"name": "ignored"}}}})
+	d := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "app"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "db", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "db"}}}}}}}}, "apps", "Deployment")
+	wrong := d.(*appsv1.Deployment).DeepCopy()
+	wrong.Name = "wrong"
+	wrong.Spec.Template.Spec.Volumes[0].Secret.SecretName = "ignored"
+	secret := projectionObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "db"}}, "", "Secret")
+	access := projectionAccess{denied: []string{"Secret"}}
+	for _, traverse := range []ownership.Access{access, ownership.Unrestricted()} {
+		var prior []byte
+		for _, present := range []bool{false, true} {
+			objects := []runtime.Object{sealed, d, wrong}
+			if present {
+				objects = append(objects, secret)
+			}
+			s := newProjectionSession(t, objects...)
+			var answers []any
+			for _, obj := range []runtime.Object{sealed, d} {
+				captured, _ := relations.CaptureSubject(s, projectionRef(obj), obj)
+				ov := ownership.NewView(captured, access)
+				rel, cov := RelationsAnswer(captured, access, traverse, ov, projectionRef(obj), obj, "", nil, nil)
+				m, _ := apimeta.Accessor(obj)
+				ApplyOwnership(rel, ov, ownership.Observe(projectionRef(obj), m))
+				if obj == sealed {
+					requireProjectionRefs(t, rel.Consumers, d)
+				} else {
+					requireProjectionRefs(t, rel.ConfigRefs, sealed)
+				}
+				answers = append(answers, rel, cov)
+			}
+			data, err := json.Marshal(answers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prior != nil && !bytes.Equal(prior, data) {
+				t.Fatalf("Secret existence changed denied answer:\n%s\n%s", prior, data)
+			}
+			prior = data
+			for _, r := range s.reads {
+				if r.Kind == "Secret" {
+					t.Fatalf("borrowed denied Secret: %v", r)
+				}
+			}
+			requireProjectionRefs(t, projectionAnswer(t, s, wrong, access, traverse).ConfigRefs)
+			requireProjectionRefs(t, projectionAnswer(t, s, sealed, projectionAccess{denied: []string{"Secret", "Deployment"}}, traverse).Consumers)
+			requireProjectionRefs(t, projectionAnswer(t, s, d, projectionAccess{denied: []string{"Secret", "SealedSecret"}}, traverse).ConfigRefs)
+		}
+	}
+	// The composition itself never asks for the intermediate, including when
+	// Radar could not collect it but the caller is allowed to read Secrets.
+	s := newProjectionSession(t, sealed, d, secret)
+	for _, state := range []ownership.ReadState{ownership.Absent, ownership.Unavailable, ownership.Present} {
+		logical := &logicalSecretSession{projectionSession: s, state: state}
+		for _, obj := range []runtime.Object{sealed, d} {
+			a := relations.NewView(logical, ownership.Unrestricted()).Composed(relations.SealedSecretConsumers, projectionRef(obj), obj)
+			if len(a.Edges) != 1 || !a.Coverage.Complete() {
+				t.Fatalf("logical state %v: %+v", state, a)
+			}
+		}
+		if logical.secretReads != 0 {
+			t.Fatal("composition observed logical Secret")
+		}
+	}
+}
+
+type logicalSecretSession struct {
+	*projectionSession
+	state       ownership.ReadState
+	secretReads int
+}
+
+func (s *logicalSecretSession) Borrow(r resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
+	if r.Group == "" && r.Kind == "Secret" {
+		s.secretReads++
+		return nil, ownership.ObjectRead{State: s.state, Gap: ownership.Gap{Kind: r.GroupKind(), Namespace: r.Namespace, Reason: readreason.RadarKindNotCollected}}
+	}
+	return s.projectionSession.Borrow(r)
+}
+func (s *logicalSecretSession) Object(r resourceid.Ref) ownership.ObjectRead {
+	_, read := s.Borrow(r)
+	return read
 }

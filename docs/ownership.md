@@ -136,6 +136,8 @@ The families so far:
 
 `CertificateRoutes` (`compositions.go`) joins a Certificate’s declared output Secret coordinates to Traefik routes and Contour proxies declaring the same Secret. Both endpoints are checked under the caller’s access; the logical Secret is never read or required to exist. The dark projection feeds Certificate `Consumers` and route `ConfigRefs`.
 
+`SealedSecretConsumers` uses the same composition over the SealedSecret’s own namespace/name and `ConfigReferences` declarations, in both directions. It feeds SealedSecret `Consumers` and consumer `ConfigRefs` even when the Secret is absent, uncollected or denied. Ordinary `Referrers` still requires a held, readable target.
+
 A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
 that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
 workload is seen as the pods its template makes; a Rollout with a `workloadRef` as its referenced workload's). What a

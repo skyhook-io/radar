@@ -149,3 +149,16 @@ func compareCompositionRef(a, b resourceid.Ref) int {
 	}
 	return 0
 }
+
+// SealedSecretConsumers joins the SealedSecret's own namespace/name to
+// consumers declaring that Secret, including when unsealing has not succeeded.
+var SealedSecretConsumers = &Composition{
+	Name:      "sealedSecretConsumers",
+	Producer:  SealedSecrets,
+	Consumers: []*Family{ConfigReferences},
+}
+
+// Compositions are the explicit joins over logical coordinates.
+func Compositions() []*Composition {
+	return []*Composition{CertificateRoutes, SealedSecretConsumers}
+}

@@ -215,10 +215,12 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
 	n.answer(session, v, families, selectors, subject, obj, false)
-	joined := v.Composed(relations.CertificateRoutes, subject, obj)
-	n.cover(relations.CertificateRoutes.Name, joined.Coverage)
-	for _, edge := range joined.Edges {
-		n.edge(edge.Producer, edge.Consumer, relationEdge{edge: EdgeConfigures}, false)
+	for _, f := range relations.Compositions() {
+		joined := v.Composed(f, subject, obj)
+		n.cover(f.Name, joined.Coverage)
+		for _, edge := range joined.Edges {
+			n.edge(edge.Producer, edge.Consumer, relationEdge{edge: EdgeConfigures}, false)
+		}
 	}
 
 	n.management(session, ov, subject)
