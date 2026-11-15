@@ -199,7 +199,7 @@ func TestConfigConsumersListEachDeclarerInKindOrder(t *testing.T) {
 		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"volumes": []any{map[string]any{"name": "s", "configMap": map[string]any{"name": "settings"}}}}}},
 	}}
 	c := cluster{objects: []runtime.Object{
-		pod("web-1", mounts("settings")), deployment("web", mounts("settings")), deployment("other", mounts("unrelated")),
+		configMap("settings"), pod("web-1", mounts("settings")), deployment("web", mounts("settings")), deployment("other", mounts("unrelated")),
 		typed(cronJob, "batch", "v1", "CronJob"), typed(ingress, "networking.k8s.io", "v1", "Ingress"), rollout,
 	}}
 	got := consumerRefs(NewView(c, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings")))
@@ -207,14 +207,14 @@ func TestConfigConsumersListEachDeclarerInKindOrder(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("consumers %v, want %v (an Ingress declares Secrets only)", got, want)
 	}
-	secretConsumers := consumerRefs(NewView(cluster{objects: []runtime.Object{typed(ingress, "networking.k8s.io", "v1", "Ingress")}}, ownership.Unrestricted()).ConfigConsumers(ref("", "Secret", "settings")))
+	secretConsumers := consumerRefs(NewView(cluster{objects: []runtime.Object{secret("settings"), typed(ingress, "networking.k8s.io", "v1", "Ingress")}}, ownership.Unrestricted()).ConfigConsumers(ref("", "Secret", "settings")))
 	if !slices.Equal(secretConsumers, []resourceid.Ref{ref("networking.k8s.io", "Ingress", "front")}) {
 		t.Fatalf("Secret consumers %v", secretConsumers)
 	}
 }
 
 func TestConfigConsumersAnswerOnlyAsTheCallerMayRead(t *testing.T) {
-	c := cluster{objects: []runtime.Object{pod("web-1", mounts("settings")), deployment("web", mounts("settings")), secret("tls")}}
+	c := cluster{objects: []runtime.Object{configMap("settings"), pod("web-1", mounts("settings")), deployment("web", mounts("settings")), secret("tls")}}
 	got := NewView(c, denies{"Pod"}).ConfigConsumers(ref("", "ConfigMap", "settings"))
 	if !slices.Equal(consumerRefs(got), []resourceid.Ref{ref("apps", "Deployment", "web")}) || !got.Coverage.Narrowed {
 		t.Errorf("a caller who may not read Pods got %+v", got)
@@ -228,7 +228,7 @@ func TestConfigConsumersAnswerOnlyAsTheCallerMayRead(t *testing.T) {
 }
 
 func TestConfigConsumersReportUnreadKinds(t *testing.T) {
-	c := cluster{objects: []runtime.Object{deployment("web", mounts("settings"))}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "Pod"}: readreason.KindSyncPending}}
+	c := cluster{objects: []runtime.Object{configMap("settings"), deployment("web", mounts("settings"))}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "Pod"}: readreason.KindSyncPending}}
 	got := NewView(c, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"))
 	if got.Coverage.Complete() || !slices.ContainsFunc(got.Coverage.NotChecked, func(g ownership.Gap) bool { return g.Kind.Kind == "Pod" }) {
 		t.Fatalf("Pods still loading, but coverage %+v", got.Coverage)
@@ -236,7 +236,7 @@ func TestConfigConsumersReportUnreadKinds(t *testing.T) {
 }
 
 func TestConfigConsumersAreCappedAndCounted(t *testing.T) {
-	var objects []runtime.Object
+	objects := []runtime.Object{configMap("settings")}
 	for i := range 7 {
 		objects = append(objects, pod(fmt.Sprintf("web-%d", i), mounts("settings")))
 	}
@@ -257,5 +257,58 @@ func TestConfigReferencesSayWhenARolloutTemplateIsPartlyUnreadable(t *testing.T)
 	got := NewView(cluster{objects: []runtime.Object{configMap("settings")}}, ownership.Unrestricted()).ConfigReferences(refOf(rollout), rollout)
 	if len(got.Declared) != 1 || got.Declared[0].State != TargetPresent || got.Coverage.Complete() {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestConfigConsumersAnswerOnlyForASubjectRadarHolds(t *testing.T) {
+	declarer := pod("web-1", mounts("settings"))
+	if got := NewView(cluster{objects: []runtime.Object{declarer}}, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings")); len(got.Consumers) != 0 || !got.Coverage.Complete() {
+		t.Errorf("a ConfigMap that doesn't exist got %+v", got)
+	}
+	unread := cluster{objects: []runtime.Object{declarer}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "ConfigMap"}: readreason.KindSyncPending}}
+	got := NewView(unread, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"))
+	if len(got.Consumers) != 0 || got.Coverage.Complete() {
+		t.Errorf("a ConfigMap Radar couldn't read got %+v", got)
+	}
+}
+
+func TestConfigReferencesAnswerOnlyAsTheCallerMayReadTheSubject(t *testing.T) {
+	subject := pod("web-1", mounts("settings"))
+	c := cluster{objects: []runtime.Object{subject, configMap("settings")}}
+	for _, access := range []ownership.Access{denies{"Pod"}, undecided{}} {
+		if got := NewView(c, access).ConfigReferences(refOf(subject), subject); len(got.Declared) != 0 || !got.Coverage.Narrowed {
+			t.Errorf("%T: a caller who may not read the Pod learned what it declares: %+v", access, got)
+		}
+	}
+}
+
+func TestPartlyUnreadableRolloutsLeaveConsumersIncomplete(t *testing.T) {
+	broken := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "shop", "name": "checkout"},
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{
+			"nodeSelector": "not-a-map",
+			"volumes":      []any{map[string]any{"name": "s", "configMap": map[string]any{"name": "settings"}}},
+		}}},
+	}}
+	got := NewView(cluster{objects: []runtime.Object{configMap("settings"), broken}}, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"))
+	if !slices.Equal(consumerRefs(got), []resourceid.Ref{ref("argoproj.io", "Rollout", "checkout")}) || got.Coverage.Complete() {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestARolloutTemplateThatIsNotAnObjectIsUnread(t *testing.T) {
+	rollout := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "shop", "name": "checkout"},
+		"spec": map[string]any{"template": map[string]any{"spec": "not-an-object"}},
+	}}
+	if got := NewView(cluster{}, ownership.Unrestricted()).ConfigReferences(refOf(rollout), rollout); got.Coverage.Complete() {
+		t.Fatalf("a template Radar couldn't read answered complete: %+v", got)
+	}
+	none := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "shop", "name": "by-ref"},
+		"spec": map[string]any{"workloadRef": map[string]any{"kind": "Deployment", "name": "web"}},
+	}}
+	if got := NewView(cluster{}, ownership.Unrestricted()).ConfigReferences(refOf(none), none); !got.Coverage.Complete() || len(got.Declared) != 0 {
+		t.Fatalf("a Rollout with no template got %+v", got)
 	}
 }

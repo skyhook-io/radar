@@ -1,15 +1,16 @@
 package cachesource
 
 import (
+	"cmp"
 	"fmt"
 	"math/rand/v2"
 	"reflect"
 	"slices"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/relations"
@@ -18,21 +19,47 @@ import (
 
 // declaringKinds are the World's kinds whose pod spec or template declares.
 var declaringKinds = []resourceid.GroupKind{
-	{Kind: "Pod"}, {Group: "apps", Kind: "ReplicaSet"}, {Group: "apps", Kind: "Deployment"}, {Group: "batch", Kind: "Job"},
+	{Group: "apps", Kind: "Deployment"}, ownershiptest.ArgoRollout, {Group: "batch", Kind: "Job"},
+	{Group: "apps", Kind: "ReplicaSet"}, {Kind: "Pod"},
 }
 
-// withDeclarations gives the declaring objects of w references to
-// ConfigMaps in their namespace, present or not. ConfigMaps are the only
-// declarable kind a generated World serves; the others are literal cases.
+// consumerKinds are every kind ConfigConsumers asks for, in its order; the
+// ones the World doesn't serve read as empty.
+var consumerKinds = []resourceid.GroupKind{
+	{Group: "apps", Kind: "Deployment"}, ownershiptest.ArgoRollout, {Group: "apps", Kind: "StatefulSet"},
+	{Group: "apps", Kind: "DaemonSet"}, {Group: "batch", Kind: "CronJob"}, {Group: "batch", Kind: "Job"},
+	{Group: "apps", Kind: "ReplicaSet"}, {Group: "networking.k8s.io", Kind: "Ingress"}, {Kind: "Pod"},
+}
+
+// declaredPath is where DeclaringSpec writes a declaration of kind.
+var declaredPath = map[string]string{
+	"ConfigMap": "volumes[].configMap.name", "Secret": "volumes[].secret.secretName",
+	"PersistentVolumeClaim": "volumes[].persistentVolumeClaim.claimName", "ServiceAccount": "serviceAccountName",
+}
+
+// withDeclarations adds Rollouts to w and gives its declaring objects
+// references to ConfigMaps in their namespace, present or not. ConfigMaps
+// are the only declarable kind a generated World serves; the others are
+// literal cases.
 func withDeclarations(seed uint64, w ownershiptest.World) (ownershiptest.World, []resourceid.Ref) {
 	r := rand.New(rand.NewPCG(seed, seed^0x5bd1e995))
+	namespaces := []string{"alpha", "beta", "gamma"}
+	for _, ns := range namespaces {
+		for i := range r.IntN(3) {
+			name := fmt.Sprintf("rollout-%d", i)
+			w.Objects = append(w.Objects, ownershiptest.Object{
+				Ref:        resourceid.Ref{Group: ownershiptest.ArgoRollout.Group, Kind: ownershiptest.ArgoRollout.Kind, Namespace: ns, Name: name},
+				APIVersion: "argoproj.io/v1alpha1", UID: types.UID("uid-" + ns + "-" + name), ResourceVersion: "1",
+			})
+		}
+	}
 	var targets []resourceid.Ref
 	for _, o := range w.Objects {
 		if o.Ref.Kind == "ConfigMap" && o.Ref.Group == "" {
 			targets = append(targets, o.Ref)
 		}
 	}
-	for _, ns := range []string{"alpha", "beta", "gamma"} {
+	for _, ns := range namespaces {
 		targets = append(targets, resourceid.Ref{Kind: "ConfigMap", Namespace: ns, Name: "missing"})
 	}
 	for i := range w.Objects {
@@ -47,8 +74,7 @@ func withDeclarations(seed uint64, w ownershiptest.World) (ownershiptest.World, 
 			}
 		}
 		for range 1 + r.IntN(3) {
-			pick := local[r.IntN(len(local))]
-			if !slices.Contains(o.Declares, pick) {
+			if pick := local[r.IntN(len(local))]; !slices.Contains(o.Declares, pick) {
 				o.Declares = append(o.Declares, pick)
 			}
 		}
@@ -56,11 +82,103 @@ func withDeclarations(seed uint64, w ownershiptest.World) (ownershiptest.World, 
 	return w, targets
 }
 
-// consumerKinds are every kind ConfigConsumers asks the session for.
-var consumerKinds = []resourceid.GroupKind{
-	{Group: "apps", Kind: "Deployment"}, {Group: configrefs.ArgoRolloutsGroup, Kind: "Rollout"}, {Group: "apps", Kind: "StatefulSet"},
-	{Group: "apps", Kind: "DaemonSet"}, {Group: "batch", Kind: "CronJob"}, {Group: "batch", Kind: "Job"},
-	{Group: "apps", Kind: "ReplicaSet"}, {Group: "networking.k8s.io", Kind: "Ingress"}, {Kind: "Pod"},
+// expected derives the answers from the World itself: its declarations,
+// the caller's access and what Scan says Radar can read, sharing no relation
+// rule with pkg/relations.
+type expected struct {
+	w      ownershiptest.World
+	scan   relations.Session
+	access ownership.Access
+}
+
+func (e expected) may(gk resourceid.GroupKind, namespace string) bool {
+	return e.access.CanRead(gk, namespace) == ownership.Allowed
+}
+
+func (e expected) object(ref resourceid.Ref) ownershiptest.Object {
+	if i := slices.IndexFunc(e.w.Objects, func(o ownershiptest.Object) bool { return o.Ref == ref }); i >= 0 {
+		return e.w.Objects[i]
+	}
+	return ownershiptest.Object{}
+}
+
+func addGap(c *relations.Coverage, g ownership.Gap) {
+	if !slices.Contains(c.NotChecked, g) {
+		c.NotChecked = append(c.NotChecked, g)
+	}
+}
+
+// observed reads subject as an answer about it starts: true when Present,
+// otherwise the coverage the answer stops with.
+func (e expected) observed(subject resourceid.Ref, c *relations.Coverage) bool {
+	if !e.may(subject.GroupKind(), subject.Namespace) {
+		c.Narrowed = true
+		return false
+	}
+	switch read := e.scan.Object(subject); read.State {
+	case ownership.Present:
+		return true
+	case ownership.Unavailable:
+		c.NotChecked = []ownership.Gap{read.Gap}
+	}
+	return false
+}
+
+func (e expected) consumers(subject resourceid.Ref) relations.ConfigConsumersAnswer {
+	var a relations.ConfigConsumersAnswer
+	if !e.observed(subject, &a.Coverage) {
+		return a
+	}
+	for _, gk := range consumerKinds {
+		if gk.Kind == "Ingress" && subject.Kind != "Secret" {
+			continue
+		}
+		if !e.may(gk, subject.Namespace) {
+			a.Coverage.Narrowed = true
+			continue
+		}
+		read := e.scan.Indexed(gk, cache.NamespaceIndex, []string{subject.Namespace}, ownership.InNamespace(subject.Namespace))
+		for _, g := range read.Gaps {
+			addGap(&a.Coverage, g)
+		}
+		for _, found := range read.Objects {
+			if slices.Contains(e.object(found.Ref).Declares, subject) {
+				a.Consumers = append(a.Consumers, relations.ConfigConsumer{Ref: found.Ref, Paths: []string{declaredPath[subject.Kind]}})
+			}
+		}
+	}
+	slices.SortStableFunc(a.Consumers, func(x, y relations.ConfigConsumer) int {
+		return cmp.Or(cmp.Compare(slices.Index(consumerKinds, x.Ref.GroupKind()), slices.Index(consumerKinds, y.Ref.GroupKind())), cmp.Compare(x.Ref.Name, y.Ref.Name))
+	})
+	return a
+}
+
+func (e expected) references(subject resourceid.Ref) relations.ConfigReferencesAnswer {
+	var a relations.ConfigReferencesAnswer
+	if !e.observed(subject, &a.Coverage) || !slices.Contains(declaringKinds, subject.GroupKind()) {
+		return a
+	}
+	targets := slices.Clone(e.object(subject).Declares)
+	slices.SortFunc(targets, func(x, y resourceid.Ref) int { return cmp.Or(cmp.Compare(x.Kind, y.Kind), cmp.Compare(x.Name, y.Name)) })
+	for _, t := range targets {
+		d := relations.Declared{Ref: t, Paths: []string{declaredPath[t.Kind]}}
+		if !e.may(t.GroupKind(), t.Namespace) {
+			d.State = relations.TargetWithheld
+			a.Coverage.Narrowed = true
+		} else {
+			switch read := e.scan.Object(t); read.State {
+			case ownership.Present:
+				d.State = relations.TargetPresent
+			case ownership.Absent:
+				d.State = relations.TargetAbsent
+			default:
+				d.State, d.Gap = relations.TargetUnread, read.Gap
+				addGap(&a.Coverage, read.Gap)
+			}
+		}
+		a.Declared = append(a.Declared, d)
+	}
+	return a
 }
 
 func indexedRefs(r relations.IndexedRead) []resourceid.Ref {
@@ -73,47 +191,59 @@ func indexedRefs(r relations.IndexedRead) []resourceid.Ref {
 
 // exercised counts the answers a conformance run compared that said
 // something, so the generated worlds can't pass by answering nothing.
-type exercised struct{ consumers, gaps, narrowed int }
+type exercised struct{ consumers, rollouts, gaps, narrowed int }
 
-// conformRelations checks the cache source's index reads and the relations
-// View over it against Scan of w, for every target and object of w.
-func conformRelations(t *testing.T, w ownershiptest.World, targets []resourceid.Ref, seen *exercised) {
+// conformRelations checks the cache source session got's index reads
+// against Scan of w, and the relations answers over both sessions against
+// answers derived from w itself, for every target and object of w.
+func conformRelations(t *testing.T, w ownershiptest.World, got relations.Session, targets []resourceid.Ref, seen *exercised) {
 	t.Helper()
 	scanned, err := ownershiptest.Scan(w).Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := scanned.(relations.Session)
-	got := begin(t, render(t, w).source()).(relations.Session)
-	for _, target := range targets {
-		for _, gk := range consumerKinds {
-			a := want.Indexed(gk, cache.NamespaceIndex, []string{target.Namespace}, ownership.InNamespace(target.Namespace))
-			b := got.Indexed(gk, cache.NamespaceIndex, []string{target.Namespace}, ownership.InNamespace(target.Namespace))
+	scan := scanned.(relations.Session)
+	for _, gk := range consumerKinds {
+		for _, ns := range []string{"alpha", "beta", "gamma"} {
+			a := scan.Indexed(gk, cache.NamespaceIndex, []string{ns}, ownership.InNamespace(ns))
+			b := got.Indexed(gk, cache.NamespaceIndex, []string{ns}, ownership.InNamespace(ns))
 			if !slices.Equal(indexedRefs(a), indexedRefs(b)) || !slices.Equal(a.Gaps, b.Gaps) {
-				t.Errorf("Indexed(%v, %v): scan %v %v, cache %v %v", gk, target, indexedRefs(a), a.Gaps, indexedRefs(b), b.Gaps)
+				t.Errorf("Indexed(%v, %s): scan %v %v, cache %v %v", gk, ns, indexedRefs(a), a.Gaps, indexedRefs(b), b.Gaps)
 			}
 		}
 	}
 	for _, access := range []ownership.Access{ownership.Unrestricted(), alphaOnly{}} {
-		vw, vg := relations.NewView(want, access), relations.NewView(got, access)
-		for _, target := range targets {
-			a, b := vw.ConfigConsumers(target), vg.ConfigConsumers(target)
-			if !reflect.DeepEqual(a, b) {
-				t.Errorf("%T ConfigConsumers(%v):\nscan  %+v\ncache %+v", access, target, a, b)
+		want := expected{w: w, scan: scan, access: access}
+		for _, session := range []struct {
+			name string
+			s    relations.Session
+		}{{"scan", scan}, {"cache", got}} {
+			v := relations.NewView(session.s, access)
+			for _, target := range targets {
+				answer := v.ConfigConsumers(target)
+				if e := want.consumers(target); !reflect.DeepEqual(answer, e) {
+					t.Errorf("%s %T ConfigConsumers(%v):\ngot  %+v\nwant %+v", session.name, access, target, answer, e)
+				}
+				if session.name != "cache" {
+					continue
+				}
+				if len(answer.Consumers) > 0 {
+					seen.consumers++
+				}
+				if slices.ContainsFunc(answer.Consumers, func(c relations.ConfigConsumer) bool { return c.Ref.GroupKind() == ownershiptest.ArgoRollout }) {
+					seen.rollouts++
+				}
+				if len(answer.Coverage.NotChecked) > 0 {
+					seen.gaps++
+				}
+				if answer.Coverage.Narrowed {
+					seen.narrowed++
+				}
 			}
-			if len(b.Consumers) > 0 {
-				seen.consumers++
-			}
-			if len(b.Coverage.NotChecked) > 0 {
-				seen.gaps++
-			}
-			if b.Coverage.Narrowed {
-				seen.narrowed++
-			}
-		}
-		for _, o := range w.Objects {
-			if a, b := vw.ConfigReferences(o.Ref, nil), vg.ConfigReferences(o.Ref, nil); !reflect.DeepEqual(a, b) {
-				t.Errorf("%T ConfigReferences(%v):\nscan  %+v\ncache %+v", access, o.Ref, a, b)
+			for _, o := range w.Objects {
+				if answer, e := v.ConfigReferences(o.Ref, nil), want.references(o.Ref); !reflect.DeepEqual(answer, e) {
+					t.Errorf("%s %T ConfigReferences(%v):\ngot  %+v\nwant %+v", session.name, access, o.Ref, answer, e)
+				}
 			}
 		}
 	}
@@ -122,16 +252,69 @@ func conformRelations(t *testing.T, w ownershiptest.World, targets []resourceid.
 func TestRelationsConformOnGeneratedWorlds(t *testing.T) {
 	seeds := 24
 	if testing.Short() {
-		seeds = 6
+		seeds = 8
 	}
 	var seen exercised
 	for seed := range uint64(seeds) {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			w, targets := withDeclarations(seed, ownershiptest.Generate(seed))
-			conformRelations(t, w, targets, &seen)
+			conformRelations(t, w, begin(t, render(t, w).source()).(relations.Session), targets, &seen)
 		})
 	}
-	if seen.consumers == 0 || seen.gaps == 0 || seen.narrowed == 0 {
+	if seen.consumers == 0 || seen.rollouts == 0 || seen.gaps == 0 || seen.narrowed == 0 {
 		t.Fatalf("the generated worlds didn't exercise every answer: %+v", seen)
+	}
+}
+
+// TestRelationsConformThroughChanges keeps the answers right as objects are
+// created, deleted and change what they declare.
+func TestRelationsConformThroughChanges(t *testing.T) {
+	histories := 8
+	if testing.Short() {
+		histories = 3
+	}
+	var seen exercised
+	for seed := range uint64(histories) {
+		t.Run(fmt.Sprint(seed), func(t *testing.T) {
+			w, targets := withDeclarations(seed, ownershiptest.Generate(seed))
+			d := &driver{t: t, r: render(t, w), w: w}
+			r := rand.New(rand.NewPCG(seed, 11))
+			redeclared := 0
+			for n := range 10 {
+				change := "redeclare"
+				var declaring []ownershiptest.Object
+				for _, o := range d.w.Objects {
+					if slices.Contains(declaringKinds, o.Ref.GroupKind()) {
+						declaring = append(declaring, o)
+					}
+				}
+				if n%2 == 0 || len(declaring) == 0 {
+					if change = d.step(r, n); change == "skip" {
+						continue
+					}
+				} else {
+					o := declaring[r.IntN(len(declaring))]
+					var local []resourceid.Ref
+					for _, target := range targets {
+						if target.Namespace == o.Ref.Namespace && r.IntN(2) == 0 {
+							local = append(local, target)
+						}
+					}
+					d.update(o.Ref, func(o *ownershiptest.Object) { o.Declares = local })
+					redeclared++
+				}
+				d.fence()
+				conformRelations(t, d.w, begin(t, d.r.source()).(relations.Session), targets, &seen)
+				if t.Failed() {
+					t.Fatalf("after step %d (%s)", n, change)
+				}
+			}
+			if redeclared == 0 {
+				t.Fatal("no step changed what an object declares")
+			}
+		})
+	}
+	if seen.consumers == 0 {
+		t.Fatalf("the histories never found a consumer: %+v", seen)
 	}
 }

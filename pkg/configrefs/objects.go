@@ -19,7 +19,8 @@ const ArgoRolloutsGroup = "argoproj.io"
 // or Argo Rollout, or an Ingress's TLS Secrets. Repeated declarations are
 // returned separately, each with its path. ok is false for any other object.
 // A Rollout whose template doesn't decode returns the declarations that can
-// still be read, with the decoding error.
+// still be read, with the decoding error; one with no template declares
+// nothing.
 func ObjectReferences(obj any) (refs []PodSpecReference, ok bool, err error) {
 	ok, err = VisitObjectReferences(obj, func(ref PodSpecReference) { refs = append(refs, ref) })
 	return refs, ok, err
@@ -51,8 +52,11 @@ func VisitObjectReferences(obj any, visit func(PodSpecReference)) (ok bool, err 
 		if !IsArgoRollout(o) {
 			return false, nil
 		}
-		template, _, _ := unstructured.NestedMap(o.Object, "spec", "template", "spec")
-		if template == nil {
+		template, found, err := unstructured.NestedMap(o.Object, "spec", "template", "spec")
+		if err != nil {
+			return true, err
+		}
+		if !found {
 			return true, nil
 		}
 		return true, VisitPodSpecMapReferences(o.GetNamespace(), template, visit)

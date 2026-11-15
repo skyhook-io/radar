@@ -39,13 +39,20 @@ func DeclaringSpec(declares []resourceid.Ref) corev1.PodSpec {
 }
 
 // ApplyDeclarations writes declares into obj's pod spec, or its pod
-// template's, when obj is a Pod, ReplicaSet, Deployment or Job.
+// template's, when obj is a Pod, ReplicaSet, Deployment, Job or Rollout.
 func ApplyDeclarations(obj runtime.Object, declares []resourceid.Ref) {
 	if len(declares) == 0 {
 		return
 	}
 	spec := DeclaringSpec(declares)
 	switch o := obj.(type) {
+	case *unstructured.Unstructured:
+		if o.GroupVersionKind().GroupKind() == (schema.GroupKind{Group: ArgoRollout.Group, Kind: ArgoRollout.Kind}) {
+			template, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&spec)
+			if err == nil {
+				_ = unstructured.SetNestedMap(o.Object, template, "spec", "template", "spec")
+			}
+		}
 	case *corev1.Pod:
 		o.Spec = spec
 	case *appsv1.ReplicaSet:

@@ -1,6 +1,8 @@
 package k8score
 
 import (
+	"slices"
+
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -64,19 +66,40 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 // ReadableIndexedObjects returns the objects of resource in namespaces that
 // index files under any of keys, under ReadableObjects' rules: ok is false
 // unless each namespace's store is complete now, and nil namespaces means the
-// kind's whole scope. Each store is read once for all the keys, and an object
-// filed under several is returned once. ok is also false when the stores lack
-// the index. The objects are the cached ones: callers must not modify or keep
-// them.
+// kind's whole scope. An object filed under several keys is returned once,
+// and no keys read nothing. For one of k8score's own indexes each store is
+// read once for all the keys; any other index, such as the namespace index,
+// is read key by key. ok is also false when the stores lack the index. The
+// objects are the cached ones: callers must not modify or keep them.
 func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []string, index string, keys ...string) ([]apiruntime.Object, bool) {
 	if rc == nil || !rc.isEnabled(resource) || rc.kindStores[resource] == nil {
 		return nil, false
 	}
+	keys = slices.Compact(slices.Sorted(slices.Values(keys)))
 	read := func(indexer cache.Indexer) ([]any, error) {
-		if len(keys) == 1 {
+		switch {
+		case len(keys) == 0:
+			return nil, nil
+		case len(keys) == 1:
 			return indexer.ByIndex(index, keys[0])
+		case multiKeyIndexes[index]:
+			return indexer.Index(index, indexQuery(keys))
 		}
-		return indexer.Index(index, indexQuery(keys))
+		var items []any
+		seen := map[string]bool{}
+		for _, key := range keys {
+			found, err := indexer.ByIndex(index, key)
+			if err != nil {
+				return nil, err
+			}
+			for _, item := range found {
+				if k, err := cache.MetaNamespaceKeyFunc(item); err == nil && !seen[k] {
+					seen[k] = true
+					items = append(items, item)
+				}
+			}
+		}
+		return items, nil
 	}
 	var hits []any
 	if namespaces == nil {
@@ -126,6 +149,10 @@ func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []st
 	}
 	return out, true
 }
+
+// multiKeyIndexes are k8score's own indexes, whose index functions answer an
+// indexQuery.
+var multiKeyIndexes = map[string]bool{OwnerUIDIndex: true, GitOpsMembersIndex: true, KueueQueueIndex: true}
 
 // indexQuery is a read of keys from one of k8score's indexes: their index
 // functions answer it with the keys themselves, so Indexer.Index returns the

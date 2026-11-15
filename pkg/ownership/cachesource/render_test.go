@@ -116,6 +116,7 @@ func apiObject(t testing.TB, o ownershiptest.Object) (runtime.Object, bool) {
 	case ownership.FluxHelmRelease, ownership.FluxKustomization:
 		renderFluxManager(u, o)
 	}
+	ownershiptest.ApplyDeclarations(u, o.Declares)
 	return u, false
 }
 

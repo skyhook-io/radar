@@ -100,9 +100,14 @@ func scaledToZero(obj runtime.Object) bool {
 }
 
 // ConfigReferences answers what subject declares. fetched is the subject as
-// the host read it, or nil to read it from the cache.
+// the host read it, or nil to read it from the cache. A caller who may not
+// read the subject gets nothing, Narrowed.
 func (v *View) ConfigReferences(subject resourceid.Ref, fetched runtime.Object) ConfigReferencesAnswer {
 	var a ConfigReferencesAnswer
+	if !v.mayRead(subject.GroupKind(), subject.Namespace) {
+		a.Coverage.Narrowed = true
+		return a
+	}
 	obj := fetched
 	if obj == nil {
 		borrowed, read := v.session.Borrow(subject)
@@ -167,9 +172,10 @@ func (v *View) ConfigReferences(subject resourceid.Ref, fetched runtime.Object) 
 
 // ConfigConsumers answers what declares subject, a ConfigMap, Secret,
 // PersistentVolumeClaim or ServiceAccount: the Pods, pod-template workloads
-// and, for a Secret, Ingresses in its namespace. A caller who may not read
-// the subject gets nothing, Narrowed. ReplicaSets scaled to zero are left
-// out: they are old revisions.
+// and, for a Secret, Ingresses in its namespace. It answers only for a
+// subject Radar holds: a caller who may not read it gets nothing, Narrowed,
+// and a subject Radar couldn't read gets its gap. ReplicaSets scaled to zero
+// are left out: they are old revisions.
 //
 // A declaration always names its declarer's namespace, so the answer reads
 // that namespace's objects of each declaring kind and evaluates what each
@@ -185,6 +191,14 @@ func (v *View) ConfigConsumers(subject resourceid.Ref) ConfigConsumersAnswer {
 		a.Coverage.Narrowed = true
 		return a
 	}
+	switch read := v.session.Object(subject); read.State {
+	case ownership.Present:
+	case ownership.Unavailable:
+		a.Coverage.NotChecked = []ownership.Gap{read.Gap}
+		return a
+	default:
+		return a
+	}
 	want := configrefs.Ref{Kind: subject.Kind, Namespace: subject.Namespace, Name: subject.Name}
 	scope := ownership.InNamespace(subject.Namespace)
 	for _, gk := range configConsumerKinds {
@@ -196,23 +210,27 @@ func (v *View) ConfigConsumers(subject resourceid.Ref) ConfigConsumersAnswer {
 			continue
 		}
 		read := v.session.Indexed(gk, cache.NamespaceIndex, []string{subject.Namespace}, scope)
-		for _, g := range read.Gaps {
-			if !slices.Contains(a.Coverage.NotChecked, g) {
-				a.Coverage.NotChecked = append(a.Coverage.NotChecked, g)
-			}
-		}
+		gaps := read.Gaps
 		for _, o := range read.Objects {
 			if scaledToZero(o.Object) {
 				continue
 			}
 			var paths []string
-			_, _ = configrefs.VisitObjectReferences(o.Object, func(r configrefs.PodSpecReference) {
+			_, err := configrefs.VisitObjectReferences(o.Object, func(r configrefs.PodSpecReference) {
 				if r.Ref == want && !slices.Contains(paths, r.Path) {
 					paths = append(paths, r.Path)
 				}
 			})
+			if err != nil {
+				gaps = append(gaps, ownership.Gap{Kind: gk, Namespace: subject.Namespace, Reason: readreason.ReadError})
+			}
 			if len(paths) > 0 {
 				a.Consumers = append(a.Consumers, ConfigConsumer{Ref: o.Ref, Paths: paths})
+			}
+		}
+		for _, g := range gaps {
+			if !slices.Contains(a.Coverage.NotChecked, g) {
+				a.Coverage.NotChecked = append(a.Coverage.NotChecked, g)
 			}
 		}
 	}

@@ -42,6 +42,12 @@ func (stores) Borrow(resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
 	return nil, ownership.ObjectRead{State: ownership.Absent}
 }
 
+// Object finds every subject present: the benchmark asks about objects the
+// namespace's declarers name.
+func (stores) Object(resourceid.Ref) ownership.ObjectRead {
+	return ownership.ObjectRead{State: ownership.Present}
+}
+
 // appSpec declares what a typical application Pod does.
 func appSpec(app string) corev1.PodSpec {
 	return corev1.PodSpec{
