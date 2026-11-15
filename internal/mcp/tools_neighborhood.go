@@ -99,36 +99,6 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		opts.MaxNodes = 200
 	}
 
-	// Build the full topology and slice via BFS. The MCP server doesn't own
-	// a topology memoizer (the REST server does), so we accept the per-call
-	// rebuild cost here — neighborhood is a low-frequency tool.
-	//
-	// dp is captured once and threaded into both Builder and BuildNeighborhoodWithIndex
-	// so root-ID construction can resolve CRD plurals correctly (without it,
-	// buildNodeID falls back to the static kindMap which only covers built-in kinds).
-	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	buildOpts := topology.DefaultBuildOptions()
-	buildOpts.IncludeReplicaSets = true
-	buildOpts.ForRelationshipCache = true
-	// Override DefaultBuildOptions' Secret-elision: with IncludeSecrets=false,
-	// root lookup for kind=secret produces an empty subgraph and the handler
-	// returns "resource not found" even for authorized users. The Allow gate
-	// below applies the per-namespace `get secrets` SAR per node, so
-	// unauthorized users still get the same "not found" via the empty-subgraph
-	// path — existence-hiding preserved.
-	buildOpts.IncludeSecrets = true
-	topo, err := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-		WithDynamic(dp).
-		Build(buildOpts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build topology: %w", err)
-	}
-	// Build the inverted index once and reuse it across BFS expansion plus
-	// any per-resource relationship lookups downstream. Without a memoizer
-	// the cost is paid every call, but it's still cheaper than scanning
-	// topo.Edges from inside the BFS loop (O(E) per hop level).
-	idx := topology.IndexByResource(topo)
-
 	root := topology.ResourceRef{
 		Kind:      displayKindForMCP(input.Kind),
 		Namespace: input.Namespace,
@@ -142,7 +112,10 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		return canReadNeighborhoodNodeMCP(ctx, n)
 	}
 
-	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
+	sub, err := k8s.AnswerNeighborhood(ctx, cache, root, opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to answer neighborhood: %w", err)
+	}
 	// Same reason as the REST neighborhood: a Calico policy admitted through one
 	// serving group must not advertise the other.
 	topology.ReadvertiseCalicoPolicyNodes(sub.Nodes, func(t topology.SARTuple) bool {
