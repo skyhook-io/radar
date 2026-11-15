@@ -355,13 +355,186 @@ func TestDiffGenericUnstructured_QualifiedKeysHidden(t *testing.T) {
 	}
 }
 
-func TestTimelineUpdateDiff_AuditedUnstructuredGenerationFallback(t *testing.T) {
-	old := collisionObject("argoproj.io/v1alpha1", "Application", map[string]any{"spec": map[string]any{"project": "default"}})
+// Argo CD's Application CRD has no status subresource, so every controller
+// status write (reconciledAt on each refresh, a sync request) bumps generation.
+func TestTimelineUpdateDiff_ArgoApplicationGenerationBumps(t *testing.T) {
+	app := func(apiVersion string) *unstructured.Unstructured {
+		u := collisionObject(apiVersion, "Application", map[string]any{
+			"spec": map[string]any{
+				"project": "default",
+				"source": map[string]any{
+					"repoURL": "https://example.com/repo.git", "targetRevision": "main", "path": "app",
+					"helm": map[string]any{"valuesObject": map[string]any{"replicas": int64(1), "db": map[string]any{"key": "old", "pin": int64(1111)}}},
+					"kustomize": map[string]any{
+						"commonAnnotations": map[string]any{"path": "old-private"},
+						"commonLabels":      map[string]any{"targetRevision": "old-private"},
+					},
+				},
+				"sources": []any{
+					map[string]any{"name": "base", "repoURL": "https://example.com/base.git"},
+					map[string]any{"name": "overlay", "repoURL": "https://example.com/overlay.git"},
+				},
+				"syncPolicy": map[string]any{"automated": map[string]any{"enabled": true, "prune": true}},
+			},
+			"status": map[string]any{
+				"reconciledAt":   "2026-11-14T10:00:00Z",
+				"sync":           map[string]any{"status": "Synced", "revision": "abc"},
+				"health":         map[string]any{"status": "Healthy"},
+				"operationState": map[string]any{"phase": "Succeeded"},
+			},
+		})
+		u.SetGeneration(10)
+		return u
+	}
+	set := func(u *unstructured.Unstructured, value any, path ...string) {
+		if err := unstructured.SetNestedField(u.Object, value, path...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	requestSync := func(u *unstructured.Unstructured) {
+		u.Object["operation"] = map[string]any{"sync": map[string]any{"revision": "abc"}, "initiatedBy": map[string]any{"automated": true}}
+		unstructured.RemoveNestedField(u.Object, "status", "operationState")
+	}
+	sources := func(names ...string) []any {
+		out := make([]any, len(names))
+		for i, name := range names {
+			out[i] = map[string]any{"name": name, "repoURL": "https://example.com/" + name + ".git"}
+		}
+		return out
+	}
+
+	tests := []struct {
+		name       string
+		apiVersion string
+		genDelta   int64
+		mutate     func(*unstructured.Unstructured)
+		wantPaths  []string
+		wantHidden []string
+		wantValues map[string][2]any
+		// unnamedSources starts from two sources without a name field.
+		unnamedSources bool
+	}{
+		{name: "refresh writes reconciledAt", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			set(u, "2026-11-14T10:03:00Z", "status", "reconciledAt")
+		}},
+		{name: "bare generation bump", genDelta: 1, mutate: func(*unstructured.Unstructured) {}},
+		{name: "folded status writes", genDelta: 5, mutate: func(*unstructured.Unstructured) {}},
+		{name: "sync request", genDelta: 1, mutate: requestSync},
+		{name: "sync request beside a spec edit", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			requestSync(u)
+			set(u, "other", "spec", "source", "path")
+		}, wantPaths: []string{"spec.source.path"}},
+		{name: "sync status beside a spec edit", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			set(u, "OutOfSync", "status", "sync", "status")
+			set(u, "other", "spec", "source", "path")
+		}, wantPaths: []string{"status.sync.status", "spec.source.path"}},
+		{name: "tracked targetRevision edit", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			set(u, "v2", "spec", "source", "targetRevision")
+		}, wantPaths: []string{"spec.source.targetRevision"}},
+		{name: "auto-sync toggle is one row", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			set(u, false, "spec", "syncPolicy", "automated", "enabled")
+		}, wantPaths: []string{"spec.syncPolicy.automated"}},
+		{name: "helm valuesObject values are hidden", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			set(u, int64(3), "spec", "source", "helm", "valuesObject", "replicas")
+			set(u, "new", "spec", "source", "helm", "valuesObject", "db", "key")
+			set(u, int64(2222), "spec", "source", "helm", "valuesObject", "db", "pin")
+		}, wantPaths: []string{
+			"spec.source.helm.valuesObject.db.key", "spec.source.helm.valuesObject.db.pin", "spec.source.helm.valuesObject.replicas",
+		}, wantHidden: []string{
+			"spec.source.helm.valuesObject.replicas", "spec.source.helm.valuesObject.db.key", "spec.source.helm.valuesObject.db.pin",
+		}},
+		{name: "kustomize common label and annotation values are hidden", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			set(u, "new-private", "spec", "source", "kustomize", "commonAnnotations", "path")
+			set(u, "new-private", "spec", "source", "kustomize", "commonLabels", "targetRevision")
+		}, wantPaths: []string{
+			"spec.source.kustomize.commonAnnotations.path", "spec.source.kustomize.commonLabels.targetRevision",
+		}, wantHidden: []string{
+			"spec.source.kustomize.commonAnnotations.path", "spec.source.kustomize.commonLabels.targetRevision",
+		}},
+		{name: "sources reorder beside a sync status change", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			set(u, "OutOfSync", "status", "sync", "status")
+			u.Object["spec"].(map[string]any)["sources"] = sources("overlay", "base")
+		}, wantPaths: []string{"status.sync.status", "spec.sources"}},
+		{name: "unnamed sources reorder reads as an order change", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			u.Object["spec"].(map[string]any)["sources"] = []any{
+				map[string]any{"repoURL": "https://example.com/values.git", "ref": "values"},
+				map[string]any{"repoURL": "https://example.com/chart.git", "chart": "app"},
+			}
+		}, unnamedSources: true, wantPaths: []string{"spec.sources"}, wantValues: map[string][2]any{"spec.sources": {[]string{"0", "1"}, []string{"1", "0"}}}},
+		{name: "multi-source revision change shows the revision", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			u.Object["spec"].(map[string]any)["sources"] = []any{
+				map[string]any{"name": "base", "repoURL": "https://example.com/base.git"},
+				map[string]any{"name": "overlay", "repoURL": "https://example.com/overlay.git", "targetRevision": "v2"},
+			}
+		}, wantPaths: []string{"spec.sources[overlay].targetRevision"}, wantValues: map[string][2]any{"spec.sources[overlay].targetRevision": {nil, "v2"}}},
+		{name: "foreign-group Application keeps operation as desired state", apiVersion: "example.com/v1", genDelta: 1, mutate: func(u *unstructured.Unstructured) {
+			u.Object["operation"] = map[string]any{"sync": map[string]any{}}
+		}, wantPaths: []string{"operation", "metadata.generation"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiVersion := tt.apiVersion
+			if apiVersion == "" {
+				apiVersion = "argoproj.io/v1alpha1"
+			}
+			old := app(apiVersion)
+			if tt.unnamedSources {
+				old.Object["spec"].(map[string]any)["sources"] = []any{
+					map[string]any{"repoURL": "https://example.com/chart.git", "chart": "app"},
+					map[string]any{"repoURL": "https://example.com/values.git", "ref": "values"},
+				}
+			}
+			new := old.DeepCopy()
+			new.SetGeneration(old.GetGeneration() + tt.genDelta)
+			tt.mutate(new)
+
+			recomputed, recordRecomputed := timelineUpdateDiff("Application", old, new, nil, false)
+			precomputed, recordPrecomputed := timelineUpdateDiff("Application", old, new, ComputeDiff("Application", old, new), true)
+			if recordRecomputed != recordPrecomputed || !reflect.DeepEqual(recomputed, precomputed) {
+				t.Fatalf("precomputed and recomputed paths disagree: %+v / %+v", recomputed, precomputed)
+			}
+			if len(tt.wantPaths) == 0 {
+				if recordRecomputed || recomputed != nil {
+					t.Fatalf("recorded %+v, want no event", recomputed)
+				}
+				return
+			}
+			if !recordRecomputed || recomputed == nil {
+				t.Fatalf("not recorded, want %v", tt.wantPaths)
+			}
+			var got []string
+			for _, field := range recomputed.Fields {
+				got = append(got, field.Path)
+			}
+			if !reflect.DeepEqual(got, tt.wantPaths) {
+				t.Fatalf("paths = %v, want %v (summary %q)", got, tt.wantPaths, recomputed.Summary)
+			}
+			for path, want := range tt.wantValues {
+				for _, field := range recomputed.Fields {
+					if field.Path == path && (!reflect.DeepEqual(field.OldValue, want[0]) || !reflect.DeepEqual(field.NewValue, want[1])) {
+						t.Fatalf("%s = %v -> %v, want %v -> %v", path, field.OldValue, field.NewValue, want[0], want[1])
+					}
+				}
+			}
+			for _, path := range tt.wantHidden {
+				for _, field := range recomputed.Fields {
+					if field.Path == path && (field.OldValue != hiddenValueMarker || field.NewValue != hiddenValueMarker) {
+						t.Fatalf("%s = %v -> %v, want hidden values", path, field.OldValue, field.NewValue)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestTimelineUpdateDiff_AuditedCRDSpecEditStillRecorded(t *testing.T) {
+	old := collisionObject("kustomize.toolkit.fluxcd.io/v1", "Kustomization", map[string]any{"spec": map[string]any{"path": "./app", "interval": "5m"}})
 	old.SetGeneration(1)
 	new := old.DeepCopy()
 	new.SetGeneration(2)
-	diff, record := timelineUpdateDiff("Application", old, new, nil, false)
+	new.Object["spec"].(map[string]any)["interval"] = "10m"
+	diff, record := timelineUpdateDiff("Kustomization", old, new, nil, false)
 	if !record || diff == nil || len(diff.Fields) != 1 || diff.Fields[0].Path != "metadata.generation" {
-		t.Fatalf("audited generation fallback changed: record=%v diff=%+v", record, diff)
+		t.Fatalf("audited spec edit fallback changed: record=%v diff=%+v", record, diff)
 	}
 }
