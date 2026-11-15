@@ -10,7 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/integration"
-	"github.com/skyhook-io/radar/internal/issues"
 	domain "github.com/skyhook-io/radar/pkg/velero"
 )
 
@@ -29,7 +28,7 @@ type fakeRead struct {
 	access  map[string]integration.KindAccess       // resource -> access (default full)
 }
 
-func (f fakeRead) reader(iss []issues.Issue) *Reader {
+func (f fakeRead) reader() *Reader {
 	return &Reader{
 		Now: func() time.Time { return testNow },
 		Observations: Observations{
@@ -45,42 +44,48 @@ func (f fakeRead) reader(iss []issues.Issue) *Reader {
 				return acc, f.objects[k.Resource]
 			},
 			Deployments: func(context.Context, string) ([]*appsv1.Deployment, bool) { return nil, false },
-			Issues:      func(context.Context, []string) []issues.Issue { return iss },
 		},
 	}
 }
 
-func TestWorkspaceIssuesNeedTheirSubjectAndEveryRequiredRead(t *testing.T) {
+func failedBackup(ns, name string) *unstructured.Unstructured {
+	return obj("Backup", ns, name, nil, map[string]any{}, map[string]any{"phase": "Failed", "failureReason": "boom"})
+}
+
+func failedRestore(ns, name string) *unstructured.Unstructured {
+	return obj("Restore", ns, name, nil, map[string]any{}, map[string]any{"phase": "Failed", "failureReason": "boom"})
+}
+
+// Issues come from the objects the caller read, so a kind denied here raises
+// nothing, and a kind read only in some namespaces raises only there.
+func TestWorkspaceIssuesComeOnlyFromKindsReadThere(t *testing.T) {
 	f := fakeRead{
-		objects: map[string][]*unstructured.Unstructured{"schedules": {obj("Schedule", "velero", "s", nil, map[string]any{"schedule": "0 * * * *"}, map[string]any{"phase": "Enabled"})}},
-		access:  map[string]integration.KindAccess{"restores": {State: integration.KindCoverageDenied}},
+		objects: map[string][]*unstructured.Unstructured{
+			"backups":  {failedBackup("velero", "b"), failedBackup("kommander", "k")},
+			"restores": {failedRestore("velero", "r")},
+		},
+		access: map[string]integration.KindAccess{
+			"restores": {State: integration.KindCoverageDenied},
+			"backups":  {State: integration.KindCoveragePartial, Namespaces: map[string]bool{"velero": true}},
+		},
 	}
-	iss := []issues.Issue{
-		{ID: "backup", Group: domain.Group, Kind: "Backup", Namespace: "velero", Name: "b"},
-		{ID: "restore", Group: domain.Group, Kind: "Restore", Namespace: "velero", Name: "r"},
-		{ID: "needs-restores", Group: domain.Group, Kind: "Backup", Namespace: "velero", Name: "c",
-			RequiredReads: []issues.EvidenceRead{{Group: domain.Group, Resource: "restores", Namespace: "velero", Verb: "list"}}},
-		{ID: "needs-pods", Group: domain.Group, Kind: "Backup", Namespace: "velero", Name: "d",
-			RequiredReads: []issues.EvidenceRead{{Resource: "pods", Namespace: "velero", Verb: "list"}}},
-		{ID: "cnpg", Group: "postgresql.cnpg.io", Kind: "Backup", Namespace: "velero", Name: "e"},
+	got := f.reader().Workspace(context.Background())
+	if len(got.Issues) != 1 || got.Issues[0].Kind != "Backup" || got.Issues[0].Name != "b" {
+		t.Fatalf("issues %+v, want only the backup in the namespace whose Backups were read", got.Issues)
 	}
-	got := f.reader(iss).Workspace(context.Background())
-	if len(got.Issues) != 1 || got.Issues[0].ID != "backup" {
-		t.Fatalf("issues %+v, want only the backup whose reads are all covered", got.Issues)
-	}
-	if got.IssueTotals["velero"] != 1 {
-		t.Fatalf("totals %+v must count only what is shown or withheld by the cap, never denied rows", got.IssueTotals)
+	if got.IssueTotals["velero"] != 1 || got.IssueTotals["kommander"] != 0 {
+		t.Fatalf("totals %+v must count only rows from objects read", got.IssueTotals)
 	}
 }
 
 func TestWorkspaceIssuesCapPerInstallation(t *testing.T) {
-	var iss []issues.Issue
+	var backups []*unstructured.Unstructured
 	for i := range maxIssuesPerInstallation + 5 {
-		iss = append(iss, issues.Issue{ID: fmt.Sprint("a", i), Group: domain.Group, Kind: "Backup", Namespace: "velero", Name: fmt.Sprint(i)})
+		backups = append(backups, failedBackup("velero", fmt.Sprint("b", i)))
 	}
-	iss = append(iss, issues.Issue{ID: "other", Group: domain.Group, Kind: "Backup", Namespace: "kommander", Name: "x"})
-	f := fakeRead{objects: map[string][]*unstructured.Unstructured{}, access: map[string]integration.KindAccess{}}
-	got := f.reader(iss).Workspace(context.Background())
+	backups = append(backups, failedBackup("kommander", "x"))
+	f := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}
+	got := f.reader().Workspace(context.Background())
 	shown := map[string]int{}
 	for _, i := range got.Issues {
 		shown[i.Namespace]++
@@ -94,8 +99,8 @@ func TestWorkspaceIssuesCapPerInstallation(t *testing.T) {
 }
 
 // BenchmarkWorkspace10kBackups: 50 hourly schedules keeping 200 backups each,
-// three locations. The numbers go in the PR; the point is that the per-request
-// cost grows with the backups, not with schedules × backups.
+// three locations. The per-request cost should grow with the backups, not with
+// schedules × backups.
 func BenchmarkWorkspace10kBackups(b *testing.B) {
 	var schedules, backups, locations []*unstructured.Unstructured
 	for s := range 50 {
@@ -113,7 +118,7 @@ func BenchmarkWorkspace10kBackups(b *testing.B) {
 		locations = append(locations, obj("BackupStorageLocation", "velero", fmt.Sprint("loc-", l), nil, map[string]any{"default": l == 0}, map[string]any{"phase": "Available"}))
 	}
 	f := fakeRead{objects: map[string][]*unstructured.Unstructured{"schedules": schedules, "backups": backups, "backupstoragelocations": locations}}
-	r := f.reader(nil)
+	r := f.reader()
 	b.ReportAllocs()
 	for b.Loop() {
 		_ = r.Workspace(context.Background())

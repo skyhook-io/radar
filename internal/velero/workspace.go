@@ -40,22 +40,6 @@ var workspaceKinds = []integration.WorkspaceKind{
 	{Key: reposKey, Group: domain.Group, Kind: "BackupRepository", Resource: "backuprepositories"},
 }
 
-var keyByKind = func() map[string]string {
-	m := make(map[string]string, len(workspaceKinds))
-	for _, k := range workspaceKinds {
-		m[k.Kind] = k.Key
-	}
-	return m
-}()
-
-var keyByResource = func() map[string]string {
-	m := make(map[string]string, len(workspaceKinds))
-	for _, k := range workspaceKinds {
-		m[k.Resource] = k.Key
-	}
-	return m
-}()
-
 // Observations are the caller-scoped reads the server supplies.
 type Observations struct {
 	// Installed: discovery serves velero.io.
@@ -69,7 +53,6 @@ type Observations struct {
 	// Deployments returns a namespace's Deployments; read=false when the
 	// caller may not read them or Radar holds none for that namespace.
 	Deployments func(ctx context.Context, namespace string) (deployments []*appsv1.Deployment, read bool)
-	Issues      func(ctx context.Context, namespaces []string) []issues.Issue
 }
 
 // Reader builds the Velero views for one request.
@@ -210,7 +193,7 @@ func (r *Reader) Workspace(ctx context.Context) WorkspaceResponse {
 		}
 		return a.Name < b.Name
 	})
-	resp.Issues, resp.IssueTotals = r.issues(ctx, inv.access)
+	resp.Issues, resp.IssueTotals = issuesOf(inv)
 	return resp
 }
 
@@ -260,18 +243,21 @@ func (r *Reader) installation(ctx context.Context, inv inventory, ns string) Ins
 	return inst
 }
 
-// issues keeps the composed Velero rows whose subject and every required read
-// the caller could read here, and caps each installation. Nothing about a
-// withheld row is counted or named.
-func (r *Reader) issues(ctx context.Context, access map[string]integration.KindAccess) ([]Issue, map[string]int) {
-	out, totals := []Issue{}, map[string]int{}
-	if r.Observations.Issues == nil {
-		return out, totals
-	}
-	for _, iss := range r.Observations.Issues(ctx, r.Observations.Namespaces) {
-		if !issueVisible(iss, access) {
-			continue
+// issuesOf raises the Problems surface's Velero rows from the objects read
+// here, so every row rests only on kinds the caller could read in its
+// namespace, and caps each installation. Nothing about a row the caller could
+// not read is counted or named.
+func issuesOf(inv inventory) ([]Issue, map[string]int) {
+	byKind := map[string][]*unstructured.Unstructured{}
+	for _, k := range workspaceKinds {
+		for ns, items := range inv.objects[k.Key] {
+			if inv.covered(k.Key, ns) {
+				byKind[k.Kind] = append(byKind[k.Kind], items...)
+			}
 		}
+	}
+	out, totals := []Issue{}, map[string]int{}
+	for _, iss := range issues.DetectVelero(byKind) {
 		totals[iss.Namespace]++
 		if totals[iss.Namespace] > maxIssuesPerInstallation {
 			continue
@@ -283,23 +269,6 @@ func (r *Reader) issues(ctx context.Context, access map[string]integration.KindA
 		})
 	}
 	return out, totals
-}
-
-func issueVisible(iss issues.Issue, access map[string]integration.KindAccess) bool {
-	if iss.Group != domain.Group {
-		return false
-	}
-	key, ok := keyByKind[iss.Kind]
-	if !ok || !access[key].Covers(iss.Namespace) {
-		return false
-	}
-	for _, read := range iss.RequiredReads {
-		readKey, ok := keyByResource[read.Resource]
-		if read.Group != domain.Group || !ok || !access[readKey].Covers(read.Namespace) {
-			return false
-		}
-	}
-	return true
 }
 
 // ScheduleActivityResponse is GET /api/velero/schedules/{ns}/{name}/activity.

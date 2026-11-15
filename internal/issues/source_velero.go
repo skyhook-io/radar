@@ -194,6 +194,19 @@ var veleroPartialPhases = map[string]bool{
 	"WaitingForPluginOperationsPartiallyFailed": true,
 }
 
+// DetectVelero returns the rows the Problems surface raises for these Velero
+// objects (Kind → objects), sorted as it sorts them. It reads nothing, so a
+// caller that read the objects with the user's own access gets only rows that
+// access covers, without composing every other source in the cluster.
+func DetectVelero(byKind map[string][]*unstructured.Unstructured) []Issue {
+	var out []Issue
+	for kind, items := range byKind {
+		out = append(out, detectVeleroIssues(schema.GroupVersionResource{Group: VeleroGroup}, kind, items, nil)...)
+	}
+	out, _ = finalizeShapedIssues(out, Filters{}, true, true)
+	return out
+}
+
 // detectVeleroIssues turns one GVR's worth of Velero objects into Issues. It
 // takes the whole list rather than one object at a time because supersession is
 // a property of the series, not of a single backup.

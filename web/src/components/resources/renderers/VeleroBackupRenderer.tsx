@@ -1,6 +1,6 @@
 import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
 import { VeleroBackupRenderer as BaseVeleroBackupRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/VeleroBackupRenderer'
-import { resolveBackupStorageLocation } from '@skyhook-io/k8s-ui/components/resources/resource-utils-velero'
+import { getBackupStorageLocation } from '@skyhook-io/k8s-ui/components/resources/resource-utils-velero'
 import type { ResourceRef } from '@skyhook-io/k8s-ui'
 import { useResources } from '../../../api/client'
 import { useVeleroRunMessages } from '../../../api/policy'
@@ -24,34 +24,28 @@ export function VeleroBackupRenderer({ data, onNavigate }: { data: any; onNaviga
   const messages = useRunMessages('backups', data)
   const namespace = data?.metadata?.namespace ?? ''
 
+  // An unset spec.storageLocation means Velero has not processed the backup
+  // yet; there is no location to look up until it does.
+  const name = getBackupStorageLocation(data)
   const locations = useResources<any>('backupstoragelocations', namespace, 'velero.io', {
-    enabled: !!namespace,
+    enabled: !!namespace && !!name,
   })
 
-  // Everything below is gated on the lookup having answered. A location we have
-  // not read is not a healthy one, and neither is a name we have not resolved:
-  // an unset spec.storageLocation means whichever location carries spec.default,
-  // so resolving it against a list that has not loaded produces the literal
-  // "default", which is wrong on any install that renamed it — and wrong
-  // permanently when the list errors rather than for a moment.
-  const answered = !locations.isLoading && !locations.error && locations.data !== undefined
-  const resolved = answered ? resolveBackupStorageLocation(data, locations.data) : undefined
-
-  const match = answered
-    ? (locations.data ?? []).find((l: any) => l?.metadata?.name === resolved)
-    : undefined
+  // A location we have not read is not a healthy one, so nothing is claimed
+  // until the lookup answers.
+  const answered = !!name && !locations.isLoading && !locations.error && locations.data !== undefined
+  const match = answered ? (locations.data ?? []).find((l: any) => l?.metadata?.name === name) : undefined
   const phase = match?.status?.phase
 
   // The location the backup names is gone. Velero restores from the location
   // recorded on the backup, so this is not restorable — and it is invisible
   // otherwise, because a location that does not exist has no phase to report.
-  const missing = answered && !!resolved && match === undefined
+  const missing = answered && match === undefined
 
   return (
     <BaseVeleroBackupRenderer
       data={data}
       storageLocationPhase={phase}
-      storageLocationName={resolved}
       storageLocationMissing={missing}
       messages={messages}
       onNavigate={onNavigate}

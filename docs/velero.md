@@ -66,7 +66,7 @@ Attention rows are not Issues: they do not reach `/api/issues`, MCP or Diagnose.
 
 ## Issues on these views
 
-The Velero Issues the Problems surface shows, filtered to what this caller can read: the subject's kind must be read in its namespace, and so must every read the finding rests on. At most 50 per installation are returned, with the count before the cap; a withheld row is never counted or named.
+The Velero Issues the Problems surface raises, computed by the same detector (`issues.DetectVelero`) over the objects these views read. A row therefore exists only where the caller could read its kind in that namespace, and a Velero-only reader with no Pod or Deployment access still sees them; the Problems surface, which scopes by namespace access, may show such a reader fewer. Nothing else in the cluster is scanned to produce them. At most 50 per installation are returned, with the count before the cap; a row from an unread namespace is never counted or named.
 
 ## Limits
 

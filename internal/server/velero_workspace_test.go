@@ -264,6 +264,19 @@ func TestVeleroWorkspace_PartialInstallationsDiscloseNoNames(t *testing.T) {
 			t.Error("an unreadable installation was reported")
 		}
 	}
+	// No Pod or Deployment access anywhere: the failure on a Backup the caller
+	// read is still raised, and the unreadable installation's is not.
+	if !hasVeleroIssue(got, "Backup", "adhoc-broken") {
+		t.Errorf("a Velero-only reader lost the failed backup's issue: %+v", got.Issues)
+	}
+	for _, iss := range got.Issues {
+		if iss.Namespace == "kommander" {
+			t.Errorf("an issue from an unreadable namespace was returned: %+v", iss)
+		}
+	}
+	if got.IssueTotals["kommander"] != 0 {
+		t.Errorf("totals %+v count an unreadable namespace", got.IssueTotals)
+	}
 }
 
 // --namespace-scope bounds the request even though the picker does not.

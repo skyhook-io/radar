@@ -77,6 +77,7 @@ export function BackupCell({ resource, column }: { resource: any; column: string
     }
     case 'storageLocation': {
       const loc = getBackupStorageLocation(resource)
+      if (!loc) return <span className="text-sm text-theme-text-tertiary">Not assigned</span>
       return <span className="text-sm text-theme-text-secondary truncate block">{loc}</span>
     }
     case 'namespaces': {

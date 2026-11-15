@@ -11,9 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/integration"
-	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/readscope"
 	velerosvc "github.com/skyhook-io/radar/internal/velero"
 	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
@@ -141,25 +139,6 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 				}
 				deployments, err := cache.Deployments().Deployments(namespace).List(labels.Everything())
 				return deployments, err == nil && current()
-			},
-			Issues: func(ctx context.Context, namespaces []string) []issues.Issue {
-				if !current() || readscope.NoNamespaceAccess(namespaces) {
-					return nil
-				}
-				provider := issues.NewCacheProvider()
-				if provider == nil {
-					return nil
-				}
-				rq := r.WithContext(ctx)
-				rows, _ := issues.ComposeWithStats(provider, issues.Filters{
-					Namespaces: namespaces, Limit: issues.NoLimit,
-					CanReadClusterScoped: s.issueClusterScopedAccess(rq), CanReadRelated: s.issueRelatedResourceAccess(rq),
-					CanReadSubject: s.issueSubjectAccess(rq), CanReadEvidence: s.issueEvidenceAccess(rq),
-				})
-				if !current() {
-					return nil
-				}
-				return rows
 			},
 		},
 	}, true

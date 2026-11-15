@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { getCellFilterValue } from './resource-utils'
 import {
+  getBackupStorageLocation,
   getBackupStatus,
   getRestoreStatus,
   getScheduleStatus,
@@ -9,7 +10,6 @@ import {
   isVeleroResource,
   getScheduleCronInfo,
   getBackupRepositoryStatus,
-  resolveBackupStorageLocation,
 } from './resource-utils-velero'
 
 const backup = (phase: string, extra: Record<string, unknown> = {}) => ({
@@ -267,27 +267,14 @@ describe('getScheduleCronInfo', () => {
   })
 })
 
-describe('which location holds a backup', () => {
-  const locations = [
-    { metadata: { name: 'primary' }, spec: { default: true } },
-    { metadata: { name: 'dr-replica' }, spec: { default: false } },
-  ]
-
+describe('which location a backup targets', () => {
   it('uses the location the backup names', () => {
-    expect(resolveBackupStorageLocation({ spec: { storageLocation: 'dr-replica' } }, locations)).toBe('dr-replica')
+    expect(getBackupStorageLocation({ spec: { storageLocation: 'dr-replica' } })).toBe('dr-replica')
   })
 
-  // The rule Velero actually applies: the flag, not the name.
-  it('resolves an unset location through spec.default', () => {
-    expect(resolveBackupStorageLocation({ spec: {} }, locations)).toBe('primary')
-  })
-
-  // Velero's own fallback when nothing claims the flag.
-  it('falls back to the conventional name when no location is marked default', () => {
-    expect(resolveBackupStorageLocation({ spec: {} }, [{ metadata: { name: 'only' }, spec: {} }])).toBe('default')
-  })
-
-  it('falls back when the list has not been read', () => {
-    expect(resolveBackupStorageLocation({ spec: {} }, undefined)).toBe('default')
+  // Velero writes the location when it processes the backup; until then the
+  // default it will pick can still change.
+  it('names none before Velero assigns one', () => {
+    expect(getBackupStorageLocation({ spec: {} })).toBe('')
   })
 })
