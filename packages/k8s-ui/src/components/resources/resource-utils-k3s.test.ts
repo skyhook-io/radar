@@ -26,6 +26,12 @@ describe('k3s HelmChart utils', () => {
     expect(k3sValuesSummary({})).toEqual({ lines: 0, setKeys: [], valuesKeys: 0 })
   })
 
+  it('names an inline chart archive (RKE2 packages its charts that way)', () => {
+    const inline = { ...chart(), spec: { chartContent: 'H4sIAAAA' } }
+    expect(k3sHelmChartSource(inline).chart).toBe('Inline chart archive')
+    expect(getK3sHelmChartColumnValue(inline, 'chart')).toBe('Inline chart archive')
+  })
+
   it('claims only helm.cattle.io columns', () => {
     expect(getK3sHelmChartColumnValue(chart(), 'chart')).toBe('traefik-37.1.1+up37.1.0.tgz')
     expect(getK3sHelmChartColumnValue(chart({ spec: { targetNamespace: 'apps' } }), 'targetNamespace')).toBe('apps')

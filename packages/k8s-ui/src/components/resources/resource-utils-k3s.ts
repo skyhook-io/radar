@@ -24,12 +24,14 @@ export function k3sHelmTargetNamespace(data: any): string {
   return data?.spec?.targetNamespace || data?.metadata?.namespace || ''
 }
 
-// A chart URL with k3s's %{KUBERNETES_API}% placeholder is served by k3s itself.
+// A chart URL with k3s's %{KUBERNETES_API}% placeholder is served by k3s itself;
+// RKE2 packages its charts in spec.chartContent with no spec.chart.
 export function k3sHelmChartSource(data: any): { chart: string; version?: string; repo?: string; bundled: boolean } {
   const spec = data?.spec ?? {}
   const raw = String(spec.chart ?? '')
   const bundled = raw.includes('%{KUBERNETES_API}%')
-  const out: { chart: string; version?: string; repo?: string; bundled: boolean } = { chart: bundled ? raw.split('/').pop() || raw : raw, bundled }
+  const name = bundled ? raw.split('/').pop() || raw : raw
+  const out: { chart: string; version?: string; repo?: string; bundled: boolean } = { chart: name || (spec.chartContent ? 'Inline chart archive' : ''), bundled }
   if (spec.version) out.version = spec.version
   if (spec.repo) out.repo = spec.repo
   return out
