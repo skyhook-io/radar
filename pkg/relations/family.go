@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -285,57 +284,20 @@ func (v *View) resolvesTo(candidates []resourceid.Ref, subject resourceid.Ref, c
 // about 1.4 KB a Pod and made a relist about five times as long.
 func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferrersAnswer {
 	var a ReferrersAnswer
-	if !f.target(subject.GroupKind()) || !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
+	if !f.target(subject.GroupKind()) {
 		return a
 	}
-	switch read := v.session.Object(subject); read.State {
-	case ownership.Present:
-	case ownership.Unavailable:
-		a.Coverage.addGap(read.Gap)
-		return a
-	case ownership.Absent:
-		if fetched != nil {
-			a.Coverage.addGap(ownership.Gap{Kind: subject.GroupKind(), Namespace: subject.Namespace, Reason: readreason.ObjectNotFound})
-		}
-		return a
-	default:
+	if _, held := v.heldSubject(subject, fetched, &a.Coverage); !held {
 		return a
 	}
-	// A namespaced target's sources are in its namespace. A cluster-scoped
-	// one's, or a CrossNamespace family's, can be anywhere, so, as
-	// ownership.View.Children does, the search covers the namespaces the
-	// caller may read something in, each source is checked where it is, and a
-	// gap is kept only if it covers what the caller may read.
-	across := subject.Namespace == "" || f.CrossNamespace
-	scope, index, keys := ownership.InNamespace(subject.Namespace), cache.NamespaceIndex, []string{subject.Namespace}
-	if across {
-		namespaces, all := v.access.Namespaces()
-		scope = ownership.SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: true}
-		index, keys = "", nil
-		if !all {
-			// Cluster-scoped sources file under "" in the namespace index.
-			index, keys = cache.NamespaceIndex, append(slices.Clone(namespaces), "")
-		}
-		a.Coverage.Narrowed = v.access != ownership.Unrestricted()
-	}
+	// A namespaced target's sources are in its namespace; a cluster-scoped
+	// one's, or a CrossNamespace family's, can be anywhere.
+	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace, &a.Coverage)
 	for _, source := range f.Sources {
-		gk := source.Kind
-		if !source.declares(subject.GroupKind()) || !across && !v.mayRead(gk, subject.Namespace, &a.Coverage) {
+		if !source.declares(subject.GroupKind()) {
 			continue
 		}
-		read := v.session.Indexed(gk, index, keys, scope)
-		for _, g := range read.Gaps {
-			if !across || ownership.GapCoversReadable(v.access, v.session.Catalog(), g, scope) {
-				a.Coverage.addGap(g)
-			}
-		}
-		for _, o := range read.Objects {
-			// Saying a check failed would say a referrer may be there, so an
-			// undecided one narrows the answer as a denied one does.
-			if across && v.decide(gk, o.Ref.Namespace) != ownership.Allowed {
-				a.Coverage.Narrowed = true
-				continue
-			}
+		s.each(source.Kind, &a.Coverage, func(o IndexedObject) {
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
 				if slices.Contains(paths, d.Path) || d.Target != subject && !slices.Contains(d.Or, subject) {
@@ -346,12 +308,12 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 				}
 			})
 			if err != nil {
-				a.Coverage.addGap(ownership.Gap{Kind: gk, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
+				a.Coverage.addGap(ownership.Gap{Kind: source.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
 			if len(paths) > 0 {
 				a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths})
 			}
-		}
+		})
 	}
 	slices.SortStableFunc(a.Referrers, func(x, y Referrer) int {
 		return cmp.Or(cmp.Compare(f.source(x.Ref.GroupKind()), f.source(y.Ref.GroupKind())), cmp.Compare(x.Ref.Name, y.Ref.Name))

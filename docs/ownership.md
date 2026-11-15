@@ -122,6 +122,20 @@ The families so far:
 | `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include or their TCP proxy delegates to, in any namespace | `contour.go` |
 | `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
 
+A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
+that select and how each reads its selector, and the kinds that can be chosen and the labels each presents (a
+workload presents its pod template's). `Selected(family, selector)` lists what a selector chooses and
+`SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
+`Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
+PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does.
+
+| Family | Selectors → chosen |
+|---|---|
+| `ServiceSelectors` | Services → the Deployments, Rollouts, StatefulSets, DaemonSets and active Jobs whose pod template their selector matches (a Service without a selector chooses none) |
+| `DisruptionBudgets` | PodDisruptionBudgets → Deployments, StatefulSets, DaemonSets |
+| `NetworkPolicies` | NetworkPolicies and CiliumNetworkPolicies → Deployments, StatefulSets, DaemonSets |
+| `Monitors` | ServiceMonitors → Services; PodMonitors → workloads; in the namespaces their `namespaceSelector` names |
+
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families can't read a reference differently.
 
