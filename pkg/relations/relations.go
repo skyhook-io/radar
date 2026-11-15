@@ -10,9 +10,12 @@
 package relations
 
 import (
+	"slices"
+
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -95,14 +98,35 @@ func (v *View) WithLimit(limit int) *View {
 	return v
 }
 
-// mayRead reports whether the caller may read gk in namespace. Only Allowed
-// permits: an undecided check reads as denied.
-func (v *View) mayRead(gk resourceid.GroupKind, namespace string) bool {
+// decide is the caller's access to gk in namespace, asked once per view.
+func (v *View) decide(gk resourceid.GroupKind, namespace string) ownership.Decision {
 	key := accessKey{gk, namespace}
 	d, seen := v.decided[key]
 	if !seen {
 		d = v.access.CanRead(gk, namespace)
 		v.decided[key] = d
 	}
-	return d == ownership.Allowed
+	return d
+}
+
+// mayRead reports whether the caller may read gk in namespace, recording in
+// c why not: only Allowed permits; Denied narrows the answer to what the
+// caller may read, and a check that couldn't be made leaves the answer
+// incomplete, since it may have hidden anything.
+func (v *View) mayRead(gk resourceid.GroupKind, namespace string, c *Coverage) bool {
+	switch v.decide(gk, namespace) {
+	case ownership.Allowed:
+		return true
+	case ownership.Undecided:
+		c.addGap(ownership.Gap{Kind: gk, Namespace: namespace, Reason: readreason.UserPermissionCheckFailed})
+	default:
+		c.Narrowed = true
+	}
+	return false
+}
+
+func (c *Coverage) addGap(g ownership.Gap) {
+	if !slices.Contains(c.NotChecked, g) {
+		c.NotChecked = append(c.NotChecked, g)
+	}
 }

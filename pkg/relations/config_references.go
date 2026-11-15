@@ -104,8 +104,7 @@ func scaledToZero(obj runtime.Object) bool {
 // read the subject gets nothing, Narrowed.
 func (v *View) ConfigReferences(subject resourceid.Ref, fetched runtime.Object) ConfigReferencesAnswer {
 	var a ConfigReferencesAnswer
-	if !v.mayRead(subject.GroupKind(), subject.Namespace) {
-		a.Coverage.Narrowed = true
+	if !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
 		return a
 	}
 	obj := fetched
@@ -149,7 +148,14 @@ func (v *View) ConfigReferences(subject resourceid.Ref, fetched runtime.Object) 
 	})
 	for i := range a.Declared {
 		d := &a.Declared[i]
-		if !v.mayRead(d.Ref.GroupKind(), d.Ref.Namespace) {
+		switch v.decide(d.Ref.GroupKind(), d.Ref.Namespace) {
+		case ownership.Allowed:
+		case ownership.Undecided:
+			d.State = TargetUnread
+			d.Gap = ownership.Gap{Kind: d.Ref.GroupKind(), Namespace: d.Ref.Namespace, Reason: readreason.UserPermissionCheckFailed}
+			a.Coverage.addGap(d.Gap)
+			continue
+		default:
 			d.State = TargetWithheld
 			a.Coverage.Narrowed = true
 			continue
@@ -162,9 +168,7 @@ func (v *View) ConfigReferences(subject resourceid.Ref, fetched runtime.Object) 
 		default:
 			d.State = TargetUnread
 			d.Gap = read.Gap
-			if !slices.Contains(a.Coverage.NotChecked, read.Gap) {
-				a.Coverage.NotChecked = append(a.Coverage.NotChecked, read.Gap)
-			}
+			a.Coverage.addGap(read.Gap)
 		}
 	}
 	return a
@@ -187,8 +191,7 @@ func (v *View) ConfigConsumers(subject resourceid.Ref) ConfigConsumersAnswer {
 	if !IsConfigTarget(subject.GroupKind()) || subject.Namespace == "" {
 		return a
 	}
-	if !v.mayRead(subject.GroupKind(), subject.Namespace) {
-		a.Coverage.Narrowed = true
+	if !v.mayRead(subject.GroupKind(), subject.Namespace, &a.Coverage) {
 		return a
 	}
 	switch read := v.session.Object(subject); read.State {
@@ -205,8 +208,7 @@ func (v *View) ConfigConsumers(subject resourceid.Ref) ConfigConsumersAnswer {
 		if gk.Kind == "Ingress" && subject.Kind != "Secret" {
 			continue
 		}
-		if !v.mayRead(gk, subject.Namespace) {
-			a.Coverage.Narrowed = true
+		if !v.mayRead(gk, subject.Namespace, &a.Coverage) {
 			continue
 		}
 		read := v.session.Indexed(gk, cache.NamespaceIndex, []string{subject.Namespace}, scope)
@@ -229,9 +231,7 @@ func (v *View) ConfigConsumers(subject resourceid.Ref) ConfigConsumersAnswer {
 			}
 		}
 		for _, g := range gaps {
-			if !slices.Contains(a.Coverage.NotChecked, g) {
-				a.Coverage.NotChecked = append(a.Coverage.NotChecked, g)
-			}
+			a.Coverage.addGap(g)
 		}
 	}
 	slices.SortStableFunc(a.Consumers, func(x, y ConfigConsumer) int {
