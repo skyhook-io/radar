@@ -69,10 +69,13 @@ func AnswerRelationships(rel *topology.Relationships, fetched ownership.Observat
 		}
 		view := relations.NewView(rs, access(s.Catalog()))
 		references = view.ConfigReferences(fetched.Ref, object)
-		consumers = view.ConfigConsumers(fetched.Ref)
+		consumers = view.ConfigConsumers(fetched.Ref, object)
 		answered = true
 	}, rel, fetched, access)
 	switch {
+	case !relations.InConfigFamily(fetched.Ref.GroupKind()):
+		// The family says nothing about this kind, so there's nothing to
+		// report as unanswered.
 	case !answered:
 		topology.RelationFamilyUnavailable(rel, topology.ConfigReferenceFamily, relationsUnavailableReason(rel))
 	case rel.Ownership != nil && rel.Ownership.UnavailableReason != "":

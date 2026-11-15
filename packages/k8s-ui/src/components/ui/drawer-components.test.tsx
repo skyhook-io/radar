@@ -569,7 +569,7 @@ describe('RelatedResourcesSection config references', () => {
     const html = renderToString(
       <RelatedResourcesSection relationships={{ consumers: [pod], coverage: { configReferences: { truncated: true, total: 640 } } }} kind="secrets" />,
     )
-    expect(html).toContain('More than shown: 640 in all.')
+    expect(html).toContain('More than shown: 640 declare it.')
   })
 
   it("puts a workload's note under Configuration, and hints when only what the viewer may read is listed", () => {

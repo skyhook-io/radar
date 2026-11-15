@@ -1135,7 +1135,9 @@ function familyNote(coverage: RelationCoverage | undefined, question: string, no
   // not read: say so, or the group would be empty and hidden.
   if (coverage.narrowed && noneListed) text.push("It uses objects you can't view.")
   if (pressing.size > 0) text.push(`Couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}.`)
-  if (coverage.truncated) text.push(coverage.total ? `More than shown: ${coverage.total} in all.` : 'More than shown.')
+  // total counts only the declarers this family found, not other links in
+  // the same group.
+  if (coverage.truncated) text.push(coverage.total ? `More than shown: ${coverage.total} declare it.` : 'More than shown.')
   const note: RelationshipNote = {}
   if (hint.length > 0) note.hint = hint
   if (text.length > 0) note.text = text.join(' ')
