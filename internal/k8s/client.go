@@ -814,6 +814,15 @@ func GetInformerClient() kubernetes.Interface {
 	return informerClientForLocked(k8sClient)
 }
 
+// getCacheClients reads the request and informer clientsets in one critical
+// section, so a context switch between two reads cannot pair one cluster's
+// observer source with another cluster's informers.
+func getCacheClients() (*kubernetes.Clientset, kubernetes.Interface) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return k8sClient, informerClientForLocked(k8sClient)
+}
+
 // InformerClientFor maps a request clientset to the informer clientset of the
 // same client set, so a holder of GetClient() can tell whether the resource
 // cache (whose Client() is the informer client) describes its connection.

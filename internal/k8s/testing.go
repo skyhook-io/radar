@@ -397,6 +397,22 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 	return prev
 }
 
+// SetTestInformerClient installs request as the request clientset and
+// informer as the informer clientset of the same client set, the pairing
+// production builds, and returns a restore func.
+func SetTestInformerClient(request *kubernetes.Clientset, informer kubernetes.Interface) func() {
+	clientMu.Lock()
+	prevClient, prevActive := k8sClient, activeClients
+	k8sClient = request
+	activeClients = &sharedKubernetesClients{clientset: request, informerClientset: informer}
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		k8sClient, activeClients = prevClient, prevActive
+		clientMu.Unlock()
+	}
+}
+
 // SetTestPolicyReportIndex publishes a PolicyReport index directly, bypassing
 // CRD discovery and the informer warmup that normally build it.
 //

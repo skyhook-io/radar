@@ -388,9 +388,8 @@ func InitResourceCache(ctx context.Context) error {
 	var initErr error
 	once, gen := claimCacheInit()
 	once.Do(func() {
-		client := GetClient()
-		informerClient := GetInformerClient()
-		if client == nil || informerClient == nil {
+		client, informerClient := getCacheClients()
+		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
