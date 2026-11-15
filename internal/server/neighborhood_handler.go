@@ -34,7 +34,7 @@ type neighborhoodSubgraph struct {
 }
 
 // handleAINeighborhood returns the BFS-expanded neighborhood of a root
-// resource. See pkg/topology.BuildNeighborhood for the graph semantics.
+// resource. See pkg/topology.WalkNeighborhood for the graph semantics.
 //
 // GET /api/ai/neighborhood/{kind}/{namespace}/{name}
 //
@@ -100,50 +100,6 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build the full topology (memoized) and let BuildNeighborhood do the
-	// BFS slice. Cheaper than reaching into builder internals; topoMemo
-	// dedupes concurrent calls. We also fetch the cached RelationshipsIndex
-	// so the BFS expansion uses O(degree) edge lookups instead of paying
-	// an O(E) adjacency-build per request.
-	//
-	// dp is captured once and threaded into both Builder and BuildNeighborhoodWithIndex
-	// so root-ID construction can resolve CRD plurals correctly (without it,
-	// buildNodeID falls back to the static kindMap which only covers built-in kinds).
-	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-	buildOpts := topology.DefaultBuildOptions()
-	buildOpts.IncludeReplicaSets = true
-	buildOpts.ForRelationshipCache = true
-	// Override the DefaultBuildOptions Secret-elision: without this a request
-	// for kind=secret resolves to an empty subgraph (root missing in topology)
-	// and 404s even for authorized users. The Allow gate below applies the
-	// per-namespace `get secrets` SAR per node, so unauthorized users still
-	// get a 404 via the empty-subgraph path — existence-hiding preserved.
-	//
-	// The Memoizer keys on a hash that includes IncludeSecrets (see
-	// pkg/topology/memo.go memoKey), so this lives in a separate cache slot
-	// from the IncludeSecrets=false topology used elsewhere.
-	buildOpts.IncludeSecrets = true
-	build := func() (*topology.Topology, error) {
-		return topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-			WithDynamic(dp).
-			Build(buildOpts)
-	}
-	topo, err := s.topoMemo.GetScoped(cache.Generation(), buildOpts, build)
-	if err != nil {
-		log.Printf("[neighborhood] Failed to build topology for %s %s/%s: %v", rawKind, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	// GetIndexScoped piggybacks on the memo entry just populated by GetScoped
-	// above. The index is computed once per topology refresh and reused across
-	// requests, matching the relationships hot path.
-	idx, err := s.topoMemo.GetIndexScoped(cache.Generation(), buildOpts, build)
-	if err != nil {
-		log.Printf("[neighborhood] Failed to fetch topology index for %s %s/%s: %v", rawKind, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	root := topology.ResourceRef{
 		Kind:      normalizeKind(rawKind),
 		Namespace: namespace,
@@ -161,7 +117,12 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return s.canReadNeighborhoodNode(r, n)
 	}
 
-	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
+	sub, err := k8s.AnswerNeighborhood(r.Context(), cache, root, opts)
+	if err != nil {
+		log.Printf("[neighborhood] Failed to answer %s %s/%s: %v", rawKind, namespace, name, err)
+		s.writeError(w, http.StatusServiceUnavailable, "Neighborhood unavailable")
+		return
+	}
 	// A Calico policy is served by two API groups and admitted through either,
 	// but it advertises one. Point it at the group this caller can address, or
 	// following the node lands on a 403.

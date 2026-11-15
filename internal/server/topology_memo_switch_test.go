@@ -155,6 +155,7 @@ func neighborhoodRequest(t *testing.T, s *Server, name string) (int, neighborhoo
 // both must come from the new cluster, or the root resolves but its
 // neighbors are looked up in the previous cluster's index.
 func TestTopologyMemo_NeighborhoodAfterSwitch(t *testing.T) {
+	withOwnershipDiscovery(t)
 	useTestResourceCache(t, clusterWithDeployment("old-cluster-web"))
 	s := newMemoTestServer(t)
 	if code, resp := neighborhoodRequest(t, s, "old-cluster-web"); code != http.StatusOK || !topologyHasNode(resp.Subgraph.Nodes, "old-cluster-web-rs") {
