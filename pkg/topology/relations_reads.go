@@ -147,6 +147,11 @@ func (n *neighborhood) networkEntrypoints(s relations.Session, emit, traverse ow
 			found := v.Referrers(family, svc, nil)
 			n.cover(family.Name, found.Coverage)
 			for _, r := range found.Referrers {
+				// A DestinationRule configures traffic to the host; the
+				// family's own projection files it under ConfigRefs.
+				if r.Ref.Kind == "DestinationRule" && r.Ref.Group == "networking.istio.io" {
+					continue
+				}
 				add(r.Ref)
 			}
 		}
