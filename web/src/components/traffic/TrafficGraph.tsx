@@ -15,7 +15,7 @@ import {
   type EdgeMouseHandler,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import ELK from 'elkjs/lib/elk.bundled.js'
+import type { ELK } from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
 import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
@@ -25,7 +25,12 @@ import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, type TrafficFocus } from './trafficFilters'
 
-const elk = new ELK()
+// ELK is 1.5 MB; load it with the first traffic layout, not with the app.
+let elkPromise: Promise<ELK> | null = null
+function loadElk(): Promise<ELK> {
+  elkPromise ??= import('elkjs/lib/elk.bundled.js').then(({ default: ELKImpl }) => new ELKImpl())
+  return elkPromise
+}
 
 // ELK layout options for traffic graph
 const elkOptions = {
@@ -1466,7 +1471,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     const groupOutEdgeInfo = addonGroupOutEdge
 
     try {
-      const layoutResult = await elk.layout(elkGraph)
+      const layoutResult = await (await loadElk()).layout(elkGraph)
 
       // Index ELK's positioned children by id once — a .find() per node here is
       // O(nodes²) and bites on dense traffic graphs.
