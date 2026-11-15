@@ -101,9 +101,8 @@ type DynamicResourceCache struct {
 	// re-runs itself on a bounded schedule. Guarded by mu.
 	probeRetries    map[schema.GroupVersionResource]*probeRetry
 	probeSlots      chan struct{}
-	probeCtx        context.Context
-	stopProbes      context.CancelFunc
-	stopCh          chan struct{} // global shutdown; parent of every per-informer context
+	stopCtx         context.Context // cancelled by Stop; parent of every probe and informer context
+	cancelStop      context.CancelFunc
 	stopOnce        sync.Once
 	stopped         bool // set under mu by Stop; startWatching refuses new informers after
 	mu              sync.RWMutex
@@ -161,7 +160,7 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 		log.Printf("Using namespace fallback for dynamic informers: %q", cfg.NamespaceFallback)
 	}
 
-	probeCtx, stopProbes := context.WithCancel(context.Background())
+	stopCtx, cancelStop := context.WithCancel(context.Background())
 	d := &DynamicResourceCache{
 		factory:          factory,
 		nsFactories:      make(map[string]dynamicinformer.DynamicSharedInformerFactory),
@@ -170,11 +169,10 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 		deniedScopes:     make(map[informerKey]scopeDenial),
 		fanoutIncomplete: make(map[schema.GroupVersionResource]bool),
 		probeRetries:     make(map[schema.GroupVersionResource]*probeRetry),
-		probeCtx:         probeCtx,
+		stopCtx:          stopCtx,
 		probeSlots:       make(chan struct{}, 50),
-		stopProbes:       stopProbes,
+		cancelStop:       cancelStop,
 		informers:        make(map[informerKey]*informerEntry),
-		stopCh:           make(chan struct{}),
 		config:           cfg,
 		discoveryStatus:  CRDDiscoveryIdle,
 		discoveryDone:    make(chan struct{}),
@@ -665,14 +663,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		select {
-		case <-d.stopCh:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
+	ctx, cancel := context.WithCancel(d.stopCtx)
 	d.informerGeneration++
 	d.informers[key] = &informerEntry{
 		informer:  informer,
@@ -691,7 +682,7 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 		}
 	}
 
-	go informer.Run(ctx.Done())
+	go informer.RunWithContext(ctx)
 
 	informerCount := len(d.informers)
 	scopeDesc := "cluster-wide"
@@ -823,7 +814,7 @@ type probeOutcome struct {
 }
 
 func (d *DynamicResourceCache) walkScopes(gvr schema.GroupVersionResource, preferredNS string) probeOutcome {
-	return d.walkScopesContext(d.probeCtx, gvr, preferredNS)
+	return d.walkScopesContext(d.stopCtx, gvr, preferredNS)
 }
 
 func (d *DynamicResourceCache) walkScopesContext(parent context.Context, gvr schema.GroupVersionResource, preferredNS string) (outcome probeOutcome) {
@@ -1099,7 +1090,7 @@ func (d *DynamicResourceCache) noteWalk(gvr schema.GroupVersionResource, o probe
 			r.unanswered = slices.Clone(prev.unanswered)
 			maps.Copy(r.answered, prev.answered)
 		}
-		r.ctx, r.cancel = context.WithCancel(d.probeCtx)
+		r.ctx, r.cancel = context.WithCancel(d.stopCtx)
 		d.probeRetries[gvr] = r
 		go d.retryUnanswered(gvr, r)
 	}
@@ -1423,10 +1414,10 @@ func (d *DynamicResourceCache) probeCount(gvr schema.GroupVersionResource) (int,
 	select {
 	case d.probeSlots <- struct{}{}:
 		defer func() { <-d.probeSlots }()
-	case <-d.probeCtx.Done():
-		return -2, d.probeCtx.Err()
+	case <-d.stopCtx.Done():
+		return -2, d.stopCtx.Err()
 	}
-	ctx, cancel := context.WithTimeout(d.probeCtx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(d.stopCtx, 5*time.Second)
 	defer cancel()
 
 	var list *unstructured.UnstructuredList
@@ -3310,7 +3301,7 @@ func (d *DynamicResourceCache) Stop() {
 
 		d.mu.Lock()
 		d.stopped = true
-		d.stopProbes()
+		d.cancelStop()
 		d.mu.Unlock()
 
 		d.discoveryMu.Lock()
@@ -3326,10 +3317,6 @@ func (d *DynamicResourceCache) Stop() {
 			d.lateCRDTimer = nil
 		}
 		d.lateCRDMu.Unlock()
-
-		// Closing stopCh cancels every per-informer context (each informer's
-		// watchdog goroutine selects on it), stopping all watches.
-		close(d.stopCh)
 
 		d.mu.RLock()
 		nsFactories := make([]dynamicinformer.DynamicSharedInformerFactory, 0, len(d.nsFactories))
