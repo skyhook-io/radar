@@ -22,6 +22,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/client-go/util/homedir"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 var (
@@ -1531,6 +1533,13 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 
 	source := NamespaceListSeeded
 	if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+		// After a context switch the LIST can time out behind informer and
+		// discovery traffic on the shared client; the synced cluster-wide
+		// namespace informer holds the same list.
+		if names, ok := cachedNamespaceNames(); ok {
+			log.Printf("[k8s] GetAccessibleNamespaces: listing namespaces failed: %v (using the synced namespace cache)", err)
+			return names, NamespaceListCluster
+		}
 		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
 	}
@@ -1559,6 +1568,25 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 	clientMu.RUnlock()
 	sort.Strings(fallback)
 	return fallback, source
+}
+
+// cachedNamespaceNames lists namespaces from the informer cache when it is
+// synced and cluster-wide, so it holds what a successful LIST would return.
+func cachedNamespaceNames() ([]string, bool) {
+	rc := GetResourceCache()
+	if rc == nil || rc.Namespaces() == nil || !rc.IsKindReady(k8score.Namespaces) || !rc.IsKindClusterWide(k8score.Namespaces) {
+		return nil, false
+	}
+	items, err := rc.Namespaces().List(labels.Everything())
+	if err != nil {
+		return nil, false
+	}
+	names := make([]string, 0, len(items))
+	for _, ns := range items {
+		names = append(names, ns.Name)
+	}
+	sort.Strings(names)
+	return names, true
 }
 
 // ForceInCluster overrides in-cluster detection for testing

@@ -8,7 +8,10 @@ import (
 	"slices"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -51,6 +54,8 @@ func fakeNamespaceAPIServer(t *testing.T, listStatus, sarStatus int, namespaces 
 	}
 	prevClient := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(prevClient) })
+	// Namespace answers come from this apiserver alone, not a synced cache.
+	t.Cleanup(k8s.SwapResourceCacheForTest(nil))
 	prevConn := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
@@ -199,6 +204,10 @@ func TestNamespaceScope_ListFailureKeepsSavedPick(t *testing.T) {
 	if body.AccessChecked {
 		t.Error("accessChecked = true after a failed LIST, want false")
 	}
+	// The UI retries a failed list instead of keeping the short list as the answer.
+	if !body.ListFailed {
+		t.Error("listFailed = false after a failed LIST, want true")
+	}
 	if got := srv.getActiveNamespaceForUser(req); len(got) != 1 || got[0] != "broken" {
 		t.Errorf("saved pick after failed LIST = %v, want [broken]", got)
 	}
@@ -299,5 +308,33 @@ func TestNamespaceScope_NoNamespaceListIsNotAnAccessCheck(t *testing.T) {
 	}
 	if body.AccessChecked || len(body.AccessibleNamespaces) != 0 {
 		t.Errorf("accessChecked = %v, accessible = %v; want false with no list", body.AccessChecked, body.AccessibleNamespaces)
+	}
+}
+
+// Right after a context switch the namespace LIST can time out behind the
+// informer and discovery traffic on the shared client. The synced namespace
+// informer holds the same list, so the picker must not fall back to the
+// seeded short list (empty for a context with no namespace).
+func TestAccessibleNamespacesFallBackToTheSyncedCacheWhenTheListFails(t *testing.T) {
+	cacheClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "beta"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
+	)
+	fakeNamespaceAPIServer(t, http.StatusInternalServerError, http.StatusForbidden)
+	if err := k8s.InitTestResourceCache(cacheClient); err != nil {
+		t.Fatalf("init cache: %v", err)
+	}
+	t.Cleanup(func() {
+		if rc := k8s.GetResourceCache(); rc != nil {
+			rc.Stop()
+		}
+	})
+
+	got, source := k8s.GetAccessibleNamespacesWithSource(context.Background())
+	if !slices.Equal(got, []string{"alpha", "beta"}) {
+		t.Errorf("namespaces = %v, want the cached [alpha beta]", got)
+	}
+	if !source.Complete() {
+		t.Errorf("source = %q, want a complete list", source)
 	}
 }

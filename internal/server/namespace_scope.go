@@ -63,6 +63,10 @@ type NamespaceScopeResponse struct {
 	CacheScoped          bool               `json:"cacheScoped"`
 	CacheScopeNamespace  string             `json:"cacheScopeNamespace,omitempty"`
 	NamespaceRescope     bool               `json:"namespaceRescope"`
+	// ListFailed: the namespace LIST failed for a reason other than RBAC and
+	// no synced cache stood in, so AccessibleNamespaces is only the seeds.
+	// The UI retries rather than treating the short list as the answer.
+	ListFailed bool `json:"listFailed,omitempty"`
 }
 
 // nsPreferenceKey builds the per-user, per-context key for nsPreferences.
@@ -571,6 +575,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		CacheScoped:          k8s.ForceNamespaceScope,
 		CacheScopeNamespace:  cacheScopeNs,
 		NamespaceRescope:     k8s.ForceNamespaceScope && !s.authConfig.Enabled() && s.configManagement() != "operator",
+		ListFailed:           source == k8s.NamespaceListFailed,
 	})
 }
 

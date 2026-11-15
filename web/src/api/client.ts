@@ -7693,6 +7693,17 @@ export interface NamespaceScope {
   cacheScopeNamespace?: string;
   /** true when this client may rebuild the local cache for another namespace. */
   namespaceRescope: boolean;
+  /**
+   * The server's namespace LIST failed for a reason other than RBAC (e.g. a
+   * timeout right after a context switch), so accessibleNamespaces is only
+   * its short fallback list. Absent from older servers.
+   */
+  listFailed?: boolean;
+}
+
+/** A failed namespace list is retried soon rather than kept as the answer. */
+export function namespaceScopeRefetchInterval(scope: Pick<NamespaceScope, "listFailed"> | undefined): number | false {
+  return scope?.listFailed ? 3000 : false;
 }
 
 export function useNamespaceScope() {
@@ -7704,6 +7715,7 @@ export function useNamespaceScope() {
       return applyTabPick(scope, apiBase);
     },
     staleTime: 30000,
+    refetchInterval: (query) => namespaceScopeRefetchInterval(query.state.data),
   });
 }
 
