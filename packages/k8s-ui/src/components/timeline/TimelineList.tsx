@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Virtuoso, type VirtuosoHandle, type ListItem } from 'react-virtuoso'
 import { Collapse, CollapseChevron } from '../ui/Collapse'
 import { DiffViewer, DiffBadge } from './DiffViewer'
 import { TimelineToolbar } from './TimelineToolbar'
@@ -135,6 +136,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const showDeleted = showDeletedProp ?? showDeletedInternal
   const setShowDeleted = onShowDeletedChange ?? setShowDeletedInternal
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
+  const [openFolds, setOpenFolds] = useState<Set<string>>(() => new Set())
 
   // Clear every content filter at once. Each setter already resolves to the
   // controlled callback or the internal state setter, so this works in both
@@ -350,29 +352,86 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     return groups
   }, [filteredActivity, compact, foldPerResource, selectedEventId])
 
-  // Visible-window reporting: rows carry their time span in data attributes;
-  // on scroll (rAF-throttled) and whenever the row set changes, the span of
-  // rows intersecting the scrollport is reported so a host scrubber can show
-  // it as the lens. DOM-measured, so it runs only in effects/handlers —
-  // SSR-safe by construction.
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  type ListRow = {
+    type: 'header'
+    key: string
+    label: string
+    count: number
+  } | {
+    type: 'activity'
+    key: string
+    item: AggregatedItem
+    eventId: string
+    fromMs: number
+    toMs: number
+    lastInGroup: boolean
+  }
+  const listRows = useMemo<ListRow[]>(() => groupedActivity.flatMap((group) => [
+    { type: 'header', key: `header:${group.label}`, label: group.label, count: group.items.length },
+    ...group.items.map((item, index): ListRow => {
+      const first = item.type === 'aggregated' ? item.first
+        : item.type === 'folded' ? item.others[item.others.length - 1] : item.item
+      const last = item.type === 'aggregated' ? item.last : item.type === 'folded' ? item.latest : item.item
+      const key = item.type === 'folded' ? item.key
+        : item.type === 'aggregated' ? `agg-${item.first.id}-${item.last.id}` : item.item.id
+      return {
+        type: 'activity', key: `${group.label}:${key}`, item,
+        eventId: item.type === 'folded' ? item.latest.id : first.id,
+        fromMs: new Date(first.timestamp).getTime(),
+        toMs: new Date(last.timestamp).getTime(),
+        lastInGroup: index === group.items.length - 1,
+      }
+    }),
+  ]), [groupedActivity])
+
+  useEffect(() => {
+    setOpenFolds((previous) => {
+      if (previous.size === 0) return previous
+      const keys = new Set(listRows.map((row) => row.key))
+      const next = new Set([...previous].filter((key) => keys.has(key)))
+      return next.size === previous.size ? previous : next
+    })
+  }, [listRows])
+
+  // Only rows near the viewport are mounted, so the visible window reported to
+  // a host scrubber (its lens) comes from the rendered items' offsets and time
+  // spans, not from the DOM.
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
+  const [scroller, setScroller] = useState<HTMLElement | null>(null)
+  const handleScrollerRef = useCallback((element: HTMLElement | Window | null) => {
+    setScroller(element instanceof HTMLElement ? element : null)
+  }, [])
+  const renderedItems = useRef<ListItem<ListRow>[]>([])
+  const [listReady, setListReady] = useState(false)
   const visibleWindowRaf = useRef<number | null>(null)
+  const reportedWindow = useRef<{ callback: typeof onVisibleWindowChange; fromMs: number; toMs: number } | null>(null)
   const reportVisibleWindow = useCallback(() => {
-    const container = scrollRef.current
-    if (!container || !onVisibleWindowChange) return
-    const containerRect = container.getBoundingClientRect()
+    if (!onVisibleWindowChange) return
     let fromMs = Infinity
     let toMs = -Infinity
-    for (const row of container.querySelectorAll<HTMLElement>('[data-ts-from]')) {
-      const rect = row.getBoundingClientRect()
-      if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) continue
-      const from = Number(row.dataset.tsFrom)
-      const to = Number(row.dataset.tsTo)
-      if (Number.isFinite(from) && from < fromMs) fromMs = from
-      if (Number.isFinite(to) && to > toMs) toMs = to
+    if (scroller && !isLoading && listRows.length > 0) {
+      const top = scroller.scrollTop
+      const bottom = top + scroller.clientHeight
+      // The rendered range includes overscan; only its intersection with the
+      // actual scrollport belongs in the host's lens.
+      for (const row of renderedItems.current) {
+        if (row.offset + row.size < top || row.offset > bottom) continue
+        const data = row.data
+        if (!data || data.type !== 'activity') continue
+        if (Number.isFinite(data.fromMs)) fromMs = Math.min(fromMs, data.fromMs)
+        if (Number.isFinite(data.toMs)) toMs = Math.max(toMs, data.toMs)
+      }
     }
+    const previous = reportedWindow.current
+    if (previous?.callback === onVisibleWindowChange && previous.fromMs === fromMs && previous.toMs === toMs) return
+    reportedWindow.current = { callback: onVisibleWindowChange, fromMs, toMs }
     onVisibleWindowChange(fromMs <= toMs ? { fromMs, toMs } : null)
-  }, [onVisibleWindowChange])
+  }, [onVisibleWindowChange, scroller, isLoading, listRows])
+  const handleItemsRendered = useCallback((items: ListItem<ListRow>[]) => {
+    renderedItems.current = items
+    setListReady(items.some((row) => row.size > 0))
+    reportVisibleWindow()
+  }, [reportVisibleWindow])
   const handleListScroll = useCallback(() => {
     if (visibleWindowRaf.current != null) return
     visibleWindowRaf.current = requestAnimationFrame(() => {
@@ -383,44 +442,56 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   useEffect(() => {
     reportVisibleWindow()
     return () => {
-      if (visibleWindowRaf.current != null) cancelAnimationFrame(visibleWindowRaf.current)
+      if (visibleWindowRaf.current != null) {
+        cancelAnimationFrame(visibleWindowRaf.current)
+        visibleWindowRaf.current = null
+      }
     }
-  }, [reportVisibleWindow, groupedActivity])
+  }, [reportVisibleWindow])
 
   // Carry the swimlane's view window into the list: once rows exist, scroll so
   // the row nearest `scrollToMs` sits at the top. Applied once per `scrollToMs`
   // (a fresh view switch), so it never fights the user's own scrolling after.
   const scrolledToRef = useRef<number | null>(null)
   useEffect(() => {
-    if (scrollToMs == null || scrolledToRef.current === scrollToMs) return
-    const container = scrollRef.current
-    if (!container) return
-    const rows = container.querySelectorAll<HTMLElement>('[data-ts-from]')
-    if (rows.length === 0) return
-    let best: HTMLElement | null = null
+    if (isLoading || !scroller || !listReady || scrollToMs == null || scrolledToRef.current === scrollToMs) return
+    let bestIndex = -1
     let bestDelta = Infinity
-    for (const row of rows) {
-      const delta = Math.abs(Number(row.dataset.tsFrom) - scrollToMs)
-      if (delta < bestDelta) { bestDelta = delta; best = row }
-    }
-    if (best) {
-      container.scrollTop += best.getBoundingClientRect().top - container.getBoundingClientRect().top
+    listRows.forEach((row, index) => {
+      if (row.type !== 'activity') return
+      const delta = Math.abs(row.fromMs - scrollToMs)
+      if (delta < bestDelta) { bestDelta = delta; bestIndex = index }
+    })
+    if (bestIndex >= 0) {
+      virtuosoRef.current?.scrollToIndex({ index: bestIndex, align: 'start' })
       scrolledToRef.current = scrollToMs
       // A jump that lands where the list already sits emits no scroll event, so
       // the host's lens would keep showing the pre-jump window without this.
       reportVisibleWindow()
     }
-  }, [scrollToMs, groupedActivity, reportVisibleWindow])
+  }, [scrollToMs, listRows, listReady, scroller, isLoading, reportVisibleWindow])
 
   // Bidirectional sync: when the selection changes externally (a swimlane marker
-  // click), scroll the matching card into view. Re-runs on groupedActivity so a
-  // selection made before the rows exist still lands once they render.
+  // click), scroll the matching card into view, mounted or not. Re-runs on the
+  // row set so a selection made before the rows exist still lands.
   useEffect(() => {
-    if (!selectedEventId) return
-    const container = scrollRef.current
-    const card = container?.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(selectedEventId)}"]`)
-    card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [selectedEventId, groupedActivity])
+    if (isLoading || !scroller || !listReady || !selectedEventId) return
+    const index = listRows.findIndex((row) => row.type === 'activity' && row.eventId === selectedEventId)
+    if (index >= 0) virtuosoRef.current?.scrollToIndex({ index, align: 'center', behavior: 'smooth' })
+  }, [selectedEventId, listRows, listReady, scroller, isLoading])
+
+  const listComponents = useMemo(() => ({
+    Footer: () => (
+      <div className="px-4 pb-4">
+        {truncatedAt != null && (isTruncated ?? events.length >= truncatedAt) && (
+          <div className="flex items-center justify-center gap-2 pt-10 pb-4 text-sm text-theme-text-tertiary">
+            <Clock className="h-4 w-4 opacity-50" />
+            <span>{truncationMessage ?? `Showing the newest ${truncatedAt.toLocaleString()} events in this range — narrow the query to see older ones`}</span>
+          </div>
+        )}
+      </div>
+    ),
+  }), [truncatedAt, isTruncated, events.length, truncationMessage])
 
   const renderActivityCard = (item: TimelineEvent) => (
     <ActivityCard
@@ -465,7 +536,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       )}
 
       {/* Timeline content */}
-      <div className="flex-1 overflow-auto" ref={scrollRef} onScroll={onVisibleWindowChange ? handleListScroll : undefined}>
+      <div className="flex-1 min-h-0 overflow-auto">
         {isLoading ? (
           <PaneLoader label="Loading timeline…" className="h-full" />
         ) : filteredActivity.length === 0 ? (
@@ -536,38 +607,49 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
             })()}
           </div>
         ) : (
-          <div className="p-4 space-y-6">
-            {groupedActivity.map((group) => (
-              <div key={group.label}>
-                {/* Time period header */}
-                <div className="flex items-center gap-2 mb-3">
-                  <Clock className="w-4 h-4 text-theme-text-tertiary" />
-                  <span className="text-sm font-medium text-theme-text-secondary">{group.label}</span>
-                  <span className="text-xs text-theme-text-disabled">
-                    ({pluralize(group.items.length, 'item')})
-                  </span>
+          <Virtuoso
+            ref={virtuosoRef}
+            className="h-full w-full"
+            scrollerRef={handleScrollerRef}
+            onScroll={onVisibleWindowChange ? handleListScroll : undefined}
+            data={listRows}
+            computeItemKey={(_index, row) => row.key}
+            initialItemCount={10}
+            increaseViewportBy={200}
+            itemsRendered={handleItemsRendered}
+            components={listComponents}
+            itemContent={(index, row) => {
+              if (row.type === 'header') return (
+                <div className={clsx('px-4 pb-3', index === 0 ? 'pt-4' : 'pt-6')}>
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-4 h-4 text-theme-text-tertiary" />
+                    <span className="text-sm font-medium text-theme-text-secondary">{row.label}</span>
+                    <span className="text-xs text-theme-text-disabled">({pluralize(row.count, 'item')})</span>
+                  </div>
                 </div>
-
-                {/* Activity list */}
-                <div className="space-y-2 ml-6 border-l-2 border-theme-border pl-4">
-                  {group.items.map((aggItem) => (
-                    aggItem.type === 'folded' ? (
-                      <div
-                        key={aggItem.key}
-                        data-event-id={aggItem.latest.id}
-                        data-ts-from={new Date(aggItem.others[aggItem.others.length - 1].timestamp).getTime()}
-                        data-ts-to={new Date(aggItem.latest.timestamp).getTime()}
-                      >
-                        {renderActivityCard(aggItem.latest)}
-                        <FoldedProblems latest={aggItem.latest} others={aggItem.others} renderCard={renderActivityCard} />
-                      </div>
-                    ) : aggItem.type === 'aggregated' ? (
-                      <div
-                        key={`agg-${aggItem.first.id}-${aggItem.last.id}`}
-                        data-event-id={aggItem.first.id}
-                        data-ts-from={new Date(aggItem.first.timestamp).getTime()}
-                        data-ts-to={new Date(aggItem.last.timestamp).getTime()}
-                      >
+              )
+              const aggItem = row.item
+              return (
+                <div className="px-4">
+                  <div className={clsx('ml-6 border-l-2 border-theme-border pl-4', !row.lastInGroup && 'pb-2')}>
+                    <div data-event-id={row.eventId} data-ts-from={row.fromMs} data-ts-to={row.toMs}>
+                      {aggItem.type === 'folded' ? (
+                        <>
+                          {renderActivityCard(aggItem.latest)}
+                          <FoldedProblems
+                            latest={aggItem.latest}
+                            others={aggItem.others}
+                            renderCard={renderActivityCard}
+                            open={openFolds.has(row.key)}
+                            onToggle={() => setOpenFolds((previous) => {
+                              const next = new Set(previous)
+                              if (next.has(row.key)) next.delete(row.key)
+                              else next.add(row.key)
+                              return next
+                            })}
+                          />
+                        </>
+                      ) : aggItem.type === 'aggregated' ? (
                         <AggregatedActivityCard
                           first={aggItem.first}
                           last={aggItem.last}
@@ -580,36 +662,13 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                           selected={selectedEventId === aggItem.first.id}
                           onSelect={() => onSelectEvent?.(selectedEventId === aggItem.first.id ? null : aggItem.first.id)}
                         />
-                      </div>
-                    ) : (
-                      <div
-                        key={aggItem.item.id}
-                        data-event-id={aggItem.item.id}
-                        data-ts-from={new Date(aggItem.item.timestamp).getTime()}
-                        data-ts-to={new Date(aggItem.item.timestamp).getTime()}
-                      >
-                        <ActivityCard
-                          item={aggItem.item}
-                          expanded={expandedItem === aggItem.item.id}
-                          onToggle={() => setExpandedItem(expandedItem === aggItem.item.id ? null : aggItem.item.id)}
-                          onResourceClick={onResourceClick}
-                          compact={compact}
-                          selected={selectedEventId === aggItem.item.id}
-                          onSelect={() => onSelectEvent?.(selectedEventId === aggItem.item.id ? null : aggItem.item.id)}
-                        />
-                      </div>
-                    )
-                  ))}
+                      ) : renderActivityCard(aggItem.item)}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
-            {truncatedAt != null && (isTruncated ?? events.length >= truncatedAt) && (
-              <div className="flex items-center justify-center gap-2 py-4 text-sm text-theme-text-tertiary">
-                <Clock className="h-4 w-4 opacity-50" />
-                <span>{truncationMessage ?? `Showing the newest ${truncatedAt.toLocaleString()} events in this range — narrow the query to see older ones`}</span>
-              </div>
-            )}
-          </div>
+              )
+            }}
+          />
         )}
       </div>
     </div>
@@ -848,13 +907,12 @@ function describeFolded(others: TimelineEvent[]): string {
 
 // The rest of a child resource's problems in one time group, behind one line
 // under its newest card, so a crash-looping pod doesn't fill the list.
-function FoldedProblems({ latest, others, renderCard }: { latest: TimelineEvent; others: TimelineEvent[]; renderCard: (item: TimelineEvent) => ReactNode }) {
-  const [open, setOpen] = useState(false)
+function FoldedProblems({ latest, others, renderCard, open, onToggle }: { latest: TimelineEvent; others: TimelineEvent[]; renderCard: (item: TimelineEvent) => ReactNode; open: boolean; onToggle: () => void }) {
   return (
     <div className="pl-3">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
+        onClick={onToggle}
         aria-expanded={open}
         className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
       >
