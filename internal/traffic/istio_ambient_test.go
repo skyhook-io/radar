@@ -310,7 +310,7 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 		istioSeries("istio_requests_total", "waypoint", "ns-0002", "curl", "ns-0002", "httpbin", "200", 1),
 	}
 	var many []string
-	for i := 0; len(strings.Join(many, "|")) <= istioAmbientListBudget; i++ {
+	for i := 0; len(url.QueryEscape(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many))) <= istioQueryBudget; i++ {
 		many = append(many, fmt.Sprintf("ns-%04d", i))
 	}
 	var queries []string

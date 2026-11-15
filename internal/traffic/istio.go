@@ -257,14 +257,15 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	var missing []string
 
 	ambientNamespaces := s.ambientNamespaceFn()
-	ambientOverBudget := len(strings.Join(ambientNamespaces, "|")) > istioAmbientListBudget
-	if ambientOverBudget {
-		log.Printf("[istio] %d ambient namespaces are too many to name in one query; client reports into them are not read", len(ambientNamespaces))
-		ambientNamespaces = nil
-	}
 	scopes, err := s.resolveScopes(ctx, ambientNamespaces)
 	if err != nil {
 		return scopeCheckFailed("istio"), nil
+	}
+	longest := istioHTTPQuery("istio_requests_total", istio5xxSelector, opts.Namespace, scopes.http, ambientNamespaces)
+	ambientOverBudget := len(ambientNamespaces) > 0 && len(url.QueryEscape(longest)) > istioQueryBudget
+	if ambientOverBudget {
+		log.Printf("[istio] %d ambient namespaces are too many to name in one query; client reports into them are not read", len(ambientNamespaces))
+		ambientNamespaces = nil
 	}
 
 	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, ambientNamespaces, &missing)
@@ -400,11 +401,13 @@ func istioRateQuery(groupBy, metric, selector, namespace string, sc clusterScope
 		sum(fmt.Sprintf(`, destination_workload_namespace="%s"`, safeNS))
 }
 
-// istioAmbientListBudget bounds the ambient namespace list a query names.
-// Queries are sent as GET, and a longer list risks the URL limit of a proxy in
-// front of the store (nginx's default is 8 KiB), which would fail the whole
-// HTTP query rather than only the client reports.
-const istioAmbientListBudget = 2000
+// istioQueryBudget bounds the URL-encoded HTTP query once it names the
+// ambient namespaces. Queries are sent as GET, and a longer one risks the URL
+// limit of a proxy in front of the store (nginx's default is 8 KiB), which
+// would fail the whole HTTP query rather than only the client reports.
+const istioQueryBudget = 6 << 10
+
+const istio5xxSelector = `, response_code=~"5.."`
 
 // istioHTTPQuery reads one HTTP figure by series from the side that received
 // the requests. Requests into an ambient namespace that no receiving proxy
@@ -469,7 +472,7 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc c
 		return nil, err
 	}
 
-	errorRates, err := s.queryHTTPSeriesRates(ctx, query("istio_requests_total", `, response_code=~"5.."`))
+	errorRates, err := s.queryHTTPSeriesRates(ctx, query("istio_requests_total", istio5xxSelector))
 	if err != nil {
 		log.Printf("[istio] Error querying 5xx rates (continuing without error data): %v", err)
 		*missing = append(*missing, "5xx error rates")
