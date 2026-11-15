@@ -3,6 +3,7 @@ package relations
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -232,4 +233,29 @@ func TestAContourTCPProxyDelegates(t *testing.T) {
 	child := inNamespace(object("projectcontour.io/v1", "HTTPProxy", "child", nil), "apps")
 	parent := object("projectcontour.io/v1", "HTTPProxy", "parent", map[string]any{"tcpproxy": map[string]any{"include": map[string]any{"name": "child", "namespace": "apps"}}})
 	checkFamily(t, ContourBackends, []runtime.Object{child, parent}, parent, resourceid.Ref{Group: "projectcontour.io", Kind: "HTTPProxy", Namespace: "apps", Name: "child"}, "spec.tcpproxy.include")
+}
+
+// legacyTraefik is a cluster whose discovery, complete, serves only the
+// legacy Traefik group, as before Traefik 2.10.
+type legacyTraefik struct{ allNamespaces }
+
+func (legacyTraefik) Catalog() *ownership.Catalog {
+	var served []ownership.ServedResource
+	for _, kind := range []string{"IngressRoute", "TraefikService"} {
+		served = append(served, ownership.ServedResource{Group: "traefik.containo.us", Version: "v1alpha1", Kind: kind, Resource: strings.ToLower(kind) + "s", Namespaced: true, Verbs: []string{"list", "watch", "get"}})
+	}
+	return ownership.NewCatalog(served, true)
+}
+
+func TestAnUnservedTraefikGroupShadowsNothing(t *testing.T) {
+	route := object("traefik.containo.us/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"kind": "TraefikService", "name": "split"}}}}})
+	split := object("traefik.containo.us/v1alpha1", "TraefikService", "split", nil)
+	c := legacyTraefik{allNamespaces{cluster: cluster{objects: []runtime.Object{route, split}, unread: map[resourceid.GroupKind]readreason.Code{{Group: "traefik.io", Kind: "TraefikService"}: readreason.KindUnknown}}}}
+	v := NewView(c, ownership.Unrestricted())
+	if got := v.References(TraefikBackends, refOf(route), route); len(got.Declared) != 1 || got.Declared[0].Ref != refOf(split) || got.Declared[0].State != TargetPresent || !got.Coverage.Complete() {
+		t.Errorf("on a legacy-only cluster the route's backend reads as %+v", got)
+	}
+	if got := v.Referrers(TraefikBackends, refOf(split), nil); len(got.Referrers) != 1 || !got.Coverage.Complete() {
+		t.Errorf("on a legacy-only cluster the TraefikService's referrers are %+v; want the route", got)
+	}
 }

@@ -198,7 +198,7 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 // d is absent, named by its first candidate, when none exists.
 func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage) {
 	d.State = TargetAbsent
-	for _, r := range candidates {
+	for _, r := range v.served(candidates) {
 		switch v.decide(r.GroupKind(), r.Namespace) {
 		case ownership.Allowed:
 		case ownership.Undecided:
@@ -223,12 +223,36 @@ func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage)
 	}
 }
 
+// served are the candidates whose kind the cluster serves, so an API group
+// a cluster doesn't have, such as traefik.io before Traefik 2.10, shadows
+// nothing. It drops one only when discovery is complete and another is
+// served; otherwise every candidate is tried, and an unserved one says why.
+func (v *View) served(candidates []resourceid.Ref) []resourceid.Ref {
+	if len(candidates) < 2 {
+		return candidates
+	}
+	catalog := v.session.Catalog()
+	if !catalog.Complete() {
+		return candidates
+	}
+	var out []resourceid.Ref
+	for _, r := range candidates {
+		if _, known := catalog.Kind(r.GroupKind()); known {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return candidates
+	}
+	return out
+}
+
 // resolvesTo reports whether a declaration whose candidates are candidates
 // resolves to subject: subject is one of them and none before it exists. A
 // candidate before it that Radar couldn't read, or the caller may not, leaves
 // that unknown, so the answer doesn't claim it and says why in c.
 func (v *View) resolvesTo(candidates []resourceid.Ref, subject resourceid.Ref, c *Coverage) bool {
-	for _, r := range candidates {
+	for _, r := range v.served(candidates) {
 		if r == subject {
 			return true
 		}
