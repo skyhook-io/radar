@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -198,9 +199,15 @@ func RelationsAnswer(session relations.Session, access ownership.Access, ov *own
 	n.node(subject)
 	n.answer(v, families, selectors, subject, obj, false)
 
-	chain := ov.ControllerChain(subject).Chain
-	for i := 1; i < len(chain); i++ {
-		n.edge(chain[i], chain[i-1], relationEdge{edge: EdgeManages}, false)
+	n.above(session, ov, subject)
+	for _, e := range slices.Clone(n.topo.Edges) {
+		if e.Type == EdgeManages && e.Target == familyNodeID(subject) {
+			for r := range n.nodes {
+				if familyNodeID(r) == e.Source {
+					n.above(session, ov, r)
+				}
+			}
+		}
 	}
 	children := ov.Children(subject)
 	for _, c := range children.Children {
@@ -238,6 +245,78 @@ func RelationsAnswer(session relations.Session, access ownership.Access, ov *own
 		}
 	}
 	return rel, n.coverage
+}
+
+// maxAbove bounds the walk up from a subject: owner chains in practice are
+// a handful of objects deep.
+const maxAbove = 16
+
+// above adds what manages r and what manages those, as the graph draws it and
+// its ManagedBy walks it: every owner reference ownership resolves, not only
+// controllers, the GitOps managers whose member lists name each object, and a
+// Karpenter NodeClaim's NodePool.
+func (n *neighborhood) above(session relations.Session, ov *ownership.View, r resourceid.Ref) {
+	manages := relationEdge{edge: EdgeManages}
+	seen := map[resourceid.Ref]bool{r: true}
+	frontier := []resourceid.Ref{r}
+	for depth := 0; depth < maxAbove && len(frontier) > 0; depth++ {
+		var next []resourceid.Ref
+		for _, x := range frontier {
+			var up []resourceid.Ref
+			_, owners := ov.References(x)
+			for _, o := range owners {
+				if o.State == ownership.OwnerFound {
+					up = append(up, o.Ref)
+				}
+			}
+			for _, m := range ov.RecordingManagers(x).Managers {
+				up = append(up, m.Ref)
+			}
+			if pool, ok := n.nodePool(session, x); ok {
+				up = append(up, pool)
+			}
+			for _, u := range up {
+				n.edge(u, x, manages, false)
+				if !seen[u] {
+					seen[u] = true
+					next = append(next, u)
+				}
+			}
+		}
+		frontier = next
+	}
+}
+
+// nodePool is a Karpenter NodeClaim's NodePool, by karpenter's own rule: its
+// owner reference, or its nodepool label.
+func (n *neighborhood) nodePool(session relations.Session, r resourceid.Ref) (resourceid.Ref, bool) {
+	if r.GroupKind() != (resourceid.GroupKind{Group: karpenter.Group, Kind: "NodeClaim"}) {
+		return resourceid.Ref{}, false
+	}
+	obj, read := session.Borrow(r)
+	claim, err := apimeta.Accessor(obj)
+	if read.State != ownership.Present || err != nil {
+		return resourceid.Ref{}, false
+	}
+	pools := map[string]*unstructured.Unstructured{}
+	names := []string{claim.GetLabels()[karpenter.NodePoolLabelKey]}
+	for _, o := range claim.GetOwnerReferences() {
+		names = append(names, o.Name)
+	}
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if p, got := session.Borrow(resourceid.NewRef(karpenter.Group, "NodePool", "", name)); got.State == ownership.Present {
+			if u, ok := p.(*unstructured.Unstructured); ok {
+				pools[name] = u
+			}
+		}
+	}
+	if pool, _ := karpenter.ResolveNodePoolForClaim(claim, pools); pool != nil {
+		return resourceid.NewRef(karpenter.Group, "NodePool", "", pool.GetName()), true
+	}
+	return resourceid.Ref{}, false
 }
 
 // healthChecks are the MachineHealthChecks that protect a Cluster API

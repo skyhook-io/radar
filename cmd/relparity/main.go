@@ -90,6 +90,12 @@ type report struct {
 	RestrictedEqual      int                `json:"restrictedEqual"`
 	RestrictedDiffer     int                `json:"restrictedDiffer"`
 	RestrictedDiffs      []diffGroup        `json:"restrictedDiffs"`
+
+	// ManagedBy, subject by subject: gained (the graph named none), replaced
+	// (the graph's answer is on the controller chain below the new one), or
+	// lost and unrelated, which would be regressions.
+	ManagedBy map[string]int      `json:"managedBy"`
+	Examples  map[string][]string `json:"managedByExamples"`
 }
 
 // namespacesAccess may read the namespaces it lists and anything
@@ -141,7 +147,7 @@ func main() {
 		log.Fatal("--context is required")
 	}
 	log.SetFlags(log.Ltime)
-	rep := report{Context: *contextName, Started: time.Now(), Kinds: map[string]int{}, Timings: map[string]*timing{}, FamilyGaps: map[string]int{}, RestrictedTimings: map[string]*timing{}}
+	rep := report{Context: *contextName, Started: time.Now(), Kinds: map[string]int{}, Timings: map[string]*timing{}, FamilyGaps: map[string]int{}, RestrictedTimings: map[string]*timing{}, ManagedBy: map[string]int{}, Examples: map[string][]string{}}
 
 	kubeconfig := cmp.Or(os.Getenv("KUBECONFIG"), filepath.Join(homedir.HomeDir(), ".kube", "config"))
 	if err := k8s.Initialize(k8s.InitOptions{KubeconfigPath: kubeconfig, PreferredContext: k8s.ContextRef{Name: *contextName, SourceFile: kubeconfig, InFileName: *contextName}}); err != nil {
@@ -292,6 +298,55 @@ func main() {
 			b, _ := json.MarshalIndent(before, "", "  ")
 			a, _ := json.MarshalIndent(after, "", "  ")
 			fmt.Printf("BEFORE %s\n%s\nAFTER\n%s\n", s.ref.Key(), b, a)
+		}
+		if b, a := refSet(reflect.ValueOf(before.ManagedBy)), refSet(reflect.ValueOf(after.ManagedBy)); !b.Equal(a) {
+			outcome := "replaced"
+			switch {
+			case b.Len() == 0:
+				outcome = "gained"
+			case a.Len() == 0:
+				outcome = "lost"
+			default:
+				session, err := k8s.BeginOwnershipRead(cache)
+				if err != nil {
+					log.Fatalf("session: %v", err)
+				}
+				// Everything above the subject: any owner reference and any
+				// GitOps manager, transitively, as the graph's walk follows.
+				onChain := sets.New[string]()
+				v := ownership.NewView(session, ownership.Unrestricted())
+				frontier := []resourceid.Ref{s.ref}
+				for depth := 0; depth < 16 && len(frontier) > 0; depth++ {
+					var next []resourceid.Ref
+					for _, x := range frontier {
+						_, owners := v.References(x)
+						var up []resourceid.Ref
+						for _, o := range owners {
+							if o.State == ownership.OwnerFound {
+								up = append(up, o.Ref)
+							}
+						}
+						for _, m := range v.RecordingManagers(x).Managers {
+							up = append(up, m.Ref)
+						}
+						for _, u := range up {
+							key := u.Group + "/" + u.Kind + "/" + u.Namespace + "/" + u.Name
+							if !onChain.Has(key) {
+								onChain.Insert(key)
+								next = append(next, u)
+							}
+						}
+					}
+					frontier = next
+				}
+				if !onChain.IsSuperset(b.Difference(a)) {
+					outcome = "unrelated"
+				}
+			}
+			rep.ManagedBy[outcome]++
+			if len(rep.Examples[outcome]) < 5 {
+				rep.Examples[outcome] = append(rep.Examples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), sets.List(b), sets.List(a)))
+			}
 		}
 		if compare(kind, s.ref, before, after, diffs) {
 			rep.SubjectsEqual++
