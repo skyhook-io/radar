@@ -11,6 +11,7 @@ function reading(overrides: Partial<VeleroScheduleReading> = {}): VeleroSchedule
   return {
     namespace: 'velero',
     name: 'nightly',
+    created: ago(60 * 24),
     cron: '0 2 * * *',
     zone: { name: 'UTC', source: 'serverDefault' },
     state: 'onSchedule',

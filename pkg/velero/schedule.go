@@ -342,7 +342,7 @@ func inferOffset(name string, runs []Run) (time.Duration, bool) {
 			continue
 		}
 		offset := local.Sub(run.Created.UTC().Truncate(time.Second))
-		offset = (offset + 7*time.Minute + 30*time.Second).Truncate(15 * time.Minute)
+		offset = offset.Round(15 * time.Minute)
 		if offset < -12*time.Hour || offset > 14*time.Hour {
 			continue
 		}

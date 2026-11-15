@@ -1,10 +1,13 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
+  Collapse,
+  CollapseChevron,
   CronValue,
   ProblemList,
   Tooltip,
   VELERO_COMPLETED_NOTE,
   VELERO_NONE_KEPT,
+  VELERO_NONE_KEPT_SHORT,
   VELERO_RUNS_UNKNOWN,
   VeleroRunPhase,
   VeleroScheduleStateBadge,
@@ -17,6 +20,7 @@ import {
   veleroScheduleReasonText,
   veleroScheduleStateLabel,
   veleroScheduleTone,
+  veleroLocalTime,
   type ResourceRef,
   type VeleroLocationReading,
   type VeleroScheduleReading,
@@ -36,6 +40,10 @@ import {
 } from './shared'
 
 export const VELERO_NOTHING_NEEDS_ATTENTION = 'Nothing in what Radar can read needs attention.'
+
+// Radar's own readings come first, so the schedules this view exists for are
+// never pushed below a long Issues list.
+const ATTENTION_FOLD = 8
 
 function scheduleProblem(s: VeleroScheduleReading): WorkspaceProblem {
   const tone = veleroScheduleTone(s)
@@ -78,7 +86,7 @@ function cappedIssueNotes(data: VeleroScreenProps['data'], shown: VeleroScreenPr
 function NewestRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: VeleroScreenProps['onInspect'] }) {
   if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
   const run = s.runs.newest
-  if (!run) return <span className="text-theme-text-tertiary">{VELERO_NONE_KEPT}</span>
+  if (!run) return <NoneKept />
   return (
     <button
       type="button"
@@ -95,11 +103,22 @@ function NewestRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: 
   )
 }
 
+function NoneKept() {
+  return (
+    <Tooltip content={`${VELERO_NONE_KEPT}. Velero deletes backups past their TTL, so this is not “never”.`}>
+      <span className="text-theme-text-tertiary">{VELERO_NONE_KEPT_SHORT}</span>
+    </Tooltip>
+  )
+}
+
 function LocationCell({ s }: { s: VeleroScheduleReading }) {
   if (!s.location.viaDefault) return <span className="break-all">{s.location.name}</span>
   return (
     <Tooltip content="The schedule names no location, so its backups go to the installation’s default.">
-      <span className="text-theme-text-secondary">default ({s.location.name || 'unresolved'})</span>
+      <span>
+        <span className="break-all">{s.location.name || 'Unresolved'}</span>
+        <Sub>via default</Sub>
+      </span>
     </Tooltip>
   )
 }
@@ -114,13 +133,16 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
   )
   const attention = useMemo<WorkspaceProblem[]>(
     () => [
-      ...issues.map(veleroIssueProblem),
       ...schedules.filter((s) => s.attention).map(scheduleProblem),
       ...locations.filter((l) => l.attention).map(locationProblem),
+      ...issues.map(veleroIssueProblem),
     ],
     [issues, schedules, locations],
   )
   const capped = cappedIssueNotes(data, issues, installation)
+  const [showAll, setShowAll] = useState(false)
+  const shown = attention.slice(0, ATTENTION_FOLD)
+  const folded = attention.slice(ATTENTION_FOLD)
   const navigate = (ref: ResourceRef) => onInspect(refToSelectedResource(ref))
 
   const columns: TableColumn<VeleroScheduleReading>[] = [
@@ -162,7 +184,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
             <Tooltip content={veleroNextRunTitle(s)}>
               <span>{veleroNextRunText(s)}</span>
             </Tooltip>
-            <Sub>{new Date(s.nextRun).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</Sub>
+            <Sub>{veleroLocalTime(s.nextRun)}</Sub>
           </>
         ) : (
           <span className="text-theme-text-tertiary">—</span>
@@ -173,7 +195,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
       width: '11%',
       cell: (s) =>
         s.lastSubmitted ? (
-          <Tooltip content={new Date(s.lastSubmitted).toLocaleString()}>
+          <Tooltip content={veleroLocalTime(s.lastSubmitted)}>
             <span>{formatRelativeAgeTime(s.lastSubmitted)}</span>
           </Tooltip>
         ) : (
@@ -186,13 +208,14 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
       width: '12%',
       cell: (s) => {
         const newest = veleroNewestSuccessfulText(s.runs)
-        return newest.run ? (
-          <Tooltip content={new Date(newest.run.created).toLocaleString()}>
-            <span>{newest.text}</span>
-          </Tooltip>
-        ) : (
-          <span className="text-theme-text-tertiary">{newest.text}</span>
-        )
+        if (newest.run) {
+          return (
+            <Tooltip content={veleroLocalTime(newest.run.created)}>
+              <span>{newest.text}</span>
+            </Tooltip>
+          )
+        }
+        return s.runs.read === 'unknown' ? <span className="text-theme-text-tertiary">{newest.text}</span> : <NoneKept />
       },
     },
     { header: 'Location', width: '11%', cell: (s) => <LocationCell s={s} /> },
@@ -209,7 +232,28 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
             {attention.length === 0 ? (
               <p className="text-sm text-theme-text-tertiary">{VELERO_NOTHING_NEEDS_ATTENTION}</p>
             ) : (
-              <ProblemList problems={attention} rootKind="" onNavigate={navigate} />
+              <>
+                <ProblemList problems={shown} rootKind="" onNavigate={navigate} />
+                {folded.length > 0 && (
+                  <>
+                    <Collapse open={showAll} id="velero-attention-more">
+                      <div className="pt-2">
+                        <ProblemList problems={folded} rootKind="" onNavigate={navigate} />
+                      </div>
+                    </Collapse>
+                    <button
+                      type="button"
+                      aria-expanded={showAll}
+                      aria-controls="velero-attention-more"
+                      onClick={() => setShowAll((v) => !v)}
+                      className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline"
+                    >
+                      <CollapseChevron open={showAll} />
+                      {showAll ? 'Show fewer' : `Show ${folded.length} more`}
+                    </button>
+                  </>
+                )}
+              </>
             )}
             {capped.map((note) => (
               <p key={note} className="mt-2 text-xs text-theme-text-tertiary">{note}</p>

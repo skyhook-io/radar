@@ -49,8 +49,23 @@ describe('Velero overview', () => {
   it('says what was read when nothing needs attention, and never calls it healthy', () => {
     const html = text(render(workspace({ schedules: [schedule({ runs: { read: 'full', kept: 0 } })] })))
     expect(html).toContain(VELERO_NOTHING_NEEDS_ATTENTION)
-    expect(html).toContain('None among the backups Velero still keeps')
+    expect(html).toContain('None kept')
     expect(html.toLowerCase()).not.toContain('all healthy')
+  })
+
+  it('puts schedule readings first and folds a long list', () => {
+    const issues = Array.from({ length: 10 }, (_, i) => ({
+      id: `i${i}`, severity: 'critical' as const, category: 'backup', kind: 'Backup', group: 'velero.io', namespace: 'velero', name: `run-${i}`, reason: 'BackupFailed', message: 'boom',
+    }))
+    const late = schedule({ name: 'late-one', state: 'late', attention: true, missedRuns: 2 })
+    const html = text(render(workspace({ issues, schedules: [late] })))
+    expect(html.indexOf('late-one')).toBeLessThan(html.indexOf('run-0'))
+    expect(html).toContain('Show 3 more')
+  })
+
+  it('says a next run in the past was due, not that it ran', () => {
+    const html = text(render(workspace({ schedules: [schedule({ state: 'late', attention: true, nextRun: new Date(Date.now() - 3 * 3_600_000).toISOString() })] })))
+    expect(html).toContain('was due 3h ago')
   })
 
   it('says how many issues were left out when an installation was capped', () => {

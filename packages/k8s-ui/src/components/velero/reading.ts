@@ -71,8 +71,9 @@ export function veleroMomentText(iso: string | undefined, fallback = '—'): str
   return formatRelativeAgeTime(iso, fallback)
 }
 
-function localTime(iso: string): string {
-  return new Date(iso).toLocaleString()
+/** A moment in the viewer's local time, the one format the Velero views use ("Nov 15, 03:00 AM"). */
+export function veleroLocalTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -126,7 +127,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
         : 'A backup from this schedule is still running; Velero submits the next one after it finishes.'
     case 'late': {
       const since = reading.lastSubmitted
-        ? `since ${localTime(reading.lastSubmitted)} (${formatRelativeAgeTime(reading.lastSubmitted)})`
+        ? `since ${veleroLocalTime(reading.lastSubmitted)} (${formatRelativeAgeTime(reading.lastSubmitted)})`
         : 'since the schedule was created'
       return `No backup submitted ${since}; ${missedText(reading.missedRuns)}. Velero does not catch up on missed runs.`
     }
@@ -171,13 +172,15 @@ export function veleroZoneDetail(zone: VeleroZone): string {
 /** The next run's relative text, "~" prefixed when the zone it was evaluated in is not certain. */
 export function veleroNextRunText(reading: Pick<VeleroScheduleReading, 'nextRun' | 'nextRunCertain'>): string {
   if (!reading.nextRun) return '—'
-  const text = veleroMomentText(reading.nextRun)
+  // A next run in the past is when it was due; it did not happen.
+  const past = Date.parse(reading.nextRun) <= Date.now()
+  const text = past ? `was due ${formatRelativeAgeTime(reading.nextRun)}` : veleroMomentText(reading.nextRun)
   return reading.nextRunCertain ? text : `~${text}`
 }
 
 export function veleroNextRunTitle(reading: Pick<VeleroScheduleReading, 'nextRun' | 'nextRunCertain' | 'zone'>): string | undefined {
   if (!reading.nextRun) return undefined
-  const at = localTime(reading.nextRun)
+  const at = veleroLocalTime(reading.nextRun)
   return reading.nextRunCertain
     ? at
     : `${at} · an estimate: ${veleroZoneDetail(reading.zone)}`
@@ -186,6 +189,8 @@ export function veleroNextRunTitle(reading: Pick<VeleroScheduleReading, 'nextRun
 export const VELERO_RUNS_UNKNOWN = 'Unknown — no access to backups'
 /** No run among the backups Velero still keeps; TTL deletes older ones, so this is not "never". */
 export const VELERO_NONE_KEPT = 'None among the backups Velero still keeps'
+/** VELERO_NONE_KEPT for a table cell; the full sentence goes in its tooltip. */
+export const VELERO_NONE_KEPT_SHORT = 'None kept'
 
 /** The newest Completed run, or why there is none to show. */
 export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: string; run?: VeleroRun } {

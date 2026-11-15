@@ -172,6 +172,17 @@ func TestReadScheduleZones(t *testing.T) {
 			t.Fatalf("an inferred zone two hours past due should be probablyLate, got %s", later.State)
 		}
 	})
+	t.Run("a negative offset rounds to the nearest quarter hour", func(t *testing.T) {
+		// Named 07:00 local, stamped 12:00:03Z: a server five hours behind UTC.
+		runs := []*unstructured.Unstructured{backup("daily-20261115070000", "daily", "Completed", at("12:00").Add(3*time.Second))}
+		r := read(schedule("daily", "0 7 * * *", lastBackup(at("12:00"))), runs, ServerConfig{Source: ServerUnread}, at("13:00"))
+		if r.Zone != (Zone{Name: "UTC-05:00", Source: ZoneInferred}) {
+			t.Fatalf("zone %+v, want UTC-05:00", r.Zone)
+		}
+		if want := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC); !r.NextRun.Equal(want) {
+			t.Fatalf("next run %v, want %v (07:00 at UTC-05:00)", r.NextRun, want)
+		}
+	})
 	t.Run("unknown zone far past due is probably late", func(t *testing.T) {
 		r := read(schedule("nightly", "0 * * * *", lastBackup(at("11:00").Add(-48*time.Hour))), nil, ServerConfig{Source: ServerUnread}, at("12:00"))
 		if r.Zone.Source != ZoneUnknown || r.State != StateProbablyLate || r.Reason != ReasonZoneUnconfirmed || !r.Attention {
