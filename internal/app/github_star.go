@@ -246,5 +246,6 @@ func saveStarState(path string, state *starState) {
 func ghCommand(ghPath string, args ...string) *exec.Cmd {
 	cmd := exec.Command(ghPath, args...)
 	cmd.Dir = desktopenv.ChildDir()
+	desktopenv.HideConsoleWindow(cmd)
 	return cmd
 }
