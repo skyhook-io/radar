@@ -28,7 +28,13 @@ import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRa
 // ELK is 1.5 MB; load it with the first traffic layout, not with the app.
 let elkPromise: Promise<ELK> | null = null
 function loadElk(): Promise<ELK> {
-  elkPromise ??= import('elkjs/lib/elk.bundled.js').then(({ default: ELKImpl }) => new ELKImpl())
+  elkPromise ??= import('elkjs/lib/elk.bundled.js')
+    .then(({ default: ELKImpl }) => new ELKImpl())
+    .catch((err) => {
+      // A failed chunk load must not disable layout for the whole session.
+      elkPromise = null
+      throw err
+    })
   return elkPromise
 }
 
