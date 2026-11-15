@@ -33,7 +33,9 @@ const (
 var groups = []string{domain.Group}
 
 // WorkspaceKinds are the Velero kinds the views read.
-func WorkspaceKinds() []integration.WorkspaceKind { return append([]integration.WorkspaceKind(nil), workspaceKinds...) }
+func WorkspaceKinds() []integration.WorkspaceKind {
+	return append([]integration.WorkspaceKind(nil), workspaceKinds...)
+}
 
 var workspaceKinds = []integration.WorkspaceKind{
 	{Key: schedulesKey, Group: domain.Group, Kind: "Schedule", Resource: "schedules"},
