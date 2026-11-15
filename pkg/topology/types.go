@@ -396,7 +396,7 @@ type BuildOptions struct {
 	IncludePVCs          bool     // Include PersistentVolumeClaim nodes
 	IncludeReplicaSets   bool     // Include ReplicaSet nodes (noisy intermediate objects)
 	IncludeGenericCRDs   bool     // Include CRDs with owner refs to topology nodes (default: true)
-	ForRelationshipCache bool     // Retain full template/Pod facts and skip the large-cluster guard for resource reads
+	ForRelationshipCache bool     // Retain full template/Pod facts and skip the large-cluster guard for internal graph consumers
 	ShowPolicyEffect     bool     // Evaluate NetworkPolicies and annotate edges with allow/block/unprotected
 	SummaryMode          bool     // Collapse the pod tier into per-workload/service counts (set by Build when estimate ≥ SummaryModeThreshold)
 }
@@ -417,9 +417,12 @@ func (opts BuildOptions) MatchesNamespaceFilter(ns string) bool {
 	return MatchesNamespace(opts.Namespaces, ns)
 }
 
-// RelationshipBuildOptions retains the complete cached graph for relationship
-// projection. A root's namespace is not a visibility boundary: controllers may
-// explicitly reference another namespace. Callers must authorize emitted refs.
+// RelationshipBuildOptions retains complete graph facts for graph-based
+// relationship projection. A root's namespace is not a visibility boundary:
+// controllers may explicitly reference another namespace. Authorize emitted refs.
+//
+// Deprecated: Use caller-scoped relation families for resource reads. Display
+// and other graph consumers should choose their own BuildOptions.
 func RelationshipBuildOptions() BuildOptions {
 	opts := DefaultBuildOptions()
 	opts.IncludeReplicaSets = true

@@ -15,8 +15,7 @@ import (
 )
 
 // requestAccess is what one request's user may read through Related
-// Resources, by the rules the per-user relationship graph applies
-// (relationshipTopologyForUser, applyClusterScopedTopologyRBAC): namespace
+// Resources and the relation families: namespace
 // access for namespaced kinds, with a list check per namespace for Secrets,
 // LimitRanges and Calico's policies in either API group, and a list check for
 // each cluster-scoped kind. Listing what an object owns enumerates names, so
@@ -125,9 +124,7 @@ func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string)
 }
 
 // checkedInNamespace reports the namespaced kinds authorized per namespace
-// beyond namespace access: Secrets and Calico's policies, as the relationship
-// graph strips them, and LimitRanges and Trivy's reports, as a resource GET
-// checks them.
+// beyond namespace access: Secrets, Calico policies, LimitRanges and Trivy reports.
 func checkedInNamespace(kind resourceid.GroupKind) bool {
 	switch kind.Group {
 	case "":
@@ -177,27 +174,4 @@ func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string,
 	access := func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }
 	rel, _, _ := k8s.AnswerRelationships(k8s.GetResourceCache(), obj, access, access, "")
 	return rel
-}
-
-// withholdDirectLookups drops what the user may not list from the
-// relationships read straight from the shared caches rather than the
-// user's graph: a StorageClass's volumes and claims, a claim's volume and
-// class, a volume's claim and class, and the Pods on a Node.
-func (s *Server) withholdDirectLookups(r *http.Request, rel *topology.Relationships) {
-	isClaim := func(c topology.ResourceRef) bool { return c.Kind == "PersistentVolumeClaim" && c.Group == "" }
-	if len(rel.Pods) > 0 || slices.ContainsFunc(rel.Consumers, isClaim) {
-		if namespaces := s.getUserNamespaces(r, nil); namespaces != nil {
-			rel.Pods = slices.DeleteFunc(rel.Pods, func(p topology.ResourceRef) bool { return !slices.Contains(namespaces, p.Namespace) })
-			rel.Consumers = slices.DeleteFunc(rel.Consumers, func(c topology.ResourceRef) bool { return isClaim(c) && !slices.Contains(namespaces, c.Namespace) })
-		}
-	}
-	isVolume := func(c topology.ResourceRef) bool { return c.Kind == "PersistentVolume" && c.Group == "" }
-	if (slices.ContainsFunc(rel.Consumers, isVolume) || slices.ContainsFunc(rel.StorageRefs, isVolume)) && !s.canRead(r, "", "persistentvolumes", "", "list") {
-		rel.Consumers = slices.DeleteFunc(rel.Consumers, isVolume)
-		rel.StorageRefs = slices.DeleteFunc(rel.StorageRefs, isVolume)
-	}
-	isClass := func(c topology.ResourceRef) bool { return c.Kind == "StorageClass" && c.Group == "storage.k8s.io" }
-	if slices.ContainsFunc(rel.ConfigRefs, isClass) && !s.canRead(r, "storage.k8s.io", "storageclasses", "", "list") {
-		rel.ConfigRefs = slices.DeleteFunc(rel.ConfigRefs, isClass)
-	}
 }

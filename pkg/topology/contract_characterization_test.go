@@ -517,7 +517,7 @@ type charCase struct {
 
 func charCases() []charCase {
 	return []charCase{
-		// The SSE broadcaster's relationship cache (internal/server/sse.go buildFullTopology).
+		// Frozen options of the former broadcast relationship graph.
 		{"sse-relationship-cache", charSSEOptions},
 		{"relationship-options", RelationshipBuildOptions},
 		{"resources-default", DefaultBuildOptions},

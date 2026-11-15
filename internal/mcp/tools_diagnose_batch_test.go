@@ -10,7 +10,6 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
-	"github.com/skyhook-io/radar/pkg/topology"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,12 +57,6 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 	if _, err := cache.ListBlocking(gvr, "alpha", 5*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	graphCalls := 0
-	SetRelationshipTopologySource(func() (*topology.Topology, *topology.RelationshipsIndex) {
-		graphCalls++
-		return &topology.Topology{}, nil
-	})
-	t.Cleanup(func() { SetRelationshipTopologySource(nil) })
 	input := diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Kind: "Workload", Namespace: "alpha", Name: "blocked"}}
 	result, _, err := handleDiagnose(context.Background(), nil, input)
 	if err != nil {
@@ -107,9 +100,6 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 	if len(jobBody.RelatedIssues) != 1 || jobBody.RelatedIssues[0].Reason != issues.ReasonKueueLocalQueueMissing || jobBody.Coverage == "" {
 		t.Fatalf("Job did not find its Workload finding: %s", renderContent(jobResult.Content))
 	}
-	if graphCalls != 0 {
-		t.Fatal("batch diagnosis requested a global relationship graph")
-	}
 	getResult, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: "Job", Namespace: "alpha", Name: "run"})
 	if err != nil {
 		t.Fatal(err)
@@ -127,9 +117,6 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 		}
 	}
 
-	if graphCalls != 0 {
-		t.Fatal("get_resource requested the retired relationship graph")
-	}
 	ctx := withTestUserPerms(t, "other-team", nil, []string{"other"})
 	if _, _, err := handleDiagnose(ctx, nil, input); err == nil {
 		t.Fatal("diagnose bypassed namespace access")

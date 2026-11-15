@@ -125,9 +125,8 @@ func (n namespacesAccess) CanRead(_ resourceid.GroupKind, namespace string) owne
 }
 func (n namespacesAccess) Namespaces() ([]string, bool) { return n, false }
 
-// userGraph is the graph relationshipTopologyForUser gives a user who may
-// read namespaces and every cluster-scoped kind: a copy without the nodes in
-// other namespaces.
+// userGraph reproduces the former per-user graph filter for parity comparisons:
+// the user may read the named namespaces and every cluster-scoped kind.
 func userGraph(shared *topology.Topology, namespaces []string) *topology.Topology {
 	copied := *shared
 	copied.Nodes = append([]topology.Node(nil), shared.Nodes...)
@@ -142,8 +141,8 @@ func userGraph(shared *topology.Topology, namespaces []string) *topology.Topolog
 	return &copied
 }
 
-// withholdNamespaces is withholdDirectLookups for that user: the direct
-// reads' Pods and claims outside their namespaces go.
+// withholdNamespaces reproduces the former direct-read namespace filter
+// for parity comparisons.
 func withholdNamespaces(rel *topology.Relationships, namespaces []string) {
 	rel.Pods = slices.DeleteFunc(rel.Pods, func(p topology.ResourceRef) bool { return !slices.Contains(namespaces, p.Namespace) })
 	rel.Consumers = slices.DeleteFunc(rel.Consumers, func(c topology.ResourceRef) bool {

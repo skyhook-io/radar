@@ -7,8 +7,8 @@ import (
 )
 
 // The benchmarks in this file record what the all-namespace relationship
-// graph costs today, on the same fixtures the cache-index layer that replaces
-// it is measured on. They change no behavior; docs/loadtest.md lists how to
+// graph cost before cutover, on the same fixtures the family path
+// is measured on. They change no behavior; docs/loadtest.md lists how to
 // run them and the baselines they produced.
 //
 // Fixtures: L is the field census (fieldShape: 191,504 objects, 29,455 Pods);
@@ -21,8 +21,8 @@ var relationshipFixtures = []struct {
 	{"XL", 10, 3},
 }
 
-// serverRelationshipOptions are the options the SSE broadcaster builds the
-// shared relationship graph with (buildFullTopology in internal/server).
+// serverRelationshipOptions preserves the former broadcast graph options
+// for baseline comparisons.
 func serverRelationshipOptions() BuildOptions {
 	opts := RelationshipBuildOptions()
 	opts.ViewMode = ViewModeResources
@@ -121,13 +121,12 @@ func drawerSubjects(p *mockProvider) []struct {
 	}
 }
 
-// BenchmarkDrawerRelationships is one drawer's Related Resources read from the
-// shared graph, two ways:
+// BenchmarkDrawerRelationships preserves the former graph-based drawer costs,
+// two ways:
 //   - shared-index: auth off, the graph's cached index answers the lookup;
-//   - per-user-copy: auth on, where the server copies the whole graph, strips
+//   - per-user-copy: auth on, copying the whole graph, stripping
 //     the nodes in namespaces the user may not list and rebuilds the index for
-//     that one request (relationshipTopologyForUser and cloneTopology in
-//     internal/server). The user here may list half the namespaces and every
+//     that one request. The user here may list half the namespaces and every
 //     cluster-scoped kind; a user denied some of those also has them stripped
 //     before the index is rebuilt.
 func BenchmarkDrawerRelationships(b *testing.B) {
