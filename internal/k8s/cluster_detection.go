@@ -23,24 +23,50 @@ var (
 )
 
 var (
-	cachedServerVersion string
-	serverVersionOnce   = new(sync.Once)
-	serverVersionMu     sync.Mutex
+	serverVersionMu       sync.Mutex
+	cachedServerVersion   string
+	serverVersionInFlight *serverVersionRead
 )
 
-// GetServerVersion returns the cached Kubernetes server version.
-// The version is fetched once and cached for the lifetime of the context.
+type serverVersionRead struct {
+	done    chan struct{}
+	version string
+}
+
+// GetServerVersion returns the Kubernetes server version, read once per
+// context. A failed read is not kept: the next call asks again, while callers
+// that arrive during a read wait for it instead of starting their own.
 func GetServerVersion() string {
 	serverVersionMu.Lock()
-	defer serverVersionMu.Unlock()
-	serverVersionOnce.Do(func() {
-		if client := GetClient(); client != nil {
-			if v, err := client.Discovery().ServerVersion(); err == nil {
-				cachedServerVersion = v.GitVersion
-			}
+	if cachedServerVersion != "" {
+		defer serverVersionMu.Unlock()
+		return cachedServerVersion
+	}
+	if read := serverVersionInFlight; read != nil {
+		serverVersionMu.Unlock()
+		<-read.done
+		return read.version
+	}
+	read := &serverVersionRead{done: make(chan struct{})}
+	serverVersionInFlight = read
+	serverVersionMu.Unlock()
+
+	if client := GetClient(); client != nil {
+		if v, err := client.Discovery().ServerVersion(); err == nil {
+			read.version = v.GitVersion
 		}
-	})
-	return cachedServerVersion
+	}
+
+	serverVersionMu.Lock()
+	// A context switch during the read invalidated it; don't cache the
+	// previous cluster's version.
+	if serverVersionInFlight == read {
+		serverVersionInFlight = nil
+		cachedServerVersion = read.version
+	}
+	serverVersionMu.Unlock()
+	close(read.done)
+	return read.version
 }
 
 // InvalidateServerVersionCache resets the cached server version.
@@ -49,7 +75,7 @@ func InvalidateServerVersionCache() {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
-	serverVersionOnce = new(sync.Once)
+	serverVersionInFlight = nil
 }
 
 // ClusterInfo contains detected cluster information
