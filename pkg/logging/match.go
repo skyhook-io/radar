@@ -30,11 +30,14 @@ type Rule struct {
 }
 
 type Flow struct {
-	Namespace      string
-	Name           string
-	Cluster        bool
-	LoggingRef     string
-	Match          []Rule
+	Namespace  string
+	Name       string
+	Cluster    bool
+	LoggingRef string
+	Match      []Rule
+	// MatchSet: spec.match is present, even empty. An empty list gives the
+	// operator a route with no match rules, which selects nothing.
+	MatchSet       bool
 	LegacySelector map[string]string // spec.selectors, used only when Match is empty
 	GlobalOutputs  []string          // spec.globalOutputRefs
 	LocalOutputs   []string          // spec.localOutputRefs
@@ -73,6 +76,9 @@ func InScope(flow Flow, podNamespace string) bool {
 func Selects(flow Flow, pod PodFacts) Decision {
 	if !InScope(flow, pod.Namespace) {
 		return Decision{Rule: -1}
+	}
+	if len(flow.Match) == 0 && flow.MatchSet {
+		return Decision{Rule: -1, Unmet: []string{"a match rule"}}
 	}
 	if len(flow.Match) == 0 {
 		missing := missingLabels(flow.LegacySelector, pod.Labels)

@@ -337,7 +337,7 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 			SelectedPods: logPodCount{Count: len(caught), LowerBound: podsPartial || partial || maybe},
 		}
 		for _, ref := range l.DefaultFlow.GlobalOutputs {
-			route.Destinations = append(route.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], ref))
+			route.Destinations = append(route.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], l.LoggingRef, ref))
 		}
 		provider.Routes = append(provider.Routes, route)
 	}

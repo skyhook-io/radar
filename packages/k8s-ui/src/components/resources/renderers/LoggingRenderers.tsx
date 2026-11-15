@@ -50,7 +50,7 @@ export function FluentbitAgentRenderer({ data }: Props) {
 
 // controlNamespaces is where the host found Loggings; a ClusterFlow outside
 // all of them is ignored by the operator. Undefined: the host couldn't tell.
-export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggingsUnreadable }: Props & { controlNamespaces?: string[]; loggingsUnreadable?: boolean }) {
+export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggingsUnreadable, missingOutputs }: Props & { controlNamespaces?: string[]; loggingsUnreadable?: boolean; missingOutputs?: string[] }) {
   const cluster = data.kind === 'ClusterFlow'
   const ns = data.metadata?.namespace ?? ''
   const rules = getLoggingFlowRules(data)
@@ -58,7 +58,7 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
   const globalRefs: string[] = data.spec?.globalOutputRefs ?? []
   const localRefs: string[] = data.spec?.localOutputRefs ?? []
   const deprecatedRefs: string[] = data.spec?.outputRefs ?? []
-  const invalid = getLoggingFlowInvalid(data)
+  const invalid = getLoggingFlowInvalid(data) ?? (missingOutputs?.length ? `it names ${missingOutputs.join(', ')}, which Radar didn't find for its Logging` : null)
   const notCounted = cluster && controlNamespaces !== undefined && !controlNamespaces.includes(ns)
   // ClusterOutputs live in the Logging's control namespace: a ClusterFlow's own,
   // or for a Flow the single known one (several Loggings: no link rather than a wrong one).
@@ -77,7 +77,7 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
     </Section>
     <Section title={`Selection rules (${rules.length})`} defaultExpanded>
       {rules.length === 0
-        ? <p className="text-sm text-theme-text-secondary">No rules: every pod in scope is selected.</p>
+        ? <p className="text-sm text-theme-text-secondary">{Array.isArray(data.spec?.match) ? 'Empty match: the operator selects no pod.' : 'No rules: every pod in scope is selected.'}</p>
         : <ol className="space-y-1 text-sm">
             {rules.map((r, i) => <li key={i} className="flex flex-wrap items-baseline gap-2">
               <Badge severity={r.exclude ? 'warning' : 'success'} size="sm">{r.exclude ? 'exclude' : 'select'}</Badge>

@@ -73,6 +73,7 @@ func seedLoggingFixture(t *testing.T, kinds []k8s.APIResource, podLabels map[str
 		lgObj("ClusterFlow", "team", "stray", map[string]any{}, nil),
 		lgObj("Flow", "team", "second-flow", map[string]any{"loggingRef": "second", "localOutputRefs": []any{"local"}}, nil),
 		lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{"url": "https://user:pw@loki.example/push", "password": map[string]any{"value": "s3cret"}}}, map[string]any{"active": true}),
+		lgObj("Output", "team", "local", map[string]any{"loggingRef": "second", "loki": map[string]any{}}, map[string]any{"active": false}),
 	}
 	var keep []runtime.Object
 	for _, o := range objs {
@@ -164,7 +165,7 @@ func TestLoggingPodShippingNotSelected(t *testing.T) {
 	resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
 	got, _ := getLoggingPod(t, resp)
 	// second-flow (empty match, Logging "second") selects it, but its only
-	// output doesn't exist, so nothing is delivered.
+	// output is inactive, so nothing is delivered.
 	if got.Shipped || got.Uncertain {
 		t.Fatalf("response = %+v", got)
 	}
@@ -327,20 +328,22 @@ func TestLoggingPodShippingNeedsAWorkingOutput(t *testing.T) {
 		objs               []runtime.Object
 		shipped, uncertain bool
 		delivers           *bool
+		ignored            bool
 	}{
-		{"working output", []runtime.Object{flow(active, "loki"), out(active)}, true, false, boolp(true)},
-		{"inactive flow", []runtime.Object{flow(inactive, "loki"), out(active)}, false, false, boolp(false)},
-		{"no outputs", []runtime.Object{flow(active)}, false, false, boolp(false)},
-		{"missing output", []runtime.Object{flow(active, "loki")}, false, false, boolp(false)},
-		{"inactive output", []runtime.Object{flow(active, "loki"), out(inactive)}, false, false, boolp(false)},
-		{"output state unknown", []runtime.Object{flow(active, "loki"), out(nil)}, false, true, nil},
+		{"working output", []runtime.Object{flow(active, "loki"), out(active)}, true, false, boolp(true), false},
+		{"inactive flow", []runtime.Object{flow(inactive, "loki"), out(active)}, false, false, boolp(false), false},
+		{"no outputs", []runtime.Object{flow(active)}, false, false, boolp(false), false},
+		// The operator rejects a Flow naming an output that doesn't exist.
+		{"missing output", []runtime.Object{flow(active, "loki")}, false, false, nil, true},
+		{"inactive output", []runtime.Object{flow(active, "loki"), out(inactive)}, false, false, boolp(false), false},
+		{"output state unknown", []runtime.Object{flow(active, "loki"), out(nil)}, false, true, nil, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			seedLoggingObjects(t, nil, c.objs...)
 			resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
 			got, _ := getLoggingPod(t, resp)
 			f := flowByName(got, "all")
-			if got.Shipped != c.shipped || got.Uncertain != c.uncertain || !f.Selected || !reflect.DeepEqual(f.Delivers, c.delivers) {
+			if got.Shipped != c.shipped || got.Uncertain != c.uncertain || f.Selected == c.ignored || f.Ignored != c.ignored || !reflect.DeepEqual(f.Delivers, c.delivers) {
 				t.Fatalf("shipped=%v uncertain=%v flow=%+v", got.Shipped, got.Uncertain, f)
 			}
 		})
@@ -478,5 +481,51 @@ func TestLoggingPodShippingInvalidFlowAndDeprecatedOutputRefs(t *testing.T) {
 	}
 	if got.Shipped {
 		t.Errorf("shipped = true")
+	}
+}
+
+// A Flow naming an output the operator can't resolve (missing, or with another
+// loggingRef) is rejected, but only when Radar read that output kind.
+func TestLoggingPodShippingMissingOutputRejectsFlow(t *testing.T) {
+	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil)
+	flow := lgObj("Flow", "team", "app", map[string]any{"localOutputRefs": []any{"out", "gone"}}, map[string]any{"active": true})
+	out := lgObj("Output", "team", "out", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true})
+	t.Run("outputs read", func(t *testing.T) {
+		seedLoggingWith(t, l, flow, out)
+		got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+		if f := flowByName(got, "app"); !f.Ignored || f.Selected || !strings.Contains(f.Invalid, "Output gone") || got.Shipped {
+			t.Fatalf("shipped=%v app=%+v", got.Shipped, f)
+		}
+	})
+	t.Run("output of another Logging", func(t *testing.T) {
+		other := lgObj("Output", "team", "gone", map[string]any{"loggingRef": "second", "loki": map[string]any{}}, map[string]any{"active": true})
+		seedLoggingWith(t, l, flow, out, other)
+		got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+		if f := flowByName(got, "app"); !f.Ignored || f.Invalid == "" {
+			t.Fatalf("app = %+v", f)
+		}
+	})
+	t.Run("outputs unread", func(t *testing.T) {
+		restoreFixtureCache(t)
+		k8s.ResetResourceCache()
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "app-1"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
+		if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+			t.Fatal(err)
+		}
+		seedCNPGWorkspace(t, loggingKinds("outputs"), l, flow)
+		got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+		if f := flowByName(got, "app"); f.Ignored || f.Invalid != "" || !f.Selected || f.Delivers != nil || !got.Uncertain {
+			t.Fatalf("uncertain=%v app=%+v", got.Uncertain, f)
+		}
+	})
+}
+
+// "match: []" leaves the operator a route with no match rules: nothing is selected.
+func TestLoggingPodShippingEmptyMatchSelectsNothing(t *testing.T) {
+	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil)
+	seedLoggingWith(t, l, lgObj("ClusterFlow", "logging-system", "empty", map[string]any{"match": []any{}}, nil))
+	got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+	if f := flowByName(got, "empty"); f.Selected || f.Uncertain {
+		t.Fatalf("empty = %+v", f)
 	}
 }
