@@ -251,9 +251,10 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	}
 	if m, err := apimeta.Accessor(obj); err == nil {
 		if meta := ManagedByFromMeta(m); meta != nil {
-			if n.allowedRef(*meta) {
-				rel.ManagedBy = []ResourceRef{*meta}
-			}
+			// Named by the subject's own labels and annotations, which the
+			// caller reads: a declared name, like a spec reference, shown
+			// whether or not the caller may read the manager itself.
+			rel.ManagedBy = []ResourceRef{*meta}
 		} else if top := n.topManager(session, ov, subject); top != nil {
 			rel.ManagedBy = []ResourceRef{*top}
 		} else {

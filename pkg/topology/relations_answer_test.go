@@ -317,8 +317,8 @@ func TestRelationsAnswerManagedByControllerTop(t *testing.T) {
 	}
 	s = newProjectionSession(t, pod, rs, deployment)
 	rel = projectionAnswer(t, s, pod, projectionAccess{denied: []string{"HelmRelease"}}, ownership.Unrestricted())
-	if len(rel.ManagedBy) != 0 {
-		t.Fatalf("hidden metadata manager: %+v", rel.ManagedBy)
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != "release" {
+		t.Fatalf("a manager the subject's own labels name: %+v", rel.ManagedBy)
 	}
 }
 
