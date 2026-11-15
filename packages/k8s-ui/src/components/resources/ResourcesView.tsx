@@ -8430,7 +8430,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
             const bgClass =
               sq.status === 'ready' ? 'bg-green-500' :
               sq.status === 'completed' ? 'bg-theme-text-tertiary/30 border border-theme-text-tertiary' :
-              sq.status === 'running' ? 'bg-yellow-500' :
+              sq.status === 'running' || sq.status === 'starting' ? 'bg-yellow-500' :
               sq.status === 'waiting' ? 'bg-red-500' :
               sq.status === 'terminated' ? 'bg-red-500' :
               'bg-theme-text-tertiary/30 border border-dashed border-theme-text-tertiary'
@@ -8438,7 +8438,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
             const dotColor =
               sq.status === 'ready' ? 'bg-green-500' :
               sq.status === 'completed' ? 'bg-theme-text-tertiary' :
-              sq.status === 'running' ? 'bg-yellow-500' :
+              sq.status === 'running' || sq.status === 'starting' ? 'bg-yellow-500' :
               sq.status === 'waiting' || sq.status === 'terminated' ? 'bg-red-500' :
               'bg-theme-text-tertiary'
             // Relative time helper
@@ -8458,7 +8458,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
               sq.status === 'ready' ? 'Running' :
               sq.status === 'completed' ? 'Completed' :
               sq.status === 'running' ? 'Running (not ready)' :
-              sq.status === 'waiting' ? 'Waiting' :
+              sq.status === 'starting' || sq.status === 'waiting' ? 'Waiting' :
               sq.status === 'terminated' ? 'Terminated' : 'Unknown'
             const uptime = sq.status === 'ready' || sq.status === 'running' ? timeAgo(sq.startedAt) : null
             const duration = (sq.status === 'completed' || sq.status === 'terminated') ? runDuration(sq.startedAt, sq.finishedAt) : null
