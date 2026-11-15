@@ -338,3 +338,53 @@ func TestAccessibleNamespacesFallBackToTheSyncedCacheWhenTheListFails(t *testing
 		t.Errorf("source = %q, want a complete list", source)
 	}
 }
+
+// The cache can lag a namespace created moments ago, so a list taken from it
+// serves the picker but doesn't let a tab drop its pick by it (accessChecked)
+// and doesn't end the retry (listFailed).
+func TestNamespaceScope_CacheFallbackKeepsPickAndRetries(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	fakeNamespaceAPIServer(t, http.StatusInternalServerError, http.StatusForbidden)
+	cacheClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "broken"}},
+	)
+	if err := k8s.InitTestResourceCache(cacheClient); err != nil {
+		t.Fatalf("init cache: %v", err)
+	}
+	t.Cleanup(func() {
+		if rc := k8s.GetResourceCache(); rc != nil {
+			rc.Stop()
+		}
+	})
+
+	srv := New(Config{DevMode: true})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(func() {
+		ts.Close()
+		srv.Stop()
+	})
+	req := httptest.NewRequest("GET", "/api/cluster/namespace-scope", nil)
+	srv.setActiveNamespaceForUser(req, []string{"broken"})
+
+	resp, err := http.Get(ts.URL + "/api/cluster/namespace-scope")
+	if err != nil {
+		t.Fatalf("GET namespace-scope: %v", err)
+	}
+	var body NamespaceScopeResponse
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || decodeErr != nil {
+		t.Fatalf("status = %d (decode: %v), want 200", resp.StatusCode, decodeErr)
+	}
+	if !slices.Equal(body.AccessibleNamespaces, []string{"alpha", "broken"}) {
+		t.Errorf("accessibleNamespaces = %v, want the cached [alpha broken]", body.AccessibleNamespaces)
+	}
+	if body.AccessChecked || !body.ListFailed {
+		t.Errorf("accessChecked=%v listFailed=%v, want false/true for a cache answer", body.AccessChecked, body.ListFailed)
+	}
+	if !slices.Equal(body.Actives, []string{"broken"}) {
+		t.Errorf("actives = %v, want [broken]", body.Actives)
+	}
+}

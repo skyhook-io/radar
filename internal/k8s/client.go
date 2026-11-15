@@ -1502,12 +1502,16 @@ const (
 	// NamespaceListRBAC: the LIST was denied and --rbac-namespaces names every
 	// namespace the install is granted, so the list is complete for this install.
 	NamespaceListRBAC NamespaceListSource = "rbac-namespaces"
+	// NamespaceListCache: the LIST failed and the synced namespace informer
+	// answered. Complete as of the cache, but it can lag a namespace created
+	// moments ago, so it must not prune a pick.
+	NamespaceListCache NamespaceListSource = "cache"
 )
 
 // Complete reports whether the list holds every namespace Radar can be
 // granted, rather than a best-effort short list.
 func (s NamespaceListSource) Complete() bool {
-	return s == NamespaceListCluster || s == NamespaceListRBAC
+	return s == NamespaceListCluster || s == NamespaceListRBAC || s == NamespaceListCache
 }
 
 // GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
@@ -1540,7 +1544,7 @@ func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, Namespace
 		// outlived a context switch must not borrow the new cluster's cache.
 		if names, ok := cachedNamespaceNames(); ok && GetClient() == client {
 			log.Printf("[k8s] GetAccessibleNamespaces: listing namespaces failed: %v (using the synced namespace cache)", err)
-			return names, NamespaceListCluster
+			return names, NamespaceListCache
 		}
 		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)

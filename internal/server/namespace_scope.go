@@ -63,9 +63,9 @@ type NamespaceScopeResponse struct {
 	CacheScoped          bool               `json:"cacheScoped"`
 	CacheScopeNamespace  string             `json:"cacheScopeNamespace,omitempty"`
 	NamespaceRescope     bool               `json:"namespaceRescope"`
-	// ListFailed: the namespace LIST failed for a reason other than RBAC and
-	// no synced cache stood in, so AccessibleNamespaces is only the seeds.
-	// The UI retries rather than treating the short list as the answer.
+	// ListFailed: the namespace LIST failed for a reason other than RBAC.
+	// AccessibleNamespaces is then the synced cache's list, or only the seeds
+	// when there is none; either way the UI asks again until a LIST succeeds.
 	ListFailed bool `json:"listFailed,omitempty"`
 }
 
@@ -505,7 +505,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// or access check says nothing about the picks, so it must not erase them.
 	// A nil list means no namespace could be enumerated at all (LIST denied
 	// with no fallback); like a failed lookup, it says nothing about a pick.
-	accessChecked := !discoveryFailed && source != k8s.NamespaceListFailed && namespaces != nil
+	accessChecked := !discoveryFailed && source != k8s.NamespaceListFailed && source != k8s.NamespaceListCache && namespaces != nil
 	if len(actives) > 0 && accessChecked {
 		survivors := intersectPicksWithAllowed(actives, namespaces)
 		if len(survivors) != len(actives) {
@@ -575,7 +575,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		CacheScoped:          k8s.ForceNamespaceScope,
 		CacheScopeNamespace:  cacheScopeNs,
 		NamespaceRescope:     k8s.ForceNamespaceScope && !s.authConfig.Enabled() && s.configManagement() != "operator",
-		ListFailed:           source == k8s.NamespaceListFailed,
+		ListFailed:           source == k8s.NamespaceListFailed || source == k8s.NamespaceListCache,
 	})
 }
 
