@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -32,6 +33,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -41,13 +43,21 @@ type subject struct {
 	obj k8sruntime.Object
 }
 
-// timing is one kind's answer times; the micros are p50, p95 and max.
 type timing struct {
-	Count    int       `json:"count"`
-	Before   []int64   `json:"-"`
-	After    []int64   `json:"-"`
-	BeforeUS []float64 `json:"beforeMicros"`
-	AfterUS  []float64 `json:"afterMicros"`
+	Count                               int       `json:"count"`
+	Before                              []int64   `json:"-"`
+	After                               []int64   `json:"-"`
+	BeforeUS                            []float64 `json:"beforeP50P95P99Micros"`
+	AfterUS                             []float64 `json:"afterP50P95P99Micros"`
+	BeforeMedianUS                      float64   `json:"beforeMedianMicros"`
+	AfterMedianUS                       float64   `json:"afterMedianMicros"`
+	BeforeAllocsPerAnswer               float64   `json:"beforeAllocsPerAnswer"`
+	AfterAllocsPerAnswer                float64   `json:"afterAllocsPerAnswer"`
+	BeforeBytesPerAnswer                float64   `json:"beforeBytesPerAnswer"`
+	AfterBytesPerAnswer                 float64   `json:"afterBytesPerAnswer"`
+	beforeAllocations, afterAllocations uint64
+	beforeBytes, afterBytes             uint64
+	beforeSamples, afterSamples         int
 }
 
 type diffKey struct {
@@ -65,22 +75,25 @@ type diffGroup struct {
 }
 
 type report struct {
-	Context        string             `json:"context"`
-	Started        time.Time          `json:"started"`
-	Objects        int                `json:"objects"`
-	Kinds          map[string]int     `json:"kinds"`
-	WatchedCRDs    int                `json:"watchedCRDKinds"`
-	GraphBuildMS   []float64          `json:"graphBuildMillis"`
-	GraphIndexMS   float64            `json:"graphIndexMillis"`
-	GraphNodes     int                `json:"graphNodes"`
-	GraphEdges     int                `json:"graphEdges"`
-	GraphHeldMiB   float64            `json:"graphHeldMiB"`
-	CacheHeapMiB   float64            `json:"cacheHeapMiB"`
-	Timings        map[string]*timing `json:"timings"`
-	SubjectsEqual  int                `json:"subjectsEqual"`
-	SubjectsDiffer int                `json:"subjectsDiffer"`
-	Diffs          []diffGroup        `json:"diffs"`
-	FamilyGaps     map[string]int     `json:"familyGaps"`
+	Context          string             `json:"context"`
+	Started          time.Time          `json:"started"`
+	Objects          int                `json:"objects"`
+	Kinds            map[string]int     `json:"kinds"`
+	WatchedCRDs      int                `json:"watchedCRDKinds"`
+	GraphBuildMS     []float64          `json:"graphBuildMillis"`
+	GraphIndexMS     float64            `json:"graphIndexMillis"`
+	GraphNodes       int                `json:"graphNodes"`
+	GraphEdges       int                `json:"graphEdges"`
+	GraphHeldMiB     float64            `json:"graphHeldMiB"`
+	CacheHeapMiB     float64            `json:"cacheHeapMiB"`
+	Timings          map[string]*timing `json:"timings"`
+	SubjectsEqual    int                `json:"subjectsEqual"`
+	SubjectsDiffer   int                `json:"subjectsDiffer"`
+	Diffs            []diffGroup        `json:"diffs"`
+	FamilyGaps       map[string]int     `json:"familyGaps"`
+	Repeats          int                `json:"repeats"`
+	Pooled           timing             `json:"pooledTimings"`
+	RestrictedPooled timing             `json:"restrictedPooledTimings"`
 
 	// A user who may read half the namespaces and everything cluster-scoped,
 	// asked about the objects they may read: today's per-user graph copy
@@ -91,9 +104,14 @@ type report struct {
 	RestrictedDiffer     int                `json:"restrictedDiffer"`
 	RestrictedDiffs      []diffGroup        `json:"restrictedDiffs"`
 
-	ManagedBy            map[string]int      `json:"managedBy"`
-	Examples             map[string][]string `json:"managedByExamples"`
-	ManagedByUnexplained int                 `json:"managedByUnexplained"`
+	ManagedBy                      map[string]int      `json:"managedBy"`
+	Examples                       map[string][]string `json:"managedByExamples"`
+	ManagedByUnexplained           int                 `json:"managedByUnexplained"`
+	RestrictedManagedBy            map[string]int      `json:"restrictedManagedBy"`
+	RestrictedManagedByExamples    map[string][]string `json:"restrictedManagedByExamples"`
+	RestrictedManagedByUnexplained int                 `json:"restrictedManagedByUnexplained"`
+	TimingMethod                   string              `json:"timingMethod"`
+	AllocationMethod               string              `json:"allocationMethod"`
 }
 
 // namespacesAccess may read the namespaces it lists and anything
@@ -135,18 +153,35 @@ func withholdNamespaces(rel *topology.Relationships, namespaces []string) {
 }
 
 func main() {
+	exitCode := 0
+	defer func() {
+		if exitCode != 0 {
+			os.Exit(exitCode)
+		}
+	}()
+
 	contextName := flag.String("context", "", "kubeconfig context to read")
 	out := flag.String("out", "", "write the JSON report here")
 	perKind := flag.Int("max-per-kind", 0, "answer at most this many objects of each kind (0: all)")
 	only := flag.String("only", "", "answer only objects of these kinds, comma-separated (Kind or Kind.group)")
 	cpuprofile := flag.String("cpuprofile", "", "write a CPU profile of the answers (both ways) here")
 	explain := flag.String("explain", "", "print both answers for the subject with this resource key (group|Kind|namespace|name)")
+	repeats := flag.Int("repeats", 5, "time each subject this many times in each separate answer pass")
 	flag.Parse()
+	if *repeats < 1 {
+		log.Fatal("--repeats must be positive")
+	}
 	if *contextName == "" {
 		log.Fatal("--context is required")
 	}
 	log.SetFlags(log.Ltime)
 	rep := report{Context: *contextName, Started: time.Now(), Kinds: map[string]int{}, Timings: map[string]*timing{}, FamilyGaps: map[string]int{}, RestrictedTimings: map[string]*timing{}, ManagedBy: map[string]int{}, Examples: map[string][]string{}}
+
+	rep.Repeats = *repeats
+	rep.RestrictedManagedBy = map[string]int{}
+	rep.RestrictedManagedByExamples = map[string][]string{}
+	rep.TimingMethod = "Per-kind: median of per-subject medians; pooled: all repeated samples, nearest-rank p50/p95/p99; separate passes with GC between them"
+	rep.AllocationMethod = "Process-wide MemStats Mallocs and TotalAlloc deltas per answer, averaged over repeats; includes concurrent informer/background allocations"
 
 	kubeconfig := cmp.Or(os.Getenv("KUBECONFIG"), filepath.Join(homedir.HomeDir(), ".kube", "config"))
 	if err := k8s.Initialize(k8s.InitOptions{KubeconfigPath: kubeconfig, PreferredContext: k8s.ContextRef{Name: *contextName, SourceFile: kubeconfig, InFileName: *contextName}}); err != nil {
@@ -253,7 +288,7 @@ func main() {
 		half = append(half, allNamespaces[i])
 	}
 	rep.RestrictedNamespaces = len(half)
-	restricted := func(*ownership.Catalog) ownership.Access { return half }
+	restrictedAccess := func(*ownership.Catalog) ownership.Access { return half }
 	restrictedDiffs := map[diffKey]*diffGroup{}
 
 	if *cpuprofile != "" {
@@ -266,101 +301,98 @@ func main() {
 		}
 		defer pprof.StopCPUProfile()
 	}
+	beforeAnswer := func(restricted bool) func(subject) measuredAnswer {
+		return func(s subject) measuredAnswer {
+			graph, graphIndex, access := topo, index, unrestricted
+			if restricted {
+				graph, graphIndex, access = userGraph(topo, half), nil, restrictedAccess
+			}
+			rel := topology.GetRelationshipsWithObject(s.ref.Kind, s.ref.Namespace, s.ref.Name, s.obj, graph, provider, dp, graphIndex)
+			if rel == nil {
+				rel = &topology.Relationships{}
+			}
+			if restricted {
+				withholdNamespaces(rel, half)
+			}
+			if fetched, ok := k8s.OwnershipObservation(s.obj); ok {
+				owner, _ := meta.Accessor(s.obj)
+				k8s.AnswerOwnership(rel, fetched, owner, access)
+			}
+			return measuredAnswer{rel: rel}
+		}
+	}
+	afterAnswer := func(access func(*ownership.Catalog) ownership.Access) func(subject) measuredAnswer {
+		return func(s subject) measuredAnswer {
+			rel, coverage := k8s.AnswerRelationships(cache, s.obj, access, access, istioDomain)
+			if rel == nil {
+				log.Fatalf("family answer unavailable for %s", s.ref.Key())
+			}
+			return measuredAnswer{rel: rel, coverage: coverage}
+		}
+	}
+	runtime.GC()
+	before := measurePass(subjects, *repeats, rep.Timings, &rep.Pooled, false, beforeAnswer(false))
+	runtime.GC()
+	after := measurePass(subjects, *repeats, rep.Timings, &rep.Pooled, true, afterAnswer(unrestricted))
+	restrictedSubjects := slices.DeleteFunc(slices.Clone(subjects), func(s subject) bool { return s.ref.Namespace != "" && !slices.Contains(half, s.ref.Namespace) })
+	runtime.GC()
+	restrictedBefore := measurePass(restrictedSubjects, *repeats, rep.RestrictedTimings, &rep.RestrictedPooled, false, beforeAnswer(true))
+	runtime.GC()
+	restrictedAfter := measurePass(restrictedSubjects, *repeats, rep.RestrictedTimings, &rep.RestrictedPooled, true, afterAnswer(restrictedAccess))
 	diffs := map[diffKey]*diffGroup{}
 	for i, s := range subjects {
-		kind := s.ref.Kind
-		if s.ref.Group != "" {
-			kind += "." + s.ref.Group
-		}
+		kind := subjectKind(s)
 		rep.Kinds[kind]++
-		t := rep.Timings[kind]
-		if t == nil {
-			t = &timing{}
-			rep.Timings[kind] = t
-		}
-		t.Count++
-
-		fetched, observed := k8s.OwnershipObservation(s.obj)
-		owner, _ := meta.Accessor(s.obj)
-		start := time.Now()
-		before := topology.GetRelationshipsWithObject(s.ref.Kind, s.ref.Namespace, s.ref.Name, s.obj, topo, provider, dp, index)
-		if before == nil {
-			before = &topology.Relationships{}
-		}
-		if observed {
-			k8s.AnswerOwnership(before, fetched, owner, unrestricted)
-		}
-		t.Before = append(t.Before, time.Since(start).Nanoseconds())
-
-		start = time.Now()
-		after, coverage := k8s.AnswerRelationships(cache, s.obj, unrestricted, unrestricted, istioDomain)
-		t.After = append(t.After, time.Since(start).Nanoseconds())
-		if after == nil {
-			after = &topology.Relationships{}
-		}
-		for name, c := range coverage {
-			if len(c.NotChecked) > 0 {
+		for name, c := range after[i].coverage {
+			if !c.Complete() {
 				rep.FamilyGaps[name]++
 			}
 		}
 		if *explain != "" && s.ref.Key() == *explain {
-			b, _ := json.MarshalIndent(before, "", "  ")
-			a, _ := json.MarshalIndent(after, "", "  ")
+			b, _ := json.MarshalIndent(before[i].rel, "", "  ")
+			a, _ := json.MarshalIndent(after[i].rel, "", "  ")
 			fmt.Printf("BEFORE %s\n%s\nAFTER\n%s\n", s.ref.Key(), b, a)
 		}
-		outcome := managedByOutcome(cache, topo, ownership.Unrestricted(), s, before.ManagedBy, after.ManagedBy)
+		outcome := managedByOutcome(cache, topo, ownership.Unrestricted(), s, before[i].rel.ManagedBy, after[i].rel.ManagedBy)
 		if outcome != "" {
 			rep.ManagedBy[outcome]++
 			if outcome == "lost" {
 				rep.ManagedByUnexplained++
 			}
 			if outcome == "lost" || outcome == "lateral" || len(rep.Examples[outcome]) < 5 {
-				rep.Examples[outcome] = append(rep.Examples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), before.ManagedBy, after.ManagedBy))
+				rep.Examples[outcome] = append(rep.Examples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), before[i].rel.ManagedBy, after[i].rel.ManagedBy))
 			}
 		}
-		if compare(kind, s.ref, before, after, diffs) {
+		if compare(kind, s.ref, before[i].rel, after[i].rel, diffs) {
 			rep.SubjectsEqual++
 		} else {
 			rep.SubjectsDiffer++
 		}
-		if s.ref.Namespace == "" || slices.Contains(half, s.ref.Namespace) {
-			t := rep.RestrictedTimings[kind]
-			if t == nil {
-				t = &timing{}
-				rep.RestrictedTimings[kind] = t
+	}
+	for i, s := range restrictedSubjects {
+		outcome := managedByOutcome(cache, topo, half, s, restrictedBefore[i].rel.ManagedBy, restrictedAfter[i].rel.ManagedBy)
+		if outcome != "" {
+			rep.RestrictedManagedBy[outcome]++
+			if outcome == "lost" {
+				rep.RestrictedManagedByUnexplained++
 			}
-			t.Count++
-			start := time.Now()
-			before := topology.GetRelationshipsWithObject(s.ref.Kind, s.ref.Namespace, s.ref.Name, s.obj, userGraph(topo, half), provider, dp, nil)
-			if before == nil {
-				before = &topology.Relationships{}
-			}
-			withholdNamespaces(before, half)
-			if observed {
-				k8s.AnswerOwnership(before, fetched, owner, restricted)
-			}
-			t.Before = append(t.Before, time.Since(start).Nanoseconds())
-			start = time.Now()
-			after, _ := k8s.AnswerRelationships(cache, s.obj, restricted, restricted, istioDomain)
-			if after == nil {
-				after = &topology.Relationships{}
-			}
-			t.After = append(t.After, time.Since(start).Nanoseconds())
-			if compare(kind, s.ref, before, after, restrictedDiffs) {
-				rep.RestrictedEqual++
-			} else {
-				rep.RestrictedDiffer++
+			if outcome == "lost" || outcome == "lateral" || len(rep.RestrictedManagedByExamples[outcome]) < 5 {
+				rep.RestrictedManagedByExamples[outcome] = append(rep.RestrictedManagedByExamples[outcome], fmt.Sprintf("%s: before %v, after %v", s.ref.Key(), restrictedBefore[i].rel.ManagedBy, restrictedAfter[i].rel.ManagedBy))
 			}
 		}
-		if (i+1)%2000 == 0 {
-			log.Printf("%d/%d answered", i+1, len(subjects))
+		if compare(subjectKind(s), s.ref, restrictedBefore[i].rel, restrictedAfter[i].rel, restrictedDiffs) {
+			rep.RestrictedEqual++
+		} else {
+			rep.RestrictedDiffer++
 		}
 	}
 	for _, ts := range []map[string]*timing{rep.Timings, rep.RestrictedTimings} {
 		for _, t := range ts {
-			t.BeforeUS, t.AfterUS = percentiles(t.Before), percentiles(t.After)
+			t.finish()
 		}
 	}
+	rep.Pooled.finish()
+	rep.RestrictedPooled.finish()
 	for _, g := range restrictedDiffs {
 		rep.RestrictedDiffs = append(rep.RestrictedDiffs, *g)
 	}
@@ -378,6 +410,11 @@ func main() {
 		}
 	}
 	fmt.Printf("%s: %d objects, %d equal, %d differ, %d diff groups; restricted user (%d of %d namespaces): %d equal, %d differ, %d groups\n", rep.Context, rep.Objects, rep.SubjectsEqual, rep.SubjectsDiffer, len(rep.Diffs), len(half), len(allNamespaces), rep.RestrictedEqual, rep.RestrictedDiffer, len(rep.RestrictedDiffs))
+	fmt.Printf("pooled p50/p95/p99 (µs): before %v, after %v; unexplained ManagedBy losses: %d unrestricted, %d restricted\n", rep.Pooled.BeforeUS, rep.Pooled.AfterUS, rep.ManagedByUnexplained, rep.RestrictedManagedByUnexplained)
+	if rep.ManagedByUnexplained+rep.RestrictedManagedByUnexplained > 0 {
+		exitCode = 1
+	}
+
 }
 
 func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access ownership.Access, subject subject, before, after []topology.ResourceRef) string {
@@ -471,15 +508,97 @@ func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access
 	return "lateral"
 }
 
-// percentiles are the p50, p95 and max of ns, in microseconds.
+type measuredAnswer struct {
+	rel      *topology.Relationships
+	coverage map[string]relations.Coverage
+}
+
+func subjectKind(s subject) string {
+	if s.ref.Group != "" {
+		return s.ref.Kind + "." + s.ref.Group
+	}
+	return s.ref.Kind
+}
+
+func measurePass(subjects []subject, repeats int, timings map[string]*timing, pooled *timing, after bool, answer func(subject) measuredAnswer) []measuredAnswer {
+	out := make([]measuredAnswer, len(subjects))
+	for i, s := range subjects {
+		kind := subjectKind(s)
+		t := timings[kind]
+		if t == nil {
+			t = &timing{}
+			timings[kind] = t
+		}
+		durations := make([]int64, 0, repeats)
+		for range repeats {
+			var beforeMem, afterMem runtime.MemStats
+			runtime.ReadMemStats(&beforeMem)
+			start := time.Now()
+			out[i] = answer(s)
+			elapsed := time.Since(start).Nanoseconds()
+			runtime.ReadMemStats(&afterMem)
+			durations = append(durations, elapsed)
+			for _, dst := range []*timing{t, pooled} {
+				if after {
+					dst.afterAllocations += afterMem.Mallocs - beforeMem.Mallocs
+					dst.afterBytes += afterMem.TotalAlloc - beforeMem.TotalAlloc
+					dst.afterSamples++
+				} else {
+					dst.beforeAllocations += afterMem.Mallocs - beforeMem.Mallocs
+					dst.beforeBytes += afterMem.TotalAlloc - beforeMem.TotalAlloc
+					dst.beforeSamples++
+				}
+			}
+		}
+		if after {
+			t.After = append(t.After, median(durations))
+			pooled.After = append(pooled.After, durations...)
+		} else {
+			t.Count++
+			pooled.Count++
+			t.Before = append(t.Before, median(durations))
+			pooled.Before = append(pooled.Before, durations...)
+		}
+		if (i+1)%2000 == 0 {
+			log.Printf("pass after=%v: %d/%d subjects", after, i+1, len(subjects))
+		}
+	}
+	return out
+}
+
+func (t *timing) finish() {
+	t.BeforeUS, t.AfterUS = percentiles(t.Before), percentiles(t.After)
+	t.BeforeMedianUS, t.AfterMedianUS = float64(median(t.Before))/1000, float64(median(t.After))/1000
+	if t.beforeSamples > 0 {
+		t.BeforeAllocsPerAnswer = float64(t.beforeAllocations) / float64(t.beforeSamples)
+		t.BeforeBytesPerAnswer = float64(t.beforeBytes) / float64(t.beforeSamples)
+	}
+	if t.afterSamples > 0 {
+		t.AfterAllocsPerAnswer = float64(t.afterAllocations) / float64(t.afterSamples)
+		t.AfterBytesPerAnswer = float64(t.afterBytes) / float64(t.afterSamples)
+	}
+}
+
+func median(ns []int64) int64 {
+	if len(ns) == 0 {
+		return 0
+	}
+	s := slices.Sorted(slices.Values(ns))
+	mid := len(s) / 2
+	if len(s)%2 == 0 {
+		return s[mid-1] + (s[mid]-s[mid-1])/2
+	}
+	return s[mid]
+}
+
+// percentiles uses nearest ranks for pooled or per-subject-median samples.
 func percentiles(ns []int64) []float64 {
 	if len(ns) == 0 {
 		return nil
 	}
-	s := slices.Clone(ns)
-	slices.Sort(s)
-	at := func(p float64) float64 { return float64(s[min(len(s)-1, int(p*float64(len(s))))]) / 1000 }
-	return []float64{at(0.5), at(0.95), float64(s[len(s)-1]) / 1000}
+	s := slices.Sorted(slices.Values(ns))
+	at := func(p float64) float64 { return float64(s[max(0, int(math.Ceil(p*float64(len(s))))-1)]) / 1000 }
+	return []float64{at(.50), at(.95), at(.99)}
 }
 
 // compare records every field where before and after name different objects
@@ -562,7 +681,7 @@ func refSet(v reflect.Value) sets.Set[string] {
 				add(r)
 			}
 			out.Insert("stop:" + x.Stop)
-			out.Insert("reason:" + x.Reason)
+			out.Insert("reason:" + string(x.Reason))
 		}
 	default:
 		data, err := json.Marshal(v.Interface())
