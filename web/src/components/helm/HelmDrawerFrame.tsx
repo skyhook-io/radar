@@ -84,7 +84,7 @@ export function HelmDrawerFrame({ onClose, isOpen, rightInset, children }: HelmD
         TRANSITION_DRAWER,
         isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
       )}
-      style={{ width: renderedDrawerWidth, top: HEADER_HEIGHT, right: rightInset, height: `calc(100vh - ${HEADER_HEIGHT}px - ${dockInset}px)` }}
+      style={{ width: renderedDrawerWidth, top: `calc(${HEADER_HEIGHT}px + var(--radar-titlebar-h, 0px))`, right: rightInset, height: `calc(100vh - var(--radar-titlebar-h, 0px) - ${HEADER_HEIGHT}px - ${dockInset}px)` }}
     >
       {/* Resize handle */}
       <div

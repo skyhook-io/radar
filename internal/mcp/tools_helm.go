@@ -202,7 +202,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 
 	user := userFromContext(ctx)
-	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user)
+	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, user, mcpHelmObjectScope(ctx, ""))
 	if helm.ReleaseReadDeniedForCaller(err) {
 		observed, why := observedHelmReleaseResult(ctx, input)
 		if observed != nil {
@@ -240,11 +240,17 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if detail.HealthSummary != "" {
 		result["healthSummary"] = detail.HealthSummary
 	}
+	if detail.StatusUnreadCount > 0 {
+		result["statusUnreadCount"] = detail.StatusUnreadCount
+	}
 	if detail.LastOperation != nil {
 		result["lastOperation"] = detail.LastOperation
 	}
 	if detail.OperationInsight != nil {
 		result["operationInsight"] = detail.OperationInsight
+	}
+	if detail.ManagedByFlux {
+		result["managedByFlux"] = true
 	}
 	if detail.ManagedByFluxHelmRelease != "" {
 		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease

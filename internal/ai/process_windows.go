@@ -7,11 +7,14 @@ import (
 	"strconv"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/skyhook-io/radar/internal/desktopenv"
 )
 
 const windowsStillActive = 259
 
 func configureProcessLifecycle(cmd *exec.Cmd) {
+	desktopenv.HideConsoleWindow(cmd)
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil
@@ -22,6 +25,7 @@ func configureProcessLifecycle(cmd *exec.Cmd) {
 		// killing the direct process if taskkill is unavailable or loses a race
 		// with normal process exit.
 		killTree := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
+		desktopenv.HideConsoleWindow(killTree)
 		if err := killTree.Run(); err != nil {
 			_ = cmd.Process.Kill()
 		}

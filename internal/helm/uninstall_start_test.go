@@ -77,7 +77,7 @@ func TestUninstallStuckClockSurvivesFailedRetryInDetail(t *testing.T) {
 	if err := cfg.Releases.Create(rel); err != nil {
 		t.Fatal(err)
 	}
-	if detail, err := getReleaseWith(cfg, "", "default", "deleting"); err != nil || detail.LastOperation == nil {
+	if detail, err := getReleaseWith(cfg, "", "default", "deleting", scannedObjects{}); err != nil || detail.LastOperation == nil {
 		t.Fatalf("first detail = %#v, %v", detail, err)
 	}
 
@@ -85,7 +85,7 @@ func TestUninstallStuckClockSurvivesFailedRetryInDetail(t *testing.T) {
 	if err := cfg.Releases.Update(rel); err != nil {
 		t.Fatal(err)
 	}
-	detail, err := getReleaseWith(cfg, "", "default", "deleting")
+	detail, err := getReleaseWith(cfg, "", "default", "deleting", scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}

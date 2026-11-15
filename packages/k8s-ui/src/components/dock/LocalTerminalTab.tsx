@@ -7,9 +7,11 @@ import { RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboard'
 import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
+import { showApiError, showApiNotice } from '../ui/Toast'
 import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
 import { attachTerminalKeys } from './terminalKeys'
 import { useTerminalSearch } from './useTerminalSearch'
+import { useTerminalCopyOnSelect } from './terminalPreferences'
 import { TerminalSearchBar, TerminalSearchButton } from './TerminalSearchBar'
 import { toneTextClass } from '../ui/status-tone'
 
@@ -61,6 +63,7 @@ export function LocalTerminalTab({
   const connectAllowed = canConnect?.() !== false
   const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
   const search = useTerminalSearch(isActive)
+  const { getState: copyOnSelect } = useTerminalCopyOnSelect()
   const { attach: attachSearch, open: openSearch, restoreFocus } = search
 
   const handleCopy = useCallback(() => {
@@ -130,6 +133,9 @@ export function LocalTerminalTab({
     const disposeClipboard = setupTerminalClipboard(xterm, terminalRef.current, {
       confirmPaste,
       onSelectionChange: setHasSelection,
+      copyOnSelect,
+      onCopyError: () => showApiError('Could not copy the selection. Check clipboard access before pasting.'),
+      onCopyPending: () => showApiNotice('Selection not copied. Account information is unavailable.', 'Wait for it to load, or switch to another tab or window and back to retry.', 'warning'),
     })
     const detachSearch = attachSearch(xterm)
     attachTerminalKeys(xterm, { onFind: openSearch })
