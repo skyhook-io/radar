@@ -876,7 +876,7 @@ func degradedResourceFromEvents(root *unstructured.Unstructured, resolver Resolv
 // path's framing.
 func resourceHealthIssue(change Change, resolver Resolver) Issue {
 	if change.Missing {
-		action := "Review the diff in Resources and the sync policy before deciding whether to sync."
+		action := "Review the desired changes and sync policy before deciding whether to sync."
 		if change.Sync == "Synced" {
 			action = "Refresh the application to check its status."
 		}
@@ -2272,7 +2272,7 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazar
 		Scope:    ScopeOperation,
 		Reason:   "ManualDrift",
 		Message:  "Application is OutOfSync and auto-sync is disabled.",
-		Action:   "Review the diff in Resources and the sync policy before deciding whether to sync.",
+		Action:   "Review the desired changes and sync policy before deciding whether to sync.",
 	}
 	if syncHazard != "" {
 		issue.Action = syncHazard

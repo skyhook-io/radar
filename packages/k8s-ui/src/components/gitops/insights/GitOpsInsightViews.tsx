@@ -1345,7 +1345,7 @@ function explainChangeStatus(
     if (inFlight) return 'Live state differs from Git. A sync is in progress — wait for it to finish.'
     if (context?.rolledBack) return 'Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.'
     if (isAuto) return 'Live state differs from Git. Auto-sync should reconcile this within a few minutes; click Sync to force it.'
-    return 'Live state differs from Git. Review the diff and sync policy before deciding whether to sync.'
+    return 'Live state differs from Git. Review the desired changes and sync policy before deciding whether to sync.'
   }
   if (health === 'Missing' && parentFailed) return 'Resource was not created — see the operation error above for the cause.'
   if (health === 'Degraded') return 'Resource reports an unhealthy state. Open the resource for events and logs.'

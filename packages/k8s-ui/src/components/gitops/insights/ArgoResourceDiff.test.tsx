@@ -141,7 +141,7 @@ describe('GitOpsChangesView expanded Argo row', () => {
     const data = insight(false)
     data.summary.autoSyncMode = 'Manual'
     const html = renderToStaticMarkup(<GitOpsChangesView insight={data} />)
-    expect(html).toContain('Review the diff and sync policy before deciding whether to sync.')
+    expect(html).toContain('Review the desired changes and sync policy before deciding whether to sync.')
     expect(html).not.toContain('See the sync warning above')
   })
 

@@ -690,7 +690,7 @@ func TestDetectArgoAppProblems_ManualDriftGate(t *testing.T) {
 		if !d.OnsetAt.Equal(base) {
 			t.Errorf("OnsetAt = %v, want exact first observation %v", d.OnsetAt, base)
 		}
-		if d.Action != "Review the diff in Resources and the sync policy before deciding whether to sync." {
+		if d.Action != "Review the desired changes and sync policy before deciding whether to sync." {
 			t.Errorf("unexpected manual drift guidance: %s", d.Action)
 		}
 	})

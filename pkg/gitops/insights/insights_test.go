@@ -796,7 +796,7 @@ func TestManualDriftGuidanceDoesNotInferWhoInitiatesSync(t *testing.T) {
 				t.Fatal("auto-sync wire value changed")
 			}
 			issue := detectManualDriftWithoutAutoSync(root, "")
-			if issue == nil || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the diff in Resources and the sync policy before deciding whether to sync." {
+			if issue == nil || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the desired changes and sync policy before deciding whether to sync." {
 				t.Fatalf("unexpected guidance: %+v", issue)
 			}
 		})
@@ -958,7 +958,7 @@ func TestBuildIssuesArgoRollbackState(t *testing.T) {
 					t.Fatalf("cause = %q, want %q", issue.Cause, wantCause)
 				}
 			}
-			if tc.reason == "ManualDrift" && (issue.Severity != SeverityWarning || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the diff in Resources and the sync policy before deciding whether to sync.") {
+			if tc.reason == "ManualDrift" && (issue.Severity != SeverityWarning || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the desired changes and sync policy before deciding whether to sync.") {
 				t.Fatalf("manual drift changed: %+v", issue)
 			}
 		})

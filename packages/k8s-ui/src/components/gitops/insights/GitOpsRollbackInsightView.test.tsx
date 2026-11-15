@@ -43,11 +43,11 @@ describe('rollback insights', () => {
   it('explains that resource Sync can undo the rollback', () => {
     const html = renderToString(<GitOpsChangesView insight={insight(true)} />)
     expect(html).toContain('Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.')
-    expect(html).not.toContain('Review the diff and sync policy before deciding whether to sync.')
+    expect(html).not.toContain('Review the desired changes and sync policy before deciding whether to sync.')
   })
 
   it('asks for a review before deciding whether to sync ordinary drift', () => {
-    expect(renderToString(<GitOpsChangesView insight={insight(false)} />)).toContain('Live state differs from Git. Review the diff and sync policy before deciding whether to sync.')
+    expect(renderToString(<GitOpsChangesView insight={insight(false)} />)).toContain('Live state differs from Git. Review the desired changes and sync policy before deciding whether to sync.')
   })
 })
 
@@ -69,7 +69,7 @@ it('keeps Missing health explanations rollback-aware without a confirmed missing
   data.changes![0].health = 'Missing'
   const html = renderToString(<GitOpsChangesView insight={data} />)
   expect(html).toContain('Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.')
-  expect(html).not.toContain('Declared in Git but not present in the cluster. Review the diff and sync policy before deciding whether to sync.')
+  expect(html).not.toContain('Declared in Git but not present in the cluster. Review the desired changes and sync policy before deciding whether to sync.')
 })
 
 it('asks for refresh when reported Missing health conflicts with Synced', () => {
