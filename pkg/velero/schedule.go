@@ -242,14 +242,16 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 		return r
 	}
 	nextUTC := next.UTC()
-	r.NextRun, r.NextRunCertain = &nextUTC, r.Zone.Certain()
+	// An @every schedule's times do not depend on the zone.
+	timingCertain := r.Zone.Certain() || parsed.fixedDelay
+	r.NextRun, r.NextRunCertain = &nextUTC, timingCertain
 	r.Blocker = blockerOf(runs)
 
 	if !in.Now.After(next) {
 		r.State = StateOnSchedule
 		return r
 	}
-	if !r.Zone.Certain() {
+	if !timingCertain {
 		switch {
 		case in.Now.After(next.Add(uncertainMargin(r.Zone, parsed, anchor, loc))):
 			if r.Blocker != nil {

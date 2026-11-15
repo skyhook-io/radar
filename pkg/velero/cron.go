@@ -23,6 +23,9 @@ type parsedCron struct {
 	// zoned is set when the expression names its own zone (CRON_TZ= or TZ=);
 	// otherwise it runs in the Velero server's local zone.
 	zoned bool
+	// fixedDelay: an @every expression adds a duration to its anchor, so its
+	// times do not depend on any zone.
+	fixedDelay bool
 }
 
 // parseCron recovers from a parser panic the way Velero's controller does
@@ -42,7 +45,8 @@ func parseCron(expr string) (p parsedCron, err error) {
 		return parsedCron{}, err
 	}
 	trimmed := strings.TrimSpace(expr)
-	return parsedCron{sched: s, zoned: strings.HasPrefix(trimmed, "CRON_TZ=") || strings.HasPrefix(trimmed, "TZ=")}, nil
+	_, fixedDelay := s.(cron.ConstantDelaySchedule)
+	return parsedCron{sched: s, zoned: strings.HasPrefix(trimmed, "CRON_TZ=") || strings.HasPrefix(trimmed, "TZ="), fixedDelay: fixedDelay}, nil
 }
 
 // next is the first run strictly after t. Without its own zone the expression

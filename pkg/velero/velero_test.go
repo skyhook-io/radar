@@ -358,6 +358,18 @@ func TestReadLocation(t *testing.T) {
 	}
 }
 
+func TestEveryScheduleIsLateRegardlessOfZone(t *testing.T) {
+	s := schedule("hourly", "@every 1h", lastBackup(at("08:00")))
+	r := read(s, nil, ServerConfig{Source: ServerUnread}, at("12:00"))
+	if r.State != StateLate || !r.Attention || !r.NextRunCertain || r.MissedRuns != 3 {
+		t.Fatalf("got %s attention=%v certain=%v missed=%d", r.State, r.Attention, r.NextRunCertain, r.MissedRuns)
+	}
+	unread := ReadSchedule(ScheduleInput{Schedule: s, Server: ServerConfig{Source: ServerUnread}, Now: at("12:00")})
+	if unread.State != StateLateOrHeld {
+		t.Fatalf("with backups unread, got %s", unread.State)
+	}
+}
+
 func TestRunsRecreatedByBackupSyncKeepTheirRunTime(t *testing.T) {
 	started := func(at time.Time) func(map[string]any) {
 		return func(o map[string]any) { o["status"].(map[string]any)["startTimestamp"] = ts(at) }

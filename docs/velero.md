@@ -32,6 +32,8 @@ Both are listed under the **Velero** category in the Resources sidebar, above th
 | Validation interval | `spec.validationFrequency` (> 0; `0` disables); else the server's `--store-validation-frequency` | No overdue verdict |
 | Backups targeting a location | Each Backup's `spec.storageLocation`, which Velero fills when it first processes the backup | A backup without one is "not yet assigned", never counted under today's default |
 
+An `@every` schedule adds a fixed duration to its anchor, so its times are exact whatever the zone.
+
 Server configuration counts only when its effective value is known: a `TZ` from `envFrom`/`valueFrom` or an argument built from `$(VAR)` leaves it unknown, and during a rollout the previous template may still be running, so nothing is taken from it.
 
 ## Schedule states
