@@ -121,6 +121,9 @@ What each benchmark reports:
 - `BenchmarkConfigConsumers` (`pkg/relations`): what references a ConfigMap, and a Secret every Pod pulls with,
   answered from the cache by reading the namespace's Pods, ReplicaSets and Deployments. `typical` is the census's
   average namespace (68 Pods); `dense` holds 5,000 Pods, 5,000 ReplicaSets and 2,500 Deployments.
+- `BenchmarkNodePods` (`pkg/relations`): a Node's Pods (about 30), by reading every Pod as Radar does and by an
+  index of Pods by Node, which Radar doesn't keep; `BenchmarkIndexRelist`'s `with-owner-uid-and-node` prices
+  that index on each relist.
 
 Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 
@@ -138,6 +141,14 @@ Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 | Pod update with eight concurrent readers, without / with | 18.0 µs / 18.8 µs | |
 | Config consumers from the cache, typical namespace (ConfigMap / Secret) | 33 µs / 76 µs | |
 | Config consumers from the cache, dense namespace (ConfigMap / Secret, 500 listed) | 6 ms / 14 ms | |
+| A Node's Pods, reading every Pod | 10 ms, 19 MB | 34-40 ms, 63 MB |
+| A Node's Pods, with an index of Pods by Node | 14-27 µs | 15-18 µs |
+| Pod relist, owner-UID index plus an index by Node | 34 ms (+5 ms) | 161 ms (+57 ms) |
+
+Radar doesn't keep the index of Pods by Node: a Node's Pods are asked for rarely, and reading every Pod is what
+the relationship read does today, while the index would cost every relist. An index of a busy kind earns its
+keep only when its question is frequent; the Reflector index (`ReflectsIndex`) files only mirrors, so it holds
+next to nothing.
 
 The synthetic fixtures carry more references per Pod than most clusters, so the graph is larger than in a
 real process of the same shape. For a process-level number, run `go run ./cmd/testserver -census large-eks`

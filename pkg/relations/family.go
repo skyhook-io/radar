@@ -34,10 +34,23 @@ type Family struct {
 	// CrossNamespace: a declaration may name a namespaced target in another
 	// namespace, as a Gateway API route may name a Gateway.
 	CrossNamespace bool
+	// ReferrersIndex, when set, finds the sources that may name a target
+	// through a store index keyed by the target, in every namespace, instead
+	// of reading every source in scope: for a family whose sources are many
+	// and cross namespaces, as Pods naming their Node are. What each source
+	// found declares is still evaluated.
+	ReferrersIndex *ReferrersIndex
 	// Declared visits what obj declares, each with the path declaring it.
 	// It returns an error when part of obj couldn't be read, after visiting
 	// what could.
 	Declared func(obj runtime.Object, visit func(Declaration)) error
+}
+
+// ReferrersIndex is a store index the sources of a family keep, and the key
+// it files them under for a target.
+type ReferrersIndex struct {
+	Name string
+	Key  func(target resourceid.Ref) string
 }
 
 // Source is a kind that declares. Targets narrows the family's Targets to
@@ -292,7 +305,10 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	}
 	// A namespaced target's sources are in its namespace; a cluster-scoped
 	// one's, or a CrossNamespace family's, can be anywhere.
-	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace, &a.Coverage)
+	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace || f.ReferrersIndex != nil, &a.Coverage)
+	if f.ReferrersIndex != nil {
+		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject)}
+	}
 	for _, source := range f.Sources {
 		if !source.declares(subject.GroupKind()) {
 			continue

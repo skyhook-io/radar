@@ -27,8 +27,12 @@ func (s stores) Indexed(gk resourceid.GroupKind, index string, keys []string, _ 
 	if st == nil {
 		return r
 	}
+	byKey := func(key string) ([]any, error) { return st.ByIndex(index, key) }
+	if index == "" {
+		keys, byKey = []string{""}, func(string) ([]any, error) { return st.List(), nil }
+	}
 	for _, key := range keys {
-		items, _ := st.ByIndex(index, key)
+		items, _ := byKey(key)
 		for _, item := range items {
 			obj := item.(runtime.Object)
 			m, _ := apimeta.Accessor(obj)
@@ -38,12 +42,12 @@ func (s stores) Indexed(gk resourceid.GroupKind, index string, keys []string, _ 
 	return r
 }
 
+// Borrow and Object find every subject present: the benchmarks ask about
+// objects the stores' declarers name.
 func (stores) Borrow(resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
-	return nil, ownership.ObjectRead{State: ownership.Absent}
+	return nil, ownership.ObjectRead{State: ownership.Present}
 }
 
-// Object finds every subject present: the benchmark asks about objects the
-// namespace's declarers name.
 func (stores) Object(resourceid.Ref) ownership.ObjectRead {
 	return ownership.ObjectRead{State: ownership.Present}
 }

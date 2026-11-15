@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -161,7 +162,9 @@ type allNamespaces struct {
 }
 
 func (c allNamespaces) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {
-	if index != "" {
+	// Another index only narrows what the caller evaluates, so every object
+	// stands in for what it files under keys.
+	if index == cache.NamespaceIndex {
 		r := c.cluster.Indexed(gk, index, keys, scope)
 		r.Gaps = append(r.Gaps, c.gaps...)
 		return r
