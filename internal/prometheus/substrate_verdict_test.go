@@ -10,7 +10,8 @@ const (
 	verdictShort   = "< bool"
 	verdictAnyFree = `max(ate_workerpool_workers{`
 	verdictFree    = `ate_worker_state=~"idle|partial",ate_sandbox_class!="unknown"}))`
-	verdictTotal   = `ate_worker_state!="unschedulable",ate_sandbox_class!="unknown"}))`
+	verdictTotal   = `ate_worker_state=~"idle|partial|at_capacity",ate_sandbox_class!="unknown"}))`
+	verdictFresh   = "count(ate_actor_lifecycle_operation_duration_seconds_count{"
 )
 
 func okCharts(ids ...string) []SubstrateChart {
@@ -63,7 +64,7 @@ func TestSubstratePoolVerdictStates(t *testing.T) {
 
 // Short needs every point of the five minutes, and the condition now.
 func TestSubstrateShortRequiresAFullHold(t *testing.T) {
-	_, f := poolVerdict(t, nil, okCharts())
+	_, f := poolVerdict(t, []fakeRule{{verdictTotal, result(series(nil, 2))}}, okCharts())
 	for _, q := range f.queries {
 		if strings.Contains(q, verdictShort) {
 			if !strings.Contains(q, "count_over_time(") || !strings.Contains(q, ">= bool 6") || strings.Count(q, "< bool") != 3 {
@@ -111,7 +112,7 @@ func TestSubstratePoolVerdictFacts(t *testing.T) {
 		{ID: "resumeFailures", State: SubstrateChartEmpty},
 		{ID: "crashes", State: SubstrateChartDuplicateSources, Reason: "reported through more than one scrape job"},
 	}
-	v, f := poolVerdict(t, []fakeRule{{"histogram_quantile(0.95", result(series(nil, 0.8))}}, charts)
+	v, f := poolVerdict(t, []fakeRule{{"histogram_quantile(0.95", result(series(nil, 0.8))}, {verdictFresh, result(series(nil, 3))}}, charts)
 	if p95 := fact(v, "resumeP95"); p95.State != SubstrateFactOK || *p95.Value != 0.8 {
 		t.Fatalf("p95 = %+v", p95)
 	}
@@ -133,7 +134,7 @@ func TestSubstratePoolVerdictFacts(t *testing.T) {
 
 func nodeRun(f *fakeSubstrateProm) *substrateRun {
 	req := poolRequest(substrateNodeCharts())
-	req.sel = substrateNodeSelector(substrateSpelling{}, "worker-1")
+	req.base = func(sp substrateSpelling) string { return substrateNodeSelector(sp, "worker-1") }
 	return newSubstrateRun(context.Background(), f, unverifiedScope, req)
 }
 
@@ -143,6 +144,7 @@ func TestSubstrateNodeVerdict(t *testing.T) {
 	f := &fakeSubstrateProm{rules: []fakeRule{
 		{"max by (ate_snapshot_upload_overdue_band)", result(series(band("under_1m"), 0), series(band("1m_to_5m"), 2), series(band("over_15m"), 1))},
 		{"max(atelet_snapshot_undurable_age_max_seconds", result(series(nil, 420))},
+		{"count(atelet_snapshot_undurable_age_max_seconds{", result(series(nil, 1))},
 	}}
 	v := nodeRun(f).nodeVerdict(charts)
 	overdue := fact(v, "overdueUploads")
@@ -176,5 +178,37 @@ func TestSubstrateNodeVerdict(t *testing.T) {
 	refused := []SubstrateChart{{ID: "overdueUploads", State: SubstrateChartMismatch, Reason: "this cluster's identity labels do not appear on these series"}}
 	if v := nodeRun(&fakeSubstrateProm{}).nodeVerdict(refused); v.State != SubstrateVerdictUnknown || v.Reason != refused[0].Reason {
 		t.Fatalf("refused = %+v", v)
+	}
+}
+
+// A summary over the hour outlives the series it summarizes: once they stop,
+// the fact is unavailable, not the hour's stale number.
+func TestSubstrateRangeFactRequiresCurrentSeries(t *testing.T) {
+	v, _ := poolVerdict(t, []fakeRule{{"histogram_quantile(0.95", result(series(nil, 0.8))}}, okCharts("resumeTime"))
+	if p95 := fact(v, "resumeP95"); p95.State != SubstrateFactUnavailable || !strings.Contains(p95.Reason, "stopped reporting") {
+		t.Fatalf("p95 after the series stopped = %+v", p95)
+	}
+}
+
+// Without the controller's desired count the pool is still judged from the
+// API server's counts, and says the shortfall was not.
+func TestSubstratePoolVerdictWithoutDesiredWorkers(t *testing.T) {
+	v, _ := poolVerdict(t, []fakeRule{{verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 2))}, {verdictTotal, result(series(nil, 2))}}, okCharts())
+	if v.State != SubstrateVerdictServing || !strings.Contains(v.Reason, "desired worker count") {
+		t.Fatalf("verdict = %s %q, want serving qualified by the missing desired count", v.State, v.Reason)
+	}
+	if free := fact(v, "freeWorkers"); free.State != SubstrateFactOK || *free.Value != 2 || *free.Of != 2 {
+		t.Fatalf("free = %+v", free)
+	}
+}
+
+// A worker state this reading does not know could be capacity or not.
+func TestSubstratePoolVerdictUnknownWorkerState(t *testing.T) {
+	v, _ := poolVerdict(t, []fakeRule{
+		{`!~"idle|partial|at_capacity|unschedulable"`, result(series(map[string]string{"ate_worker_state": "draining"}, 1))},
+		{verdictTotal, result(series(nil, 2))},
+	}, okCharts())
+	if v.State != SubstrateVerdictUnknown || !strings.Contains(v.Reason, "draining") {
+		t.Fatalf("verdict = %s %q", v.State, v.Reason)
 	}
 }

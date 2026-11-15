@@ -17,12 +17,16 @@ export interface SubstrateChart {
   title: string
   unit: string
   population: string
+  /** The metrics read, in the spelling Prometheus holds them. */
   source: string
   seriesBy?: string
   state: SubstrateChartState
+  /** Why there are no series; on an ok chart, which named series has no data. */
   reason?: string
   isolation: { mode: 'configured' | 'verified' | 'unverified' | ''; labels?: Record<string, string>; note: string }
-  series: { labels: Record<string, string>; dataPoints: { timestamp: number; value: number }[] }[]
+  /** One display label per series, under `series`. A null value is a gap. */
+  series: { labels: Record<string, string>; dataPoints: { timestamp: number; value: number | null }[] }[]
+  /** Series beyond the first 12. */
   omitted?: number
   steps: number
   covered: number
@@ -31,36 +35,56 @@ export interface SubstrateChart {
 export type SubstrateVerdictState =
   /** Substrate's own capacity alert condition has held for five minutes. */
   | 'short'
+  /** No API replica sees a free actor slot. */
   | 'full'
+  /** Some worker has a free actor slot. Slots are counted by actors alone: an
+   *  actor can still fail to place for lack of CPU or memory. */
   | 'serving'
+  /** No schedulable worker of a known class. */
   | 'noWorkers'
   /** A node: some actor's snapshot upload is overdue. */
   | 'behind'
+  /** A node: no overdue upload is counted. Snapshots with no storage
+   *  destination are not counted, so this does not prove all are saved. */
   | 'current'
   | 'unknown'
 
+/**
+ * One number behind a verdict. resumeP95, resumeFailures and crashes summarize
+ * the requested range; freeWorkers, overdueUploads and oldestUnsaved read now.
+ */
 export interface SubstrateFact {
   id: string
+  /** Display text. */
   label: string
-  unit: string
+  unit: 'workers' | 'seconds' | 'percent' | 'count'
   /** ok has a value; empty means the series exist and recorded nothing here; unavailable says why. */
   state: 'ok' | 'empty' | 'unavailable'
   value?: number
+  /** Only on an ok freeWorkers: the schedulable workers of known classes it is out of. */
   of?: number
   reason?: string
+  /** Only on an ok overdueUploads: Substrate's band keys with actors in them, worst first. */
   parts?: { label: string; value: number }[]
 }
 
 export interface SubstrateVerdict {
   state: SubstrateVerdictState
+  /** Why the state is unknown, or what qualifies a known one (a shortfall that could not be judged). */
   reason?: string
   facts: SubstrateFact[]
 }
 
 export interface SubstrateHealth {
-  /** available · notFound (no Substrate series at all) · notOnNode · notAttributable · error (every chart failed) */
+  /**
+   * available: some chart has data or a refusal of its own; read each chart's
+   * state. notFound: no chart has series for this subject in the range, which
+   * does not say whether Substrate or the object exists. notOnNode,
+   * notAttributable: a node's atelet series. error: every chart failed.
+   */
   status: 'available' | 'notFound' | 'notOnNode' | 'notAttributable' | 'error'
   reason?: string
+  /** The range served: 1h when the request named an unknown one. */
   range: string
   /** Unix seconds. */
   start: number

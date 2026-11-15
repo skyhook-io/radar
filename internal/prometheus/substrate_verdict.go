@@ -2,8 +2,10 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -11,16 +13,21 @@ import (
 
 // A verdict answers the question the charts are opened for: does this pool
 // have workers to place actors on, and is this node's actor state safe in
-// storage. It is read now, and its facts over the request's range.
+// storage. The verdict and the capacity and snapshot facts read now; resume
+// p95, failed resumes and crashes summarize the request's range.
 
 const (
 	// SubstrateVerdictShort: Substrate's own SubstrateWorkerPoolCapacityNotDelivered
 	// alert condition has held for five minutes: fewer schedulable workers than
-	// the fewest desired.
+	// the fewest desired. It needs the controller's desired worker count.
 	SubstrateVerdictShort = "short"
-	// SubstrateVerdictFull: no API replica sees a free worker slot.
-	SubstrateVerdictFull      = "full"
-	SubstrateVerdictServing   = "serving"
+	// SubstrateVerdictFull: no API replica sees a free actor slot.
+	SubstrateVerdictFull = "full"
+	// SubstrateVerdictServing: some worker has a free actor slot. Slots are
+	// counted by actors alone; an actor can still fail to place for lack of
+	// CPU or memory, and such a placement names no pool.
+	SubstrateVerdictServing = "serving"
+	// SubstrateVerdictNoWorkers: no schedulable worker of a known class.
 	SubstrateVerdictNoWorkers = "noWorkers"
 	// SubstrateVerdictBehind: some actor's snapshot upload is overdue.
 	SubstrateVerdictBehind = "behind"
@@ -36,25 +43,35 @@ const (
 
 // SubstrateVerdict is the one-line reading of a pool or node.
 type SubstrateVerdict struct {
-	State  string          `json:"state"`
+	State string `json:"state"`
+	// Reason says why the state is unknown, or qualifies a known one: a pool
+	// whose shortfall Radar could not judge.
 	Reason string          `json:"reason,omitempty"`
 	Facts  []SubstrateFact `json:"facts"`
 }
 
 // SubstrateFact is one number behind a verdict. Value is set only when State
 // is ok; empty means the series exist and recorded nothing for this subject.
+// Label is display text.
 type SubstrateFact struct {
-	ID     string              `json:"id"`
-	Label  string              `json:"label"`
-	Unit   string              `json:"unit"`
-	State  string              `json:"state"`
-	Value  *float64            `json:"value,omitempty"`
-	Of     *float64            `json:"of,omitempty"`
-	Reason string              `json:"reason,omitempty"`
-	Parts  []SubstrateFactPart `json:"parts,omitempty"`
+	ID string `json:"id"`
+	// Label is display text.
+	Label string `json:"label"`
+	// Unit is workers, seconds, percent or count.
+	Unit  string   `json:"unit"`
+	State string   `json:"state"`
+	Value *float64 `json:"value,omitempty"`
+	// Of is the total Value is out of, set only on an ok freeWorkers: the
+	// schedulable workers of known classes, averaged across API replicas.
+	Of     *float64 `json:"of,omitempty"`
+	Reason string   `json:"reason,omitempty"`
+	// Parts breaks an ok overdueUploads down by upload_overdue_band, worst
+	// first, listing only bands with actors in them.
+	Parts []SubstrateFactPart `json:"parts,omitempty"`
 }
 
 type SubstrateFactPart struct {
+	// Label is Substrate's band key (1m_to_5m, 5m_to_15m, over_15m).
 	Label string  `json:"label"`
 	Value float64 `json:"value"`
 }
@@ -88,24 +105,36 @@ func unavailableFact(id, label, unit, reason string) SubstrateFact {
 
 func queryFailed(err error) string { return "Prometheus query failed: " + truncate(err.Error(), 200) }
 
-// chartFact reads one number over the request's range from the same series,
-// scope and checks as the chart it summarizes: a chart Radar refused to draw
-// leaves its fact unavailable for the same reason.
+// chartFact reads one number from the same series, scope and checks as the
+// chart it summarizes: a chart Radar refused to draw leaves its fact
+// unavailable for the same reason. build reads over x.window, the request's
+// range, or now.
 func (r *substrateRun) chartFact(chart SubstrateChart, def substrateChartDef, id, label, unit string, build func(x substrateExpr) string) SubstrateFact {
 	if chart.State != SubstrateChartOK && chart.State != SubstrateChartEmpty {
 		return unavailableFact(id, label, unit, chart.Reason)
 	}
+	const stopped = "Prometheus has no current value for this; the series stopped reporting"
 	check := r.check(def.families())
-	v, err := instantValue(r.ctx, r.q, build(r.expr(check.matchers, r.rangeWindow())))
+	x := r.expr(def.inst, check.matchers, r.rangeWindow())
+	v, err := instantValue(r.ctx, r.q, build(x))
 	switch {
 	case err != nil:
 		return unavailableFact(id, label, unit, queryFailed(err))
 	case v == nil && chart.State == SubstrateChartOK:
 		// The range has data and now has none: the series stopped, which says
 		// nothing about the value.
-		return unavailableFact(id, label, unit, "Prometheus has no current value for this; the series stopped reporting")
+		return unavailableFact(id, label, unit, stopped)
 	case v == nil:
 		return SubstrateFact{ID: id, Label: label, Unit: unit, State: SubstrateFactEmpty, Reason: def.emptyReason}
+	}
+	// A summary over the range still has a value after the series stopped,
+	// counting only the time before; say nothing rather than a stale number.
+	fresh, err := instantValue(r.ctx, r.q, "count("+x.vec(def.inst, def.inst.probeSuffix())+")")
+	switch {
+	case err != nil:
+		return unavailableFact(id, label, unit, queryFailed(err))
+	case fresh == nil:
+		return unavailableFact(id, label, unit, stopped)
 	}
 	return SubstrateFact{ID: id, Label: label, Unit: unit, State: SubstrateFactOK, Value: v}
 }
@@ -124,18 +153,11 @@ func chartDef(defs []substrateChartDef, id string) substrateChartDef {
 }
 
 // poolVerdict judges the pool's capacity now, in the order an operator acts
-// on it: short of workers, then full, then serving.
+// on it: short of workers, then no workers or full, then serving. Everything
+// but the shortfall reads the API server's worker counts alone; the shortfall
+// also needs the controller's desired count, which a setup may not collect.
 func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	defs := r.req.charts
-	check := r.check([]substrateInstrument{instWorkers, instDesired})
-	x := r.expr(check.matchers, "")
-	schedulable := []string{x.m("ate.worker.state", "!=", "unschedulable"), x.m("ate.sandbox.class", "!=", "unknown")}
-	free := []string{x.m("ate.worker.state", "=~", "idle|partial"), x.m("ate.sandbox.class", "!=", "unknown")}
-	// The counts the workers chart draws: averaged across API replicas.
-	averaged := func(extra []string) string {
-		return "sum(avg by (ate_worker_state, ate_sandbox_class) (" + collapseHA(x.norm(x.vec(instWorkers, "", extra...), "ate.worker.state", "ate.sandbox.class")) + "))"
-	}
-
 	v := &SubstrateVerdict{State: SubstrateVerdictUnknown}
 	freeFact := unavailableFact("freeWorkers", "Free workers", "workers", "")
 	defer func() {
@@ -151,60 +173,69 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 			}),
 		)
 	}()
-	if check.state != "" {
-		v.Reason, freeFact.Reason = check.reason, check.reason
-		return v
-	}
-
-	// Substrate's alert, for one pool: the most any replica reports
-	// schedulable is below the fewest desired over five minutes, held for
-	// five minutes. A maximum, so a lagging replica cannot raise it.
-	actual := "sum(max by (ate_worker_state, ate_sandbox_class) (" + x.norm(x.vec(instWorkers, "", schedulable...), "ate.worker.state", "ate.sandbox.class") + "))"
-	desired := "min(min_over_time(" + x.vec(instDesired, "") + "[5m]))"
-	// Held means true at every one-minute point of the last six minutes, all
-	// six present (the earliest is at least five minutes old), and true now:
-	// a minimum over whatever points exist would call one minute of history,
-	// or a recovery since the last point, five minutes short.
-	cond := "(" + actual + " < bool " + desired + ")"
-	short, err := instantValue(r.ctx, r.q, "min_over_time("+cond+"[6m:1m]) * (count_over_time("+cond+"[6m:1m]) >= bool 6) * "+cond)
-	if err != nil {
-		v.Reason, freeFact.Reason = queryFailed(err), queryFailed(err)
-		return v
-	}
-	const noCounts = "Substrate reported no worker counts for this pool in the last 5 minutes"
-	if short == nil {
-		v.Reason, freeFact.Reason = noCounts, noCounts
-		return v
-	}
-
-	total, err := instantValue(r.ctx, r.q, averaged(schedulable))
-	if err == nil && total != nil {
-		var freeNow *float64
-		if freeNow, err = instantValue(r.ctx, r.q, averaged(free)); err == nil {
-			if freeNow == nil {
-				zero := 0.0
-				freeNow = &zero
-			}
-			freeFact = SubstrateFact{ID: "freeWorkers", Label: "Free workers", Unit: "workers", State: SubstrateFactOK, Value: freeNow, Of: total}
+	unknown := func(reason string) *SubstrateVerdict {
+		v.Reason = reason
+		if freeFact.State != SubstrateFactOK {
+			freeFact.Reason = reason
 		}
+		return v
 	}
-	if err != nil {
-		freeFact.Reason = queryFailed(err)
-	} else if total == nil {
-		freeFact.Reason = noCounts
+	check := r.check([]substrateInstrument{instWorkers})
+	if check.state != "" {
+		return unknown(check.reason)
+	}
+	x := r.expr(instWorkers, check.matchers, "")
+	// Only the states this reading knows count as capacity; a state Substrate
+	// adds later could mean either.
+	const knownStates = "idle|partial|at_capacity"
+	knownClass := x.m("ate.sandbox.class", "!=", "unknown")
+	schedulable := []string{x.m("ate.worker.state", "=~", knownStates), knownClass}
+	free := []string{x.m("ate.worker.state", "=~", "idle|partial"), knownClass}
+	// The counts the workers chart draws: averaged across API replicas.
+	averaged := func(extra []string) string {
+		return "sum(avg by (ate_worker_state, ate_sandbox_class) (" + collapseHA(x.norm(x.vec(instWorkers, "", extra...), "ate.worker.state", "ate.sandbox.class")) + "))"
 	}
 
+	other, err := strictQuerier{r.q}.Query(r.ctx, "max by (ate_worker_state) ("+x.norm(x.vec(instWorkers, "", x.m("ate.worker.state", "!~", knownStates+"|unschedulable")), "ate.worker.state")+") > 0")
+	if err != nil {
+		return unknown(queryFailed(err))
+	}
+	if len(other.Series) > 0 {
+		var states []string
+		for _, s := range other.Series {
+			states = append(states, s.Labels["ate_worker_state"])
+		}
+		sort.Strings(states)
+		return unknown("Substrate reports workers in a state Radar does not read (" + strings.Join(states, ", ") + "), so it cannot tell whether they have room")
+	}
+
+	const noCounts = "Substrate reported no worker counts for this pool in the last 5 minutes"
+	total, err := instantValue(r.ctx, r.q, averaged(schedulable))
 	switch {
-	case *short == 1:
+	case err != nil:
+		return unknown(queryFailed(err))
+	case total == nil:
+		return unknown(noCounts)
+	}
+	freeNow, err := instantValue(r.ctx, r.q, averaged(free))
+	if err != nil {
+		return unknown(queryFailed(err))
+	}
+	if freeNow == nil {
+		zero := 0.0
+		freeNow = &zero
+	}
+	freeFact = SubstrateFact{ID: "freeWorkers", Label: "Free workers", Unit: "workers", State: SubstrateFactOK, Value: freeNow, Of: total}
+
+	short, err := r.poolShort()
+	switch {
+	case err != nil:
+		v.Reason = err.Error()
+	case short:
 		v.State = SubstrateVerdictShort
 		return v
-	case err != nil:
-		v.Reason = queryFailed(err)
-		return v
-	case total == nil:
-		v.Reason = noCounts
-		return v
-	case *total == 0:
+	}
+	if *total == 0 {
 		v.State = SubstrateVerdictNoWorkers
 		return v
 	}
@@ -213,13 +244,46 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	anyFree, err := instantValue(r.ctx, r.q, "max("+x.vec(instWorkers, "", free...)+")")
 	switch {
 	case err != nil:
-		v.Reason = queryFailed(err)
+		return unknown(queryFailed(err))
 	case anyFree == nil || *anyFree == 0:
 		v.State = SubstrateVerdictFull
 	default:
 		v.State = SubstrateVerdictServing
 	}
 	return v
+}
+
+// poolShort reports whether Substrate's capacity alert condition holds for
+// the pool. Its error says why the shortfall cannot be judged.
+func (r *substrateRun) poolShort() (bool, error) {
+	cannot := func(why string) error {
+		return errors.New("Radar cannot tell whether the pool is short of workers: " + why)
+	}
+	check := r.check([]substrateInstrument{instWorkers, instDesired})
+	if check.state != "" {
+		return false, cannot(check.reason)
+	}
+	xw, xd := r.expr(instWorkers, check.matchers, ""), r.expr(instDesired, check.matchers, "")
+	// Substrate's alert, for one pool: the most any replica reports
+	// schedulable is below the fewest desired over five minutes, held for
+	// five minutes. A maximum, so a lagging replica cannot raise it.
+	schedulable := []string{xw.m("ate.worker.state", "!=", "unschedulable"), xw.m("ate.sandbox.class", "!=", "unknown")}
+	actual := "sum(max by (ate_worker_state, ate_sandbox_class) (" + xw.norm(xw.vec(instWorkers, "", schedulable...), "ate.worker.state", "ate.sandbox.class") + "))"
+	desired := "min(min_over_time(" + xd.vec(instDesired, "") + "[5m]))"
+	// Held means true at every one-minute point of the last six minutes, all
+	// six present (the earliest is at least five minutes old), and true now:
+	// a minimum over whatever points exist would call one minute of history,
+	// or a recovery since the last point, five minutes short.
+	cond := "(" + actual + " < bool " + desired + ")"
+	short, err := instantValue(r.ctx, r.q, "min_over_time("+cond+"[6m:1m]) * (count_over_time("+cond+"[6m:1m]) >= bool 6) * "+cond)
+	switch {
+	case err != nil:
+		return false, cannot(queryFailed(err))
+	case short == nil:
+		// The worker counts are there (poolVerdict read them), so the desired count is not.
+		return false, cannot("Substrate's controller reported no desired worker count for it in the last 5 minutes. Substrate's bundled Prometheus does not collect the controller's metrics")
+	}
+	return *short == 1, nil
 }
 
 // nodeVerdict judges whether actor state on this node is reaching storage.
@@ -238,7 +302,7 @@ func (r *substrateRun) nodeVerdict(charts []SubstrateChart) *SubstrateVerdict {
 		return v
 	}
 	check := r.check([]substrateInstrument{instOverdue})
-	x := r.expr(check.matchers, "")
+	x := r.expr(instOverdue, check.matchers, "")
 	res, err := strictQuerier{r.q}.Query(r.ctx, "max by (ate_snapshot_upload_overdue_band) ("+x.norm(x.vec(instOverdue, ""), "ate.snapshot.upload_overdue_band")+")")
 	if err != nil {
 		v.Reason, overdue.Reason = queryFailed(err), queryFailed(err)

@@ -167,3 +167,53 @@ func TestSubstrateDottedQueries(t *testing.T) {
 		t.Fatalf("resumeTime source = %q", c.Source)
 	}
 }
+
+// The API server scraped under escaped names and the controller pushing dotted
+// names over OTLP: each is read in its own spelling, and the shortfall query
+// combines both.
+func TestSubstrateSpellingPerComponent(t *testing.T) {
+	names := []string{"ate_workerpool_workers", "ate_actor_crashes_total", "ate.workerpool.desired_workers", "ate.workerpool.ready_workers"}
+	base := func(sp substrateSpelling) string { return substratePoolSelector(sp, "agents", "pool") }
+	sps, err := resolveSubstrateSpellings(context.Background(), &fakeSubstrateProm{names: names}, unverifiedScope, substratePoolInstruments, base, time.Hour)
+	if err != nil || sps.of(instWorkers).dotted || !sps.of(instDesired).dotted || sps.of(instWorkers).ambiguous != "" || sps.of(instDesired).ambiguous != "" {
+		t.Fatalf("spellings = %+v %v", sps, err)
+	}
+
+	f := &fakeSubstrateProm{names: names, rules: []fakeRule{
+		{"count by (job)", result(series(map[string]string{"job": "ateapi"}, 1))},
+		{"sum by (ate_worker_state, ate_sandbox_class) (avg by", result(series(map[string]string{"ate_worker_state": "idle"}, 2))},
+		{verdictTotal, result(series(nil, 2))},
+	}}
+	end := time.Unix(10_000*60, 0)
+	resp := collectSubstratePool(context.Background(), f, unverifiedScope, "agents", "pool", "1h", end.Add(-time.Hour), end, time.Minute)
+	if resp.Status == SubstrateChartError {
+		t.Fatalf("status = %s %q", resp.Status, resp.Reason)
+	}
+	sawShort := false
+	for _, q := range f.queries {
+		if strings.Contains(q, "< bool") {
+			sawShort = strings.Contains(q, `ate_workerpool_workers{ate_workerpool_namespace="agents"`) && strings.Contains(q, `{"ate.workerpool.desired_workers","ate.workerpool.namespace"="agents"`)
+			break
+		}
+	}
+	if !sawShort {
+		t.Fatalf("no shortfall query combining both spellings in %v", f.queries)
+	}
+	if c := chartByID(resp.Charts, "readiness"); !strings.Contains(c.Source, "ate.workerpool.desired_workers") {
+		t.Fatalf("readiness source = %q", c.Source)
+	}
+}
+
+// One component under two names refuses only the charts that read it.
+func TestSubstrateAmbiguousComponentRefusesOnlyItsCharts(t *testing.T) {
+	names := []string{"ate_workerpool_workers", "ate_workerpool_desired_workers", "ate.workerpool.desired_workers", "ate_workerpool_ready_workers"}
+	f := &fakeSubstrateProm{names: names, rules: []fakeRule{{"count by (job)", result(series(map[string]string{"job": "ateapi"}, 1))}, {"count(", result(series(nil, 1))}}}
+	end := time.Unix(10_000*60, 0)
+	resp := collectSubstratePool(context.Background(), f, unverifiedScope, "agents", "pool", "1h", end.Add(-time.Hour), end, time.Minute)
+	if c := chartByID(resp.Charts, "readiness"); c.State != SubstrateChartAmbiguous || !strings.Contains(c.Reason, "atecontroller") {
+		t.Fatalf("readiness = %s %q, want ambiguous", c.State, c.Reason)
+	}
+	if c := chartByID(resp.Charts, "workers"); c.State == SubstrateChartAmbiguous {
+		t.Fatalf("workers refused for the controller's ambiguity: %q", c.Reason)
+	}
+}

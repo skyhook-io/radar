@@ -101,7 +101,7 @@ describe('SubstrateHealthCharts', () => {
   })
   it('does not call an hour-old sample "now"', () => {
     health = { data: { ...base, status: 'available', charts: [chart({ series: [
-      { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 2 }, { timestamp: 4600, value: null as unknown as number }] },
+      { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 2 }, { timestamp: 4600, value: null }] },
       { labels: { series: 'partial (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 1 }] },
     ] })] } }
     expect(render(pool)).not.toMatch(/<\/span><span class="tabular-nums/)

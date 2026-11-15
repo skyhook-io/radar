@@ -20,8 +20,10 @@ import (
 //     the suffixes. GMP rejects dotted labels in a by clause, so aggregations
 //     copy them to their escaped names first (norm).
 //
-// One request reads one spelling throughout, so every selector, scope probe
-// and aggregation agrees on the label names.
+// Each Substrate component's series are read in one spelling, so every
+// selector, scope probe and aggregation over them agrees on the label names.
+// Components can differ: an API server scraped under escaped names alongside a
+// controller pushing dotted names over OTLP is a valid setup.
 
 type instrumentKind int
 
@@ -34,27 +36,35 @@ const (
 // substrateInstrument is one OTel instrument Substrate exports, as named in
 // its metric registry.
 type substrateInstrument struct {
-	name    string
-	kind    instrumentKind
-	seconds bool
+	name string
+	// component is the process that emits it (the registry's emitted_by).
+	component string
+	kind      instrumentKind
+	seconds   bool
 	// additive: a chart sums or averages it across emitters, so the same
 	// process observed through two scrape jobs would be counted twice. A chart
 	// that takes a maximum is unaffected by a duplicate.
 	additive bool
 }
 
+const (
+	componentAPI        = "ateapi"
+	componentController = "atecontroller"
+	componentAtelet     = "atelet"
+)
+
 var (
-	instWorkers    = substrateInstrument{name: "ate.workerpool.workers", additive: true}
-	instDesired    = substrateInstrument{name: "ate.workerpool.desired_workers"}
-	instReady      = substrateInstrument{name: "ate.workerpool.ready_workers"}
-	instLifecycle  = substrateInstrument{name: "ate.actor.lifecycle.operation.duration", kind: instrumentHistogram, seconds: true, additive: true}
-	instAssignment = substrateInstrument{name: "ate.scheduler.assignment.duration", kind: instrumentHistogram, seconds: true, additive: true}
-	instCrashes    = substrateInstrument{name: "ate.actor.crashes", kind: instrumentCounter, additive: true}
-	instUndurable  = substrateInstrument{name: "atelet.snapshot.undurable.age.max", seconds: true}
-	instOverdue    = substrateInstrument{name: "atelet.snapshot.upload.overdue.actors"}
-	instUpload     = substrateInstrument{name: "atelet.snapshot.upload.duration", kind: instrumentHistogram, seconds: true, additive: true}
-	instRestore    = substrateInstrument{name: "ate.actor.restore.duration", kind: instrumentHistogram, seconds: true, additive: true}
-	instCheckpoint = substrateInstrument{name: "ate.actor.checkpoint.duration", kind: instrumentHistogram, seconds: true, additive: true}
+	instWorkers    = substrateInstrument{name: "ate.workerpool.workers", component: componentAPI, additive: true}
+	instDesired    = substrateInstrument{name: "ate.workerpool.desired_workers", component: componentController}
+	instReady      = substrateInstrument{name: "ate.workerpool.ready_workers", component: componentController}
+	instLifecycle  = substrateInstrument{name: "ate.actor.lifecycle.operation.duration", component: componentAPI, kind: instrumentHistogram, seconds: true, additive: true}
+	instAssignment = substrateInstrument{name: "ate.scheduler.assignment.duration", component: componentAPI, kind: instrumentHistogram, seconds: true, additive: true}
+	instCrashes    = substrateInstrument{name: "ate.actor.crashes", component: componentAPI, kind: instrumentCounter, additive: true}
+	instUndurable  = substrateInstrument{name: "atelet.snapshot.undurable.age.max", component: componentAtelet, seconds: true}
+	instOverdue    = substrateInstrument{name: "atelet.snapshot.upload.overdue.actors", component: componentAtelet}
+	instUpload     = substrateInstrument{name: "atelet.snapshot.upload.duration", component: componentAtelet, kind: instrumentHistogram, seconds: true, additive: true}
+	instRestore    = substrateInstrument{name: "ate.actor.restore.duration", component: componentAtelet, kind: instrumentHistogram, seconds: true, additive: true}
+	instCheckpoint = substrateInstrument{name: "ate.actor.checkpoint.duration", component: componentAtelet, kind: instrumentHistogram, seconds: true, additive: true}
 )
 
 // stems are the names, before a histogram's _bucket or _count, Prometheus can
@@ -93,6 +103,23 @@ type substrateSpelling struct {
 	// stems: the stem found for each instrument; one not found reads its most
 	// likely stem, so "not found" names what was looked for.
 	stems map[string]string
+	// ambiguous: why this component's series cannot be read in one spelling.
+	ambiguous string
+}
+
+// substrateSpellings is the spelling of each component's series.
+type substrateSpellings map[string]substrateSpelling
+
+// of returns the spelling i's component uses; a component never resolved
+// reads the escaped default.
+func (s substrateSpellings) of(i substrateInstrument) substrateSpelling { return s[i.component] }
+
+func (s substrateSpellings) source(instruments []substrateInstrument) string {
+	names := make([]string, len(instruments))
+	for i, inst := range instruments {
+		names[i] = s.of(inst).stem(inst)
+	}
+	return strings.Join(names, ", ")
 }
 
 func (s substrateSpelling) stem(i substrateInstrument) string {
@@ -125,14 +152,6 @@ func (s substrateSpelling) match(attr, op, value string) string {
 		name = strconv.Quote(name)
 	}
 	return name + op + strconv.Quote(value)
-}
-
-func (s substrateSpelling) source(instruments []substrateInstrument) string {
-	names := make([]string, len(instruments))
-	for i, inst := range instruments {
-		names[i] = s.stem(inst)
-	}
-	return strings.Join(names, ", ")
 }
 
 func escapeOTelName(name string) string { return strings.ReplaceAll(name, ".", "_") }
@@ -201,7 +220,7 @@ func (x substrateExpr) rate(i substrateInstrument, part string, extra ...string)
 }
 
 func collapseHA(expr string) string {
-	return "max without (prometheus, prometheus_replica, replica) (" + expr + ")"
+	return "max without (prometheus, prometheus_replica, replica, __replica__) (" + expr + ")"
 }
 
 func (x substrateExpr) quantile(q string, i substrateInstrument, extra ...string) string {
@@ -223,26 +242,88 @@ type substrateNameLister interface {
 
 const substrateNameMatch = `{__name__=~"(ate|atelet)[._].+"}`
 
-// resolveSubstrateSpelling picks the spelling, and each instrument's name in
-// it, that this Prometheus holds over the window. A name list holding one
-// candidate per instrument, in one spelling, is taken as it is. Otherwise each
-// candidate is checked for series of this pool or node within this cluster's
-// scope: the one with series wins, and two with series are ambiguous, since
-// the same activity could be counted under either name.
-func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpelling, string, error) {
+// resolveSubstrateSpellings resolves each component's spelling on its own
+// (resolveSubstrateSpelling), from one name list. A component whose series
+// two names could hold is marked ambiguous, which refuses only the charts
+// that read it. A component Prometheus holds nothing for is named in the
+// spelling of one it holds, so "not found" names what this pipeline would
+// have produced.
+func resolveSubstrateSpellings(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpellings, error) {
+	held, err := substrateNamesHeld(ctx, q, window)
+	if err != nil || held == nil {
+		return substrateSpellings{}, err
+	}
+	var components []string
+	groups := map[string][]substrateInstrument{}
+	for _, inst := range instruments {
+		if _, ok := groups[inst.component]; !ok {
+			components = append(components, inst.component)
+		}
+		groups[inst.component] = append(groups[inst.component], inst)
+	}
+	sps := substrateSpellings{}
+	var unheld []string
+	fallback, haveFallback := substrateSpelling{}, false
+	for _, c := range components {
+		sp, found, ambiguous, err := resolveSpellingFrom(ctx, q, resolve, held, groups[c], base, window)
+		if err != nil {
+			return nil, err
+		}
+		sp.ambiguous = ambiguous
+		sps[c] = sp
+		switch {
+		case !found:
+			unheld = append(unheld, c)
+		case !haveFallback && ambiguous == "":
+			fallback, haveFallback = sp, true
+		}
+	}
+	if haveFallback {
+		for _, c := range unheld {
+			sps[c] = spellingFrom(fallback.dotted, nil, groups[c])
+		}
+	}
+	return sps, nil
+}
+
+// substrateNamesHeld is the set of Substrate metric names Prometheus holds
+// samples for over the window, or nil when q cannot list names.
+func substrateNamesHeld(ctx context.Context, q seriesQuerier, window time.Duration) (map[string]bool, error) {
 	lister, ok := q.(substrateNameLister)
 	if !ok {
-		return substrateSpelling{}, "", nil
+		return nil, nil
 	}
 	now := time.Now()
 	names, err := lister.MetricNames(ctx, []string{substrateNameMatch}, now.Add(-window), now)
 	if err != nil {
-		return substrateSpelling{}, "", err
+		return nil, err
 	}
 	held := make(map[string]bool, len(names))
 	for _, n := range names {
 		held[n] = true
 	}
+	return held, nil
+}
+
+// resolveSubstrateSpelling picks the spelling, and each instrument's name in
+// it, that this Prometheus holds over the window for one component's
+// instruments. A name list holding one candidate per instrument, in one
+// spelling, is taken as it is. Otherwise each candidate is checked for series
+// of this pool or node within this cluster's scope: the one with series wins,
+// and two with series are ambiguous, since the same activity could be counted
+// under either name.
+func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpelling, string, error) {
+	held, err := substrateNamesHeld(ctx, q, window)
+	if err != nil || held == nil {
+		return substrateSpelling{}, "", err
+	}
+	sp, _, ambiguous, err := resolveSpellingFrom(ctx, q, resolve, held, instruments, base, window)
+	return sp, ambiguous, err
+}
+
+// resolveSpellingFrom is resolveSubstrateSpelling over a fetched name list;
+// found reports whether the list holds any candidate name.
+func resolveSpellingFrom(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, held map[string]bool, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (sp substrateSpelling, found bool, ambiguous string, err error) {
 	// present: per spelling, per instrument, the candidate stems the name list holds.
 	present := func(dotted bool) map[string][]string {
 		out := map[string][]string{}
@@ -256,6 +337,7 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve subs
 		return out
 	}
 	escaped, dotted := present(false), present(true)
+	found = len(escaped) > 0 || len(dotted) > 0
 	unique := func(p map[string][]string) bool {
 		for _, stems := range p {
 			if len(stems) > 1 {
@@ -266,9 +348,9 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve subs
 	}
 	switch {
 	case len(dotted) == 0 && unique(escaped):
-		return spellingFrom(false, escaped, instruments), "", nil
+		return spellingFrom(false, escaped, instruments), found, "", nil
 	case len(escaped) == 0 && unique(dotted):
-		return spellingFrom(true, dotted, instruments), "", nil
+		return spellingFrom(true, dotted, instruments), found, "", nil
 	}
 
 	// live narrows each spelling's candidates to those with series for this
@@ -305,16 +387,16 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve subs
 	}
 	liveEscaped, err := live(false, escaped)
 	if err != nil {
-		return substrateSpelling{}, "", err
+		return substrateSpelling{}, found, "", err
 	}
 	liveDotted, err := live(true, dotted)
 	if err != nil {
-		return substrateSpelling{}, "", err
+		return substrateSpelling{}, found, "", err
 	}
-	const switched = "After a pipeline changes how it names metrics, this lasts until the range no longer spans the change"
+	const switched = "This clears once the range no longer spans a change in how the pipeline names metrics; if both keep arriving, the component is exported twice"
 	switch {
 	case len(liveEscaped) > 0 && len(liveDotted) > 0:
-		return substrateSpelling{}, "these series appear under both the underscore and the dotted (UTF-8) metric names in this range, so Radar cannot tell which holds the whole answer. " + switched, nil
+		return substrateSpelling{}, found, instruments[0].component + "'s series appear under both the underscore and the dotted (UTF-8) metric names in this range, so Radar cannot tell which holds the whole answer. " + switched, nil
 	}
 	isDotted, chosen, candidates := len(liveDotted) > 0 || (len(liveEscaped) == 0 && len(escaped) == 0), liveEscaped, escaped
 	if isDotted {
@@ -322,7 +404,7 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve subs
 	}
 	for _, inst := range instruments {
 		if stems := chosen[inst.name]; len(stems) > 1 {
-			return substrateSpelling{}, inst.name + " appears as both " + strings.Join(stems, " and ") + " for this in the range, so Radar cannot tell which holds the whole answer. " + switched, nil
+			return substrateSpelling{}, found, inst.name + " appears as both " + strings.Join(stems, " and ") + " for this in the range, so Radar cannot tell which holds the whole answer. " + switched, nil
 		}
 	}
 	// Instruments with no series here fall back to a name the list holds.
@@ -331,7 +413,7 @@ func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve subs
 			chosen[name] = stems[:1]
 		}
 	}
-	return spellingFrom(isDotted, chosen, instruments), "", nil
+	return spellingFrom(isDotted, chosen, instruments), found, "", nil
 }
 
 // spellingFrom builds a spelling from one stem found per instrument. An

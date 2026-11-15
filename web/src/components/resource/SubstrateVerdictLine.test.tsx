@@ -24,7 +24,7 @@ function withVerdict(verdict: SubstrateVerdict, status: SubstrateHealth['status'
   health = { data: { ...base, status, verdict } }
 }
 const render = (target: typeof pool | typeof node) => renderToStaticMarkup(<SubstrateVerdictLine target={target} onOpenMetrics={() => {}} />)
-const ok = (id: string, label: string, unit: string, value: number, extra: Partial<SubstrateFact> = {}): SubstrateFact => ({ id, label, unit, state: 'ok', value, ...extra })
+const ok = (id: string, label: string, unit: SubstrateFact['unit'], value: number, extra: Partial<SubstrateFact> = {}): SubstrateFact => ({ id, label, unit, state: 'ok', value, ...extra })
 
 describe('SubstrateVerdictLine', () => {
   it('flags a pool short of workers in amber and keeps its facts uncolored', () => {
@@ -37,13 +37,23 @@ describe('SubstrateVerdictLine', () => {
     expect(html).toContain('View metrics')
   })
 
-  it('reads full as neutral and serving as plain text', () => {
+  it('reads full as neutral and free slots as plain text, never as serving', () => {
     withVerdict({ state: 'full', facts: [] })
     expect(render(pool)).toContain('bg-theme-hover/50')
     withVerdict({ state: 'serving', facts: [] })
     const html = render(pool)
-    expect(html).toContain('Serving')
+    expect(html).toContain('Free slots')
+    expect(html).not.toContain('Serving')
     expect(html).not.toMatch(/bg-amber|bg-red|bg-emerald/)
+    expect(html).not.toContain('aria-label="Qualified"')
+  })
+
+  it('marks a verdict qualified by an unjudged shortfall or an unconfirmed cluster', () => {
+    withVerdict({ state: 'serving', reason: "Radar cannot tell whether the pool is short of workers: Substrate's controller reported no desired worker count", facts: [] })
+    expect(render(pool)).toContain('aria-label="Qualified"')
+    const unverified = { isolation: { mode: 'unverified' as const, note: "Radar couldn't confirm these Substrate series belong to this exact cluster" } }
+    health = { data: { ...base, status: 'available', verdict: { state: 'full', facts: [] }, charts: [{ id: 'workers', title: '', unit: 'workers', population: '', source: '', state: 'ok', series: [], steps: 0, covered: 0, ...unverified }] } }
+    expect(render(pool)).toContain('aria-label="Qualified"')
   })
 
   it('shows fractional replica averages as approximate, never rounded', () => {
@@ -79,7 +89,7 @@ describe('SubstrateVerdictLine', () => {
     health = { ...health, error: new Error('timeout') }
     const html = render(pool)
     expect(html).toContain('Unknown')
-    expect(html).not.toContain('Serving')
+    expect(html).not.toContain('Free slots')
     health = { data: health.data }
     connected = false
     expect(render(pool)).toBe('')

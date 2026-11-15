@@ -34,10 +34,14 @@ const (
 	SubstrateChartMismatch         = "mismatch"
 	SubstrateChartError            = "error"
 
-	// SubstrateNotFound: Prometheus holds none of the series the charts read.
+	// SubstrateNotFound: no chart has series for this pool or node in the
+	// range (a histogram without classic buckets counts as none). It does not
+	// say whether Substrate or the object exists.
 	SubstrateNotFound = "notFound"
 	// SubstrateNotOnNode: atelet series carry node labels, none of them this node's.
 	SubstrateNotOnNode = "notOnNode"
+	// SubstrateAvailable: some chart has data or a refusal of its own; each
+	// chart's state, and the verdict's, still has to be read.
 	SubstrateAvailable = "available"
 
 	substrateMaxSeries   = 12
@@ -50,22 +54,32 @@ type SubstrateChart struct {
 	Title string `json:"title"`
 	Unit  string `json:"unit"`
 	// Population says which observations the chart counts.
-	Population string          `json:"population"`
-	Source     string          `json:"source"`
-	SeriesBy   string          `json:"seriesBy,omitempty"`
-	State      string          `json:"state"`
-	Reason     string          `json:"reason,omitempty"`
-	Isolation  SeriesIsolation `json:"isolation"`
-	Series     []prom.Series   `json:"series"`
-	Omitted    int             `json:"omitted,omitempty"`
-	Steps      int             `json:"steps"`
-	Covered    int             `json:"covered"`
+	Population string `json:"population"`
+	// Source names the metrics read, in the spelling Prometheus holds them.
+	Source   string `json:"source"`
+	SeriesBy string `json:"seriesBy,omitempty"`
+	State    string `json:"state"`
+	// Reason says why a chart has no series; on an ok chart, which of its
+	// named series has no data.
+	Reason    string          `json:"reason,omitempty"`
+	Isolation SeriesIsolation `json:"isolation"`
+	// Series carry one display label, under the key series.
+	Series []prom.Series `json:"series"`
+	// Omitted counts the series beyond the first 12.
+	Omitted int `json:"omitted,omitempty"`
+	Steps   int `json:"steps"`
+	Covered int `json:"covered"`
 }
 
 // SubstrateHealthResponse is the curated Substrate chart set for one WorkerPool or Node.
 type SubstrateHealthResponse struct {
-	Status      string           `json:"status"`
-	Reason      string           `json:"reason,omitempty"`
+	// Status is available, notFound, notOnNode or notAttributable (a node),
+	// or error when every chart failed or was refused.
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+	// Range is the range served: one of parseTimeRange's names, 1h when the
+	// request named none or an unknown one. Start and End are aligned to the
+	// step, in Unix seconds.
 	Range       string           `json:"range"`
 	Start       int64            `json:"start"`
 	End         int64            `json:"end"`
@@ -237,14 +251,34 @@ type substrateScopeResolver func(ctx context.Context, probe scopeProbe) (string,
 // checkSubstrateFamilies resolves the cluster scope of the instruments one
 // chart reads, probed together so that two from different clusters are caught
 // even when no cluster label proves either, and refuses a summed or averaged
-// instrument reported through more than one scrape job.
-func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, sp substrateSpelling, families []substrateInstrument, sel string, window time.Duration, requireEach bool) substrateFamilyCheck {
-	extra := make([]string, 0, len(families)-1)
-	for _, f := range families[1:] {
-		extra = append(extra, sp.probe(f))
+// instrument reported through more than one scrape job. Each family selects
+// the subject (base) in its own component's spelling. scopeOnly resolves the
+// scope alone: the per-chart checks judge presence and duplicates within the
+// subject.
+func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, sps substrateSpellings, families []substrateInstrument, base func(substrateSpelling) string, window time.Duration, scopeOnly bool) substrateFamilyCheck {
+	for _, f := range families {
+		if ambiguous := sps.of(f).ambiguous; ambiguous != "" {
+			return substrateFamilyCheck{state: SubstrateChartAmbiguous, reason: ambiguous}
+		}
 	}
-	matchers, iso, err := resolve(ctx, scopeProbe{metric: sp.probe(families[0]), additionalMetrics: extra, selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true,
-		unverifiedNote: "Radar couldn't confirm these Substrate series belong to this exact cluster (no cluster label it could check)"})
+	probe := func(f substrateInstrument) string { return sps.of(f).probe(f) }
+	sel := func(f substrateInstrument) string { return base(sps.of(f)) }
+	p := scopeProbe{metric: probe(families[0]), selectors: []string{sel(families[0])}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true,
+		unverifiedNote: "Radar couldn't confirm these Substrate series belong to this exact cluster (no cluster label it could check)"}
+	mixed := false
+	for _, f := range families[1:] {
+		p.additionalMetrics = append(p.additionalMetrics, probe(f))
+		mixed = mixed || sel(f) != sel(families[0])
+	}
+	if mixed {
+		// Components spelled differently name the subject's labels differently.
+		p.selectors = []string{""}
+		p.metricSelectors = make(map[string]string, len(families))
+		for _, f := range families {
+			p.metricSelectors[probe(f)] = sel(f)
+		}
+	}
+	matchers, iso, err := resolve(ctx, p)
 	switch {
 	case errors.Is(err, ErrScopeAmbiguous):
 		return substrateFamilyCheck{isolation: iso, state: SubstrateChartAmbiguous, reason: "these series appear under more than one cluster identity in this Prometheus, so any answer could mix clusters"}
@@ -254,19 +288,22 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 		return substrateFamilyCheck{isolation: iso, state: SubstrateChartError, reason: "Prometheus scope check failed: " + truncate(err.Error(), 200)}
 	}
 	check := substrateFamilyCheck{matchers: matchers, isolation: iso}
+	if scopeOnly {
+		return check
+	}
 	// A verified scope is accepted once any of the families appears under it;
 	// one that appears only outside it would leave a paired chart half drawn.
-	if requireEach && matchers != "" && len(families) > 1 {
+	if matchers != "" && len(families) > 1 {
 		for _, f := range families {
 			present := func(s string) (bool, error) {
-				res, err := strictQuerier{q}.Query(ctx, "count(count_over_time("+vectorSelector(sp.probe(f), s)+"["+window.String()+"]))")
+				res, err := strictQuerier{q}.Query(ctx, "count(count_over_time("+vectorSelector(probe(f), s)+"["+window.String()+"]))")
 				return err == nil && len(res.Series) > 0, err
 			}
-			scoped, err := present(withScope(sel, matchers))
+			scoped, err := present(withScope(sel(f), matchers))
 			if err == nil && !scoped {
 				var anywhere bool
-				if anywhere, err = present(sel); err == nil && anywhere {
-					check.state, check.reason = SubstrateChartMismatch, "this cluster's identity labels do not appear on "+sp.stem(f)+", which this chart combines"
+				if anywhere, err = present(sel(f)); err == nil && anywhere {
+					check.state, check.reason = SubstrateChartMismatch, "this cluster's identity labels do not appear on "+sps.of(f).stem(f)+", which this chart combines"
 					return check
 				}
 			}
@@ -280,7 +317,7 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 		if !f.additive {
 			continue
 		}
-		res, err := strictQuerier{q}.Query(ctx, "count by (job) (count_over_time("+vectorSelector(sp.probe(f), withScope(sel, matchers))+"["+window.String()+"]))")
+		res, err := strictQuerier{q}.Query(ctx, "count by (job) (count_over_time("+vectorSelector(probe(f), withScope(sel(f), matchers))+"["+window.String()+"]))")
 		if err != nil {
 			check.state, check.reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
 			return check
@@ -316,8 +353,9 @@ func substrateProbeWindow(start, end time.Time, step time.Duration) time.Duratio
 }
 
 type substrateRequest struct {
-	sp         substrateSpelling
-	sel        string
+	sps substrateSpellings
+	// base selects the pool or node in one spelling.
+	base       func(substrateSpelling) string
 	charts     []substrateChartDef
 	rangeName  string
 	start, end time.Time
@@ -344,13 +382,15 @@ func (r *substrateRun) check(families []substrateInstrument) substrateFamilyChec
 	if c, ok := r.checks[key]; ok {
 		return c
 	}
-	c := checkSubstrateFamilies(r.ctx, r.q, r.resolve, r.req.sp, families, r.req.sel, r.window, true)
+	c := checkSubstrateFamilies(r.ctx, r.q, r.resolve, r.req.sps, families, r.req.base, r.window, false)
 	r.checks[key] = c
 	return c
 }
 
-func (r *substrateRun) expr(matchers, window string) substrateExpr {
-	return substrateExpr{sp: r.req.sp, sel: withScope(r.req.sel, matchers), window: window}
+// expr builds queries over inst's component, in that component's spelling.
+func (r *substrateRun) expr(inst substrateInstrument, matchers, window string) substrateExpr {
+	sp := r.req.sps.of(inst)
+	return substrateExpr{sp: sp, sel: withScope(r.req.base(sp), matchers), window: window}
 }
 
 func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, req substrateRequest) []SubstrateChart {
@@ -372,7 +412,7 @@ func (r *substrateRun) charts() []SubstrateChart {
 	for i, d := range req.charts {
 		check := checks[i]
 		c := &charts[i]
-		*c = SubstrateChart{ID: d.id, Title: d.title, Unit: d.unit, Population: d.population, Source: req.sp.source(d.families()), SeriesBy: d.seriesBy, Isolation: check.isolation, Series: []prom.Series{}, Steps: steps}
+		*c = SubstrateChart{ID: d.id, Title: d.title, Unit: d.unit, Population: d.population, Source: req.sps.source(d.families()), SeriesBy: d.seriesBy, Isolation: check.isolation, Series: []prom.Series{}, Steps: steps}
 		if check.state != "" {
 			c.State, c.Reason = check.state, check.reason
 			continue
@@ -387,7 +427,7 @@ func (r *substrateRun) charts() []SubstrateChart {
 				return
 			}
 			defer func() { <-sem }()
-			runSubstrateChart(r.ctx, strictQuerier{r.q}, d, r.expr(check.matchers, w), req.start, req.end, req.step, c)
+			runSubstrateChart(r.ctx, strictQuerier{r.q}, d, r.expr(d.inst, check.matchers, w), req.start, req.end, req.step, c)
 		}()
 	}
 	wg.Wait()
@@ -607,11 +647,10 @@ func markUnattributedNodeCharts(ctx context.Context, q seriesQuerier, sp substra
 	}
 }
 
+// substrateRequestBounds reads the range parameter: one of parseTimeRange's
+// names, 1h when it is missing or unknown. The name returned is the one served.
 func substrateRequestBounds(r *http.Request) (string, time.Time, time.Time, time.Duration) {
-	rangeName := r.URL.Query().Get("range")
-	if rangeName == "" {
-		rangeName = "1h"
-	}
+	rangeName := normalizeTimeRange(r.URL.Query().Get("range"))
 	start, end, step := alignSubstrateRange(parseTimeRange(rangeName))
 	return rangeName, start, end, step
 }
@@ -651,14 +690,11 @@ func collectSubstratePool(ctx context.Context, q seriesQuerier, resolve substrat
 		return SubstrateHealthResponse{Status: SubstrateChartError, Reason: reason, Range: rangeName, Charts: []SubstrateChart{}}
 	}
 	base := func(sp substrateSpelling) string { return substratePoolSelector(sp, namespace, name) }
-	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, resolve, substratePoolInstruments, base, substrateProbeWindow(start, end, step))
-	switch {
-	case err != nil:
+	sps, err := resolveSubstrateSpellings(ctx, q, resolve, substratePoolInstruments, base, substrateProbeWindow(start, end, step))
+	if err != nil {
 		return failed(queryFailed(err))
-	case ambiguous != "":
-		return failed(ambiguous)
 	}
-	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sp: sp, sel: base(sp), charts: substratePoolCharts(), rangeName: rangeName, start: start, end: end, step: step})
+	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sps: sps, base: base, charts: substratePoolCharts(), rangeName: rangeName, start: start, end: end, step: step})
 	charts := run.charts()
 	status, reason := substrateResponseStatus(charts)
 	resp := SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
@@ -687,17 +723,19 @@ func collectSubstrateNode(ctx context.Context, q seriesQuerier, resolve substrat
 	}
 	window := substrateProbeWindow(start, end, step)
 	base := func(sp substrateSpelling) string { return substrateNodeSelector(sp, node) }
-	sp, ambiguous, err := resolveSubstrateSpelling(ctx, q, resolve, substrateNodeFamilies, base, window)
-	switch {
-	case err != nil:
+	sps, err := resolveSubstrateSpellings(ctx, q, resolve, substrateNodeFamilies, base, window)
+	if err != nil {
 		return failed(SubstrateChartError, queryFailed(err))
-	case ambiguous != "":
-		return failed(SubstrateChartError, ambiguous)
+	}
+	sp := sps.of(instUndurable)
+	if sp.ambiguous != "" {
+		return failed(SubstrateChartError, sp.ambiguous)
 	}
 	// Attribution is decided within this cluster's series: another cluster's
 	// node labels say nothing about this one's. Scope only: a family absent
-	// here says nothing about the node's other charts.
-	scope := checkSubstrateFamilies(ctx, q, resolve, sp, substrateNodeFamilies, "", window, false)
+	// here, or reported twice for another node, says nothing about this node's
+	// charts.
+	scope := checkSubstrateFamilies(ctx, q, resolve, sps, substrateNodeFamilies, func(substrateSpelling) string { return "" }, window, true)
 	if scope.state != "" {
 		return failed(SubstrateChartError, scope.reason)
 	}
@@ -708,7 +746,7 @@ func collectSubstrateNode(ctx context.Context, q seriesQuerier, resolve substrat
 	if status != SubstrateAvailable {
 		return failed(status, reason)
 	}
-	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sp: sp, sel: base(sp), charts: substrateNodeCharts(), rangeName: rangeName, start: start, end: end, step: step})
+	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sps: sps, base: base, charts: substrateNodeCharts(), rangeName: rangeName, start: start, end: end, step: step})
 	charts := run.charts()
 	markUnattributedNodeCharts(ctx, q, sp, scope.matchers, window, charts)
 	status, reason = substrateResponseStatus(charts)

@@ -95,53 +95,40 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, client.GetStatus())
 }
 
+var timeRanges = map[string]struct{ duration, step time.Duration }{
+	"10m": {10 * time.Minute, 15 * time.Second},
+	"30m": {30 * time.Minute, 30 * time.Second},
+	"1h":  {time.Hour, time.Minute},
+	"3h":  {3 * time.Hour, 2 * time.Minute},
+	"6h":  {6 * time.Hour, 5 * time.Minute},
+	"12h": {12 * time.Hour, 10 * time.Minute},
+	"24h": {24 * time.Hour, 15 * time.Minute},
+	"48h": {48 * time.Hour, 30 * time.Minute},
+	"7d":  {7 * 24 * time.Hour, time.Hour},
+	"14d": {14 * 24 * time.Hour, 2 * time.Hour},
+}
+
+// normalizeTimeRange returns the range parseTimeRange serves for rangeStr.
+func normalizeTimeRange(rangeStr string) string {
+	if _, ok := timeRanges[rangeStr]; ok {
+		return rangeStr
+	}
+	return "1h"
+}
+
 // parseTimeRange parses the "range" query parameter into start/end/step.
 // Supported values: 10m, 30m, 1h, 3h, 6h, 12h, 24h, 48h, 7d, 14d (default: 1h).
 // The frontend UI exposes a subset of these; the full set is available via the API.
 func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) {
 	end = time.Now()
-
-	var duration time.Duration
-	switch rangeStr {
-	case "10m":
-		duration = 10 * time.Minute
-		step = 15 * time.Second
-	case "30m":
-		duration = 30 * time.Minute
-		step = 30 * time.Second
-	case "1h", "":
-		duration = time.Hour
-		step = time.Minute
-	case "3h":
-		duration = 3 * time.Hour
-		step = 2 * time.Minute
-	case "6h":
-		duration = 6 * time.Hour
-		step = 5 * time.Minute
-	case "12h":
-		duration = 12 * time.Hour
-		step = 10 * time.Minute
-	case "24h":
-		duration = 24 * time.Hour
-		step = 15 * time.Minute
-	case "48h":
-		duration = 48 * time.Hour
-		step = 30 * time.Minute
-	case "7d":
-		duration = 7 * 24 * time.Hour
-		step = time.Hour
-	case "14d":
-		duration = 14 * 24 * time.Hour
-		step = 2 * time.Hour
-	default:
-		log.Printf("[prometheus] Unrecognized range %q, falling back to 1h", rangeStr)
-		rangeStr = "1h"
-		duration = time.Hour
-		step = time.Minute
+	r, ok := timeRanges[rangeStr]
+	if !ok {
+		if rangeStr != "" {
+			log.Printf("[prometheus] Unrecognized range %q, falling back to 1h", rangeStr)
+		}
+		r = timeRanges["1h"]
 	}
-
-	start = end.Add(-duration)
-	return
+	return end.Add(-r.duration), end, r.step
 }
 
 // ResourceMetricsResponse is the response shape for resource metrics.

@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -60,7 +61,8 @@ func unverifiedScope(context.Context, scopeProbe) (string, SeriesIsolation, erro
 
 func poolRequest(charts []substrateChartDef) substrateRequest {
 	end := time.Unix(10_000*60, 0)
-	return substrateRequest{sel: substratePoolSelector(substrateSpelling{}, "agents", "pool"), charts: charts, start: end.Add(-time.Hour), end: end, step: time.Minute}
+	base := func(sp substrateSpelling) string { return substratePoolSelector(sp, "agents", "pool") }
+	return substrateRequest{base: base, charts: charts, start: end.Add(-time.Hour), end: end, step: time.Minute}
 }
 
 func chartByID(charts []SubstrateChart, id string) SubstrateChart {
@@ -226,7 +228,7 @@ func TestSubstrateRatesCollapseHACopies(t *testing.T) {
 	f := &fakeSubstrateProm{}
 	querySubstrateCharts(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts()))
 	for _, q := range f.queries {
-		if strings.Contains(q, "rate(") && !strings.Contains(q, "max without (prometheus, prometheus_replica, replica) (rate(") {
+		if strings.Contains(q, "rate(") && !strings.Contains(q, "max without (prometheus, prometheus_replica, replica, __replica__) (rate(") {
 			t.Fatalf("rate without HA collapse: %s", q)
 		}
 	}
@@ -265,7 +267,7 @@ func TestSubstrateWorkerAverageCollapsesHACopies(t *testing.T) {
 	f := &fakeSubstrateProm{}
 	querySubstrateCharts(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts()))
 	for _, q := range f.queries {
-		if strings.Contains(q, "avg by") && !strings.Contains(q, "(max without (prometheus, prometheus_replica, replica) (ate_workerpool_workers{") {
+		if strings.Contains(q, "avg by") && !strings.Contains(q, "(max without (prometheus, prometheus_replica, replica, __replica__) (ate_workerpool_workers{") {
 			t.Fatalf("worker average without HA collapse: %s", q)
 		}
 	}
@@ -358,10 +360,11 @@ func TestSubstrateNodeScopeIgnoresAbsentFamilies(t *testing.T) {
 	f := &fakeSubstrateProm{rules: []fakeRule{
 		{`count(count_over_time(ate_actor_checkpoint_duration_seconds_count{}`, result(series(nil, 1))},
 	}}
-	if check := checkSubstrateFamilies(context.Background(), f, resolve, substrateSpelling{}, families, "", time.Hour, false); check.state != "" {
+	anywhere := func(substrateSpelling) string { return "" }
+	if check := checkSubstrateFamilies(context.Background(), f, resolve, substrateSpellings{}, families, anywhere, time.Hour, true); check.state != "" {
 		t.Fatalf("node scope = %s %q, want no refusal", check.state, check.reason)
 	}
-	if check := checkSubstrateFamilies(context.Background(), f, resolve, substrateSpelling{}, families, "", time.Hour, true); check.state != SubstrateChartMismatch {
+	if check := checkSubstrateFamilies(context.Background(), f, resolve, substrateSpellings{}, families, anywhere, time.Hour, false); check.state != SubstrateChartMismatch {
 		t.Fatalf("paired check = %s, want mismatch", check.state)
 	}
 }
@@ -383,6 +386,32 @@ func TestSubstrateChartsExplainEmpty(t *testing.T) {
 	for _, d := range append(substratePoolCharts(), substrateNodeCharts()...) {
 		if d.emptyReason == "" {
 			t.Errorf("%s has no empty reason", d.id)
+		}
+	}
+}
+
+// Another node reported through two jobs does not blank this node: duplicates
+// are judged within the node's own series.
+func TestSubstrateNodeDuplicatesJudgedPerNode(t *testing.T) {
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		{`count by (job) (count_over_time(atelet_snapshot_upload_duration_seconds_count{}`, result(series(map[string]string{"job": "a"}, 1), series(map[string]string{"job": "b"}, 1))},
+		{"count by (job)", result(series(map[string]string{"job": "a"}, 1))},
+		{"count(", result(series(nil, 1))},
+	}}
+	end := time.Unix(10_000*60, 0)
+	resp := collectSubstrateNode(context.Background(), f, unverifiedScope, "worker-1", "1h", end.Add(-time.Hour), end, time.Minute)
+	if resp.Status != SubstrateAvailable {
+		t.Fatalf("status = %s %q, want available", resp.Status, resp.Reason)
+	}
+	if c := chartByID(resp.Charts, "uploadTime"); c.State == SubstrateChartDuplicateSources {
+		t.Fatalf("uploadTime refused for another node's duplicate: %q", c.Reason)
+	}
+}
+
+func TestSubstrateRequestBoundsEchoesTheServedRange(t *testing.T) {
+	for query, want := range map[string]string{"": "1h", "?range=bogus": "1h", "?range=6h": "6h"} {
+		if got, _, _, _ := substrateRequestBounds(httptest.NewRequest("GET", "/x"+query, nil)); got != want {
+			t.Errorf("%q: range = %s, want %s", query, got, want)
 		}
 	}
 }

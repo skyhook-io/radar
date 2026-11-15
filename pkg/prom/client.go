@@ -150,7 +150,9 @@ func (c *Client) LabelValues(ctx context.Context, label string, matches []string
 }
 
 // LabelValuesWithWarnings is LabelValues with the response's warnings, for a
-// caller that must not read a partial list as a complete one.
+// caller that must not read a partial list as a complete one. The warnings are
+// the backend's, plus one Radar adds when the backend marks the response
+// partial; none means the backend reported no gap.
 func (c *Client) LabelValuesWithWarnings(ctx context.Context, label string, matches []string, start, end time.Time, limit int) ([]string, []string, error) {
 	params := url.Values{}
 	for _, m := range matches {

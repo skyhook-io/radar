@@ -71,6 +71,9 @@ type scopeProbe struct {
 	allowUnlabeledDuplicate bool
 	singlePartition         bool
 	unverifiedNote          string
+	// metricSelectors: matchers for one metric only, ANDed with the selector,
+	// for metrics that name the subject's labels differently.
+	metricSelectors map[string]string
 	// strict rejects a partial or warning response from the probes instead of
 	// reading an incomplete identity set as a unique one.
 	strict bool
@@ -80,7 +83,7 @@ func (p scopeProbe) over(sel string) string {
 	metrics := append([]string{p.metric}, p.additionalMetrics...)
 	probes := make([]string, len(metrics))
 	for i, metric := range metrics {
-		probes[i] = vectorSelector(metric, sel)
+		probes[i] = vectorSelector(metric, withScope(p.metricSelectors[metric], sel))
 		if p.window > 0 {
 			probes[i] = "count_over_time(" + probes[i] + "[" + p.window.String() + "])"
 		}

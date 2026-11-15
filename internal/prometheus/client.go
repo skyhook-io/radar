@@ -943,7 +943,6 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 	return p.QueryRange(ctx, query, start, end, step)
 }
 
-// Query executes a Prometheus instant query via the underlying pkg/prom.Client.
 // MetricNames lists the metric names matching the selectors that hold
 // samples between start and end.
 func (c *Client) MetricNames(ctx context.Context, matches []string, start, end time.Time) ([]string, error) {
@@ -961,6 +960,7 @@ func (c *Client) MetricNames(ctx context.Context, matches []string, start, end t
 	return names, err
 }
 
+// Query executes a Prometheus instant query via the underlying pkg/prom.Client.
 func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, error) {
 	if _, _, err := c.EnsureConnected(ctx); err != nil {
 		return nil, err
