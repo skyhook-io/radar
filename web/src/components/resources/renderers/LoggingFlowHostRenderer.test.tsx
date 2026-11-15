@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { controlNamespacesOf, loggingsReadComplete, missingOutputRefs } from './LoggingFlowHostRenderer'
 
 describe('controlNamespacesOf', () => {
@@ -34,5 +35,21 @@ describe('loggingsReadComplete', () => {
     expect(loggingsReadComplete({ isError: false, coverage: { status: 'partial' } })).toBe(false)
     expect(loggingsReadComplete({ isError: false, coverage: undefined })).toBe(false) // an older Radar's bare array
     expect(loggingsReadComplete({ isError: true, coverage: { status: 'complete' } })).toBe(false)
+  })
+})
+
+describe('LoggingFlowHostRenderer', () => {
+  it('says when it could not read the outputs instead of looking checked', async () => {
+    vi.resetModules()
+    vi.doMock('../../../api/client', () => ({
+      useResources: (kind: string) => kind === 'clusteroutputs'
+        ? { data: undefined, error: new Error('boom'), isError: true }
+        : { data: [], error: null, isError: false, coverage: { status: 'complete' } },
+    }))
+    const { LoggingFlowHostRenderer: Host } = await import('./LoggingFlowHostRenderer')
+    const html = renderToStaticMarkup(<Host data={{ kind: 'ClusterFlow', metadata: { name: 'all', namespace: 'logging' }, spec: { globalOutputRefs: ['loki'] } }} />)
+    expect(html).toContain('Could not check whether this flow&#x27;s outputs exist: boom')
+    expect(html).not.toContain('Rejected by the Logging operator')
+    vi.doUnmock('../../../api/client')
   })
 })
