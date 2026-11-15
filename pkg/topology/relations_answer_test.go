@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -23,6 +25,7 @@ type projectionSession struct {
 	ownership.ReadSession
 	objects map[resourceid.Ref]runtime.Object
 	reads   []resourceid.Ref
+	gaps    map[resourceid.GroupKind]ownership.Gap
 }
 
 func projectionRef(obj runtime.Object) resourceid.Ref {
@@ -58,6 +61,9 @@ func newProjectionSession(t *testing.T, objects ...runtime.Object) *projectionSe
 }
 func (s *projectionSession) Borrow(ref resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
 	s.reads = append(s.reads, ref)
+	if gap, ok := s.gaps[ref.GroupKind()]; ok {
+		return nil, ownership.ObjectRead{State: ownership.Unavailable, Gap: gap}
+	}
 	if obj := s.objects[ref]; obj != nil {
 		m, _ := apimeta.Accessor(obj)
 		return obj, ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(ref, m)}
@@ -70,6 +76,10 @@ func (s *projectionSession) Object(ref resourceid.Ref) ownership.ObjectRead {
 }
 func (s *projectionSession) Indexed(gk resourceid.GroupKind, _ string, _ []string, scope ownership.SearchScope) relations.IndexedRead {
 	var out relations.IndexedRead
+	if gap, ok := s.gaps[gk]; ok {
+		out.Gaps = []ownership.Gap{gap}
+		return out
+	}
 	for ref, obj := range s.objects {
 		if ref.GroupKind() == gk && (ref.Namespace == "" && scope.IncludeClusterScoped || ref.Namespace != "" && (scope.AllNamespaces || slices.Contains(scope.Namespaces, ref.Namespace))) {
 			out.Objects = append(out.Objects, relations.IndexedObject{Ref: ref, Object: obj})
@@ -353,5 +363,45 @@ func TestRelationsAnswerManagedByClimbsNonControllerOwners(t *testing.T) {
 	rel = projectionAnswer(t, s, endpoint, projectionAccess{denied: []string{"ReplicaSet"}}, ownership.Unrestricted())
 	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Pod" {
 		t.Fatalf("stop below an unreadable owner: %+v", rel.ManagedBy)
+	}
+}
+
+func TestRelationsAnswerKnativePrivateServiceNeedsNoRevision(t *testing.T) {
+	for _, state := range []string{"denied", "absent", "uncollected"} {
+		for _, latest := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/latest=%v", state, latest), func(t *testing.T) {
+				status := map[string]any{"traffic": []any{map[string]any{"revisionName": "web-1"}}}
+				if latest {
+					status = map[string]any{"latestReadyRevisionName": "web-1"}
+				}
+				ksvc := projectionCR("serving.knative.dev", "Service", "shop", "web", map[string]any{"status": status})
+				svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-1-private"}}, "", "Service")
+				revision := projectionCR("serving.knative.dev", "Revision", "shop", "web-1", map[string]any{})
+				revision.SetLabels(map[string]string{"serving.knative.dev/service": "web"})
+				s := newProjectionSession(t, ksvc, svc, revision)
+				var emit ownership.Access = ownership.Unrestricted()
+				switch state {
+				case "denied":
+					emit = projectionAccess{denied: []string{"Revision"}}
+				case "absent":
+					delete(s.objects, projectionRef(revision))
+				case "uncollected":
+					delete(s.objects, projectionRef(revision))
+					s.gaps = map[resourceid.GroupKind]ownership.Gap{projectionRef(revision).GroupKind(): {Kind: projectionRef(revision).GroupKind(), Namespace: "shop", Reason: readreason.RadarKindNotCollected}}
+				}
+				forward := projectionAnswer(t, s, ksvc, emit, emit)
+				reverse := projectionAnswer(t, s, svc, emit, emit)
+				if !slices.Equal(forward.Backends, []ResourceRef{refOf(projectionRef(svc))}) || !slices.Equal(reverse.RoutedFrom, []ResourceRef{refOf(projectionRef(ksvc))}) {
+					t.Fatalf("forward %v, reverse %v", forward.Backends, reverse.RoutedFrom)
+				}
+				front := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", OwnerReferences: []metav1.OwnerReference{{APIVersion: "serving.knative.dev/v1", Kind: "Route", Name: "web"}}}}, "", "Service")
+				s.objects[projectionRef(front)] = front
+				forward = projectionAnswer(t, s, ksvc, emit, emit)
+				reverse = projectionAnswer(t, s, front, emit, emit)
+				if !slices.Contains(forward.Services, refOf(projectionRef(front))) || !slices.Contains(reverse.Backends, refOf(projectionRef(ksvc))) {
+					t.Fatalf("front door forward %+v, reverse %+v", forward, reverse)
+				}
+			})
+		}
 	}
 }
