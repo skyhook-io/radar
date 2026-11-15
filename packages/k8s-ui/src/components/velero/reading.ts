@@ -22,7 +22,7 @@ const STATE_LABEL: Record<VeleroScheduleState, string> = {
   cannotRun: 'Cannot run',
   notValidated: 'Not validated',
   unknown: 'Unknown',
-  neverRuns: 'Never runs',
+  alwaysDue: 'Always due',
   skipPending: 'Skipping next run',
   held: 'Held',
   late: 'Late',
@@ -44,7 +44,7 @@ const STATE_TONE: Record<VeleroScheduleState, HealthLevel> = {
   cannotRun: 'unhealthy',
   notValidated: 'degraded',
   unknown: 'unknown',
-  neverRuns: 'unhealthy',
+  alwaysDue: 'unhealthy',
   skipPending: 'neutral',
   held: 'neutral',
   late: 'unhealthy',
@@ -76,7 +76,7 @@ export function veleroLocalTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-const SERVER_DOWN = 'The Velero server has no running pod, so nothing submits backups.'
+const SERVER_DOWN = 'The Velero server has no pods, so nothing submits backups.'
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
@@ -117,8 +117,8 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
     }
     case 'unknown':
       return 'Radar can’t read this cron expression the way Velero does, so it can’t say when the schedule runs next.'
-    case 'neverRuns':
-      return 'This cron expression has no future time, so the schedule never runs.'
+    case 'alwaysDue':
+      return 'This cron expression has no future time, so Velero treats the schedule as always due and submits a new backup whenever the previous one has started.'
     case 'skipPending':
       return 'Set to skip its next run (skipImmediately). Velero moves the schedule past it on its next pass.'
     case 'held':
@@ -218,7 +218,7 @@ export function veleroFrequencyText(seconds: number): string {
 /** Why a storage location needs attention. */
 export function veleroLocationReasonText(loc: VeleroLocationReading): string {
   if (loc.validationOverdue && loc.lastValidation && loc.frequency) {
-    const cause = loc.reason === 'serverDown' ? ' The Velero server has no running pod, so nothing validates it.' : ''
+    const cause = loc.reason === 'serverDown' ? ' The Velero server has no pods, so nothing validates it.' : ''
     return `Velero last validated this location ${formatAge(loc.lastValidation)} ago; it validates every ${veleroFrequencyText(loc.frequency.seconds)}.${cause}`
   }
   return ''
@@ -226,7 +226,7 @@ export function veleroLocationReasonText(loc: VeleroLocationReading): string {
 
 /** Why an installation needs attention: its server Deployment has no available pod. */
 export function veleroServerDownText(namespace: string, deployment?: string): string {
-  return `Deployment ${deployment ?? 'velero'} in ${namespace} has no available pod, so no schedule submits backups and no storage location is validated.`
+  return `Deployment ${deployment ?? 'velero'} in ${namespace} has no pods, so no schedule submits backups and no storage location is validated.`
 }
 
 const DEFAULT_SOURCE_DETAIL: Record<VeleroDefaultSource, string> = {

@@ -46,7 +46,7 @@ First match wins.
 | Cannot run | Name longer than 63 characters: Velero writes it unshortened into a label, so every submission fails | Yes |
 | Not validated | Phase is not `Enabled`; the controller validates on create | After 5 minutes |
 | Unknown | Velero accepted a cron Radar cannot parse | No |
-| Never runs | The cron has no future time | Yes |
+| Always due | The cron has no future time; Velero compares now against the zero time, so it submits a new run whenever the previous one has started | Yes |
 | Skip pending | `spec.skipImmediately` is set; the controller moves its anchor on the next pass | No |
 | Held | Due, and a run of the schedule is `""`, `New` or `InProgress` (the controller's skip rule) | When the run has not started for 10 minutes; a long `InProgress` run is the stalled-run Issue's |
 | Late | Past the next run by 5 minutes, zone certain, Backups read, nothing holding it. Counts the scheduled times that passed; Velero does not catch up | Yes |
@@ -55,6 +55,8 @@ First match wins.
 | Possibly late | Past the estimated run within the uncertain margin | No |
 | Due | Within the 5-minute grace | No |
 | On schedule | Otherwise | No |
+
+**A stopped server is named first.** When the Velero server Deployment can be read and has no pods (scaled to zero, or its pods cannot be created), it leads Needs attention, and late schedules and overdue locations say that is why. An unavailable but running pod does not count: it still processes schedules.
 
 Storage locations need attention when **validation is overdue**: the interval is known and more than three intervals plus 5 minutes have passed since the last validation (Radar's threshold). An Unavailable location is already an Issue (`BackupStorageLocationUnavailable`).
 

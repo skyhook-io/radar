@@ -68,7 +68,7 @@ function serverProblem(namespace: string, deployment?: string): WorkspaceProblem
     detail: veleroServerDownText(namespace, deployment),
     subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
     source: 'reading',
-    origin: { label: 'Radar’s reading of the Velero server', detail: 'The server Deployment’s available pods.' },
+    origin: { label: 'Radar’s reading of the Velero server', detail: 'The server Deployment’s pods.' },
     tone: 'unhealthy',
   }
 }
@@ -148,7 +148,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
   const attention = useMemo<WorkspaceProblem[]>(
     () => [
       ...data.installations
-        .filter((i) => (installation === null || i.namespace === installation) && i.server.availableReplicas === 0)
+        .filter((i) => (installation === null || i.namespace === installation) && i.server.pods === 0)
         .map((i) => serverProblem(i.namespace, i.server.deployment)),
       ...schedules.filter((s) => s.attention).map(scheduleProblem),
       ...locations.filter((l) => l.attention).map(locationProblem),

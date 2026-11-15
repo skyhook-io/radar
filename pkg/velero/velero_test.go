@@ -110,7 +110,7 @@ func TestReadScheduleTiming(t *testing.T) {
 		{name: "unread backups cannot rule out a hold", s: hourly(), unread: true, now: at("12:10"), state: StateLateOrHeld, reason: ReasonBackupsUnread, attention: true},
 		{name: "another schedule's run does not hold", s: hourly(), backups: []*unstructured.Unstructured{backup("other-1", "other", "InProgress", at("11:00"))}, now: at("12:10"), state: StateLate, attention: true, missed: 1},
 		{name: "never submitted anchors on creation", s: schedule("fresh", "0 * * * *", created(at("11:30"))), now: at("12:10"), state: StateLate, attention: true, missed: 1},
-		{name: "cron with no future time", s: schedule("never", "0 0 31 2 *"), now: at("12:10"), state: StateNeverRuns, reason: ReasonNoFutureTime, attention: true},
+		{name: "cron with no future time", s: schedule("never", "0 0 31 2 *"), now: at("12:10"), state: StateAlwaysDue, reason: ReasonNoFutureTime, attention: true},
 		{name: "paused wins over rejection", s: schedule("p", "0 * * * *", specField("paused", true), phase("FailedValidation")), now: at("12:10"), state: StatePaused},
 		{name: "rejected is the Issue's, not attention", s: schedule("r", "bad cron", phase("FailedValidation")), now: at("12:10"), state: StateRejected},
 		{name: "validation errors reject", s: schedule("r", "0 * * * *", func(o map[string]any) { o["status"].(map[string]any)["validationErrors"] = []any{"x"} }), now: at("12:10"), state: StateRejected},
@@ -132,10 +132,12 @@ func TestReadScheduleTiming(t *testing.T) {
 
 func TestServerDownExplainsLateSchedulesAndOverdueValidation(t *testing.T) {
 	d := veleroDeployment(nil, nil)
-	d.Status.AvailableReplicas = 0
+	zero := int32(0)
+	d.Spec.Replicas = &zero
+	d.Status.Replicas, d.Status.UpdatedReplicas, d.Status.AvailableReplicas = 0, 0, 0
 	down := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true)
 	if !down.Down() {
-		t.Fatalf("a Deployment with no available pod is down: %+v", down)
+		t.Fatalf("a Deployment scaled to zero is down: %+v", down)
 	}
 	r := read(schedule("nightly", "0 * * * *", lastBackup(at("08:00"))), nil, down, at("12:10"))
 	if r.State != StateLate || r.Reason != ReasonServerDown || !r.Attention {
@@ -151,9 +153,10 @@ func TestServerDownExplainsLateSchedulesAndOverdueValidation(t *testing.T) {
 	if !loc.ValidationOverdue || loc.Reason != ReasonServerDown {
 		t.Fatalf("location %+v", loc)
 	}
-	d.Status.AvailableReplicas = 1
-	if up := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true); up.Down() {
-		t.Fatal("a Deployment with an available pod is not down")
+	unready := veleroDeployment(nil, nil)
+	unready.Status.AvailableReplicas = 0
+	if up := ServerConfigFromDeployments([]*appsv1.Deployment{unready}, true); up.Down() {
+		t.Fatal("a running pod that is not yet available still processes schedules; it is not down")
 	}
 	if (ServerConfig{Source: ServerUnread}).Down() {
 		t.Fatal("an unread server is not known to be down")

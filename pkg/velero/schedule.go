@@ -54,15 +54,18 @@ const (
 	StateCannotRun          ScheduleState = "cannotRun"
 	StateNotValidated       ScheduleState = "notValidated"
 	StateUnknown            ScheduleState = "unknown"
-	StateNeverRuns          ScheduleState = "neverRuns"
-	StateSkipPending        ScheduleState = "skipPending"
-	StateHeld               ScheduleState = "held"
-	StateLate               ScheduleState = "late"
-	StateProbablyLate       ScheduleState = "probablyLate"
-	StateLateOrHeld         ScheduleState = "lateOrHeld"
-	StatePossiblyLate       ScheduleState = "possiblyLate"
-	StateDue                ScheduleState = "due"
-	StateOnSchedule         ScheduleState = "onSchedule"
+	// StateAlwaysDue: the cron has no future time. Velero's getNextRunTime
+	// then compares now against the zero time, so the schedule is always due
+	// and Velero submits a new run whenever no run of it is New or InProgress.
+	StateAlwaysDue    ScheduleState = "alwaysDue"
+	StateSkipPending  ScheduleState = "skipPending"
+	StateHeld         ScheduleState = "held"
+	StateLate         ScheduleState = "late"
+	StateProbablyLate ScheduleState = "probablyLate"
+	StateLateOrHeld   ScheduleState = "lateOrHeld"
+	StatePossiblyLate ScheduleState = "possiblyLate"
+	StateDue          ScheduleState = "due"
+	StateOnSchedule   ScheduleState = "onSchedule"
 )
 
 // Reason codes qualify a state.
@@ -230,7 +233,7 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	loc := zoneLocation(r.Zone, parsed)
 	next := parsed.next(anchor, loc)
 	if next.IsZero() {
-		r.State, r.Reason, r.Attention = StateNeverRuns, ReasonNoFutureTime, true
+		r.State, r.Reason, r.Attention = StateAlwaysDue, ReasonNoFutureTime, true
 		return r
 	}
 	nextUTC := next.UTC()

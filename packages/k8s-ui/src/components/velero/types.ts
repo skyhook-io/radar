@@ -33,7 +33,7 @@ export type VeleroScheduleState =
   | 'cannotRun'
   | 'notValidated'
   | 'unknown'
-  | 'neverRuns'
+  | 'alwaysDue'
   | 'skipPending'
   | 'held'
   | 'late'
@@ -120,8 +120,8 @@ export interface VeleroServerConfig {
   defaultLocation?: string
   validationFrequencySeconds?: number
   schedulingDisabled?: boolean
-  /** The server Deployment's available pods, when the Deployment was found. */
-  availableReplicas?: number
+  /** The server Deployment's non-terminated pods (status.replicas), when the Deployment was found. */
+  pods?: number
 }
 
 /** pkg/velero DefaultSource */
