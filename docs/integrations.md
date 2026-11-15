@@ -906,6 +906,8 @@ Service links accept short names in the rule's namespace or full `name.namespace
 
 ### What Radar Shows
 
+**Velero views** (`/velero`, `/velero/locations`, listed under the Velero category in the Resources sidebar): what needs attention, every schedule read against Velero's controller (next run, late or held, newest and newest successful run), and each storage location with the backups targeting it and the schedules writing to it. The Schedule drawer adds a Schedule activity section with recent runs. Sources, certainty and states: [velero.md](velero.md).
+
 **Backup Detail View:**
 - Phase with color-coded badge, start/completion timestamps, duration
 - Progress bar during in-progress backups (items backed up percentage)
@@ -960,7 +962,7 @@ They roll up under three categories, split by what you'd go and look at: `backup
 
 **Namespace attribution.** Issues attribute to the Velero object's own namespace (`velero`, or `kommander` on NKP). They are therefore admin-visible, but *not* visible to a user whose namespace view-filter excludes the Velero namespace — including one scoped only to the namespace whose data was lost. Surfacing a failure against the *protected* namespaces needs the protection-coverage model and is not part of this.
 
-**What is not detected yet.** Every detection above is driven by something Velero wrote — a phase, or in the stalled case a `startTimestamp` measured against the run's own budget. Radar does not yet detect the *absence* of a run: a schedule that quietly stopped firing (controller down, wrong cron, schedule deleted) leaves its last run `Completed`, so no issue is raised even though backups have silently stopped. That needs the schedule cadence modelled against Velero's real controller semantics (a due run is *skipped* while a prior backup is in flight), which is tracked separately. **Treat "no Velero issues" as "nothing Velero recorded looks wrong", not as "backups are healthy."**
+**What is not an Issue yet.** Every detection above is driven by something Velero wrote — a phase, or in the stalled case a `startTimestamp` measured against the run's own budget. The *absence* of a run (a schedule that stopped firing because the controller is down, its name is too long to label its backups, or a run never started) is read on the [Velero views](velero.md), modelled on the controller's own rules, but it does not raise an Issue, so it does not reach the Problems surface, MCP or Diagnose. **Treat "no Velero issues" as "nothing Velero recorded looks wrong", not as "backups are healthy."**
 
 ### Supported CRDs
 
@@ -974,7 +976,7 @@ They roll up under three categories, split by what you'd go and look at: `backup
 | BackupRepository | `velero.io/v1` | — | Yes | Yes | — |
 
 **Limitations**:
-- **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet.
+- **A backup's phase is not its restorability.** A `Completed` backup can sit on an Unavailable storage location or be past its TTL. The BackupStorageLocation page shows stored and restorable counts. Unavailable means it cannot restore now; expired means Velero intends to delete it, so Radar excludes it even if garbage collection has not run yet. A backup counts against a location by its `spec.storageLocation`, which Velero fills when it first processes the backup; one Velero has not processed yet counts against none.
 - **Stalled-run detection depends on the phase.** `WaitingForPluginOperations` is measured against Velero's `spec.itemOperationTimeout`. For `InProgress` and `Finalizing`, that duration is only a yardstick because Velero defines no deadline. Radar reports the distinction and elapsed time without guessing at a cause. If the field is absent, Radar uses Velero's built-in four-hour default; a controller-level override is not visible in the resource.
 - **Fetching run messages needs a live controller and reachable storage.** Radar creates a `DownloadRequest` and follows Velero's pre-signed object-storage URL. A stopped controller or a URL unreachable from Radar returns an explicit error; configure the storage location's `publicUrl` when needed. Data-mover objects (`DataUpload`/`DataDownload`) and full backup logs remain unavailable.
 
