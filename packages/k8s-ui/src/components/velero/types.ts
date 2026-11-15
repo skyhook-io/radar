@@ -160,6 +160,8 @@ export interface VeleroLocationReading {
   /** Absent when neither spec.validationFrequency nor the server's flag could be read. */
   frequency?: VeleroValidationFrequency
   validationOverdue?: boolean
+  /** No validation recorded although the location is older than ten minutes. */
+  neverValidated?: boolean
   default: boolean
   defaultSource: VeleroDefaultSource
   /** Absent when the namespace's Backups were not read. */

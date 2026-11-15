@@ -217,6 +217,10 @@ export function veleroFrequencyText(seconds: number): string {
 
 /** Why a storage location needs attention. */
 export function veleroLocationReasonText(loc: VeleroLocationReading): string {
+  if (loc.neverValidated) {
+    const cause = loc.reason === 'serverDown' ? ' The Velero server has no pods, so nothing validates it.' : ''
+    return `Velero has never validated this location; it validates a new location as soon as it sees it.${cause}`
+  }
   if (loc.validationOverdue && loc.lastValidation && loc.frequency) {
     const cause = loc.reason === 'serverDown' ? ' The Velero server has no pods, so nothing validates it.' : ''
     return `Velero last validated this location ${formatAge(loc.lastValidation)} ago; it validates every ${veleroFrequencyText(loc.frequency.seconds)}.${cause}`

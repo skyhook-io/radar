@@ -14,6 +14,9 @@ import (
 const (
 	validationOverdueIntervals = 3
 	validationOverdueGrace     = 5 * time.Minute
+	// neverValidatedAfter: Velero validates a new location as soon as its
+	// controller sees it, even with recurring validation disabled.
+	neverValidatedAfter = 10 * time.Minute
 )
 
 // DefaultSource says how Radar decided which location is the default.
@@ -95,8 +98,11 @@ type LocationReading struct {
 	// flag could be read; no overdue verdict is given then.
 	Frequency         *ValidationFrequency `json:"frequency,omitempty"`
 	ValidationOverdue bool                 `json:"validationOverdue,omitempty"`
-	Default           bool                 `json:"default"`
-	DefaultSource     DefaultSource        `json:"defaultSource"`
+	// NeverValidated: no validation was recorded although the location is
+	// older than neverValidatedAfter.
+	NeverValidated bool          `json:"neverValidated,omitempty"`
+	Default        bool          `json:"default"`
+	DefaultSource  DefaultSource `json:"defaultSource"`
 	// Backups is nil when the namespace's Backups were not read.
 	Backups *LocationBackups `json:"backups,omitempty"`
 	// Schedules is nil when the namespace's Schedules were not read.
@@ -137,8 +143,11 @@ func ReadLocation(in LocationInput) LocationReading {
 		r.ValidationOverdue = in.Now.Sub(*r.LastValidation) > limit
 	}
 	// An Unavailable location is already an Issue (BackupStorageLocationUnavailable).
-	r.Attention = r.ValidationOverdue
-	if r.ValidationOverdue && in.Server.Down() {
+	if r.LastValidation == nil && in.Now.Sub(l.GetCreationTimestamp().Time) > neverValidatedAfter {
+		r.NeverValidated = true
+	}
+	r.Attention = r.ValidationOverdue || r.NeverValidated
+	if r.Attention && in.Server.Down() {
 		r.Reason = ReasonServerDown
 	}
 

@@ -49,4 +49,8 @@ describe('Velero storage locations', () => {
     const html = render(workspace({ locations: [location({ frequency: { seconds: 0, source: 'spec', disabled: true } })] }))
     expect(html).toContain('validation disabled')
   })
+  it('says when Velero never validated a location', () => {
+    const html = text(render(workspace({ locations: [location({ neverValidated: true, attention: true, lastValidation: undefined })] })))
+    expect(html).toContain('Not validated yet')
+  })
 })

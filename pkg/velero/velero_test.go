@@ -354,6 +354,44 @@ func TestReadLocation(t *testing.T) {
 	}
 }
 
+func TestUnknownZoneWithUnreadBackupsKeepsTheHiddenRunCaveat(t *testing.T) {
+	r := ReadSchedule(ScheduleInput{
+		Schedule: schedule("nightly", "0 * * * *", lastBackup(at("11:00").Add(-48*time.Hour))),
+		Server:   ServerConfig{Source: ServerUnread}, Now: at("12:00"),
+	})
+	if r.State != StateLateOrHeld || r.Reason != ReasonBackupsUnread || !r.Attention || r.NextRunCertain {
+		t.Fatalf("got %s %s attention=%v certain=%v", r.State, r.Reason, r.Attention, r.NextRunCertain)
+	}
+}
+
+func TestLocationNeverValidated(t *testing.T) {
+	unvalidated := func(created time.Time, freq string) *unstructured.Unstructured {
+		return location("l", func(o map[string]any) {
+			o["metadata"].(map[string]any)["creationTimestamp"] = ts(created)
+			delete(o["status"].(map[string]any), "lastValidationTime")
+			if freq != "" {
+				o["spec"].(map[string]any)["validationFrequency"] = freq
+			}
+		})
+	}
+	for _, c := range []struct {
+		name    string
+		loc     *unstructured.Unstructured
+		flagged bool
+	}{
+		{"old and never validated", unvalidated(at("10:00"), ""), true},
+		{"old, recurring validation disabled, still validated once", unvalidated(at("10:00"), "0s"), true},
+		{"just created", unvalidated(at("11:55"), ""), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := ReadLocation(LocationInput{Location: c.loc, Server: utcServer, Now: at("12:00")})
+			if r.NeverValidated != c.flagged || r.Attention != c.flagged {
+				t.Fatalf("neverValidated=%v attention=%v", r.NeverValidated, r.Attention)
+			}
+		})
+	}
+}
+
 func TestLocationValidation(t *testing.T) {
 	validated := func(when time.Time) func(map[string]any) {
 		return func(o map[string]any) { o["status"].(map[string]any)["lastValidationTime"] = ts(when) }

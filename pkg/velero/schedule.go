@@ -252,6 +252,12 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 				r.Reason, r.Attention = heldReason(r.Blocker, in.Now)
 				return r
 			}
+			if !in.BackupsRead {
+				// A run Radar cannot see may hold it; the estimated next run
+				// keeps its "~".
+				r.State, r.Reason, r.Attention = StateLateOrHeld, ReasonBackupsUnread, true
+				return r
+			}
 			r.State, r.Reason, r.Attention = StateProbablyLate, ReasonZoneUnconfirmed, true
 		default:
 			r.State, r.Reason = StatePossiblyLate, ReasonZoneUnconfirmed

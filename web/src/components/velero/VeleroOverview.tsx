@@ -77,7 +77,7 @@ function locationProblem(l: VeleroLocationReading): WorkspaceProblem {
   return {
     id: `location:${l.namespace}/${l.name}`,
     category: 'location',
-    title: 'Validation overdue',
+    title: l.neverValidated ? 'Never validated' : 'Validation overdue',
     detail: veleroLocationReasonText(l) || undefined,
     subject: { kind: 'BackupStorageLocation', group: VELERO_GROUP, namespace: l.namespace, name: l.name },
     source: 'reading',
