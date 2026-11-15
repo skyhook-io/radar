@@ -1,8 +1,6 @@
 package relations
 
 import (
-	"slices"
-
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -13,7 +11,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/netpol"
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
 var (
@@ -21,49 +21,89 @@ var (
 	kindCronJob = resourceid.GroupKind{Group: "batch", Kind: "CronJob"}
 )
 
-// Workloads present their pod template's labels: what a selector that
-// chooses pods would choose them by.
+// podTemplate is a workload as a selector sees it: the pods its template
+// makes.
+func podTemplate(t corev1.PodTemplateSpec) (Candidate, bool) {
+	return Candidate{Labels: t.Labels, ServiceAccount: t.Spec.ServiceAccountName}, true
+}
+
+// Workloads are chosen by their pod template.
 var (
-	selectDeployment = Selectable{Kind: kindDeployment, Labels: func(obj runtime.Object) (labels.Set, bool) {
-		d, ok := obj.(*appsv1.Deployment)
-		return templateLabels(ok, func() map[string]string { return d.Spec.Template.Labels })
+	selectDeployment = Selectable{Kind: kindDeployment, Candidate: func(obj runtime.Object, _ Lookup) (Candidate, bool) {
+		if d, ok := obj.(*appsv1.Deployment); ok {
+			return podTemplate(d.Spec.Template)
+		}
+		return Candidate{}, false
 	}}
-	selectStatefulSet = Selectable{Kind: kindStatefulSet, Labels: func(obj runtime.Object) (labels.Set, bool) {
-		s, ok := obj.(*appsv1.StatefulSet)
-		return templateLabels(ok, func() map[string]string { return s.Spec.Template.Labels })
+	selectStatefulSet = Selectable{Kind: kindStatefulSet, Candidate: func(obj runtime.Object, _ Lookup) (Candidate, bool) {
+		if s, ok := obj.(*appsv1.StatefulSet); ok {
+			return podTemplate(s.Spec.Template)
+		}
+		return Candidate{}, false
 	}}
-	selectDaemonSet = Selectable{Kind: kindDaemonSet, Labels: func(obj runtime.Object) (labels.Set, bool) {
-		d, ok := obj.(*appsv1.DaemonSet)
-		return templateLabels(ok, func() map[string]string { return d.Spec.Template.Labels })
+	selectDaemonSet = Selectable{Kind: kindDaemonSet, Candidate: func(obj runtime.Object, _ Lookup) (Candidate, bool) {
+		if d, ok := obj.(*appsv1.DaemonSet); ok {
+			return podTemplate(d.Spec.Template)
+		}
+		return Candidate{}, false
 	}}
 	// A finished Job has no pods left to choose.
-	selectActiveJob = Selectable{Kind: kindJob, Labels: func(obj runtime.Object) (labels.Set, bool) {
-		j, ok := obj.(*batchv1.Job)
-		return templateLabels(ok && j.Status.Active > 0, func() map[string]string { return j.Spec.Template.Labels })
-	}}
-	selectCronJob = Selectable{Kind: kindCronJob, Labels: func(obj runtime.Object) (labels.Set, bool) {
-		c, ok := obj.(*batchv1.CronJob)
-		return templateLabels(ok, func() map[string]string { return c.Spec.JobTemplate.Spec.Template.Labels })
-	}}
-	selectRollout = Selectable{Kind: kindRollout, Labels: func(obj runtime.Object) (labels.Set, bool) {
-		u, ok := unstructuredOf(obj, kindRollout)
-		if !ok {
-			return nil, false
+	selectActiveJob = Selectable{Kind: kindJob, Candidate: func(obj runtime.Object, _ Lookup) (Candidate, bool) {
+		if j, ok := obj.(*batchv1.Job); ok && j.Status.Active > 0 {
+			return podTemplate(j.Spec.Template)
 		}
-		set, _, _ := unstructured.NestedStringMap(u.Object, "spec", "template", "metadata", "labels")
-		return set, true
+		return Candidate{}, false
 	}}
-	selectService = Selectable{Kind: kindService, Labels: func(obj runtime.Object) (labels.Set, bool) {
-		s, ok := obj.(*corev1.Service)
-		return templateLabels(ok, func() map[string]string { return s.Labels })
+	selectCronJob = Selectable{Kind: kindCronJob, Candidate: func(obj runtime.Object, _ Lookup) (Candidate, bool) {
+		if c, ok := obj.(*batchv1.CronJob); ok {
+			return podTemplate(c.Spec.JobTemplate.Spec.Template)
+		}
+		return Candidate{}, false
+	}}
+	selectRollout = Selectable{Kind: kindRollout, Candidate: rolloutCandidate}
+	selectService = Selectable{Kind: kindService, Candidate: func(obj runtime.Object, _ Lookup) (Candidate, bool) {
+		if s, ok := obj.(*corev1.Service); ok {
+			return Candidate{Labels: s.Labels}, true
+		}
+		return Candidate{}, false
 	}}
 )
 
-func templateLabels(ok bool, get func() map[string]string) (labels.Set, bool) {
+// rolloutWorkloadGroups are the kinds an Argo Rollout's workloadRef may
+// take its pod template from, by group.
+var rolloutWorkloadGroups = map[string]string{"Deployment": "apps", "ReplicaSet": "apps", "PodTemplate": ""}
+
+// rolloutCandidate is a Rollout's pods: its own template, or, for a Rollout
+// whose workloadRef names one, the referenced workload's, read as the
+// caller may read it.
+func rolloutCandidate(obj runtime.Object, lookup Lookup) (Candidate, bool) {
+	u, ok := unstructuredOf(obj, kindRollout)
 	if !ok {
-		return nil, false
+		return Candidate{}, false
 	}
-	return get(), true
+	kind, name, ref := rollouts.WorkloadRef(u)
+	if !ref {
+		podLabels, _, _ := unstructured.NestedStringMap(u.Object, "spec", "template", "metadata", "labels")
+		serviceAccount, _, _ := unstructured.NestedString(u.Object, "spec", "template", "spec", "serviceAccountName")
+		return Candidate{Labels: podLabels, ServiceAccount: serviceAccount}, true
+	}
+	group, known := rolloutWorkloadGroups[kind]
+	if !known {
+		return Candidate{}, false
+	}
+	workload, found := lookup(resourceid.NewRef(group, kind, u.GetNamespace(), name))
+	if !found {
+		return Candidate{}, false
+	}
+	switch w := workload.(type) {
+	case *appsv1.Deployment:
+		return podTemplate(w.Spec.Template)
+	case *appsv1.ReplicaSet:
+		return podTemplate(w.Spec.Template)
+	case *corev1.PodTemplate:
+		return podTemplate(w.Template)
+	}
+	return Candidate{}, false
 }
 
 // labelSelection is a metav1.LabelSelector's selection: a nil one chooses
@@ -76,7 +116,7 @@ func labelSelection(sel *metav1.LabelSelector) (Selection, bool, error) {
 	if err != nil {
 		return Selection{}, false, err
 	}
-	return Selection{Labels: parsed}, true, nil
+	return LabelSelection(parsed), true, nil
 }
 
 // unstructuredSelection reads a metav1.LabelSelector at fields of u.
@@ -94,16 +134,17 @@ func unstructuredSelection(u *unstructured.Unstructured, fields ...string) (Sele
 
 // ServiceSelectors is the family of the workloads a Service's selector
 // chooses: those whose pod template it matches. A Service without a
-// selector chooses none. A Rollout's canary, stable, active and preview
-// Services are chosen by name (RolloutServices), not by selector.
+// selector, or an ExternalName Service, whose selector Kubernetes ignores,
+// chooses none. A Rollout's canary, stable, active and preview Services are
+// chosen by name (RolloutServices), not by selector.
 var ServiceSelectors = &SelectorFamily{
 	Name: "serviceSelectors",
 	Selectors: []Selector{{Kind: kindService, Selection: func(obj runtime.Object) (Selection, bool, error) {
 		svc, ok := obj.(*corev1.Service)
-		if !ok || len(svc.Spec.Selector) == 0 {
+		if !ok || len(svc.Spec.Selector) == 0 || svc.Spec.Type == corev1.ServiceTypeExternalName {
 			return Selection{}, false, nil
 		}
-		return Selection{Labels: labels.SelectorFromSet(svc.Spec.Selector)}, true, nil
+		return LabelSelection(labels.SelectorFromSet(svc.Spec.Selector)), true, nil
 	}}},
 	Selectables: []Selectable{selectDeployment, selectRollout, selectStatefulSet, selectDaemonSet, selectActiveJob},
 }
@@ -122,9 +163,23 @@ var DisruptionBudgets = &SelectorFamily{
 	Selectables: []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
 }
 
+// ciliumSelection is a CiliumNetworkPolicy's selection, as Cilium matches
+// it (netpol.CiliumSelects): any of its specs' endpoint selectors, with
+// Cilium's label sources and the identity labels it derives for a pod. A
+// selector on Namespace labels is undecided, as Radar doesn't read them here.
+func ciliumSelection(obj runtime.Object) (Selection, bool, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return Selection{}, false, nil
+	}
+	return Selection{Matches: func(c Candidate) (bool, bool) {
+		return netpol.CiliumSelects(u, netpol.CiliumIdentityOf(c.Ref.Namespace, c.Labels, c.ServiceAccount, nil))
+	}}, true, nil
+}
+
 // NetworkPolicies is the family of the workloads a NetworkPolicy or
 // CiliumNetworkPolicy applies to: those whose pod template its pod or
-// endpoint selector matches. An empty selector applies to every workload in
+// endpoint selectors match. An empty selector applies to every workload in
 // the policy's namespace, as a default-deny policy does.
 var NetworkPolicies = &SelectorFamily{
 	Name: "networkPolicies",
@@ -136,13 +191,7 @@ var NetworkPolicies = &SelectorFamily{
 			}
 			return labelSelection(&np.Spec.PodSelector)
 		}},
-		{Kind: resourceid.GroupKind{Group: "cilium.io", Kind: "CiliumNetworkPolicy"}, Selection: func(obj runtime.Object) (Selection, bool, error) {
-			u, ok := obj.(*unstructured.Unstructured)
-			if !ok {
-				return Selection{}, false, nil
-			}
-			return unstructuredSelection(u, "spec", "endpointSelector")
-		}},
+		{Kind: resourceid.GroupKind{Group: "cilium.io", Kind: "CiliumNetworkPolicy"}, Selection: ciliumSelection},
 	},
 	Selectables: []Selectable{selectDeployment, selectStatefulSet, selectDaemonSet},
 }
@@ -160,9 +209,9 @@ func monitorSelection(obj runtime.Object) (Selection, bool, error) {
 		return s, ok, err
 	}
 	if anyNamespace, _, _ := unstructured.NestedBool(u.Object, "spec", "namespaceSelector", "any"); anyNamespace {
-		s.InNamespace = func(string) bool { return true }
-	} else if names, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "namespaceSelector", "matchNames"); len(names) > 0 {
-		s.InNamespace = func(namespace string) bool { return slices.Contains(names, namespace) }
+		s.AnyNamespace = true
+	} else {
+		s.Namespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "namespaceSelector", "matchNames")
 	}
 	return s, true, nil
 }

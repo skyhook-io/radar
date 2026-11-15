@@ -22,8 +22,8 @@ type SelectorFamily struct {
 	Name string
 	// Selectors are the kinds that choose, in the order answers list them.
 	Selectors []Selector
-	// Selectables are the kinds that can be chosen, by the labels each
-	// presents, in the order answers list them.
+	// Selectables are the kinds that can be chosen, in the order answers
+	// list them.
 	Selectables []Selectable
 	// CrossNamespace: a selector may choose objects in other namespaces, as
 	// a ServiceMonitor's namespaceSelector does.
@@ -40,28 +40,55 @@ type Selector struct {
 	Selection func(obj runtime.Object) (s Selection, ok bool, err error)
 }
 
-// Selection is what one selector chooses: the objects whose labels match,
-// in its own namespace unless InNamespace says otherwise.
+// Selection is what one selector chooses, and where.
 type Selection struct {
-	Labels labels.Selector
-	// InNamespace, when set, says which namespaces the selector chooses in;
-	// otherwise it chooses only in its own.
-	InNamespace func(namespace string) bool
+	// Matches reports whether c is chosen. decided is false when that can't
+	// be told from what Radar holds, as for a selector on labels Radar
+	// didn't read.
+	Matches func(c Candidate) (chosen, decided bool)
+	// Namespaces are the namespaces it chooses in when it names them, and
+	// AnyNamespace says it chooses in every one; otherwise it chooses in its
+	// own.
+	Namespaces   []string
+	AnyNamespace bool
 }
 
-func (s Selection) chooses(own, namespace string, set labels.Set) bool {
-	if s.InNamespace == nil && namespace != own || s.InNamespace != nil && !s.InNamespace(namespace) {
-		return false
+// LabelSelection is the Selection of a label selector over a candidate's
+// labels, in the selector's own namespace.
+func LabelSelection(sel labels.Selector) Selection {
+	return Selection{Matches: func(c Candidate) (bool, bool) { return sel.Matches(c.Labels), true }}
+}
+
+func (s Selection) chooses(own, namespace string) bool {
+	switch {
+	case s.AnyNamespace:
+		return true
+	case len(s.Namespaces) > 0:
+		return slices.Contains(s.Namespaces, namespace)
 	}
-	return s.Labels.Matches(set)
+	return namespace == own
 }
 
-// Selectable is a kind that can be chosen, and the labels it presents: a
-// workload presents its pod template's. ok is false when the object can't
-// be chosen now, as a Job that has finished.
+// Candidate is an object as a selector sees it: a workload is seen as the
+// pods its template makes.
+type Candidate struct {
+	Ref            resourceid.Ref
+	Labels         labels.Set
+	ServiceAccount string
+}
+
+// Lookup reads another object an answer depends on, as the caller may read
+// it, recording in the answer's coverage why it couldn't. ok is false when
+// the object isn't there to read.
+type Lookup func(ref resourceid.Ref) (obj runtime.Object, ok bool)
+
+// Selectable is a kind that can be chosen. Candidate returns obj as a
+// selector sees it; ok is false when it can't be chosen now, as a Job that
+// has finished, or when what it presents depends on an object lookup
+// couldn't read.
 type Selectable struct {
-	Kind   resourceid.GroupKind
-	Labels func(obj runtime.Object) (set labels.Set, ok bool)
+	Kind      resourceid.GroupKind
+	Candidate func(obj runtime.Object, lookup Lookup) (c Candidate, ok bool)
 }
 
 func (s Selector) selects(gk resourceid.GroupKind) bool {
@@ -88,6 +115,39 @@ type MatchesAnswer struct {
 	Coverage Coverage
 }
 
+// lookup reads objects for an answer whose coverage is c.
+func (v *View) lookup(c *Coverage) Lookup {
+	return func(ref resourceid.Ref) (runtime.Object, bool) {
+		if !v.mayRead(ref.GroupKind(), ref.Namespace, c) {
+			return nil, false
+		}
+		obj, read := v.session.Borrow(ref)
+		switch read.State {
+		case ownership.Present:
+			return obj, true
+		case ownership.Unavailable:
+			c.addGap(read.Gap)
+		}
+		return nil, false
+	}
+}
+
+func (v *View) candidate(s Selectable, o IndexedObject, c *Coverage) (Candidate, bool) {
+	cand, ok := s.Candidate(o.Object, v.lookup(c))
+	cand.Ref = o.Ref
+	return cand, ok
+}
+
+// match reports whether selection chooses cand, recording in c that it
+// couldn't tell when it can't.
+func match(selection Selection, selector resourceid.Ref, cand Candidate, c *Coverage) bool {
+	chosen, decided := selection.Matches(cand)
+	if !decided {
+		c.addGap(ownership.Gap{Kind: selector.GroupKind(), Namespace: selector.Namespace, Reason: readreason.FilterEvalFailed})
+	}
+	return chosen && decided
+}
+
 // Selected answers what subject, a selector of f, chooses. It answers only
 // for a subject Radar holds, as Referrers does.
 func (v *View) Selected(f *SelectorFamily, subject resourceid.Ref, fetched runtime.Object) MatchesAnswer {
@@ -108,13 +168,24 @@ func (v *View) Selected(f *SelectorFamily, subject resourceid.Ref, fetched runti
 	if !ok {
 		return a
 	}
-	s := v.newSearch(subject.Namespace, selection.InNamespace != nil, &a.Coverage)
+	var s search
+	switch {
+	case selection.AnyNamespace:
+		s = v.newSearch(subject.Namespace, true, &a.Coverage)
+	case len(selection.Namespaces) > 0:
+		s = v.newSearchIn(selection.Namespaces, &a.Coverage)
+	default:
+		s = v.newSearch(subject.Namespace, false, &a.Coverage)
+	}
 	for _, target := range f.Selectables {
 		if !sel.selects(target.Kind) {
 			continue
 		}
 		s.each(target.Kind, &a.Coverage, func(o IndexedObject) {
-			if set, ok := target.Labels(o.Object); ok && selection.chooses(subject.Namespace, o.Ref.Namespace, set) {
+			if !selection.chooses(subject.Namespace, o.Ref.Namespace) {
+				return
+			}
+			if cand, ok := v.candidate(target, o, &a.Coverage); ok && match(selection, subject, cand, &a.Coverage) {
 				a.Matches = append(a.Matches, o.Ref)
 			}
 		})
@@ -136,7 +207,7 @@ func (v *View) SelectedBy(f *SelectorFamily, subject resourceid.Ref, fetched run
 	if !held {
 		return a
 	}
-	set, ok := f.Selectables[i].Labels(obj)
+	cand, ok := v.candidate(f.Selectables[i], IndexedObject{Ref: subject, Object: obj}, &a.Coverage)
 	if !ok {
 		return a
 	}
@@ -150,7 +221,7 @@ func (v *View) SelectedBy(f *SelectorFamily, subject resourceid.Ref, fetched run
 			if err != nil {
 				a.Coverage.addGap(ownership.Gap{Kind: sel.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
-			if ok && selection.chooses(o.Ref.Namespace, subject.Namespace, set) {
+			if ok && selection.chooses(o.Ref.Namespace, subject.Namespace) && match(selection, o.Ref, cand, &a.Coverage) {
 				a.Matches = append(a.Matches, o.Ref)
 			}
 		})

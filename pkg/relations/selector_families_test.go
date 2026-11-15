@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -123,5 +124,66 @@ func TestSelectedAnswersAreCappedAndCounted(t *testing.T) {
 	got := NewView(allNamespaces{cluster: cluster{objects: objects}}, ownership.Unrestricted()).WithLimit(2).Selected(ServiceSelectors, refOf(svc), nil)
 	if len(got.Matches) != 2 || !got.Coverage.Truncated || got.Coverage.Total != 3 {
 		t.Errorf("capped at 2 got %+v", got)
+	}
+}
+
+func TestCiliumPoliciesSelectAsCiliumDoes(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	// One of several specs, with Cilium's source prefix on the key.
+	specs := object("cilium.io/v2", "CiliumNetworkPolicy", "specs", nil)
+	delete(specs.Object, "spec")
+	specs.Object["specs"] = []any{
+		map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"k8s:app": "api"}}},
+		map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"k8s:app": "web"}}},
+	}
+	checkSelects(t, NetworkPolicies, []runtime.Object{web, specs}, specs, web)
+
+	// A selector on Namespace labels can't be judged without the Namespace.
+	byNamespace := object("cilium.io/v2", "CiliumNetworkPolicy", "by-ns", map[string]any{"endpointSelector": map[string]any{
+		"matchLabels": map[string]any{"k8s:io.cilium.k8s.namespace.labels.team": "shop"},
+	}})
+	got := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{web, byNamespace}}}, ownership.Unrestricted()).Selected(NetworkPolicies, refOf(byNamespace), nil)
+	if len(got.Matches) != 0 || got.Coverage.Complete() {
+		t.Errorf("a selector on Namespace labels answered %+v; want no claim, incomplete", got)
+	}
+}
+
+func TestAMonitorReadsOnlyTheNamespacesItNames(t *testing.T) {
+	svc := labelled(typed(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web"}}, "", "v1", "Service"), map[string]string{"metrics": "on"})
+	sm := inNamespace(object("monitoring.coreos.com/v1", "ServiceMonitor", "web", map[string]any{
+		"selector":          map[string]any{"matchLabels": map[string]any{"metrics": "on"}},
+		"namespaceSelector": map[string]any{"matchNames": []any{"alpha"}},
+	}), "monitoring")
+	c := allNamespaces{cluster: cluster{objects: []runtime.Object{svc, sm}}, gaps: []ownership.Gap{{Kind: kindService, Namespace: "unrelated", Reason: readreason.RadarNamespaceNotCollected}}}
+	got := NewView(c, ownership.Unrestricted()).Selected(Monitors, refOf(sm), nil)
+	if !slices.Equal(got.Matches, []resourceid.Ref{refOf(svc)}) {
+		t.Fatalf("the monitor selects %+v", got)
+	}
+	for _, g := range got.Coverage.NotChecked {
+		if g.Namespace == "unrelated" {
+			t.Errorf("a monitor naming alpha reported a gap in %q", g.Namespace)
+		}
+	}
+}
+
+func TestAWorkloadRefRolloutIsChosenByItsWorkloadsTemplate(t *testing.T) {
+	template := labelled(deployment("web-template", mounts()), map[string]string{"app": "web"})
+	rollout := object("argoproj.io/v1alpha1", "Rollout", "web", map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web-template"}})
+	svc := typed(&corev1.Service{ObjectMeta: meta("web"), Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "v1", "Service")
+	checkSelects(t, ServiceSelectors, []runtime.Object{template, rollout, svc}, svc, template, rollout)
+
+	// Without its workload readable the Rollout's pods are unknown.
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{template, rollout, svc}, unread: map[resourceid.GroupKind]readreason.Code{kindDeployment: readreason.KindSyncPending}}}, ownership.Unrestricted())
+	if got := v.SelectedBy(ServiceSelectors, refOf(rollout), nil); len(got.Matches) != 0 || got.Coverage.Complete() {
+		t.Errorf("with its workload unread the Rollout's Services are %+v; want none, incomplete", got)
+	}
+}
+
+func TestAnExternalNameServiceSelectsNothing(t *testing.T) {
+	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
+	ext := typed(&corev1.Service{ObjectMeta: meta("ext"), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: "example.org", Selector: map[string]string{"app": "web"}}}, "", "v1", "Service")
+	checkSelects(t, ServiceSelectors, []runtime.Object{web, ext}, ext)
+	if got := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{web, ext}}}, ownership.Unrestricted()).SelectedBy(ServiceSelectors, refOf(web), nil); len(got.Matches) != 0 {
+		t.Errorf("the Deployment is selected by %v", got.Matches)
 	}
 }

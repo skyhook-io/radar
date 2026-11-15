@@ -64,6 +64,15 @@ func (v *View) newSearch(namespace string, across bool, c *Coverage) search {
 	return s
 }
 
+// newSearchIn searches the namespaces a selector names, as an across search
+// does: each object checked where it is, gaps kept only where the caller may
+// read.
+func (v *View) newSearchIn(namespaces []string, c *Coverage) search {
+	namespaces = slices.Compact(slices.Sorted(slices.Values(namespaces)))
+	c.Narrowed = c.Narrowed || v.access != ownership.Unrestricted()
+	return search{v: v, across: true, scope: ownership.SearchScope{Namespaces: namespaces}, index: cache.NamespaceIndex, keys: namespaces}
+}
+
 // each hands fn every object of gk in the search the caller may read.
 func (s search) each(gk resourceid.GroupKind, c *Coverage, fn func(IndexedObject)) {
 	if !s.across && !s.v.mayRead(gk, s.namespace, c) {
@@ -71,6 +80,9 @@ func (s search) each(gk resourceid.GroupKind, c *Coverage, fn func(IndexedObject
 	}
 	read := s.v.session.Indexed(gk, s.index, s.keys, s.scope)
 	for _, g := range read.Gaps {
+		if g.Namespace != "" && !s.scope.AllNamespaces && !slices.Contains(s.scope.Namespaces, g.Namespace) {
+			continue
+		}
 		if !s.across || ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, s.scope) {
 			c.addGap(g)
 		}

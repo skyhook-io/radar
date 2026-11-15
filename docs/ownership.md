@@ -133,17 +133,20 @@ The families so far:
 | `SealedSecrets` | Bitnami SealedSecrets → the Secret of their own name they produce | `status_families.go` |
 
 A **selector family** (`selectors.go`, `selector_families.go`) is one way objects choose others by labels: the kinds
-that select and how each reads its selector, and the kinds that can be chosen and the labels each presents (a
-workload presents its pod template's). `Selected(family, selector)` lists what a selector chooses and
+that select and how each reads its selector, and the kinds that can be chosen and how a selector sees each (a
+workload is seen as the pods its template makes; a Rollout with a `workloadRef` as its referenced workload's, read as
+the caller may read it). `Selected(family, selector)` lists what a selector chooses and
 `SelectedBy(family, object)` what chooses an object, through the same search, access checks and coverage as
 `Referrers`. They follow the API's semantics, not the topology view's display rules: an empty NetworkPolicy, Cilium,
-PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does.
+PodDisruptionBudget or monitor selector chooses everything in scope, as a default-deny policy does. A match Radar
+can't judge, such as a Cilium selector on Namespace labels, leaves the answer incomplete (`filter_eval_failed`)
+rather than reading as no match.
 
 | Family | Selectors → chosen |
 |---|---|
-| `ServiceSelectors` | Services → the Deployments, Rollouts, StatefulSets, DaemonSets and active Jobs whose pod template their selector matches (a Service without a selector chooses none) |
+| `ServiceSelectors` | Services → the Deployments, Rollouts, StatefulSets, DaemonSets and active Jobs whose pod template their selector matches (a Service without a selector, or an ExternalName Service, chooses none) |
 | `DisruptionBudgets` | PodDisruptionBudgets → Deployments, StatefulSets, DaemonSets |
-| `NetworkPolicies` | NetworkPolicies and CiliumNetworkPolicies → Deployments, StatefulSets, DaemonSets |
+| `NetworkPolicies` | NetworkPolicies and CiliumNetworkPolicies → Deployments, StatefulSets, DaemonSets; Cilium policies match as Cilium does (`netpol.CiliumSelects`: every spec, label sources, identity labels) |
 | `Monitors` | ServiceMonitors → Services; PodMonitors → workloads; in the namespaces their `namespaceSelector` names |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
