@@ -13,6 +13,16 @@ Both are listed under the **Velero** category in the Resources sidebar, above th
 
 **The namespace filter does not apply.** Velero keeps its objects in its own namespace (`velero`, `kommander` on NKP, or wherever it was installed), while the filter selects application namespaces; applying it would empty the views. Every kind is still read only where the caller may list it, Radar's `--namespace-scope` still bounds the request, and a namespace the caller did not name is never reported as denied. A caller who cannot list a kind cluster-wide is checked only in the namespaces where Radar holds objects of that kind (its watched namespaces when Radar itself watches namespace by namespace), so the cost does not grow with the cluster and does not depend on Radar listing Namespaces; such a caller's coverage always reads partial, so it never shows whether Velero exists where they cannot look. More than one installation shows installation chips.
 
+## Back up now
+
+The Schedule drawer's **Back up now** creates a Backup from the schedule's template, exactly as `velero backup create --from-schedule` does (`pkg/velero.BackupFromSchedule`): the template as its spec, the template's labels (else the schedule's) plus `velero.io/schedule-name`, the schedule's annotations except kubectl's last-applied, an owner reference when the schedule sets `useOwnerReferencesInBackup`, and the name `<schedule>-<UTC timestamp>`. The confirmation shows what it backs up, where it is stored and how long it is kept.
+
+- **It is one of the schedule's runs.** The label makes Velero hold the schedule's next run while it is in progress, and Radar lists it among the runs; the confirmation says so.
+- **As the caller.** The schedule is read and the Backup created with the caller's identity, so the apiserver enforces `get schedules` and `create backups`.
+- **Bound to what was reviewed.** The request carries the schedule's `resourceVersion`; a schedule edited since is refused (409).
+- **Refused when it would fail:** a schedule whose name does not fit a label (409; the button is disabled).
+- `POST /api/velero/schedules/{namespace}/{name}/backup`, behind capability `veleroBackupNow`.
+
 ## Data
 
 - `GET /api/velero/workspace`: every installation the caller can read. Readings, not objects; every time is absolute, with `observedAt` saying when the readings were computed.

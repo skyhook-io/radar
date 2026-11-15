@@ -684,6 +684,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.
 			r.Post("/velero/{kind}/{namespace}/{name}/messages", s.handleVeleroRunMessages)
+			// POST: creates a Backup from the schedule's template, as the caller.
+			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
 
 			r.Get("/namespaces", s.handleNamespaces)
 			r.Get("/api-resources", s.handleAPIResources)
@@ -1507,6 +1509,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		CNPGWorkspace:            true,
 		CNPGProtectionSetup:      true,
 		VeleroWorkspace:          true,
+		VeleroBackupNow:          true,
 		ServiceEndpointSlices:    true,
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,

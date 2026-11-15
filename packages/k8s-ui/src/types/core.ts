@@ -187,6 +187,8 @@ export interface FeatureCapabilities {
   cnpgWorkspace?: boolean
   cnpgProtectionSetup?: boolean
   veleroWorkspace?: boolean
+  /** POST /api/velero/schedules/{namespace}/{name}/backup */
+  veleroBackupNow?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

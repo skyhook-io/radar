@@ -49,6 +49,7 @@ export const RADAR_FEATURES = {
   cnpgWorkspace: { label: 'CloudNativePG views', flag: 'cnpgWorkspace', flagShippedWithEndpoint: true },
   cnpgProtectionSetup: { label: 'CloudNativePG backup setup', flag: 'cnpgProtectionSetup', flagShippedWithEndpoint: true },
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
+  veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },

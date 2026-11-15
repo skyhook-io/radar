@@ -5,7 +5,7 @@ import { schedule } from '../../velero/velero.fixtures'
 const activity = vi.hoisted(() => ({ current: {} as Record<string, unknown> }))
 
 vi.mock('../../../api/client', () => ({ useRadarFeature: () => ({ support: 'supported' }) }))
-vi.mock('../../../api/velero', () => ({ useVeleroScheduleActivity: () => activity.current }))
+vi.mock('../../../api/velero', () => ({ useVeleroScheduleActivity: () => activity.current, useVeleroBackupNow: () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false }) }))
 vi.mock('@skyhook-io/k8s-ui/components/resources/renderers/VeleroScheduleRenderer', () => ({
   VeleroScheduleRenderer: ({ activity }: { activity?: unknown }) => <>{activity as never}<p>schedule spec</p></>,
 }))

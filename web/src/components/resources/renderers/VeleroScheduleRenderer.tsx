@@ -4,6 +4,7 @@ import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/rende
 import { useRadarFeature } from '../../../api/client'
 import { useVeleroScheduleActivity } from '../../../api/velero'
 import { RefreshFailedNotice } from '../../workspace/layout'
+import { VeleroBackupNow } from '../../velero/VeleroBackupNow'
 
 /**
  * Host wrapper leading a Velero Schedule with "Schedule activity": the server's
@@ -21,6 +22,7 @@ export function VeleroScheduleRenderer({ data, onNavigate }: { data: any; onNavi
       {/* A failed refresh keeps the last reading; say how old it is rather than present it as current. */}
       <RefreshFailedNotice queries={[activity]} className="px-4 pb-2" />
       <VeleroScheduleActivity reading={reading} created={data?.metadata?.creationTimestamp} onNavigate={onNavigate} />
+      <VeleroBackupNow schedule={data} reading={reading} onNavigate={onNavigate} />
     </>
   ) : support === 'supported' && activity.error ? (
     <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />
