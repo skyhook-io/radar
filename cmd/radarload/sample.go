@@ -146,7 +146,7 @@ func processStats(ctx context.Context, pid int) (uint64, float64, error) {
 	return rss * 1024, cpu, err
 }
 
-func (c *radarClient) sample(ctx context.Context, start time.Time, pid int) sample {
+func (c *radarClient) sample(ctx context.Context, start time.Time, pid int, runtime bool) sample {
 	s := sample{At: time.Now()}
 	if !start.IsZero() {
 		s.Elapsed = s.At.Sub(start).Seconds()
@@ -157,6 +157,9 @@ func (c *radarClient) sample(ctx context.Context, start time.Time, pid int) samp
 	} else {
 		s.RSS = &rss
 		s.CPU = &cpu
+	}
+	if !runtime {
+		return s
 	}
 	b, err := c.bytes(ctx, "/debug/pprof/heap?debug=1")
 	if err == nil {

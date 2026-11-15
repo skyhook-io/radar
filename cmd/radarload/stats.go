@@ -79,22 +79,33 @@ func summarize(samples []sample, c *workloadCounters, seconds float64) summary {
 			rate := delta * 60 / b.At.Sub(a.At).Seconds()
 			s.CPUPerMinute = &rate
 		}
-		if a.Heap != nil && b.Heap != nil && b.Heap.GC >= a.Heap.GC {
-			delta := b.Heap.GC - a.Heap.GC
-			s.GCCount = &delta
+		// Heap reads are spaced out (-runtime-every), so GC and pause totals
+		// come from the samples that carry one.
+		var withHeap []int
+		for i := range samples {
+			if samples[i].Heap != nil {
+				withHeap = append(withHeap, i)
+			}
+		}
+		if len(withHeap) >= 2 {
+			first, last := samples[withHeap[0]].Heap, samples[withHeap[len(withHeap)-1]].Heap
+			if last.GC >= first.GC {
+				delta := last.GC - first.GC
+				s.GCCount = &delta
+			}
 		}
 		var pause uint64
-		for i := 1; i < len(samples); i++ {
-			if samples[i-1].Heap == nil || samples[i].Heap == nil {
-				s.PauseError = "heap sample missing"
-				continue
-			}
-			delta, err := pauseDelta(samples[i-1].Heap, samples[i].Heap)
+		if len(withHeap) < 2 {
+			s.PauseError = "fewer than two heap samples"
+		}
+		for j := 1; j < len(withHeap); j++ {
+			prev, cur := withHeap[j-1], withHeap[j]
+			delta, err := pauseDelta(samples[prev].Heap, samples[cur].Heap)
 			if err != nil {
 				s.PauseError = err.Error()
 				continue
 			}
-			samples[i].GCPauseNS = &delta
+			samples[cur].GCPauseNS = &delta
 			pause += delta
 		}
 		if s.PauseError == "" {

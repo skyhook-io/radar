@@ -15,9 +15,12 @@ import (
 )
 
 type config struct {
-	URL          string        `json:"url"`
-	PID          int           `json:"pid"`
-	Duration     time.Duration `json:"duration_ns"`
+	URL      string        `json:"url"`
+	PID      int           `json:"pid"`
+	Duration time.Duration `json:"duration_ns"`
+	// RuntimeEvery spaces the Go heap and goroutine reads: producing a heap
+	// profile costs the target real CPU, so sampling it often skews CPU.
+	RuntimeEvery time.Duration `json:"runtime_every_ns"`
 	SSE          int           `json:"sse"`
 	Askers       int           `json:"askers"`
 	QPS          float64       `json:"qps"`
@@ -83,6 +86,7 @@ func command(args []string) error {
 	f.StringVar(&c.URL, "url", "http://localhost:9280", "Radar HTTP base URL (may include a base path)")
 	f.IntVar(&c.PID, "pid", 0, "local Radar process PID (not the go run wrapper)")
 	f.DurationVar(&c.Duration, "duration", 10*time.Minute, "measurement duration; minimum 35s for CPU profiling")
+	f.DurationVar(&c.RuntimeEvery, "runtime-every", 30*time.Second, "how often to read Go heap and goroutine counts from pprof (RSS and CPU are read every 2s)")
 	f.IntVar(&c.SSE, "sse", 3, "concurrent SSE connections")
 	f.IntVar(&c.Askers, "askers", 4, "concurrent request workers")
 	f.Float64Var(&c.QPS, "qps", 20, "combined offered requests/second; saturated slots are counted as dropped")
@@ -106,7 +110,7 @@ func command(args []string) error {
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if c.PID <= 0 || c.Duration < 35*time.Second || c.SSE < 0 || c.Askers < 1 || c.QPS <= 0 || c.QPS > 1e6 || math.IsNaN(c.QPS) || math.IsInf(c.QPS, 0) || c.PerKind < 1 || c.Timeout <= 0 || c.ReadyTimeout <= 0 {
+	if c.PID <= 0 || c.Duration < 35*time.Second || c.SSE < 0 || c.Askers < 1 || c.QPS <= 0 || c.QPS > 1e6 || math.IsNaN(c.QPS) || math.IsInf(c.QPS, 0) || c.PerKind < 1 || c.Timeout <= 0 || c.ReadyTimeout <= 0 || c.RuntimeEvery < 2*time.Second {
 		return errors.New("require -pid > 0, -duration >= 35s, -sse >= 0, -askers >= 1, 0 < -qps <= 1000000, positive limits/timeouts")
 	}
 	if err := os.MkdirAll(filepath.Dir(c.Out), 0755); err != nil {
@@ -192,7 +196,7 @@ func run(ctx context.Context, c config, client *radarClient) error {
 	if len(neighborhoods) == 0 {
 		return errors.New("no usable neighborhood roots; cannot exercise required neighborhood workload")
 	}
-	initial := client.sample(ctx, time.Time{}, c.PID)
+	initial := client.sample(ctx, time.Time{}, c.PID, true)
 	if len(initial.Errors) > 0 {
 		return fmt.Errorf("sampling preflight failed: %v; pprofEnabled in internal/server/server.go requires a local listener, auth, or RADAR_PPROF=true (never Cloud)", initial.Errors)
 	}
@@ -220,8 +224,13 @@ func run(ctx context.Context, c config, client *radarClient) error {
 		profileDone <- client.profile(loadCtx, c.Out, "cpu", "/debug/pprof/profile?seconds=30")
 	}()
 	ticker := time.NewTicker(2 * time.Second)
+	var lastRuntime time.Time
 	r.Samples = append(r.Samples, sampleWindow(loadCtx, ticker.C, func(ctx context.Context) sample {
-		return client.sample(ctx, r.Started, c.PID)
+		runtime := time.Since(lastRuntime) >= c.RuntimeEvery
+		if runtime {
+			lastRuntime = time.Now()
+		}
+		return client.sample(ctx, r.Started, c.PID, runtime)
 	})...)
 	r.Ended = time.Now()
 	ticker.Stop()
