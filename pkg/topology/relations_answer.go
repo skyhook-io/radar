@@ -254,13 +254,55 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 			if n.allowedRef(*meta) {
 				rel.ManagedBy = []ResourceRef{*meta}
 			}
-		} else if top := ChainOf(ov.ControllerChain(subject)).Top(); top != nil {
+		} else if top := n.topManager(session, ov, subject); top != nil {
 			rel.ManagedBy = []ResourceRef{*top}
 		} else {
 			rel.ManagedBy = n.ownManagers(rel, ov, subject)
 		}
 	}
 	return rel, n.coverage
+}
+
+// topManager climbs from subject while something readable is above it: the
+// top of its controller chain, else an owner reference that isn't a
+// controller's (a CiliumEndpoint's Pod, a CiliumNode's Node), else a
+// NodeClaim's NodePool. It stops below GitOps managers: what manages a
+// workload's Application is ownership.manager's answer, not this one.
+func (n *neighborhood) topManager(session relations.Session, ov *ownership.View, subject resourceid.Ref) *ResourceRef {
+	var last *ResourceRef
+	seen := map[resourceid.Ref]bool{subject: true}
+	for cur := subject; len(seen) <= 16; {
+		next, ok := n.above(session, ov, cur)
+		if !ok || seen[next] {
+			break
+		}
+		r := refOf(next)
+		if !n.allowedRef(r) {
+			break
+		}
+		seen[next], last, cur = true, &r, next
+	}
+	return last
+}
+
+func (n *neighborhood) above(session relations.Session, ov *ownership.View, r resourceid.Ref) (resourceid.Ref, bool) {
+	if top := ChainOf(ov.ControllerChain(r)).Top(); top != nil {
+		if id := refIdentity(*top); id != r {
+			return id, true
+		}
+	}
+	_, owners := ov.References(r)
+	var found []resourceid.Ref
+	for _, owner := range owners {
+		if owner.State == ownership.OwnerFound {
+			found = append(found, owner.Ref)
+		}
+	}
+	if len(found) > 0 {
+		slices.SortFunc(found, func(a, b resourceid.Ref) int { return strings.Compare(a.Key(), b.Key()) })
+		return found[0], true
+	}
+	return n.nodePool(session, r)
 }
 
 // ownManagers is what manages an object nothing owns: the controllers that

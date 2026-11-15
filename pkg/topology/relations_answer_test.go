@@ -336,3 +336,22 @@ func TestRelationsAnswerManagedByOwnManager(t *testing.T) {
 		t.Fatalf("hidden generator named: %+v", rel.ManagedBy)
 	}
 }
+
+func TestRelationsAnswerManagedByClimbsNonControllerOwners(t *testing.T) {
+	controller := true
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "deployment"}}, "apps", "Deployment")
+	rs := projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "rs", UID: "rs", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "deployment", Controller: &controller}}}}, "apps", "ReplicaSet")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod", UID: "pod", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs", UID: "rs", Controller: &controller}}}}, "", "Pod")
+	// An object a Pod owns without being its controller, as a CiliumEndpoint is.
+	endpoint := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod-endpoint", UID: "endpoint", OwnerReferences: []metav1.OwnerReference{{APIVersion: "v1", Kind: "Pod", Name: "pod", UID: "pod"}}}}, "", "ConfigMap")
+	s := newProjectionSession(t, endpoint, pod, rs, deployment)
+	rel := projectionAnswer(t, s, endpoint, ownership.Unrestricted(), ownership.Unrestricted())
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Deployment" || rel.ManagedBy[0].Name != "web" {
+		t.Fatalf("climb through a non-controller owner: %+v", rel.ManagedBy)
+	}
+	s = newProjectionSession(t, endpoint, pod, rs, deployment)
+	rel = projectionAnswer(t, s, endpoint, projectionAccess{denied: []string{"ReplicaSet"}}, ownership.Unrestricted())
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Pod" {
+		t.Fatalf("stop below an unreadable owner: %+v", rel.ManagedBy)
+	}
+}
