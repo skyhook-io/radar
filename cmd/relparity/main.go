@@ -336,7 +336,7 @@ func main() {
 	}
 	afterAnswer := func(access func(*ownership.Catalog) ownership.Access) func(subject) measuredAnswer {
 		return func(s subject) measuredAnswer {
-			rel, coverage := k8s.AnswerRelationships(cache, s.obj, access, access, istioDomain)
+			rel, coverage, _ := k8s.AnswerRelationships(cache, s.obj, access, access, istioDomain)
 			if rel == nil {
 				log.Fatalf("family answer unavailable for %s", s.ref.Key())
 			}

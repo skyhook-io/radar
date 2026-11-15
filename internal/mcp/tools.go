@@ -1394,14 +1394,8 @@ func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
 	return (gvk.Kind == "Secret" && gvk.Group == "") || meaningfulchanges.TrackedKindForGroup(gvk.Kind, gvk.Group)
 }
 
-// buildMCPResourceContext assembles the resourceContext section for MCP
-// get_resource. Mirrors the REST handler's buildAIResourceContext: pre-
-// computes IssueSummary + AuditSummary in the caller, threads the
-// PolicyReport index when Kyverno is installed, hands a request-scoped
-// RBAC checker to Build for per-ref gating, and lets Build's own
-// fallback resolve Relationships via topology.GetRelationshipsWithObject
-// (which applies KindForGVK so cross-group CRDs map to the right
-// topology node).
+// buildMCPResourceContext assembles the same access-checked family and
+// ownership answers as REST, with precomputed issue and audit facts.
 func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, issueSummary *resourcecontext.IssueSummary, includeTopology bool) *resourcecontext.ResourceContext {
 	return buildMCPResourceContextWithOperatorChildren(
 		ctx,
@@ -1476,11 +1470,12 @@ func buildMCPResourceContextWithOperatorChildren(ctx context.Context, obj runtim
 	}
 
 	if includeTopology {
-		if topo, index, prov, dyn, ok := mcpTopologyForContext(); ok {
-			opts.RelIndex = index
-			opts.Topology = topo
-			opts.Provider = prov
-			opts.DynamicProv = dyn
+		access := func(c *ownership.Catalog) ownership.Access { return ownershipAccess(ctx, c) }
+		traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+		opts.Relationships, _, opts.RelationshipExtras = k8s.AnswerResourceContextRelationships(cache, obj, access, traverse, "")
+		if cache != nil {
+			opts.Provider = k8s.NewTopologyResourceProvider(cache)
+			opts.DynamicProv = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 		}
 	}
 	opts.OpenTelemetryAutoInstrumentation, opts.OpenTelemetryAutoInstrumentationUnavailable = k8s.OpenTelemetryAutoInstrumentationForObject(obj, func(group, resource, namespace, verb string) bool {

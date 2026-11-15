@@ -284,6 +284,7 @@ func TestResourceContextOwnerAsksNothingAboutChildren(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatal(err)
 	}
+	k8s.GetServerVersion()
 	prev := k8s.SetTestClient(&kubernetes.Clientset{})
 	defer k8s.SetTestClient(prev)
 	ctx := withTestUserPerms(t, "viewer", nil, nil)

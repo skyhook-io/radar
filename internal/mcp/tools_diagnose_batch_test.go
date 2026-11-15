@@ -110,11 +110,25 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 	if graphCalls != 0 {
 		t.Fatal("batch diagnosis requested a global relationship graph")
 	}
-	if _, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: "Job", Namespace: "alpha", Name: "run"}); err != nil {
+	getResult, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: "Job", Namespace: "alpha", Name: "run"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if graphCalls == 0 {
-		t.Fatal("get_resource stopped using its relationship graph")
+	var getBody map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(renderContent(getResult.Content)), &getBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(getBody["resourceContext"]) == 0 || len(getBody["resource"]) == 0 {
+		t.Fatalf("get_resource envelope changed: %s", renderContent(getResult.Content))
+	}
+	for _, key := range []string{"relationshipExtras", "fields", "declarations", "scalerManagers"} {
+		if _, ok := getBody[key]; ok {
+			t.Fatalf("in-process companion leaked to get_resource: %s", key)
+		}
+	}
+
+	if graphCalls != 0 {
+		t.Fatal("get_resource requested the retired relationship graph")
 	}
 	ctx := withTestUserPerms(t, "other-team", nil, []string{"other"})
 	if _, _, err := handleDiagnose(ctx, nil, input); err == nil {
