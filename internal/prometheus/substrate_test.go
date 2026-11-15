@@ -118,7 +118,9 @@ func TestSubstrateScopeStates(t *testing.T) {
 		{ErrScopeMismatch, SubstrateChartMismatch},
 		{prom.ErrPartialResponse, SubstrateChartError},
 	} {
-		resolve := func(context.Context, scopeProbe) (string, SeriesIsolation, error) { return "", SeriesIsolation{}, tc.err }
+		resolve := func(context.Context, scopeProbe) (string, SeriesIsolation, error) {
+			return "", SeriesIsolation{}, tc.err
+		}
 		f := &fakeSubstrateProm{}
 		charts := querySubstrateCharts(context.Background(), f, resolve, poolRequest(substratePoolCharts()))
 		for _, c := range charts {
@@ -295,7 +297,7 @@ func TestSubstrateChartGaps(t *testing.T) {
 	if c := chartByID(charts, "readiness"); c.State != SubstrateChartOK || c.Reason != "no data for ready" {
 		t.Fatalf("readiness = %s %q, want ok noting the missing ready series", c.State, c.Reason)
 	}
-	if c := chartByID(charts, "resumeTime"); c.State != SubstrateChartNoSeries || !strings.Contains(c.Reason, "no ate_actor_lifecycle_operation_duration_seconds_bucket") {
+	if c := chartByID(charts, "resumeTime"); c.State != SubstrateChartNoSeries || !strings.Contains(c.Reason, "has ate_actor_lifecycle_operation_duration_seconds_count but none of the classic histogram buckets") {
 		t.Fatalf("resumeTime = %s %q, want missing buckets named", c.State, c.Reason)
 	}
 }
@@ -330,3 +332,34 @@ func TestSubstrateNodePresenceUsesEveryFamily(t *testing.T) {
 	}
 }
 
+// The restore chart also reads checkpoints: either family counts for presence and attribution.
+func TestSubstrateRestoreChartReadsCheckpointsToo(t *testing.T) {
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		{`count(last_over_time(ate_actor_checkpoint_duration_seconds_count{node=""}`, result(series(nil, 1))},
+	}}
+	charts := []SubstrateChart{}
+	for _, d := range substrateNodeCharts() {
+		charts = append(charts, SubstrateChart{ID: d.id, State: SubstrateChartNoSeries})
+	}
+	markUnattributedNodeCharts(context.Background(), f, "", time.Hour, charts)
+	if c := chartByID(charts, "restoreTime"); c.State != SubstrateChartNotAttributable || !strings.Contains(c.Reason, "ate_actor_checkpoint_duration_seconds_count") {
+		t.Fatalf("restoreTime = %s %q, want checkpoints named as unattributable", c.State, c.Reason)
+	}
+}
+
+// Scope for a node's charts does not require every atelet family to be present here.
+func TestSubstrateNodeScopeIgnoresAbsentFamilies(t *testing.T) {
+	families := []substrateFamily{{metric: "atelet_snapshot_undurable_age_max_seconds"}, {metric: "ate_actor_checkpoint_duration_seconds_count"}}
+	resolve := func(context.Context, scopeProbe) (string, SeriesIsolation, error) {
+		return `cluster="a"`, SeriesIsolation{Mode: SeriesIsolationVerified}, nil
+	}
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		{`count(count_over_time(ate_actor_checkpoint_duration_seconds_count{}`, result(series(nil, 1))},
+	}}
+	if check := checkSubstrateFamilies(context.Background(), f, resolve, families, "", time.Hour, false); check.state != "" {
+		t.Fatalf("node scope = %s %q, want no refusal", check.state, check.reason)
+	}
+	if check := checkSubstrateFamilies(context.Background(), f, resolve, families, "", time.Hour, true); check.state != SubstrateChartMismatch {
+		t.Fatalf("paired check = %s, want mismatch", check.state)
+	}
+}

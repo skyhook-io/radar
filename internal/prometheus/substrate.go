@@ -93,12 +93,12 @@ type substrateFamily struct {
 
 type substrateChartDef struct {
 	id, title, unit, population, source, seriesBy string
-	family                                         substrateFamily
+	family                                        substrateFamily
 	// also: other families the chart's queries read. Each is checked like
 	// family; the chart is drawn only when all of them resolve to one scope.
-	also []substrateFamily
-	queries                                        func(sel, window string) []substrateQuery
-	emptyReason                                    string
+	also        []substrateFamily
+	queries     func(sel, window string) []substrateQuery
+	emptyReason string
 	// presence: the series the chart's queries actually read, when that is
 	// not family (a quantile reads _bucket; family is _count).
 	presence string
@@ -280,7 +280,7 @@ type substrateScopeResolver func(ctx context.Context, probe scopeProbe) (string,
 // reads, probed together so that two families from different clusters are
 // caught even when no cluster label proves either, and refuses a summed or
 // averaged family reported through more than one scrape job.
-func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, families []substrateFamily, sel string, window time.Duration) substrateFamilyCheck {
+func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, families []substrateFamily, sel string, window time.Duration, requireEach bool) substrateFamilyCheck {
 	extra := make([]string, 0, len(families)-1)
 	for _, f := range families[1:] {
 		extra = append(extra, f.metric)
@@ -298,7 +298,7 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 	check := substrateFamilyCheck{matchers: matchers, isolation: iso}
 	// A verified scope is accepted once any of the families appears under it;
 	// one that appears only outside it would leave a paired chart half drawn.
-	if matchers != "" && len(families) > 1 {
+	if requireEach && matchers != "" && len(families) > 1 {
 		for _, f := range families {
 			present := func(s string) (bool, error) {
 				res, err := strictQuerier{q}.Query(ctx, "count(count_over_time("+f.metric+"{"+s+"}["+window.String()+"]))")
@@ -341,6 +341,10 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 	return check
 }
 
+func (d substrateChartDef) families() []substrateFamily {
+	return append([]substrateFamily{d.family}, d.also...)
+}
+
 func substrateFamiliesKey(families []substrateFamily) string {
 	metrics := make([]string, len(families))
 	for i, f := range families {
@@ -376,7 +380,7 @@ func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrat
 		families := append([]substrateFamily{d.family}, d.also...)
 		key := substrateFamiliesKey(families)
 		if _, ok := checks[key]; !ok {
-			checks[key] = checkSubstrateFamilies(ctx, q, resolve, families, req.sel, probeWindow)
+			checks[key] = checkSubstrateFamilies(ctx, q, resolve, families, req.sel, probeWindow, true)
 		}
 	}
 
@@ -460,10 +464,15 @@ func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef
 	if err == nil && !found && presence != d.family.metric {
 		// Observations without classic buckets: a native-histogram pipeline,
 		// or one that dropped the buckets. Not the same as no activity.
-		var counted bool
-		if counted, err = present(d.family.metric); err == nil && counted {
-			c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has "+d.family.metric+" but no "+presence+" series; Radar reads classic histogram buckets"
-			return
+		for _, f := range d.families() {
+			var counted bool
+			if counted, err = present(f.metric); err != nil {
+				break
+			}
+			if counted {
+				c.State, c.Reason = SubstrateChartNoSeries, "Prometheus has "+f.metric+" but none of the classic histogram buckets (_bucket) Radar reads"
+				return
+			}
 		}
 	}
 	switch {
@@ -610,10 +619,13 @@ func markUnattributedNodeCharts(ctx context.Context, q seriesQuerier, matchers s
 		if charts[i].State != SubstrateChartNoSeries {
 			continue
 		}
-		res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+defs[i].family.metric+"{"+withScope(`node=""`, matchers)+"}["+window.String()+"]))")
-		if err == nil && len(res.Series) > 0 {
-			charts[i].State = SubstrateChartNotAttributable
-			charts[i].Reason = defs[i].family.metric + " is exported without a node label, so Radar cannot tell which node reported it"
+		for _, f := range defs[i].families() {
+			res, err := strictQuerier{q}.Query(ctx, "count(last_over_time("+f.metric+"{"+withScope(`node=""`, matchers)+"}["+window.String()+"]))")
+			if err == nil && len(res.Series) > 0 {
+				charts[i].State = SubstrateChartNotAttributable
+				charts[i].Reason = f.metric + " is exported without a node label, so Radar cannot tell which node reported it"
+				break
+			}
 		}
 	}
 }
@@ -673,7 +685,8 @@ func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 		for i, f := range substrateNodeFamilies {
 			families[i] = substrateFamily{metric: f}
 		}
-		scope := checkSubstrateFamilies(ctx, q, resolve, families, "", window)
+		// Scope only: a family absent here says nothing about the node's other charts.
+		scope := checkSubstrateFamilies(ctx, q, resolve, families, "", window, false)
 		if scope.state != "" {
 			return SubstrateHealthResponse{Status: SubstrateChartError, Reason: scope.reason, Range: rangeName, Charts: []SubstrateChart{}}
 		}
@@ -686,7 +699,12 @@ func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 		}
 		charts := querySubstrateCharts(ctx, q, resolve, substrateRequest{sel: substrateNodeSelector(node), charts: substrateNodeCharts(), rangeName: rangeName, start: start, end: end, step: step})
 		markUnattributedNodeCharts(ctx, q, scope.matchers, window, charts)
-		return SubstrateHealthResponse{Status: SubstrateAvailable, Range: rangeName, Charts: charts}
+		status, reason = substrateResponseStatus(charts)
+		if status == SubstrateNotFound {
+			// atelet reports for this node, just none of what these charts read.
+			status = SubstrateAvailable
+		}
+		return SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
 	})
 }
 
