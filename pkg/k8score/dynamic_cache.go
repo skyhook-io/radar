@@ -577,9 +577,9 @@ func (d *DynamicResourceCache) hasCoveringInformer(gvr schema.GroupVersionResour
 
 // startWatching creates and starts an informer for (gvr, scopeNS), where
 // scopeNS == "" is cluster-wide. No access probe — the caller has decided the
-// scope. Each informer runs under its own context derived from the global
-// stop channel, so a single informer can be cancelled independently (the
-// idle reaper relies on this) while Stop() still tears them all down.
+// scope. Each informer runs under its own child of the cache's stop context,
+// so a cluster-wide watch can cancel the namespace informers it supersedes
+// while Stop() still tears them all down.
 func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, scopeNS string) error {
 	return d.startWatchingScope(gvr, scopeNS, false)
 }
@@ -675,7 +675,8 @@ func (d *DynamicResourceCache) startWatchingScope(gvr schema.GroupVersionResourc
 	kind := d.gvrToKind(gvr)
 	d.addDynamicChangeHandlers(informer, kind, gvr)
 	// Re-apply handlers registered via AddGVRChangeHandler so informers created
-	// lazily (or re-created after an idle reap) still feed derived caches.
+	// lazily (per-namespace watches, or a cluster-wide one replacing them) still
+	// feed derived caches.
 	for _, h := range d.gvrHandlers[gvr] {
 		if _, err := informer.AddEventHandler(h); err != nil {
 			log.Printf("Warning: re-applying change handler for %v failed: %v", gvr, err)
@@ -3246,7 +3247,7 @@ func (d *DynamicResourceCache) AddGVRChangeHandler(gvr schema.GroupVersionResour
 	}
 
 	// Remember the handler so informers started later for this GVR (lazy
-	// per-namespace watches, or re-creations after an idle reap) get it too —
+	// per-namespace watches, or a cluster-wide one replacing them) get it too —
 	// otherwise derived caches silently miss those namespaces' events.
 	d.gvrHandlers[gvr] = append(d.gvrHandlers[gvr], handler)
 
