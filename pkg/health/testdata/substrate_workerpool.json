@@ -1,0 +1,532 @@
+[
+  {
+    "name": "ready",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 3,
+        "readyReplicas": 3,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "healthy",
+    "uiLevel": "healthy",
+    "text": "Ready",
+    "critical": false
+  },
+  {
+    "name": "unresolved, no worker ready",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "SandboxConfigNotFound",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "SandboxConfigNotFound",
+    "critical": true
+  },
+  {
+    "name": "unresolved, workers still ready on the last config",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 2,
+        "readyReplicas": 2,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "SandboxConfigNotFound",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "alert",
+    "text": "SandboxConfigNotFound",
+    "critical": false
+  },
+  {
+    "name": "unresolved, Pods exist but none ready",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 3,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "SandboxConfigNotFound",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "SandboxConfigNotFound",
+    "critical": true
+  },
+  {
+    "name": "unresolved while scaled to zero",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 0
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "DefaultConfigNotFound",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "alert",
+    "text": "DefaultConfigNotFound",
+    "critical": false
+  },
+  {
+    "name": "unresolved with no observed generation",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 2
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "SandboxConfigNotFound",
+                "message": "m",
+                "observedGeneration": 0,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "SandboxConfigNotFound",
+    "critical": true
+  },
+  {
+    "name": "failure reported for an older generation",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 2
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "False",
+                "reason": "SandboxConfigNotFound",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "SandboxConfigNotFound",
+    "critical": false
+  },
+  {
+    "name": "resolution not yet judged for this generation",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 2
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 3,
+        "readyReplicas": 3,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Resolving",
+    "critical": false
+  },
+  {
+    "name": "scaled to zero",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 0
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "uiLevel": "neutral",
+    "text": "Scaled to zero",
+    "critical": false
+  },
+  {
+    "name": "scaling down",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 0
+      },
+      "status": {
+        "replicas": 2,
+        "readyReplicas": 1,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Scaling down",
+    "critical": false
+  },
+  {
+    "name": "scaling up",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 1,
+        "readyReplicas": 1,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Scaling",
+    "critical": false
+  },
+  {
+    "name": "no status yet",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Pending",
+    "critical": false
+  }
+]

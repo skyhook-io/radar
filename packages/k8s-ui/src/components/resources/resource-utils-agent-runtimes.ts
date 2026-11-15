@@ -48,11 +48,15 @@ function workerPoolResolvedConditions(resource: any): { condition: any; stale: b
   return classes.map(sandboxClass => {
     const condition = findCondition(sandboxClass?.conditions, 'Resolved')
     const observed = count(condition?.observedGeneration)
-    return { condition, stale: generation !== undefined && observed !== undefined && observed < generation }
+    return { condition, stale: generation !== undefined && observed !== undefined && observed > 0 && observed < generation }
   })
 }
 
 /**
+ * Mirrors pkg/health ReadSubstrateWorkerPool, which Issues and AI summaries
+ * use; pkg/health/testdata/substrate_workerpool.json pins both. The UI shows
+ * `alert` where Go's levels say degraded.
+ *
  * WorkerPool has no Ready condition and no top-level observedGeneration. Its
  * one condition, Resolved, sits per sandbox class in status.sandboxClasses[]
  * and records the generation it was computed for. While a class does not
@@ -66,14 +70,15 @@ export function getWorkerPoolStatus(resource: any): StatusBadge {
   const ready = count(status?.readyReplicas) ?? 0
   const pods = count(status?.replicas) ?? 0
 
+  const desired = count(resource?.spec?.replicas)
   for (const { condition, stale } of resolved) {
     if (condition?.status !== 'False') continue
     // Reported for an older spec: the controller has not judged the current one yet.
     if (stale) return badge(condition.reason || 'Unresolved', 'degraded')
-    return badge(condition.reason || 'Unresolved', ready > 0 ? 'alert' : 'unhealthy')
+    // Nothing can host the pool's actors only when workers are wanted and none is ready.
+    return badge(condition.reason || 'Unresolved', desired !== undefined && desired > 0 && ready === 0 ? 'unhealthy' : 'alert')
   }
 
-  const desired = count(resource?.spec?.replicas)
   if (desired === 0) return pods > 0 ? badge('Scaling down', 'degraded') : badge('Scaled to zero', 'neutral')
   if (!status || resolved.length === 0) return badge('Pending', 'degraded')
   if (resolved.some(r => r.stale || r.condition?.status !== 'True')) return badge('Resolving', 'degraded')

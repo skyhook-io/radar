@@ -75,6 +75,20 @@ describe('Agent Sandbox warm pools and expiry', () => {
   })
 })
 
+const poolVectors = JSON.parse(readFileSync(new URL('../../../../../pkg/health/testdata/substrate_workerpool.json', import.meta.url), 'utf8'))
+
+describe('Agent Substrate WorkerPool status (shared with pkg/health)', () => {
+  for (const vector of poolVectors) {
+    it(vector.name, () => {
+      const expected = { text: vector.text, level: vector.uiLevel }
+      expect(getWorkerPoolStatus(vector.object)).toMatchObject(expected)
+      expect(getResourceStatus('workerpools', vector.object)).toMatchObject(expected)
+      expect(getAgentRuntimeStatus(vector.object)).toMatchObject(expected)
+      expect(getCellFilterValue(vector.object, 'status', 'substrateworkerpools')).toBe(vector.text)
+    })
+  }
+})
+
 describe('Agent Substrate WorkerPool status', () => {
   it('reads the nested Resolved condition by ready workers', () => {
     expect(getWorkerPoolStatus(pool())).toMatchObject({ text: 'Ready', level: 'healthy' })
