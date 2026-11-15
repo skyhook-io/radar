@@ -1297,7 +1297,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-36' },
-    { key: 'operatingMode', label: 'Requested', width: 'w-28', tooltip: 'Requested operating mode (spec.operatingMode). Status is what the controller observed.' },
+    { key: 'operatingMode', label: 'Requested', width: 'w-36', tooltip: 'Requested operating mode (spec.operatingMode). Status is what the controller observed.' },
     { key: 'sandboxNode', label: 'Node', width: 'w-44' },
     { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'shutdownTime: when the controller tears the sandbox down' },
     { key: 'age', label: 'Age', width: 'w-24' },
