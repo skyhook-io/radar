@@ -29,6 +29,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -275,7 +276,7 @@ func main() {
 	rep.GraphNodes, rep.GraphEdges = len(topo.Nodes), len(topo.Edges)
 	log.Printf("graph: %d nodes, %d edges, built in %v ms, holds %.1f MiB", rep.GraphNodes, rep.GraphEdges, rep.GraphBuildMS, rep.GraphHeldMiB)
 
-	subjects := collect(provider, dc, crds, crdKind, *perKind)
+	subjects := collect(provider, cache.ResourceCache, dc, crds, crdKind, *perKind)
 	if *only != "" {
 		kinds := strings.Split(*only, ",")
 		subjects = slices.DeleteFunc(subjects, func(s subject) bool {
@@ -739,7 +740,7 @@ func refSet(v reflect.Value) sets.Set[string] {
 
 // collect lists every cached object: the typed kinds the provider serves and
 // every watched CRD kind.
-func collect(p topology.ResourceProvider, dc *k8s.DynamicResourceCache, crds []schema.GroupVersionResource, crdKind map[schema.GroupVersionResource]string, perKind int) []subject {
+func collect(p topology.ResourceProvider, typed *k8score.ResourceCache, dc *k8s.DynamicResourceCache, crds []schema.GroupVersionResource, crdKind map[schema.GroupVersionResource]string, perKind int) []subject {
 	var out []subject
 	add := func(group, kind string, objs []any) {
 		if perKind > 0 && len(objs) > perKind {
@@ -787,13 +788,20 @@ func collect(p topology.ResourceProvider, dc *k8s.DynamicResourceCache, crds []s
 	add("", "ConfigMap", anys(p.ConfigMaps()))
 	add("", "Secret", anys(p.Secrets()))
 	add("", "PersistentVolumeClaim", anys(p.PersistentVolumeClaims()))
-	add("", "PersistentVolume", anys(p.PersistentVolumes()))
 	add("autoscaling", "HorizontalPodAutoscaler", anys(p.HorizontalPodAutoscalers()))
 	add("policy", "PodDisruptionBudget", anys(p.PodDisruptionBudgets()))
 	add("networking.k8s.io", "NetworkPolicy", anys(p.NetworkPolicies()))
-	add("", "Node", anys(p.Nodes()))
 	if sa, ok := p.(topology.ServiceAccountProvider); ok {
 		add("", "ServiceAccount", anys(sa.ServiceAccounts()))
+	}
+	for _, kl := range k8score.AllKindListers() {
+		b, ok := resourceid.BuiltinForKind(kl.Kind())
+		if !ok || b.Group != kl.Group() || b.Namespaced {
+			continue
+		}
+		if objects, ready := typed.ReadableIndexedObjects(b.Resource, nil, ""); ready {
+			add(b.Group, b.Kind, anys(objects, nil))
+		}
 	}
 	for _, gvr := range crds {
 		objs, err := dc.List(gvr, "")

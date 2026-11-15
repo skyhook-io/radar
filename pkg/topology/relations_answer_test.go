@@ -8,6 +8,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -61,7 +62,7 @@ func newProjectionSession(t *testing.T, objects ...runtime.Object) *projectionSe
 }
 func (s *projectionSession) Borrow(ref resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
 	s.reads = append(s.reads, ref)
-	if gap, ok := s.gaps[ref.GroupKind()]; ok {
+	if gap, ok := s.gaps[ref.GroupKind()]; ok && (gap.Namespace == "" || gap.Namespace == ref.Namespace) {
 		return nil, ownership.ObjectRead{State: ownership.Unavailable, Gap: gap}
 	}
 	if obj := s.objects[ref]; obj != nil {
@@ -76,11 +77,14 @@ func (s *projectionSession) Object(ref resourceid.Ref) ownership.ObjectRead {
 }
 func (s *projectionSession) Indexed(gk resourceid.GroupKind, _ string, _ []string, scope ownership.SearchScope) relations.IndexedRead {
 	var out relations.IndexedRead
-	if gap, ok := s.gaps[gk]; ok {
+	gap, incomplete := s.gaps[gk]
+	if incomplete {
 		out.Gaps = []ownership.Gap{gap}
-		return out
 	}
 	for ref, obj := range s.objects {
+		if incomplete && (gap.Namespace == "" || gap.Namespace == ref.Namespace) {
+			continue
+		}
 		if ref.GroupKind() == gk && (ref.Namespace == "" && scope.IncludeClusterScoped || ref.Namespace != "" && (scope.AllNamespaces || slices.Contains(scope.Namespaces, ref.Namespace))) {
 			out.Objects = append(out.Objects, relations.IndexedObject{Ref: ref, Object: obj})
 		}
@@ -480,6 +484,54 @@ func TestRelationsAnswerNetworkingHiddenStoreGaps(t *testing.T) {
 			}
 			if len(rel.Gateways)+len(rel.Services)+len(rel.Routes) != 0 {
 				t.Fatalf("unreadable hops emitted: %+v", rel)
+			}
+		})
+	}
+}
+
+func TestRelationsAnswerStorageClassReverseLists(t *testing.T) {
+	class := "fast"
+	sc := projectionObject(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}}, "storage.k8s.io", "StorageClass")
+	pv := projectionObject(&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "volume"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class}}, "", "PersistentVolume")
+	pvc := projectionObject(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "disk"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}}, "", "PersistentVolumeClaim")
+	other := pvc.(*corev1.PersistentVolumeClaim).DeepCopy()
+	other.Namespace = "other"
+	for _, tc := range []struct {
+		name    string
+		emit    ownership.Access
+		partial bool
+		want    []ResourceRef
+	}{
+		{"allowed", ownership.Unrestricted(), false, []ResourceRef{refOf(projectionRef(pv)), refOf(projectionRef(pvc)), refOf(projectionRef(other))}},
+		{"claims denied", projectionAccess{denied: []string{"PersistentVolumeClaim"}}, false, []ResourceRef{refOf(projectionRef(pv))}},
+		{"volumes denied", projectionAccess{denied: []string{"PersistentVolume"}}, false, []ResourceRef{refOf(projectionRef(pvc)), refOf(projectionRef(other))}},
+		{"namespace denied", projectionAccess{namespaces: []string{"shop"}}, false, []ResourceRef{refOf(projectionRef(pv)), refOf(projectionRef(pvc))}},
+		{"claims partially collected", ownership.Unrestricted(), true, []ResourceRef{refOf(projectionRef(pv)), refOf(projectionRef(pvc))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newProjectionSession(t, sc, pv, pvc, other)
+			gap := ownership.Gap{Kind: projectionRef(pvc).GroupKind(), Namespace: "other", Reason: readreason.RadarNamespaceNotCollected}
+			if tc.partial {
+				s.gaps = map[resourceid.GroupKind]ownership.Gap{gap.Kind: gap}
+			}
+			captured, ok := relations.CaptureSubject(s, projectionRef(sc), sc)
+			if !ok {
+				t.Fatal("capture failed")
+			}
+			rel, coverage := RelationsAnswer(captured, tc.emit, ownership.Unrestricted(), ownership.NewView(captured, tc.emit), projectionRef(sc), sc, "", nil, nil)
+			if len(rel.Consumers) != len(tc.want) {
+				t.Fatalf("consumers %v, want %v", rel.Consumers, tc.want)
+			}
+			for _, ref := range tc.want {
+				if !slices.Contains(rel.Consumers, ref) {
+					t.Errorf("missing consumer %v in %v", ref, rel.Consumers)
+				}
+			}
+			if tc.partial {
+				c := coverage["direct"]
+				if c.Complete() || !slices.Contains(c.NotChecked, gap) {
+					t.Fatalf("partial collection lost: %+v", coverage)
+				}
 			}
 		})
 	}
