@@ -234,7 +234,7 @@ func conformRelations(t *testing.T, w ownershiptest.World, got relations.Session
 		}{{"scan", scan}, {"cache", got}} {
 			v := relations.NewView(session.s, access)
 			for _, target := range targets {
-				answer := v.ConfigConsumers(target)
+				answer := v.ConfigConsumers(target, nil)
 				if e := want.consumers(target); !reflect.DeepEqual(answer, e) {
 					t.Errorf("%s %T ConfigConsumers(%v):\ngot  %+v\nwant %+v", session.name, access, target, answer, e)
 				}

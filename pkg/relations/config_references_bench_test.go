@@ -105,7 +105,7 @@ func BenchmarkConfigConsumers(b *testing.B) {
 				b.ReportAllocs()
 				var found int
 				for b.Loop() {
-					found = len(NewView(s, ownership.Unrestricted()).ConfigConsumers(subject).Consumers)
+					found = len(NewView(s, ownership.Unrestricted()).ConfigConsumers(subject, nil).Consumers)
 				}
 				b.ReportMetric(float64(found), "consumers")
 			})

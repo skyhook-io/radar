@@ -74,6 +74,12 @@ func IsConfigTarget(gk resourceid.GroupKind) bool {
 	return gk.Group == "" && configTargetKinds[gk.Kind]
 }
 
+// InConfigFamily reports whether the config-reference family answers
+// anything about an object of gk: a kind it declares, or one that declares.
+func InConfigFamily(gk resourceid.GroupKind) bool {
+	return IsConfigTarget(gk) || slices.Contains(configConsumerKinds, gk)
+}
+
 // configConsumerKinds are the kinds that declare config references, in the
 // order answers list them.
 var configConsumerKinds = []resourceid.GroupKind{
@@ -178,15 +184,17 @@ func (v *View) ConfigReferences(subject resourceid.Ref, fetched runtime.Object) 
 // PersistentVolumeClaim or ServiceAccount: the Pods, pod-template workloads
 // and, for a Secret, Ingresses in its namespace. It answers only for a
 // subject Radar holds: a caller who may not read it gets nothing, Narrowed,
-// and a subject Radar couldn't read gets its gap. ReplicaSets scaled to zero
-// are left out: they are old revisions.
+// and a subject Radar couldn't read gets its gap. fetched is the subject as
+// the host read it, or nil: a subject the host read that Radar's cache
+// doesn't hold yet leaves the answer incomplete rather than empty.
+// ReplicaSets scaled to zero are left out: they are old revisions.
 //
 // A declaration always names its declarer's namespace, so the answer reads
 // that namespace's objects of each declaring kind and evaluates what each
 // declares, rather than keeping an index of every declaration: on a Pod
 // store such an index cost about 1.4 KB a Pod and made a relist about five
 // times as long.
-func (v *View) ConfigConsumers(subject resourceid.Ref) ConfigConsumersAnswer {
+func (v *View) ConfigConsumers(subject resourceid.Ref, fetched runtime.Object) ConfigConsumersAnswer {
 	var a ConfigConsumersAnswer
 	if !IsConfigTarget(subject.GroupKind()) || subject.Namespace == "" {
 		return a
@@ -198,6 +206,11 @@ func (v *View) ConfigConsumers(subject resourceid.Ref) ConfigConsumersAnswer {
 	case ownership.Present:
 	case ownership.Unavailable:
 		a.Coverage.NotChecked = []ownership.Gap{read.Gap}
+		return a
+	case ownership.Absent:
+		if fetched != nil {
+			a.Coverage.NotChecked = []ownership.Gap{{Kind: subject.GroupKind(), Namespace: subject.Namespace, Reason: readreason.ObjectNotFound}}
+		}
 		return a
 	default:
 		return a

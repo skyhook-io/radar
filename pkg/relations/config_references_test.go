@@ -183,7 +183,7 @@ func TestReplicaSetsScaledToZeroDeclareNothing(t *testing.T) {
 	if got := v.ConfigReferences(refOf(old), old); len(got.Declared) != 0 {
 		t.Errorf("a ReplicaSet scaled to zero declares %+v", got.Declared)
 	}
-	got := consumerRefs(v.ConfigConsumers(ref("", "ConfigMap", "settings")))
+	got := consumerRefs(v.ConfigConsumers(ref("", "ConfigMap", "settings"), nil))
 	want := []resourceid.Ref{ref("apps", "ReplicaSet", "web-new"), ref("apps", "ReplicaSet", "web-unset")}
 	if !slices.Equal(got, want) {
 		t.Errorf("consumers %v, want %v", got, want)
@@ -202,12 +202,12 @@ func TestConfigConsumersListEachDeclarerInKindOrder(t *testing.T) {
 		configMap("settings"), pod("web-1", mounts("settings")), deployment("web", mounts("settings")), deployment("other", mounts("unrelated")),
 		typed(cronJob, "batch", "v1", "CronJob"), typed(ingress, "networking.k8s.io", "v1", "Ingress"), rollout,
 	}}
-	got := consumerRefs(NewView(c, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings")))
+	got := consumerRefs(NewView(c, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"), nil))
 	want := []resourceid.Ref{ref("apps", "Deployment", "web"), ref("argoproj.io", "Rollout", "checkout"), ref("batch", "CronJob", "nightly"), ref("", "Pod", "web-1")}
 	if !slices.Equal(got, want) {
 		t.Fatalf("consumers %v, want %v (an Ingress declares Secrets only)", got, want)
 	}
-	secretConsumers := consumerRefs(NewView(cluster{objects: []runtime.Object{secret("settings"), typed(ingress, "networking.k8s.io", "v1", "Ingress")}}, ownership.Unrestricted()).ConfigConsumers(ref("", "Secret", "settings")))
+	secretConsumers := consumerRefs(NewView(cluster{objects: []runtime.Object{secret("settings"), typed(ingress, "networking.k8s.io", "v1", "Ingress")}}, ownership.Unrestricted()).ConfigConsumers(ref("", "Secret", "settings"), nil))
 	if !slices.Equal(secretConsumers, []resourceid.Ref{ref("networking.k8s.io", "Ingress", "front")}) {
 		t.Fatalf("Secret consumers %v", secretConsumers)
 	}
@@ -215,14 +215,14 @@ func TestConfigConsumersListEachDeclarerInKindOrder(t *testing.T) {
 
 func TestConfigConsumersAnswerOnlyAsTheCallerMayRead(t *testing.T) {
 	c := cluster{objects: []runtime.Object{configMap("settings"), pod("web-1", mounts("settings")), deployment("web", mounts("settings")), secret("tls")}}
-	got := NewView(c, denies{"Pod"}).ConfigConsumers(ref("", "ConfigMap", "settings"))
+	got := NewView(c, denies{"Pod"}).ConfigConsumers(ref("", "ConfigMap", "settings"), nil)
 	if !slices.Equal(consumerRefs(got), []resourceid.Ref{ref("apps", "Deployment", "web")}) || !got.Coverage.Narrowed {
 		t.Errorf("a caller who may not read Pods got %+v", got)
 	}
-	if got := NewView(c, denies{"Secret"}).ConfigConsumers(ref("", "Secret", "tls")); len(got.Consumers) != 0 || !got.Coverage.Narrowed {
+	if got := NewView(c, denies{"Secret"}).ConfigConsumers(ref("", "Secret", "tls"), nil); len(got.Consumers) != 0 || !got.Coverage.Narrowed {
 		t.Errorf("a caller who may not read the Secret learned its consumers: %+v", got)
 	}
-	if got := NewView(c, undecided{}).ConfigConsumers(ref("", "ConfigMap", "settings")); len(got.Consumers) != 0 || got.Coverage.Complete() ||
+	if got := NewView(c, undecided{}).ConfigConsumers(ref("", "ConfigMap", "settings"), nil); len(got.Consumers) != 0 || got.Coverage.Complete() ||
 		!slices.ContainsFunc(got.Coverage.NotChecked, func(g ownership.Gap) bool { return g.Reason == readreason.UserPermissionCheckFailed }) {
 		t.Errorf("an undecided check granted a read, or claimed a complete answer: %+v", got)
 	}
@@ -230,7 +230,7 @@ func TestConfigConsumersAnswerOnlyAsTheCallerMayRead(t *testing.T) {
 
 func TestConfigConsumersReportUnreadKinds(t *testing.T) {
 	c := cluster{objects: []runtime.Object{configMap("settings"), deployment("web", mounts("settings"))}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "Pod"}: readreason.KindSyncPending}}
-	got := NewView(c, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"))
+	got := NewView(c, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"), nil)
 	if got.Coverage.Complete() || !slices.ContainsFunc(got.Coverage.NotChecked, func(g ownership.Gap) bool { return g.Kind.Kind == "Pod" }) {
 		t.Fatalf("Pods still loading, but coverage %+v", got.Coverage)
 	}
@@ -241,7 +241,7 @@ func TestConfigConsumersAreCappedAndCounted(t *testing.T) {
 	for i := range 7 {
 		objects = append(objects, pod(fmt.Sprintf("web-%d", i), mounts("settings")))
 	}
-	got := NewView(cluster{objects: objects}, ownership.Unrestricted()).WithLimit(5).ConfigConsumers(ref("", "ConfigMap", "settings"))
+	got := NewView(cluster{objects: objects}, ownership.Unrestricted()).WithLimit(5).ConfigConsumers(ref("", "ConfigMap", "settings"), nil)
 	if len(got.Consumers) != 5 || !got.Coverage.Truncated || got.Coverage.Total != 7 || got.Coverage.Complete() {
 		t.Fatalf("got %d consumers, coverage %+v", len(got.Consumers), got.Coverage)
 	}
@@ -263,11 +263,11 @@ func TestConfigReferencesSayWhenARolloutTemplateIsPartlyUnreadable(t *testing.T)
 
 func TestConfigConsumersAnswerOnlyForASubjectRadarHolds(t *testing.T) {
 	declarer := pod("web-1", mounts("settings"))
-	if got := NewView(cluster{objects: []runtime.Object{declarer}}, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings")); len(got.Consumers) != 0 || !got.Coverage.Complete() {
+	if got := NewView(cluster{objects: []runtime.Object{declarer}}, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"), nil); len(got.Consumers) != 0 || !got.Coverage.Complete() {
 		t.Errorf("a ConfigMap that doesn't exist got %+v", got)
 	}
 	unread := cluster{objects: []runtime.Object{declarer}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "ConfigMap"}: readreason.KindSyncPending}}
-	got := NewView(unread, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"))
+	got := NewView(unread, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"), nil)
 	if len(got.Consumers) != 0 || got.Coverage.Complete() {
 		t.Errorf("a ConfigMap Radar couldn't read got %+v", got)
 	}
@@ -292,7 +292,7 @@ func TestPartlyUnreadableRolloutsLeaveConsumersIncomplete(t *testing.T) {
 			"volumes":      []any{map[string]any{"name": "s", "configMap": map[string]any{"name": "settings"}}},
 		}}},
 	}}
-	got := NewView(cluster{objects: []runtime.Object{configMap("settings"), broken}}, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"))
+	got := NewView(cluster{objects: []runtime.Object{configMap("settings"), broken}}, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"), nil)
 	if !slices.Equal(consumerRefs(got), []resourceid.Ref{ref("argoproj.io", "Rollout", "checkout")}) || got.Coverage.Complete() {
 		t.Fatalf("got %+v", got)
 	}
@@ -335,3 +335,12 @@ func (targetUndecided) CanRead(gk resourceid.GroupKind, _ string) ownership.Deci
 	return ownership.Allowed
 }
 func (targetUndecided) Namespaces() ([]string, bool) { return nil, true }
+
+func TestAFetchedSubjectTheCacheLacksLeavesConsumersIncomplete(t *testing.T) {
+	cm := configMap("settings")
+	c := cluster{objects: []runtime.Object{pod("web-1", mounts("settings"))}}
+	got := NewView(c, ownership.Unrestricted()).ConfigConsumers(ref("", "ConfigMap", "settings"), cm)
+	if got.Coverage.Complete() || !slices.ContainsFunc(got.Coverage.NotChecked, func(g ownership.Gap) bool { return g.Reason == readreason.ObjectNotFound }) {
+		t.Fatalf("a ConfigMap the host read but the cache lacks got %+v", got)
+	}
+}
