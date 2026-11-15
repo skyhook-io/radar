@@ -249,9 +249,34 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 			}
 		} else if top := ChainOf(ov.ControllerChain(subject)).Top(); top != nil {
 			rel.ManagedBy = []ResourceRef{*top}
+		} else {
+			rel.ManagedBy = n.ownManagers(rel, ov, subject)
 		}
 	}
 	return rel, n.coverage
+}
+
+// ownManagers is what manages an object nothing owns: the controllers that
+// generate it from their spec (a Certificate's Secret, a NodePool's Node),
+// else the GitOps manager that records it, when exactly one does.
+func (n *neighborhood) ownManagers(rel *Relationships, ov *ownership.View, subject resourceid.Ref) []ResourceRef {
+	var out []ResourceRef
+	if generators, _ := OtherManagingControllers(rel, ov, subject); len(generators) > 0 {
+		for _, g := range generators {
+			if n.allowedRef(g) {
+				out = append(out, g)
+			}
+		}
+		return out
+	}
+	answer := ov.Manager(subject)
+	if answer.Lead == nil || answer.State != ownership.ManagerAgree && answer.State != ownership.ManagerListed {
+		return nil
+	}
+	if lead := refOf(*answer.Lead); n.allowedRef(lead) {
+		return []ResourceRef{lead}
+	}
+	return nil
 }
 
 func (n *neighborhood) management(session relations.Session, ov *ownership.View, r resourceid.Ref) {

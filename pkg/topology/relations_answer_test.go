@@ -321,3 +321,18 @@ func TestRelationsAnswerManagedByControllerTop(t *testing.T) {
 		t.Fatalf("hidden metadata manager: %+v", rel.ManagedBy)
 	}
 }
+
+func TestRelationsAnswerManagedByOwnManager(t *testing.T) {
+	secret := projectionObject(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "tls", UID: "secret"}}, "", "Secret")
+	cert := projectionCR("cert-manager.io", "Certificate", "shop", "web-cert", map[string]any{"spec": map[string]any{"secretName": "tls"}})
+	s := newProjectionSession(t, secret, cert)
+	rel := projectionAnswer(t, s, secret, ownership.Unrestricted(), ownership.Unrestricted())
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Certificate" || rel.ManagedBy[0].Name != "web-cert" {
+		t.Fatalf("a generated Secret's manager: %+v", rel.ManagedBy)
+	}
+	s = newProjectionSession(t, secret, cert)
+	rel = projectionAnswer(t, s, secret, projectionAccess{denied: []string{"Certificate"}}, ownership.Unrestricted())
+	if len(rel.ManagedBy) != 0 {
+		t.Fatalf("hidden generator named: %+v", rel.ManagedBy)
+	}
+}
