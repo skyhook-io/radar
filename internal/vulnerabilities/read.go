@@ -3,7 +3,6 @@ package vulnerabilities
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"time"
 
@@ -106,27 +105,40 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	readable, accessGaps := readableNamespaces(gvr, req, namespaces)
 	gaps = append(gaps, accessGaps...)
 
-	// A namespace whose reports Radar can't read is a gap; the request fails
-	// only when nothing is left to answer from.
+	// A namespace whose reports Radar can't read is a gap, coded by why; the
+	// request fails only when nothing is left to answer from.
 	var items []*unstructured.Unstructured
-	var failed []string
+	failed := map[readreason.Code][]string{}
+	var lastErr error
 	for _, ns := range scopeNamespaces(readable) {
 		got, err := list(ns)
 		if err != nil {
 			if ns == "" || ctx.Err() != nil {
 				return Response{}, err
 			}
-			failed = append(failed, ns)
+			code := readreason.KindSyncPending
+			if !errors.Is(err, ErrNotReady) {
+				code = readreason.ReadError
+				if c, ok := readplan.CollectorErrorCode(err); ok {
+					code = c
+				}
+			}
+			failed[code] = append(failed[code], ns)
+			lastErr = err
 			continue
 		}
 		items = append(items, got...)
 	}
 	if len(failed) > 0 {
-		if len(failed) == len(readable) {
-			return Response{}, fmt.Errorf("%w: no namespace's reports could be read", ErrNotReady)
+		var all []string
+		for code, namespaces := range failed {
+			gaps = appendGap(gaps, code, namespaces)
+			all = append(all, namespaces...)
 		}
-		readable = slices.DeleteFunc(slices.Clone(readable), func(ns string) bool { return slices.Contains(failed, ns) })
-		gaps = appendGap(gaps, readreason.ReadError, failed)
+		if len(all) == len(readable) {
+			return Response{}, lastErr
+		}
+		readable = slices.DeleteFunc(slices.Clone(readable), func(ns string) bool { return slices.Contains(all, ns) })
 	}
 
 	// Each join input answers only where Radar collects it and it has

@@ -9,6 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/vulnerabilities"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -83,6 +84,9 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	case errors.Is(err, vulnerabilities.ErrNotReady):
 		return nil, nil, readErrorf(readreason.KindSyncPending, "%s", err.Error())
 	case err != nil:
+		if code, ok := readplan.CollectorErrorCode(err); ok {
+			return nil, nil, readErrorf(code, "%s", err.Error())
+		}
 		return nil, nil, err
 	}
 	return toJSONResult(trimVulnerabilities(resp, limit))

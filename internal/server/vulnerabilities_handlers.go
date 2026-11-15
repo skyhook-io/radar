@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/readplan"
 	"github.com/skyhook-io/radar/internal/vulnerabilities"
 	"github.com/skyhook-io/radar/pkg/readreason"
 )
@@ -69,6 +70,9 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 			s.writeErrorCode(w, http.StatusNotFound, string(readreason.KindUnknown), err.Error())
 		case errors.Is(err, vulnerabilities.ErrNotReady):
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(readreason.KindSyncPending), err.Error())
+		case isCollectorRefusal(err):
+			code, _ := readplan.CollectorErrorCode(err)
+			s.writeErrorCode(w, http.StatusServiceUnavailable, string(code), err.Error())
 		default:
 			log.Printf("[vulnerabilities] Failed to read vulnerability reports (%s): %v", strings.Join(namespaces, ","), err)
 			s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -76,4 +80,12 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, resp)
+}
+
+// isCollectorRefusal: Radar's own identity couldn't read the reports
+// (forbidden, credentials rejected, not watchable). The caller's access isn't
+// in question, so it isn't a 403.
+func isCollectorRefusal(err error) bool {
+	_, ok := readplan.CollectorErrorCode(err)
+	return ok
 }
