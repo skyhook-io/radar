@@ -144,3 +144,19 @@ var AnalysisRuns = &Family{
 		return nil
 	},
 }
+
+// SealedSecrets is the family of the Secret a Bitnami SealedSecret
+// produces: the controller names it after the SealedSecret, whatever
+// spec.template.metadata.name says. The Secret's consumers are its
+// ConfigReferences referrers, also when the caller may not read the Secret.
+var SealedSecrets = &Family{
+	Name:    "sealedSecrets",
+	Sources: []Source{{Kind: resourceid.GroupKind{Group: "bitnami.com", Kind: "SealedSecret"}}},
+	Targets: []resourceid.GroupKind{kindSecret},
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := unstructuredOf(obj, resourceid.GroupKind{Group: "bitnami.com", Kind: "SealedSecret"}); ok {
+			visit(Declaration{Target: resourceid.NewRef("", "Secret", u.GetNamespace(), u.GetName()), Path: "metadata.name"})
+		}
+		return nil
+	},
+}

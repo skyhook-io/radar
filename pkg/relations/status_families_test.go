@@ -72,3 +72,9 @@ func TestMachinesAndRolloutsNameWhatTheirStatusRecords(t *testing.T) {
 	rollout.Object["status"] = map[string]any{"canary": map[string]any{"currentStepAnalysisRunStatus": map[string]any{"name": "checkout-6c4f-2", "status": "Running"}}}
 	checkFamily(t, AnalysisRuns, []runtime.Object{run, rollout}, rollout, ref("argoproj.io", "AnalysisRun", "checkout-6c4f-2"), "status.canary.currentStepAnalysisRunStatus")
 }
+
+func TestASealedSecretProducesTheSecretOfItsName(t *testing.T) {
+	secret := typed(&corev1.Secret{ObjectMeta: meta("db")}, "", "v1", "Secret")
+	sealed := object("bitnami.com/v1alpha1", "SealedSecret", "db", map[string]any{"template": map[string]any{"metadata": map[string]any{"name": "ignored"}}})
+	checkFamily(t, SealedSecrets, []runtime.Object{secret, sealed}, sealed, refOf(secret), "metadata.name")
+}
