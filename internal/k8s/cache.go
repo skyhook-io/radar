@@ -909,10 +909,14 @@ func deletionAccountsForGenerationBump(oldObj, newObj any) bool {
 
 func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 	if oldU, newU, ok := unstructuredPair(oldObj, newObj); ok && !desiredStateStripped(newU) {
-		registration, audited := diffFunctions[kind]
-		if !audited || resourceid.GroupFromAPIVersion(newU.GetAPIVersion()) != registration.group {
-			return !reflect.DeepEqual(genericDesiredState(oldU), genericDesiredState(newU))
+		oldDesired, newDesired := genericDesiredState(oldU), genericDesiredState(newU)
+		if registration, audited := diffFunctions[kind]; audited && resourceid.GroupFromAPIVersion(newU.GetAPIVersion()) == registration.group {
+			for _, root := range registration.requestRoots {
+				delete(oldDesired, root)
+				delete(newDesired, root)
+			}
 		}
+		return !reflect.DeepEqual(oldDesired, newDesired)
 	}
 	// The delete event that follows records the removal.
 	if deletionAccountsForGenerationBump(oldObj, newObj) {

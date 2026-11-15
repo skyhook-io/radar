@@ -133,40 +133,37 @@ func GetClusterPlatform(ctx context.Context) (string, error) {
 		return "nkp", nil
 	}
 
-	var nodes []corev1.Node
+	var node *corev1.Node
 	cache := GetResourceCache()
 	if cache != nil {
 		if nodeLister := cache.Nodes(); nodeLister != nil {
 			nodeList, err := nodeLister.List(labels.Everything())
 			if err == nil && len(nodeList) > 0 {
+				node = nodeList[0]
 				for _, n := range nodeList {
-					nodes = append(nodes, *n)
+					if k8score.DetectNodePlatform(*n) != "unknown" {
+						node = n
+						break
+					}
 				}
 			}
 		}
 	}
 
 	// Fallback to direct API if cache unavailable
-	if client := GetClient(); len(nodes) == 0 && client != nil {
-		nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{
-			Limit: 1,
-		})
-		if err != nil {
+	if client := GetClient(); node == nil && client != nil {
+		nodeList, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{Limit: 1})
+		if err != nil || len(nodeList.Items) == 0 {
 			return detectPlatformFallback(ctx)
 		}
-		if len(nodeList.Items) == 0 {
-			return detectPlatformFallback(ctx)
-		}
-		nodes = nodeList.Items
+		node = &nodeList.Items[0]
 	}
 
-	if len(nodes) == 0 {
+	if node == nil {
 		return detectPlatformFallback(ctx)
 	}
 
-	node := nodes[0]
-
-	platform := k8score.DetectNodePlatform(node)
+	platform := k8score.DetectNodePlatform(*node)
 	if platform != "unknown" {
 		if platform == "gke" {
 			if isAutopilot, _ := IsGKEAutopilot(ctx); isAutopilot {

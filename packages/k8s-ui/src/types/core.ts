@@ -222,7 +222,7 @@ export interface Deployment {
 //
 // When adding a new kind here, also update:
 // - ALL_NODE_KINDS in App.tsx
-// - resource-kind-colors.ts TOPOLOGY_RESOURCE_KINDS array
+// - TopologyFilterSidebar.tsx RESOURCE_KINDS array
 // - K8sResourceNode.tsx NODE_DIMENSIONS
 // - resource-icons.ts KIND_ICON_MAP
 // - kindToPlural in navigation.ts (if irregular plural)

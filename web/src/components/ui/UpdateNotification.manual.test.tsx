@@ -66,13 +66,16 @@ describe('manual Desktop version checks', () => {
     expect(container.textContent).toContain('Radar 1.2.3')
   })
 
-  it('publishes a fresh available update and clears its dismissal', () => {
+  it('publishes a fresh available update, clears its dismissal and leaves the announcement to the card', () => {
     localStorage.setItem('radar-update-dismissed', '1.3.0')
     const info = { ...current, updateAvailable: true, latestVersion: '1.3.0' }
+    act(() => { window.dispatchEvent(new Event('radar:check-for-updates')) })
     act(() => { window.dispatchEvent(new CustomEvent('radar:update-check-result', { detail: info })) })
     expect(client.getQueryData(['version-check', '/desktop/api'])).toEqual(info)
     expect(localStorage.getItem('radar-update-dismissed')).toBeNull()
-    expect(container.textContent).toContain('Radar 1.3.0 is available')
+    act(() => { vi.advanceTimersByTime(DURATION_TOAST_EXIT) })
+    // The card shares the toast's corner; a toast saying the same would cover it.
+    expect(container.querySelector('[role="status"]')).toBeNull()
   })
 
   it('reports failure without replacing known version data', () => {

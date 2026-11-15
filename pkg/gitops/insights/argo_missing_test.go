@@ -55,6 +55,9 @@ func TestConfirmedAbsenceCreatesIssueDespiteHealthyControllerVerdict(t *testing.
 			if sync == "Synced" && issue.Action != "Refresh the application to check its status." {
 				t.Fatalf("stale Synced guidance: %+v", issue)
 			}
+			if sync == "OutOfSync" && issue.Action != "Review the desired changes and sync policy before deciding whether to sync." {
+				t.Fatalf("missing resource must not prescribe a sync: %+v", issue)
+			}
 		}
 		if !found {
 			t.Fatalf("no confirmed-absence issue: %+v", issues)

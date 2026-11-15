@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { parseLogLine } from '../../utils/log-format'
 import { triggerDownload } from '../../utils/download'
 import { useLogBuffer } from './useLogBuffer'
@@ -32,10 +32,11 @@ const ALL_CONTAINERS = '(all containers)'
  * Kubernetes: no stream and no previous instance. For a pod that is gone the
  * host passes no containers, and they come from the result.
  */
-export function LogsHistoryViewer({ podName, containers, initialContainer, fetchHistory, historyEmptyHint, initialHistoryWindow = '6h', overrideDownload, forceDark, defaultDark, toolbarLead }: {
+export function LogsHistoryViewer({ podName, containers, initialContainer, initContainers, fetchHistory, historyEmptyHint, initialHistoryWindow = '6h', overrideDownload, forceDark, defaultDark, toolbarLead }: {
   podName: string
   containers: string[]
   initialContainer?: string
+  initContainers?: string[]
   fetchHistory: FetchHistory
   historyEmptyHint?: ReactNode
   initialHistoryWindow?: LogsHistoryWindow
@@ -46,6 +47,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
 }) {
   const [since, setSince] = useState<LogsHistoryWindow>(initialHistoryWindow)
   const [knownContainers, setKnownContainers] = useState(containers)
+  const initContainerSet = useMemo(() => new Set(initContainers), [initContainers])
   // A gone pod's containers are unknown until the first read: read them all.
   const [container, setContainer] = useState(initialContainer || containers[0] || '')
   const [result, setResult] = useState<(LogsHistoryResult & { wholePod: boolean }) | null>(null)
@@ -66,7 +68,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
       const wholePod = !!container && r.logs[container] === undefined && r.logs[ALL_CONTAINERS] !== undefined
       setResult({ ...r, wholePod })
       // A wider window can show containers an earlier read didn't.
-      if (!wholePod) setKnownContainers(known => [...new Set([...known, ...r.containers])].sort())
+      if (!wholePod) setKnownContainers(known => [...new Set([...known, ...r.containers])])
       const keys = wholePod ? [ALL_CONTAINERS] : container ? [container] : Object.keys(r.logs)
       const lines = keys.flatMap(c => (r.logs[c] ?? '').split('\n').filter(Boolean).map(line => ({ ...parseLogLine(line), container: c })))
       lines.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
@@ -98,7 +100,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
     <div className="flex h-full min-h-0 flex-col">
       {result && (
         <div className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-1.5 text-xs text-theme-text-secondary">
-          From Loki, {windowLabel}
+          From Loki, {windowLabel}, matched by pod name (lines from an earlier pod with the same name are included)
           {result.wholePod && ', all containers (Loki has no container label)'}
           {result.truncated && `, the newest ${result.limit.toLocaleString()} lines (the limit; older lines in this window may be missing)`}.
         </div>
@@ -128,7 +130,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, fetch
           toolbarExtra={({ isDark, palette }) => (
             <>
               {toolbarLead?.({ isDark, palette })}
-              <ContainerSelect containers={knownContainers} value={container} onChange={setContainer} includeAll={containers.length === 0 && knownContainers.length > 1} isDark={isDark} />
+              <ContainerSelect containers={knownContainers} value={container} onChange={setContainer} includeAll={containers.length === 0 && knownContainers.length > 1} isDark={isDark} initContainers={initContainerSet} />
               <HistoryWindowSelect value={since} onChange={(v) => setSince(v as LogsHistoryWindow)} isDark={isDark} />
             </>
           )}

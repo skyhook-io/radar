@@ -38,7 +38,9 @@ export function ManagedResourcesList({
 
   const grouped = groupManagedResourcesByKind(resources)
   const sortedGroups = Array.from(grouped.entries()).sort((a, b) => a[0].localeCompare(b[0]))
-  const hasMore = resources.length > maxVisible && !showAll
+  // Over the cap, each kind shows an equal share; Show all must appear whenever any kind is cut.
+  const perKind = !showAll && resources.length > maxVisible ? Math.ceil(maxVisible / sortedGroups.length) : Infinity
+  const hasMore = sortedGroups.some(([, kindResources]) => kindResources.length > perKind)
 
   return (
     <div className="border-b-subtle pb-4 last:border-0">
@@ -59,7 +61,8 @@ export function ManagedResourcesList({
             <ResourceKindGroup
               key={kind}
               kind={kind}
-              resources={showAll ? kindResources : kindResources.slice(0, Math.ceil(maxVisible / sortedGroups.length))}
+              resources={kindResources.slice(0, perKind)}
+              total={kindResources.length}
               onResourceClick={onResourceClick}
               showHealth={showHealth}
             />
@@ -82,11 +85,12 @@ export function ManagedResourcesList({
 interface ResourceKindGroupProps {
   kind: string
   resources: ManagedResource[]
+  total: number
   onResourceClick?: (resource: ManagedResource) => void
   showHealth?: boolean
 }
 
-function ResourceKindGroup({ kind, resources, onResourceClick, showHealth }: ResourceKindGroupProps) {
+function ResourceKindGroup({ kind, resources, total, onResourceClick, showHealth }: ResourceKindGroupProps) {
   const [expanded, setExpanded] = useState(resources.length <= 5)
 
   return (
@@ -97,7 +101,7 @@ function ResourceKindGroup({ kind, resources, onResourceClick, showHealth }: Res
       >
         <CollapseChevron open={expanded} className="w-3 h-3" />
         <span className="font-medium">{kind}</span>
-        <span className="text-theme-text-tertiary">({resources.length})</span>
+        <span className="text-theme-text-tertiary">({resources.length < total ? `${resources.length} of ${total}` : total})</span>
       </button>
 
       <Collapse open={expanded} mountLazily>
