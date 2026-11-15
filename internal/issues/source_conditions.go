@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/longhorn"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -130,6 +131,11 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		if gvr.Group == VeleroGroup {
 			out = append(out, detectVeleroIssues(gvr, kind, items, ownedSubjects)...)
 			continue
+		}
+		// A Longhorn Volume carries no failing condition for faulted or
+		// degraded: its robustness says it, so the Volume is read here.
+		if gvr.Group == longhorn.Group && kind == "Volume" {
+			out = append(out, detectLonghornVolumeIssues(gvr, kind, items)...)
 		}
 		// A schedule's outcome is read against the cluster's backups, so it is
 		// evaluated per namespace over the Cluster list, not per object.

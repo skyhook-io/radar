@@ -130,6 +130,14 @@ func Classify(in classifyInput) issuesapi.Category {
 				return issuesapi.CategoryGatewayRouteInvalid
 			}
 			return issuesapi.CategoryOperatorConditionFail
+		case g == "longhorn.io":
+			switch in.Reason {
+			case ReasonLonghornVolumeFaulted:
+				return issuesapi.CategoryVolumeFaulted
+			case ReasonLonghornVolumeDegraded:
+				return issuesapi.CategoryVolumeDegraded
+			}
+			return issuesapi.CategoryOperatorConditionFail
 		case g == "apiregistration.k8s.io" && in.Kind == "APIService":
 			return issuesapi.CategoryAPIServiceUnavailable
 		case g == "velero.io":
