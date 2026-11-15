@@ -602,6 +602,8 @@ export interface HelmReleaseController {
   // Where values are changed when that is a separate object. exists: true
   // it was read, false a complete read found none (create it), absent unknown.
   valuesRef?: { kind: string; group: string; namespace: string; name: string; exists?: boolean }
+  // k3s: the Addon (server manifest) that applies and re-applies the HelmChart.
+  addon?: string
 }
 
 export interface SelectedResource {

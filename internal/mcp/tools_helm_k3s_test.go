@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -110,7 +111,17 @@ func TestManageHelmRefusesK3sManagedRelease(t *testing.T) {
 		}
 	}
 	_, _, err = handleManageHelm(ctx, nil, manageHelmInput{Action: "uninstall", Namespace: "kube-system", Name: "demo"})
-	if err == nil || !strings.Contains(err.Error(), "k3s HelmChart kube-system/demo") || !strings.Contains(err.Error(), "delete or disable the HelmChart") {
+	if err == nil || !strings.Contains(err.Error(), "k3s HelmChart kube-system/demo") || !strings.Contains(err.Error(), "delete the HelmChart") || strings.Contains(err.Error(), "disable") {
 		t.Errorf("uninstall must be refused pointing at the HelmChart itself: %v", err)
+	}
+}
+
+// k3s re-applies a HelmChart from its server manifests directory, so deleting
+// it is not a way out; the server's --disable flag is.
+func TestControllerRefusalNamesK3sDisableForPackagedCharts(t *testing.T) {
+	c := &helm.ReleaseController{Tool: "k3s", Kind: "HelmChart", Group: "helm.cattle.io", Namespace: "kube-system", Name: "traefik", Addon: "traefik"}
+	err := controllerRefusal("uninstall", c)
+	if err == nil || !strings.Contains(err.Error(), "--disable traefik") || strings.Contains(err.Error(), "delete the HelmChart instead") {
+		t.Fatalf("refusal = %v", err)
 	}
 }

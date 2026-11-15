@@ -58,6 +58,10 @@ type ReleaseController struct {
 	// ValuesRef is where the release's values are changed when that is not
 	// the controller object itself (k3s: the same-named HelmChartConfig).
 	ValuesRef *ControllerValuesRef `json:"valuesRef,omitempty"`
+	// Addon is the k3s Addon (a manifest on the k3s servers) that applies the
+	// HelmChart; k3s re-applies it, so it is removed with the server's
+	// --disable flag rather than by deleting it.
+	Addon string `json:"addon,omitempty"`
 }
 
 // ControllerValuesRef is an object values are changed in. Exists is true when
@@ -95,7 +99,7 @@ func releaseController(fluxRef string, k3s k3sOwner) *ReleaseController {
 	}
 	ns, name, _ := strings.Cut(k3s.chart, "/")
 	return &ReleaseController{
-		Tool: "k3s", Kind: k3sHelmChartKind, Group: k3sHelmGroup, Namespace: ns, Name: name,
+		Tool: "k3s", Kind: k3sHelmChartKind, Group: k3sHelmGroup, Namespace: ns, Name: name, Addon: k3s.addon,
 		ValuesRef: &ControllerValuesRef{Kind: k3sHelmChartConfigKind, Group: k3sHelmGroup, Namespace: ns, Name: name, Exists: k3s.configExists()},
 	}
 }

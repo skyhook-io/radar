@@ -1604,9 +1604,10 @@ const (
 // exists, the HelmChartConfig that overrides its values ("namespace/name").
 // configKnown: the configs were read completely, so an empty config means
 // none exists rather than none was seen.
+// addon: the k3s Addon (server manifest) that applies the HelmChart, if any.
 type k3sOwner struct {
-	chart, config string
-	configKnown   bool
+	chart, config, addon string
+	configKnown          bool
 }
 
 // k3sTarget is the release a HelmChart installs: its own name, in
@@ -1640,6 +1641,17 @@ func k3sHelmControllerManages(u *unstructured.Unstructured) bool {
 	return true
 }
 
+// k3sAddon is the name of the k3s Addon whose manifest applies u: k3s's deploy
+// controller applies server manifests through wrangler with the Addon as owner,
+// and re-applies them, so such a HelmChart comes back after a delete.
+func k3sAddon(u *unstructured.Unstructured) string {
+	annotations := u.GetAnnotations()
+	if annotations["objectset.rio.cattle.io/owner-gvk"] != "k3s.cattle.io/v1, Kind=Addon" {
+		return ""
+	}
+	return annotations["objectset.rio.cattle.io/owner-name"]
+}
+
 // k3sHelmChartKeys maps "targetNamespace/name" to the HelmChart (and its
 // same-named HelmChartConfig) that installs that release.
 func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstructured) map[string]k3sOwner {
@@ -1658,7 +1670,7 @@ func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstruc
 		}
 		target := k3sTarget(c)
 		key := target.namespace + "/" + target.name
-		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), configKnown: configsKnown}
+		owner := k3sOwner{chart: c.GetNamespace() + "/" + c.GetName(), addon: k3sAddon(c), configKnown: configsKnown}
 		if configured[owner.chart] {
 			owner.config = owner.chart
 		}

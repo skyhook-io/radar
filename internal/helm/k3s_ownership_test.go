@@ -59,6 +59,23 @@ func TestK3sHelmChartKeysSkipsChartsHelmControllerIgnores(t *testing.T) {
 	}
 }
 
+func TestK3sHelmChartKeysRecordsTheK3sAddon(t *testing.T) {
+	packaged := k3sObj("HelmChart", "kube-system", "traefik", map[string]any{"chart": "traefik"})
+	packaged.SetAnnotations(map[string]string{
+		"objectset.rio.cattle.io/owner-gvk":  "k3s.cattle.io/v1, Kind=Addon",
+		"objectset.rio.cattle.io/owner-name": "traefik",
+	})
+	other := k3sObj("HelmChart", "kube-system", "app", map[string]any{"chart": "app"})
+	other.SetAnnotations(map[string]string{"objectset.rio.cattle.io/owner-gvk": "example.com/v1, Kind=Thing", "objectset.rio.cattle.io/owner-name": "x"})
+	got := k3sHelmChartKeys(true, []*unstructured.Unstructured{packaged, other}, nil)
+	if got["kube-system/traefik"].addon != "traefik" || got["kube-system/app"].addon != "" {
+		t.Fatalf("keys = %+v", got)
+	}
+	if c := releaseController("", got["kube-system/traefik"]); c.Addon != "traefik" {
+		t.Fatalf("controller = %+v", c)
+	}
+}
+
 func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 	snapshot := func() *helmReleaseStorageSnapshot {
 		return &helmReleaseStorageSnapshot{

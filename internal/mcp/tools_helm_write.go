@@ -465,8 +465,10 @@ func helmUninstallPreviewResult(in manageHelmInput, status, token string, previe
 func controllerRefusal(action string, c *helm.ReleaseController) error {
 	owner := fmt.Sprintf("release is managed by %s %s %s", c.Tool, c.Kind, c.Ref())
 	switch {
+	case action == "uninstall" && c.Addon != "":
+		return fmt.Errorf("%s, which k3s applies from the server manifest %q and re-applies if deleted; to remove it, start the k3s servers with --disable %s", owner, c.Addon, c.Addon)
 	case action == "uninstall":
-		return fmt.Errorf("%s; delete or disable the %s instead (it would reinstall the release)", owner, c.Kind)
+		return fmt.Errorf("%s; delete the %s instead (it would reinstall the release)", owner, c.Kind)
 	case c.ValuesRef != nil && c.ValuesRef.Exists != nil && *c.ValuesRef.Exists:
 		return fmt.Errorf("%s; change its values in %s %s/%s instead", owner, c.ValuesRef.Kind, c.ValuesRef.Namespace, c.ValuesRef.Name)
 	case c.ValuesRef != nil && c.ValuesRef.Exists != nil:
