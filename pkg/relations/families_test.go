@@ -285,3 +285,22 @@ func TestClustersNameTheirClusterClass(t *testing.T) {
 		t.Errorf("a v1beta1 Cluster names %+v", r)
 	}
 }
+
+func TestKnativeFamiliesNameWhereEventsAndTrafficGo(t *testing.T) {
+	ksvc := inNamespace(object("serving.knative.dev/v1", "Service", "handler", nil), "apps")
+	trigger := object("eventing.knative.dev/v1", "Trigger", "orders", map[string]any{
+		"broker":     "default",
+		"subscriber": map[string]any{"ref": map[string]any{"apiVersion": "serving.knative.dev/v1", "kind": "Service", "name": "handler", "namespace": "apps"}},
+	})
+	broker := object("eventing.knative.dev/v1", "Broker", "default", nil)
+	checkFamily(t, KnativeEventDestinations, []runtime.Object{ksvc, trigger}, trigger, resourceid.Ref{Group: "serving.knative.dev", Kind: "Service", Namespace: "apps", Name: "handler"}, "spec.subscriber.ref")
+	checkFamily(t, KnativeTriggerBrokers, []runtime.Object{broker, trigger}, trigger, ref("eventing.knative.dev", "Broker", "default"), "spec.broker")
+
+	ping := object("sources.knative.dev/v1", "PingSource", "tick", map[string]any{"sink": map[string]any{"ref": map[string]any{"apiVersion": "eventing.knative.dev/v1", "kind": "Broker", "name": "default"}}})
+	checkFamily(t, KnativeEventDestinations, []runtime.Object{broker, ping}, ping, ref("eventing.knative.dev", "Broker", "default"), "spec.sink.ref")
+
+	rev := object("serving.knative.dev/v1", "Revision", "handler-00002", nil)
+	route := object("serving.knative.dev/v1", "Route", "handler", nil)
+	route.Object["status"] = map[string]any{"traffic": []any{map[string]any{"revisionName": "handler-00002", "percent": int64(100)}}}
+	checkFamily(t, KnativeRouteRevisions, []runtime.Object{rev, route}, route, ref("serving.knative.dev", "Revision", "handler-00002"), "status.traffic[].revisionName")
+}

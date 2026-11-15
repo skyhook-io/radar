@@ -105,6 +105,9 @@ The families so far:
 | `FluxSources` | Flux Kustomizations, HelmReleases, HelmCharts → the GitRepository, OCIRepository, Bucket, ExternalArtifact, HelmRepository or HelmChart they build from, in any namespace (an inline HelmRelease also declares the HelmChart the controller recorded) | `families.go` |
 | `NodeClasses` | Karpenter NodePools → their provider's NodeClass (`IsTarget`: each provider defines its own kind) | `families.go` |
 | `ClusterClasses` | Cluster API Clusters → the ClusterClass their topology names, in any namespace | `families.go` |
+| `KnativeEventDestinations` | Knative Triggers, event sources and Channels → where they send events (subscriber, sink, backing channel), in any namespace, among the addressables Knative ships and core Services | `families.go` |
+| `KnativeTriggerBrokers` | Knative Triggers → the Broker they subscribe to (`brokerRef` in any namespace, or the older same-namespace `broker`) | `families.go` |
+| `KnativeRouteRevisions` | Knative Routes → the Revisions their status sends traffic to | `families.go` |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families can't read a reference differently.

@@ -282,3 +282,81 @@ var ClusterClasses = &Family{
 		return nil
 	},
 }
+
+func knative(group, kind string) resourceid.GroupKind {
+	return resourceid.GroupKind{Group: group, Kind: kind}
+}
+
+var (
+	kindKnativeService = knative(configrefs.KnativeServingGroup, "Service")
+	kindTrigger        = knative(configrefs.KnativeEventingGroup, "Trigger")
+	kindBroker         = knative(configrefs.KnativeEventingGroup, "Broker")
+	kindChannel        = knative(configrefs.KnativeMessagingGroup, "Channel")
+	kindInMemory       = knative(configrefs.KnativeMessagingGroup, "InMemoryChannel")
+)
+
+// knativeEventSources are the kinds that send events somewhere: Triggers,
+// the event sources Knative ships, and Channels, which send to their backing
+// channel.
+var knativeEventSources = func() []Source {
+	out := []Source{{Kind: kindTrigger}}
+	for _, kind := range configrefs.KnativeSourceKinds {
+		out = append(out, Source{Kind: knative(configrefs.KnativeSourcesGroup, kind)})
+	}
+	return append(out, Source{Kind: kindChannel, Targets: []resourceid.GroupKind{kindInMemory}}, Source{Kind: kindInMemory, Targets: []resourceid.GroupKind{kindInMemory}})
+}()
+
+// KnativeEventDestinations is the family of where a Knative Trigger
+// delivers events, an event source sends them, or a Channel's backing
+// channel is, in any namespace. Any addressable kind can be a destination;
+// the family answers for the ones Knative ships and core Services.
+var KnativeEventDestinations = &Family{
+	Name:    "knativeEventDestinations",
+	Sources: knativeEventSources,
+	Targets: []resourceid.GroupKind{
+		kindKnativeService, kindService, kindBroker, kindChannel, kindInMemory,
+		knative(configrefs.KnativeFlowsGroup, "Sequence"), knative(configrefs.KnativeFlowsGroup, "Parallel"),
+	},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			for _, r := range configrefs.KnativeEventDestinations(u) {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+// KnativeTriggerBrokers is the family of the Broker a Knative Trigger
+// subscribes to, which its brokerRef may name in another namespace.
+var KnativeTriggerBrokers = &Family{
+	Name:           "knativeTriggerBrokers",
+	Sources:        []Source{{Kind: kindTrigger}},
+	Targets:        []resourceid.GroupKind{kindBroker},
+	CrossNamespace: true,
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := unstructuredOf(obj, kindTrigger); ok {
+			if r, ok := configrefs.KnativeTriggerBroker(u); ok {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}
+
+// KnativeRouteRevisions is the family of the Revisions a Knative Route sends
+// traffic to, as its status resolves them.
+var KnativeRouteRevisions = &Family{
+	Name:    "knativeRouteRevisions",
+	Sources: []Source{{Kind: knative(configrefs.KnativeServingGroup, "Route")}},
+	Targets: []resourceid.GroupKind{knative(configrefs.KnativeServingGroup, "Revision")},
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		if u, ok := unstructuredOf(obj, knative(configrefs.KnativeServingGroup, "Route")); ok {
+			for _, r := range configrefs.KnativeRouteRevisions(u) {
+				visitPathRef(visit, r)
+			}
+		}
+		return nil
+	},
+}

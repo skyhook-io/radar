@@ -4811,17 +4811,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		krouteName := kroute.GetName()
 		krouteID := knativeRouteIDs[krouteNs+"/"+krouteName]
 
-		trafficTargets, _, _ := unstructured.NestedSlice(kroute.Object, "status", "traffic")
-		for _, tt := range trafficTargets {
-			ttMap, ok := tt.(map[string]any)
-			if !ok {
-				continue
-			}
-			revName, _, _ := unstructured.NestedString(ttMap, "revisionName")
-			if revName == "" {
-				continue
-			}
-			if krevID, ok := knativeRevisionIDs[krouteNs+"/"+revName]; ok {
+		for _, rev := range configrefs.KnativeRouteRevisions(kroute) {
+			if krevID, ok := knativeRevisionIDs[krouteNs+"/"+rev.Ref.Name]; ok {
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", krouteID, krevID),
 					Source: krouteID,
