@@ -1,6 +1,8 @@
 package relations
 
 import (
+	"slices"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -83,9 +85,7 @@ func rolloutCandidate(obj runtime.Object, lookup Lookup) (Candidate, bool) {
 	}
 	kind, name, ref := rollouts.WorkloadRef(u)
 	if !ref {
-		podLabels, _, _ := unstructured.NestedStringMap(u.Object, "spec", "template", "metadata", "labels")
-		serviceAccount, _, _ := unstructured.NestedString(u.Object, "spec", "template", "spec", "serviceAccountName")
-		return Candidate{Labels: podLabels, ServiceAccount: serviceAccount}, true
+		return unstructuredTemplate(u, []string{"spec", "template"})
 	}
 	group, known := rolloutWorkloadGroups[kind]
 	if !known {
@@ -102,8 +102,22 @@ func rolloutCandidate(obj runtime.Object, lookup Lookup) (Candidate, bool) {
 		return podTemplate(w.Spec.Template)
 	case *corev1.PodTemplate:
 		return podTemplate(w.Template)
+	case *unstructured.Unstructured:
+		// Kinds Radar doesn't keep typed, as PodTemplates, come from the
+		// dynamic cache.
+		path := []string{"spec", "template"}
+		if kind == "PodTemplate" {
+			path = []string{"template"}
+		}
+		return unstructuredTemplate(w, path)
 	}
 	return Candidate{}, false
+}
+
+func unstructuredTemplate(u *unstructured.Unstructured, path []string) (Candidate, bool) {
+	podLabels, _, _ := unstructured.NestedStringMap(u.Object, slices.Concat(path, []string{"metadata", "labels"})...)
+	serviceAccount, _, _ := unstructured.NestedString(u.Object, slices.Concat(path, []string{"spec", "serviceAccountName"})...)
+	return Candidate{Labels: podLabels, ServiceAccount: serviceAccount}, true
 }
 
 // labelSelection is a metav1.LabelSelector's selection: a nil one chooses

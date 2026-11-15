@@ -187,3 +187,12 @@ func TestAnExternalNameServiceSelectsNothing(t *testing.T) {
 		t.Errorf("the Deployment is selected by %v", got.Matches)
 	}
 }
+
+func TestAPodTemplateBackedRolloutIsChosenByTheTemplate(t *testing.T) {
+	podTemplate := object("v1", "PodTemplate", "template", nil)
+	delete(podTemplate.Object, "spec")
+	podTemplate.Object["template"] = map[string]any{"metadata": map[string]any{"labels": map[string]any{"app": "web"}}}
+	rollout := object("argoproj.io/v1alpha1", "Rollout", "web", map[string]any{"workloadRef": map[string]any{"apiVersion": "v1", "kind": "PodTemplate", "name": "template"}})
+	svc := typed(&corev1.Service{ObjectMeta: meta("web"), Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "v1", "Service")
+	checkSelects(t, ServiceSelectors, []runtime.Object{podTemplate, rollout, svc}, svc, rollout)
+}
