@@ -49,14 +49,18 @@ var scannedByOwner = map[string]bool{"ReplicaSet": true, "ReplicationController"
 // (Pending, Running, Unknown), init containers included, and of CronJobs that
 // aren't suspended, which run on schedule and usually have no Pod between
 // runs. canRead is the caller's access to a kind in a namespace (nil allows
-// all): Pods are read only in namespaces where the caller may read Pods
-// (podDenied lists the others), and a target is listed only when the caller
-// may read both the scanned object and the workload it names. ok is false
-// while the Pod cache isn't ready: nothing can then be said about what runs.
-func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool) (targets []target, podDenied []string, ok bool) {
-	if cache == nil || cache.Pods() == nil || !cache.IsKindReady("pods") {
-		return nil, nil, false
+// all): Pods are read only in namespaces where the caller may read Pods, and
+// a target is listed only when the caller may read both the scanned object
+// and the workload it names. The caller checks that namespaces' Pods have
+// loaded (AssessKindRead); ok is false when Radar has no Pod cache.
+func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool) (live liveSet, ok bool) {
+	if cache == nil || cache.Pods() == nil {
+		return liveSet{}, false
 	}
+	var targets []target
+	var podDenied []string
+	cronJobsUnknown := false
+	withheld := map[ownerKey]bool{}
 	may := func(group, kind, ns string) bool { return canRead == nil || canRead(group, kind, ns) }
 	podAccess := map[string]bool{}
 	mayPods := func(ns string) bool {
@@ -72,7 +76,11 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 	}
 	seen := map[targetKey]bool{}
 	add := func(t target) {
-		if seen[t.key] || !may(t.scannedGroup, t.key.kind, t.key.namespace) || !may(t.workload.Group, t.workload.Kind, t.workload.Namespace) {
+		if seen[t.key] {
+			return
+		}
+		if !may(t.scannedGroup, t.key.kind, t.key.namespace) || !may(t.workload.Group, t.workload.Kind, t.workload.Namespace) {
+			withheld[t.key.owner()] = true
 			return
 		}
 		seen[t.key] = true
@@ -107,6 +115,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			}
 		}
 		if cache.CronJobs() == nil || !cache.IsKindReady("cronjobs") {
+			cronJobsUnknown = true
 			continue
 		}
 		var cronJobs []*batchv1.CronJob
@@ -133,7 +142,19 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 		}
 	}
 	slices.Sort(podDenied)
-	return targets, podDenied, true
+	return liveSet{targets: targets, podDenied: podDenied, withheld: withheld, cronJobsUnknown: cronJobsUnknown}, true
+}
+
+// liveSet is what runs, as far as the caller may see it: podDenied are
+// namespaces whose Pods the caller can't read, and withheld are scanned
+// objects the caller can't read, whose reports must not count as inactive.
+type liveSet struct {
+	targets   []target
+	podDenied []string
+	withheld  map[ownerKey]bool
+	// cronJobsUnknown: CronJobs couldn't be read, so whether one is
+	// suspended, or exists, is unknown.
+	cronJobsUnknown bool
 }
 
 func podContainers(spec corev1.PodSpec) []corev1.Container {

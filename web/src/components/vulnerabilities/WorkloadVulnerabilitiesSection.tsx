@@ -29,7 +29,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
 
   const images = data?.images ?? []
   const unscanned = data?.unscanned ?? []
-  const critical = images.reduce((n, img) => n + img.counts.critical, 0)
+  const critical = images.reduce((n, img) => n + (img.findingsUnread ? 0 : img.counts.critical), 0)
   const fixFirst: VulnerabilityFinding[] = []
   const seen = new Set<string>()
   for (const img of images) {
@@ -58,7 +58,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
               </span>
               <span className="flex flex-wrap items-center gap-x-3">
                 {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityCounts counts={img.counts} />}
-                <span className="text-xs text-theme-text-secondary">{img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown} with a fix · scanned {formatRelativeAgeTime(img.scannedAt)}</span>
+                <span className="text-xs text-theme-text-secondary">{img.findingsUnread ? '' : `${img.fixable.critical + img.fixable.high + img.fixable.medium + img.fixable.low + img.fixable.unknown} with a fix · `}scanned {formatRelativeAgeTime(img.scannedAt)}</span>
               </span>
               <SharedWith others={[...new Set(img.workloads.filter((w) => !isThis(w)).map((w) => `${w.namespace}/${w.name}`))]} />
             </div>

@@ -137,26 +137,28 @@ func artifactImage(body map[string]any) (image, digest string) {
 // Hub's implicit registry, library/ prefix and :latest tag filled in.
 func sameImage(podImage string, r *report) bool {
 	if i := strings.Index(podImage, "@"); i >= 0 {
-		if r.digest != "" {
-			return strings.EqualFold(podImage[i+1:], r.digest)
-		}
-		podImage = podImage[:i]
+		// A pinned digest matches only a report that scanned that digest.
+		return r.digest != "" && strings.EqualFold(podImage[i+1:], r.digest)
 	}
 	return r.image != "" && normalizeImage(podImage) == normalizeImage(r.image)
 }
 
+// normalizeImage fills in Docker Hub's implicit registry, library/ prefix
+// and :latest tag. Registry and repository are case-insensitive in practice;
+// tags are not.
 func normalizeImage(ref string) string {
-	ref = strings.ToLower(ref)
 	if i := strings.Index(ref, "@"); i >= 0 {
 		ref = ref[:i]
 	}
-	if slash := strings.LastIndex(ref, "/"); !strings.Contains(ref[slash+1:], ":") {
-		ref += ":latest"
+	name, tag := ref, "latest"
+	if slash, colon := strings.LastIndex(ref, "/"), strings.LastIndex(ref, ":"); colon > slash {
+		name, tag = ref[:colon], ref[colon+1:]
 	}
+	name = strings.ToLower(name)
 	for _, hub := range []string{"docker.io/", "index.docker.io/", "registry-1.docker.io/"} {
-		ref = strings.TrimPrefix(ref, hub)
+		name = strings.TrimPrefix(name, hub)
 	}
-	return strings.TrimPrefix(ref, "library/")
+	return strings.TrimPrefix(name, "library/") + ":" + tag
 }
 
 // slotKey is one container of one workload running one image.
@@ -452,6 +454,25 @@ type cveAgg struct {
 	images   map[string]bool
 }
 
+// keepAffected keeps the MaxAffectedPerCVE most widely run images, so a CVE
+// in thousands of images holds a bounded list that still shows where it
+// runs most.
+func (c *cveAgg) keepAffected(a CVEImage) {
+	if len(c.row.Affected) < MaxAffectedPerCVE {
+		c.row.Affected = append(c.row.Affected, a)
+		return
+	}
+	least := 0
+	for i, x := range c.row.Affected {
+		if x.WorkloadsTotal < c.row.Affected[least].WorkloadsTotal {
+			least = i
+		}
+	}
+	if a.WorkloadsTotal > c.row.Affected[least].WorkloadsTotal {
+		c.row.Affected[least] = a
+	}
+}
+
 // cves groups findings by CVE ID. A CVE's workload count is the distinct
 // workloads across the images that carry it; CVEs from one base image share
 // one image set, so each distinct set is counted once.
@@ -491,13 +512,11 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			c.row.Fixable = c.row.Fixable || fd.FixedVersion != ""
 			c.packages[fd.Package] = true
 			c.images[r.imageID] = true
-			if len(c.row.Affected) < MaxAffectedPerCVE*4 {
-				c.row.Affected = append(c.row.Affected, CVEImage{
-					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), Package: fd.Package,
-					InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion,
-					Workloads: listed, WorkloadsTotal: len(workloads),
-				})
-			}
+			c.keepAffected(CVEImage{
+				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), Package: fd.Package,
+				InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion,
+				Workloads: listed, WorkloadsTotal: len(workloads),
+			})
 		}
 	}
 	workloadsBySet := map[string]int{}
@@ -633,10 +652,10 @@ func (j *rollup) unscannedRows(f Filter) []Unscanned {
 		if !m.workloadKept(workloads) || !m.rowMatches(image, workloads) {
 			continue
 		}
-		rows = append(rows, Unscanned{Image: image, Workloads: workloads})
+		rows = append(rows, Unscanned{Image: image, Workloads: workloads[:min(len(workloads), MaxWorkloadsPerRow)], WorkloadsTotal: len(workloads)})
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
-	return rows
+	return rows[:min(len(rows), MaxRows)]
 }
 
 func countFindings(findings []Finding) (all, fixable Counts) {

@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/search"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceapi"
 )
@@ -86,6 +87,29 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	}
 
 	readable, gaps := readableNamespaces(gvr, req, clusterNamespaces(cache))
+
+	// What runs is known only where Radar collects Pods and they have
+	// loaded; reports elsewhere are withheld and named, never read as
+	// inactive.
+	pods := cache.AssessKindRead("pods", readable)
+	switch {
+	case pods.Readiness == k8score.KindUnavailable:
+		return Response{}, ErrNotReady
+	case pods.AllNamespaces:
+		if pods.Readiness != k8score.KindReady {
+			return Response{}, ErrNotReady
+		}
+	default:
+		gaps = appendGap(gaps, readreason.RadarNamespaceNotCollected, pods.Uncovered)
+		if readable == nil {
+			// Radar collects Pods only in some namespaces; the rest are unknown.
+			gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()})
+		}
+		gaps = appendGap(gaps, readreason.KindSyncPending, pods.Loading)
+		gaps = appendGap(gaps, readreason.KindSyncTimedOut, pods.Failed)
+		readable = pods.Read
+	}
+
 	var items []*unstructured.Unstructured
 	for _, ns := range scopeNamespaces(readable) {
 		got, err := list(ns)
@@ -95,15 +119,42 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		items = append(items, got...)
 	}
 
-	targets, podDenied, ready := liveTargets(cache, readable, req.CanRead)
+	live, ready := liveTargets(cache, readable, req.CanRead)
 	if !ready {
 		return Response{}, ErrNotReady
 	}
+	targets := live.targets
 	// Where the caller can't read Pods, what runs is unknown: its reports
-	// would otherwise all read as inactive.
-	if len(podDenied) > 0 {
-		items = withoutNamespaces(items, podDenied)
-		gaps = append(gaps, gap(readreason.UserForbidden, podDenied))
+	// would otherwise all read as inactive. Reports about an object the
+	// caller can't read are withheld the same way.
+	if len(live.podDenied) > 0 {
+		items = withoutNamespaces(items, live.podDenied)
+		gaps = appendGap(gaps, readreason.UserForbidden, live.podDenied)
+	}
+	if live.cronJobsUnknown {
+		before := len(items)
+		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
+			r, ok := reportHeader(u)
+			return ok && r.owner.kind == "CronJob"
+		})
+		if len(items) < before {
+			gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
+		}
+	}
+	if len(live.withheld) > 0 {
+		var namespaces []string
+		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
+			r, ok := reportHeader(u)
+			if ok && live.withheld[r.owner] {
+				if !slices.Contains(namespaces, r.owner.namespace) {
+					namespaces = append(namespaces, r.owner.namespace)
+				}
+				return true
+			}
+			return false
+		})
+		slices.Sort(namespaces)
+		gaps = appendGap(gaps, readreason.UserForbidden, namespaces)
 	}
 	resp, err := build(ctx, items, targets, req.View, req.Filter)
 	if err != nil {
@@ -164,6 +215,22 @@ func clusterNamespaces(cache *k8s.ResourceCache) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// appendGap adds a gap for namespaces, merging into an existing gap with the
+// same code.
+func appendGap(gaps []resourceapi.Gap, code readreason.Code, namespaces []string) []resourceapi.Gap {
+	if len(namespaces) == 0 {
+		return gaps
+	}
+	for i := range gaps {
+		if gaps[i].Code == code && gaps[i].Namespaces != nil {
+			merged := slices.Compact(slices.Sorted(slices.Values(slices.Concat(gaps[i].Namespaces.Names, namespaces))))
+			gaps[i].Namespaces = resourceapi.Names(merged, 64)
+			return gaps
+		}
+	}
+	return append(gaps, gap(code, namespaces))
 }
 
 func gap(code readreason.Code, namespaces []string) resourceapi.Gap {

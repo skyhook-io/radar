@@ -146,10 +146,13 @@ type WorkloadContainer struct {
 	Fixable        *Counts `json:"fixable,omitempty"`
 }
 
-// Unscanned is a running image no report covers yet.
+// Unscanned is a running image no report covers yet. Workloads lists at
+// most MaxWorkloadsPerRow of WorkloadsTotal; the response lists at most
+// MaxRows of Summary.ImagesUnscanned.
 type Unscanned struct {
-	Image     string        `json:"image"`
-	Workloads []WorkloadRef `json:"workloads"`
+	Image          string        `json:"image"`
+	Workloads      []WorkloadRef `json:"workloads"`
+	WorkloadsTotal int           `json:"workloadsTotal"`
 }
 
 // Summary describes everything in scope, before the request's filters.

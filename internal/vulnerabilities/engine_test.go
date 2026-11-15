@@ -139,6 +139,15 @@ func TestSameImage(t *testing.T) {
 	if !sameImage("redis", &report{image: "index.docker.io/library/redis:latest"}) {
 		t.Error("an untagged reference is :latest")
 	}
+	if sameImage("acme/app:release", &report{image: "acme/app:Release"}) {
+		t.Error("tags are case-sensitive")
+	}
+	if !sameImage("ACME/app:Release", &report{image: "acme/app:Release"}) {
+		t.Error("repository names compare case-insensitively")
+	}
+	if sameImage("acme/app:stable@sha256:new", &report{image: "acme/app:stable"}) {
+		t.Error("a pinned digest needs a report that recorded that digest")
+	}
 }
 
 // One image run by two workloads is one row. The newest report's findings

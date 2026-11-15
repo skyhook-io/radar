@@ -453,14 +453,14 @@ function WorkloadTable({ workloads, onOpen }: { workloads: VulnerabilityWorkload
 // A workload's counts cover only its scanned containers: with none scanned
 // they are unknown, never "no known CVEs".
 function WorkloadFindings({ workload }: { workload: VulnerabilityWorkload }) {
-  const unscanned = workload.containers.filter((c) => !c.scanned).length
-  if (unscanned === workload.containers.length) {
-    return <span className="text-xs text-warning-text">No report yet for any container</span>
+  const unknown = workload.containers.filter((c) => !c.scanned || c.findingsUnread).length
+  if (unknown === workload.containers.length) {
+    return <span className="text-xs text-warning-text">No findings read for any container</span>
   }
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <SeverityBar counts={workload.counts} />
-      {unscanned > 0 && <span className="text-xs text-warning-text">{unscanned} {unscanned === 1 ? 'container' : 'containers'} not scanned yet</span>}
+      {unknown > 0 && <span className="text-xs text-warning-text">{unknown} {unknown === 1 ? 'container' : 'containers'} not counted: not scanned yet or too many findings</span>}
     </div>
   )
 }
@@ -473,7 +473,7 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
         summary={
           <span className="flex items-center gap-2 text-sm text-theme-text-secondary">
             <CircleDashed className="h-4 w-4 text-theme-text-tertiary" aria-hidden />
-            {data.unscanned.length} running {data.unscanned.length === 1 ? 'image has' : 'images have'} no report yet: unknown, not clean
+            {data.summary.imagesUnscanned} running {data.summary.imagesUnscanned === 1 ? 'image has' : 'images have'} no report yet: unknown, not clean
           </span>
         }
       >
@@ -482,6 +482,7 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
             <li key={u.image} className="flex flex-col gap-1">
               <span className="font-mono text-xs text-theme-text-primary">{u.image}</span>
               <WorkloadLinks workloads={u.workloads} onOpen={onOpen} />
+              {u.workloadsTotal > u.workloads.length && <span className="text-xs text-theme-text-tertiary">and {u.workloadsTotal - u.workloads.length} more</span>}
             </li>
           ))}
         </ul>

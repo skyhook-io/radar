@@ -108,6 +108,12 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	if len(resp.Unscanned) > limit {
 		resp.Unscanned = resp.Unscanned[:limit]
 	}
+	for i := range resp.Unscanned {
+		resp.Unscanned[i].Workloads = resp.Unscanned[i].Workloads[:min(len(resp.Unscanned[i].Workloads), vulnerabilityDetailsPerRow)]
+	}
+	for i := range resp.Images {
+		resp.Images[i].Workloads = resp.Images[i].Workloads[:min(len(resp.Images[i].Workloads), vulnerabilityDetailsPerRow)]
+	}
 	resp.Coverage.RowsOmitted += omitted
 	return resp
 }

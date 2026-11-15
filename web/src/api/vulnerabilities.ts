@@ -122,7 +122,7 @@ export interface VulnerabilitiesResponse {
   images?: VulnerableImage[]
   cves?: VulnerabilityCVE[]
   workloads?: VulnerabilityWorkload[]
-  unscanned: { image: string; workloads: VulnerabilityWorkloadRef[] }[]
+  unscanned: { image: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
