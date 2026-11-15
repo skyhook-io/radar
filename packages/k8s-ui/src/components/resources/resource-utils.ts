@@ -29,7 +29,7 @@ import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiv
 import { getVolcanoJobStatus as _getVolcanoJobStatus, getVolcanoQueueStatus as _getVolcanoQueueStatus, getVolcanoPodGroupStatus as _getVolcanoPodGroupStatus, getJobFlowStatus as _getJobFlowStatus, getJobTemplateStatus as _getJobTemplateStatus } from './resource-utils-volcano'
 import { getKaiQueueStatus as _getKaiQueueStatus, getKaiPodGroupStatus as _getKaiPodGroupStatus } from './resource-utils-kai'
 import { getKaitoWorkspaceStatus as _getKaitoWorkspaceStatus, getRAGEngineStatus as _getRAGEngineStatus } from './resource-utils-kaito'
-import { getSandboxClaimStatus as _getSandboxClaimStatus, getSandboxStatus as _getSandboxStatus, getSandboxWarmPoolStatus as _getSandboxWarmPoolStatus, getWorkerPoolStatus as _getWorkerPoolStatus } from './resource-utils-agent-runtimes'
+import { getAgentRuntimeColumnValue, getSandboxClaimStatus as _getSandboxClaimStatus, getSandboxStatus as _getSandboxStatus, getSandboxWarmPoolStatus as _getSandboxWarmPoolStatus, getWorkerPoolStatus as _getWorkerPoolStatus } from './resource-utils-agent-runtimes'
 import { getNIMServiceStatus as _getNIMServiceStatus, getNIMCacheStatus as _getNIMCacheStatus, getNIMPipelineStatus as _getNIMPipelineStatus } from './resource-utils-nim'
 import { getAMDDeviceConfigStatus as _getAMDDeviceConfigStatus } from './resource-utils-amd-gpu'
 import { getPyTorchJobStatus as _getPyTorchJobStatus, getTFJobStatus as _getTFJobStatus, getMPIJobStatus as _getMPIJobStatus, getTrainJobStatus as _getTrainJobStatus } from './resource-utils-kubeflow-training'
@@ -239,7 +239,7 @@ function containerSettledOk(cs: any): boolean {
 // isFatalWaitingReason. These escalate immediately regardless of pod age or a
 // Terminating overlay (a bad image / config error is a real failure now, not a
 // benign young-Pending pod).
-const FATAL_WAITING_REASONS = new Set([
+export const FATAL_WAITING_REASONS = new Set([
   'CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull', 'InvalidImageName',
   'ImageInspectError', 'CreateContainerConfigError', 'CreateContainerError', 'RunContainerError',
 ])
@@ -2565,6 +2565,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (otelValue !== undefined) return otelValue
   const flaggerValue = getFlaggerColumnValue(resource, column)
   if (flaggerValue !== undefined) return flaggerValue
+  const agentRuntimeValue = getAgentRuntimeColumnValue(resource, column)
+  if (agentRuntimeValue !== undefined) return agentRuntimeValue
   const crdValue = getCRDColumnValue(resource, column)
   if (crdValue !== undefined) return crdValue
   const kindLower = kind.toLowerCase()

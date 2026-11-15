@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import {
   formatSandboxExpiry,
+  getAgentRuntimeSortValue,
   getAgentRuntimeStatus,
   getSandboxClaimStatus,
   getSandboxStatus,
@@ -37,38 +39,22 @@ function pool({ generation = 1, observed = 1, desired = 3, ready: readyCount = 3
   }
 }
 
-describe('Agent Sandbox status', () => {
-  it('reads intentional Ready=False states as settled, not failed', () => {
-    expect(getSandboxStatus(sandbox([ready('False', 'SandboxSuspended')]))).toMatchObject({ text: 'Suspended', level: 'neutral' })
-    expect(getSandboxStatus(sandbox([ready('False', 'SandboxExpired')]))).toMatchObject({ text: 'Expired', level: 'neutral' })
-    expect(getSandboxStatus(sandbox([ready('False', 'PodSucceeded')]))).toMatchObject({ text: 'Finished', level: 'neutral' })
-  })
+const vectors = JSON.parse(readFileSync(new URL('../../../../../pkg/health/testdata/agent_sandbox.json', import.meta.url), 'utf8'))
 
-  it('separates provisioning, scheduling, retried errors and failures', () => {
-    expect(getSandboxStatus(sandbox([ready('False', 'DependenciesNotReady')]))).toMatchObject({ text: 'Provisioning', level: 'degraded' })
-    expect(getSandboxStatus(sandbox([
-      ready('False', 'DependenciesNotReady'),
-      { type: 'PodScheduled', status: 'False', reason: 'Unschedulable' },
-    ]))).toMatchObject({ text: 'Unschedulable', level: 'alert' })
-    expect(getSandboxStatus(sandbox([ready('False', 'ReconcilerError')]))).toMatchObject({ level: 'alert' })
-    expect(getSandboxStatus(sandbox([ready('False', 'PodFailed')]))).toMatchObject({ text: 'PodFailed', level: 'unhealthy' })
-    expect(getSandboxStatus(sandbox([ready('True', 'DependenciesReady')]))).toMatchObject({ text: 'Ready', level: 'healthy' })
-    expect(getSandboxStatus(sandbox([ready('Unknown')]))).toMatchObject({ level: 'unknown' })
-    expect(getSandboxStatus(sandbox([]))).toMatchObject({ text: 'Pending', level: 'degraded' })
-  })
+describe('Agent Sandbox status (shared with pkg/health)', () => {
+  for (const vector of vectors) {
+    it(vector.name, () => {
+      const isClaim = vector.object.kind === 'SandboxClaim'
+      const expected = { text: vector.text, level: vector.uiLevel }
+      expect(isClaim ? getSandboxClaimStatus(vector.object) : getSandboxStatus(vector.object)).toMatchObject(expected)
+      expect(getResourceStatus(isClaim ? 'sandboxclaims' : 'sandboxes', vector.object)).toMatchObject(expected)
+      expect(getAgentRuntimeStatus(vector.object)).toMatchObject(expected)
+      expect(getCellFilterValue(vector.object, 'status', isClaim ? 'agentsandboxclaims' : 'agentsandboxes')).toBe(vector.text)
+    })
+  }
+})
 
-  it('trusts a completed suspension over a lagging Ready reason', () => {
-    const suspended = sandbox([ready('False', 'PodTerminating'), { type: 'Suspended', status: 'True' }], { operatingMode: 'Suspended' })
-    expect(getSandboxStatus(suspended)).toMatchObject({ text: 'Suspended', level: 'neutral' })
-  })
-
-  it('reads claim reasons', () => {
-    const claim = (reason: string) => ({ apiVersion: 'extensions.agents.x-k8s.io/v1beta1', status: { conditions: [ready('False', reason)] } })
-    expect(getSandboxClaimStatus(claim('ClaimExpired'))).toMatchObject({ text: 'Expired', level: 'neutral' })
-    expect(getSandboxClaimStatus(claim('AdoptionConflict'))).toMatchObject({ text: 'Binding', level: 'degraded' })
-    expect(getSandboxClaimStatus(claim('WarmPoolNotFound'))).toMatchObject({ text: 'WarmPoolNotFound', level: 'unhealthy' })
-  })
-
+describe('Agent Sandbox warm pools and expiry', () => {
   it('reads warm pools from ready versus desired and observed generation', () => {
     const warm = (replicas: number | undefined, readyReplicas: number, generation = 1, observedGeneration = 1) => ({
       metadata: { generation }, spec: { replicas }, status: { readyReplicas, observedGeneration },
@@ -122,7 +108,7 @@ describe('Agent Substrate WorkerPool status', () => {
 
 describe('agent runtime kinds claim only their own API group', () => {
   it('header status, banner status and table filter agree for the curated groups', () => {
-    const suspended = sandbox([ready('False', 'SandboxSuspended')])
+    const suspended = sandbox([ready('False', 'SandboxSuspended'), { type: 'Suspended', status: 'True' }])
     expect(getResourceStatus('sandboxes', suspended)).toMatchObject({ text: 'Suspended' })
     expect(getAgentRuntimeStatus(suspended)).toMatchObject({ text: 'Suspended', level: 'neutral' })
     expect(getCellFilterValue(suspended, 'status', 'agentsandboxes')).toBe('Suspended')
@@ -138,3 +124,17 @@ describe('agent runtime kinds claim only their own API group', () => {
     expect(getAgentRuntimeStatus({ apiVersion: 'api.kagent.dev/v1alpha3', kind: 'SandboxTemplate' })).toBeNull()
   })
 })
+
+describe('agent runtime column filter and sort values', () => {
+  it('match the cells and sort counts and expiry as numbers', () => {
+    const p = pool({ ready: 2 })
+    expect(getCellFilterValue(p, 'workers', 'substrateworkerpools')).toBe('2/3')
+    expect(getCellFilterValue(p, 'sandboxConfig', 'substrateworkerpools')).toBe('gvisor-default')
+    expect(getAgentRuntimeSortValue(p, 'workers')).toBe(2)
+    const s = sandbox([], { shutdownTime: '2026-11-15T14:00:00Z' })
+    expect(getAgentRuntimeSortValue(s, 'expires')).toBe(Date.parse('2026-11-15T14:00:00Z'))
+    expect(getAgentRuntimeSortValue(sandbox([]), 'expires')).toBe(Number.MAX_SAFE_INTEGER)
+    expect(getAgentRuntimeSortValue({ apiVersion: 'example.io/v1', kind: 'Sandbox' }, 'expires')).toBeUndefined()
+  })
+})
+

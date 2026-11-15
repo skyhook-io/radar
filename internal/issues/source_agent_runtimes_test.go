@@ -19,7 +19,20 @@ func readyFalse(name, reason string, since time.Duration) *unstructured.Unstruct
 	}}
 }
 
+func withCondition(u *unstructured.Unstructured, condType, status, reason string, since time.Duration) *unstructured.Unstructured {
+	conds := u.Object["status"].(map[string]any)["conditions"].([]any)
+	u.Object["status"].(map[string]any)["conditions"] = append(conds, map[string]any{
+		"type": condType, "status": status, "reason": reason,
+		"lastTransitionTime": time.Now().Add(-since).UTC().Format(time.RFC3339),
+	})
+	return u
+}
+
 func composeOne(gvr schema.GroupVersionResource, kind string, objects ...*unstructured.Unstructured) map[string]Issue {
+	for _, u := range objects {
+		u.SetAPIVersion(gvr.GroupVersion().String())
+		u.SetKind(kind)
+	}
 	p := &fakeProvider{
 		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: objects},
 		kinds:      map[schema.GroupVersionResource]string{gvr: kind},
@@ -35,7 +48,10 @@ func composeOne(gvr schema.GroupVersionResource, kind string, objects ...*unstru
 func TestAgentSandboxReadyReasons(t *testing.T) {
 	sandboxes := schema.GroupVersionResource{Group: agentSandboxGroup, Version: "v1beta1", Resource: "sandboxes"}
 	got := composeOne(sandboxes, "Sandbox",
-		readyFalse("suspended", "SandboxSuspended", 72*time.Hour),
+		withCondition(readyFalse("suspended", "SandboxSuspended", 72*time.Hour), "Suspended", "True", "PodTerminated", 72*time.Hour),
+		withCondition(readyFalse("stuck-suspending", "SandboxSuspended", 2*time.Hour), "Suspended", "False", "PodTerminating", 2*time.Hour),
+		// Ready kept its day-old transition time through the resume.
+		withCondition(readyFalse("just-resumed", "DependenciesNotReady", 24*time.Hour), "Suspended", "False", "NotSuspended", 2*time.Minute),
 		readyFalse("expired", "SandboxExpired", 72*time.Hour),
 		readyFalse("finished", "PodSucceeded", 72*time.Hour),
 		readyFalse("provisioning", "DependenciesNotReady", 5*time.Minute),
@@ -44,12 +60,12 @@ func TestAgentSandboxReadyReasons(t *testing.T) {
 		readyFalse("erroring", "ReconcilerError", time.Minute),
 		readyFalse("invalid", "InvalidConfiguration", time.Minute),
 	)
-	for _, quiet := range []string{"suspended", "expired", "finished", "provisioning"} {
+	for _, quiet := range []string{"suspended", "expired", "finished", "provisioning", "just-resumed"} {
 		if issue, ok := got[quiet]; ok {
 			t.Errorf("%s: unexpected issue %q", quiet, issue.Reason)
 		}
 	}
-	for _, loud := range []string{"stuck", "failed", "erroring", "invalid"} {
+	for _, loud := range []string{"stuck", "stuck-suspending", "failed", "erroring", "invalid"} {
 		if _, ok := got[loud]; !ok {
 			t.Errorf("%s: expected an issue, got %v", loud, got)
 		}
@@ -63,6 +79,9 @@ func TestAgentSandboxClaimReadyReasons(t *testing.T) {
 		readyFalse("binding", "AdoptionConflict", time.Minute),
 		readyFalse("no-pool", "WarmPoolNotFound", time.Minute),
 		readyFalse("mirrors-sandbox", "SandboxSuspended", 72*time.Hour),
+		readyFalse("cold-start", "SandboxNotReady", time.Minute),
+		// The claim's Sandbox reports a stuck provision under its own name.
+		readyFalse("mirrors-provisioning", "DependenciesNotReady", 2*time.Hour),
 	)
 	if _, ok := got["no-pool"]; !ok || len(got) != 1 {
 		t.Fatalf("issues = %v, want only no-pool", got)

@@ -1,0 +1,628 @@
+[
+  {
+    "name": "ready",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "True",
+            "reason": "DependenciesReady",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "healthy",
+    "uiLevel": "healthy",
+    "text": "Ready",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "suspension complete",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "operatingMode": "Suspended"
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "SandboxSuspended",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          },
+          {
+            "type": "Suspended",
+            "status": "True",
+            "reason": "PodTerminated",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "uiLevel": "neutral",
+    "text": "Suspended",
+    "settled": true,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "suspension requested, Pod still terminating",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "operatingMode": "Suspended"
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "SandboxSuspended",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          },
+          {
+            "type": "Suspended",
+            "status": "False",
+            "reason": "PodTerminating",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Suspending",
+    "settled": false,
+    "inProgress": true,
+    "mirrored": false
+  },
+  {
+    "name": "reconcile error during suspension",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "operatingMode": "Suspended"
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "ReconcilerError",
+            "message": "boom",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          },
+          {
+            "type": "Suspended",
+            "status": "True",
+            "reason": "PodTerminated",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "alert",
+    "text": "ReconcilerError",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "expired",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "SandboxExpired",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "uiLevel": "neutral",
+    "text": "Expired",
+    "settled": true,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "finished",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "PodSucceeded",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "uiLevel": "neutral",
+    "text": "Finished",
+    "settled": true,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "provisioning",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "DependenciesNotReady",
+            "message": "Pod exists with phase: Pending",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Provisioning",
+    "settled": false,
+    "inProgress": true,
+    "mirrored": false
+  },
+  {
+    "name": "image pull failure",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "DependenciesNotReady",
+            "message": "Pod exists with phase: Pending; container \"agent\" is waiting: ImagePullBackOff",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "ImagePullBackOff",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "crash loop on a running Pod",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "DependenciesNotReady",
+            "message": "Pod exists with phase: Running; container \"agent\" is waiting: CrashLoopBackOff",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "CrashLoopBackOff",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "unschedulable",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "DependenciesNotReady",
+            "message": "Pod exists with phase: Pending",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          },
+          {
+            "type": "PodScheduled",
+            "status": "False",
+            "reason": "Unschedulable",
+            "message": "0/4 nodes",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "alert",
+    "text": "Unschedulable",
+    "settled": false,
+    "inProgress": true,
+    "mirrored": false
+  },
+  {
+    "name": "Pod failed",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "PodFailed",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "PodFailed",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "invalid configuration",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "InvalidConfiguration",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "InvalidConfiguration",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "condition from an older generation",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 2
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "SandboxSuspended",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          },
+          {
+            "type": "Suspended",
+            "status": "True",
+            "reason": "PodTerminated",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Updating",
+    "settled": false,
+    "inProgress": true,
+    "mirrored": false
+  },
+  {
+    "name": "no conditions yet",
+    "object": {
+      "apiVersion": "agents.x-k8s.io/v1beta1",
+      "kind": "Sandbox",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": []
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Pending",
+    "settled": false,
+    "inProgress": true,
+    "mirrored": false
+  },
+  {
+    "name": "claim cold start",
+    "object": {
+      "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+      "kind": "SandboxClaim",
+      "metadata": {
+        "name": "c",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "SandboxNotReady",
+            "message": "Sandbox is not ready",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Provisioning",
+    "settled": false,
+    "inProgress": true,
+    "mirrored": false
+  },
+  {
+    "name": "claim expired",
+    "object": {
+      "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+      "kind": "SandboxClaim",
+      "metadata": {
+        "name": "c",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "ClaimExpired",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "uiLevel": "neutral",
+    "text": "Expired",
+    "settled": true,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "claim warm pool missing",
+    "object": {
+      "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+      "kind": "SandboxClaim",
+      "metadata": {
+        "name": "c",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "WarmPoolNotFound",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "WarmPoolNotFound",
+    "settled": false,
+    "inProgress": false,
+    "mirrored": false
+  },
+  {
+    "name": "claim forwarding its Sandbox's provisioning",
+    "object": {
+      "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+      "kind": "SandboxClaim",
+      "metadata": {
+        "name": "c",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "DependenciesNotReady",
+            "message": "Pod exists with phase: Pending",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Provisioning",
+    "settled": false,
+    "inProgress": true,
+    "mirrored": true
+  },
+  {
+    "name": "claim forwarding its Sandbox's suspension",
+    "object": {
+      "apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+      "kind": "SandboxClaim",
+      "metadata": {
+        "name": "c",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {},
+      "status": {
+        "conditions": [
+          {
+            "type": "Ready",
+            "status": "False",
+            "reason": "SandboxSuspended",
+            "message": "",
+            "observedGeneration": 1,
+            "lastTransitionTime": "2026-11-14T10:00:00Z"
+          }
+        ]
+      }
+    },
+    "level": "neutral",
+    "uiLevel": "neutral",
+    "text": "Suspended",
+    "settled": true,
+    "inProgress": false,
+    "mirrored": true
+  }
+]

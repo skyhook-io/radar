@@ -2,7 +2,7 @@
 // (agents.x-k8s.io, extensions.agents.x-k8s.io).
 
 import type { HealthLevel, StatusBadge } from './resource-utils'
-import { formatDuration, healthColors } from './resource-utils'
+import { FATAL_WAITING_REASONS, formatDuration, healthColors } from './resource-utils'
 import { isApiGroup } from './resource-utils-cnpg'
 
 export const SUBSTRATE_GROUP = 'ate.dev'
@@ -119,33 +119,55 @@ export function getWorkerPoolSandboxConfig(resource: any): string {
 // AGENT SANDBOX — Sandbox and SandboxClaim
 // ============================================================================
 
-// Ready=False reasons that describe a state someone chose, not a failure:
-// an administrative suspension, an expiry, a Pod that ran to completion, or a
-// claim whose lifetime ended.
+// Mirrors pkg/health ReadAgentSandbox, which the Issues and AI summaries use;
+// pkg/health/testdata/agent_sandbox.json pins both. The UI adds one shade the
+// Go levels lack: `alert` for a retried controller error or an unschedulable Pod.
+
+// Ready=False reasons that describe a state someone chose and the controller
+// completed: an expiry, a Pod that ran to completion, a claim whose lifetime
+// ended. A suspension is read separately, since Ready reports it as soon as it
+// is requested.
 const SANDBOX_SETTLED_REASONS: Record<string, string> = {
-  SandboxSuspended: 'Suspended',
   SandboxExpired: 'Expired',
   PodSucceeded: 'Finished',
   ClaimExpired: 'Expired',
 }
 
 // Ready=False reasons the controller reports while it is still bringing the
-// sandbox up or tearing it down.
+// sandbox up, tearing it down or binding a claim.
 const SANDBOX_PROGRESS_REASONS: Record<string, string> = {
   DependenciesNotReady: 'Provisioning',
   PodTerminating: 'Terminating',
   SandboxCreatePending: 'Provisioning',
+  SandboxNotReady: 'Provisioning',
   AdoptionConflict: 'Binding',
 }
 
-function sandboxReadyStatus(ready: any, podScheduled: any): StatusBadge {
+function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
+  if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
+  const conditions = resource?.status?.conditions
+  const ready = findCondition(conditions, 'Ready')
   if (!ready) return badge('Pending', 'degraded')
+  const generation = count(resource?.metadata?.generation)
+  const observed = count(ready.observedGeneration)
+  if (generation !== undefined && observed !== undefined && observed > 0 && observed < generation) return badge('Updating', 'degraded')
   if (ready.status === 'True') return badge('Ready', 'healthy')
   if (ready.status !== 'False') return badge('Unknown', 'unknown')
   const reason = typeof ready.reason === 'string' ? ready.reason : ''
+  if (reason === 'SandboxSuspended') {
+    // The Suspended condition says when the Pod is actually gone.
+    return isClaim || findCondition(conditions, 'Suspended')?.status === 'True'
+      ? badge('Suspended', 'neutral')
+      : badge('Suspending', 'degraded')
+  }
   if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
-  if (reason === 'DependenciesNotReady' && podScheduled?.status === 'False' && podScheduled.reason) {
-    return badge(podScheduled.reason, 'alert')
+  if (reason === 'DependenciesNotReady') {
+    // The controller names a waiting container in its message ("container
+    // "agent" is waiting: ImagePullBackOff"). A hard failure is not provisioning.
+    const waiting = typeof ready.message === 'string' ? /is waiting: ([A-Za-z]+)/.exec(ready.message)?.[1] : undefined
+    if (waiting && FATAL_WAITING_REASONS.has(waiting)) return badge(waiting, 'unhealthy')
+    const scheduled = findCondition(conditions, 'PodScheduled')
+    if (scheduled?.status === 'False' && scheduled.reason) return badge(scheduled.reason, 'alert')
   }
   if (SANDBOX_PROGRESS_REASONS[reason]) return badge(SANDBOX_PROGRESS_REASONS[reason], 'degraded')
   // The controller retries these; a persistent one still deserves attention.
@@ -154,18 +176,11 @@ function sandboxReadyStatus(ready: any, podScheduled: any): StatusBadge {
 }
 
 export function getSandboxStatus(resource: any): StatusBadge {
-  if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
-  const conditions = resource?.status?.conditions
-  const suspended = findCondition(conditions, 'Suspended')
-  if (resource?.spec?.operatingMode === 'Suspended' && suspended?.status === 'True') {
-    return badge('Suspended', 'neutral')
-  }
-  return sandboxReadyStatus(findCondition(conditions, 'Ready'), findCondition(conditions, 'PodScheduled'))
+  return sandboxReadyStatus(resource, false)
 }
 
 export function getSandboxClaimStatus(resource: any): StatusBadge {
-  if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
-  return sandboxReadyStatus(findCondition(resource?.status?.conditions, 'Ready'), undefined)
+  return sandboxReadyStatus(resource, true)
 }
 
 export function getSandboxOperatingMode(resource: any): string {
@@ -254,4 +269,49 @@ export function getAgentRuntimeStatus(resource: any): (StatusBadge & { message?:
   return status.level === 'healthy' || typeof message !== 'string' || !message.trim()
     ? status
     : { ...status, message: message.trim() }
+}
+
+/**
+ * Filter text for the agent runtime columns other than status, matching what
+ * the cells show; undefined for any other resource or column.
+ */
+export function getAgentRuntimeColumnValue(resource: any, column: string): string | undefined {
+  const kind = resource?.kind
+  if (kind === 'WorkerPool' && isSubstrateResource(resource)) {
+    switch (column) {
+      case 'workers': return getWorkerPoolWorkers(resource)
+      case 'sandboxClass': return getWorkerPoolSandboxClass(resource)
+      case 'sandboxConfig': return getWorkerPoolSandboxConfig(resource)
+    }
+  } else if (kind === 'Sandbox' && isAgentSandboxResource(resource)) {
+    switch (column) {
+      case 'operatingMode': return getSandboxOperatingMode(resource)
+      case 'sandboxNode': return getSandboxNode(resource)
+      case 'expires': return formatSandboxExpiry(getSandboxExpiry(resource))
+    }
+  } else if (kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)) {
+    switch (column) {
+      case 'warmPool': return getSandboxClaimWarmPool(resource)
+      case 'claimedSandbox': return getSandboxClaimSandbox(resource)
+      case 'expires': return formatSandboxExpiry(getSandboxExpiry(resource))
+    }
+  } else if (kind === 'SandboxWarmPool' && isAgentSandboxExtensionResource(resource)) {
+    switch (column) {
+      case 'warmReady': return getSandboxWarmPoolReady(resource)
+      case 'template': return getSandboxWarmPoolTemplate(resource)
+    }
+  }
+  return undefined
+}
+
+/** Sort keys for the same columns: counts and expiry times sort as numbers. */
+export function getAgentRuntimeSortValue(resource: any, column: string): string | number | undefined {
+  const text = getAgentRuntimeColumnValue(resource, column)
+  if (text === undefined) return undefined
+  if (column === 'workers' || column === 'warmReady') return count(resource?.status?.readyReplicas) ?? 0
+  if (column === 'expires') {
+    const at = Date.parse(getSandboxExpiry(resource) ?? '')
+    return Number.isFinite(at) ? at : Number.MAX_SAFE_INTEGER
+  }
+  return text === '-' ? '' : text
 }

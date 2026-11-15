@@ -3,6 +3,7 @@ import { getCRDColumnValue } from './resource-utils-crd'
 import { getStrimziConnectorColumnValue, getStrimziClusterColumnValue } from './resource-utils-strimzi'
 import { getOpenTelemetryColumnValue } from './resource-utils-opentelemetry'
 import { getFlaggerColumnValue } from './resource-utils-flagger'
+import { getAgentRuntimeSortValue } from './resource-utils-agent-runtimes'
 import type { ResourceCoverage } from '../../types/resource-coverage'
 import { resourceCoverageNotice, resourceEmptyMessage, resourceNarrowedNotice } from '../../utils/resource-coverage'
 import React, { useState, useMemo, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
@@ -1296,7 +1297,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-36' },
-    { key: 'operatingMode', label: 'Mode', width: 'w-24', tooltip: 'Requested operating mode. Ready, in Status, is what the controller observed.' },
+    { key: 'operatingMode', label: 'Requested', width: 'w-28', tooltip: 'Requested operating mode (spec.operatingMode). Status is what the controller observed.' },
     { key: 'sandboxNode', label: 'Node', width: 'w-44' },
     { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'shutdownTime: when the controller tears the sandbox down' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -5648,6 +5649,8 @@ export function ResourcesView({
     if (otelValue !== undefined) return otelValue
     const flaggerValue = getFlaggerColumnValue(resource, column)
     if (flaggerValue !== undefined) return flaggerValue
+    const agentRuntimeValue = getAgentRuntimeSortValue(resource, column)
+    if (agentRuntimeValue !== undefined) return agentRuntimeValue
 
     switch (column) {
       case 'name':

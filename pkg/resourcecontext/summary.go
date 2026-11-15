@@ -178,6 +178,9 @@ func unstructuredHealth(u *unstructured.Unstructured) string {
 			return levelToString(health.OpenTelemetryInstrumentation(u).Level)
 		}
 	}
+	if group := u.GroupVersionKind().Group; (group == "agents.x-k8s.io" && u.GetKind() == "Sandbox") || (group == "extensions.agents.x-k8s.io" && u.GetKind() == "SandboxClaim") {
+		return levelToString(health.AgentSandbox(u).Level)
+	}
 	if u.GroupVersionKind().Group == "flagger.app" && u.GetKind() == "Canary" {
 		return levelToString(health.FlaggerCanary(u).Level)
 	}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/health"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -15,45 +15,27 @@ const (
 	substrateGroup              = "ate.dev"
 )
 
-// Agent Sandbox reports every non-running state as Ready=False. These reasons
-// are states someone chose — an administrative suspension, an expiry, a Pod
-// that ran to completion, a claim whose lifetime ended — so they are never
-// failures, however long they last.
-var agentSandboxSettledReasons = map[string]bool{
-	"SandboxSuspended": true,
-	"SandboxExpired":   true,
-	"PodSucceeded":     true,
-	"ClaimExpired":     true,
-}
-
-// Reasons the controller reports while it is still bringing a sandbox up,
-// tearing it down or binding a claim. One that persists is no longer
-// progress: a Pod that cannot be created has no Issue of its own to fall back on.
-var agentSandboxProgressReasons = map[string]bool{
-	"DependenciesNotReady": true,
-	"PodTerminating":       true,
-	"SandboxCreatePending": true,
-	"AdoptionConflict":     true,
-}
-
 const agentSandboxProgressGrace = 30 * time.Minute
 
 // agentSandboxSuppressesGenericConditions reports whether the generic
 // Ready=False warning should stay silent for an Agent Sandbox Sandbox or
-// SandboxClaim. Any other reason keeps the generic warning.
+// SandboxClaim (pkg/health reads the reasons). A settled state is never an
+// Issue. A state still in progress is one only once it has lasted the grace
+// period: a Sandbox whose Pod or Service is never created has no other finding
+// to fall back on. A claim's state forwarded from its Sandbox is the Sandbox's
+// to report. Anything else keeps the generic warning.
 func agentSandboxSuppressesGenericConditions(group, kind string, u *unstructured.Unstructured) bool {
 	if !(group == agentSandboxGroup && kind == "Sandbox") && !(group == agentSandboxExtensionsGroup && kind == "SandboxClaim") {
 		return false
 	}
-	ready, ok := conditions.FindFalseConditionWithTime(u, "Ready")
-	if !ok {
-		return false
-	}
-	if agentSandboxSettledReasons[ready.Reason] {
+	r := health.ReadAgentSandbox(u)
+	switch {
+	case r.Settled:
 		return true
-	}
-	if agentSandboxProgressReasons[ready.Reason] {
-		return !ready.HasLastTransitionTime || time.Since(ready.LastTransitionTime) <= agentSandboxProgressGrace
+	case r.InProgress && r.Mirrored:
+		return true
+	case r.InProgress:
+		return !r.SinceKnown || time.Since(r.Since) <= agentSandboxProgressGrace
 	}
 	return false
 }
