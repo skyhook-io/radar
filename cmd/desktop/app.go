@@ -164,11 +164,14 @@ func claimDownloadFile(defaultFilename string) (*os.File, error) {
 }
 
 func downloadsDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+	dir := userDownloadsDir()
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, "Downloads")
 	}
-	dir := filepath.Join(home, "Downloads")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("cannot access Downloads folder: %w", err)
 	}
