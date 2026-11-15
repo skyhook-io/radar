@@ -99,4 +99,12 @@ describe('LoggingView', () => {
     Object.assign(state, { data, error: null })
     expect(render()).toContain('Not found in logging-agents')
   })
+  it('says the operator rejects an invalid route, with the reason', () => {
+    const data = pipeline()
+    Object.assign(data.providers[0].routes[0], { ignored: true, invalid: 'it names Output gone, which Radar didn\'t find for its Logging' })
+    Object.assign(state, { data, error: null })
+    const html = render()
+    expect(html).toContain('rejected by the operator')
+    expect(html).toContain('it names Output gone')
+  })
 })

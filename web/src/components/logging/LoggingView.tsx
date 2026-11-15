@@ -50,7 +50,7 @@ function RouteRows({ routes, open }: { routes: LogPipelineRoute[]; open: Open })
       {routes.map((r) => (
         <div key={`${r.kind}/${r.namespace}/${r.name}`} className="flex flex-wrap items-center gap-1.5 text-sm">
           <button className="text-left text-accent-text hover:underline" onClick={() => open({ kind: PLURALS[r.kind] ?? 'flows', namespace: r.namespace, name: r.name, group: r.group })}>{r.fallback ? 'default flow' : `${r.kind} ${r.name}`}</button>
-          {r.ignored ? <Badge severity="neutral" size="sm">ignored by the operator</Badge> : <Count value={r.selectedPods} what="running pods selected" />}
+          {r.ignored ? <Badge severity="neutral" size="sm" title={r.invalid}>{r.invalid ? 'rejected by the operator' : 'ignored by the operator'}</Badge> : <Count value={r.selectedPods} what="running pods selected" />}
           {r.active === false && <Badge severity="error" size="sm">inactive</Badge>}
         </div>
       ))}

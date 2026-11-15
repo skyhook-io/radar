@@ -2035,6 +2035,8 @@ export interface LogPipelineRoute {
   /** The Logging whose loggingRef the route carries; empty when none has it. */
   instance: string
   ignored: boolean
+  /** Why the operator rejects the route; it never renders it. */
+  invalid?: string
   /** Receives what no other route of its instance selects (a Logging's defaultFlow). */
   fallback?: boolean
   hasFilters: boolean

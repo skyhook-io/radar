@@ -54,6 +54,8 @@ type logPipelineRoute struct {
 	// no Logging has it.
 	Instance string `json:"instance"`
 	Ignored  bool   `json:"ignored"`
+	// Invalid: why the operator rejects the route and never renders it.
+	Invalid string `json:"invalid,omitempty"`
 	// Fallback: the route receives what no other route of its instance selects
 	// (the Logging's defaultFlow).
 	Fallback     bool             `json:"fallback,omitempty"`
@@ -232,10 +234,21 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		for _, u := range read(src.kind, src.plural, false, src.within) {
 			f := logging.FlowFrom(u)
 			c := pipelineCandidate(f, loggings, loggingsUnread)
+			dests := flowDestinations(f, outputs, clusterOutputNamespace)
+			// A missing output is claimed only where its kind was read in full.
+			unread := map[string]bool{
+				"ClusterOutput": access["clusteroutputs"].State != integration.KindCoverageFull,
+				"Output":        !access["outputs"].Covers(f.Namespace),
+			}
+			invalid := f.Invalid
+			if invalid == "" {
+				invalid = missingOutput(dests, unread)
+			}
+			c.Ignored = c.Ignored || invalid != ""
 			cands = append(cands, c)
 			provider.Routes = append(provider.Routes, logPipelineRoute{
 				Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
-				Instance: instanceOf[f.LoggingRef], Ignored: c.Ignored, HasFilters: f.HasFilters, Active: flowActive(u), Destinations: flowDestinations(f, outputs, clusterOutputNamespace),
+				Instance: instanceOf[f.LoggingRef], Ignored: c.Ignored, Invalid: invalid, HasFilters: f.HasFilters, Active: flowActive(u), Destinations: dests,
 			})
 		}
 	}

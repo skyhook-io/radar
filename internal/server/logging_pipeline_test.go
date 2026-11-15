@@ -42,10 +42,10 @@ func seedPipelineFixture(t *testing.T, pods ...runtime.Object) {
 			Status: appsv1.DaemonSetStatus{NumberReady: 2, DesiredNumberScheduled: 3}},
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentd", OwnerReferences: owned("Logging", "default")},
 			Status: appsv1.StatefulSetStatus{ReadyReplicas: 1, Replicas: 1}},
-	}, pods...)
+	}, nil, pods...)
 }
 
-func seedPipelineFixtureWith(t *testing.T, loggingSpec, loggingStatus map[string]any, workloads []runtime.Object, pods ...runtime.Object) {
+func seedPipelineFixtureWith(t *testing.T, loggingSpec, loggingStatus map[string]any, workloads, loggingObjs []runtime.Object, pods ...runtime.Object) {
 	t.Helper()
 	restoreFixtureCache(t)
 	k8s.ResetResourceCache()
@@ -58,7 +58,7 @@ func seedPipelineFixtureWith(t *testing.T, loggingSpec, loggingStatus map[string
 		t.Fatal(err)
 	}
 	kinds := append(loggingKinds(), k8s.APIResource{Group: logging.Group, Version: "v1beta1", Name: "fluentbitagents", Kind: "FluentbitAgent", Verbs: []string{"get", "list", "watch"}})
-	seedCNPGWorkspace(t, kinds,
+	seedCNPGWorkspace(t, kinds, append(loggingObjs,
 		lgObj("Logging", "", "default", loggingSpec, loggingStatus),
 		lgObj("FluentbitAgent", "", "default", map[string]any{}, nil),
 		lgObj("ClusterFlow", "logging-system", "optin", map[string]any{
@@ -66,7 +66,7 @@ func seedPipelineFixtureWith(t *testing.T, loggingSpec, loggingStatus map[string
 			"globalOutputRefs": []any{"loki"},
 		}, map[string]any{"active": true}),
 		lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{"url": "https://user:pw@loki.example/push", "password": map[string]any{"value": "s3cret"}}}, map[string]any{"active": true}),
-	)
+	)...)
 }
 
 func readPipeline(t *testing.T, resp *http.Response) (logPipelineResponse, string) {
@@ -315,7 +315,7 @@ func TestLoggingPipelineAgentNamespaceAndDetachedAggregator(t *testing.T) {
 		[]runtime.Object{
 			&appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-agents", Name: "default-fluentbit", OwnerReferences: owned("FluentbitAgent", "default")}},
 			&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "logging-system", Name: "default-fluentd", OwnerReferences: owned("FluentdConfig", "default-fluentd")}},
-		}, pipelinePods()...)
+		}, nil, pipelinePods()...)
 	got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
 	i := got.Providers[0].Instances[0]
 	if len(i.Collectors) != 1 || i.Collectors[0].Namespace != "logging-agents" || i.CollectorNamespace != "logging-agents" || len(i.Aggregators) != 1 || i.Aggregators[0].Name != "default-fluentd" {
@@ -326,7 +326,7 @@ func TestLoggingPipelineAgentNamespaceAndDetachedAggregator(t *testing.T) {
 // The defaultFlow receives what no Flow selects: those pods are routed, and it
 // shows as a route with their count.
 func TestLoggingPipelineDefaultFlow(t *testing.T) {
-	seedPipelineFixtureWith(t, map[string]any{"controlNamespace": "logging-system", "defaultFlow": map[string]any{"globalOutputRefs": []any{"loki"}}}, nil, nil, pipelinePods()...)
+	seedPipelineFixtureWith(t, map[string]any{"controlNamespace": "logging-system", "defaultFlow": map[string]any{"globalOutputRefs": []any{"loki"}}}, nil, nil, nil, pipelinePods()...)
 	got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
 	if got.Unrouted.Count != 0 || len(got.Unrouted.Pods) != 0 {
 		t.Errorf("unrouted = %+v", got.Unrouted)
@@ -339,5 +339,22 @@ func TestLoggingPipelineDefaultFlow(t *testing.T) {
 	}
 	if fb == nil || fb.Kind != "Logging" || fb.Instance != "default" || fb.SelectedPods != (logPodCount{Count: 1}) || len(fb.Destinations) != 1 || !fb.Destinations[0].Found {
 		t.Fatalf("default flow route = %+v", fb)
+	}
+}
+
+// A Flow naming an output its Logging doesn't have is rejected by the operator:
+// it routes nothing, so its pods stay unrouted.
+func TestLoggingPipelineMissingOutputRejectsFlow(t *testing.T) {
+	broken := lgObj("Flow", "team", "broken", map[string]any{"localOutputRefs": []any{"gone"}}, map[string]any{"active": true})
+	seedPipelineFixtureWith(t, map[string]any{"controlNamespace": "logging-system"}, nil, nil, []runtime.Object{broken}, pipelinePods()...)
+	got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
+	var r logPipelineRoute
+	for _, x := range got.Providers[0].Routes {
+		if x.Name == "broken" {
+			r = x
+		}
+	}
+	if !r.Ignored || !strings.Contains(r.Invalid, "Output gone") || got.Unrouted.Count != 1 || got.Unrouted.Pods[0].Name != "b1" {
+		t.Fatalf("broken=%+v unrouted=%+v", r, got.Unrouted)
 	}
 }
