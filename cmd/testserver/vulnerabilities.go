@@ -22,7 +22,8 @@ import (
 // about them. It covers what the Vulnerabilities views must tell apart: one
 // image run by workloads in two namespaces, a sidecar, a StatefulSet mid-
 // rollout on two images, a CronJob between runs, a bare Pod, an older
-// ReplicaSet's leftover report, and a running image with no report yet.
+// ReplicaSet's leftover report, a running image with no report yet, and an
+// image scanned with no findings.
 
 var vulnerabilityReportGVR = schema.GroupVersionResource{Group: "aquasecurity.github.io", Version: "v1alpha1", Resource: "vulnerabilityreports"}
 
@@ -174,6 +175,8 @@ func vulnerabilityFixture() (typed []runtime.Object, reports []runtime.Object) {
 	typed = append(typed, fixtureDeployment("shop", "storefront", "storefront-5b6c7d", 2, nginx)...)
 	typed = append(typed, fixtureDeployment("shop", "api-gateway", "api-gateway-6c8d9e", 2, corev1.Container{Name: "gateway", Image: "ghcr.io/acme/api-gateway:7.3.1"})...)
 	typed = append(typed, fixtureDeployment("payments", "billing", "billing-4f5a6b", 2, corev1.Container{Name: "app", Image: "ghcr.io/acme/checkout:2.14.0"})...)
+	// queue-keeper: an image scanned with no findings.
+	typed = append(typed, fixtureDeployment("shop", "queue-keeper", "queue-keeper-2d3e4f", 1, corev1.Container{Name: "keeper", Image: "registry.k8s.io/pause:3.9"})...)
 
 	// An older checkout ReplicaSet, scaled to zero; its report is a leftover.
 	controller := true
@@ -232,6 +235,7 @@ func vulnerabilityFixture() (typed []runtime.Object, reports []runtime.Object) {
 		fixtureReport("shop", "DaemonSet", "apps/v1", "node-agent", "uid-shop-node-agent", "agent", "quay.io", "prometheus/node-exporter", "v1.5.0", agentDigest, "", "", "2026-11-13T22:00:00Z", goApp),
 		fixtureReport("shop", "CronJob", "batch/v1", "nightly-report", "uid-shop-nightly-report", "report", "ghcr.io", "acme/nightly-report", "0.9.2", reportDigest, "alpine", "3.19.1", "2026-11-15T02:05:00Z", alpineBase),
 		fixtureReport("shop", "ReplicaSet", "apps/v1", "api-gateway-6c8d9e", "uid-shop-api-gateway-6c8d9e", "gateway", "ghcr.io", "acme/api-gateway", "7.3.1", gatewayDigest, "alpine", "3.20.3", "2026-11-15T09:30:00Z", vulnFixture(alpineBase, goApp[1:])),
+		fixtureReport("shop", "ReplicaSet", "apps/v1", "queue-keeper-2d3e4f", "uid-shop-queue-keeper-2d3e4f", "keeper", "registry.k8s.io", "pause", "3.9", "sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097", "", "", "2026-11-15T09:00:00Z", nil),
 		// Leftover from the older checkout revision: not counted.
 		fixtureReport("shop", "ReplicaSet", "apps/v1", "checkout-6a1b2c", "uid-shop-checkout-6a1b2c", "app", "ghcr.io", "acme/checkout", "2.13.0", "sha256:0ld", "debian", "12.5", "2026-11-01T09:40:00Z", debianBase),
 	}
