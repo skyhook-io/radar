@@ -90,6 +90,15 @@ describe('Agent Substrate WorkerPool status (shared with pkg/health)', () => {
 })
 
 describe('Agent Substrate WorkerPool status', () => {
+  it('explains a reading no condition explains, instead of repeating it', () => {
+    const pending = { apiVersion: 'ate.dev/v1', kind: 'WorkerPool', metadata: { name: 'p' }, spec: { replicas: 5 } }
+    expect(getAgentRuntimeStatus(pending)).toMatchObject({ text: 'Pending', message: "Substrate's controller hasn't reported on this pool yet." })
+    expect(getAgentRuntimeStatus(pool({ ready: 1 }))).toMatchObject({ text: 'Scaling', message: '1 of 3 workers ready.' })
+    expect(getAgentRuntimeStatus(pool({ desired: 0, ready: 0, pods: 2 }))).toMatchObject({ text: 'Scaling down', message: 'Scaled to zero; 2 worker Pods are still running.' })
+    expect(getAgentRuntimeStatus(pool({ observed: 1, generation: 2 }))).toMatchObject({ text: 'Resolving' })
+    expect(getAgentRuntimeStatus(pool())?.message).toBeUndefined()
+  })
+
   it('reads the nested Resolved condition by ready workers', () => {
     expect(getWorkerPoolStatus(pool())).toMatchObject({ text: 'Ready', level: 'healthy' })
     expect(getWorkerPoolStatus(pool({ resolved: 'False', reason: 'SandboxConfigNotFound', ready: 0 })))

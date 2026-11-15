@@ -95,6 +95,19 @@ function workerPoolStatusMessage(resource: any): string | undefined {
     const note = `Reported for generation ${condition.observedGeneration}; the pool is now at generation ${generation}.`
     return message ? `${note} ${message}` : note
   }
+  // No condition explains it: say what the reading means rather than repeat it.
+  const ready = count(resource?.status?.readyReplicas) ?? 0
+  const desired = count(resource?.spec?.replicas)
+  switch (getWorkerPoolStatus(resource).text) {
+    case 'Pending':
+      return "Substrate's controller hasn't reported on this pool yet."
+    case 'Resolving':
+      return "Substrate's controller hasn't confirmed a SandboxConfig for every sandbox class of the current spec yet."
+    case 'Scaling':
+      return desired === undefined ? undefined : `${ready} of ${desired} workers ready.`
+    case 'Scaling down':
+      return `Scaled to zero; ${count(resource?.status?.replicas) ?? 0} worker Pods are still running.`
+  }
   return undefined
 }
 
