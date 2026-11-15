@@ -46,6 +46,14 @@ func TestClassifyAddon(t *testing.T) {
 			wantAddon: false, wantWhy: "",
 		},
 		{
+			name: "user LeaderWorkerSet named like the operator", wl: "lws-storage-sample",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "LeaderWorkerSet controller installed by its chart", chart: "lws-0.7.0", wl: "lws-controller-manager",
+			wantAddon: true, wantWhy: "chart=lws",
+		},
+		{
 			name: "user model server deployed with the llm-d chart", chart: "llm-d-modelservice-0.2.1", wl: "ms-llama-decode",
 			wantAddon: false, wantWhy: "",
 		},

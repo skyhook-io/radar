@@ -55,6 +55,9 @@ var knownAddonCharts = buildAddonCatalog()
 // Chart/addon-manager/image evidence still classifies them.
 var genericAddonNames = map[string]bool{
 	"alloy": true, "contour": true, "kong": true, "vault": true, "vector": true,
+	// Workload APIs users name their own objects with; upstream examples use
+	// names like "lws-storage-sample".
+	"lws": true, "jobset": true, "volcano": true,
 }
 
 // integrationsNotAddons are crdGroupToChart names that identify an integration
