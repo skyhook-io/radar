@@ -769,8 +769,11 @@ Kustomizations use `spec.sourceRef`; HelmReleases use `spec.chart.spec.sourceRef
 or `spec.chartRef`. Inline releases also link the generated HelmChart named by
 `status.helmChart`; an observed HelmChart links its source in its own namespace.
 An ExternalArtifact links the ArtifactGenerator named by its `spec.sourceRef`, and a
-generator links the GitRepository / OCIRepository / Bucket in its `spec.sources`
-(with their aliases). These upstream hops follow only objects already reached
+generator links the GitRepository / OCIRepository / Bucket / HelmChart /
+ExternalArtifact in its `spec.sources` (with their aliases). Its artifact count
+reads the ExternalArtifacts in `status.inventory`, not the Namespaces
+source-watcher 2.3 also records there, and shows `-` when Radar can't read an
+inventory. These upstream hops follow only objects already reached
 from a root, at most three levels, so a release that consumes one of a
 generator's artifacts never pulls in the generator's other artifacts.
 These are dependencies, not owners: topology draws each source upstream, with

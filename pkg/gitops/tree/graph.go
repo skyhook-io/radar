@@ -411,8 +411,17 @@ func enrichFluxSource(node Node, obj *unstructured.Unstructured) Node {
 		node.HealthSource = HealthSourceController
 		node.TopologyStatus = healthToTopology(state.Health)
 		node.Info = nil
-		inventory, _, _ := unstructured.NestedSlice(obj.Object, "status", "inventory")
-		node.Data["generatedCount"] = len(inventory)
+		// source-watcher 2.3 also lists the Namespaces it manages; entries from
+		// earlier versions carry no kind. No inventory leaves the count unknown.
+		if inventory, ok, _ := unstructured.NestedSlice(obj.Object, "status", "inventory"); ok {
+			count := 0
+			for _, raw := range inventory {
+				if e, ok := raw.(map[string]any); ok && (e["kind"] == nil || e["kind"] == "" || e["kind"] == "ExternalArtifact") {
+					count++
+				}
+			}
+			node.Data["generatedCount"] = count
+		}
 		return node
 	}
 	if node.Tool != ToolFluxCD || apiGroup(obj) != "source.toolkit.fluxcd.io" {

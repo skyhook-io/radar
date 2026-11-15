@@ -106,11 +106,15 @@ func TestArtifactGeneratorNamesItsSources(t *testing.T) {
 			map[string]any{"alias": "charts", "kind": "OCIRepository", "name": "charts", "namespace": "shared"},
 			map[string]any{"kind": "HelmRepository", "name": "x"},
 			map[string]any{"alias": "empty", "kind": "Bucket"},
+			map[string]any{"alias": "chart", "kind": "HelmChart", "name": "podinfo"},
+			map[string]any{"alias": "upstream", "kind": "ExternalArtifact", "name": "base", "namespace": "shared"},
 		}},
 	}}
 	want := []FluxSourceRef{
 		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "GitRepository", "flux-system", "platform"), Role: "source", Alias: "repo"},
 		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "OCIRepository", "shared", "charts"), Role: "source", Alias: "charts"},
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "HelmChart", "flux-system", "podinfo"), Role: "source", Alias: "chart"},
+		{Ref: resourceid.NewRef("source.toolkit.fluxcd.io", "ExternalArtifact", "shared", "base"), Role: "source", Alias: "upstream"},
 	}
 	if got := FluxSourceReferences(gen); !reflect.DeepEqual(got, want) {
 		t.Fatalf("refs = %+v, want %+v", got, want)

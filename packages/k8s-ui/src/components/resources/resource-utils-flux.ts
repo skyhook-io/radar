@@ -231,7 +231,15 @@ export function getArtifactGeneratorSources(ag: any): string {
     .join(', ')
 }
 
-export function getArtifactGeneratorCount(ag: any): number {
+// The generated ExternalArtifacts in the inventory, or undefined when Radar
+// can't read one. source-watcher 2.3 also records the Namespaces it manages
+// there; entries from earlier versions carry no kind.
+export function getArtifactGeneratorArtifacts(ag: any): any[] | undefined {
   const inventory = ag.status?.inventory
-  return Array.isArray(inventory) ? inventory.length : 0
+  if (!Array.isArray(inventory)) return undefined
+  return inventory.filter((e) => e && (!e.kind || e.kind === 'ExternalArtifact'))
+}
+
+export function getArtifactGeneratorCount(ag: any): number | undefined {
+  return getArtifactGeneratorArtifacts(ag)?.length
 }

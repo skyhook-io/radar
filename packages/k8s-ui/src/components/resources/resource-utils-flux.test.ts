@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  getArtifactGeneratorArtifacts,
   getArtifactGeneratorCount,
   getArtifactGeneratorSources,
   getArtifactGeneratorStatus,
@@ -55,6 +56,15 @@ describe('ArtifactGenerator helpers', () => {
     expect(getArtifactGeneratorStatus({ ...ag, status: undefined }).text).toBe('Unknown')
     expect(getArtifactGeneratorSources(ag)).toBe('repo→GitRepository/platform, OCIRepository/charts')
     expect(getArtifactGeneratorCount(ag)).toBe(3)
-    expect(getArtifactGeneratorCount({ ...ag, status: {} })).toBe(0)
+    expect(getArtifactGeneratorCount({ ...ag, status: { inventory: [] } })).toBe(0)
+  })
+
+  it('counts only artifacts, and nothing when Radar has no inventory', () => {
+    // source-watcher 2.3 also records the namespaces it manages; earlier entries have no kind.
+    const mixed = { ...ag, status: { inventory: [{ kind: 'Namespace', name: 'team-a' }, { kind: 'ExternalArtifact', name: 'a', namespace: 'team-a' }, { name: 'b' }] } }
+    expect(getArtifactGeneratorCount(mixed)).toBe(2)
+    expect(getArtifactGeneratorArtifacts(mixed)?.map((a) => a.name)).toEqual(['a', 'b'])
+    expect(getArtifactGeneratorCount({ ...ag, status: {} })).toBeUndefined()
+    expect(getArtifactGeneratorArtifacts({ ...ag, status: {} })).toBeUndefined()
   })
 })

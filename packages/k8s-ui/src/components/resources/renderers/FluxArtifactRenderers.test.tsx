@@ -36,4 +36,20 @@ describe('ArtifactGeneratorRenderer', () => {
     const copyRules = html.match(/<button\b[\s\S]*?<\/button>/g)?.find(button => button.includes('Copy rules'))
     expect(copyRules).toContain('aria-expanded="true"')
   })
+
+  it('links every source kind, leaves namespaces out of the artifacts, and says when there is no inventory', () => {
+    const data = {
+      apiVersion: 'source.extensions.fluxcd.io/v1beta1', kind: 'ArtifactGenerator', metadata: { name: 'gen', namespace: 'flux-system' },
+      spec: { sources: [{ alias: 'chart', kind: 'HelmChart', name: 'podinfo' }, { alias: 'base', kind: 'ExternalArtifact', name: 'base' }] },
+      status: { inventory: [{ kind: 'Namespace', name: 'team-a' }, { kind: 'ExternalArtifact', name: 'app', namespace: 'team-a' }] },
+    }
+    const html = text(renderToString(<ArtifactGeneratorRenderer onNavigate={navigate} data={data} />))
+    expect(html).toMatch(/<button[^>]*>[^<]*podinfo/)
+    expect(html).toMatch(/<button[^>]*>[^<]*base/)
+    expect(html).toContain('Artifacts (1)')
+    expect(html).not.toContain('team-a<')
+    const none = text(renderToString(<ArtifactGeneratorRenderer onNavigate={navigate} data={{ ...data, status: {} }} />))
+    expect(none).toContain('Radar can&#x27;t read an inventory in this generator&#x27;s status.')
+    expect(none).not.toContain('Artifacts (0)')
+  })
 })

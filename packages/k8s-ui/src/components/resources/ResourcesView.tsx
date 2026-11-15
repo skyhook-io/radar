@@ -5731,7 +5731,7 @@ export function ResourcesView({
         return 0
       }
       case 'artifacts':
-        return kindLower === 'artifactgenerators' ? getArtifactGeneratorCount(resource) : ''
+        return kindLower === 'artifactgenerators' ? (getArtifactGeneratorCount(resource) ?? -1) : ''
       default:
         return ''
     }

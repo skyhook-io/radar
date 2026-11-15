@@ -107,7 +107,7 @@ func artifactGeneratorSources(gen *unstructured.Unstructured) []FluxSourceRef {
 			continue
 		}
 		kind, name := StringValue(m["kind"]), StringValue(m["name"])
-		if name == "" || !slices.Contains([]string{"GitRepository", "OCIRepository", "Bucket"}, kind) {
+		if name == "" || !slices.Contains([]string{"GitRepository", "OCIRepository", "Bucket", "HelmChart", "ExternalArtifact"}, kind) {
 			continue
 		}
 		namespace := StringValue(m["namespace"])

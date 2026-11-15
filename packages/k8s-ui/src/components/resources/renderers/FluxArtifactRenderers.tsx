@@ -5,7 +5,7 @@ import { GitOpsStatusBadge } from '../../gitops'
 import { fluxConditionsToGitOpsStatus, type FluxCondition } from '../../../types/gitops'
 import { TimeValue } from '../../ui/ScheduleValue'
 import { Tooltip } from '../../ui/Tooltip'
-import { getExternalArtifactGenerator, shortArtifactRevision } from '../resource-utils-flux'
+import { getArtifactGeneratorArtifacts, getExternalArtifactGenerator, shortArtifactRevision } from '../resource-utils-flux'
 
 type NavigateRef = { kind: string; namespace: string; name: string; group?: string }
 
@@ -18,6 +18,8 @@ const SOURCE_PLURALS: Record<string, string> = {
   GitRepository: 'gitrepositories',
   OCIRepository: 'ocirepositories',
   Bucket: 'buckets',
+  HelmChart: 'helmcharts',
+  ExternalArtifact: 'externalartifacts',
 }
 const MAX_ARTIFACTS = 50
 const MAX_COPY_RULES = 5
@@ -70,7 +72,7 @@ export function ExternalArtifactRenderer({ data, onNavigate }: Props) {
 export function ArtifactGeneratorRenderer({ data, onNavigate }: Props) {
   const namespace = data.metadata?.namespace || ''
   const sources: any[] = (data.spec?.sources || []).filter((s: any) => s?.kind && s?.name)
-  const inventory: any[] = data.status?.inventory || []
+  const inventory = getArtifactGeneratorArtifacts(data)
   const artifacts: any[] = data.spec?.artifacts || []
   return (
     <>
@@ -92,9 +94,11 @@ export function ArtifactGeneratorRenderer({ data, onNavigate }: Props) {
           </div>
         </Section>
       )}
-      <Section title={`Artifacts (${inventory.length})`} icon={FileArchive}>
-        {inventory.length === 0 ? (
-          <span className="text-sm text-theme-text-tertiary">No artifacts generated yet.</span>
+      <Section title={inventory ? `Artifacts (${inventory.length})` : 'Artifacts'} icon={FileArchive}>
+        {!inventory ? (
+          <span className="text-sm text-theme-text-tertiary">Radar can't read an inventory in this generator's status.</span>
+        ) : inventory.length === 0 ? (
+          <span className="text-sm text-theme-text-tertiary">The inventory lists no artifacts.</span>
         ) : (
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm">
             {inventory.slice(0, MAX_ARTIFACTS).map((a, i) => (

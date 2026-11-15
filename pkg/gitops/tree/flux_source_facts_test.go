@@ -116,11 +116,15 @@ func TestHelmReleaseRevisionIsTheInstalledChart(t *testing.T) {
 func TestArtifactGeneratorSourceFacts(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.extensions.fluxcd.io/v1beta1", "kind": "ArtifactGenerator",
 		"metadata": map[string]any{"name": "gen", "namespace": "team"},
-		"status": map[string]any{"inventory": []any{map[string]any{"name": "a"}, map[string]any{"name": "b"}},
+		"status": map[string]any{"inventory": []any{map[string]any{"name": "a"}, map[string]any{"kind": "ExternalArtifact", "name": "b"}, map[string]any{"kind": "Namespace", "name": "team-a"}},
 			"conditions": []any{map[string]any{"type": "Ready", "status": "False", "reason": "SourceNotReady", "message": "source not ready"}}}}}
 	node := enrichNodeFromObject(Node{Tool: ToolFluxCD, Sync: "Synced"}, obj)
 	if node.Health != "Degraded" || node.Data["readyMessage"] != "source not ready" || node.Data["generatedCount"] != 2 || node.Data["artifact"] != nil || node.Sync != "" {
 		t.Fatalf("generator facts: %+v", node)
+	}
+	delete(obj.Object["status"].(map[string]any), "inventory")
+	if node := enrichNodeFromObject(Node{Tool: ToolFluxCD}, obj); node.Data["generatedCount"] != nil {
+		t.Fatalf("no inventory read as a count: %v", node.Data["generatedCount"])
 	}
 	obj.SetAPIVersion("example.org/v1")
 	if other := enrichNodeFromObject(Node{Tool: ToolFluxCD, Sync: "Synced"}, obj); other.Data["generatedCount"] != nil {

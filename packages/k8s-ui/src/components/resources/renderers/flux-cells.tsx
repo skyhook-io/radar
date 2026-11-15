@@ -319,7 +319,7 @@ export function ArtifactGeneratorCell({ resource, column }: { resource: any; col
       )
     }
     case 'artifacts':
-      return <span className="text-sm text-theme-text-secondary">{getArtifactGeneratorCount(resource)}</span>
+      return <span className="text-sm text-theme-text-secondary">{getArtifactGeneratorCount(resource) ?? '-'}</span>
     case 'status': {
       const status = getArtifactGeneratorStatus(resource)
       return <span className={clsx('badge', status.color)}>{status.text}</span>

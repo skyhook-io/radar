@@ -1925,6 +1925,7 @@ export {
   getArtifactGeneratorStatus,
   getArtifactGeneratorSources,
   getArtifactGeneratorCount,
+  getArtifactGeneratorArtifacts,
   shortArtifactRevision,
   getGitRepositoryStatus,
   getOCIRepositoryStatus,
