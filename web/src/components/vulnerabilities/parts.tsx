@@ -1,4 +1,5 @@
 import { clsx } from 'clsx'
+import { WithTooltip } from '../ui/Tooltip'
 import { CertaintyGlyph, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
 import type {
   VulnerabilitiesResponse,
@@ -43,9 +44,11 @@ export function SeverityCounts({ counts }: { counts: VulnerabilityCounts }) {
   return (
     <span className="flex flex-wrap gap-x-3 font-mono text-xs">
       {SEVERITIES.map(({ key, letter, label }) => (
-        <span key={key} title={`${counts[key]} ${label}`} className={counts[key] > 0 ? VULN_SEVERITY_TEXT[upper(key)] : 'text-theme-text-disabled'}>
-          {letter} {counts[key]}
-        </span>
+        <WithTooltip key={key} tip={`${counts[key]} ${label}`}>
+          <span className={counts[key] > 0 ? VULN_SEVERITY_TEXT[upper(key)] : 'text-theme-text-disabled'}>
+            {letter} {counts[key]}
+          </span>
+        </WithTooltip>
       ))}
     </span>
   )
@@ -114,12 +117,12 @@ export function findingsCertainty(data: Pick<VulnerabilitiesResponse, 'summary' 
 // focusable glyph would nest one control in another.
 export function FindingTotal({ value, certainty, className, plain }: { value: number; certainty: Certainty; className?: string; plain?: boolean }) {
   if (certainty === 'unknown') {
-    return <span className={clsx('font-mono text-theme-text-tertiary', className)} title="Nothing scanned yet">—</span>
+    return <span className={clsx('font-mono text-theme-text-tertiary', className)}>—</span>
   }
   return (
     <span className={clsx('inline-flex items-baseline gap-1.5', className)}>
       {certainty === 'lower_bound' && (plain
-        ? <span className="text-theme-text-tertiary" title="At least">≥</span>
+        ? <span className="text-theme-text-tertiary">≥</span>
         : <CertaintyGlyph certainty="lower_bound" title="At least: some running images have no report, or some reports aren't readable" />)}
       <span className="font-mono">{value}</span>
     </span>

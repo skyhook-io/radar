@@ -36,7 +36,9 @@ func setupVulnerabilityReports(t *testing.T) {
 		if _, err := testFakeClient.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = testFakeClient.CoreV1().Pods(ns).Delete(context.Background(), "web", metav1.DeleteOptions{}) })
+		t.Cleanup(func() {
+			_ = testFakeClient.CoreV1().Pods(ns).Delete(context.Background(), "web", metav1.DeleteOptions{})
+		})
 
 		u := &unstructured.Unstructured{Object: map[string]any{
 			"report": map[string]any{

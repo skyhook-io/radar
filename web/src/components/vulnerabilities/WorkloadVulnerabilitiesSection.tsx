@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { WithTooltip } from '../ui/Tooltip'
 import { Shield } from 'lucide-react'
 import { Section } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
@@ -54,7 +55,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
             <div key={img.id} className="flex flex-col gap-1 rounded-md border border-theme-border bg-theme-surface px-3 py-2">
               <span className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium text-theme-text-primary">{[...new Set(img.workloads.filter(isThis).map((w) => w.container))].join(', ')}</span>
-                <span className="truncate font-mono text-xs text-theme-text-tertiary" title={img.image}>{img.image}</span>
+                <WithTooltip tip={img.image}><span className="truncate font-mono text-xs text-theme-text-tertiary">{img.image}</span></WithTooltip>
               </span>
               <span className="flex flex-wrap items-center gap-x-3">
                 {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityCounts counts={img.counts} />}
@@ -84,7 +85,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
               <span className="text-xs font-medium text-theme-text-secondary">Fix first</span>
               {fixFirst.slice(0, 3).map((f) => (
                 <div key={f.id} className="grid grid-cols-[136px_70px_minmax(0,1fr)] items-center gap-2 text-xs">
-                  <span className="truncate font-mono text-theme-text-primary" title={f.title}>{f.id}</span>
+                  <WithTooltip tip={f.title}><span className="truncate font-mono text-theme-text-primary">{f.id}</span></WithTooltip>
                   <SeverityBadge severity={f.severity} />
                   <span className="truncate font-mono text-theme-text-tertiary">{f.package} → <span className="text-emerald-700 dark:text-emerald-400">{f.fixedVersion}</span></span>
                 </div>

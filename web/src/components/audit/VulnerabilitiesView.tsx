@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { AlertTriangle, CircleDashed, ExternalLink, Search, ShieldAlert } from 'lucide-react'
@@ -305,7 +306,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
             summary={
               <div className="grid flex-1 grid-cols-[minmax(0,2.4fr)_minmax(0,2fr)_80px_minmax(0,2fr)_100px] items-center gap-4 text-sm">
                 <span className="flex min-w-0 flex-col">
-                  <span className="truncate font-mono text-theme-text-primary" title={img.image}>{img.image}</span>
+                  <WithTooltip tip={img.image}><span className="truncate font-mono text-theme-text-primary">{img.image}</span></WithTooltip>
                   <span className="truncate font-mono text-xs text-theme-text-tertiary">{img.digest ? `${img.digest.slice(0, 19)}…` : 'no digest recorded'}{img.os ? ` · ${img.os}` : ''}</span>
                 </span>
                 {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityBar counts={img.counts} />}
@@ -353,9 +354,9 @@ function FindingsList({ findings }: { findings: VulnerableImage['findings'] }) {
       {findings.map((f) => (
         <div key={`${f.id}/${f.package}/${f.installedVersion}`} className="grid grid-cols-[150px_74px_minmax(0,1fr)_minmax(0,1.4fr)] items-center gap-3 border-b border-theme-border bg-theme-base px-3 py-1.5 text-xs last:border-0">
           {f.link ? (
-            <a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline" title={f.title}>{f.id}</a>
+            <WithTooltip tip={f.title}><a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline">{f.id}</a></WithTooltip>
           ) : (
-            <span className="truncate font-mono text-theme-text-primary" title={f.title}>{f.id}</span>
+            <WithTooltip tip={f.title}><span className="truncate font-mono text-theme-text-primary">{f.id}</span></WithTooltip>
           )}
           <SeverityBadge severity={f.severity} />
           <span className="truncate font-mono text-theme-text-secondary">{f.package}</span>
@@ -397,7 +398,7 @@ function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: Vuln
                 <div className="overflow-hidden rounded-md border border-theme-border">
                   {c.affected.map((a) => (
                     <div key={a.imageId} className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)_minmax(0,2fr)] items-start gap-3 border-b border-theme-border bg-theme-base px-3 py-2 text-xs last:border-0">
-                      <span className="truncate font-mono text-theme-text-primary" title={a.image}>{a.image}</span>
+                      <WithTooltip tip={a.image}><span className="truncate font-mono text-theme-text-primary">{a.image}</span></WithTooltip>
                       <span className="flex min-w-0 flex-col">
                         {a.packages.map((p) => (
                           <span key={`${p.package}/${p.installedVersion}`} className="truncate font-mono text-theme-text-tertiary">
