@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/timeline"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/wailsapp/wails/v2/pkg/menu"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -38,6 +39,12 @@ type DesktopApp struct {
 	cancel         context.CancelFunc
 	checkForUpdate func(context.Context) *versionpkg.UpdateInfo
 	execJS         func(string)
+
+	// Windows title bar (titlebar.go).
+	menu          *menu.Menu
+	titleBarMenus []titleBarMenu
+	titleMu       sync.Mutex
+	currentTitle  string
 }
 
 func NewDesktopApp(srv *server.Server, timelineStoreCfg timeline.StoreConfig) *DesktopApp {
@@ -69,7 +76,12 @@ func formatWindowTitle(contextName string) string {
 }
 
 func (a *DesktopApp) updateWindowTitle(contextName string) {
-	a.setWindowTitle(formatWindowTitle(contextName))
+	title := formatWindowTitle(contextName)
+	a.titleMu.Lock()
+	a.currentTitle = title
+	a.titleMu.Unlock()
+	a.setWindowTitle(title)
+	a.pushTitleBar()
 }
 
 // startup is called when the Wails app starts.
@@ -78,6 +90,9 @@ func (a *DesktopApp) startup(ctx context.Context) {
 	startNativeMouseMonitor(ctx)
 	a.srv.SetSaveFileFunc(a.saveFile)
 	a.srv.SetSaveFileStreamFunc(a.saveFileStream)
+	if a.menu != nil {
+		a.installTitleBar(a.menu)
+	}
 
 	// The OS titlebar must track the active kubeconfig context for the same
 	// reason the in-page selector does: a fleet UI showing the wrong cluster

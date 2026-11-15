@@ -146,6 +146,19 @@ body {
   flex-direction: column;
 }
 
+/* The Windows desktop app draws its own title bar above the app shell
+   (desktop/WindowsTitleBar.tsx); the shell gives up that height. */
+html.radar-custom-titlebar body {
+  overflow: hidden;
+}
+html.radar-custom-titlebar #radar {
+  margin-top: var(--radar-titlebar-h);
+  height: calc(100vh - var(--radar-titlebar-h));
+}
+html.radar-custom-titlebar #radar .h-screen {
+  height: calc(100vh - var(--radar-titlebar-h));
+}
+
 /* ============================================
    REACT FLOW CUSTOMIZATIONS
    ============================================ */
