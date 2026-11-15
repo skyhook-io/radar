@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -231,6 +232,22 @@ func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc c
 	return sc.clusterMismatchWarning(rows, family)
 }
 
+// istioQueryFailure describes a failed query for the viewer without the
+// request URL. The URL carries the query, which names every ambient namespace
+// in the cluster, including ones the viewer cannot see; the server log keeps
+// the full error.
+func istioQueryFailure(err error) string {
+	var httpErr *prom.HTTPError
+	if errors.As(err, &httpErr) {
+		return fmt.Sprintf("Prometheus answered HTTP %d", httpErr.StatusCode)
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Err.Error()
+	}
+	return err.Error()
+}
+
 // errIstioTCPUnchecked stands in for the TCP query when its cluster scope
 // could not be checked.
 var errIstioTCPUnchecked = errors.New("could not check which cluster the TCP series belong to")
@@ -240,6 +257,11 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	var missing []string
 
 	ambientNamespaces := s.ambientNamespaceFn()
+	ambientOverBudget := len(strings.Join(ambientNamespaces, "|")) > istioAmbientListBudget
+	if ambientOverBudget {
+		log.Printf("[istio] %d ambient namespaces are too many to name in one query; client reports into them are not read", len(ambientNamespaces))
+		ambientNamespaces = nil
+	}
 	scopes, err := s.resolveScopes(ctx, ambientNamespaces)
 	if err != nil {
 		return scopeCheckFailed("istio"), nil
@@ -260,7 +282,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 			Source:    "istio",
 			Timestamp: time.Now(),
 			Flows:     []Flow{},
-			Warning:   fmt.Sprintf("Failed to query Prometheus for Istio metrics: %v", err),
+			Warning:   fmt.Sprintf("Failed to query Prometheus for Istio metrics: %s", istioQueryFailure(err)),
 		}, nil
 	}
 
@@ -315,6 +337,12 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		s.noteFamilyMismatch(ctx, opts, response, scopes.http, "istio_requests_total", scopes.httpSelector, "HTTP requests aren't shown on this map.")
 	case len(tcpFlows) == 0 && tcpErr == nil:
 		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, istioReporterSelector, "TCP connections aren't shown on this map.")
+	}
+	if ambientOverBudget {
+		response.Warning = strings.TrimSpace("Requests into ambient namespaces that no waypoint reported aren't shown: this cluster has too many ambient namespaces for Radar to name in one query. " + response.Warning)
+		if response.WarningKind != WarningTransient {
+			response.WarningKind = WarningIncomplete
+		}
 	}
 	applyClusterScopeWarning(response, mismatch, scopes.http.mixed || scopes.tcp.mixed)
 	return response, nil
@@ -371,6 +399,12 @@ func istioRateQuery(groupBy, metric, selector, namespace string, sc clusterScope
 	return sum(fmt.Sprintf(`, source_workload_namespace="%s"`, safeNS)) + " or " +
 		sum(fmt.Sprintf(`, destination_workload_namespace="%s"`, safeNS))
 }
+
+// istioAmbientListBudget bounds the ambient namespace list a query names.
+// Queries are sent as GET, and a longer list risks the URL limit of a proxy in
+// front of the store (nginx's default is 8 KiB), which would fail the whole
+// HTTP query rather than only the client reports.
+const istioAmbientListBudget = 2000
 
 // istioHTTPQuery reads one HTTP figure by series from the side that received
 // the requests. Requests into an ambient namespace that no receiving proxy

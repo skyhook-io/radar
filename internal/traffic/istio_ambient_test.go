@@ -2,10 +2,15 @@ package traffic
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 
 	promclient "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 func istioSeries(metric, reporter, srcNs, src, dstNs, dst, code string, value float64) istioRawSeries {
@@ -275,5 +280,56 @@ func TestIstioScopeCheckCoversClientReportsWhenAmbient(t *testing.T) {
 		if selectors[istioTCPMetric] != istioReporterSelector {
 			t.Errorf("ambient %v: TCP scope checked with %q, want %q", tc.ambient, selectors[istioTCPMetric], istioReporterSelector)
 		}
+	}
+}
+
+// The query names every ambient namespace, so a failure shown to a viewer must
+// not carry the request URL.
+func TestIstioQueryFailureOmitsTheQuery(t *testing.T) {
+	query := `sum by (x) (rate(istio_requests_total{destination_workload_namespace=~"secret-ns"}[5m]))`
+	full := "http://prom:9090/api/v1/query?query=" + url.QueryEscape(query)
+	for _, err := range []error{
+		fmt.Errorf("prom.HTTPTransport: %w", &url.Error{Op: "Get", URL: full, Err: errors.New("dial tcp: connection refused")}),
+		&prom.HTTPError{StatusCode: 503, URL: full, Body: []byte(`{"error":"query timed out"}`)},
+	} {
+		s := newTestIstio(func(context.Context, string) (*prom.QueryResult, error) { return nil, err })
+		s.ambientNamespaceFn = func() []string { return []string{"secret-ns"} }
+		resp, gerr := s.GetFlows(context.Background(), DefaultFlowOptions())
+		if gerr != nil {
+			t.Fatal(gerr)
+		}
+		if resp.Warning == "" || strings.Contains(resp.Warning, "secret-ns") || strings.Contains(resp.Warning, "query=") {
+			t.Errorf("warning %q must say the query failed without the query itself", resp.Warning)
+		}
+	}
+}
+
+func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
+	raw := []istioRawSeries{
+		istioSeries("istio_requests_total", "source", "side", "curl", "ns-0001", "httpbin", "200", 2),
+		istioSeries("istio_requests_total", "waypoint", "ns-0002", "curl", "ns-0002", "httpbin", "200", 1),
+	}
+	var many []string
+	for i := 0; len(strings.Join(many, "|")) <= istioAmbientListBudget; i++ {
+		many = append(many, fmt.Sprintf("ns-%04d", i))
+	}
+	var queries []string
+	fake := fakeIstioProm(raw, nil)
+	s := newTestIstio(func(ctx context.Context, q string) (*prom.QueryResult, error) {
+		queries = append(queries, q)
+		return fake(ctx, q)
+	})
+	s.ambientNamespaceFn = func() []string { return many }
+	resp, err := s.GetFlows(context.Background(), DefaultFlowOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range queries {
+		if strings.Contains(q, `reporter="source"`) {
+			t.Fatalf("over budget, no query may name the ambient namespaces: %s", q)
+		}
+	}
+	if len(resp.Flows) != 1 || !strings.Contains(resp.Warning, "too many ambient namespaces") || resp.WarningKind != WarningIncomplete {
+		t.Errorf("want the waypoint flow and an incomplete warning, got flows %+v warning %q kind %q", resp.Flows, resp.Warning, resp.WarningKind)
 	}
 }
