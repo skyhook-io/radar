@@ -143,6 +143,15 @@ func sameImage(podImage string, r *report) bool {
 	return r.image != "" && normalizeImage(podImage) == normalizeImage(r.image)
 }
 
+// canonicalImage is a Pod image reference as one identity: the pinned
+// digest when there is one, else the normalized reference.
+func canonicalImage(ref string) string {
+	if i := strings.Index(ref, "@"); i >= 0 {
+		return strings.ToLower(ref[i+1:])
+	}
+	return normalizeImage(ref)
+}
+
 // normalizeImage fills in Docker Hub's implicit registry, library/ prefix
 // and :latest tag. Registry and repository are case-insensitive in practice;
 // tags are not.
@@ -248,13 +257,13 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 	scannedSlot := map[slotKey]bool{}
 	for _, t := range targets {
 		if _, ok := j.targetImage[t.key]; ok {
-			scannedSlot[slotKey{t.workload, t.container, t.image}] = true
+			scannedSlot[slotKey{t.workload, t.container, canonicalImage(t.image)}] = true
 		}
 	}
 	for _, t := range targets {
 		// A new ReplicaSet of the same image, not yet scanned, is covered by
 		// the older one's report.
-		if _, ok := j.targetImage[t.key]; ok || scannedSlot[slotKey{t.workload, t.container, t.image}] {
+		if _, ok := j.targetImage[t.key]; ok || scannedSlot[slotKey{t.workload, t.container, canonicalImage(t.image)}] {
 			continue
 		}
 		w := t.workload
@@ -426,7 +435,9 @@ func (j *rollup) imageRows(f Filter) []Image {
 				matching = append(matching, fd)
 			}
 		}
-		if len(matching) == 0 && (m.narrowsFindings() || !rowMatched) {
+		// An unread image's findings are unknown, so no finding filter can
+		// rule it out.
+		if len(matching) == 0 && !(r.unread && rowMatched) && (m.narrowsFindings() || !rowMatched) {
 			continue
 		}
 		counts, fixable := countFindings(r.findings)
@@ -633,6 +644,10 @@ func (j *rollup) workloads(f Filter) []Workload {
 		kept := rowMatched && !m.narrowsFindings()
 		for id := range a.images {
 			if kept {
+				break
+			}
+			if j.images[id].report.unread && rowMatched {
+				kept = true
 				break
 			}
 			for _, fd := range j.images[id].report.findings {

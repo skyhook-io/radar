@@ -164,3 +164,12 @@ func TestListVulnerabilitiesWithoutTrivy(t *testing.T) {
 		t.Fatalf("code %q", code)
 	}
 }
+
+// A trimmed answer says it isn't complete.
+func TestTrimVulnerabilitiesMarksIncomplete(t *testing.T) {
+	resp := vulnerabilities.Response{Images: make([]vulnerabilities.Image, 3), Coverage: vulnerabilities.Coverage{Complete: true}}
+	got := trimVulnerabilities(resp, 2)
+	if got.Coverage.Complete || got.Coverage.RowsOmitted != 1 || len(got.Images) != 2 {
+		t.Fatalf("%+v", got.Coverage)
+	}
+}

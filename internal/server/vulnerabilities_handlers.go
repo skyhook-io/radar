@@ -74,7 +74,11 @@ func (s *Server) handleVulnerabilities(w http.ResponseWriter, r *http.Request) {
 			code, _ := readplan.CollectorErrorCode(err)
 			s.writeErrorCode(w, http.StatusServiceUnavailable, string(code), err.Error())
 		default:
-			log.Printf("[vulnerabilities] Failed to read vulnerability reports (%s): %v", strings.Join(namespaces, ","), err)
+			scope := strings.Join(namespaces, ",")
+			if namespaces == nil {
+				scope = "*"
+			}
+			log.Printf("[vulnerabilities] Failed to read vulnerability reports %s/%s: %v", scope, "vulnerabilityreports", err)
 			s.writeError(w, http.StatusInternalServerError, err.Error())
 		}
 		return

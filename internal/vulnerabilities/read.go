@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,6 +28,9 @@ var ErrNotReady = errors.New("vulnerability reports aren't ready yet: Radar is s
 
 // syncWait bounds how long a read waits for the report watch to sync.
 const syncWait = 10 * time.Second
+
+// maxConcurrentLists bounds the per-namespace report reads in flight.
+const maxConcurrentLists = 8
 
 // Request is one read, with the caller's access as the calling surface
 // checks it.
@@ -110,10 +114,31 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	var items []*unstructured.Unstructured
 	failed := map[readreason.Code][]string{}
 	var lastErr error
-	for _, ns := range scopeNamespaces(readable) {
-		got, err := list(ns)
-		if err != nil {
-			if ns == "" || ctx.Err() != nil {
+	scope := scopeNamespaces(readable)
+	type result struct {
+		ns    string
+		items []*unstructured.Unstructured
+		err   error
+	}
+	// Each namespace's read may wait for its own watch to sync; reading
+	// them one at a time would add those waits up.
+	results := make([]result, len(scope))
+	sem := make(chan struct{}, maxConcurrentLists)
+	var wg sync.WaitGroup
+	for i, ns := range scope {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			got, err := list(ns)
+			results[i] = result{ns: ns, items: got, err: err}
+		}()
+	}
+	wg.Wait()
+	for _, res := range results {
+		if err := res.err; err != nil {
+			if res.ns == "" || ctx.Err() != nil {
 				return Response{}, err
 			}
 			code := readreason.KindSyncPending
@@ -123,11 +148,11 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 					code = c
 				}
 			}
-			failed[code] = append(failed[code], ns)
+			failed[code] = append(failed[code], res.ns)
 			lastErr = err
 			continue
 		}
-		items = append(items, got...)
+		items = append(items, res.items...)
 	}
 	if len(failed) > 0 {
 		var all []string
@@ -157,21 +182,39 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	if !ready {
 		return Response{}, ErrNotReady
 	}
+	// A namespace with no running Pod must still be one the caller may list
+	// Pods in, or "nothing runs there" is a claim it can't make.
+	if req.CanListPods != nil {
+		check := readable
+		if check == nil {
+			check = reportNamespaces(items)
+		}
+		for _, ns := range check {
+			if !slices.Contains(live.podDenied, ns) && !req.CanListPods(ns) {
+				live.podDenied = append(live.podDenied, ns)
+			}
+		}
+		slices.Sort(live.podDenied)
+	}
 	targets := live.targets
 	// Where the caller can't read Pods, what runs is unknown: its reports
 	// would otherwise all read as inactive. Reports about an object the
 	// caller can't read are withheld the same way.
 	if len(live.podDenied) > 0 {
 		items = withoutNamespaces(items, live.podDenied)
+		targets = slices.DeleteFunc(targets, func(t target) bool { return slices.Contains(live.podDenied, t.key.namespace) })
 		gaps = appendGap(gaps, readreason.UserForbidden, live.podDenied)
 	}
 	// Where CronJobs aren't read, a CronJob between runs is unknown whether
 	// or not it has a report yet.
 	if !cronOK || len(cronGaps) > 0 {
+		cronUnknown := func(ns string) bool { return !cronOK || (cronReadable != nil && !slices.Contains(cronReadable, ns)) }
 		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
 			r, ok := reportHeader(u)
-			return ok && r.owner.kind == "CronJob" && (!cronOK || (cronReadable != nil && !slices.Contains(cronReadable, r.owner.namespace)))
+			return ok && r.owner.kind == "CronJob" && cronUnknown(r.owner.namespace)
 		})
+		// Their running Jobs' images are withheld with them, not unscanned.
+		targets = slices.DeleteFunc(targets, func(t target) bool { return t.key.kind == "CronJob" && cronUnknown(t.key.namespace) })
 		if cronOK {
 			gaps = append(gaps, cronGaps...)
 		} else {

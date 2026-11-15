@@ -4,7 +4,8 @@ import { Shield } from 'lucide-react'
 import { Section } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { useAPIResources } from '../../api/apiResources'
-import { useRadarFeature } from '../../api/client'
+import { ApiError, useRadarFeature } from '../../api/client'
+import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { hasVulnerabilityReports, useVulnerabilities, type VulnerabilityFinding } from '../../api/vulnerabilities'
 import { SeverityBadge, SeverityCounts, gapSentence } from './parts'
 
@@ -26,7 +27,17 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   const available = hasVulnerabilityReports(resources) && support !== 'unsupported'
   const workload = { kind, namespace, name }
   const { data, isLoading, error } = useVulnerabilities({ view: 'image', workload }, available && !!namespace && !!name)
-  if (!available || error) return null
+  if (!available) return null
+  // An older Radar, or a report kind removed since the page loaded, has
+  // nothing to show here; anything else is a failure worth saying.
+  if (error && (isRadarFeatureUnsupported(error) || (error instanceof ApiError && error.status === 404))) return null
+  if (error) {
+    return (
+      <Section title="Vulnerabilities" icon={Shield}>
+        <p className="text-xs text-warning-text">Couldn't read vulnerability reports: {error instanceof Error ? error.message : 'request failed'}.</p>
+      </Section>
+    )
+  }
 
   const images = data?.images ?? []
   const unscanned = data?.unscanned ?? []

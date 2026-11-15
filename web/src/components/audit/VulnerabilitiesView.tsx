@@ -224,7 +224,7 @@ function SummaryTiles({ data }: { data: VulnerabilitiesResponse }) {
   const certainty = findingsCertainty(data)
   const nothing = certainty === 'unknown'
   const tiles = [
-    { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : 'every running image has a report', tone: '' },
+    { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : data.coverage.complete ? 'every running image has a report' : 'none unscanned where Radar could read', tone: '' },
     { label: 'Images with Critical CVEs', value: s.imagesWithCritical, certainty, sub: nothing ? 'nothing scanned yet' : `of ${s.imagesScanned} scanned`, tone: s.imagesWithCritical > 0 ? 'text-red-700 dark:text-red-400' : '' },
     { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'fixed in at least one image', tone: s.fixableCriticalHighCves > 0 ? 'text-orange-700 dark:text-orange-400' : '' },
     { label: 'Workloads with Critical or High', value: s.workloadsAffected, certainty, sub: `of ${s.workloads} running or scheduled`, tone: '' },

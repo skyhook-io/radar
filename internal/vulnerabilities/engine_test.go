@@ -261,6 +261,10 @@ func TestFindingsBudget(t *testing.T) {
 	if !resp.Coverage.Truncated || len(resp.Images) != 1 || !resp.Images[0].FindingsUnread {
 		t.Fatalf("an unread image is marked unread, not clean: %+v", resp)
 	}
+	filtered := mustBuild(t, items, targets, ViewImage, Filter{Severities: []Severity{SeverityCritical}, FixableOnly: true})
+	if len(filtered.Images) != 1 || !filtered.Images[0].FindingsUnread {
+		t.Fatalf("an unread image can't be ruled out by a finding filter: %+v", filtered.Images)
+	}
 	w := mustBuild(t, items, targets, ViewWorkload, Filter{})
 	if c := w.Workloads[0].Containers[0]; !c.FindingsUnread || c.Counts != nil {
 		t.Fatalf("workload container: %+v", c)
@@ -313,5 +317,22 @@ func TestCVEInTwoPackagesIsOneImage(t *testing.T) {
 	resp := mustBuild(t, items, targets, ViewCVE, Filter{})
 	if len(resp.CVEs) != 1 || resp.CVEs[0].Images != 1 || len(resp.CVEs[0].Affected) != 1 || len(resp.CVEs[0].Affected[0].Packages) != 2 {
 		t.Fatalf("%+v", resp.CVEs)
+	}
+}
+
+// Two ReplicaSets of one Deployment spelling the same Docker Hub image
+// differently share the scanned slot: neither reads as unscanned.
+func TestRolloutWithImageAliasesStaysScanned(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "rs-old", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-1", container: "nginx", registry: "index.docker.io", repo: "library/nginx", tag: "1.25", scanned: "2026-11-10T10:00:00Z", vulns: []vuln{{"CVE-1", "HIGH", "zlib", "1", "2"}}}),
+	}
+	web := WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "web-1", "nginx", "nginx:1.25", "", web),
+		liveTarget("shop", "ReplicaSet", "web-2", "nginx", "docker.io/library/nginx:1.25", "", web),
+	}
+	resp := mustBuild(t, items, targets, ViewImage, Filter{})
+	if len(resp.Unscanned) != 0 {
+		t.Fatalf("unscanned: %+v", resp.Unscanned)
 	}
 }
