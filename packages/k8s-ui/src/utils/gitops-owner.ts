@@ -152,11 +152,11 @@ export function managerChipPresentation(answer: ManagerAnswer): { prefix: string
   const fluxReasons: Record<string, Partial<Record<ManagerClaim['check'], string>>> = {
     'kustomize.toolkit.fluxcd.io': {
       omitted: "its inventory doesn't list this resource; it may have been removed from the source while pruning is off, or the latest apply hasn't finished",
-      unreadable: 'its status has no inventory yet; Flux records one once an apply succeeds',
+      unreadable: "Radar can't read an inventory in its status; Flux records one once an apply succeeds",
     },
     'helm.toolkit.fluxcd.io': {
       omitted: "its inventory doesn't list this resource; it may be a Helm hook, kept by helm.sh/resource-policy: keep, or the latest release hasn't finished",
-      unreadable: "its status has no inventory; Flux records one from version 2.8, at each install or upgrade, so a release not upgraded since then has none",
+      unreadable: "Radar can't read an inventory in its status; Flux records one from version 2.8, at each install or upgrade, so a release installed earlier and not upgraded since has none",
     },
   }
   const subject = answer.via ? managerRefLabel(evidence.object) : 'this resource'
