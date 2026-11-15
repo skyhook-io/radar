@@ -67,3 +67,12 @@ func TestStagedCalicoPoliciesPreviewProtectionOnly(t *testing.T) {
 		t.Error("enforced Calico policies cover a staged kind")
 	}
 }
+
+func TestACalicoPolicyThatRulesAWorkloadOutNeedsNoNamespace(t *testing.T) {
+	api := labelled(deployment("api", mounts()), map[string]string{"app": "api"})
+	global := calicoPolicy("projectcalico.org", "GlobalNetworkPolicy", "", "retail", map[string]any{"selector": "app == 'web'", "namespaceSelector": "team == 'retail'"})
+	c := allNamespaces{cluster: cluster{objects: []runtime.Object{api, global}, unread: map[resourceid.GroupKind]readreason.Code{{Kind: "Namespace"}: readreason.KindSyncPending}}}
+	if got := NewView(c, ownership.Unrestricted()).SelectedBy(CalicoPolicies, refOf(api), nil); len(got.Matches) != 0 || !got.Coverage.Complete() {
+		t.Errorf("a policy whose selector rules the workload out answered %+v; want none, complete", got)
+	}
+}

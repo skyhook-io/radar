@@ -61,7 +61,7 @@ func calicoSelection(namespaced, staged bool) func(runtime.Object) (Selection, b
 			return Selection{}, false, nil
 		}
 		matcher := netpol.CompileCalicoPolicyMatcher(policy)
-		needsNamespace, needsServiceAccount, raw := matcher.Needs()
+		_, _, raw := matcher.Needs()
 		return Selection{AnyNamespace: !namespaced, Matches: func(c Candidate, lookup Lookup) (bool, bool) {
 			serviceAccount := c.ServiceAccount
 			if serviceAccount == "" {
@@ -71,24 +71,23 @@ func calicoSelection(namespaced, staged bool) func(runtime.Object) (Selection, b
 			if !raw {
 				podLabels = netpol.CalicoEndpointLabels(c.Ref.Namespace, c.Labels, serviceAccount)
 			}
-			var namespaceLabels, serviceAccountLabels map[string]string
-			if needsNamespace {
-				ns, ok := lookup(resourceid.NewRef("", "Namespace", "", c.Ref.Namespace))
-				namespace, isNamespace := ns.(*corev1.Namespace)
+			namespaceLabels := func() (map[string]string, bool) {
+				obj, ok := lookup(resourceid.NewRef("", "Namespace", "", c.Ref.Namespace))
+				ns, isNamespace := obj.(*corev1.Namespace)
 				if !ok || !isNamespace {
-					return false, false
+					return nil, false
 				}
-				namespaceLabels = netpol.CalicoNamespaceLabels(namespace)
+				return netpol.CalicoNamespaceLabels(ns), true
 			}
-			if needsServiceAccount {
+			serviceAccountLabels := func() (map[string]string, bool) {
 				obj, ok := lookup(resourceid.NewRef("", "ServiceAccount", c.Ref.Namespace, serviceAccount))
 				sa, isServiceAccount := obj.(*corev1.ServiceAccount)
 				if !ok || !isServiceAccount {
-					return false, false
+					return nil, false
 				}
-				serviceAccountLabels = netpol.CalicoServiceAccountLabels(sa)
+				return netpol.CalicoServiceAccountLabels(sa), true
 			}
-			return matcher.Matches(podLabels, namespaceLabels, serviceAccount, serviceAccountLabels)
+			return matcher.MatchesLazily(podLabels, namespaceLabels, serviceAccount, serviceAccountLabels)
 		}}, true, nil
 	}
 }

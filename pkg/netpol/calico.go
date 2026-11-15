@@ -579,6 +579,44 @@ func CalicoNamespaceLabels(namespace *corev1.Namespace) map[string]string {
 	return labels
 }
 
+// MatchesLazily is Matches with the Namespace's and ServiceAccount's labels
+// read only once the selectors before them have matched: a workload the
+// endpoint selector rules out needs neither. decided is false when a label
+// set it needs couldn't be read, or the endpoint selector is unusable.
+func (m *CalicoPolicyMatcher) MatchesLazily(workloadLabels map[string]string, namespaceLabels func() (map[string]string, bool), serviceAccountName string, serviceAccountLabels func() (map[string]string, bool)) (matched, decided bool) {
+	if m == nil || !m.endpointValid {
+		return false, false
+	}
+	if m.kubernetes {
+		return m.kubernetesSelector.Matches(labels.Set(workloadLabels)), true
+	}
+	if !m.endpoint(workloadLabels) || m.blocked {
+		return false, true
+	}
+	if m.namespaceSelector != nil {
+		ns, ok := namespaceLabels()
+		if !ok {
+			return false, false
+		}
+		if !m.namespaceSelector(ns) {
+			return false, true
+		}
+	}
+	if m.serviceAccountSelector != nil {
+		if serviceAccountName == "" {
+			return false, true
+		}
+		sa, ok := serviceAccountLabels()
+		if !ok {
+			return false, false
+		}
+		if !m.serviceAccountSelector(sa) {
+			return false, true
+		}
+	}
+	return true, true
+}
+
 // Needs reports which labels beyond a workload's own Matches reads: the
 // Namespace's for a namespaceSelector, the ServiceAccount's for a
 // serviceAccountSelector. raw is true for a StagedKubernetesNetworkPolicy,
