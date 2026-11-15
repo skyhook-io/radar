@@ -31,7 +31,9 @@ function loadElk(): Promise<ELK> {
   elkPromise ??= import('elkjs/lib/elk.bundled.js')
     .then(({ default: ELKImpl }) => new ELKImpl())
     .catch((err) => {
-      // A failed chunk load must not disable layout for the whole session.
+      // Let a later layout try again where the browser refetches failed
+      // modules. Chromium caches the failure until reload, so there the
+      // graph keeps the fallback grid, as with any lazy chunk that failed.
       elkPromise = null
       throw err
     })
