@@ -323,3 +323,15 @@ func TestIstioFamiliesNameGatewaysAndServiceHosts(t *testing.T) {
 		t.Errorf("with the mesh's domain unknown an FQDN names %+v", got.Declared)
 	}
 }
+
+func TestArgoWorkflowsNameTheirTemplates(t *testing.T) {
+	tmpl := object("argoproj.io/v1alpha1", "WorkflowTemplate", "build", nil)
+	wf := object("argoproj.io/v1alpha1", "Workflow", "build-x7", map[string]any{"workflowTemplateRef": map[string]any{"name": "build"}})
+	checkFamily(t, ArgoWorkflowTemplates, []runtime.Object{tmpl, wf}, wf, ref("argoproj.io", "WorkflowTemplate", "build"), "spec.workflowTemplateRef")
+
+	shared := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "ClusterWorkflowTemplate", "metadata": map[string]any{"name": "notify"}}}
+	cron := inNamespace(object("argoproj.io/v1alpha1", "CronWorkflow", "nightly", map[string]any{"workflowSpec": map[string]any{"templates": []any{
+		map[string]any{"name": "main", "steps": []any{[]any{map[string]any{"name": "tell", "templateRef": map[string]any{"name": "notify", "clusterScope": true}}}}},
+	}}}), "ops")
+	checkFamily(t, ArgoWorkflowTemplates, []runtime.Object{shared, cron}, cron, resourceid.Ref{Group: "argoproj.io", Kind: "ClusterWorkflowTemplate", Name: "notify"}, "spec.workflowSpec.templates[].steps[][].templateRef")
+}

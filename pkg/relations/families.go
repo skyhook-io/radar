@@ -17,7 +17,7 @@ var (
 	kindStatefulSet  = resourceid.GroupKind{Group: "apps", Kind: "StatefulSet"}
 	kindDaemonSet    = resourceid.GroupKind{Group: "apps", Kind: "DaemonSet"}
 	kindReplicaSet   = resourceid.GroupKind{Group: "apps", Kind: "ReplicaSet"}
-	kindRollout      = resourceid.GroupKind{Group: configrefs.ArgoRolloutsGroup, Kind: "Rollout"}
+	kindRollout      = resourceid.GroupKind{Group: configrefs.ArgoGroup, Kind: "Rollout"}
 	kindService      = resourceid.GroupKind{Kind: "Service"}
 	kindSecret       = resourceid.GroupKind{Kind: "Secret"}
 	kindScaledObject = resourceid.GroupKind{Group: "keda.sh", Kind: "ScaledObject"}
@@ -407,4 +407,32 @@ func IstioServiceHosts(domain string) *Family {
 			return nil
 		},
 	}
+}
+
+var (
+	kindWorkflow     = resourceid.GroupKind{Group: configrefs.ArgoGroup, Kind: "Workflow"}
+	kindCronWorkflow = resourceid.GroupKind{Group: configrefs.ArgoGroup, Kind: "CronWorkflow"}
+)
+
+// ArgoWorkflowTemplates is the family of the WorkflowTemplates and
+// ClusterWorkflowTemplates an Argo Workflow or CronWorkflow uses, through its
+// workflowTemplateRef or a task's or step's templateRef.
+var ArgoWorkflowTemplates = &Family{
+	Name:    "argoWorkflowTemplates",
+	Sources: []Source{{Kind: kindWorkflow}, {Kind: kindCronWorkflow}},
+	Targets: []resourceid.GroupKind{{Group: configrefs.ArgoGroup, Kind: "WorkflowTemplate"}, {Group: configrefs.ArgoGroup, Kind: "ClusterWorkflowTemplate"}},
+	Declared: func(obj runtime.Object, visit func(Declaration)) error {
+		fields := []string{"spec"}
+		u, ok := unstructuredOf(obj, kindWorkflow)
+		if !ok {
+			if u, ok = unstructuredOf(obj, kindCronWorkflow); !ok {
+				return nil
+			}
+			fields = []string{"spec", "workflowSpec"}
+		}
+		for _, r := range configrefs.ArgoWorkflowTemplateRefs(u.Object, u.GetNamespace(), fields...) {
+			visitPathRef(visit, r)
+		}
+		return nil
+	},
 }

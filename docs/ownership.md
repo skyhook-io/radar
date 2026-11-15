@@ -110,6 +110,7 @@ The families so far:
 | `KnativeRouteRevisions` | Knative Routes → the Revisions their status sends traffic to | `families.go` |
 | `IstioGateways` | Istio VirtualServices → the Istio Gateways they bind to, in any namespace (`mesh` binds sidecars, not a Gateway) | `families.go` |
 | `IstioServiceHosts(domain)` | Istio VirtualServices (HTTP, TCP, TLS routes) and DestinationRules → the Services their hosts name, in any namespace. Made per request with the mesh's domain from istiod (`configrefs.IstioServiceDomain`): an FQDN resolves only with it | `families.go` |
+| `ArgoWorkflowTemplates` | Argo Workflows and CronWorkflows → the WorkflowTemplates and ClusterWorkflowTemplates their `workflowTemplateRef` and task or step `templateRef`s use | `families.go` |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
 families can't read a reference differently.

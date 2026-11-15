@@ -16,7 +16,7 @@ var ConfigReferences = &Family{
 	Name: "configReferences",
 	Sources: []Source{
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}},
-		{Kind: resourceid.GroupKind{Group: configrefs.ArgoRolloutsGroup, Kind: "Rollout"}},
+		{Kind: resourceid.GroupKind{Group: configrefs.ArgoGroup, Kind: "Rollout"}},
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "StatefulSet"}},
 		{Kind: resourceid.GroupKind{Group: "apps", Kind: "DaemonSet"}},
 		{Kind: resourceid.GroupKind{Group: "batch", Kind: "CronJob"}},

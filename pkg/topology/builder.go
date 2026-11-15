@@ -7619,60 +7619,11 @@ type argoWorkflowTemplateRef struct {
 }
 
 func argoWorkflowTemplateRefsFromWorkflowSpec(obj map[string]any, fields ...string) []argoWorkflowTemplateRef {
-	spec, found, _ := unstructured.NestedMap(obj, fields...)
-	if !found {
-		return nil
-	}
-	refs := make([]argoWorkflowTemplateRef, 0)
-	seen := make(map[string]bool)
-	addRef := func(raw map[string]any) {
-		name, _, _ := unstructured.NestedString(raw, "name")
-		if name == "" {
-			return
-		}
-		clusterScope, _, _ := unstructured.NestedBool(raw, "clusterScope")
-		key := fmt.Sprintf("%t/%s", clusterScope, name)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		refs = append(refs, argoWorkflowTemplateRef{name: name, clusterScope: clusterScope})
-	}
-
-	if workflowRef, found, _ := unstructured.NestedMap(spec, "workflowTemplateRef"); found {
-		addRef(workflowRef)
-	}
-	templates, _, _ := unstructured.NestedSlice(spec, "templates")
-	for _, rawTemplate := range templates {
-		template, ok := rawTemplate.(map[string]any)
-		if !ok {
-			continue
-		}
-		for _, rawTask := range argoTemplateTasks(template) {
-			task, ok := rawTask.(map[string]any)
-			if !ok {
-				continue
-			}
-			if templateRef, found, _ := unstructured.NestedMap(task, "templateRef"); found {
-				addRef(templateRef)
-			}
-		}
+	var refs []argoWorkflowTemplateRef
+	for _, r := range configrefs.ArgoWorkflowTemplateRefs(obj, "", fields...) {
+		refs = append(refs, argoWorkflowTemplateRef{name: r.Ref.Name, clusterScope: r.Ref.Kind == "ClusterWorkflowTemplate"})
 	}
 	return refs
-}
-
-func argoTemplateTasks(template map[string]any) []any {
-	tasks := make([]any, 0)
-	if dagTasks, found, _ := unstructured.NestedSlice(template, "dag", "tasks"); found {
-		tasks = append(tasks, dagTasks...)
-	}
-	stepGroups, _, _ := unstructured.NestedSlice(template, "steps")
-	for _, rawGroup := range stepGroups {
-		if group, ok := rawGroup.([]any); ok {
-			tasks = append(tasks, group...)
-		}
-	}
-	return tasks
 }
 
 func addArgoWorkflowTemplateEdges(edges []Edge, sourceID, sourceNamespace string, refs []argoWorkflowTemplateRef, workflowTemplateIDs, clusterWorkflowTemplateIDs map[string]string) []Edge {
