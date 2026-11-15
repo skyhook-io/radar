@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { AlertTriangle, CircleDashed, ExternalLink, Search, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, CircleDashed, ExternalLink, Search, ShieldAlert, ShieldCheck } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -170,7 +170,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         <EmptyState
           tone="neutral"
           icon={ShieldAlert}
-          headline={filtered ? 'Nothing matches these filters' : data.summary.imagesScanned === 0 ? 'No scanned images run in this scope' : 'No known CVEs in the images that run'}
+          headline={filtered ? 'Nothing matches these filters' : data.summary.imagesScanned === 0 ? 'No scanned images run in this scope' : `No known CVEs in the ${data.summary.imagesScanned} scanned ${data.summary.imagesScanned === 1 ? 'image' : 'images'} that run`}
           body={filtered ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && data.unscanned.length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
         />
       ) : view === 'cve' ? (
@@ -189,6 +189,9 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         <p className="text-xs text-theme-text-tertiary">{data.coverage.rowsOmitted} more rows not shown. Narrow with a filter or the namespace picker.</p>
       )}
 
+      {!severities.length && !fixableOnly && view !== 'cve' && (
+        <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
+      )}
       <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
     </div>
   )
@@ -470,6 +473,45 @@ function WorkloadFindings({ workload }: { workload: VulnerabilityWorkload }) {
     <div className="flex min-w-0 flex-col gap-1">
       <SeverityBar counts={workload.counts} />
       {unknown > 0 && <span className="text-xs text-warning-text">{unknown} {unknown === 1 ? 'container' : 'containers'} not counted: not scanned yet or too many findings</span>}
+    </div>
+  )
+}
+
+// Scanned and clean, folded away so the rows are the ones that need work.
+function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view: VulnerabilityView; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+  const images = view === 'image' ? data.clean ?? [] : []
+  const workloads = view === 'workload' ? data.cleanWorkloads ?? [] : []
+  const count = images.length + workloads.length
+  if (count === 0) return null
+  return (
+    <div className="shrink-0 rounded-lg border border-theme-border bg-theme-surface">
+      <Disclosure
+        summary={
+          <span className="flex items-center gap-2 text-sm text-theme-text-secondary">
+            <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+            {view === 'image'
+              ? `${count} scanned ${count === 1 ? 'image has' : 'images have'} no known CVEs`
+              : `${count} ${count === 1 ? 'workload runs' : 'workloads run'} only images with no known CVEs`}
+          </span>
+        }
+      >
+        {view === 'image' ? (
+          <ul className="flex flex-col gap-2">
+            {images.map((c) => (
+              <li key={c.id} className="flex flex-col gap-1">
+                <span className="flex items-baseline gap-2 text-xs">
+                  <ImageName image={c.image} className="text-theme-text-primary" />
+                  <span className="text-theme-text-tertiary">scanned {formatRelativeAgeTime(c.scannedAt)}</span>
+                </span>
+                <WorkloadLinks workloads={c.workloads} onOpen={onOpen} />
+                {c.workloadsTotal > c.workloads.length && <span className="text-xs text-theme-text-tertiary">and {c.workloadsTotal - c.workloads.length} more</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <WorkloadLinks workloads={workloads} onOpen={onOpen} />
+        )}
+      </Disclosure>
     </div>
   )
 }

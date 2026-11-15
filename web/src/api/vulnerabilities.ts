@@ -97,6 +97,7 @@ export interface VulnerabilityWorkload {
 
 export interface VulnerabilitySummary {
   imagesScanned: number
+  imagesClean: number
   imagesUnscanned: number
   imagesWithCritical: number
   fixableCriticalHighCves: number
@@ -120,6 +121,10 @@ export interface VulnerabilitiesResponse {
   images?: VulnerableImage[]
   cves?: VulnerabilityCVE[]
   workloads?: VulnerabilityWorkload[]
+  /** Scanned images with no findings, kept out of the rows unless searched for. */
+  clean?: { id: string; image: string; scannedAt: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number; report: VulnerableImage['report'] }[]
+  /** Workloads whose every container is scanned and clean. */
+  cleanWorkloads?: VulnerabilityWorkloadRef[]
   unscanned: { image: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
   coverage: {
     complete: boolean

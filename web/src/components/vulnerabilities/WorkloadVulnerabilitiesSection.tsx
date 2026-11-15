@@ -40,6 +40,8 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   }
 
   const images = data?.images ?? []
+  // The tab folds clean images away; a workload's drawer shows every container.
+  const clean = data?.clean ?? []
   const unscanned = data?.unscanned ?? []
   const critical = images.reduce((n, img) => n + (img.findingsUnread ? 0 : img.counts.critical), 0)
   const fixFirst: VulnerabilityFinding[] = []
@@ -84,7 +86,16 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
               <span className="text-xs text-warning-text">No report yet: Trivy hasn't scanned this image.</span>
             </div>
           ))}
-          {images.length === 0 && unscanned.length === 0 && (
+          {clean.map((img) => (
+            <div key={img.id} className="flex flex-col gap-1 rounded-md border border-theme-border bg-theme-surface px-3 py-2">
+              <span className="flex flex-wrap items-baseline gap-x-2">
+                <span className="font-medium text-theme-text-primary">{[...new Set(img.workloads.filter(isThis).map((w) => w.container))].join(', ')}</span>
+                <ImageName image={img.image} className="text-xs text-theme-text-tertiary" />
+              </span>
+              <span className="text-xs text-theme-text-secondary">No known CVEs · scanned {formatRelativeAgeTime(img.scannedAt)}</span>
+            </div>
+          ))}
+          {images.length === 0 && clean.length === 0 && unscanned.length === 0 && (
             <p className="text-xs text-theme-text-tertiary">
               {data && !data.coverage.complete
                 ? gapSentence(data.coverage.gaps)?.replace(' Counts cover the rest.', '') ?? "Some reports couldn't be read."

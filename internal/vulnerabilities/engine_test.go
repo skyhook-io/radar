@@ -348,3 +348,31 @@ func TestArtifactImageWithNameInTag(t *testing.T) {
 		t.Fatalf("%q %q", img, digest)
 	}
 }
+
+// Clean images and workloads are listed apart, not as rows, so they don't
+// bury the ones with findings; a search that names one brings its row back.
+func TestCleanImagesListedApart(t *testing.T) {
+	items := []*unstructured.Unstructured{
+		vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{{"CVE-A", "HIGH", "zlib", "1", "2"}}}),
+		vulnReport(reportSpec{name: "p", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/pause", tag: "3", digest: "sha256:p", scanned: "2026-11-10T00:00:00Z"}),
+	}
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/pause:3", "", worker),
+	}
+	resp := mustBuild(t, items, targets, ViewImage, Filter{})
+	if len(resp.Images) != 1 || resp.Images[0].Image != "acme/checkout:2" || len(resp.Clean) != 1 || resp.Clean[0].Image != "acme/pause:3" {
+		t.Fatalf("rows %+v clean %+v", resp.Images, resp.Clean)
+	}
+	if resp.Summary.ImagesClean != 1 || resp.Summary.ImagesScanned != 2 {
+		t.Fatalf("summary %+v", resp.Summary)
+	}
+	named := mustBuild(t, items, targets, ViewImage, Filter{Query: "pause"})
+	if len(named.Images) != 1 || named.Images[0].Image != "acme/pause:3" || len(named.Clean) != 0 {
+		t.Fatalf("a search that names a clean image shows its row: %+v / %+v", named.Images, named.Clean)
+	}
+	w := mustBuild(t, items, targets, ViewWorkload, Filter{})
+	if len(w.Workloads) != 1 || w.Workloads[0].Name != "checkout" || len(w.CleanWorkloads) != 1 || w.CleanWorkloads[0].Name != "worker" {
+		t.Fatalf("workloads %+v clean %+v", w.Workloads, w.CleanWorkloads)
+	}
+}

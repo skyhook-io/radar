@@ -152,6 +152,17 @@ type WorkloadContainer struct {
 	Fixable        *Counts `json:"fixable,omitempty"`
 }
 
+// CleanImage is a running image whose report has no findings.
+type CleanImage struct {
+	ID        string    `json:"id"`
+	Image     string    `json:"image"`
+	ScannedAt time.Time `json:"scannedAt"`
+	// Workloads lists at most MaxWorkloadsPerRow of WorkloadsTotal.
+	Workloads      []WorkloadRef         `json:"workloads"`
+	WorkloadsTotal int                   `json:"workloadsTotal"`
+	Report         resourceapi.ObjectRef `json:"report"`
+}
+
 // Unscanned is a running image no report covers yet. Workloads lists at
 // most MaxWorkloadsPerRow of WorkloadsTotal; the response lists at most
 // MaxRows of Summary.ImagesUnscanned.
@@ -163,7 +174,9 @@ type Unscanned struct {
 
 // Summary describes everything in scope, before the request's filters.
 type Summary struct {
-	ImagesScanned      int `json:"imagesScanned"`
+	ImagesScanned int `json:"imagesScanned"`
+	// ImagesClean counts scanned images with no findings.
+	ImagesClean        int `json:"imagesClean"`
 	ImagesUnscanned    int `json:"imagesUnscanned"`
 	ImagesWithCritical int `json:"imagesWithCritical"`
 	// FixableCriticalHighCVEs counts distinct Critical and High CVE IDs that
@@ -198,14 +211,19 @@ type Coverage struct {
 // Response is GET /api/vulnerabilities and the MCP list_vulnerabilities
 // answer. Exactly one of Images, CVEs and Workloads is set, by View.
 type Response struct {
-	Source    string      `json:"source"`
-	View      View        `json:"view"`
-	Summary   Summary     `json:"summary"`
-	Images    []Image     `json:"images,omitempty"`
-	CVEs      []CVE       `json:"cves,omitempty"`
-	Workloads []Workload  `json:"workloads,omitempty"`
-	Unscanned []Unscanned `json:"unscanned"`
-	Coverage  Coverage    `json:"coverage"`
+	Source    string     `json:"source"`
+	View      View       `json:"view"`
+	Summary   Summary    `json:"summary"`
+	Images    []Image    `json:"images,omitempty"`
+	CVEs      []CVE      `json:"cves,omitempty"`
+	Workloads []Workload `json:"workloads,omitempty"`
+	// Clean lists the scanned images with no findings (image view), and
+	// CleanWorkloads the workloads whose every container is one (workload
+	// view). They are kept out of the rows unless a search names them.
+	Clean          []CleanImage  `json:"clean,omitempty"`
+	CleanWorkloads []WorkloadRef `json:"cleanWorkloads,omitempty"`
+	Unscanned      []Unscanned   `json:"unscanned"`
+	Coverage       Coverage      `json:"coverage"`
 }
 
 // Filter narrows the pivot. The summary is always unfiltered.

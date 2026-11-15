@@ -294,12 +294,14 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 		}
 		resp.CVEs, resp.Coverage.RowsOmitted = capRows(cves)
 	case ViewWorkload:
-		resp.Workloads = j.workloads(f)
-		resp.Workloads, resp.Coverage.RowsOmitted = capRows(resp.Workloads)
+		rows, clean := j.workloads(f)
+		resp.Workloads, resp.Coverage.RowsOmitted = capRows(rows)
+		resp.CleanWorkloads = clean
 	default:
 		resp.View = ViewImage
-		resp.Images = j.imageRows(f)
-		resp.Images, resp.Coverage.RowsOmitted = capRows(resp.Images)
+		rows, clean := j.imageRows(f)
+		resp.Images, resp.Coverage.RowsOmitted = capRows(rows)
+		resp.Clean = clean
 	}
 	resp.Coverage.InactiveReports = j.inactiveReports
 	resp.Coverage.Truncated = j.truncated
@@ -326,6 +328,9 @@ func (j *rollup) summary() Summary {
 		s.ImagesScanned++
 		counts, _ := countFindings(r.findings)
 		addCounts(&s.Counts, counts)
+		if !r.unread && len(r.findings) == 0 {
+			s.ImagesClean++
+		}
 		if counts.Critical > 0 {
 			s.ImagesWithCritical++
 		}
@@ -421,9 +426,13 @@ func (j *rollup) sortedImages() []*imageAgg {
 	return aggs
 }
 
-func (j *rollup) imageRows(f Filter) []Image {
+// imageRows lists the images with findings. Images scanned with no
+// findings are listed apart as clean, so they don't bury the ones that need
+// work, unless a search names them.
+func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 	m := newMatcher(f)
-	rows := []Image{}
+	rows = []Image{}
+	clean = []CleanImage{}
 	for _, agg := range j.sortedImages() {
 		r := agg.report
 		workloads := sortedWorkloads(agg.workloads)
@@ -431,6 +440,15 @@ func (j *rollup) imageRows(f Filter) []Image {
 			continue
 		}
 		rowMatched := m.rowMatches(r.image, workloads)
+		if !r.unread && len(r.findings) == 0 && (m.query == "" || !rowMatched || m.narrowsFindings()) {
+			if rowMatched {
+				clean = append(clean, CleanImage{
+					ID: r.imageID, Image: cmp.Or(r.image, r.digest), ScannedAt: r.scannedAt, Report: r.ref,
+					Workloads: workloads[:min(len(workloads), MaxWorkloadsPerRow)], WorkloadsTotal: len(workloads),
+				})
+			}
+			continue
+		}
 		var matching []Finding
 		for _, fd := range r.findings {
 			if m.findingMatches(fd, rowMatched) {
@@ -458,7 +476,8 @@ func (j *rollup) imageRows(f Filter) []Image {
 	slices.SortStableFunc(rows, func(a, b Image) int {
 		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
 	})
-	return rows
+	slices.SortFunc(clean, func(a, b CleanImage) int { return cmp.Compare(a.Image, b.Image) })
+	return rows, clean[:min(len(clean), MaxRows)]
 }
 
 type cveAgg struct {
@@ -585,7 +604,10 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 	return rows, nil
 }
 
-func (j *rollup) workloads(f Filter) []Workload {
+// workloads lists the running workloads. Workloads whose every container is
+// scanned and clean are listed apart, unless a search names them; a workload
+// with an unscanned or unread container is never clean.
+func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 	m := newMatcher(f)
 	type wAgg struct {
 		row    Workload
@@ -632,17 +654,28 @@ func (j *rollup) workloads(f Filter) []Workload {
 			addCounts(&a.row.Fixable, fixable)
 		}
 	}
-	rows := []Workload{}
+	rows = []Workload{}
+	clean = []WorkloadRef{}
 	for _, ref := range order {
 		a := byRef[ref]
 		if !m.workloadKept([]WorkloadRef{ref}) {
 			continue
 		}
 		images := make([]string, 0, len(a.row.Containers))
+		allClean := true
 		for _, c := range a.row.Containers {
 			images = append(images, c.Image)
+			if !c.Scanned || c.FindingsUnread || c.Counts == nil || totalCount(*c.Counts) > 0 {
+				allClean = false
+			}
 		}
 		rowMatched := m.rowMatches(strings.Join(images, " "), []WorkloadRef{ref})
+		if allClean && (m.query == "" || !rowMatched || m.narrowsFindings()) {
+			if rowMatched {
+				clean = append(clean, ref)
+			}
+			continue
+		}
 		kept := rowMatched && !m.narrowsFindings()
 		for id := range a.images {
 			if kept {
@@ -670,8 +703,13 @@ func (j *rollup) workloads(f Filter) []Workload {
 	slices.SortStableFunc(rows, func(a, b Workload) int {
 		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 	})
-	return rows
+	slices.SortFunc(clean, func(a, b WorkloadRef) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
+	})
+	return rows, clean[:min(len(clean), MaxRows)]
 }
+
+func totalCount(c Counts) int { return c.Critical + c.High + c.Medium + c.Low + c.Unknown }
 
 func (j *rollup) unscannedRows(f Filter) []Unscanned {
 	m := newMatcher(f)
