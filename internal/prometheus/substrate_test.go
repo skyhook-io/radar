@@ -242,3 +242,28 @@ func TestSubstrateWorkersRefuseDuplicateSources(t *testing.T) {
 	}
 }
 
+// With a verified scope, a paired family that exists only outside it is a mismatch, not half a chart.
+func TestSubstratePairedFamilyOutsideVerifiedScope(t *testing.T) {
+	resolve := func(context.Context, scopeProbe) (string, SeriesIsolation, error) {
+		return `cluster="a"`, SeriesIsolation{Mode: SeriesIsolationVerified}, nil
+	}
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		{`count(count_over_time(ate_workerpool_desired_workers{ate_workerpool_namespace="agents",ate_workerpool_name="pool",cluster="a"}`, result(series(nil, 1))},
+		{`count(count_over_time(ate_workerpool_ready_workers{ate_workerpool_namespace="agents",ate_workerpool_name="pool"}`, result(series(nil, 1))},
+	}}
+	charts := querySubstrateCharts(context.Background(), f, resolve, poolRequest(substratePoolCharts()))
+	if c := chartByID(charts, "readiness"); c.State != SubstrateChartMismatch || !strings.Contains(c.Reason, "ate_workerpool_ready_workers") {
+		t.Fatalf("readiness = %s %q, want a mismatch naming the ready family", c.State, c.Reason)
+	}
+}
+
+func TestSubstrateWorkerAverageCollapsesHACopies(t *testing.T) {
+	f := &fakeSubstrateProm{}
+	querySubstrateCharts(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts()))
+	for _, q := range f.queries {
+		if strings.Contains(q, "avg by") && !strings.Contains(q, "(max without (prometheus, prometheus_replica, replica) (ate_workerpool_workers{") {
+			t.Fatalf("worker average without HA collapse: %s", q)
+		}
+	}
+}
+

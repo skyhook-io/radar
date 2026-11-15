@@ -108,7 +108,11 @@ func substrateRateWindow(step time.Duration) string {
 // rate collapses copies of one series that differ only by the labels an HA
 // Prometheus pair or a federation adds, so they are not added twice.
 func rate(metric, sel, window string) string {
-	return "max without (prometheus, prometheus_replica, replica) (rate(" + metric + "{" + sel + "}[" + window + "]))"
+	return collapseHA("rate(" + metric + "{" + sel + "}[" + window + "])")
+}
+
+func collapseHA(expr string) string {
+	return "max without (prometheus, prometheus_replica, replica) (" + expr + ")"
 }
 
 func quantile(q, bucket, sel, window string) string {
@@ -134,7 +138,7 @@ func substratePoolCharts() []substrateChartDef {
 			source:     "ate_workerpool_workers",
 			family:     workers,
 			queries: func(sel, _ string) []substrateQuery {
-				return []substrateQuery{{expr: `sum by (ate_worker_state, ate_sandbox_class) (avg by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (ate_workerpool_workers{` + sel + `}))`}}
+				return []substrateQuery{{expr: `sum by (ate_worker_state, ate_sandbox_class) (avg by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state, ate_sandbox_class) (` + collapseHA("ate_workerpool_workers{"+sel+"}") + `))`}}
 			},
 		},
 		{
@@ -289,6 +293,28 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 		return substrateFamilyCheck{isolation: iso, state: SubstrateChartError, reason: "Prometheus scope check failed: " + truncate(err.Error(), 200)}
 	}
 	check := substrateFamilyCheck{matchers: matchers, isolation: iso}
+	// A verified scope is accepted once any of the families appears under it;
+	// one that appears only outside it would leave a paired chart half drawn.
+	if matchers != "" && len(families) > 1 {
+		for _, f := range families {
+			present := func(s string) (bool, error) {
+				res, err := strictQuerier{q}.Query(ctx, "count(count_over_time("+f.metric+"{"+s+"}["+window.String()+"]))")
+				return err == nil && len(res.Series) > 0, err
+			}
+			scoped, err := present(withScope(sel, matchers))
+			if err == nil && !scoped {
+				var anywhere bool
+				if anywhere, err = present(sel); err == nil && anywhere {
+					check.state, check.reason = SubstrateChartMismatch, "this cluster's identity labels do not appear on "+f.metric+", which this chart combines"
+					return check
+				}
+			}
+			if err != nil {
+				check.state, check.reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
+				return check
+			}
+		}
+	}
 	for _, f := range families {
 		if !f.additive {
 			continue
