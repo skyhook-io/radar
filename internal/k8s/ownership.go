@@ -54,19 +54,22 @@ func BeginOwnershipRead(cache *ResourceCache) (ownership.ReadSession, error) {
 // a context switch refuses them with it. Caches replaced or not ready leave
 // the answer unavailable.
 func AnswerOwnership(rel *topology.Relationships, fetched ownership.Observation, owner metav1.Object, access func(*ownership.Catalog) ownership.Access) {
-	answerOwnership(ownershipSource, topology.ApplyOwnership, splitHistory(fetched.Ref, owner), rel, fetched, access)
+	answerOwnership(ownershipSource, topology.ApplyOwnership, splitHistory(fetched.Ref, owner, nil), rel, fetched, access)
 }
 
 // splitHistory moves the ReplicaSets among rel's Children that only keep
 // subject's rollback history to OlderRevisions, reading them and the Pods
 // still naming them through the typed cache the session reads.
-func splitHistory(subject resourceid.Ref, owner metav1.Object) func(*topology.Relationships, *ownership.View, ownership.ReadSession) {
+func splitHistory(subject resourceid.Ref, owner metav1.Object, access ownership.Access) func(*topology.Relationships, *ownership.View, ownership.ReadSession) {
 	return func(rel *topology.Relationships, _ *ownership.View, s ownership.ReadSession) {
 		typed, ok := cachesource.TypedCache(s)
 		if !ok || owner == nil {
 			return
 		}
 		topology.SplitOlderRevisions(rel, subject.GroupKind(), owner.GetAnnotations(), func(namespace, name string) (*appsv1.ReplicaSet, bool, bool) {
+			if access != nil && access.CanRead(resourceid.GroupKind{Kind: "Pod"}, namespace) != ownership.Allowed {
+				return nil, false, false
+			}
 			obj, found, ok := typed.ReadableObject(k8score.ReplicaSets, namespace, name)
 			rs, isReplicaSet := obj.(*appsv1.ReplicaSet)
 			if !ok || !found || !isReplicaSet {
@@ -208,7 +211,7 @@ func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 		rel = &topology.Relationships{}
 	}
 	topology.ApplyOwnership(rel, ov, fetched)
-	splitHistory(fetched.Ref, owner)(rel, ov, session)
+	splitHistory(fetched.Ref, owner, acc)(rel, ov, session)
 	if session.ValidateCaches() != nil {
 		return nil, nil
 	}

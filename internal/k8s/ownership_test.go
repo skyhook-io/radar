@@ -203,7 +203,7 @@ func TestSplitHistoryCostsNothingForAnOwnerWithoutHistory(t *testing.T) {
 		goruntime.ReadMemStats(&after)
 		return (after.TotalAlloc - before.TotalAlloc) / answers
 	}
-	without, with := bytes(nil), bytes(splitHistory(subject, rs))
+	without, with := bytes(nil), bytes(splitHistory(subject, rs, nil))
 	if with > without+without/20 {
 		t.Fatalf("the split adds %d bytes to an answer of %d; a ReplicaSet keeps no history", with-without, without)
 	}
@@ -221,7 +221,7 @@ func TestSplitHistoryReadsTheSessionsCache(t *testing.T) {
 	)
 	subject := resourceid.Ref{Group: "apps", Kind: "Deployment", Namespace: "shop", Name: "web"}
 	rel := &topology.Relationships{}
-	answerOwnership(source, topology.ApplyOwnership, splitHistory(subject, deployment), rel, ownership.Observe(subject, deployment), func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
+	answerOwnership(source, topology.ApplyOwnership, splitHistory(subject, deployment, nil), rel, ownership.Observe(subject, deployment), func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() })
 	if want := []topology.ResourceRef{historyChild("web-1"), historyChild("web-3")}; !slices.Equal(rel.Children, want) {
 		t.Errorf("children %v, want %v: the live revision and one still holding a Pod", rel.Children, want)
 	}
@@ -234,7 +234,7 @@ func TestSplitHistoryReadsTheSessionsCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	rel = &topology.Relationships{Children: []topology.ResourceRef{historyChild("web-2")}}
-	splitHistory(subject, deployment)(rel, ownership.NewView(scripted, ownership.Unrestricted()), scripted)
+	splitHistory(subject, deployment, nil)(rel, ownership.NewView(scripted, ownership.Unrestricted()), scripted)
 	if len(rel.OlderRevisions) != 0 {
 		t.Errorf("a session over other caches moved %v; only the typed cache it reads can say", rel.OlderRevisions)
 	}
@@ -453,5 +453,52 @@ func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
 	rel, coverage = AnswerRelationships(captured, obj, switched, access, "")
 	if rel != nil || coverage != nil {
 		t.Fatalf("published after cache replacement: %+v, %+v", rel, coverage)
+	}
+}
+
+type historyPodAccess struct {
+	ownership.Access
+	decision ownership.Decision
+}
+
+func (a historyPodAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if gk == (resourceid.GroupKind{Kind: "Pod"}) && namespace == "shop" {
+		return a.decision
+	}
+	return a.Access.CanRead(gk, namespace)
+}
+
+func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
+	for _, decision := range []ownership.Decision{ownership.Denied, ownership.Undecided, ownership.Allowed} {
+		for _, withPod := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%v/pod=%v", decision, withPod), func(t *testing.T) {
+				objects := []runtime.Object{historyReplicaSet("web-1", "1", 0, 0)}
+				if withPod {
+					objects = append(objects, historyPod("web-1-a", "web-1"))
+				}
+				_, typed, source, deployment := historyFixture(t, objects...)
+				previous := ownershipSource
+				ownershipSource = source.(*cachesource.Source)
+				t.Cleanup(func() { ownershipSource = previous })
+				obj := deployment.DeepCopy()
+				obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+				access := func(*ownership.Catalog) ownership.Access {
+					return historyPodAccess{Access: ownership.Unrestricted(), decision: decision}
+				}
+				traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+				rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse, "")
+				if rel == nil {
+					t.Fatal("answer unavailable")
+				}
+				older := decision == ownership.Allowed && !withPod
+				if older {
+					if len(rel.Children) != 0 || !slices.Equal(rel.OlderRevisions, []topology.ResourceRef{historyChild("web-1")}) {
+						t.Fatalf("readable empty Pods: children %v, older %v", rel.Children, rel.OlderRevisions)
+					}
+				} else if !slices.Equal(rel.Children, []topology.ResourceRef{historyChild("web-1")}) || len(rel.OlderRevisions) != 0 {
+					t.Fatalf("children %v, older %v; want unsplit ReplicaSet", rel.Children, rel.OlderRevisions)
+				}
+			})
+		}
 	}
 }
