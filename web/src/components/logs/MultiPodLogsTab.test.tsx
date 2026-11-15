@@ -3,13 +3,13 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const state = vi.hoisted(() => ({ logs: {} as Record<string, { data?: unknown; error?: unknown }>, viewer: [] as string[], requested: [] as string[] }))
+const state = vi.hoisted(() => ({ logs: {} as Record<string, { data?: unknown; error?: unknown }>, viewer: [] as string[], requested: [] as string[], resource: undefined as { data?: unknown; isLoading?: boolean } | undefined, viewerProps: [] as Record<string, unknown>[] }))
 vi.mock('../../api/client', async (original) => ({
   ...await original<typeof import('../../api/client')>(),
   usePodLogs: (_ns: string, pod: string) => { if (pod) state.requested.push(pod); return state.logs[pod] ?? {} },
-  useResource: () => ({ data: { status: { phase: 'Running' } } }),
+  useResource: () => state.resource ?? { data: { status: { phase: 'Running' } } },
 }))
-vi.mock('./LogsViewer', () => ({ LogsViewer: ({ podName }: { podName: string }) => { state.viewer.push(podName); return <div>viewer:{podName}</div> } }))
+vi.mock('./LogsViewer', () => ({ LogsViewer: (props: { podName: string }) => { state.viewer.push(props.podName); state.viewerProps.push(props); return <div>viewer:{props.podName}</div> } }))
 
 const { ApiError } = await import('../../api/client')
 const { MultiPodLogsTab } = await import('./MultiPodLogsTab')
@@ -18,7 +18,7 @@ const { MultiPodLogsTab } = await import('./MultiPodLogsTab')
 const pods = [{ kind: 'Pod', namespace: 'ml', name: 'gone-pod' }, { kind: 'Pod', namespace: 'ml', name: 'live-pod' }]
 let host: HTMLDivElement
 let root: ReturnType<typeof createRoot>
-beforeEach(() => { state.logs = {}; state.viewer = []; state.requested = []; host = document.createElement('div'); root = createRoot(host) })
+beforeEach(() => { state.logs = {}; state.viewer = []; state.requested = []; state.resource = undefined; state.viewerProps = []; host = document.createElement('div'); root = createRoot(host) })
 afterEach(() => act(() => root.unmount()))
 
 function render(selected: string, onSelectPod = vi.fn()) {
@@ -82,6 +82,26 @@ describe('MultiPodLogsTab', () => {
   it('uses the caller\'s empty message when there are no Pods', () => {
     act(() => root.render(<MultiPodLogsTab pods={[]} namespace="ml" selectedPod={null} onSelectPod={vi.fn()} emptyMessage="This RayCluster has no Pods right now." />))
     expect(host.textContent).toContain('This RayCluster has no Pods right now.')
+  })
+
+  it('lists init containers in run order and opens the one the Pod is stuck on', () => {
+    state.logs['live-pod'] = { data: { containers: ['job', 'fetch-config', 'migrate'] } }
+    state.resource = { isLoading: true }
+    render('live-pod')
+    expect(state.viewer).toEqual([])
+
+    state.resource = { data: {
+      spec: { initContainers: [{ name: 'fetch-config' }, { name: 'migrate' }], containers: [{ name: 'job' }] },
+      status: { phase: 'Pending', initContainerStatuses: [
+        { name: 'fetch-config', state: { terminated: { exitCode: 0 } } },
+        { name: 'migrate', state: { waiting: { reason: 'CrashLoopBackOff' } } },
+      ] },
+    } }
+    render('live-pod')
+    expect(state.viewerProps.at(-1)).toMatchObject({ containers: ['fetch-config', 'migrate', 'job'], initialContainer: 'migrate', initContainers: ['fetch-config', 'migrate'] })
+
+    act(() => root.render(<MultiPodLogsTab pods={pods} namespace="ml" selectedPod="live-pod" onSelectPod={vi.fn()} initialContainer="job" />))
+    expect(state.viewerProps.at(-1)).toMatchObject({ initialContainer: 'job' })
   })
 
   it('keeps the viewer for a Pod whose containers loaded even if a later refetch fails', () => {
