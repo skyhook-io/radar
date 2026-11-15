@@ -2207,13 +2207,27 @@ export function useCapabilities() {
   });
 }
 
-// The server keeps a result built on a failed check for only 5s; ask again
-// soon so a timed-out check doesn't hide controls until the settled refetch.
+// A result built on a failed access check is kept by the server for only 5s;
+// ask again soon, backing off while the checks keep failing.
 export function capabilitiesRefetchInterval(
-  query: { state: { data?: Pick<Capabilities, "checksIncomplete"> } },
+  query: { state: { dataUpdatedAt: number; data?: Pick<Capabilities, "checksIncomplete"> } },
   settled: number | false,
 ): number | false {
-  return query.state.data?.checksIncomplete ? 5000 : settled;
+  return backoffRefetchInterval(query, query.state.dataUpdatedAt, !!query.state.data?.checksIncomplete, settled);
+}
+
+const failedAnswerStreaks = new WeakMap<object, { answeredAt: number; count: number }>();
+
+// backoffRefetchInterval polls 5s, 10s, 20s… up to 60s after consecutive
+// failed answers, so a struggling apiserver isn't asked more often the longer
+// it struggles; answeredAt identifies an answer, since React Query asks for
+// the interval more than once per fetch.
+export function backoffRefetchInterval(query: object, answeredAt: number, failing: boolean, settled: number | false): number | false {
+  const previous = failedAnswerStreaks.get(query) ?? { answeredAt: 0, count: 0 };
+  const streak = answeredAt === previous.answeredAt ? previous : { answeredAt, count: failing ? previous.count + 1 : 0 };
+  failedAnswerStreaks.set(query, streak);
+  if (!failing || streak.count === 0) return settled;
+  return Math.min(5000 * 2 ** (streak.count - 1), 60_000);
 }
 
 // ============================================================================
@@ -2494,13 +2508,14 @@ export function useNamespaceCapabilities(
   globalCaps: Capabilities | undefined,
 ) {
   const needsCheck = namespace && globalCaps;
+  const connected = useClusterConnected();
   return useQuery<Capabilities>({
     queryKey: ["capabilities", namespace],
     queryFn: () =>
       fetchJSON(`/capabilities?namespace=${encodeURIComponent(namespace!)}`),
     enabled: !!needsCheck,
     staleTime: 60000,
-    refetchInterval: (query) => capabilitiesRefetchInterval(query, false),
+    refetchInterval: (query) => connected ? capabilitiesRefetchInterval(query, false) : false,
   });
 }
 
@@ -2630,10 +2645,12 @@ export function useNamespaces() {
 }
 
 // A 5xx is a list Radar couldn't read (a timed-out LIST or access check), not
-// an empty one; ask again until it answers. A denial won't change by polling.
-export function namespacesRefetchInterval(query: { state: { status: string; error: unknown } }): number | false {
-  const { status, error } = query.state;
-  return status === "error" && error instanceof ApiError && error.status >= 500 ? 10_000 : false;
+// an empty one; ask again (backing off) until it answers. A denial won't
+// change by polling.
+export function namespacesRefetchInterval(query: { state: { status: string; error: unknown; dataUpdatedAt: number; errorUpdatedAt: number } }): number | false {
+  const { status, error, dataUpdatedAt, errorUpdatedAt } = query.state;
+  const failing = status === "error" && error instanceof ApiError && error.status >= 500;
+  return backoffRefetchInterval(query, Math.max(dataUpdatedAt, errorUpdatedAt), failing, false);
 }
 
 // Topology (for manual refresh)

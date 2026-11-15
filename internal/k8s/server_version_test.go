@@ -53,6 +53,7 @@ func TestGetServerVersionRetriesAfterFailureAndKeepsSuccess(t *testing.T) {
 		t.Fatalf("failed read = %q, want empty", got)
 	}
 	failing.Store(false)
+	expireServerVersionFailure(t)
 	if got := GetServerVersion(); got != "v1.31.2" {
 		t.Fatalf("after the apiserver answers = %q, want v1.31.2", got)
 	}
@@ -87,5 +88,38 @@ func TestGetServerVersionSharesOneInFlightRead(t *testing.T) {
 	wg.Wait()
 	if n := reads.Load(); n != 1 {
 		t.Errorf("concurrent callers made %d reads, want 1", n)
+	}
+}
+
+func expireServerVersionFailure(t *testing.T) {
+	t.Helper()
+	serverVersionMu.Lock()
+	serverVersionFailedAt = serverVersionFailedAt.Add(-serverVersionRetryAfter)
+	serverVersionMu.Unlock()
+}
+
+// During an outage, callers right after a failed read get "" at once instead
+// of each waiting out the client timeout; the read is retried after the window.
+func TestGetServerVersionAnswersEmptyRightAfterFailure(t *testing.T) {
+	var failing atomic.Bool
+	var reads atomic.Int32
+	failing.Store(true)
+	setServerVersionClient(t, func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		if failing.Load() {
+			http.Error(w, "timeout", http.StatusGatewayTimeout)
+			return
+		}
+		writeVersion(w)
+	})
+
+	GetServerVersion()
+	failing.Store(false)
+	if got := GetServerVersion(); got != "" || reads.Load() != 1 {
+		t.Fatalf("right after a failure got %q with %d reads, want \"\" without a new read", got, reads.Load())
+	}
+	expireServerVersionFailure(t)
+	if got := GetServerVersion(); got != "v1.31.2" {
+		t.Errorf("after the retry window = %q, want v1.31.2", got)
 	}
 }

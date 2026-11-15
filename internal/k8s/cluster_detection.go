@@ -26,7 +26,12 @@ var (
 	serverVersionMu       sync.Mutex
 	cachedServerVersion   string
 	serverVersionInFlight *serverVersionRead
+	serverVersionFailedAt time.Time
 )
+
+// serverVersionRetryAfter answers "" without a new read for a while after a
+// failure, so callers during an outage don't each wait out the client timeout.
+const serverVersionRetryAfter = 5 * time.Second
 
 type serverVersionRead struct {
 	done    chan struct{}
@@ -34,13 +39,18 @@ type serverVersionRead struct {
 }
 
 // GetServerVersion returns the Kubernetes server version, read once per
-// context. A failed read is not kept: the next call asks again, while callers
-// that arrive during a read wait for it instead of starting their own.
+// context. A failed read is not kept: a call after serverVersionRetryAfter asks
+// again, while callers that arrive during a read wait for it instead of
+// starting their own.
 func GetServerVersion() string {
 	serverVersionMu.Lock()
 	if cachedServerVersion != "" {
 		defer serverVersionMu.Unlock()
 		return cachedServerVersion
+	}
+	if time.Since(serverVersionFailedAt) < serverVersionRetryAfter {
+		serverVersionMu.Unlock()
+		return ""
 	}
 	if read := serverVersionInFlight; read != nil {
 		serverVersionMu.Unlock()
@@ -63,6 +73,9 @@ func GetServerVersion() string {
 	if serverVersionInFlight == read {
 		serverVersionInFlight = nil
 		cachedServerVersion = read.version
+		if read.version == "" {
+			serverVersionFailedAt = time.Now()
+		}
 	}
 	serverVersionMu.Unlock()
 	close(read.done)
@@ -76,6 +89,7 @@ func InvalidateServerVersionCache() {
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
 	serverVersionInFlight = nil
+	serverVersionFailedAt = time.Time{}
 }
 
 // ClusterInfo contains detected cluster information
