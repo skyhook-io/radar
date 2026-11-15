@@ -252,6 +252,7 @@ loadtest: frontend embed
 bench-relationships:
 	cd pkg && go test ./k8score -run '^$$' -bench 'BenchmarkIndexRelist|BenchmarkIndexedStoreChurn|BenchmarkOwnerIndexUpdate' -benchtime 2s -count 1
 	cd pkg && go test ./topology -run '^$$' -bench 'BenchmarkRelationshipGraphRetained|BenchmarkSharedRelationshipBuild|BenchmarkDrawerRelationships|BenchmarkSummaryRelationshipsPage' -benchtime 3x -count 1 -timeout 30m
+	cd pkg && go test ./relations -run '^$$' -bench 'BenchmarkConfigConsumers' -benchtime 2s -count 1
 
 # Bootstrap a kind cluster pre-loaded with curated Velero fixtures (all 13
 # Backup phases, the supersession series, a paused+invalid Schedule, an

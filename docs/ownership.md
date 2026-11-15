@@ -56,11 +56,35 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
 - **`pkg/k8score`: the indexes.** Every informer except Events' indexes objects by owner UID (`owner_index.go`), and
   every Argo CD Application, Flux Kustomization and HelmRelease informer indexes its recorded members
   (`gitops_members_index.go`). Both are always on. Reads answer only from stores loaded in full
-  (`ReadableDependents` for typed kinds, `ReadableIndexed` for dynamic ones).
+  (`ReadableIndexedObjects` for typed kinds, `ReadableIndexed` for dynamic ones).
 - **`pkg/ownership/cachesource`: the cache source.** One traversal (`dynamicIndexed`) reads either index for custom
   resources. It reads a resource watched at several versions from one version, pins the namespaces a version is watched
   in at the session's first look, and turns every unread kind or namespace into a gap. Dependent searches reuse the
   session's unwatched-kind gaps; watched stores are still read each time, so a loading store can become available.
+
+## Beyond ownership: other relations
+
+`pkg/relations` answers the relations that aren't ownership or management from the same caches, through the same
+session, `Access` and gaps: a `relations.Session` is an ownership session that also reads index lookups (`Indexed`)
+and lends cached objects (`Borrow`), which the cache source implements. Relations move off Radar's all-namespace
+relationship graph one family at a time; until all have, Related Resources combines both.
+
+**Config references** (`config_references.go`) are the ConfigMaps, Secrets, PersistentVolumeClaims and
+ServiceAccount a Pod, a pod-template workload (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, Argo
+Rollout) or an Ingress's TLS declares, extracted by `pkg/configrefs` (`ObjectReferences`), which the topology builder
+also uses.
+
+- `ConfigReferences(subject)`: each declared target, every path declaring it, and what reading it found: present,
+  absent, unread (with its gap) or withheld from the caller.
+- `ConfigConsumers(subject)`: what declares a ConfigMap, Secret, PersistentVolumeClaim or ServiceAccount, as the
+  caller may read it, up to 500 with a total. A declaration always names its declarer's namespace, so the answer
+  reads that namespace's objects of each declaring kind through the namespace index and evaluates what each declares;
+  an index of every declaration cost about 1.4 KB per Pod and made a Pod relist about five times as long
+  ([measurements](loadtest.md#relationship-cost-baselines)). A caller who may not read the subject gets nothing.
+- ReplicaSets scaled explicitly to zero declare nothing: they are old revisions.
+
+The cache-source conformance tests check `Indexed` and both answers against the brute-force `Scan` of generated
+worlds whose objects declare references (`ownershiptest.Object.Declares`).
 
 ## What manages an object
 

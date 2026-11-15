@@ -104,6 +104,7 @@ func apiObject(t testing.TB, o ownershiptest.Object) (runtime.Object, bool) {
 			t.Fatal(err)
 		}
 		setMeta(t, obj, o)
+		ownershiptest.ApplyDeclarations(obj, o.Declares)
 		return obj, true
 	}
 	u := &unstructured.Unstructured{}

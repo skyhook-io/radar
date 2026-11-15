@@ -56,13 +56,27 @@ func isEventResource(gvr schema.GroupVersionResource) bool {
 }
 
 // ReadableDependents returns the objects of resource in namespaces whose owner
-// references name uid, under ReadableObjects' rules: ok is false unless each
-// namespace's store is complete now, and nil namespaces means the kind's whole
-// scope. The objects are the cached ones: callers must not modify or keep
-// them.
+// references name uid, under ReadableIndexedObjects' rules.
 func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string, uid string) ([]apiruntime.Object, bool) {
+	return rc.ReadableIndexedObjects(resource, namespaces, OwnerUIDIndex, uid)
+}
+
+// ReadableIndexedObjects returns the objects of resource in namespaces that
+// index files under any of keys, under ReadableObjects' rules: ok is false
+// unless each namespace's store is complete now, and nil namespaces means the
+// kind's whole scope. Each store is read once for all the keys, and an object
+// filed under several is returned once. ok is also false when the stores lack
+// the index. The objects are the cached ones: callers must not modify or keep
+// them.
+func (rc *ResourceCache) ReadableIndexedObjects(resource string, namespaces []string, index string, keys ...string) ([]apiruntime.Object, bool) {
 	if rc == nil || !rc.isEnabled(resource) || rc.kindStores[resource] == nil {
 		return nil, false
+	}
+	read := func(indexer cache.Indexer) ([]any, error) {
+		if len(keys) == 1 {
+			return indexer.ByIndex(index, keys[0])
+		}
+		return indexer.Index(index, indexQuery(keys))
 	}
 	var hits []any
 	if namespaces == nil {
@@ -70,7 +84,7 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 			if !st.synced() {
 				return nil, false
 			}
-			items, err := st.indexer.ByIndex(OwnerUIDIndex, uid)
+			items, err := read(st.indexer)
 			if err != nil {
 				return nil, false
 			}
@@ -80,7 +94,7 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 		covered := rc.KindNamespaces(resource)
 		isCovered := namespaceSet(covered)
 		wanted := namespaceSet(namespaces)
-		read := map[cache.Indexer]bool{}
+		seen := map[cache.Indexer]bool{}
 		for _, namespace := range namespaces {
 			if covered != nil && !isCovered[namespace] {
 				return nil, false
@@ -89,11 +103,11 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 			if !ok || !st.synced() {
 				return nil, false
 			}
-			if read[st.indexer] {
+			if seen[st.indexer] {
 				continue
 			}
-			read[st.indexer] = true
-			items, err := st.indexer.ByIndex(OwnerUIDIndex, uid)
+			seen[st.indexer] = true
+			items, err := read(st.indexer)
 			if err != nil {
 				return nil, false
 			}
