@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -371,5 +372,29 @@ func TestIstioQueryFailureKeepsPrometheusExplanation(t *testing.T) {
 		if got := istioQueryFailure(tc.err, tc.namesAmbient); got != tc.want {
 			t.Errorf("istioQueryFailure(%v, ambient=%v) = %q, want %q", tc.err, tc.namesAmbient, got, tc.want)
 		}
+	}
+}
+
+// With ambient namespaces in the query, a transport error is described without
+// any text that may quote the URL.
+func TestIstioQueryFailureTransportErrorsWithAmbientNamespaces(t *testing.T) {
+	full := "http://prom:9090/api/v1/query?query=" + url.QueryEscape(`m{destination_workload_namespace=~"secret-ns"}`)
+	redirect := &url.Error{Op: "Get", URL: full, Err: fmt.Errorf("failed to parse Location header %q: invalid", full)}
+	dial := &url.Error{Op: "Get", URL: full, Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}}
+	timeout := &url.Error{Op: "Get", URL: full, Err: context.DeadlineExceeded}
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{redirect, "Prometheus returned an error; Radar's server log has the details"},
+		{dial, "dial tcp: connection refused"},
+		{timeout, "the request to Prometheus timed out"},
+	} {
+		if got := istioQueryFailure(fmt.Errorf("prom.HTTPTransport: %w", tc.err), true); got != tc.want {
+			t.Errorf("istioQueryFailure(%v) = %q, want %q", tc.err, got, tc.want)
+		}
+	}
+	if got := istioQueryFailure(redirect, false); !strings.Contains(got, "Location") {
+		t.Errorf("without ambient namespaces the transport detail is kept, got %q", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -263,7 +264,18 @@ func istioQueryFailure(err error, namesAmbient bool) string {
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return urlErr.Err.Error()
+		if !namesAmbient {
+			return urlErr.Err.Error()
+		}
+		// A transport error can quote the URL too, as a redirect's Location
+		// does; a timeout or a failed dial says what happened without it.
+		var opErr *net.OpError
+		switch {
+		case urlErr.Timeout():
+			return "the request to Prometheus timed out"
+		case errors.As(urlErr.Err, &opErr):
+			return opErr.Error()
+		}
 	}
 	if namesAmbient {
 		return "Prometheus returned an error; Radar's server log has the details"

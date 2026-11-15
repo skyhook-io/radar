@@ -876,8 +876,8 @@ function DetailsPanel({
                     </div>
                   </div>
                 )}
-                {/* A rate-based source already shows this figure as the Request Rate. */}
-                {!isRateBased && edgeData.flow && requestRateOf(edgeData.flow) > 0 && (
+                {/* Where the Request Rate above already is this figure, it isn't repeated. */}
+                {edgeData.flow && requestRateOf(edgeData.flow) > 0 && !(isRateBased && edgeData.flow.requestRate) && (
                   <div className="p-2 rounded bg-theme-elevated">
                     <div className="text-theme-text-tertiary">Requests</div>
                     <div className="text-theme-text-primary font-medium">
