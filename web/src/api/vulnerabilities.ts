@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import type { APIResource } from '../types'
-import { fetchJSON, useRadarFeature } from './client'
+import { ApiError, fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
 // Mirrors internal/vulnerabilities/types.go.
@@ -165,6 +165,11 @@ export interface VulnerabilitiesParams {
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
 
+/** The cluster doesn't serve the report kind: no scanner, not a failure. */
+export function isKindUnknown(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404 && error.data?.error_code === 'kind_unknown'
+}
+
 /** A workload as the tab's `workload` URL filter writes it: Kind/namespace/name. */
 export function workloadParam(w: { kind: string; namespace: string; name: string }): string {
   return `${w.kind}/${w.namespace}/${w.name}`
@@ -212,6 +217,8 @@ export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
-    placeholderData: (prev) => (prev?.view === p.view ? prev : undefined),
+    // Keep showing the last answer while the tab's filters change, but never
+    // carry one workload's answer over to another's drawer or row.
+    placeholderData: (prev) => (prev?.view === p.view && !p.workload ? prev : undefined),
   })
 }

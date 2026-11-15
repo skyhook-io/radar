@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { hasVulnerabilityReports, parseWorkloadParam, vulnerabilitiesPath, workloadParam } from '../../api/vulnerabilities'
+import { ApiError } from '../../api/client'
+import { hasVulnerabilityReports, isKindUnknown, parseWorkloadParam, vulnerabilitiesPath, workloadParam } from '../../api/vulnerabilities'
 import { gapSentence, imageParts, workloadSummary } from './parts'
 
 describe('vulnerabilities helpers', () => {
@@ -16,6 +17,12 @@ describe('vulnerabilities helpers', () => {
     expect(parseWorkloadParam('checkout')).toBeUndefined()
     expect(parseWorkloadParam('Deployment//checkout')).toBeUndefined()
     expect(parseWorkloadParam(null)).toBeUndefined()
+  })
+
+  it('reads a 404 as no scanner only when the handler says the kind is unknown', () => {
+    expect(isKindUnknown(new ApiError('no kind', 404, { error_code: 'kind_unknown' }))).toBe(true)
+    expect(isKindUnknown(new ApiError('not found', 404))).toBe(false)
+    expect(isKindUnknown(new ApiError('boom', 500, { error_code: 'kind_unknown' }))).toBe(false)
   })
 
   it('detects the report kind by group and plural, not by kind name alone', () => {

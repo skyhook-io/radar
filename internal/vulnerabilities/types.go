@@ -70,6 +70,9 @@ type Finding struct {
 	// ordering. Empty when there is no fix or Radar can't order the versions;
 	// FixedVersion then stands as the scanner wrote it.
 	FixTarget string `json:"fixTarget,omitempty"`
+	// ecosystem is how the package's versions are ordered (ecosystemOf);
+	// two packages share a name only within one ecosystem.
+	ecosystem string
 }
 
 // Fix is one package upgrade and what it clears: every fixable CVE in that

@@ -59,7 +59,7 @@ export function ImageName({ image, className }: { image: string; className?: str
 
 export function SeverityCounts({ counts }: { counts: VulnerabilityCounts }) {
   if (totalFindings(counts) === 0) {
-    return <span className="text-xs text-theme-text-tertiary">No known CVEs</span>
+    return <span className="text-xs text-theme-text-tertiary">No CVEs reported</span>
   }
   // Zeros are left out: "H 1" reads faster than "C 0 H 1 M 0 L 0".
   return (
@@ -102,14 +102,19 @@ export function FixVersion({ installed, fixed, target, showInstalled = true, cla
   )
 }
 
+// Keys are the scanner's package types and, for reports without them, the
+// ecosystem Radar reads from the package URL (deb, pypi, golang, …).
 const ECOSYSTEMS: Record<string, string> = {
+  deb: 'OS package (deb)', apk: 'OS package (apk)', rpm: 'OS package (rpm)',
+  pypi: 'Python package', gem: 'Ruby gem', cocoapods: 'CocoaPods pod', maven: 'Java library', golang: 'Go module',
+  cargo: 'Rust crate', pub: 'Dart package', hex: 'Elixir package', swift: 'Swift package', rustbinary: 'Rust crate, compiled in',
   debian: 'Debian package', ubuntu: 'Ubuntu package', alpine: 'Alpine package', wolfi: 'Wolfi package', chainguard: 'Chainguard package',
   redhat: 'RPM package', centos: 'RPM package', rocky: 'RPM package', alma: 'RPM package', amazon: 'RPM package', oracle: 'RPM package',
   fedora: 'RPM package', suse: 'RPM package', 'cbl-mariner': 'RPM package', azurelinux: 'RPM package', photon: 'RPM package',
   gobinary: 'Go module, compiled in', gomod: 'Go module', npm: 'npm package', 'node-pkg': 'npm package', yarn: 'npm package', pnpm: 'npm package', bun: 'npm package',
   'python-pkg': 'Python package', pip: 'Python package', pipenv: 'Python package', poetry: 'Python package', uv: 'Python package',
   jar: 'Java library', pom: 'Java library', gradle: 'Java library', sbt: 'Java library',
-  gemspec: 'Ruby gem', bundler: 'Ruby gem', cargo: 'Rust crate', 'rust-binary': 'Rust crate, compiled in',
+  gemspec: 'Ruby gem', bundler: 'Ruby gem', 'rust-binary': 'Rust crate, compiled in',
   composer: 'PHP package', nuget: '.NET package', 'dotnet-core': '.NET package',
 }
 

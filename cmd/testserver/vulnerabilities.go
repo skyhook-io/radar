@@ -32,21 +32,23 @@ type fixtureFinding struct {
 	score                                      float64
 }
 
+// fixtureVuln carries a package URL type ("deb/debian", "golang"), as Trivy
+// Operator records by default; packageType appears only when configured.
 type fixtureVuln struct {
 	fixtureFinding
-	pkgType string
+	purlType string
 }
 
-func ofType(pkgType string, findings []fixtureFinding) []fixtureVuln {
+func ofType(purlType string, findings []fixtureFinding) []fixtureVuln {
 	out := make([]fixtureVuln, len(findings))
 	for i, f := range findings {
-		out[i] = fixtureVuln{f, pkgType}
+		out[i] = fixtureVuln{f, purlType}
 	}
 	return out
 }
 
 var (
-	debianBase = ofType("debian", []fixtureFinding{
+	debianBase = ofType("deb/debian", []fixtureFinding{
 		{"CVE-2026-20871", "CRITICAL", "zlib1g", "1:1.2.13.dfsg-1", "1:1.2.13.dfsg-1+deb12u1", "zlib: heap overflow in inflate on a crafted stream", 9.8},
 		{"CVE-2026-31337", "CRITICAL", "libexpat1", "2.5.0-1", "2.5.0-1+deb12u2", "expat: integer overflow in XML_GetBuffer", 9.1},
 		{"CVE-2026-11902", "HIGH", "libssl3", "3.0.11-1~deb12u2", "3.0.15-1~deb12u1", "openssl: timing side channel in RSA decryption", 7.5},
@@ -57,11 +59,11 @@ var (
 		{"CVE-2026-05518", "LOW", "bash", "5.2.15-2+b2", "", "bash: unchecked return in history expansion", 3.3},
 		{"CVE-2026-05519", "LOW", "coreutils", "9.1-1", "", "coreutils: heap overread in split", 2.8},
 	})
-	alpineBase = ofType("alpine", []fixtureFinding{
+	alpineBase = ofType("apk/alpine", []fixtureFinding{
 		{"CVE-2026-17733", "HIGH", "musl", "1.2.4-r2", "1.2.4-r3", "musl: buffer overflow in iconv GB18030", 7.5},
 		{"CVE-2026-23001", "MEDIUM", "busybox", "1.36.1-r15", "1.36.1-r17", "busybox: use after free in awk", 6.5},
 	})
-	goApp = ofType("gobinary", []fixtureFinding{
+	goApp = ofType("golang", []fixtureFinding{
 		{"CVE-2026-44120", "CRITICAL", "golang.org/x/net", "v0.31.0", "v0.38.0, v0.36.1", "x/net/http2: unbounded memory growth from HPACK headers", 9.0},
 		{"CVE-2026-44177", "MEDIUM", "golang.org/x/net", "v0.31.0", "v0.33.0", "x/net/html: quadratic parsing of nested tags", 5.3},
 		{"CVE-2026-29118", "HIGH", "stdlib", "1.23.2", "1.23.8", "net/http: request smuggling via chunked encoding", 7.5},
@@ -83,7 +85,8 @@ func fixtureReport(ns, ownerKind, ownerAPIVersion, ownerName, ownerUID, containe
 		counts[v.severity]++
 		items = append(items, map[string]any{
 			"vulnerabilityID": v.id, "severity": v.severity, "resource": v.pkg, "installedVersion": v.installed,
-			"fixedVersion": v.fixed, "title": v.title, "score": v.score, "packageType": v.pkgType,
+			"fixedVersion": v.fixed, "title": v.title, "score": v.score,
+			"packagePURL": "pkg:" + v.purlType + "/" + v.pkg + "@" + v.installed,
 			"primaryLink": "https://avd.aquasec.com/nvd/" + v.id,
 		})
 	}
@@ -238,12 +241,12 @@ func vulnerabilityFixture() (typed []runtime.Object, reports []runtime.Object) {
 	reports = []runtime.Object{
 		fixtureReport("shop", "ReplicaSet", "apps/v1", "checkout-7d9f8c", "uid-shop-checkout-7d9f8c", "app", "ghcr.io", "acme/checkout", "2.14.0", checkoutDigest, "debian", "12.7", "2026-11-15T09:40:00Z", vulnFixture(debianBase, goApp)),
 		fixtureReport("payments", "ReplicaSet", "apps/v1", "billing-4f5a6b", "uid-payments-billing-4f5a6b", "app", "ghcr.io", "acme/checkout", "2.14.0", checkoutDigest, "debian", "12.7", "2026-11-15T08:10:00Z", vulnFixture(debianBase, goApp)),
-		fixtureReport("shop", "ReplicaSet", "apps/v1", "checkout-7d9f8c", "uid-shop-checkout-7d9f8c", "envoy", "index.docker.io", "envoyproxy/envoy", "v1.31.2", "sha256:e1f0c2d4a6b8c1e3f5a7b9d2c4e6f8a1b3d5c7e9f2a4b6d8c1e3f5a7b9d2e0f0", "ubuntu", "22.04", "2026-11-15T09:41:00Z", ofType("ubuntu", []fixtureFinding{
+		fixtureReport("shop", "ReplicaSet", "apps/v1", "checkout-7d9f8c", "uid-shop-checkout-7d9f8c", "envoy", "index.docker.io", "envoyproxy/envoy", "v1.31.2", "sha256:e1f0c2d4a6b8c1e3f5a7b9d2c4e6f8a1b3d5c7e9f2a4b6d8c1e3f5a7b9d2e0f0", "ubuntu", "22.04", "2026-11-15T09:41:00Z", ofType("deb/ubuntu", []fixtureFinding{
 			{"CVE-2026-11902", "HIGH", "libssl3", "3.0.2-0ubuntu1.15", "3.0.2-0ubuntu1.18", "openssl: timing side channel in RSA decryption", 7.5},
 			{"CVE-2026-17733", "MEDIUM", "tar", "1.34+dfsg-1ubuntu0.1.22.04.1", "", "tar: path traversal with crafted archive names", 5.5},
 		})),
 		fixtureReport("shop", "ReplicaSet", "apps/v1", "storefront-5b6c7d", "uid-shop-storefront-5b6c7d", "nginx", "index.docker.io", "library/nginx", "1.23.4", nginxDigest, "debian", "11.6", "2026-11-15T07:55:00Z", vulnFixture(debianBase[:6])),
-		fixtureReport("shop", "StatefulSet", "apps/v1", "db", "uid-shop-db", "postgres", "index.docker.io", "library/postgres", "16.4", pg164Digest, "debian", "12.7", "2026-11-15T06:00:00Z", vulnFixture(debianBase[2:5], ofType("debian", []fixtureFinding{
+		fixtureReport("shop", "StatefulSet", "apps/v1", "db", "uid-shop-db", "postgres", "index.docker.io", "library/postgres", "16.4", pg164Digest, "debian", "12.7", "2026-11-15T06:00:00Z", vulnFixture(debianBase[2:5], ofType("deb/debian", []fixtureFinding{
 			{"CVE-2026-37210", "HIGH", "postgresql-16", "16.4-1.pgdg120+1", "16.6-1.pgdg120+1", "postgresql: SQL injection via quoting in libpq", 8.1},
 		}))),
 		fixtureReport("shop", "DaemonSet", "apps/v1", "node-agent", "uid-shop-node-agent", "agent", "quay.io", "prometheus/node-exporter", "v1.5.0", agentDigest, "", "", "2026-11-13T22:00:00Z", goApp),

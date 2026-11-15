@@ -71,7 +71,7 @@ func reportHeader(u *unstructured.Unstructured) (report, bool) {
 
 // parseFindings reads a report's findings, one per (CVE, package, installed
 // version), worst first.
-func parseFindings(u *unstructured.Unstructured, osFamily string) []Finding {
+func parseFindings(u *unstructured.Unstructured) []Finding {
 	body, _ := u.Object["report"].(map[string]any)
 	vulns, _ := body["vulnerabilities"].([]any)
 	findings := make([]Finding, 0, len(vulns))
@@ -88,10 +88,11 @@ func parseFindings(u *unstructured.Unstructured, osFamily string) []Finding {
 			Link:             str(v["primaryLink"]),
 			PackageType:      str(v["packageType"]),
 		}
+		f.ecosystem = ecosystemOf(f.PackageType, str(v["packagePURL"]))
 		if f.ID == "" {
 			continue
 		}
-		key := f.ID + "\x00" + f.Package + "\x00" + f.InstalledVersion
+		key := f.ID + "\x00" + f.ecosystem + "\x00" + f.Package + "\x00" + f.InstalledVersion
 		if seen[key] {
 			continue
 		}
@@ -99,7 +100,7 @@ func parseFindings(u *unstructured.Unstructured, osFamily string) []Finding {
 		if score, ok := number(v["score"]); ok {
 			f.Score = &score
 		}
-		f.FixTarget, _ = fixTarget(f.PackageType, osFamily, f.InstalledVersion, f.FixedVersion)
+		f.FixTarget, _ = fixTarget(f.ecosystem, f.InstalledVersion, f.FixedVersion)
 		findings = append(findings, f)
 	}
 	slices.SortFunc(findings, compareFindings)
@@ -258,7 +259,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			continue
 		}
 		read += n
-		agg.report.findings = parseFindings(agg.report.u, agg.report.osFamily)
+		agg.report.findings = parseFindings(agg.report.u)
 	}
 	scannedSlot := map[slotKey]bool{}
 	for _, t := range targets {
@@ -636,7 +637,7 @@ func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 		}
 		// A rollout can run two images in one container slot; list both. Two
 		// ReplicaSets running one image share a slot, scanned if either is.
-		slot := t.container + "\x00" + t.image
+		slot := t.container + "\x00" + canonicalImage(t.image)
 		id, scanned := j.targetImage[t.key]
 		if i, ok := a.seen[slot]; ok {
 			if !scanned || a.row.Containers[i].Scanned {
@@ -654,6 +655,8 @@ func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 		ts := r.scannedAt
 		c.Scanned, c.ImageID, c.ScannedAt, c.FindingsUnread = true, id, &ts, r.unread
 		if r.unread {
+			// Kept so a filter can't rule out findings that weren't read.
+			a.images[id] = true
 			continue
 		}
 		counts, fixable := countFindings(r.findings)

@@ -21,6 +21,7 @@ import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { ApiError } from '../../api/client'
 import {
   useVulnerabilities,
+  isKindUnknown,
   parseWorkloadParam,
   workloadParam,
   type VulnerabilitiesResponse,
@@ -210,7 +211,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         <EmptyState
           tone="neutral"
           icon={ShieldAlert}
-          headline={filtered ? 'Nothing matches these filters' : data.summary.imagesScanned === 0 ? 'No scanned images run in this scope' : `No known CVEs in the ${data.summary.imagesScanned} scanned ${data.summary.imagesScanned === 1 ? 'image' : 'images'} that run`}
+          headline={emptyHeadline(view, filtered, data)}
           body={filtered ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && data.unscanned.length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
         />
       ) : view === 'fix' ? (
@@ -245,13 +246,22 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   )
 }
 
+function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: VulnerabilitiesResponse): string {
+  if (filtered) return 'Nothing matches these filters'
+  const s = data.summary
+  if (s.imagesScanned === 0) return 'No scanned images run in this scope'
+  if (view === 'fix' && totalFindings(s.counts) > 0) return `None of the ${totalFindings(s.counts)} reported findings has a fixed release yet`
+  if (!data.coverage.complete && totalFindings(s.counts) === 0 && s.imagesClean === 0) return 'No findings could be read in this scope'
+  return `No CVEs reported for the ${s.imagesScanned} scanned ${s.imagesScanned === 1 ? 'image' : 'images'} that run`
+}
+
 function VulnerabilitiesError({ error }: { error: unknown }) {
   const upgrade = getRadarUpgradeRequirement(error)
   if (upgrade) {
     return <EmptyState tone="neutral" icon={ShieldAlert} headline={radarUpgradeHeadline('Vulnerability views')} body={radarUpgradeDetail(upgrade)} action={<RadarUpgradeAction requirement={upgrade} />} />
   }
   // A cluster without the report kind: nothing failed, there is no scanner.
-  if (error instanceof ApiError && error.status === 404) {
+  if (isKindUnknown(error)) {
     return (
       <EmptyState
         tone="neutral"
@@ -279,7 +289,7 @@ function SummaryTiles({ data }: { data: VulnerabilitiesResponse }) {
   const tiles = [
     { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : data.coverage.complete ? 'every running image has a report' : 'none unscanned where Radar could read', tone: '' },
     { label: 'Images with Critical CVEs', value: s.imagesWithCritical, certainty, sub: nothing ? 'nothing scanned yet' : `of ${s.imagesScanned} scanned`, tone: s.imagesWithCritical > 0 ? 'text-red-700 dark:text-red-400' : '' },
-    { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'fixed in at least one image', tone: s.fixableCriticalHighCves > 0 ? 'text-orange-700 dark:text-orange-400' : '' },
+    { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'a fixed release is reported', tone: s.fixableCriticalHighCves > 0 ? 'text-orange-700 dark:text-orange-400' : '' },
     { label: 'Workloads with Critical or High', value: s.workloadsAffected, certainty, sub: `of ${s.workloads} running or scheduled`, tone: '' },
   ]
   return (
@@ -305,8 +315,8 @@ function CoverageNotes({ data }: { data: VulnerabilitiesResponse }) {
   return (
     <div className="flex flex-col gap-1.5 text-xs">
       <p className="text-theme-text-tertiary">
-        From Trivy Operator's VulnerabilityReports{scan ? ` · ${scan}` : ''}. A report reflects what was known when the image was scanned.
-        {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about older revisions or removed workloads and isn't counted.`}
+        From Trivy Operator's VulnerabilityReports{scan ? ` · ${scan}` : ''}. A report lists what was known when the image was scanned, after the scanner's own filters.
+        {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about workloads that don't run now (older revisions, scaled to zero or removed) and isn't counted.`}
       </p>
       {gaps && <p className="text-warning-text">{gaps}</p>}
       {data.coverage.truncated && <p className="text-warning-text">Some images have too many findings to read in one request and are marked unread. Narrow with the namespace picker.</p>}
@@ -314,7 +324,7 @@ function CoverageNotes({ data }: { data: VulnerabilitiesResponse }) {
   )
 }
 
-function Disclosure({ summary, children, flush = false }: { summary: React.ReactNode; children: React.ReactNode; flush?: boolean }) {
+function Disclosure({ summary, children, flush = false }: { summary: React.ReactNode; children: React.ReactNode | ((open: boolean) => React.ReactNode); flush?: boolean }) {
   const [open, setOpen] = useState(false)
   const { panelId, buttonProps } = useDisclosure(open)
   return (
@@ -324,7 +334,7 @@ function Disclosure({ summary, children, flush = false }: { summary: React.React
         {summary}
       </button>
       <Collapse open={open} id={panelId} mountLazily>
-        <div className={clsx('border-t border-theme-border bg-theme-base', flush ? 'py-2' : 'px-3 py-3 pl-10')}>{children}</div>
+        <div className={clsx('border-t border-theme-border bg-theme-base', flush ? 'py-2' : 'px-3 py-3 pl-10')}>{typeof children === 'function' ? children(open) : children}</div>
       </Collapse>
     </div>
   )
@@ -418,7 +428,7 @@ function namespaceCount(img: VulnerableImage): string {
 
 function FindingsList({ findings, total }: { findings: VulnerableImage['findings']; total: number }) {
   if (findings.length === 0) {
-    return <span className="text-xs text-theme-text-tertiary">{total === 0 ? 'No known CVEs in this image.' : 'No findings match the filters.'}</span>
+    return <span className="text-xs text-theme-text-tertiary">{total === 0 ? 'No CVEs reported for this image.' : 'No findings match the filters.'}</span>
   }
   return (
     <div className="flex flex-col divide-y divide-theme-border border-y border-theme-border">
@@ -442,7 +452,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
   return (
     <div className="flex shrink-0 flex-col gap-2">
       <p className="text-xs text-theme-text-tertiary">
-        One row per package upgrade, with every CVE it clears. The target is the smallest fixed release above what's installed, compared with the package's own versioning.
+        One row per package update, with every CVE it clears: the lowest release that fixes them all, compared with the package's own versioning. Updating a package means rebuilding the image that holds it; for an image you don't build, look for a newer release of the image.
       </p>
       <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
         <div className="min-w-[960px]">
@@ -462,12 +472,12 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                       <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
                       {f.packageType && <span className="truncate text-xs text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
                     </span>
-                    <WithTooltip tip={f.to ? `${f.from.join(', ')} → ${f.to}` : "Radar can't order this package's versions, so it shows every fixed release the scanner lists."}>
+                    <WithTooltip tip={f.to ? `${f.from.join(', ')} → ${f.to}` : "Radar can't order this package's versions, so it can't pick one release that fixes every CVE here. These are the fixed releases the scanner lists."}>
                       <span className="min-w-0 truncate font-mono text-xs">
                         <span className="text-theme-text-tertiary">{f.from.join(', ')} → </span>
                         {f.to
                           ? <span className="text-emerald-700 dark:text-emerald-400">{f.to}</span>
-                          : <span className="text-theme-text-secondary">one of {(f.listed ?? []).join(', ')}</span>}
+                          : <span className="text-theme-text-secondary">fixed in {(f.listed ?? []).join(', ')}</span>}
                       </span>
                     </WithTooltip>
                     <SeverityCounts counts={f.counts} />
@@ -601,7 +611,7 @@ function WorkloadTable({ workloads, severities, query, onOpen, onShow }: {
               </div>
             }
           >
-            <WorkloadUpgrades workload={w} severities={severities} query={query} onOpen={onOpen} onShow={onShow} />
+            {(open) => <WorkloadUpgrades workload={w} active={open} severities={severities} query={query} onOpen={onOpen} onShow={onShow} />}
           </Disclosure>
         ))}
       </div>
@@ -613,23 +623,26 @@ const MAX_WORKLOAD_UPGRADES = 8
 
 // What a workload's owner changes: the By fix rows narrowed to this
 // workload, read when the row opens.
-function WorkloadUpgrades({ workload: w, severities, query, onOpen, onShow }: {
+function WorkloadUpgrades({ workload: w, active, severities, query, onOpen, onShow }: {
   workload: VulnerabilityWorkload
+  /** False once the row closes: its subtree stays mounted, its polling stops. */
+  active: boolean
   severities: VulnerabilitySeverity[]
   query: string
   onOpen: (w: VulnerabilityWorkloadRef) => void
   onShow: (w: VulnerabilityWorkloadRef, by: VulnerabilityView) => void
 }) {
   const ref = { kind: w.kind, group: w.group, namespace: w.namespace, name: w.name }
-  const { data, isLoading, error } = useVulnerabilities({ view: 'fix', namespaces: [w.namespace], severities, query, workload: ref })
+  const { data, isLoading, error } = useVulnerabilities({ view: 'fix', namespaces: [w.namespace], severities, query, workload: ref }, active)
   const total = totalFindings(w.counts)
   const fixable = totalFindings(w.fixable)
   const fixes = data?.fixes ?? []
   const several = w.containers.length > 1
+  const filtered = severities.length > 0 || query !== ''
   const actions = (
     <span className="flex flex-wrap gap-x-4">
       <button type="button" onClick={() => onOpen(ref)} className="text-accent-text hover:underline">Open {w.name}</button>
-      {total > 0 && <button type="button" onClick={() => onShow(ref, 'image')} className="text-accent-text hover:underline">All {total} findings</button>}
+      {total > 0 && <button type="button" onClick={() => onShow(ref, 'image')} className="text-accent-text hover:underline">{filtered ? 'Its findings' : `All ${total} findings`}</button>}
       {fixes.length > MAX_WORKLOAD_UPGRADES && <button type="button" onClick={() => onShow(ref, 'fix')} className="text-accent-text hover:underline">All {fixes.length} upgrades</button>}
     </span>
   )
@@ -637,7 +650,10 @@ function WorkloadUpgrades({ workload: w, severities, query, onOpen, onShow }: {
   if (isLoading) lead = <span className="text-theme-text-tertiary">Reading its upgrades…</span>
   else if (error) lead = <span className="text-warning-text">Couldn't read its upgrades: {error instanceof Error ? error.message : 'request failed'}.</span>
   else if (total === 0) lead = <span className="text-theme-text-tertiary">Nothing to upgrade: no findings were read for its containers.</span>
-  else if (fixes.length === 0) lead = <span className="text-theme-text-tertiary">None of its {total} findings{severities.length > 0 || query ? ' that match' : ''} has a fixed release yet.</span>
+  // The workload's counts cover its whole images; under a filter only the
+  // upgrade rows follow it, so the sentence leaves the counts out.
+  else if (filtered) lead = <span className="text-theme-text-secondary">{fixes.length === 0 ? 'None of the findings that match has a fixed release yet.' : `${fixes.length} ${fixes.length === 1 ? 'upgrade' : 'upgrades'} for the findings that match`}</span>
+  else if (fixes.length === 0) lead = <span className="text-theme-text-tertiary">None of its {total} findings has a fixed release yet.</span>
   else lead = (
     <span className="text-theme-text-secondary">
       {fixes.length} {fixes.length === 1 ? 'upgrade clears' : 'upgrades clear'} {fixable} of its {total} findings
@@ -659,7 +675,7 @@ function WorkloadUpgrades({ workload: w, severities, query, onOpen, onShow }: {
             <SeverityCounts counts={f.counts} />
             {f.to
               ? <FixVersion installed={f.from.join(', ')} target={f.to} />
-              : <span className="truncate font-mono text-theme-text-secondary">one of {(f.listed ?? []).join(', ')}</span>}
+              : <span className="truncate font-mono text-theme-text-secondary">fixed in {(f.listed ?? []).join(', ')}</span>}
           </span>
           <span className="flex min-w-0 flex-wrap gap-x-3">
             {several && f.affected.map((a) => <ImageName key={a.imageId} image={a.image} className="text-theme-text-tertiary" />)}
@@ -672,7 +688,7 @@ function WorkloadUpgrades({ workload: w, severities, query, onOpen, onShow }: {
 }
 
 // A workload's counts cover only its scanned containers: with none scanned
-// they are unknown, never "no known CVEs".
+// they are unknown, never "no reported CVEs".
 function WorkloadFindings({ workload }: { workload: VulnerabilityWorkload }) {
   const unscanned = workload.containers.filter((c) => !c.scanned).length
   const unread = workload.containers.filter((c) => c.scanned && c.findingsUnread).length
@@ -706,8 +722,8 @@ function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view
           <span className="flex items-center gap-2 text-sm text-theme-text-secondary">
             <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
             {view === 'image'
-              ? `${count} scanned ${count === 1 ? 'image has' : 'images have'} no known CVEs`
-              : `${count} ${count === 1 ? 'workload runs' : 'workloads run'} only images with no known CVEs`}
+              ? `${count} scanned ${count === 1 ? 'image has' : 'images have'} no reported CVEs`
+              : `${count} ${count === 1 ? 'workload runs' : 'workloads run'} only images with no reported CVEs`}
           </span>
         }
       >

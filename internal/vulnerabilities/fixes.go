@@ -10,8 +10,8 @@ import (
 // imagePackage is one package as installed in one image, with the fixable
 // findings that name it.
 type imagePackage struct {
-	pkg, pkgType, installed string
-	findings                []Finding
+	pkg, pkgType, eco, installed string
+	findings                     []Finding
 }
 
 type fixAgg struct {
@@ -48,10 +48,10 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			if fd.FixedVersion == "" || !m.findingMatches(fd, rowMatched) {
 				continue
 			}
-			key := fd.Package + "\x00" + fd.InstalledVersion
+			key := fd.ecosystem + "\x00" + fd.Package + "\x00" + fd.InstalledVersion
 			p := packages[key]
 			if p == nil {
-				p = &imagePackage{pkg: fd.Package, pkgType: fd.PackageType, installed: fd.InstalledVersion}
+				p = &imagePackage{pkg: fd.Package, pkgType: cmp.Or(fd.PackageType, fd.ecosystem), eco: fd.ecosystem, installed: fd.InstalledVersion}
 				packages[key] = p
 				order = append(order, key)
 			}
@@ -59,10 +59,10 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		}
 		for _, key := range order {
 			p := packages[key]
-			to, listed := upgradeFor(p, r.osFamily)
-			rowKey := p.pkg + "\x00" + to
+			to, listed := upgradeFor(p)
+			rowKey := p.eco + "\x00" + p.pkg + "\x00" + to
 			if to == "" {
-				rowKey = p.pkg + "\x00?\x00" + strings.Join(listed, "|")
+				rowKey = p.eco + "\x00" + p.pkg + "\x00?\x00" + strings.Join(listed, "|")
 			}
 			a := byKey[rowKey]
 			if a == nil {
@@ -136,35 +136,57 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 	return rows, nil
 }
 
-// upgradeFor is the version that clears every fixable finding of one
-// installed package: the highest of their per-CVE fix targets. When any of
-// them can't be ordered, it returns no target and the scanner's lists.
-func upgradeFor(p *imagePackage, osFamily string) (to string, listed []string) {
-	compare := comparerFor(p.pkgType, osFamily)
+// upgradeFor is the one version that fixes every fixable finding of an
+// installed package. It starts at the highest of their own targets, then
+// checks it against each finding's fixed releases: a scanner lists one fix
+// per maintained branch, so a version above one finding's fix can still be
+// on another branch that lacks it (with "7.5.5, 6.11.6" listed, 7.5.4 is
+// not fixed). Such a finding moves the candidate up to its next fix, and the
+// check repeats. When no listed version fixes them all, or the versions
+// can't be ordered, it returns no target and the scanner's lists.
+func upgradeFor(p *imagePackage) (to string, listed []string) {
 	for _, fd := range p.findings {
 		listed = append(listed, fd.FixedVersion)
 	}
 	slices.Sort(listed)
 	listed = slices.Compact(listed)
+	compare := comparerFor(p.eco)
 	if compare == nil {
 		return "", listed
 	}
 	for _, fd := range p.findings {
-		target, ok := fixTarget(p.pkgType, osFamily, p.installed, fd.FixedVersion)
+		target, ok := fixTarget(p.eco, p.installed, fd.FixedVersion)
 		if !ok {
 			return "", listed
 		}
 		if to == "" {
 			to = target
-			continue
-		}
-		higher, parsed := compare(target, to)
-		if !parsed {
+		} else if higher, ok := compare(target, to); !ok {
 			return "", listed
-		}
-		if higher > 0 {
+		} else if higher > 0 {
 			to = target
 		}
 	}
-	return to, nil
+	for range len(p.findings) * 4 {
+		moved := false
+		for _, fd := range p.findings {
+			fixes := fixedReleases(fd.FixedVersion)
+			fixed, ok := fixedBy(compare, to, fixes)
+			if !ok {
+				return "", listed
+			}
+			if fixed {
+				continue
+			}
+			next, ok := nextFix(compare, to, fixes)
+			if !ok {
+				return "", listed
+			}
+			to, moved = next, true
+		}
+		if !moved {
+			return to, nil
+		}
+	}
+	return "", listed
 }

@@ -21,13 +21,14 @@ import (
 )
 
 // setupRunningVulnerableWeb runs Deployment web (ReplicaSet web-1) in team-a
-// and team-b, each with a VulnerabilityReport about the ReplicaSet.
+// and team-b, each with a VulnerabilityReport about the ReplicaSet, and in
+// team-c, not scanned yet.
 func setupRunningVulnerableWeb(t *testing.T) {
 	t.Helper()
 	controller := true
 	objs := []runtime.Object{}
 	var reports []runtime.Object
-	for _, ns := range []string{"team-a", "team-b"} {
+	for _, ns := range []string{"team-a", "team-b", "team-c"} {
 		objs = append(objs,
 			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}},
 			&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: ns,
@@ -39,6 +40,9 @@ func setupRunningVulnerableWeb(t *testing.T) {
 				Status: corev1.PodStatus{Phase: corev1.PodRunning},
 			},
 		)
+		if ns == "team-c" {
+			continue
+		}
 		u := &unstructured.Unstructured{Object: map[string]any{
 			"report": map[string]any{
 				"registry": map[string]any{"server": "index.docker.io"},
@@ -146,6 +150,25 @@ func TestListVulnerabilitiesFollowsReportRBAC(t *testing.T) {
 	}
 	if got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.UserForbidden {
 		t.Fatalf("carol's coverage must name team-b: %+v", got.Coverage)
+	}
+
+	// dave may list reports and Pods in team-a and team-c but read the
+	// workloads only in team-a. team-c's image has no report yet; it is
+	// still withheld and named, not dropped from an answer that reads complete.
+	ctx = withRestrictedUser(t, "dave", []string{"team-a", "team-c"})
+	dave := getPermCache().Get("dave", nil)
+	dave.SetCanI("list", vulnReportGVR.Group, vulnReportGVR.Resource, "", true)
+	for _, ns := range []string{"team-a", "team-c"} {
+		dave.SetCanI("get", "", "pods", ns, true)
+		dave.SetCanI("list", "", "pods", ns, true)
+		for _, r := range []string{"deployments", "replicasets"} {
+			dave.SetCanI("get", "apps", r, ns, ns == "team-a")
+			dave.SetCanI("list", "apps", r, ns, ns == "team-a")
+		}
+	}
+	got = listVulns(t, ctx, listVulnerabilitiesInput{})
+	if len(got.Unscanned) != 0 || got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.UserForbidden {
+		t.Fatalf("dave's unreadable, unscanned workload must be a gap: %+v / %+v", got.Unscanned, got.Coverage)
 	}
 
 	if _, _, err := handleListVulnerabilities(context.Background(), nil, listVulnerabilitiesInput{View: "nope"}); err == nil {

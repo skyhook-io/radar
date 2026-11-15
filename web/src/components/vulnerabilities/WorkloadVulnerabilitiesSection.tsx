@@ -4,9 +4,9 @@ import { Shield } from 'lucide-react'
 import { Section } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { useAPIResources } from '../../api/apiResources'
-import { ApiError, useRadarFeature } from '../../api/client'
+import { useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
-import { hasVulnerabilityReports, useVulnerabilities, workloadParam, type VulnerabilityFinding } from '../../api/vulnerabilities'
+import { hasVulnerabilityReports, isKindUnknown, useVulnerabilities, workloadParam, type VulnerabilityFinding } from '../../api/vulnerabilities'
 import { FixVersion, ImageName, SeverityBadge, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
@@ -30,7 +30,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   if (!available) return null
   // An older Radar, or a report kind removed since the page loaded, has
   // nothing to show here; anything else is a failure worth saying.
-  if (error && (isRadarFeatureUnsupported(error) || (error instanceof ApiError && error.status === 404))) return null
+  if (error && (isRadarFeatureUnsupported(error) || isKindUnknown(error))) return null
   if (error) {
     return (
       <Section title="Vulnerabilities" icon={Shield}>
@@ -92,7 +92,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
                 <span className="font-medium text-theme-text-primary">{[...new Set(img.workloads.filter(isThis).map((w) => w.container))].join(', ')}</span>
                 <ImageName image={img.image} className="text-xs text-theme-text-tertiary" />
               </span>
-              <span className="text-xs text-theme-text-secondary">No known CVEs · scanned {formatRelativeAgeTime(img.scannedAt)}</span>
+              <span className="text-xs text-theme-text-secondary">No CVEs reported · scanned {formatRelativeAgeTime(img.scannedAt)}</span>
             </div>
           ))}
           {images.length === 0 && clean.length === 0 && unscanned.length === 0 && (

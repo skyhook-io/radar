@@ -1,6 +1,7 @@
 package vulnerabilities
 
 import (
+	"slices"
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
@@ -16,74 +17,184 @@ import (
 // doesn't parse as that ecosystem's version.
 type compareFunc func(a, b string) (cmp int, ok bool)
 
-// comparerFor picks the version ordering for a finding the way the scanner
-// decided it was vulnerable: by its package type (Trivy's result type), or
-// for OS packages without one, by the image's OS family. nil means Radar
-// doesn't know how this ecosystem orders versions.
-func comparerFor(packageType, osFamily string) compareFunc {
-	t := strings.ToLower(packageType)
-	if t == "" {
-		t = strings.ToLower(osFamily)
+// packageTypeEcosystem maps the scanner's package types (Trivy's result
+// types and OS families) to the ecosystems below.
+var packageTypeEcosystem = map[string]string{
+	"debian": "deb", "ubuntu": "deb",
+	"alpine": "apk", "wolfi": "apk", "chainguard": "apk", "minimos": "apk",
+	"redhat": "rpm", "centos": "rpm", "rocky": "rpm", "alma": "rpm", "amazon": "rpm", "oracle": "rpm", "fedora": "rpm",
+	"photon": "rpm", "suse": "rpm", "sles": "rpm", "slem": "rpm", "opensuse": "rpm", "opensuse.leap": "rpm",
+	"opensuse-leap": "rpm", "opensuse.tumbleweed": "rpm", "opensuse-tumbleweed": "rpm", "cbl-mariner": "rpm",
+	"azurelinux": "rpm", "mariner": "rpm",
+	"pip": "pypi", "pipenv": "pypi", "poetry": "pypi", "python-pkg": "pypi", "uv": "pypi",
+	"gemspec": "gem", "bundler": "gem", "cocoapods": "cocoapods",
+	"jar": "maven", "pom": "maven", "gradle": "maven", "sbt": "maven",
+	"npm": "npm", "yarn": "npm", "pnpm": "npm", "bun": "npm", "node-pkg": "npm",
+	"gobinary": "golang", "gomod": "golang",
+	"cargo": "cargo", "rust-binary": "cargo", "rustbinary": "cargo",
+	"composer": "composer", "composer-vendor": "composer",
+	"nuget": "nuget", "dotnet-core": "nuget", "packages-props": "nuget",
+	"pub": "pub", "hex": "hex", "swift": "swift",
+}
+
+// ecosystemOf names the ecosystem a finding's package belongs to: from the
+// scanner's package type when the report carries it (Trivy Operator writes
+// it only when asked to), else from the type in the package URL, which it
+// writes whenever it knows one. Without either the package could be the
+// OS's or a dependency inside the image, so it stays unknown: ordering its
+// versions by the image's OS would be a guess.
+func ecosystemOf(packageType, purl string) string {
+	if t := strings.ToLower(packageType); t != "" {
+		if eco, ok := packageTypeEcosystem[t]; ok {
+			return eco
+		}
+		return t
 	}
-	switch t {
-	case "debian", "ubuntu":
+	rest, ok := strings.CutPrefix(purl, "pkg:")
+	if !ok {
+		return ""
+	}
+	t, _, _ := strings.Cut(rest, "/")
+	return strings.ToLower(t)
+}
+
+// comparerFor is the version ordering of an ecosystem; nil when Radar
+// doesn't know how it orders versions.
+func comparerFor(eco string) compareFunc {
+	switch eco {
+	case "deb":
 		return compareDeb
-	case "alpine", "wolfi", "chainguard", "minimos":
+	case "apk":
 		return compareApk
-	case "redhat", "centos", "rocky", "alma", "amazon", "oracle", "fedora", "photon",
-		"suse", "sles", "slem", "opensuse", "opensuse.leap", "opensuse.tumbleweed",
-		"cbl-mariner", "azurelinux", "mariner":
+	case "rpm":
 		return compareRpm
-	case "pip", "pipenv", "poetry", "python-pkg", "uv":
+	case "pypi":
 		return comparePep440
-	case "gemspec", "bundler":
+	case "gem", "cocoapods":
 		return compareGem
-	case "jar", "pom", "gradle", "sbt":
+	case "maven":
 		return compareMvn
-	case "npm", "yarn", "pnpm", "bun", "node-pkg", "gobinary", "gomod", "cargo", "rust-binary",
-		"composer", "composer-vendor", "nuget", "dotnet-core", "packages-props", "pub", "hex", "swift", "cocoapods":
+	case "npm", "golang", "cargo", "composer", "nuget", "pub", "hex", "swift":
 		return compareSemver
 	}
 	return nil
 }
 
-// fixTarget is the version to move a package to: the smallest listed fixed
-// version above the installed one, read with the package's own version
-// ordering. A scanner lists one fix per maintained branch ("8.0.1, 7.5.5,
-// 6.11.6"); for 6.11.4 the answer is 6.11.6. ok is false when the ordering
-// is unknown, a version doesn't parse, or nothing listed is above the
-// installed version: the caller then shows the list as the scanner wrote it
-// and picks nothing.
-func fixTarget(packageType, osFamily, installed, fixed string) (target string, ok bool) {
-	compare := comparerFor(packageType, osFamily)
-	if compare == nil || installed == "" || fixed == "" {
+// fixedReleases splits a scanner's fixed-version list ("8.0.1, 7.5.5,
+// 6.11.6": one fix per maintained branch).
+func fixedReleases(fixed string) []string {
+	var out []string
+	for _, v := range strings.Split(fixed, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// fixTarget is the version to move a package to for one finding: the
+// smallest listed fixed version above the installed one, read with the
+// ecosystem's own ordering. For 6.11.4 with "8.0.1, 7.5.5, 6.11.6" that is
+// 6.11.6. ok is false when the ordering is unknown, a version doesn't parse,
+// or nothing listed is above the installed version: the caller then shows
+// the list as the scanner wrote it and picks nothing.
+func fixTarget(eco, installed, fixed string) (target string, ok bool) {
+	compare := comparerFor(eco)
+	if compare == nil || installed == "" {
 		return "", false
 	}
-	for _, candidate := range strings.Split(fixed, ",") {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		above, parsed := compare(candidate, installed)
-		if !parsed {
+	return nextFix(compare, installed, fixedReleases(fixed))
+}
+
+// nextFix is the smallest of fixes above v.
+func nextFix(compare compareFunc, v string, fixes []string) (string, bool) {
+	var next string
+	for _, f := range fixes {
+		above, ok := compare(f, v)
+		if !ok {
 			return "", false
 		}
 		if above <= 0 {
 			continue
 		}
-		if target == "" {
-			target = candidate
+		if next != "" {
+			lower, ok := compare(f, next)
+			if !ok {
+				return "", false
+			}
+			if lower >= 0 {
+				continue
+			}
+		}
+		next = f
+	}
+	return next, next != ""
+}
+
+// fixedBy reports whether moving to v fixes a finding whose fixed releases
+// are fixes. At or above every listed fix it does. Otherwise v must be on
+// the branch of the highest fix at or below it: with "7.5.5, 6.11.6", 6.11.7
+// is fixed but 7.5.4 is not, though both are above 6.11.6. A branch is the
+// shortest version prefix (major, then major.minor) that tells the listed
+// fixes apart.
+func fixedBy(compare compareFunc, v string, fixes []string) (fixed, ok bool) {
+	var floor string
+	top := true
+	for _, f := range fixes {
+		c, ok := compare(f, v)
+		if !ok {
+			return false, false
+		}
+		if c > 0 {
+			top = false
 			continue
 		}
-		lower, parsed := compare(candidate, target)
-		if !parsed {
-			return "", false
-		}
-		if lower < 0 {
-			target = candidate
+		if floor == "" {
+			floor = f
+		} else if higher, ok := compare(f, floor); !ok {
+			return false, false
+		} else if higher > 0 {
+			floor = f
 		}
 	}
-	return target, target != ""
+	if top {
+		return true, true
+	}
+	if floor == "" {
+		return false, true
+	}
+	n := branchDepth(fixes)
+	return slices.Equal(versionPrefix(floor, n), versionPrefix(v, n)), true
+}
+
+func branchDepth(fixes []string) int {
+	for n := 1; n < 3; n++ {
+		seen := map[string]bool{}
+		distinct := true
+		for _, f := range fixes {
+			k := strings.Join(versionPrefix(f, n), ".")
+			if seen[k] {
+				distinct = false
+				break
+			}
+			seen[k] = true
+		}
+		if distinct {
+			return n
+		}
+	}
+	return 3
+}
+
+// versionPrefix is the first n numeric components of a version, past a
+// leading "v" and a Debian-style epoch ("1:").
+func versionPrefix(v string, n int) []string {
+	if _, rest, ok := strings.Cut(v, ":"); ok {
+		v = rest
+	}
+	v = strings.TrimPrefix(strings.TrimPrefix(v, "v"), "V")
+	parts := strings.FieldsFunc(v, func(r rune) bool { return r < '0' || r > '9' })
+	return parts[:min(n, len(parts))]
 }
 
 func compareDeb(a, b string) (int, bool) {

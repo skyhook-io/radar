@@ -70,12 +70,14 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		return Response{}, ErrNotReady
 	}
 	// A report list read before its watch synced would read as no reports,
-	// and every running image as unscanned.
+	// and every running image as unscanned. Every namespace's wait shares
+	// one deadline, so queued namespaces don't add their waits up.
+	deadline := time.Now().Add(syncWait)
 	list := func(ns string) ([]*unstructured.Unstructured, error) {
 		if err := dynamic.EnsureWatchingContext(ctx, gvr, ns); err != nil {
 			return nil, err
 		}
-		waitCtx, cancel := context.WithTimeout(ctx, syncWait)
+		waitCtx, cancel := context.WithDeadline(ctx, deadline)
 		synced := dynamic.WaitForSyncContext(waitCtx, gvr, ns)
 		cancel()
 		if !synced {
@@ -177,6 +179,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	}
 	items = filterNamespaces(items, readable)
 	cronReadable, cronGaps, cronOK := narrowToTyped(cache.AssessKindRead("cronjobs", readable), readable, nil)
+	jobReadable, jobGaps, jobOK := narrowToTyped(cache.AssessKindRead("jobs", readable), readable, nil)
 
 	live, ready := liveTargets(cache, readable, req.CanRead, req.CanListPods)
 	if !ready {
@@ -221,17 +224,46 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 			gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
 		}
 	}
-	if len(live.withheld) > 0 {
+	// A running object the caller can't read is withheld whether or not it
+	// has a report yet: without the gap, an unscanned one would just vanish.
+	// Where Jobs aren't read, a Job's Pods can't be traced to the CronJob
+	// that Trivy scanned them through: its report would read as inactive
+	// and the running image as unscanned. Both are withheld instead.
+	if !jobOK || len(jobGaps) > 0 {
+		jobUnknown := func(ns string) bool { return !jobOK || (jobReadable != nil && !slices.Contains(jobReadable, ns)) }
 		var namespaces []string
-		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
-			r, ok := reportHeader(u)
-			if ok && live.withheld[r.owner] {
-				if !slices.Contains(namespaces, r.owner.namespace) {
-					namespaces = append(namespaces, r.owner.namespace)
+		targets = slices.DeleteFunc(targets, func(t target) bool {
+			if t.key.kind == "Job" && jobUnknown(t.key.namespace) {
+				if !slices.Contains(namespaces, t.key.namespace) {
+					namespaces = append(namespaces, t.key.namespace)
 				}
 				return true
 			}
 			return false
+		})
+		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
+			r, ok := reportHeader(u)
+			return ok && (r.owner.kind == "Job" || r.owner.kind == "CronJob") && jobUnknown(r.owner.namespace) && slices.Contains(namespaces, r.owner.namespace)
+		})
+		if len(namespaces) > 0 {
+			slices.Sort(namespaces)
+			if jobOK {
+				gaps = append(gaps, jobGaps...)
+			} else {
+				gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
+			}
+		}
+	}
+	if len(live.withheld) > 0 {
+		var namespaces []string
+		for owner := range live.withheld {
+			if !slices.Contains(namespaces, owner.namespace) {
+				namespaces = append(namespaces, owner.namespace)
+			}
+		}
+		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
+			r, ok := reportHeader(u)
+			return ok && live.withheld[r.owner]
 		})
 		slices.Sort(namespaces)
 		gaps = appendGap(gaps, readreason.UserForbidden, namespaces)

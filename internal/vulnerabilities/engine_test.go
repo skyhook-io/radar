@@ -269,6 +269,10 @@ func TestFindingsBudget(t *testing.T) {
 	if c := w.Workloads[0].Containers[0]; !c.FindingsUnread || c.Counts != nil {
 		t.Fatalf("workload container: %+v", c)
 	}
+	wf := mustBuild(t, items, targets, ViewWorkload, Filter{Severities: []Severity{SeverityCritical}})
+	if len(wf.Workloads) != 1 {
+		t.Fatalf("a workload whose findings weren't read can't be ruled out by a filter: %+v", wf.Workloads)
+	}
 }
 
 // After a StatefulSet moves to a new image, the report about the old one
@@ -334,6 +338,10 @@ func TestRolloutWithImageAliasesStaysScanned(t *testing.T) {
 	resp := mustBuild(t, items, targets, ViewImage, Filter{})
 	if len(resp.Unscanned) != 0 {
 		t.Fatalf("unscanned: %+v", resp.Unscanned)
+	}
+	w := mustBuild(t, items, targets, ViewWorkload, Filter{})
+	if len(w.Workloads) != 1 || len(w.Workloads[0].Containers) != 1 || !w.Workloads[0].Containers[0].Scanned {
+		t.Fatalf("one image under two spellings is one scanned container: %+v", w.Workloads)
 	}
 }
 
@@ -439,6 +447,28 @@ func TestFixView(t *testing.T) {
 	for _, c := range byCVE.CVEs {
 		if c.ID == "CVE-1" && c.Affected[0].Packages[0].FixTarget != "6.11.6" {
 			t.Fatalf("CVE view target: %+v", c.Affected[0].Packages)
+		}
+	}
+}
+
+// A package name is only an identity within its ecosystem: npm and Python
+// packages called "redis" are two upgrades, never one.
+func TestFixRowsKeepEcosystemsApart(t *testing.T) {
+	u := vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{
+		{"CVE-1", "HIGH", "redis", "4.0.0", "4.0.1"},
+		{"CVE-2", "HIGH", "redis", "4.0.0", "4.0.2"},
+	}})
+	vs := u.Object["report"].(map[string]any)["vulnerabilities"].([]any)
+	vs[0].(map[string]any)["packagePURL"] = "pkg:npm/redis@4.0.0"
+	vs[1].(map[string]any)["packagePURL"] = "pkg:pypi/redis@4.0.0"
+	targets := []target{liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout)}
+	resp := mustBuild(t, []*unstructured.Unstructured{u}, targets, ViewFix, Filter{})
+	if len(resp.Fixes) != 2 {
+		t.Fatalf("two ecosystems, two upgrades: %+v", resp.Fixes)
+	}
+	for _, f := range resp.Fixes {
+		if f.CVEsTotal != 1 || (f.PackageType == "npm") != (f.To == "4.0.1") {
+			t.Fatalf("each upgrade clears its own ecosystem's CVE: %+v", f)
 		}
 	}
 }
