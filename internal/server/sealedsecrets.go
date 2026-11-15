@@ -22,6 +22,10 @@ import (
 // sealing keys in. Only the value "active" is a key the controller uses.
 const sealingKeyLabel = "sealedsecrets.bitnami.com/sealed-secrets-key"
 
+// legacySealingKeyName is the unlabelled key Secret the controller also loads:
+// the one named by its --key-prefix, whose default this is.
+const legacySealingKeyName = "sealed-secrets-key"
+
 type sealedSecretsControllerRef struct {
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
@@ -81,7 +85,7 @@ func sealedSecretsControllerRefFor(d *appsv1.Deployment) sealedSecretsController
 	}
 }
 
-// sealingKeysFromSecrets projects the labelled Secrets to names and dates,
+// sealingKeysFromSecrets projects the labelled Secrets (and the legacy key) to names and dates,
 // newest first. It reads Data["tls.crt"] (the public certificate) and never
 // any other key of Data. The active key is the newest one labelled "active",
 // which is the one the controller seals new secrets with.
@@ -98,6 +102,9 @@ func sealingKeysFromSecrets(objs []runtime.Object) []sealingKey {
 			continue
 		}
 		value, labelled := sec.Labels[sealingKeyLabel]
+		if !labelled && sec.Name == legacySealingKeyName {
+			value, labelled = "active", true
+		}
 		if !labelled {
 			continue
 		}

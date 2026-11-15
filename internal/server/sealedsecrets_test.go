@@ -365,3 +365,16 @@ func TestAbsentControllerState(t *testing.T) {
 		}
 	}
 }
+
+// The controller also loads the unlabelled legacy key Secret named by its
+// --key-prefix (default sealed-secrets-key) and seals with it when newest.
+func TestSealingKeysIncludeTheLegacyKeySecret(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	got := sealingKeysFromSecrets([]runtime.Object{
+		sealingKeySecret("sealed-secrets-keyabc", "kube-system", "active", sealingKeyPEM(t, now.Add(-48*time.Hour)), now.Add(-48*time.Hour)),
+		sealingKeySecret("sealed-secrets-key", "kube-system", "", sealingKeyPEM(t, now), now),
+	})
+	if len(got) != 2 || got[0].Name != "sealed-secrets-key" || !got[0].Active || got[0].NotUsed {
+		t.Fatalf("keys = %+v", got)
+	}
+}
