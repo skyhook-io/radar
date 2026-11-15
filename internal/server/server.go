@@ -524,13 +524,14 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	}
 
 	metricsHandler := s.newMetricsHandler()
-	r.Get("/metrics", metricsHandler.ServeHTTP)
+	r.With(s.requireSameOrigin).Get("/metrics", metricsHandler.ServeHTTP)
 
 	// Profiling exposes process diagnostics and can trigger costly collection.
 	// Keep unauthenticated shared listeners opt-in and Cloud routes unmounted.
 	if s.pprofEnabled() {
 		log.Printf("[server] pprof endpoints enabled at /debug/pprof/")
 		r.Route("/debug/pprof", func(r chi.Router) {
+			r.Use(s.requireSameOrigin)
 			r.Get("/", pprof.Index)
 			r.Get("/cmdline", func(w http.ResponseWriter, r *http.Request) {
 				if s.authConfig.Enabled() {

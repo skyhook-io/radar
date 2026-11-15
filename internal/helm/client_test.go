@@ -69,12 +69,12 @@ func TestToHelmRelease_StorageNamespace(t *testing.T) {
 		}},
 	}
 
-	same := toHelmRelease(rel, "demo-flux-helm")
+	same := toHelmRelease(rel, "demo-flux-helm", scannedObjects{})
 	if same.StorageNamespace != "" {
 		t.Fatalf("same storage namespace should be omitted, got %q", same.StorageNamespace)
 	}
 
-	different := toHelmRelease(rel, "flux-system")
+	different := toHelmRelease(rel, "flux-system", scannedObjects{})
 	if different.Namespace != "demo-flux-helm" {
 		t.Fatalf("target namespace changed: got %q", different.Namespace)
 	}
@@ -1455,7 +1455,7 @@ func secretsToObjects(secrets []*corev1.Secret) []runtime.Object {
 }
 
 func TestListReleasesAcrossNamespacesEmptySerializesAsArray(t *testing.T) {
-	releases, err := (&Client{}).ListReleasesAcrossNamespaces(context.Background(), []string{}, nil)
+	releases, err := (&Client{}).ListReleasesAcrossNamespaces(context.Background(), []string{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1942,7 +1942,7 @@ func TestHelmReleaseDeploymentTimestampPreserved(t *testing.T) {
 			rel := helmTestRelease("cart", "apps", 2, status, "")
 			rel.Info.LastDeployed = helmtime.Time{Time: deployed}
 			rel.Info.Deleted = helmtime.Time{Time: deployed.Add(time.Hour)}
-			row := toHelmRelease(rel, "apps")
+			row := toHelmRelease(rel, "apps", scannedObjects{})
 			revision, ok := toHelmRevision(rel)
 			if !ok || !row.Updated.Equal(deployed) || !revision.Updated.Equal(deployed) {
 				t.Fatalf("row/revision timestamps = %v/%v, want %v", row.Updated, revision.Updated, deployed)
@@ -1953,9 +1953,15 @@ func TestHelmReleaseDeploymentTimestampPreserved(t *testing.T) {
 
 func helmReleaseRowsForTest(t *testing.T, snapshot *helmReleaseStorageSnapshot) []HelmRelease {
 	t.Helper()
-	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, "", true)
+	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, "", scannedObjects{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return rows
+}
+
+func toHelmRelease(rel *release.Release, storageNamespace string, access StatusAccess) HelmRelease {
+	rows := []HelmRelease{toHelmReleaseSummary(rel, storageNamespace)}
+	addReleasesHealth(rows, []*release.Release{rel}, access)
+	return rows[0]
 }

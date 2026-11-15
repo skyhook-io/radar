@@ -32,6 +32,20 @@ export function isUpdateDismissed(latestVersion: string): boolean {
   }
 }
 
+type ManualCheckToast = { message: string; type: 'info' | 'success' | 'error'; detail?: string }
+
+// The answer to Help → Check for Updates. A found update is announced by the
+// update card, which shares the toast's corner, so the toast only says so when
+// something else holds that corner and the card waits.
+export function manualCheckToast(info: VersionInfo, cardShows: boolean): ManualCheckToast | null {
+  if (info.error) return { message: 'Could not check for updates', type: 'error', detail: info.error }
+  if (info.updateAvailable) return cardShows ? null : { message: `Radar ${info.latestVersion} is available`, type: 'info' }
+  if (info.buildChannel === 'development') {
+    return { message: `Latest Radar release: ${info.latestVersion}`, type: 'info', detail: 'You are running a development build.' }
+  }
+  return { message: "You're up to date", type: 'success', detail: `Radar ${info.currentVersion}` }
+}
+
 export function UpdateNotification({ placement = 'floating' }: { placement?: 'floating' | 'settings' }) {
   const inSettings = placement === 'settings'
   const [expanded, setExpanded] = useState(false)
@@ -39,7 +53,7 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelId = useId()
   const queryClient = useQueryClient()
-  const { showToast } = useToast()
+  const { showToast, dismissToast } = useToast()
   const { data: capabilities } = useCapabilities()
   const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
   const { data: versionInfo } = useVersionCheck()
@@ -72,21 +86,15 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
     }
     const resultHandler = (event: Event) => {
       const info = (event as CustomEvent<VersionInfo>).detail
-      if (info.error) {
-        showToast('Could not check for updates', { id, type: 'error', detail: info.error })
-        return
+      if (!info.error) {
+        void queryClient.cancelQueries({ queryKey: ['version-check', getApiBase()], exact: true })
+        setDismissed(false)
+        try { localStorage.removeItem(DISMISSED_KEY) } catch { /* ignore */ }
+        queryClient.setQueryData(['version-check', getApiBase()], info)
       }
-      void queryClient.cancelQueries({ queryKey: ['version-check', getApiBase()], exact: true })
-      setDismissed(false)
-      try { localStorage.removeItem(DISMISSED_KEY) } catch { /* ignore */ }
-      queryClient.setQueryData(['version-check', getApiBase()], info)
-      if (info.updateAvailable) {
-        showToast(`Radar ${info.latestVersion} is available`, { id, type: 'info' })
-      } else if (info.buildChannel === 'development') {
-        showToast(`Latest Radar release: ${info.latestVersion}`, { id, type: 'info', detail: 'You are running a development build.' })
-      } else {
-        showToast("You're up to date", { id, type: 'success', detail: `Radar ${info.currentVersion}` })
-      }
+      const toast = manualCheckToast(info, cardCanShowRef.current)
+      if (toast) showToast(toast.message, { id, type: toast.type, detail: toast.detail })
+      else dismissToast(id)
     }
 
     window.addEventListener('radar:check-for-updates', handler)
@@ -95,7 +103,7 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
       window.removeEventListener('radar:check-for-updates', handler)
       window.removeEventListener('radar:update-check-result', resultHandler)
     }
-  }, [queryClient, inSettings, showToast])
+  }, [queryClient, inSettings, showToast, dismissToast])
 
   // Runs until the launch window is over, so a notice already on screen when
   // the launch day starts steps aside too.
@@ -135,6 +143,12 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
     window.addEventListener(USAGE_PROMPT_VISIBILITY_EVENT, onUsagePrompt)
     return () => window.removeEventListener(USAGE_PROMPT_VISIBILITY_EVENT, onUsagePrompt)
   }, [inSettings])
+
+  // Whether a found update would show the card now; read by the manual
+  // check's result, which clears the card's dismissal first.
+  const cardCanShow = deploymentMode !== undefined && deploymentMode !== 'cloud' && deploymentMode !== 'in-cluster' && !launchHoldsCorner && !usagePromptShowing
+  const cardCanShowRef = useRef(cardCanShow)
+  useEffect(() => { cardCanShowRef.current = cardCanShow }, [cardCanShow])
 
   // Stop polling when update reaches a terminal state
   useEffect(() => {
@@ -186,7 +200,10 @@ export function UpdateNotification({ placement = 'floating' }: { placement?: 'fl
   }
 
   // Determine what the current effective state is
-  const effectiveState: DesktopUpdateState = updateStatus?.state ?? 'idle'
+  // The updater is idle again once the new version is in place, before Radar
+  // restarts; the card keeps showing the restart rather than offering the
+  // update again.
+  const effectiveState: DesktopUpdateState = applyUpdate.isPending || applyUpdate.isSuccess ? 'applying' : updateStatus?.state ?? 'idle'
 
   const panel = shouldRender && (
     <div

@@ -160,7 +160,7 @@ export function KustomizationRenderer({ data, onNavigate }: KustomizationRendere
       {managedResources.length > 0 && (
         <ManagedResourcesList
           resources={managedResources}
-          title={`Inventory (${managedResources.length} resources)`}
+          title="Inventory"
         />
       )}
 
