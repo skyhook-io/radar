@@ -12,7 +12,8 @@ export function useVulnerabilitiesRow(namespaces: string[]): AuditCardVulnerabil
   const { data: resources } = useAPIResources()
   const { support } = useRadarFeature('vulnerabilities')
   const available = hasVulnerabilityReports(resources) && support !== 'unsupported'
-  const { data } = useVulnerabilities({ view: 'image', namespaces }, available)
+  // Only the totals: the rows would be the whole tab's payload, every minute.
+  const { data } = useVulnerabilities({ view: 'summary', namespaces }, available)
   if (!available || !data) return undefined
   const s = data.summary
   if (s.imagesScanned === 0 && s.imagesUnscanned === 0) return undefined

@@ -62,7 +62,9 @@ func TestUpgradeForCrossesBranches(t *testing.T) {
 	pkg := func(installed string, fixed ...string) *imagePackage {
 		p := &imagePackage{pkg: "lib", eco: "npm", installed: installed}
 		for _, f := range fixed {
-			p.findings = append(p.findings, Finding{FixedVersion: f})
+			// As parseFindings records it.
+			target, _ := fixTarget(p.eco, installed, f)
+			p.findings = append(p.findings, Finding{FixedVersion: f, FixTarget: target})
 		}
 		return p
 	}

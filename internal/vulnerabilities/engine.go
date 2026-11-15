@@ -259,7 +259,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			continue
 		}
 		read += n
-		agg.report.findings = parseFindings(agg.report.u)
+		agg.report.findings = parsedFindings.get(agg.report.u)
 	}
 	scannedSlot := map[slotKey]bool{}
 	for _, t := range targets {
@@ -291,8 +291,13 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 	if err != nil {
 		return Response{}, err
 	}
-	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary(), Unscanned: j.unscannedRows(f)}
+	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary()}
+	if view != ViewSummary {
+		resp.Unscanned = j.unscannedRows(f)
+	}
 	switch view {
+	case ViewSummary:
+		// Totals and coverage only, for a page that shows counts.
 	case ViewCVE:
 		cves, err := j.cves(ctx, f)
 		if err != nil {
@@ -835,10 +840,10 @@ func ParseView(s string) (View, error) {
 	switch v := View(strings.ToLower(strings.TrimSpace(s))); v {
 	case "", ViewImage:
 		return ViewImage, nil
-	case ViewCVE, ViewWorkload, ViewFix:
+	case ViewCVE, ViewWorkload, ViewFix, ViewSummary:
 		return v, nil
 	}
-	return "", fmt.Errorf("unknown view %q (want image, cve, workload or fix)", s)
+	return "", fmt.Errorf("unknown view %q (want image, cve, workload, fix or summary)", s)
 }
 
 // ParseSeverities reads a comma-separated severity list.

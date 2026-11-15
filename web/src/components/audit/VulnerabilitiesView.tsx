@@ -212,7 +212,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           tone="neutral"
           icon={ShieldAlert}
           headline={emptyHeadline(view, filtered, data)}
-          body={filtered ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && data.unscanned.length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
+          body={filtered ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
         />
       ) : view === 'fix' ? (
         <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) })} />
@@ -757,7 +757,8 @@ function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view
 }
 
 function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
-  if (data.unscanned.length === 0) return null
+  const unscanned = data.unscanned ?? []
+  if (unscanned.length === 0) return null
   return (
     <div className="shrink-0 rounded-lg border border-theme-border bg-theme-surface">
       <Disclosure
@@ -770,7 +771,7 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
         }
       >
         <ul className="flex flex-col">
-          {data.unscanned.map((u) => (
+          {unscanned.map((u) => (
             <li key={u.image} className={FOLD_ROW}>
               <ImageName image={u.image} className="text-theme-text-primary" />
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-4">

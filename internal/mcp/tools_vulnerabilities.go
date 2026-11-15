@@ -15,7 +15,7 @@ import (
 )
 
 type listVulnerabilitiesInput struct {
-	View      string `json:"view,omitempty" jsonschema:"image (default), cve, workload or fix"`
+	View      string `json:"view,omitempty" jsonschema:"image (default), cve, workload, fix, summary"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"limit to one namespace"`
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical, high, medium, low, unknown"`
 	Fixable   bool   `json:"fixable,omitempty" jsonschema:"keep only findings with a fixed version"`

@@ -32,6 +32,12 @@ type fixAgg struct {
 func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 	m := newMatcher(f)
 	byKey := map[string]*fixAgg{}
+	// Images built on one base share package states: each is worked out once.
+	type upgrade struct {
+		to     string
+		listed []string
+	}
+	upgrades := map[string]upgrade{}
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -59,7 +65,13 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		}
 		for _, key := range order {
 			p := packages[key]
-			to, listed := upgradeFor(p)
+			state := upgradeState(p)
+			u, ok := upgrades[state]
+			if !ok {
+				u.to, u.listed = upgradeFor(p)
+				upgrades[state] = u
+			}
+			to, listed := u.to, u.listed
 			rowKey := p.eco + "\x00" + p.pkg + "\x00" + to
 			if to == "" {
 				rowKey = p.eco + "\x00" + p.pkg + "\x00?\x00" + strings.Join(listed, "|")
@@ -145,6 +157,17 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 	return rows, nil
 }
 
+// upgradeState is everything upgradeFor's answer depends on: the
+// ecosystem, the installed version and the findings' fixed releases.
+func upgradeState(p *imagePackage) string {
+	fixed := make([]string, 0, len(p.findings))
+	for _, fd := range p.findings {
+		fixed = append(fixed, fd.FixedVersion)
+	}
+	slices.Sort(fixed)
+	return p.eco + "\x00" + p.installed + "\x00" + strings.Join(slices.Compact(fixed), "\x01")
+}
+
 // upgradeFor is the one version that fixes every fixable finding of an
 // installed package. It starts at the highest of their own targets, then
 // checks it against each finding's fixed releases: a scanner lists one fix
@@ -164,8 +187,8 @@ func upgradeFor(p *imagePackage) (to string, listed []string) {
 		return "", listed
 	}
 	for _, fd := range p.findings {
-		target, ok := fixTarget(p.eco, p.installed, fd.FixedVersion)
-		if !ok {
+		target := fd.FixTarget
+		if target == "" {
 			return "", listed
 		}
 		if to == "" {

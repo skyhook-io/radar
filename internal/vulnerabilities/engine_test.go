@@ -2,6 +2,7 @@ package vulnerabilities
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -500,5 +501,23 @@ func TestUnscannedAliasesAreOneImage(t *testing.T) {
 	resp := mustBuild(t, nil, targets, ViewImage, Filter{})
 	if resp.Summary.ImagesUnscanned != 1 || len(resp.Unscanned) != 1 {
 		t.Fatalf("unscanned: %d %+v", resp.Summary.ImagesUnscanned, resp.Unscanned)
+	}
+}
+
+// The summary view is the totals and coverage of the image view, without
+// any rows: what a page showing counts needs.
+func TestSummaryView(t *testing.T) {
+	u := vulnReport(reportSpec{name: "c", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{{"CVE-1", "CRITICAL", "zlib", "1", "2"}}})
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/worker:1", "", worker),
+	}
+	full := mustBuild(t, []*unstructured.Unstructured{u}, targets, ViewImage, Filter{})
+	sum := mustBuild(t, []*unstructured.Unstructured{u}, targets, ViewSummary, Filter{})
+	if !reflect.DeepEqual(sum.Summary, full.Summary) || !reflect.DeepEqual(sum.Coverage, full.Coverage) {
+		t.Fatalf("summary differs: %+v / %+v", sum.Summary, full.Summary)
+	}
+	if sum.Images != nil || sum.Unscanned != nil || sum.Clean != nil || sum.Summary.ImagesUnscanned != 1 {
+		t.Fatalf("no rows: %+v", sum)
 	}
 }

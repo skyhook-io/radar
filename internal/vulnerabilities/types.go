@@ -18,6 +18,8 @@ const (
 	ViewCVE      View = "cve"
 	ViewWorkload View = "workload"
 	ViewFix      View = "fix"
+	// ViewSummary is the totals and coverage without rows.
+	ViewSummary View = "summary"
 )
 
 // Severity is a scanner's severity, lower-cased. Anything a scanner reports
@@ -257,7 +259,8 @@ type Coverage struct {
 }
 
 // Response is GET /api/vulnerabilities and the MCP list_vulnerabilities
-// answer. Exactly one of Images, CVEs, Workloads and Fixes is set, by View.
+// answer. Exactly one of Images, CVEs, Workloads and Fixes is set, by View;
+// the summary view sets none of them, nor Unscanned.
 type Response struct {
 	Source    string     `json:"source"`
 	View      View       `json:"view"`
@@ -271,7 +274,7 @@ type Response struct {
 	// view). They are kept out of the rows unless a search names them.
 	Clean          []CleanImage  `json:"clean,omitempty"`
 	CleanWorkloads []WorkloadRef `json:"cleanWorkloads,omitempty"`
-	Unscanned      []Unscanned   `json:"unscanned"`
+	Unscanned      []Unscanned   `json:"unscanned,omitempty"`
 	Coverage       Coverage      `json:"coverage"`
 }
 

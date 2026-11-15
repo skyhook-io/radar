@@ -5,7 +5,8 @@ import { shouldRetryRadarQuery } from './radarFeatures'
 
 // Mirrors internal/vulnerabilities/types.go.
 
-export type VulnerabilityView = 'image' | 'fix' | 'cve' | 'workload'
+/** 'summary' is the totals and coverage without rows, for a page that shows counts. */
+export type VulnerabilityView = 'image' | 'fix' | 'cve' | 'workload' | 'summary'
 export type VulnerabilitySeverity = 'critical' | 'high' | 'medium' | 'low' | 'unknown'
 
 export interface VulnerabilityCounts {
@@ -146,7 +147,7 @@ export interface VulnerabilitiesResponse {
   clean?: { id: string; image: string; scannedAt: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number; report: VulnerableImage['report'] }[]
   /** Workloads whose every container is scanned and clean. */
   cleanWorkloads?: VulnerabilityWorkloadRef[]
-  unscanned: { image: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
+  unscanned?: { image: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]
