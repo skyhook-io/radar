@@ -27,8 +27,8 @@ function chart(overrides: Partial<SubstrateHealth['charts'][number]>): Substrate
     id: 'workers', title: 'Workers by state', unit: 'workers', population: 'Every worker Pod.', source: 'ate_workerpool_workers',
     state: 'ok', isolation: { mode: 'unverified', note: 'Radar couldn\'t confirm these series belong to this exact cluster' },
     series: [
-      { labels: { series: 'idle' }, dataPoints: [{ timestamp: 1000, value: 1.5 }] },
-      { labels: { series: 'partial' }, dataPoints: [{ timestamp: 1000, value: 1.5 }] },
+      { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 4600, value: 1.5 }] },
+      { labels: { series: 'partial (gvisor)' }, dataPoints: [{ timestamp: 4600, value: 1.5 }] },
     ],
     steps: 61, covered: 1, ...overrides,
   }
@@ -63,9 +63,16 @@ describe('SubstrateHealthCharts', () => {
       chart({ id: 'resumeTime', title: 'Resume time', state: 'duplicateSources', reason: 'reported through more than one scrape job (a, b)', series: [] }),
     ] } }
     const html = render(pool)
-    expect(html).toContain('Now: idle 1.50 · partial 1.50')
+    expect(html).toContain('Now: idle (gvisor) 1.50 · partial (gvisor) 1.50')
     expect(html).toContain('Not shown: reported through more than one scrape job (a, b).')
     expect(html).toContain('Aggregates only')
     expect(html).toContain('confirm these series belong to this exact cluster')
+  })
+  it('does not call an hour-old sample "now"', () => {
+    health = { data: { ...base, status: 'available', charts: [chart({ series: [
+      { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 2 }, { timestamp: 4600, value: null as unknown as number }] },
+      { labels: { series: 'partial (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 1 }] },
+    ] })] } }
+    expect(render(pool)).not.toContain('Now:')
   })
 })

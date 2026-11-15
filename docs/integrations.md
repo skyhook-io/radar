@@ -2248,7 +2248,7 @@ A claim forwards its Sandbox's reason; an in-progress or settled forwarded reaso
 
 | Drawer | Chart | Series (each counts only what Substrate attributes) |
 |---|---|---|
-| WorkerPool | Workers by state | `ate_workerpool_workers`, averaged across API replicas (each reports the whole fleet) by pool, state and sandbox class; class `unknown` shown apart, since it is not capacity |
+| WorkerPool | Workers by state | `ate_workerpool_workers`, averaged across API replicas (each reports the whole fleet) by pool, state and sandbox class; each line names its class, and class `unknown` is not capacity |
 | WorkerPool | Ready and desired workers | `ate_workerpool_{desired,ready}_workers` |
 | WorkerPool | Resume time (p50, p95), Failed resumes (%) | `ate_actor_lifecycle_operation_duration_seconds`, operation `resume`: only resumes of actors placed on this pool |
 | WorkerPool | Placement time (p95) | `ate_scheduler_assignment_duration_seconds`, outcome `assigned`. A placement that found no capacity names no pool, so it is not counted |
@@ -2260,7 +2260,7 @@ A claim forwards its Sandbox's reason; an in-progress or settled forwarded reaso
 
 - **Names.** Radar reads the names Substrate's exporter and Prometheus's OTLP receiver produce by default (`ate_actor_crashes_total`, `*_seconds_bucket`, labels such as `ate_workerpool_name`). A pipeline that keeps UTF-8 names or sends native histograms reads as not found.
 - **Nodes.** atelet's series are attributed by the `node` label a Kubernetes scrape adds, as in Substrate's reference Prometheus configuration. Series without it are reported as not attributable rather than guessed from current Pods. A Node whose cluster serves no WorkerPools, or that runs no atelet, shows no section.
-- **Accuracy.** Each family's cluster identity is checked over the chart's range (ambiguous and mismatched identities are reported, not charted). A partial or warning answer from Prometheus is an error, not a chart. A counter family that arrives through more than one scrape job is reported instead of being added twice.
+- **Accuracy.** Each family's cluster identity is checked over the chart's range (ambiguous and mismatched identities are reported, not charted). A partial or warning answer from Prometheus is an error, not a chart. A counter family that arrives through more than one scrape job is reported instead of being added twice, and copies that differ only by an HA Prometheus pair's replica label are collapsed. A chart that combines two families is drawn only when both resolve to the same cluster identity, and a Node's attribution is decided within this cluster's series.
 - **Access.** `GET /api/prometheus/substrate/workerpools/{namespace}/{name}` requires `get` on that WorkerPool; `GET /api/prometheus/substrate/nodes/{name}` requires `get` on Nodes. Both are read-only and advertised by the `substrateHealthMetrics` capability, so Radar Hub asks only a Radar that serves them.
 
 **Not covered:** Substrate's actors, actor templates and worker assignments live in Substrate's own control plane (PostgreSQL behind a gRPC API), not in Kubernetes, so Radar does not see them. kagent's `api.kagent.dev` kinds are grouped in the sidebar but otherwise use generic discovery; the chart does not collect them by default. The drawer's conditions list shows each condition as recorded, so a settled sandbox's `Ready=False` keeps its red mark there. Topology shows the generic owner edges only (WorkerPool → Deployment → Pods; Sandbox → Pod).

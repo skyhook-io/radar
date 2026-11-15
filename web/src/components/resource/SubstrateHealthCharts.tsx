@@ -92,7 +92,9 @@ function Charts({ health }: { health: SubstrateHealth }) {
 function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHealth }) {
   const series = chart.series.map(s => ({ labels: s.labels, dataPoints: s.dataPoints }))
   const seriesLabels = series.map(s => s.labels.series || chart.title)
-  const latest = chart.state === 'ok' && series.length === 1 ? lastValue(series[0].dataPoints) : undefined
+  // Only a sample from the last two steps is "now"; an older one ended earlier in the range.
+  const since = health.end - 2 * health.stepSeconds
+  const latest = chart.state === 'ok' && series.length === 1 ? lastValue(series[0].dataPoints, since) : undefined
   return (
     <section className="flex flex-col rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0">
       <header className="flex items-baseline justify-between gap-2 mb-1">
@@ -120,7 +122,7 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
             stepSeconds={health.stepSeconds}
           />
           {series.length > 1 && <SeriesLegend series={series} color="var(--accent)" seriesLabels={seriesLabels} />}
-          {series.length > 1 && <LatestValues series={series} labels={seriesLabels} unit={chart.unit} />}
+          {series.length > 1 && <LatestValues series={series} labels={seriesLabels} unit={chart.unit} since={since} />}
           {chart.omitted ? <Muted>{chart.omitted} more series not shown.</Muted> : null}
         </>
       ) : (
@@ -131,8 +133,8 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
 }
 
 // Lines that share a value hide one another; the latest value of each stays readable here.
-function LatestValues({ series, labels, unit }: { series: { dataPoints: { value: number | null }[] }[]; labels: string[]; unit: string }) {
-  const values = series.map((s, i) => ({ label: labels[i], value: lastValue(s.dataPoints) })).filter(v => v.value !== undefined)
+function LatestValues({ series, labels, unit, since }: { series: { dataPoints: { timestamp: number; value: number | null }[] }[]; labels: string[]; unit: string; since: number }) {
+  const values = series.map((s, i) => ({ label: labels[i], value: lastValue(s.dataPoints, since) })).filter(v => v.value !== undefined)
   if (!values.length) return null
   return (
     <p className="mt-1 text-xs text-theme-text-tertiary tabular-nums">
@@ -153,8 +155,8 @@ function chartReason(chart: SubstrateChart): string {
   }
 }
 
-function lastValue(points: { value: number | null }[]): number | undefined {
-  for (let i = points.length - 1; i >= 0; i--) {
+function lastValue(points: { timestamp: number; value: number | null }[], since: number): number | undefined {
+  for (let i = points.length - 1; i >= 0 && points[i].timestamp >= since; i--) {
     const v = points[i].value
     if (v != null && Number.isFinite(v)) return v
   }

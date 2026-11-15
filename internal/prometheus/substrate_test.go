@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 // fakeSubstrateProm answers each query from the first rule whose fragment it contains.
 type fakeSubstrateProm struct {
 	rules   []fakeRule
+	mu      sync.Mutex
 	queries []string
 }
 
@@ -21,7 +23,9 @@ type fakeRule struct {
 }
 
 func (f *fakeSubstrateProm) answer(query string) (*prom.QueryResult, error) {
+	f.mu.Lock()
 	f.queries = append(f.queries, query)
+	f.mu.Unlock()
 	for _, r := range f.rules {
 		if strings.Contains(query, r.fragment) {
 			return r.result, nil
@@ -81,7 +85,7 @@ func TestSubstratePoolCharts(t *testing.T) {
 	charts := querySubstrateCharts(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts()))
 
 	workers := chartByID(charts, "workers")
-	if workers.State != SubstrateChartOK || len(workers.Series) != 2 || workers.Series[1].Labels["series"] != "idle (class unknown)" || workers.Isolation.Mode != SeriesIsolationUnverified {
+	if workers.State != SubstrateChartOK || len(workers.Series) != 2 || workers.Series[0].Labels["series"] != "idle (gvisor)" || workers.Series[1].Labels["series"] != "idle (unknown)" || workers.Isolation.Mode != SeriesIsolationUnverified {
 		t.Fatalf("workers = %+v", workers)
 	}
 	for _, id := range []string{"resumeTime", "resumeFailures"} {
@@ -174,7 +178,7 @@ func TestSubstrateNodeAttribution(t *testing.T) {
 		{"labelled for this node", []fakeRule{{family + `node="worker-1"}`, result(series(nil, 1))}, {family + `node!=""}`, result(series(nil, 1))}, {family + "}", result(series(nil, 1))}}, SubstrateAvailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, _, err := substrateNodeAttribution(context.Background(), &fakeSubstrateProm{rules: tc.rules}, "worker-1", time.Hour)
+			got, _, err := substrateNodeAttribution(context.Background(), &fakeSubstrateProm{rules: tc.rules}, "", "worker-1", time.Hour)
 			if err != nil || got != tc.want {
 				t.Fatalf("got %q, %v; want %q", got, err, tc.want)
 			}
@@ -190,3 +194,31 @@ func TestAlignSubstrateRangeIsWholeSeconds(t *testing.T) {
 		t.Fatalf("window %v ending %v, want a whole 10m ending on a step", window, alignedEnd)
 	}
 }
+
+// A chart that reads two families is drawn only when both resolve to one scope.
+func TestSubstrateChartFamiliesMustShareScope(t *testing.T) {
+	resolve := func(_ context.Context, p scopeProbe) (string, SeriesIsolation, error) {
+		if p.metric == "ate_workerpool_ready_workers" {
+			return `cluster="b"`, SeriesIsolation{Mode: SeriesIsolationVerified}, nil
+		}
+		return `cluster="a"`, SeriesIsolation{Mode: SeriesIsolationVerified}, nil
+	}
+	charts := querySubstrateCharts(context.Background(), &fakeSubstrateProm{}, resolve, poolRequest(substratePoolCharts()))
+	if c := chartByID(charts, "readiness"); c.State != SubstrateChartAmbiguous {
+		t.Fatalf("readiness = %s, want ambiguous", c.State)
+	}
+	if c := chartByID(charts, "workers"); c.State == SubstrateChartAmbiguous {
+		t.Fatal("a single-family chart should not inherit another chart's conflict")
+	}
+}
+
+func TestSubstrateRatesCollapseHACopies(t *testing.T) {
+	f := &fakeSubstrateProm{}
+	querySubstrateCharts(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts()))
+	for _, q := range f.queries {
+		if strings.Contains(q, "rate(") && !strings.Contains(q, "max without (prometheus, prometheus_replica, replica) (rate(") {
+			t.Fatalf("rate without HA collapse: %s", q)
+		}
+	}
+}
+
