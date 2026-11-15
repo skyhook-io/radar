@@ -417,6 +417,26 @@ func main() {
 
 }
 
+// implementationClass: the graph named a Gateway's GatewayClass, which
+// implements it rather than owning or generating it.
+func implementationClass(s subject, before []topology.ResourceRef) bool {
+	return s.ref.Kind == "Gateway" && s.ref.Group == "gateway.networking.k8s.io" && len(before) == 1 &&
+		before[0].Kind == "GatewayClass" && before[0].Group == "gateway.networking.k8s.io"
+}
+
+// unownedCrossplaneManaged: the graph found a Crossplane composite by
+// scanning composites' resourceRefs for a managed resource that carries no
+// owner reference. Crossplane always sets one on what it composes; only a
+// hand-made fixture lacks it, and the families answer the reverse question
+// through owner references and claimRef.
+func unownedCrossplaneManaged(s subject, before []topology.ResourceRef) bool {
+	m, err := meta.Accessor(s.obj)
+	if err != nil || len(m.GetOwnerReferences()) != 0 || len(before) != 1 || !strings.HasSuffix(s.ref.Group, ".crossplane.io") {
+		return false
+	}
+	return before[0].Group != "" && !strings.HasSuffix(before[0].Group, ".k8s.io")
+}
+
 func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access ownership.Access, subject subject, before, after []topology.ResourceRef) string {
 	b, a := refSet(reflect.ValueOf(before)), refSet(reflect.ValueOf(after))
 	m, _ := meta.Accessor(subject.obj)
@@ -427,6 +447,12 @@ func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access
 		return ""
 	}
 	if len(after) == 0 {
+		if implementationClass(subject, before) {
+			return "lost-implementation-class"
+		}
+		if unownedCrossplaneManaged(subject, before) {
+			return "lost-unowned-managed-resource"
+		}
 		return "lost"
 	}
 	if len(before) == 0 {
