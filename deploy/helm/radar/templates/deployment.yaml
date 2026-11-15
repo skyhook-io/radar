@@ -236,6 +236,9 @@ spec:
             {{- if .Values.auth.proxy.logoutURL }}
             - {{ printf "--auth-proxy-logout-url=%s" .Values.auth.proxy.logoutURL | quote }}
             {{- end }}
+            {{- with .Values.auth.proxy.logoutCookies }}
+            - {{ printf "--auth-proxy-logout-cookies=%s" (join "," .) | quote }}
+            {{- end }}
             {{- if .Values.auth.oidc.issuerURL }}
             - {{ printf "--auth-oidc-issuer=%s" .Values.auth.oidc.issuerURL | quote }}
             {{- end }}

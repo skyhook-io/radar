@@ -532,6 +532,8 @@ export interface DashboardHelmRelease {
   chartVersion: string;
   status: string;
   resourceHealth?: string;
+  // Workloads and Pods whose live status wasn't read.
+  statusUnreadCount?: number;
 }
 
 export interface DashboardHelmSummary {
@@ -2072,9 +2074,10 @@ export function useApplyDesktopUpdate() {
       }
       return response.json();
     },
+    // No success toast: the update card shows the restart, in the corner a
+    // toast would cover.
     meta: {
       errorMessage: "Failed to apply update",
-      successMessage: "Update applied — restarting...",
     },
   });
 }
