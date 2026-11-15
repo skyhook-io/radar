@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -91,8 +92,18 @@ type expected struct {
 	access ownership.Access
 }
 
-func (e expected) may(gk resourceid.GroupKind, namespace string) bool {
-	return e.access.CanRead(gk, namespace) == ownership.Allowed
+// may applies the caller's access the way an answer must: only Allowed
+// reads; Denied narrows; a check that couldn't be made is a gap.
+func (e expected) may(gk resourceid.GroupKind, namespace string, c *relations.Coverage) bool {
+	switch e.access.CanRead(gk, namespace) {
+	case ownership.Allowed:
+		return true
+	case ownership.Undecided:
+		addGap(c, ownership.Gap{Kind: gk, Namespace: namespace, Reason: readreason.UserPermissionCheckFailed})
+	default:
+		c.Narrowed = true
+	}
+	return false
 }
 
 func (e expected) object(ref resourceid.Ref) ownershiptest.Object {
@@ -111,8 +122,7 @@ func addGap(c *relations.Coverage, g ownership.Gap) {
 // observed reads subject as an answer about it starts: true when Present,
 // otherwise the coverage the answer stops with.
 func (e expected) observed(subject resourceid.Ref, c *relations.Coverage) bool {
-	if !e.may(subject.GroupKind(), subject.Namespace) {
-		c.Narrowed = true
+	if !e.may(subject.GroupKind(), subject.Namespace, c) {
 		return false
 	}
 	switch read := e.scan.Object(subject); read.State {
@@ -133,8 +143,7 @@ func (e expected) consumers(subject resourceid.Ref) relations.ConfigConsumersAns
 		if gk.Kind == "Ingress" && subject.Kind != "Secret" {
 			continue
 		}
-		if !e.may(gk, subject.Namespace) {
-			a.Coverage.Narrowed = true
+		if !e.may(gk, subject.Namespace, &a.Coverage) {
 			continue
 		}
 		read := e.scan.Indexed(gk, cache.NamespaceIndex, []string{subject.Namespace}, ownership.InNamespace(subject.Namespace))
@@ -162,10 +171,15 @@ func (e expected) references(subject resourceid.Ref) relations.ConfigReferencesA
 	slices.SortFunc(targets, func(x, y resourceid.Ref) int { return cmp.Or(cmp.Compare(x.Kind, y.Kind), cmp.Compare(x.Name, y.Name)) })
 	for _, t := range targets {
 		d := relations.Declared{Ref: t, Paths: []string{declaredPath[t.Kind]}}
-		if !e.may(t.GroupKind(), t.Namespace) {
+		switch decision := e.access.CanRead(t.GroupKind(), t.Namespace); {
+		case decision == ownership.Undecided:
+			d.State = relations.TargetUnread
+			d.Gap = ownership.Gap{Kind: t.GroupKind(), Namespace: t.Namespace, Reason: readreason.UserPermissionCheckFailed}
+			addGap(&a.Coverage, d.Gap)
+		case decision != ownership.Allowed:
 			d.State = relations.TargetWithheld
 			a.Coverage.Narrowed = true
-		} else {
+		default:
 			switch read := e.scan.Object(t); read.State {
 			case ownership.Present:
 				d.State = relations.TargetPresent
@@ -212,7 +226,7 @@ func conformRelations(t *testing.T, w ownershiptest.World, got relations.Session
 			}
 		}
 	}
-	for _, access := range []ownership.Access{ownership.Unrestricted(), alphaOnly{}} {
+	for _, access := range []ownership.Access{ownership.Unrestricted(), alphaOnly{}, betaUndecided{}} {
 		want := expected{w: w, scan: scan, access: access}
 		for _, session := range []struct {
 			name string
@@ -318,3 +332,14 @@ func TestRelationsConformThroughChanges(t *testing.T) {
 		t.Fatalf("the histories never found a consumer: %+v", seen)
 	}
 }
+
+// betaUndecided can't check anything in beta, and may read everything else.
+type betaUndecided struct{}
+
+func (betaUndecided) CanRead(_ resourceid.GroupKind, namespace string) ownership.Decision {
+	if namespace == "beta" {
+		return ownership.Undecided
+	}
+	return ownership.Allowed
+}
+func (betaUndecided) Namespaces() ([]string, bool) { return nil, true }

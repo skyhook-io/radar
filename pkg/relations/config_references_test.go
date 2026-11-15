@@ -222,8 +222,9 @@ func TestConfigConsumersAnswerOnlyAsTheCallerMayRead(t *testing.T) {
 	if got := NewView(c, denies{"Secret"}).ConfigConsumers(ref("", "Secret", "tls")); len(got.Consumers) != 0 || !got.Coverage.Narrowed {
 		t.Errorf("a caller who may not read the Secret learned its consumers: %+v", got)
 	}
-	if got := NewView(c, undecided{}).ConfigConsumers(ref("", "ConfigMap", "settings")); len(got.Consumers) != 0 || !got.Coverage.Narrowed {
-		t.Errorf("an undecided check granted a read: %+v", got)
+	if got := NewView(c, undecided{}).ConfigConsumers(ref("", "ConfigMap", "settings")); len(got.Consumers) != 0 || got.Coverage.Complete() ||
+		!slices.ContainsFunc(got.Coverage.NotChecked, func(g ownership.Gap) bool { return g.Reason == readreason.UserPermissionCheckFailed }) {
+		t.Errorf("an undecided check granted a read, or claimed a complete answer: %+v", got)
 	}
 }
 
@@ -275,10 +276,11 @@ func TestConfigConsumersAnswerOnlyForASubjectRadarHolds(t *testing.T) {
 func TestConfigReferencesAnswerOnlyAsTheCallerMayReadTheSubject(t *testing.T) {
 	subject := pod("web-1", mounts("settings"))
 	c := cluster{objects: []runtime.Object{subject, configMap("settings")}}
-	for _, access := range []ownership.Access{denies{"Pod"}, undecided{}} {
-		if got := NewView(c, access).ConfigReferences(refOf(subject), subject); len(got.Declared) != 0 || !got.Coverage.Narrowed {
-			t.Errorf("%T: a caller who may not read the Pod learned what it declares: %+v", access, got)
-		}
+	if got := NewView(c, denies{"Pod"}).ConfigReferences(refOf(subject), subject); len(got.Declared) != 0 || !got.Coverage.Narrowed {
+		t.Errorf("a caller who may not read the Pod learned what it declares: %+v", got)
+	}
+	if got := NewView(c, undecided{}).ConfigReferences(refOf(subject), subject); len(got.Declared) != 0 || got.Coverage.Complete() {
+		t.Errorf("a caller whose access couldn't be checked got %+v; want nothing, incomplete", got)
 	}
 }
 
@@ -312,3 +314,24 @@ func TestARolloutTemplateThatIsNotAnObjectIsUnread(t *testing.T) {
 		t.Fatalf("a Rollout with no template got %+v", got)
 	}
 }
+
+// A target whose access couldn't be checked is unread, not withheld: the
+// answer can't say the caller may not read it.
+func TestAnUndecidedTargetIsUnreadNotWithheld(t *testing.T) {
+	subject := pod("web-1", mounts("settings"))
+	access := targetUndecided{}
+	got := NewView(cluster{objects: []runtime.Object{subject, configMap("settings")}}, access).ConfigReferences(refOf(subject), subject)
+	if len(got.Declared) != 1 || got.Declared[0].State != TargetUnread || got.Declared[0].Gap.Reason != readreason.UserPermissionCheckFailed || got.Coverage.Narrowed || got.Coverage.Complete() {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+type targetUndecided struct{}
+
+func (targetUndecided) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if gk.Kind == "ConfigMap" {
+		return ownership.Undecided
+	}
+	return ownership.Allowed
+}
+func (targetUndecided) Namespaces() ([]string, bool) { return nil, true }
