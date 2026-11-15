@@ -2231,6 +2231,49 @@ func TestSetArgoAutoSyncLifecycle(t *testing.T) {
 	})
 }
 
+// When spec.syncPolicy.automated has an explicit enabled flag (e.g. Argo CD 3.x
+// or an ApplicationSet managing automated.prune and selfHeal while ignoring
+// automated.enabled), suspend sets enabled: false in place so other fields
+// in the block are not wiped and do not trigger ApplicationSet reconciliation.
+func TestSetArgoAutoSyncSuspendPreservesBlockWhenEnabledPresent(t *testing.T) {
+	original := map[string]any{"enabled": true, "prune": true, "selfHeal": true}
+	client := newFakeArgo(appWithAutomated(original, nil))
+
+	// Suspend should switch `enabled: false` in place instead of deleting the automated block.
+	setAutoSync(t, client, false)
+	suspended := getTestApp(t, client)
+	automated, found := automatedOf(suspended)
+	if !found {
+		t.Fatalf("suspend removed automated block instead of setting enabled: false: %#v", suspended.Object["spec"])
+	}
+	if automated["enabled"] != false {
+		t.Fatalf("expected enabled: false, got %#v", automated["enabled"])
+	}
+	if automated["prune"] != true || automated["selfHeal"] != true {
+		t.Fatalf("suspend changed prune/selfHeal: %#v", automated)
+	}
+	if ArgoAutoSyncEnabled(suspended) {
+		t.Fatalf("ArgoAutoSyncEnabled reported true for suspended app with enabled: false")
+	}
+
+	// Resume clears enabled: false and re-enables auto-sync while keeping prune and selfHeal.
+	setAutoSync(t, client, true)
+	resumed := getTestApp(t, client)
+	resumedAutomated, found := automatedOf(resumed)
+	if !found {
+		t.Fatalf("resume removed automated block: %#v", resumed.Object["spec"])
+	}
+	if val, hasEnabled := resumedAutomated["enabled"]; hasEnabled && val != nil {
+		t.Fatalf("resume left enabled flag: %#v", val)
+	}
+	if resumedAutomated["prune"] != true || resumedAutomated["selfHeal"] != true {
+		t.Fatalf("resumed automated changed: %#v", resumedAutomated)
+	}
+	if !ArgoAutoSyncEnabled(resumed) {
+		t.Fatalf("ArgoAutoSyncEnabled reported false after resume")
+	}
+}
+
 // "Enable Auto-Sync" on an Application Radar never suspended has no saved
 // settings to restore. It must not turn pruning or self-heal on: Argo CD's own
 // UI and CLI enable auto-sync with both off, and a block that exists keeps its

@@ -807,6 +807,7 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 		return nil, true, nil
 	}
 	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	_, hasEnabled := automated["enabled"]
 	// An explicit `enabled: true` means the same as none, and resume drops it.
 	delete(automated, "enabled")
 	saved, err := json.Marshal(automated)
@@ -815,6 +816,12 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 	}
 	prune, _ := automated["prune"].(bool)
 	selfHeal, _ := automated["selfHeal"].(bool)
+
+	var specAutomated any
+	if hasEnabled {
+		specAutomated = map[string]any{"enabled": false}
+	}
+
 	return map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]any{
@@ -824,7 +831,7 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 			},
 		},
 		"spec": map[string]any{
-			"syncPolicy": map[string]any{"automated": nil},
+			"syncPolicy": map[string]any{"automated": specAutomated},
 		},
 	}, false, nil
 }
