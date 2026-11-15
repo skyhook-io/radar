@@ -83,11 +83,12 @@ type outsideCoverage struct {
 	Failed     []outsideDenied `json:"failed,omitempty"`
 	Skipped    []string        `json:"skipped,omitempty"`
 	NotChecked []string        `json:"notChecked,omitempty"`
-	// LabelScan: the release records no inventory, so a fixed set of common
-	// kinds was listed by Flux's labels; other kinds weren't checked.
+	// LabelScan: Radar can't read an inventory in the release's status, so a
+	// fixed set of common kinds was listed by Flux's labels; other kinds
+	// weren't checked.
 	LabelScan bool `json:"labelScan,omitempty"`
-	// NoInventory: a Kustomization without a readable status.inventory (Flux
-	// records one only when pruning is on), so its members are unknown.
+	// NoInventory: Radar can't read a Kustomization's status.inventory (Flux
+	// records one once an apply succeeds), so its members are unknown.
 	NoInventory bool `json:"noInventory,omitempty"`
 	// Remote: the root applies to another cluster (spec.kubeConfig), whose
 	// objects Radar doesn't read.

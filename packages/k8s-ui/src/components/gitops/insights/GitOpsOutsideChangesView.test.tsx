@@ -68,6 +68,7 @@ describe('GitOpsOutsideChangesView', () => {
 
   it('says when the root applies elsewhere or records no inventory', () => {
     expect(render({ coverage: { listed: 0, remote: true } })).toContain('applies to another cluster')
-    expect(render({ coverage: { listed: 0, noInventory: true } })).toContain('records no inventory')
+    expect(render({ coverage: { listed: 0, noInventory: true } })).toContain('Radar can&#x27;t read an inventory in this Kustomization&#x27;s status')
+    expect(render({ coverage: { listed: 0, labelScan: true } })).toContain('Radar can&#x27;t read an inventory in this release&#x27;s status')
   })
 })
