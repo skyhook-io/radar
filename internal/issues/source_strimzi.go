@@ -81,14 +81,15 @@ func StrimziConnectorIssues(gvr schema.GroupVersionResource, u *unstructured.Uns
 	return out
 }
 
-// StrimziClusterIssues reports a Kafka or KafkaNodePool that Strimzi marks
-// NotReady. Strimzi signals failure with NotReady=True and never sets
-// Ready=False, so the generic condition walk cannot see it. Only a status the
-// operator wrote for the current generation is assessed, and the condition's
-// message is left out because it can carry operator exception text.
-func StrimziClusterIssues(gvr schema.GroupVersionResource, u *unstructured.Unstructured) []Issue {
+// StrimziKafkaIssues reports a Kafka that Strimzi marks NotReady. Strimzi
+// signals failure with NotReady=True and never sets Ready=False, so the generic
+// condition walk cannot see it. Only a status the operator wrote for the
+// current generation is assessed, and the condition's message is left out
+// because it can carry operator exception text. KafkaNodePools are not
+// assessed: Strimzi never writes Ready or NotReady on them.
+func StrimziKafkaIssues(gvr schema.GroupVersionResource, u *unstructured.Unstructured) []Issue {
 	kind := u.GetKind()
-	if (kind != "Kafka" && kind != "KafkaNodePool") || !strimziStatusCurrent(u) {
+	if kind != "Kafka" || !strimziStatusCurrent(u) {
 		return nil
 	}
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")

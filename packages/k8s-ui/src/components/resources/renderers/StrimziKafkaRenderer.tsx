@@ -7,7 +7,10 @@ import {
   getStrimziKafkaListeners,
   getStrimziKafkaPoolNames,
   getStrimziPoolRoles,
+  getStrimziPoolDrift,
   describeStrimziStorage,
+  describeStrimziVersion,
+  getStrimziWarningReasons,
 } from '../resource-utils-strimzi'
 
 const MAX_LISTED = 20
@@ -32,12 +35,8 @@ function conditionTone(current: boolean) {
     : 'neutral' as const
 }
 
-function StatusNote({ current }: { current: boolean }) {
-  return <p className="mb-3 text-xs text-theme-text-secondary">
-    {current
-      ? 'Strimzi operator snapshot of the last reconciliation. A reconciled resource does not establish that clients can connect.'
-      : 'Reconciliation is paused, stale or unreported. These observations do not establish current state.'}
-  </p>
+function StatusNote({ children }: { children: string }) {
+  return <p className="mb-3 text-xs text-theme-text-secondary">{children}</p>
 }
 
 function ObservedGeneration({ data }: { data: any }) {
@@ -55,14 +54,17 @@ export function StrimziKafkaRenderer({ data, onNavigate }: { data: any; onNaviga
   const nodeIds: unknown[] = Array.isArray(status.registeredNodeIds) ? status.registeredNodeIds : []
   const storage = describeStrimziStorage(spec.storage)
   const zookeeper = data.spec?.zookeeper
+  const warnings = getStrimziWarningReasons(data)
   return <>
     <Section title="Kafka Cluster" defaultExpanded>
-      <StatusNote current={state.snapshotCurrent} />
+      <StatusNote>{state.snapshotCurrent
+        ? 'Strimzi operator snapshot of the last reconciliation. A reconciled resource does not establish that clients can connect.'
+        : 'Reconciliation is paused, stale or unreported. These observations do not establish current state.'}</StatusNote>
       <PropertyList>
         <Property label="Operator status" value={<Badge severity={healthToSeverity(state.level)}>{state.text}</Badge>} />
-        <Property label="Kafka version" value={status.kafkaVersion ?? spec.version ?? 'Not reported'} />
-        <Property label="Metadata version" value={status.kafkaMetadataVersion ?? spec.metadataVersion ?? 'Not reported'} />
-        <Property label="Metadata state" value={typeof status.kafkaMetadataState === 'string' ? status.kafkaMetadataState : zookeeper ? 'ZooKeeper (declared)' : 'Not reported'} />
+        <Property label="Kafka version" value={describeStrimziVersion(status.kafkaVersion, spec.version)} />
+        <Property label="Metadata version" value={describeStrimziVersion(status.kafkaMetadataVersion, spec.metadataVersion)} />
+        {(typeof status.kafkaMetadataState === 'string' || zookeeper) && <Property label="Metadata state" value={typeof status.kafkaMetadataState === 'string' ? status.kafkaMetadataState : 'ZooKeeper (declared)'} />}
         <Property label="Cluster ID" value={<span className="break-all">{status.clusterId ?? 'Not reported'}</span>} />
         {spec.replicas !== undefined && <Property label="Broker replicas (spec.kafka)" value={spec.replicas} />}
         {zookeeper?.replicas !== undefined && <Property label="ZooKeeper replicas" value={zookeeper.replicas} />}
@@ -70,10 +72,13 @@ export function StrimziKafkaRenderer({ data, onNavigate }: { data: any; onNaviga
         <ObservedGeneration data={data} />
       </PropertyList>
       {!operationalIssuesShown && state.level === 'degraded' && <AlertBanner variant="warning" title={state.text} message="Strimzi reports NotReady. Inspect the conditions below, the cluster operator logs and the broker Pods." />}
+      {state.level === 'healthy' && warnings.length > 0 && <AlertBanner variant="warning" title="Strimzi reported warnings" message={`Reconciliation succeeded, but Strimzi flagged the configuration (${warnings.join(', ')}). Some warnings mean data loss on restart or an ignored change; inspect the conditions below.`} />}
     </Section>
     <Section title={`Node Pools (${pools.length})`} defaultExpanded>
       {pools.length === 0
-        ? <p className="text-sm text-theme-text-secondary">No node pools reported. Brokers may be defined directly on the Kafka resource.</p>
+        ? <p className="text-sm text-theme-text-secondary">{spec.replicas !== undefined
+            ? 'No node pools reported. Brokers are declared on the Kafka resource (spec.kafka.replicas), which Strimzi supports only before 0.46.'
+            : `No node pools reported. Strimzi leaves this list empty when a reconciliation fails before reaching the pools, and from 0.46 a Kafka needs at least one KafkaNodePool labelled strimzi.io/cluster=${data.metadata?.name ?? '<this Kafka>'}.`}</p>
         : <PropertyList>
             {pools.slice(0, MAX_LISTED).map(name => <Property key={name} label="KafkaNodePool" value={<ResourceLink kind="KafkaNodePool" group={GROUP} name={name} namespace={namespace} onNavigate={onNavigate} />} />)}
           </PropertyList>}
@@ -89,7 +94,7 @@ export function StrimziKafkaRenderer({ data, onNavigate }: { data: any; onNaviga
               <td className="py-2 pr-3">{l.type ?? 'Not declared'}</td>
               <td className="py-2 pr-3">{l.port ?? 'Not declared'}</td>
               <td className="py-2 pr-3">{l.tls === undefined ? 'Not declared' : l.tls ? 'Yes' : 'No'}</td>
-              <td className="py-2 pr-3">{l.authentication ?? 'None'}</td>
+              <td className="py-2 pr-3">{!l.declared ? 'Not declared' : l.authentication ?? 'None'}</td>
               <td className="py-2 break-all">{l.bootstrapServers ?? (l.addresses.length ? l.addresses.slice(0, 5).join(', ') : 'Not reported')}</td>
             </tr>)}
           </tbody></table></div>}
@@ -104,37 +109,40 @@ export function StrimziKafkaRenderer({ data, onNavigate }: { data: any; onNaviga
 }
 
 export function StrimziKafkaNodePoolRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
-  const operationalIssuesShown = useOperationalIssuesShown()
   const state = getStrimziClusterStatus(data)
   const spec = data.spec ?? {}
   const status = data.status ?? {}
   const cluster = data.metadata?.labels?.['strimzi.io/cluster']
   const roles = getStrimziPoolRoles(data)
+  const drift = getStrimziPoolDrift(data)
   const nodeIds: unknown[] = Array.isArray(status.nodeIds) ? status.nodeIds : []
   const storage = describeStrimziStorage(spec.storage)
   const requests = spec.resources?.requests ?? {}
   const limits = spec.resources?.limits ?? {}
   return <>
     <Section title="Node Pool" defaultExpanded>
-      <StatusNote current={state.snapshotCurrent} />
+      <StatusNote>{state.snapshotCurrent
+        ? 'Strimzi wrote this status for the pool\'s current spec and assigned its node IDs. Broker health is reported on the Kafka resource, not on the pool.'
+        : 'Strimzi has not written status for this pool\'s current spec. It does so only while reconciling the Kafka named in the strimzi.io/cluster label.'}</StatusNote>
       <PropertyList>
         <Property label="Operator status" value={<Badge severity={healthToSeverity(state.level)}>{state.text}</Badge>} />
         <Property label="Kafka" value={cluster ? <ResourceLink kind="Kafka" group={GROUP} name={cluster} namespace={data.metadata?.namespace} onNavigate={onNavigate} /> : 'Not specified (strimzi.io/cluster label missing)'} />
-        <Property label="Roles" value={roles.length ? roles.join(', ') : 'Not reported'} />
-        <Property label="Replicas (reported / desired)" value={`${status.replicas ?? 'Unknown'} / ${spec.replicas ?? 'Unknown'}`} />
+        <Property label="Roles" value={`${roles.length ? roles.join(', ') : 'Not reported'}${drift.roles && drift.declaredRoles ? ` (declared ${drift.declaredRoles.join(', ') || 'none'})` : ''}`} />
+        <Property label="Replicas (assigned / desired)" value={`${status.replicas ?? 'Unknown'} / ${spec.replicas ?? 'Unknown'}`} />
         <Property label="CPU request / limit" value={`${requests.cpu ?? 'Not set'} / ${limits.cpu ?? 'Not set'}`} />
         <Property label="Memory request / limit" value={`${requests.memory ?? 'Not set'} / ${limits.memory ?? 'Not set'}`} />
         <ObservedGeneration data={data} />
       </PropertyList>
-      {!operationalIssuesShown && state.level === 'degraded' && <AlertBanner variant="warning" title={state.text} message="Strimzi reports NotReady. Inspect the conditions below, the cluster operator logs and the pool's Pods." />}
-      <p className="mt-3 text-xs text-theme-text-tertiary">A reported replica count that differs from the desired count is expected while the pool is scaling and is not itself a failure.</p>
+      {state.text === 'Not applied' && <AlertBanner variant="warning" title="Strimzi did not apply this change" message="Strimzi kept the previous replicas or roles, usually because brokers that would be removed still hold partitions. The Kafka resource carries the reason as a ScaleDownPreventionCheck warning." />}
+      {state.text === 'Warnings' && <AlertBanner variant="warning" title="Strimzi reported a warning" message="Part of this pool's spec may not have been applied. Inspect the conditions below and the cluster operator logs." />}
+      <p className="mt-3 text-xs text-theme-text-tertiary">Assigned counts the node IDs Strimzi allocated for the pool, not the broker Pods that are running.</p>
     </Section>
     <Section title={`Node IDs (${nodeIds.length})`} defaultExpanded={nodeIds.length > 0}>
       {nodeIds.length === 0
         ? <p className="text-sm text-theme-text-secondary">No node IDs reported.</p>
         : <p className="text-sm break-all">{nodeIds.slice(0, 50).join(', ')}{nodeIds.length > 50 && `; ${nodeIds.length - 50} more in YAML`}</p>}
     </Section>
-    {storage.length > 0 && <Section title="Storage" defaultExpanded>
+    {storage.length > 0 && <Section title="Storage (spec)" defaultExpanded>
       <ul className="text-sm space-y-1">{storage.slice(0, MAX_LISTED).map((line, i) => <li key={i}>{line}</li>)}</ul>
     </Section>}
     <ConditionsSection conditions={sanitizedConditions(status)} getConditionTone={conditionTone(state.snapshotCurrent)} />

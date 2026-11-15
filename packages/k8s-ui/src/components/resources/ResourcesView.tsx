@@ -377,7 +377,7 @@ function phonePinnedLeft(compareMode: boolean | undefined, showCheckbox: boolean
 // sort icon without the header render and the width math drifting apart.
 const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
   'connectCluster', 'connectorClass', 'connectorTasks',
-  'kafkaVersion', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
+  'kafkaVersion', 'kafkaWarnings', 'kafkaPools', 'kafkaListeners', 'poolKafka', 'poolRoles', 'poolReplicas',
   'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
   'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
   'cpu', 'memory', 'containers',
@@ -612,6 +612,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
     { key: 'status', label: 'Operator Status', width: 'w-44 shrink-0', tooltip: 'Strimzi reconciliation status. Ready does not establish that clients can connect.' },
+    { key: 'kafkaWarnings', label: 'Warnings', width: 'w-40 shrink-0', tooltip: 'Reasons of the Warning conditions Strimzi reported. A warning does not fail reconciliation but can mean data loss on restart or an ignored change.' },
     { key: 'kafkaVersion', label: 'Kafka Version', width: 'w-32 shrink-0' },
     { key: 'kafkaPools', label: 'Node Pools', width: 'min-w-40' },
     { key: 'kafkaListeners', label: 'Listeners', width: 'min-w-40' },
@@ -620,10 +621,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   kafkanodepools: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-40 shrink-0' },
-    { key: 'status', label: 'Operator Status', width: 'w-44 shrink-0', tooltip: 'Strimzi reconciliation status, not a live check of the broker Pods.' },
+    { key: 'status', label: 'Operator Status', width: 'w-44 shrink-0', tooltip: 'Whether Strimzi applied the pool\'s current spec. Broker health is reported on the owning Kafka.' },
     { key: 'poolKafka', label: 'Kafka', width: 'min-w-32' },
     { key: 'poolRoles', label: 'Roles', width: 'w-40 shrink-0' },
-    { key: 'poolReplicas', label: 'Replicas', width: 'w-28 shrink-0', tooltip: 'Reported / desired replicas. A difference is expected while the pool scales.' },
+    { key: 'poolReplicas', label: 'Replicas', width: 'w-28 shrink-0', tooltip: 'Node IDs Strimzi assigned / desired replicas. Not a count of running Pods.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   opentelemetrycollectors: [
