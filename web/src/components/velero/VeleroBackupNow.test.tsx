@@ -45,10 +45,26 @@ describe('Back up now', () => {
     expect(dialog).toContain('payments')
     expect(dialog).toContain('primary')
     expect(dialog).toContain('168h0m0s')
-    expect(dialog).toContain("Velero waits for it to finish before submitting the schedule's next run")
+    expect(dialog).toContain("while it is new or in progress, Velero does not submit the schedule's next run")
     const confirm = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Back up now').at(-1)!
     act(() => confirm.click())
-    expect(state.mutate).toHaveBeenCalledWith({ namespace: 'velero', name: 'nightly', resourceVersion: '42' }, expect.anything())
+    expect(state.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ namespace: 'velero', name: 'nightly', resourceVersion: '42', backupName: expect.stringMatching(/^nightly-\d{14}$/) }),
+      expect.anything(),
+    )
+  })
+
+  it('keeps the schedule it showed, and refuses one that changed while it was open', () => {
+    const root = render(<VeleroBackupNow schedule={nightly} reading={reading({ name: 'nightly' })} />)
+    act(() => buttonNamed('Back up now')!.click())
+    const edited = { ...nightly, metadata: { ...nightly.metadata, resourceVersion: '43' }, spec: { ...nightly.spec, template: { ...nightly.spec.template, storageLocation: 'elsewhere' } } }
+    act(() => root.render(<VeleroBackupNow schedule={edited} reading={reading({ name: 'nightly' })} />))
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('primary')
+    expect(text).not.toContain('elsewhere')
+    expect(text).toContain('This schedule changed while this was open')
+    const confirm = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Back up now').at(-1)!
+    expect(confirm.disabled).toBe(true)
   })
 
   it('cannot start a backup that would fail', () => {

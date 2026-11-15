@@ -17,9 +17,10 @@ Both are listed under the **Velero** category in the Resources sidebar, above th
 
 The Schedule drawer's **Back up now** creates a Backup from the schedule's template, exactly as `velero backup create --from-schedule` does (`pkg/velero.BackupFromSchedule`): the template as its spec, the template's labels (else the schedule's) plus `velero.io/schedule-name`, the schedule's annotations except kubectl's last-applied, an owner reference when the schedule sets `useOwnerReferencesInBackup`, and the name `<schedule>-<UTC timestamp>`. The confirmation shows what it backs up, where it is stored and how long it is kept.
 
-- **It is one of the schedule's runs.** The label makes Velero hold the schedule's next run while it is in progress, and Radar lists it among the runs; the confirmation says so.
+- **It is one of the schedule's runs.** Radar lists it among the runs, and while it is new or in progress Velero does not submit the schedule's next run (the controller's hold covers only those phases, not queued or finalizing ones); the confirmation says so.
 - **As the caller.** The schedule is read and the Backup created with the caller's identity, so the apiserver enforces `get schedules` and `create backups`.
-- **Bound to what was reviewed.** The request carries the schedule's `resourceVersion`; a schedule edited since is refused (409).
+- **Bound to what was reviewed.** The confirmation freezes the schedule it shows. The request carries that `resourceVersion`, and a schedule edited since is refused (409); the dialog disables itself if the schedule changes while open.
+- **Once per confirmation.** The confirmation names the backup when it opens (`<schedule>-<UTC timestamp>`); sending it again after a lost answer returns that backup instead of starting another.
 - **Refused when it would fail:** a schedule whose name does not fit a label (409; the button is disabled).
 - `POST /api/velero/schedules/{namespace}/{name}/backup`, behind capability `veleroBackupNow`.
 

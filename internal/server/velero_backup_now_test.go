@@ -95,6 +95,30 @@ func TestVeleroBackupNow(t *testing.T) {
 		}
 	})
 
+	// The answer to the first request was lost and the same confirmation is
+	// sent again: it gets the backup it already made, and no second one.
+	t.Run("returns the backup a repeated confirmation already created", func(t *testing.T) {
+		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
+		body := `{"resourceVersion":"7","name":"nightly-20261115210509"}`
+		first := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", body, nil)
+		again := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", body, nil)
+		if first.Code != http.StatusOK || again.Code != http.StatusOK || !strings.Contains(again.Body.String(), "nightly-20261115210509") {
+			t.Fatalf("first %d %s, again %d %s", first.Code, first.Body.String(), again.Code, again.Body.String())
+		}
+		list, err := dyn.Resource(veleroBackupGVR).Namespace("velero").List(t.Context(), metav1.ListOptions{})
+		if err != nil || len(list.Items) != 1 {
+			t.Fatalf("backups = %d (%v), want exactly one", len(list.Items), err)
+		}
+	})
+
+	t.Run("refuses a name that is not this schedule's", func(t *testing.T) {
+		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
+		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7","name":"other-20261115210509"}`, nil)
+		if rec.Code != http.StatusBadRequest || createdBackups(dyn) != 0 {
+			t.Fatalf("status = %d creates = %d, want 400 and nothing created", rec.Code, createdBackups(dyn))
+		}
+	})
+
 	t.Run("refuses a schedule edited since it was reviewed", func(t *testing.T) {
 		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "8"))
 		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7"}`, nil)

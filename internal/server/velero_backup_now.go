@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,11 @@ type VeleroBackupNowRequest struct {
 	// ResourceVersion of the Schedule shown in the confirmation. A schedule
 	// edited since is refused, so the backup is the one that was reviewed.
 	ResourceVersion string `json:"resourceVersion"`
+	// Name the confirmation chose for the backup, <schedule>-<14 digits>.
+	// Repeating a request whose answer was lost returns the backup it already
+	// created instead of starting another. Optional; the server names it
+	// otherwise.
+	Name string `json:"name,omitempty"`
 }
 
 // VeleroBackupNowResponse names the Backup created.
@@ -88,6 +94,10 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Name != "" && !backupNowName(name).MatchString(req.Name) {
+		s.writeError(w, http.StatusBadRequest, "name must be the schedule's name followed by a 14-digit timestamp")
+		return
+	}
 	backup, err := veleropkg.BackupFromSchedule(schedule, time.Now())
 	if errors.Is(err, veleropkg.ErrScheduleCannotRun) {
 		s.writeError(w, http.StatusConflict, "this schedule's name is longer than 63 characters, so Velero cannot label a backup from it and the backup would fail")
@@ -98,11 +108,24 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Name != "" {
+		backup.SetName(req.Name)
+	}
+
 	created, err := client.Resource(veleroBackupGVR).Namespace(namespace).Create(r.Context(), backup, metav1.CreateOptions{})
 	switch {
 	case err == nil:
 	case apierrors.IsAlreadyExists(err):
-		s.writeError(w, http.StatusConflict, "a backup from this schedule was created this second; wait a moment and try again")
+		// The same confirmation sent again (its answer was lost): the backup
+		// it asked for exists, so say so rather than start a second one.
+		if req.Name != "" {
+			if existing, getErr := client.Resource(veleroBackupGVR).Namespace(namespace).Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil &&
+				existing.GetLabels()[veleropkg.ScheduleNameLabel] == name {
+				s.writeJSON(w, VeleroBackupNowResponse{Namespace: existing.GetNamespace(), Name: existing.GetName()})
+				return
+			}
+		}
+		s.writeError(w, http.StatusConflict, "a backup named "+backup.GetName()+" already exists; wait a moment and try again")
 		return
 	case apierrors.IsForbidden(err):
 		s.writeError(w, http.StatusForbidden, "no access to create Velero backups in namespace "+namespace)
@@ -113,4 +136,10 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, VeleroBackupNowResponse{Namespace: created.GetNamespace(), Name: created.GetName()})
+}
+
+// backupNowName matches the names a confirmation may choose for a schedule's
+// backup: what Velero's CLI names it, <schedule>-<UTC timestamp>.
+func backupNowName(schedule string) *regexp.Regexp {
+	return regexp.MustCompile("^" + regexp.QuoteMeta(schedule) + `-\d{14}$`)
 }

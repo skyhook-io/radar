@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	appsv1 "k8s.io/api/apps/v1"
@@ -115,6 +116,28 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 		_, installed = discovery.GetGVRWithGroup("Schedule", veleropkg.Group)
 	}
 
+	// Where Velero is installed: every namespace Radar holds any Velero kind
+	// in. Each kind is still authorized there on its own, so an installation
+	// with no Backups yet is checked for Backups too, and reads as none rather
+	// than denied.
+	var installationsOnce sync.Once
+	var installationNamespaces []string
+	installations := func(ctx context.Context) []string {
+		installationsOnce.Do(func() {
+			seen := map[string]bool{}
+			for _, k := range velerosvc.WorkspaceKinds() {
+				for _, ns := range veleroNamespacesHeld(ctx, cache, k, budget) {
+					if !seen[ns] {
+						seen[ns] = true
+						installationNamespaces = append(installationNamespaces, ns)
+					}
+				}
+			}
+			sort.Strings(installationNamespaces)
+		})
+		return installationNamespaces
+	}
+
 	return &velerosvc.Reader{
 		ClusterContext: clusterContext,
 		Observations: velerosvc.Observations{
@@ -125,7 +148,7 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 				}
-				candidates := func() []string { return veleroNamespacesHeld(ctx, cache, k, budget) }
+				candidates := func() []string { return installations(ctx) }
 				access, items := s.readWorkspaceKindAmong(r.WithContext(ctx), cache, k, namespaces, []string{veleropkg.Group}, budget, candidates, true)
 				if !current() {
 					return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
@@ -143,12 +166,13 @@ func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {
 	}, true
 }
 
-// veleroNamespacesHeld is where Radar's own identity holds objects of k, the
-// only namespaces worth checking a caller without cluster-wide list access
-// against. Velero keeps its objects in one or two namespaces, so this costs a
-// handful of access checks where every namespace in the cluster would cost one
-// each, and it does not depend on Radar being able to list Namespaces. When
-// Radar watches k namespace by namespace, its watched namespaces stand in.
+// veleroNamespacesHeld is where Radar's own identity holds objects of k. Their
+// union over the Velero kinds is where a caller without cluster-wide list
+// access is checked: Velero keeps its objects in one or two namespaces, so
+// this costs a handful of access checks where every namespace in the cluster
+// would cost one each, and it does not depend on Radar listing Namespaces.
+// When Radar watches k namespace by namespace, its watched namespaces stand
+// in.
 func veleroNamespacesHeld(ctx context.Context, cache *k8s.ResourceCache, k integration.WorkspaceKind, budget *syncBudget) []string {
 	if list, err := listKindInGroups(ctx, cache, k, nil, []string{veleropkg.Group}, budget); err == nil {
 		seen := map[string]bool{}

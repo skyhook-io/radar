@@ -463,3 +463,26 @@ func TestVeleroWorkspace_RestrictedCallerWithoutNamespaceListing(t *testing.T) {
 		t.Errorf("schedules coverage %+v, want partial naming nothing", cov)
 	}
 }
+
+// An installation before its first backup (or after every backup expired)
+// holds no Backups, and a restricted reader's Backups read there is still
+// made: no runs reads "none kept", not "unknown".
+func TestVeleroWorkspace_RestrictedCallerBeforeTheFirstBackup(t *testing.T) {
+	seedCNPGWorkspace(t, veleroWorkspaceTestKinds, lateHourlySchedule("velero"))
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{}}
+	for _, resource := range []string{"schedules", "backups", "backupstoragelocations", "restores", "backuprepositories"} {
+		allow(perms, veleroGroup, resource, "", false)
+		allow(perms, veleroGroup, resource, "velero", true)
+	}
+	env.srv.permCache.Set("velero-reader", nil, perms)
+
+	got := getVeleroWorkspace(t, env.authGet(t, "/api/velero/workspace", "velero-reader", ""))
+	if cov := got.Coverage["backups"]; cov.State == integration.KindCoverageDenied {
+		t.Fatalf("backups coverage %+v: an empty installation read as denied", cov)
+	}
+	s := scheduleNamed(got, "velero", "hourly")
+	if s == nil || s.Runs.Read != veleropkg.RunsReadFull || s.Runs.Kept != 0 {
+		t.Fatalf("runs %+v, want read and none kept", s)
+	}
+}

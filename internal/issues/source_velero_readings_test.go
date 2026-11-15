@@ -231,3 +231,28 @@ func TestVeleroReadingCategories(t *testing.T) {
 		t.Errorf("maintenance classified %s", got)
 	}
 }
+
+// The readings are raised while visiting the storage locations, so a request
+// for Schedules or Deployments alone must still visit them.
+func TestVeleroReadingsSurviveAKindFilter(t *testing.T) {
+	objs := hourlyLastRan(4 * time.Hour)
+	location := veleroLocation(time.Second)
+	dynamic := map[schema.GroupVersionResource][]*unstructured.Unstructured{
+		veleroBSLGVR: {location}, veleroScheduleGVR: {objs[0]}, veleroBackupGVR: {objs[1]},
+	}
+	kinds := map[schema.GroupVersionResource]string{veleroBSLGVR: "BackupStorageLocation", veleroScheduleGVR: "Schedule", veleroBackupGVR: "Backup"}
+	p := &veleroReadingsProvider{fakeProvider: &fakeProvider{dynamic: dynamic, kinds: kinds}, deployments: []*appsv1.Deployment{veleroServerDeployment(0)}, deployRead: true}
+	for _, kind := range []string{"Schedule", "Deployment"} {
+		f := Filters{Kinds: []string{kind}}
+		got := applyFilters(detectGenericCRDIssues(p, f, nil, &uncheckedSet{}), f)
+		want := map[string]string{"Schedule": ReasonVeleroScheduleLate, "Deployment": ReasonVeleroServerNotRunning}[kind]
+		if _, ok := byReason(got)[want]; !ok {
+			t.Errorf("kind=%s returned %v, want %s", kind, byReason(got), want)
+		}
+		for _, i := range got {
+			if !strings.EqualFold(i.Kind, kind) {
+				t.Errorf("kind=%s returned a %s row", kind, i.Kind)
+			}
+		}
+	}
+}

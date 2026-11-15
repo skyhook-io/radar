@@ -8,6 +8,11 @@ import { VELERO_GROUP } from './routes'
 // Velero writes the schedule's name into a label on every backup it makes.
 const MAX_LABEL_VALUE = 63
 
+/** The name Velero's CLI gives a backup from a schedule: <schedule>-<UTC timestamp>. */
+function backupNameAt(schedule: string, at: Date): string {
+  return `${schedule}-${at.toISOString().replace(/[-:T]/g, '').slice(0, 14)}`
+}
+
 function list(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
 }
@@ -24,14 +29,18 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
   onNavigate?: (ref: ResourceRef) => void
 }) {
   const { support } = useRadarFeature('veleroBackupNow')
-  const [open, setOpen] = useState(false)
+  // What the confirmation shows, frozen when it opens: a refresh while it is
+  // open must not swap in a schedule the user did not review.
+  const [reviewed, setReviewed] = useState<{ resourceVersion: string; template: any; backupName: string } | null>(null)
   const backupNow = useVeleroBackupNow()
   const namespace: string = schedule?.metadata?.namespace ?? ''
   const name: string = schedule?.metadata?.name ?? ''
   const resourceVersion: string = schedule?.metadata?.resourceVersion ?? ''
   if (support !== 'supported' || !namespace || !name) return null
 
-  const template = schedule?.spec?.template ?? {}
+  const open = reviewed !== null
+  const changed = open && resourceVersion !== reviewed.resourceVersion
+  const template = (open ? reviewed.template : schedule?.spec?.template) ?? {}
   const included = list(template.includedNamespaces)
   const excluded = list(template.excludedNamespaces)
   const namespaces = included.length === 0 || included.includes('*') ? 'All namespaces' : included.join(', ')
@@ -45,7 +54,7 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
       type="button"
       onClick={() => {
         backupNow.reset()
-        setOpen(true)
+        setReviewed({ resourceVersion, template: schedule?.spec?.template ?? {}, backupName: backupNameAt(name, new Date()) })
       }}
       disabled={cannotRun || !resourceVersion}
       className="btn-secondary inline-flex items-center gap-1.5 px-2.5 py-1 text-xs disabled:opacity-50"
@@ -79,9 +88,13 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
       )}
       <ConfirmDialog
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => setReviewed(null)}
         onConfirm={() =>
-          backupNow.mutate({ namespace, name, resourceVersion }, { onSuccess: () => setOpen(false) })
+          reviewed &&
+          backupNow.mutate(
+            { namespace, name, resourceVersion: reviewed.resourceVersion, backupName: reviewed.backupName },
+            { onSuccess: () => setReviewed(null) },
+          )
         }
         title="Back up now"
         message={`Create a backup now with schedule ${name}'s settings.`}
@@ -89,6 +102,7 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
         variant="warning"
         showWarning={false}
         isLoading={backupNow.isPending}
+        confirmDisabled={changed}
       >
         <div className="space-y-3 px-4 pb-1 text-sm">
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
@@ -100,8 +114,11 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
             <dd>{template.ttl || "The Velero server's default (30 days unless it was changed)"}</dd>
           </dl>
           <p className="text-theme-text-secondary">
-            It counts as one of this schedule's runs, so Velero waits for it to finish before submitting the schedule's next run.
+            It counts as one of this schedule's runs: while it is new or in progress, Velero does not submit the schedule's next run.
           </p>
+          {changed && (
+            <p className="text-warning-text">This schedule changed while this was open. Close it and review the schedule again.</p>
+          )}
           {serverDown && (
             <p className="text-warning-text">The Velero server is not running, so the backup waits until it starts.</p>
           )}

@@ -59,10 +59,12 @@ export function useVeleroScheduleActivity(namespace: string, name: string, optio
 export function useVeleroBackupNow() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ namespace, name, resourceVersion }: { namespace: string; name: string; resourceVersion: string }) => {
+    // backupName is chosen when the confirmation opens, so sending the same
+    // confirmation again returns the backup it already created.
+    mutationFn: async ({ namespace, name, resourceVersion, backupName }: { namespace: string; name: string; resourceVersion: string; backupName?: string }) => {
       const response = await apiFetch(
         `${getApiBase()}/velero/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/backup`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resourceVersion }) },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resourceVersion, name: backupName }) },
       )
       if (!response.ok) {
         const error = await readErrorBody(response)

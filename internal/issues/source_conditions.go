@@ -66,7 +66,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// entirely. Match in lowercase (same as applyFilters) so
 		// "Pod"/"pod" and CRD-typed "MyResource"/"myresource" both
 		// compare equal.
-		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] {
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] && !veleroReadingsWanted(gvr, kind, wantKind) {
 			continue
 		}
 		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)
@@ -793,3 +793,11 @@ func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, t
 // ---------------------------------------------------------------------------
 // Source-specific normalization
 // ---------------------------------------------------------------------------
+
+// veleroReadingsWanted: the Velero readings are raised while visiting the
+// storage-location list but are about Schedules, the server Deployment and the
+// locations, so a request for any of those kinds still visits it. Rows of
+// other kinds are dropped by the kind filter afterwards.
+func veleroReadingsWanted(gvr schema.GroupVersionResource, kind string, wantKind map[string]bool) bool {
+	return gvr.Group == VeleroGroup && kind == "BackupStorageLocation" && (wantKind["schedule"] || wantKind["deployment"])
+}
