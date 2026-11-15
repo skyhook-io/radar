@@ -29,13 +29,15 @@ var istioNamespaces = []string{"istio-system", "istio", "default"}
 // It uses the shared prometheus.Client for Prometheus discovery and queries,
 // rather than maintaining its own connection state.
 type IstioSource struct {
-	k8sClient kubernetes.Interface
-	queryFn   promQueryFunc
+	k8sClient          kubernetes.Interface
+	queryFn            promQueryFunc
+	waypointsFn        func() map[istioWorkload]bool
+	ambientNamespaceFn func() []string
 }
 
 // NewIstioSource creates a new Istio traffic source
 func NewIstioSource(client kubernetes.Interface) *IstioSource {
-	s := &IstioSource{k8sClient: client}
+	s := &IstioSource{k8sClient: client, waypointsFn: cachedIstioWaypoints, ambientNamespaceFn: cachedAmbientNamespaces}
 	s.queryFn = s.defaultQuery
 	return s
 }
@@ -147,9 +149,11 @@ func (s *IstioSource) defaultQuery(ctx context.Context, query string) (*prom.Que
 	return client.Query(ctx, query)
 }
 
-// istioReporterSelector picks one side's report of each request: the
-// destination proxy's.
-const istioReporterSelector = `reporter="destination"`
+// istioReporterSelector picks the receiving side's report of each request:
+// the destination sidecar's, or in ambient mode the destination's waypoint's.
+// A destination is either sidecar-injected or behind a waypoint, so the two
+// never report the same request.
+const istioReporterSelector = `reporter=~"destination|waypoint"`
 
 const istioTCPMetric = "istio_tcp_connections_opened_total"
 
@@ -229,7 +233,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		return scopeCheckFailed("istio"), nil
 	}
 
-	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, &missing)
+	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, s.ambientNamespaceFn(), &missing)
 	if errors.Is(err, errIstioPrometheusUnavailable) {
 		return &FlowsResponse{
 			Source:    "istio",
@@ -248,10 +252,13 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}, nil
 	}
 
+	waypoints := s.waypointsFn()
+	httpFlows = withoutWaypointHops(httpFlows, waypoints)
 	httpCount := len(httpFlows)
 	tcpFlows, tcpErr := []Flow(nil), errIstioTCPUnchecked
 	if !scopes.tcpUnchecked {
 		tcpFlows, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
+		tcpFlows = withoutWaypointHops(tcpFlows, waypoints)
 	}
 	if tcpErr != nil {
 		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", tcpErr)
@@ -337,13 +344,13 @@ type istioSeriesKey struct {
 // istioHTTPGroupBy is shared by every HTTP query so their series join one to one.
 const istioHTTPGroupBy = "source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol"
 
-// istioRateQuery builds `sum by (groupBy) (rate(metric{reporter="destination"extra}[5m]))`
+// istioRateQuery builds `sum by (groupBy) (rate(metric{selector}[5m]))`
 // within the cluster scope. A namespace filter has to become two OR'd
 // selectors: PromQL cannot express "source OR destination namespace matches"
 // inside one label selector.
-func istioRateQuery(groupBy, metric, extra, namespace string, sc clusterScope) string {
+func istioRateQuery(groupBy, metric, selector, namespace string, sc clusterScope) string {
 	sum := func(more string) string {
-		return fmt.Sprintf(`sum by (%s) (rate(%s{%s}[5m]))`, groupBy, metric, sc.with(istioReporterSelector+extra+more))
+		return fmt.Sprintf(`sum by (%s) (rate(%s{%s}[5m]))`, groupBy, metric, sc.with(selector+more))
 	}
 	if namespace == "" {
 		return sum("")
@@ -351,6 +358,23 @@ func istioRateQuery(groupBy, metric, extra, namespace string, sc clusterScope) s
 	safeNS := prom.SanitizeLabelValue(namespace)
 	return sum(fmt.Sprintf(`, source_workload_namespace="%s"`, safeNS)) + " or " +
 		sum(fmt.Sprintf(`, destination_workload_namespace="%s"`, safeNS))
+}
+
+// istioHTTPQuery reads one HTTP figure by series from the side that received
+// the requests. Requests into an ambient namespace that no receiving proxy
+// reported (a sidecar or ingress gateway calling a workload with no waypoint,
+// or one that skipped it) are read from the client proxy instead, as Kiali
+// does. A series takes the client's figures only when the receiving side
+// reported none of its requests, so the two reports never add up.
+func istioHTTPQuery(metric, extra, namespace string, sc clusterScope, ambientNamespaces []string) string {
+	received := istioRateQuery(istioHTTPGroupBy, metric, istioReporterSelector+extra, namespace, sc)
+	if len(ambientNamespaces) == 0 {
+		return received
+	}
+	intoAmbient := fmt.Sprintf(`reporter="source", destination_workload_namespace=~"%s"`, strings.Join(ambientNamespaces, "|"))
+	sent := istioRateQuery(istioHTTPGroupBy, metric, intoAmbient+extra, namespace, sc)
+	anyReceived := istioRateQuery(istioHTTPGroupBy, "istio_requests_total", istioReporterSelector, namespace, sc)
+	return fmt.Sprintf(`(%s) or ((%s) unless (%s))`, received, sent, anyReceived)
 }
 
 func istioSeriesKeyFrom(labels map[string]string) istioSeriesKey {
@@ -387,23 +411,26 @@ func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (m
 // Response codes are aggregated (not split per-code) and a separate error query
 // provides 5xx error rates per series. Optional figures that cannot be read are
 // appended to missing.
-func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc clusterScope, missing *[]string) ([]Flow, error) {
-	result, err := s.queryFn(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", "", opts.Namespace, sc))
+func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc clusterScope, ambientNamespaces []string, missing *[]string) ([]Flow, error) {
+	query := func(metric, extra string) string {
+		return istioHTTPQuery(metric, extra, opts.Namespace, sc, ambientNamespaces)
+	}
+	result, err := s.queryFn(ctx, query("istio_requests_total", ""))
 	if err != nil {
 		return nil, err
 	}
 
-	errorRates, err := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", `, response_code=~"5.."`, opts.Namespace, sc))
+	errorRates, err := s.queryHTTPSeriesRates(ctx, query("istio_requests_total", `, response_code=~"5.."`))
 	if err != nil {
 		log.Printf("[istio] Error querying 5xx rates (continuing without error data): %v", err)
 		*missing = append(*missing, "5xx error rates")
 	}
 
-	bytesSent, sentErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_request_bytes_sum", "", opts.Namespace, sc))
+	bytesSent, sentErr := s.queryHTTPSeriesRates(ctx, query("istio_request_bytes_sum", ""))
 	if sentErr != nil {
 		log.Printf("[istio] Error querying request bytes (continuing without byte data): %v", sentErr)
 	}
-	bytesRecv, recvErr := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_response_bytes_sum", "", opts.Namespace, sc))
+	bytesRecv, recvErr := s.queryHTTPSeriesRates(ctx, query("istio_response_bytes_sum", ""))
 	if recvErr != nil {
 		log.Printf("[istio] Error querying response bytes (continuing without byte data): %v", recvErr)
 	}
@@ -487,7 +514,7 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc c
 
 // queryTCPFlows queries istio_tcp_connections_opened_total for TCP traffic
 func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) ([]Flow, error) {
-	query := istioRateQuery("source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name", istioTCPMetric, "", opts.Namespace, sc)
+	query := istioRateQuery("source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name", istioTCPMetric, istioReporterSelector, opts.Namespace, sc)
 
 	result, err := s.queryFn(ctx, query)
 	if err != nil {
