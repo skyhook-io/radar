@@ -268,6 +268,19 @@ func TestDynamicReadableIndexedReadsOnlyItsServingInformers(t *testing.T) {
 	if !ok || !slices.Equal(names(beta), []string{"b"}) {
 		t.Fatalf("beta from the cluster-wide informer = %v, %v; want beta's only", names(beta), ok)
 	}
+	for _, c := range []struct {
+		keys []string
+		want []string
+	}{
+		{[]string{"alpha", "beta"}, []string{"a", "b", "other"}},
+		{[]string{"beta", "alpha", "beta"}, []string{"a", "b", "other"}},
+		{nil, nil},
+	} {
+		got, ok := d.ReadableIndexed(gvr, "", cache.NamespaceIndex, c.keys...)
+		if !ok || !slices.Equal(names(got), c.want) {
+			t.Errorf("namespace keys %q = %v, %v; want %v", c.keys, names(got), ok, c.want)
+		}
+	}
 }
 
 // The lookup itself refuses a store that hasn't loaded, for callers that
