@@ -486,7 +486,7 @@ func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
 					return historyPodAccess{Access: ownership.Unrestricted(), decision: decision}
 				}
 				traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-				rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse, "")
+				rel, _, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse, "")
 				if rel == nil {
 					t.Fatal("answer unavailable")
 				}
