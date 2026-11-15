@@ -44,19 +44,6 @@ func mergeCoverage(a, b RelationCoverage) RelationCoverage {
 	return out
 }
 
-func refFor(r resourceid.Ref) ResourceRef {
-	return ResourceRef{Kind: r.Kind, Namespace: r.Namespace, Name: r.Name, Group: r.Group}
-}
-
-func appendRefs(list []ResourceRef, refs ...ResourceRef) []ResourceRef {
-	for _, r := range refs {
-		if !slices.Contains(list, r) {
-			list = append(list, r)
-		}
-	}
-	return list
-}
-
 // ApplyConfigReferences adds the config-reference family's answers about
 // subject to rel, beside what other families put in the same fields: the
 // ConfigMaps and Secrets it declares to ConfigRefs, its claims to
@@ -70,12 +57,12 @@ func ApplyConfigReferences(rel *Relationships, subject resourceid.Ref, reference
 		if d.State != relations.TargetPresent {
 			continue
 		}
-		ref := refFor(d.Ref)
+		ref := refOf(d.Ref)
 		switch d.Ref.Kind {
 		case "ConfigMap", "Secret":
-			rel.ConfigRefs = appendRefs(rel.ConfigRefs, ref)
+			rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, ref)
 		case "PersistentVolumeClaim":
-			rel.StorageRefs = appendRefs(rel.StorageRefs, ref)
+			rel.StorageRefs = appendResourceRef(rel.StorageRefs, ref)
 		case "ServiceAccount":
 			// A Pod's own ServiceAccount is set from its spec, whether or not
 			// Radar holds it.
@@ -85,7 +72,7 @@ func ApplyConfigReferences(rel *Relationships, subject resourceid.Ref, reference
 		}
 	}
 	for _, c := range consumers.Consumers {
-		rel.Consumers = appendRefs(rel.Consumers, refFor(c.Ref))
+		rel.Consumers = appendResourceRef(rel.Consumers, refOf(c.Ref))
 	}
 	if rel.Coverage == nil {
 		rel.Coverage = map[string]RelationCoverage{}

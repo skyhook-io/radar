@@ -581,6 +581,34 @@ describe('RelatedResourcesSection config references', () => {
     expect(html).not.toContain('Used By')
   })
 
+  it("says a workload uses something when all it declares is hidden from the viewer", () => {
+    const html = renderToString(
+      <RelatedResourcesSection relationships={{ coverage: { configReferences: { narrowed: true } } }} kind="deployments" />,
+    )
+    expect(html).toContain('Configuration')
+    expect(html).toContain('It uses objects you can')
+  })
+
+  it('puts the note under Storage when claims are all that is shown', () => {
+    const claim = { kind: 'PersistentVolumeClaim', namespace: 'shop', name: 'data' }
+    const html = renderToString(
+      <RelatedResourcesSection relationships={{ storageRefs: [claim], coverage: { configReferences: { narrowed: true } } }} kind="pods" />,
+    )
+    expect(html).toContain('Storage')
+    expect(html).toContain('Only ones you can view are listed.')
+    expect(html).not.toContain('Configuration')
+  })
+
+  it("keeps an uncollected kind to a hint when nothing uses a ConfigMap, as it would show on every one", () => {
+    const html = renderToString(
+      <RelatedResourcesSection
+        relationships={{ coverage: { configReferences: { notChecked: [{ group: 'argoproj.io', kind: 'Rollout', namespace: 'shop', reason: 'radar_kind_not_collected' }] } } }}
+        kind="configmaps"
+      />,
+    )
+    expect(html).not.toContain('Used By')
+  })
+
   it("says outright when Radar couldn't answer at all", () => {
     const html = renderToString(
       <RelatedResourcesSection relationships={{ coverage: { configReferences: { notChecked: [{ reason: 'cluster_connecting' }] } } }} kind="deployments" />,

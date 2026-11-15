@@ -878,8 +878,12 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
   const unanswered = ownershipUnanswered(relationships.ownership)
   const several = !relationships.owner && relationships.ownership?.primaryOwnerState === 'several'
   const ownerMissing = relationships.owner || several ? undefined : ownerNote(relationships.ownership)
+  // The family's note goes under the group it explains: Used By for a
+  // declared kind; otherwise Configuration, or Storage when claims are all
+  // this resource declares that is shown.
   const configNoteOnUsers = !!kind && CONFIG_TARGET_KINDS.has(kind)
-  const configNote = familyNote(relationships.coverage?.configReferences, configNoteOnUsers ? 'what uses this' : 'what this uses')
+  const configNoteOnStorage = !configNoteOnUsers && configRefs.length === 0 && (relationships.storageRefs?.length ?? 0) > 0
+  const configNote = familyNote(relationships.coverage?.configReferences, configNoteOnUsers ? 'what uses this' : 'what this uses', !configNoteOnUsers && configRefs.length === 0 && !configNoteOnStorage)
   let childrenCoverage = childrenNote(relationships.ownership)
   const noChildren = !relationships.children?.length && !relationships.olderRevisions?.length
   if (noChildren && childrenCoverage?.hint && !childrenCoverage.text && kind && KINDS_WITH_CHILDREN.has(kind)) {
@@ -979,8 +983,8 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
         {relationships.pods && relationships.pods.length > 0 && (
           <RelationshipGroup label="Pods" refs={dedupeResourceRefs(relationships.pods)} onNavigate={onNavigate} />
         )}
-        {(configRefs.length > 0 || (!configNoteOnUsers && configNote?.text)) && (
-          <RelationshipGroup label="Configuration" refs={dedupeResourceRefs(configRefs)} onNavigate={onNavigate} note={configNoteOnUsers ? undefined : configNote} />
+        {(configRefs.length > 0 || (!configNoteOnUsers && !configNoteOnStorage && configNote?.text)) && (
+          <RelationshipGroup label="Configuration" refs={dedupeResourceRefs(configRefs)} onNavigate={onNavigate} note={configNoteOnUsers || configNoteOnStorage ? undefined : configNote} />
         )}
         {(consumers.length > 0 || (configNoteOnUsers && configNote?.text)) && (
           <RelationshipGroup
@@ -995,7 +999,7 @@ export function RelatedResourcesSection({ relationships, onNavigate, kind, track
           <RelationshipGroup label="Autoscaler" refs={dedupeResourceRefs(relationships.scalers)} onNavigate={onNavigate} />
         )}
         {relationships.storageRefs && relationships.storageRefs.length > 0 && (
-          <RelationshipGroup label="Storage" refs={dedupeResourceRefs(relationships.storageRefs)} onNavigate={onNavigate} />
+          <RelationshipGroup label="Storage" refs={dedupeResourceRefs(relationships.storageRefs)} onNavigate={onNavigate} note={configNoteOnStorage ? configNote : undefined} />
         )}
         {relationships.pdbs && relationships.pdbs.length > 0 && (
           <RelationshipGroup label="Disruption Budget" refs={dedupeResourceRefs(relationships.pdbs)} onNavigate={onNavigate} />
@@ -1107,8 +1111,9 @@ function childrenNote(coverage: OwnershipCoverage | undefined): RelationshipNote
 // familyNote says what a relation family's answer may be missing, the way
 // childrenNote does for children: kinds Radar doesn't collect are a hint;
 // kinds it couldn't check for any other reason, and a list cut short, are
-// said outright.
-function familyNote(coverage: RelationCoverage | undefined, question: string): RelationshipNote | undefined {
+// said outright. noneListed is set where the note's group lists nothing of
+// what the resource itself declares.
+function familyNote(coverage: RelationCoverage | undefined, question: string, noneListed: boolean): RelationshipNote | undefined {
   if (!coverage) return undefined
   const uncollected = new Set<string>()
   let someNamespaces = false
@@ -1126,6 +1131,9 @@ function familyNote(coverage: RelationCoverage | undefined, question: string): R
   if (coverage.narrowed) hint.push('Only ones you can view are listed.')
   const text: string[] = []
   if (unanswered) text.push(`Couldn't check ${question}: ${unanswered}.`)
+  // Narrowed with nothing listed means it declares only what the viewer may
+  // not read: say so, or the group would be empty and hidden.
+  if (coverage.narrowed && noneListed) text.push("It uses objects you can't view.")
   if (pressing.size > 0) text.push(`Couldn't check ${Array.from(pressing, ([kind, why]) => `${kind} (${why})`).join(', ')}.`)
   if (coverage.truncated) text.push(coverage.total ? `More than shown: ${coverage.total} in all.` : 'More than shown.')
   const note: RelationshipNote = {}
