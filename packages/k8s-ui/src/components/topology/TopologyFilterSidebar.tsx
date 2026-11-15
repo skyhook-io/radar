@@ -7,111 +7,11 @@ import {
   AlertTriangle,
   Zap
 } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { NodeKind, TopologyNode } from '../../types'
 import { getTopologyIcon } from '../../utils/resource-icons'
+import { TOPOLOGY_RESOURCE_KINDS as RESOURCE_KINDS } from '../../utils/resource-kind-colors'
 
-// Resource kind configuration
-const RESOURCE_KINDS: {
-  kind: NodeKind
-  label: string
-  icon: LucideIcon
-  color: string
-  category: 'gitops' | 'workloads' | 'networking' | 'config' | 'scaling' | 'custom'
-}[] = [
-  // GitOps (ArgoCD + FluxCD)
-  { kind: 'Application', label: 'Application', icon: getTopologyIcon('Application'), color: 'text-orange-400', category: 'gitops' },
-  { kind: 'Kustomization', label: 'Kustomization', icon: getTopologyIcon('Kustomization'), color: 'text-sky-400', category: 'gitops' },
-  { kind: 'HelmRelease', label: 'HelmRelease', icon: getTopologyIcon('HelmRelease'), color: 'text-sky-400', category: 'gitops' },
-  { kind: 'GitRepository', label: 'GitRepository', icon: getTopologyIcon('GitRepository'), color: 'text-teal-400', category: 'gitops' },
-
-  // Networking
-  { kind: 'Ingress', label: 'Ingress', icon: getTopologyIcon('Ingress'), color: 'text-purple-400', category: 'networking' },
-  { kind: 'Gateway', label: 'Gateway', icon: getTopologyIcon('Gateway'), color: 'text-purple-400', category: 'networking' },
-  { kind: 'HTTPRoute', label: 'HTTPRoute', icon: getTopologyIcon('HTTPRoute'), color: 'text-purple-300', category: 'networking' },
-  { kind: 'GRPCRoute', label: 'GRPCRoute', icon: getTopologyIcon('GRPCRoute'), color: 'text-purple-300', category: 'networking' },
-  { kind: 'TCPRoute', label: 'TCPRoute', icon: getTopologyIcon('TCPRoute'), color: 'text-purple-300', category: 'networking' },
-  { kind: 'TLSRoute', label: 'TLSRoute', icon: getTopologyIcon('TLSRoute'), color: 'text-purple-300', category: 'networking' },
-  { kind: 'UDPRoute', label: 'UDPRoute', icon: getTopologyIcon('UDPRoute'), color: 'text-purple-300', category: 'networking' },
-  { kind: 'Service', label: 'Service', icon: getTopologyIcon('Service'), color: 'text-blue-400', category: 'networking' },
-  { kind: 'CalicoNetworkPolicy', label: 'Calico NetworkPolicy', icon: getTopologyIcon('CalicoNetworkPolicy'), color: 'text-teal-400', category: 'custom' },
-  { kind: 'CalicoGlobalNetworkPolicy', label: 'Calico GlobalNetworkPolicy', icon: getTopologyIcon('CalicoGlobalNetworkPolicy'), color: 'text-teal-400', category: 'custom' },
-  { kind: 'CalicoStagedNetworkPolicy', label: 'Calico StagedNetworkPolicy', icon: getTopologyIcon('CalicoStagedNetworkPolicy'), color: 'text-amber-400', category: 'custom' },
-  { kind: 'CalicoStagedGlobalNetworkPolicy', label: 'Calico StagedGlobalNetworkPolicy', icon: getTopologyIcon('CalicoStagedGlobalNetworkPolicy'), color: 'text-amber-400', category: 'custom' },
-  { kind: 'CalicoStagedKubernetesNetworkPolicy', label: 'Calico StagedKubernetesNetworkPolicy', icon: getTopologyIcon('CalicoStagedKubernetesNetworkPolicy'), color: 'text-amber-400', category: 'custom' },
-
-  // Workloads
-  { kind: 'Deployment', label: 'Deployment', icon: getTopologyIcon('Deployment'), color: 'text-emerald-400', category: 'workloads' },
-  { kind: 'Rollout', label: 'Rollout', icon: getTopologyIcon('Rollout'), color: 'text-emerald-400', category: 'workloads' },
-  { kind: 'DaemonSet', label: 'DaemonSet', icon: getTopologyIcon('DaemonSet'), color: 'text-teal-400', category: 'workloads' },
-  { kind: 'StatefulSet', label: 'StatefulSet', icon: getTopologyIcon('StatefulSet'), color: 'text-cyan-400', category: 'workloads' },
-  { kind: 'ReplicaSet', label: 'ReplicaSet', icon: getTopologyIcon('ReplicaSet'), color: 'text-green-400', category: 'workloads' },
-  { kind: 'Pod', label: 'Pod', icon: getTopologyIcon('Pod'), color: 'text-lime-400', category: 'workloads' },
-  { kind: 'PodGroup', label: 'Pod Group', icon: getTopologyIcon('PodGroup'), color: 'text-lime-400', category: 'workloads' },
-  { kind: 'Job', label: 'Job', icon: getTopologyIcon('Job'), color: 'text-orange-400', category: 'workloads' },
-  { kind: 'CronJob', label: 'CronJob', icon: getTopologyIcon('CronJob'), color: 'text-orange-300', category: 'workloads' },
-  { kind: 'JobSet', label: 'JobSet', icon: getTopologyIcon('JobSet'), color: 'text-orange-400', category: 'workloads' },
-  { kind: 'Workflow', label: 'Workflow', icon: getTopologyIcon('Workflow'), color: 'text-purple-400', category: 'workloads' },
-  { kind: 'CronWorkflow', label: 'CronWorkflow', icon: getTopologyIcon('CronWorkflow'), color: 'text-purple-300', category: 'workloads' },
-
-  // Config
-  { kind: 'ConfigMap', label: 'ConfigMap', icon: getTopologyIcon('ConfigMap'), color: 'text-amber-400', category: 'config' },
-  { kind: 'Secret', label: 'Secret', icon: getTopologyIcon('Secret'), color: 'text-red-400', category: 'config' },
-  { kind: 'ServiceAccount', label: 'Service Account', icon: getTopologyIcon('ServiceAccount'), color: 'text-fuchsia-400', category: 'config' },
-  { kind: 'SealedSecret', label: 'Sealed Secret', icon: getTopologyIcon('SealedSecret'), color: 'text-violet-400', category: 'config' },
-  { kind: 'ServiceMonitor', label: 'Service Monitor', icon: getTopologyIcon('ServiceMonitor'), color: 'text-sky-400', category: 'config' },
-  { kind: 'PodMonitor', label: 'Pod Monitor', icon: getTopologyIcon('PodMonitor'), color: 'text-sky-400', category: 'config' },
-  { kind: 'WorkflowTemplate', label: 'WorkflowTemplate', icon: getTopologyIcon('WorkflowTemplate'), color: 'text-purple-300', category: 'config' },
-  { kind: 'ClusterWorkflowTemplate', label: 'ClusterWorkflowTemplate', icon: getTopologyIcon('ClusterWorkflowTemplate'), color: 'text-purple-300', category: 'config' },
-
-  // Scaling
-  { kind: 'HorizontalPodAutoscaler', label: 'HPA', icon: getTopologyIcon('HorizontalPodAutoscaler'), color: 'text-pink-400', category: 'scaling' },
-  { kind: 'ScaledJob', label: 'ScaledJob', icon: getTopologyIcon('ScaledJob'), color: 'text-pink-300', category: 'scaling' },
-
-  // Knative
-  { kind: 'KnativeService', label: 'Knative Service', icon: getTopologyIcon('KnativeService'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'KnativeConfiguration', label: 'Knative Config', icon: getTopologyIcon('KnativeConfiguration'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'KnativeRevision', label: 'Revision', icon: getTopologyIcon('KnativeRevision'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'KnativeRoute', label: 'Route', icon: getTopologyIcon('KnativeRoute'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'Broker', label: 'Broker', icon: getTopologyIcon('Broker'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'Channel', label: 'Channel', icon: getTopologyIcon('Channel'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'Trigger', label: 'Trigger', icon: getTopologyIcon('Trigger'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'PingSource', label: 'PingSource', icon: getTopologyIcon('PingSource'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'ApiServerSource', label: 'ApiServerSource', icon: getTopologyIcon('ApiServerSource'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'ContainerSource', label: 'ContainerSource', icon: getTopologyIcon('ContainerSource'), color: 'text-fuchsia-400', category: 'custom' },
-  { kind: 'SinkBinding', label: 'SinkBinding', icon: getTopologyIcon('SinkBinding'), color: 'text-fuchsia-400', category: 'custom' },
-
-  // Traefik
-  { kind: 'IngressRoute', label: 'IngressRoute', icon: getTopologyIcon('IngressRoute'), color: 'text-cyan-400', category: 'networking' },
-  { kind: 'IngressRouteTCP', label: 'TCP Route', icon: getTopologyIcon('IngressRouteTCP'), color: 'text-cyan-400', category: 'networking' },
-  { kind: 'IngressRouteUDP', label: 'UDP Route', icon: getTopologyIcon('IngressRouteUDP'), color: 'text-cyan-400', category: 'networking' },
-  { kind: 'Middleware', label: 'Middleware', icon: getTopologyIcon('Middleware'), color: 'text-cyan-400', category: 'custom' },
-  { kind: 'MiddlewareTCP', label: 'MW TCP', icon: getTopologyIcon('MiddlewareTCP'), color: 'text-cyan-400', category: 'custom' },
-  { kind: 'TraefikService', label: 'Traefik Svc', icon: getTopologyIcon('TraefikService'), color: 'text-cyan-400', category: 'custom' },
-  { kind: 'ServersTransport', label: 'Transport', icon: getTopologyIcon('ServersTransport'), color: 'text-cyan-400', category: 'custom' },
-  { kind: 'ServersTransportTCP', label: 'Transport TCP', icon: getTopologyIcon('ServersTransportTCP'), color: 'text-cyan-400', category: 'custom' },
-  { kind: 'TLSOption', label: 'TLS Option', icon: getTopologyIcon('TLSOption'), color: 'text-cyan-400', category: 'custom' },
-  { kind: 'TLSStore', label: 'TLS Store', icon: getTopologyIcon('TLSStore'), color: 'text-cyan-400', category: 'custom' },
-
-  // Contour
-  { kind: 'HTTPProxy', label: 'HTTPProxy', icon: getTopologyIcon('HTTPProxy'), color: 'text-violet-400', category: 'networking' },
-
-  // Cluster API
-  { kind: 'CAPICluster', label: 'CAPI Cluster', icon: getTopologyIcon('CAPICluster'), color: 'text-indigo-400', category: 'custom' },
-  { kind: 'MachineDeployment', label: 'Machine Deploy', icon: getTopologyIcon('MachineDeployment'), color: 'text-indigo-400', category: 'custom' },
-  { kind: 'MachineSet', label: 'MachineSet', icon: getTopologyIcon('MachineSet'), color: 'text-indigo-400', category: 'custom' },
-  { kind: 'Machine', label: 'Machine', icon: getTopologyIcon('Machine'), color: 'text-indigo-400', category: 'custom' },
-  { kind: 'MachinePool', label: 'MachinePool', icon: getTopologyIcon('MachinePool'), color: 'text-indigo-400', category: 'custom' },
-  { kind: 'KubeadmControlPlane', label: 'Control Plane', icon: getTopologyIcon('KubeadmControlPlane'), color: 'text-indigo-400', category: 'custom' },
-  { kind: 'ClusterClass', label: 'ClusterClass', icon: getTopologyIcon('ClusterClass'), color: 'text-indigo-400', category: 'custom' },
-  { kind: 'MachineHealthCheck', label: 'Health Check', icon: getTopologyIcon('MachineHealthCheck'), color: 'text-indigo-400', category: 'custom' },
-  // AWS CAPI infrastructure
-  { kind: 'AWSManagedControlPlane', label: 'AWS Control Plane', icon: getTopologyIcon('AWSManagedControlPlane'), color: 'text-amber-400', category: 'custom' },
-  { kind: 'AWSManagedMachinePool', label: 'AWS Machine Pool', icon: getTopologyIcon('AWSManagedMachinePool'), color: 'text-amber-400', category: 'custom' },
-  { kind: 'AWSMachine', label: 'AWS Machine', icon: getTopologyIcon('AWSMachine'), color: 'text-amber-400', category: 'custom' },
-  { kind: 'EKSConfig', label: 'EKS Config', icon: getTopologyIcon('EKSConfig'), color: 'text-amber-400', category: 'custom' },
-]
 
 const CATEGORIES = [
   { id: 'gitops', label: 'GitOps' },

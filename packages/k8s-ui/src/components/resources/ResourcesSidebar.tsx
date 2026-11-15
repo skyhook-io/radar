@@ -14,6 +14,7 @@ import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../
 import type { APIResource } from '../../types'
 import { categorizeResources, CORE_RESOURCES, resourceSearchAliases } from '../../utils/api-resources'
 import { getResourceIcon } from '../../utils/resource-icons'
+import { getResourceKindIconColor } from '../../utils/resource-kind-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { certaintyGlyph } from '../facts'
 import { Input } from '../ui/Input'
@@ -189,7 +190,7 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
                 : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
         )}
       >
-        <Icon className="w-4 h-4 shrink-0" />
+        <Icon className={clsx('w-4 h-4 shrink-0', forbidden ? 'text-theme-text-disabled' : getResourceKindIconColor(resource.kind, resource.group))} />
         <Tooltip content={forbidden ? `${resource.kind} (no access)` : resource.kind} position="right" wrapperClassName="min-w-0 flex-1 overflow-hidden">
           <span className="text-left truncate block">
             {resource.kind}
@@ -768,7 +769,7 @@ export function ResourcesSidebar({
                     : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
                 )}
               >
-                <Icon className="w-4 h-4 shrink-0" />
+                <Icon className={clsx('w-4 h-4 shrink-0', getResourceKindIconColor(kindKey))} />
                 <span className="flex-1 text-left">{type.label}</span>
                 {count === null ? (
                   <Tooltip content={COUNT_UNAVAILABLE_MESSAGE} position="left">
