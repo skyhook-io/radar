@@ -111,7 +111,9 @@ What each benchmark reports:
   of its size still held (building the new index happens later, on the next relationship read).
 - `BenchmarkDrawerRelationships`: one Related Resources read. `shared-index` is auth off; `per-user-copy` is
   auth on, where each request copies the graph, strips what the user may not list and rebuilds the index.
-- `BenchmarkSummaryRelationshipsPage`: the graph part of a 1,000-row list page's summary context.
+- `BenchmarkSummaryRelationshipsPage`: a relationship read for every row of a 1,000-row Pod list, the most a list
+  page's summary context can spend on the graph. Production reads relationships only for rows with no readable
+  top controller, so a typical page spends far less.
 - `BenchmarkIndexRelist`: one relist (`Replace`) of a Pod store, with and without an index. Part of it, keying
   the list, runs outside the store's lock, so the total is an upper bound on how long readers wait; an index
   adds only to the locked part, so the difference is its cost. Pods follow the census: one owner each.
@@ -125,8 +127,8 @@ Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 | Its index | 102 MiB | 353 MiB |
 | Rebuild | 1.5 s, 926 MB allocated | 8.6 s, 3.0 GB allocated |
 | Drawer read, shared index | 0.02-0.13 ms, 2-8 KB | |
-| Drawer read, per-user copy (half the namespaces, every cluster-scoped kind readable) | 175 ms, 139 MB | |
-| Summary page, 1,000 Pods | 49 ms, 3 MB | |
+| Drawer read, per-user copy (half the namespaces, every cluster-scoped kind readable) | 341 ms, 139 MB | |
+| Summary page, a read for each of 1,000 Pods (upper bound) | 49 ms, 3 MB | |
 | Pod relist, namespace index only | 16 ms | 62 ms |
 | Pod relist, plus the owner-UID index | 33 ms | 129 ms |
 | Pod update, alone, without / with the owner-UID index | 180 ns / 245 ns | |

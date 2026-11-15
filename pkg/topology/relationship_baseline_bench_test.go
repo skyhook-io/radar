@@ -2,6 +2,7 @@ package topology
 
 import (
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -141,9 +142,9 @@ func BenchmarkDrawerRelationships(b *testing.B) {
 	}
 	index := IndexByResource(topo)
 	names := synthNames{shape: shape}
-	allowed := map[string]bool{}
+	var allowed []string
 	for i := 0; i < shape.Namespaces; i += 2 {
-		allowed[names.namespace(i)] = true
+		allowed = append(allowed, names.namespace(i))
 	}
 	for _, s := range drawerSubjects(provider) {
 		b.Run("shared-index/"+s.name, func(b *testing.B) {
@@ -162,7 +163,7 @@ func BenchmarkDrawerRelationships(b *testing.B) {
 			copied.Edges = append([]Edge(nil), topo.Edges...)
 			denied := map[string]bool{}
 			for _, n := range copied.Nodes {
-				if ns, _ := n.Data["namespace"].(string); ns != "" && !allowed[ns] {
+				if ns, _ := n.Data["namespace"].(string); ns != "" && !slices.Contains(allowed, ns) {
 					denied[n.ID] = true
 				}
 			}
@@ -172,10 +173,11 @@ func BenchmarkDrawerRelationships(b *testing.B) {
 	})
 }
 
-// BenchmarkSummaryRelationshipsPage is the graph part of one list page's
-// summary context: a 1,000-row Pod list, each row's relationships read from
-// the shared graph and its index. The ownership answer each row adds is not
-// part of this number.
+// BenchmarkSummaryRelationshipsPage reads relationships from the shared graph
+// and its index for every row of a 1,000-row Pod list: the most a list page's
+// summary context can spend on the graph. Production asks only for rows whose
+// controller chain has no readable top controller, so a typical page spends
+// far less, and a page that needs none never loads the graph.
 func BenchmarkSummaryRelationshipsPage(b *testing.B) {
 	provider := newSyntheticProvider(fieldShape())
 	topo, err := NewBuilder(provider).Build(serverRelationshipOptions())
