@@ -1,6 +1,7 @@
 import { getCRDStatus } from '../resources/resource-utils-crd'
-import { getStrimziConnectorStatus } from '../resources/resource-utils-strimzi'
+import { getStrimziConnectorStatus, getStrimziClusterStatus, isStrimziKafka, isStrimziKafkaNodePool } from '../resources/resource-utils-strimzi'
 import { StrimziConnectorRenderer } from '../resources/renderers/StrimziConnectorRenderer'
+import { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from '../resources/renderers/StrimziKafkaRenderer'
 import { getOpenTelemetryCollectorStatus, getOpenTelemetryInstrumentationStatus } from '../resources/resource-utils-opentelemetry'
 import { OpenTelemetryCollectorRenderer, OpenTelemetryInstrumentationRenderer } from '../resources/renderers/OpenTelemetryRenderers'
 import { FlaggerCanaryRenderer, FlaggerMetricTemplateRenderer } from '../resources/renderers/FlaggerRenderers'
@@ -494,7 +495,7 @@ export interface RendererOverrides {
 // Known resource types with specific renderers (module-level to avoid re-allocation)
 const KNOWN_KINDS = new Set([
   'customresourcedefinitions',
-  'kafkaconnectors',
+  'kafkaconnectors', 'kafkas', 'kafkanodepools',
   'opentelemetrycollectors', 'instrumentations',
   'canaries', 'metrictemplates',
   'helmcharts', 'helmchartconfigs',
@@ -765,7 +766,7 @@ export function ResourceRendererDispatch({
   const isFluxResource = getGitOpsTool(kind, apiVersionToGroup(data?.apiVersion)) === 'flux'
   const isGroupGatedKind =
     kind === 'customresourcedefinitions' ||
-    kind === 'kafkaconnectors' ||
+    kind === 'kafkaconnectors' || kind === 'kafkas' || kind === 'kafkanodepools' ||
     ['opentelemetrycollectors', 'instrumentations'].includes(kind) ||
     ['canaries', 'metrictemplates'].includes(kind) ||
     ['helmcharts', 'helmchartconfigs'].includes(kind) ||
@@ -784,6 +785,8 @@ export function ResourceRendererDispatch({
   const groupGatedMatched =
     (kind === 'customresourcedefinitions' && isApiGroup(data?.apiVersion, 'apiextensions.k8s.io')) ||
     (kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io')) ||
+    (kind === 'kafkas' && isStrimziKafka(data)) ||
+    (kind === 'kafkanodepools' && isStrimziKafkaNodePool(data)) ||
     (['opentelemetrycollectors', 'instrumentations'].includes(kind) && isApiGroup(data?.apiVersion, 'opentelemetry.io')) ||
     (['canaries', 'metrictemplates'].includes(kind) && isApiGroup(data?.apiVersion, 'flagger.app')) ||
     (['helmcharts', 'helmchartconfigs'].includes(kind) && isApiGroup(data?.apiVersion, K3S_HELM_GROUP)) ||
@@ -1141,6 +1144,8 @@ export function ResourceRendererDispatch({
 
         {kind === 'opentelemetrycollectors' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <CollectorComp data={data} onNavigate={onNavigate} active={active} />}
         {kind === 'kafkaconnectors' && isApiGroup(data?.apiVersion, 'kafka.strimzi.io') && <StrimziConnectorRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'kafkas' && isStrimziKafka(data) && <StrimziKafkaRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'kafkanodepools' && isStrimziKafkaNodePool(data) && <StrimziKafkaNodePoolRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'instrumentations' && isApiGroup(data?.apiVersion, 'opentelemetry.io') && <OpenTelemetryInstrumentationRenderer data={data} />}
         {kind === 'canaries' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerCanaryRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'metrictemplates' && isApiGroup(data?.apiVersion, 'flagger.app') && <FlaggerMetricTemplateRenderer data={data} onNavigate={onNavigate} />}
@@ -1210,6 +1215,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     return badge
   }
   if (k === 'kafkaconnectors' && isApiGroup(data.apiVersion, 'kafka.strimzi.io')) return getStrimziConnectorStatus(data)
+  if ((k === 'kafkas' && isStrimziKafka(data)) || (k === 'kafkanodepools' && isStrimziKafkaNodePool(data))) return getStrimziClusterStatus(data)
 
   if (isApiGroup(data.apiVersion, 'opentelemetry.io')) {
     if (k === 'opentelemetrycollectors') return getOpenTelemetryCollectorStatus(data)

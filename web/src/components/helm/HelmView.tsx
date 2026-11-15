@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'r
 import { ReleaseControllerBadge, otherController, releaseControllerOf } from './releaseController'
 import type { HelmReleaseController } from '@skyhook-io/k8s-ui'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, ChevronRight, RotateCcw, Clock } from 'lucide-react'
+import { GitBranch, Package, Search, ArrowUpCircle, LayoutGrid, List, Shield, ChevronRight, RotateCcw, Clock } from 'lucide-react'
 import { CertaintyGlyph, PaneLoader, PageHeader, SortableTh, FreshnessControl, type SortDir, Input, usePhoneLayout } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { clsx } from 'clsx'
@@ -14,6 +14,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
 import { InstallWizard } from './InstallWizard'
 import { ObservedHelmNotice } from './ObservedHelmNotice'
+import { NotCheckedBadge } from './NotCheckedBadge'
 
 type ViewTab = 'releases' | 'charts'
 
@@ -667,9 +668,22 @@ const ObservedReleaseRow = forwardRef<HTMLTableRowElement, ObservedReleaseRowPro
   )
 })
 
-function ControllerBadge({ release }: { release: { controller?: HelmReleaseController; managedByFluxHelmRelease?: string } }) {
+function ControllerBadge({ release }: { release: { controller?: HelmReleaseController; managedByFlux?: boolean; managedByFluxHelmRelease?: string } }) {
   const controller = releaseControllerOf(release)
-  return controller ? <ReleaseControllerBadge controller={controller} /> : null
+  if (controller) return <ReleaseControllerBadge controller={controller} />
+  return release.managedByFlux ? <HiddenFluxBadge /> : null
+}
+
+// Flux owns the release but the caller can't read its HelmRelease's namespace.
+function HiddenFluxBadge() {
+  return (
+    <Tooltip content="The owning Flux HelmRelease's namespace isn't available in this view, or Radar couldn't check your access. Manage this release through Flux; direct Helm changes may be reconciled back.">
+      <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
+        <GitBranch className="w-3 h-3" />
+        Flux
+      </span>
+    </Tooltip>
+  )
 }
 
 const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
@@ -695,6 +709,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary phone:max-w-[calc(100%-1.5rem)] phone:shrink-0">{release.name}</span>
           <ReleaseHealthBadge release={release} />
+          <NotCheckedBadge count={release.statusUnreadCount} />
           {listOperation && <HelmOperationChip operation={listOperation} />}
           <ControllerBadge release={release} />
           {upgradeInfo?.updateAvailable && !otherController(release) && (

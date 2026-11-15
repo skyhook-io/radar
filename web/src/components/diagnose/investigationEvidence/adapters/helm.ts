@@ -37,6 +37,7 @@ function helmOwnedResource(
     "message",
     "summary",
     "issue",
+    "statusUnread",
   ] as const) {
     if (candidate[field] !== undefined && typeof candidate[field] !== "string")
       return undefined;
@@ -208,6 +209,10 @@ export function adaptHelmRelease(
       return;
     }
   }
+  if (value.managedByFlux !== undefined && typeof value.managedByFlux !== "boolean") {
+    invalidPayload(builder, source);
+    return;
+  }
   const resourcesRaw =
     value.resources === undefined || value.resources === null
       ? []
@@ -250,6 +255,11 @@ export function adaptHelmRelease(
     resourceHealth: value.resourceHealth as string | undefined,
     healthIssue: value.healthIssue as string | undefined,
     healthSummary: value.healthSummary as string | undefined,
+    ...(typeof value.statusUnreadCount === "number" &&
+    value.statusUnreadCount > 0
+      ? { statusUnreadCount: value.statusUnreadCount }
+      : {}),
+    ...(value.managedByFlux === true ? { managedByFlux: true } : {}),
     managedByFluxHelmRelease: value.managedByFluxHelmRelease as
       string | undefined,
     ...releaseControllerField(value.controller),

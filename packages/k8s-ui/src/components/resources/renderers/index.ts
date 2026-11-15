@@ -202,6 +202,7 @@ export { K3sHelmChartRenderer, K3sHelmChartConfigRenderer } from './K3sHelmRende
 export { SecretProviderClassRenderer, SecretsStoreMountsSection } from './SecretsStoreRenderers'
 
 export { StrimziConnectorRenderer } from './StrimziConnectorRenderer'
+export { StrimziKafkaRenderer, StrimziKafkaNodePoolRenderer } from './StrimziKafkaRenderer'
 
 export { CustomResourceDefinitionRenderer } from './CustomResourceDefinitionRenderer'
 

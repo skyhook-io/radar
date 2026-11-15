@@ -22,7 +22,7 @@ func helmRecentChangesForContext(ctx context.Context, input getChangesInput, sin
 		return nil, nil
 	}
 	user := userFromContext(ctx)
-	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, resolveHelmListNamespaces(ctx, input.Namespace), user)
+	releases, err := helmClient.ListReleasesAcrossNamespaces(ctx, resolveHelmListNamespaces(ctx, input.Namespace), user, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list Helm releases: %w", err)
 	}
@@ -35,7 +35,7 @@ func helmRecentChanges(releases []helm.HelmRelease, name string, since time.Dura
 	for _, rel := range releases {
 		// A controller that keeps its own history (Flux) reports these; others
 		// (k3s) keep none, so their releases stay in.
-		if rel.ManagedByFluxHelmRelease != "" || rel.Controller.ReportsOwnHistory() {
+		if rel.ManagedByFlux || rel.ManagedByFluxHelmRelease != "" || rel.Controller.ReportsOwnHistory() {
 			continue
 		}
 		if name != "" && rel.Name != name {

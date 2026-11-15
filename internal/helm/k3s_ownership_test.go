@@ -85,16 +85,29 @@ func TestHelmReleaseRowsStampK3sOwnership(t *testing.T) {
 		}
 	}
 	k3s := map[string]k3sOwner{"kube-system/traefik": {chart: "kube-system/traefik", config: "kube-system/traefik"}}
-	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, "", false)
+	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, "", adminCaller())
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("rows = %+v, err %v", rows, err)
 	}
 	if c := rows[0].Controller; c == nil || c.Tool != "k3s" || c.Ref() != "kube-system/traefik" || c.ValuesRef == nil || c.ValuesRef.Exists == nil || !*c.ValuesRef.Exists {
 		t.Fatalf("row = %+v", rows[0].Controller)
 	}
-	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", false)
+	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", adminCaller())
 	if c := rows[0].Controller; rows[0].ManagedByFluxHelmRelease != "flux-system/traefik" || c == nil || c.Tool != "flux" || c.Kind != "HelmRelease" || c.Ref() != "flux-system/traefik" {
 		t.Fatalf("Flux wins, row = %+v", rows[0].Controller)
+	}
+	// A caller who can't read the HelmChart's namespace isn't told which
+	// object installs the release.
+	for _, access := range []StatusAccess{teamACaller(), nil} {
+		rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), nil, k3s, "", access)
+		if rows[0].Controller != nil {
+			t.Fatalf("controller for unreadable namespace = %+v", rows[0].Controller)
+		}
+	}
+	// Flux ownership with its HelmRelease withheld still wins over the HelmChart.
+	rows, _ = helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot(), map[string]string{"kube-system/traefik": "flux-system/traefik"}, k3s, "", teamACaller())
+	if !rows[0].ManagedByFlux || rows[0].Controller != nil {
+		t.Fatalf("hidden Flux owner, row = %+v", rows[0])
 	}
 }
 
