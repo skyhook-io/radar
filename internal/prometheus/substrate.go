@@ -85,9 +85,9 @@ type substrateQuery struct {
 // presence and duplicate-source checks run on it.
 type substrateFamily struct {
 	metric string
-	// additive: the chart sums rates across emitters, so the same process
-	// observed through two scrape jobs would count twice. Gauge charts take an
-	// average or maximum, which a duplicate does not change.
+	// additive: the chart sums or averages across emitters, so the same
+	// process observed through two scrape jobs would be counted twice or weigh
+	// twice. Only a chart that takes a maximum is unaffected by a duplicate.
 	additive bool
 }
 
@@ -124,7 +124,7 @@ func failureShare(count, sel, window string) string {
 }
 
 func substratePoolCharts() []substrateChartDef {
-	workers := substrateFamily{metric: "ate_workerpool_workers"}
+	workers := substrateFamily{metric: "ate_workerpool_workers", additive: true}
 	lifecycle := substrateFamily{metric: "ate_actor_lifecycle_operation_duration_seconds_count", additive: true}
 	assignment := substrateFamily{metric: "ate_scheduler_assignment_duration_seconds_count", additive: true}
 	return []substrateChartDef{
@@ -269,10 +269,16 @@ type substrateFamilyCheck struct {
 
 type substrateScopeResolver func(ctx context.Context, probe scopeProbe) (string, SeriesIsolation, error)
 
-// checkSubstrateFamily resolves the cluster scope of one family's series over
-// the window and refuses a population reported through more than one scrape job.
-func checkSubstrateFamily(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, f substrateFamily, sel string, window time.Duration) substrateFamilyCheck {
-	matchers, iso, err := resolve(ctx, scopeProbe{metric: f.metric, selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true,
+// checkSubstrateFamilies resolves the cluster scope of the families one chart
+// reads, probed together so that two families from different clusters are
+// caught even when no cluster label proves either, and refuses a summed or
+// averaged family reported through more than one scrape job.
+func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, families []substrateFamily, sel string, window time.Duration) substrateFamilyCheck {
+	extra := make([]string, 0, len(families)-1)
+	for _, f := range families[1:] {
+		extra = append(extra, f.metric)
+	}
+	matchers, iso, err := resolve(ctx, scopeProbe{metric: families[0].metric, additionalMetrics: extra, selectors: []string{sel}, window: window, singlePartition: true, allowUnlabeledProof: true, strict: true,
 		unverifiedNote: "Radar couldn't confirm these Substrate series belong to this exact cluster (no cluster label it could check)"})
 	switch {
 	case errors.Is(err, ErrScopeAmbiguous):
@@ -283,43 +289,43 @@ func checkSubstrateFamily(ctx context.Context, q seriesQuerier, resolve substrat
 		return substrateFamilyCheck{isolation: iso, state: SubstrateChartError, reason: "Prometheus scope check failed: " + truncate(err.Error(), 200)}
 	}
 	check := substrateFamilyCheck{matchers: matchers, isolation: iso}
-	if !f.additive {
-		return check
-	}
-	res, err := strictQuerier{q}.Query(ctx, "count by (job) (count_over_time("+f.metric+"{"+withScope(sel, matchers)+"}["+window.String()+"]))")
-	if err != nil {
-		check.state, check.reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
-		return check
-	}
-	if len(res.Series) > 1 {
-		jobs := make([]string, 0, len(res.Series))
-		for _, s := range res.Series {
-			jobs = append(jobs, s.Labels["job"])
+	for _, f := range families {
+		if !f.additive {
+			continue
 		}
-		sort.Strings(jobs)
-		check.state = SubstrateChartDuplicateSources
-		check.reason = "reported through more than one scrape job (" + strings.Join(jobs, ", ") + "), so adding them up would count the same events twice"
+		res, err := strictQuerier{q}.Query(ctx, "count by (job) (count_over_time("+f.metric+"{"+withScope(sel, matchers)+"}["+window.String()+"]))")
+		if err != nil {
+			check.state, check.reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
+			return check
+		}
+		if len(res.Series) > 1 {
+			jobs := make([]string, 0, len(res.Series))
+			for _, s := range res.Series {
+				jobs = append(jobs, s.Labels["job"])
+			}
+			sort.Strings(jobs)
+			check.state = SubstrateChartDuplicateSources
+			check.reason = "reported through more than one scrape job (" + strings.Join(jobs, ", ") + "), so adding them up would count the same events twice"
+			return check
+		}
 	}
 	return check
 }
 
-// combineSubstrateChecks is the check for a chart that reads several
-// families: the first failure, or a refusal when they resolve to different
-// cluster scopes, since one query could then mix clusters.
-func combineSubstrateChecks(d substrateChartDef, checks map[string]substrateFamilyCheck) substrateFamilyCheck {
-	combined := checks[d.family.metric]
-	for _, f := range d.also {
-		other := checks[f.metric]
-		switch {
-		case combined.state != "":
-			return combined
-		case other.state != "":
-			return other
-		case other.matchers != combined.matchers:
-			return substrateFamilyCheck{isolation: combined.isolation, state: SubstrateChartAmbiguous, reason: "the series this chart combines resolve to different cluster identities"}
-		}
+func substrateFamiliesKey(families []substrateFamily) string {
+	metrics := make([]string, len(families))
+	for i, f := range families {
+		metrics[i] = f.metric
 	}
-	return combined
+	return strings.Join(metrics, "|")
+}
+
+// substrateProbeWindow covers every sample a chart reads: the probes run now,
+// up to a step after the aligned end, and the first point reads a rate window
+// (or a gauge's lookback) before the start.
+func substrateProbeWindow(start, end time.Time, step time.Duration) time.Duration {
+	lookback := max(5*time.Minute, 2*time.Minute, 2*step)
+	return (end.Sub(start) + step + lookback).Round(time.Second)
 }
 
 type substrateRequest struct {
@@ -335,12 +341,13 @@ func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrat
 	w := substrateRateWindow(req.step)
 	steps := max(0, int(window/req.step)+1)
 
+	probeWindow := substrateProbeWindow(req.start, req.end, req.step)
 	checks := map[string]substrateFamilyCheck{}
 	for _, d := range req.charts {
-		for _, f := range append([]substrateFamily{d.family}, d.also...) {
-			if _, ok := checks[f.metric]; !ok {
-				checks[f.metric] = checkSubstrateFamily(ctx, q, resolve, f, req.sel, window)
-			}
+		families := append([]substrateFamily{d.family}, d.also...)
+		key := substrateFamiliesKey(families)
+		if _, ok := checks[key]; !ok {
+			checks[key] = checkSubstrateFamilies(ctx, q, resolve, families, req.sel, probeWindow)
 		}
 	}
 
@@ -348,7 +355,7 @@ func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrat
 	sem := make(chan struct{}, substrateConcurrency)
 	var wg sync.WaitGroup
 	for i, d := range req.charts {
-		check := combineSubstrateChecks(d, checks)
+		check := checks[substrateFamiliesKey(append([]substrateFamily{d.family}, d.also...))]
 		c := &charts[i]
 		*c = SubstrateChart{ID: d.id, Title: d.title, Unit: d.unit, Population: d.population, Source: d.source, SeriesBy: d.seriesBy, Isolation: check.isolation, Series: []prom.Series{}, Steps: steps}
 		if check.state != "" {
@@ -470,14 +477,23 @@ func substrateNodeAttribution(ctx context.Context, q seriesQuerier, matchers, no
 	if err != nil {
 		return "", "", err
 	}
+	const noLabel = "atelet's series carry no node label, so Radar cannot tell which node reported them. A Kubernetes scrape adds one; see Substrate's reference Prometheus configuration"
 	if !labelled {
-		return SubstrateChartNotAttributable, "atelet's series carry no node label, so Radar cannot tell which node reported them. A Kubernetes scrape adds one; see Substrate's reference Prometheus configuration", nil
+		return SubstrateChartNotAttributable, noLabel, nil
 	}
 	mine, err := count(substrateNodeSelector(node))
 	if err != nil {
 		return "", "", err
 	}
 	if !mine {
+		// Unlabelled series could be this node's.
+		unlabelled, err := count(`node=""`)
+		if err != nil {
+			return "", "", err
+		}
+		if unlabelled {
+			return SubstrateChartNotAttributable, "some of atelet's series carry no node label, so Radar cannot tell whether this node reported any. A Kubernetes scrape adds one; see Substrate's reference Prometheus configuration", nil
+		}
 		return SubstrateNotOnNode, "", nil
 	}
 	return SubstrateAvailable, "", nil
@@ -532,11 +548,12 @@ func handleSubstrateNode(w http.ResponseWriter, r *http.Request) {
 	serveSubstrate(w, r, func(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, rangeName string, start, end time.Time, step time.Duration) SubstrateHealthResponse {
 		// Attribution is decided within this cluster's series: another
 		// cluster's node labels say nothing about this one's.
-		scope := checkSubstrateFamily(ctx, q, resolve, substrateFamily{metric: "atelet_snapshot_undurable_age_max_seconds"}, "", end.Sub(start))
+		window := substrateProbeWindow(start, end, step)
+		scope := checkSubstrateFamilies(ctx, q, resolve, []substrateFamily{{metric: "atelet_snapshot_undurable_age_max_seconds"}}, "", window)
 		if scope.state != "" {
 			return SubstrateHealthResponse{Status: SubstrateChartError, Reason: scope.reason, Range: rangeName, Charts: []SubstrateChart{}}
 		}
-		status, reason, err := substrateNodeAttribution(ctx, q, scope.matchers, node, end.Sub(start))
+		status, reason, err := substrateNodeAttribution(ctx, q, scope.matchers, node, window)
 		if err != nil {
 			return SubstrateHealthResponse{Status: SubstrateChartError, Reason: "Prometheus query failed: " + truncate(err.Error(), 200), Range: rangeName, Charts: []SubstrateChart{}}
 		}

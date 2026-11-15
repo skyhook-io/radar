@@ -68,6 +68,17 @@ describe('SubstrateHealthCharts', () => {
     expect(html).toContain('Aggregates only')
     expect(html).toContain('confirm these series belong to this exact cluster')
   })
+
+  it('states a reason shared by several charts once', () => {
+    const refused = { state: 'duplicateSources' as const, reason: 'reported through more than one scrape job (a, b)', series: [] }
+    health = { data: { ...base, status: 'available', charts: [
+      chart({ id: 'resumeTime', title: 'Resume time', ...refused }),
+      chart({ id: 'crashes', title: 'Actor crashes', ...refused }),
+    ] } }
+    const html = render(pool)
+    expect(html).toContain('Resume time · Actor crashes')
+    expect(html.split('more than one scrape job').length - 1).toBe(1)
+  })
   it('does not call an hour-old sample "now"', () => {
     health = { data: { ...base, status: 'available', charts: [chart({ series: [
       { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 2 }, { timestamp: 4600, value: null as unknown as number }] },

@@ -82,10 +82,44 @@ function Charts({ health }: { health: SubstrateHealth }) {
         Aggregates only: Substrate keeps actor names out of its metrics, so no chart is about one actor.
       </p>
       <div className="grid grid-cols-1 gap-3">
-        {health.charts.map(chart => <Chart key={chart.id} chart={chart} health={health} />)}
+        {groupCharts(health.charts).map(group => group.length === 1
+          ? <Chart key={group[0].id} chart={group[0]} health={health} />
+          : <SharedReason key={group[0].id} charts={group} />)}
       </div>
       {unverified && <p className="mt-3 text-xs text-theme-text-tertiary">{unverified.isolation.note}.</p>}
     </>
+  )
+}
+
+// Charts that cannot be drawn for the same reason share one note instead of
+// repeating it card after card.
+function groupCharts(charts: SubstrateChart[]): SubstrateChart[][] {
+  const groups: SubstrateChart[][] = []
+  const byReason = new Map<string, SubstrateChart[]>()
+  for (const chart of charts) {
+    if (chart.state === 'ok') {
+      groups.push([chart])
+      continue
+    }
+    const key = `${chart.state}\u0000${chart.reason ?? ''}`
+    const group = byReason.get(key)
+    if (group) {
+      group.push(chart)
+    } else {
+      const created = [chart]
+      byReason.set(key, created)
+      groups.push(created)
+    }
+  }
+  return groups
+}
+
+function SharedReason({ charts }: { charts: SubstrateChart[] }) {
+  return (
+    <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0">
+      <h4 className="mb-1 text-xs font-medium text-theme-text-secondary">{charts.map(c => c.title).join(' · ')}</h4>
+      <Muted tone={charts[0].state === 'empty' || charts[0].state === 'noSeries' ? undefined : 'warning'}>{chartReason(charts[0])}</Muted>
+    </section>
   )
 }
 

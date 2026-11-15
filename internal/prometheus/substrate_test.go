@@ -144,8 +144,9 @@ func TestSubstrateScopeProbesAreStrictAndRanged(t *testing.T) {
 		t.Fatal("no scope probes")
 	}
 	for _, p := range probes {
-		if !p.strict || p.window != time.Hour {
-			t.Fatalf("probe %s: strict=%v window=%v, want strict over the chart window", p.metric, p.strict, p.window)
+		// One hour of chart, a step after its aligned end, and the lookback before its start.
+		if !p.strict || p.window != time.Hour+time.Minute+5*time.Minute {
+			t.Fatalf("probe %s: strict=%v window=%v, want strict over everything the chart reads", p.metric, p.strict, p.window)
 		}
 	}
 	for _, q := range f.queries {
@@ -175,6 +176,7 @@ func TestSubstrateNodeAttribution(t *testing.T) {
 		{"no atelet series", nil, SubstrateNotFound},
 		{"series without node labels", []fakeRule{{family + "}", result(series(nil, 1))}}, SubstrateChartNotAttributable},
 		{"labelled for other nodes", []fakeRule{{family + `node!=""}`, result(series(nil, 1))}, {family + "}", result(series(nil, 1))}}, SubstrateNotOnNode},
+		{"unlabelled series could be this node's", []fakeRule{{family + `node=""}`, result(series(nil, 1))}, {family + `node!=""}`, result(series(nil, 1))}, {family + "}", result(series(nil, 1))}}, SubstrateChartNotAttributable},
 		{"labelled for this node", []fakeRule{{family + `node="worker-1"}`, result(series(nil, 1))}, {family + `node!=""}`, result(series(nil, 1))}, {family + "}", result(series(nil, 1))}}, SubstrateAvailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -195,13 +197,17 @@ func TestAlignSubstrateRangeIsWholeSeconds(t *testing.T) {
 	}
 }
 
-// A chart that reads two families is drawn only when both resolve to one scope.
-func TestSubstrateChartFamiliesMustShareScope(t *testing.T) {
+// A chart that reads two families probes them together, so series of the two
+// from different clusters are caught even when no cluster label proves either.
+func TestSubstrateChartFamiliesShareOneScopeProbe(t *testing.T) {
 	resolve := func(_ context.Context, p scopeProbe) (string, SeriesIsolation, error) {
-		if p.metric == "ate_workerpool_ready_workers" {
-			return `cluster="b"`, SeriesIsolation{Mode: SeriesIsolationVerified}, nil
+		if p.metric == "ate_workerpool_desired_workers" {
+			if len(p.additionalMetrics) != 1 || p.additionalMetrics[0] != "ate_workerpool_ready_workers" {
+				t.Fatalf("readiness probe metrics = %s + %v", p.metric, p.additionalMetrics)
+			}
+			return "", SeriesIsolation{}, ErrScopeAmbiguous
 		}
-		return `cluster="a"`, SeriesIsolation{Mode: SeriesIsolationVerified}, nil
+		return "", SeriesIsolation{Mode: SeriesIsolationUnverified}, nil
 	}
 	charts := querySubstrateCharts(context.Background(), &fakeSubstrateProm{}, resolve, poolRequest(substratePoolCharts()))
 	if c := chartByID(charts, "readiness"); c.State != SubstrateChartAmbiguous {
@@ -219,6 +225,20 @@ func TestSubstrateRatesCollapseHACopies(t *testing.T) {
 		if strings.Contains(q, "rate(") && !strings.Contains(q, "max without (prometheus, prometheus_replica, replica) (rate(") {
 			t.Fatalf("rate without HA collapse: %s", q)
 		}
+	}
+}
+
+// Averaging across API replicas weighs a replica scraped through two jobs twice.
+func TestSubstrateWorkersRefuseDuplicateSources(t *testing.T) {
+	f := &fakeSubstrateProm{rules: []fakeRule{
+		{"count by (job) (count_over_time(ate_workerpool_workers", result(series(map[string]string{"job": "ateapi"}, 1), series(map[string]string{"job": "otel-collector"}, 1))},
+	}}
+	charts := querySubstrateCharts(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts()))
+	if c := chartByID(charts, "workers"); c.State != SubstrateChartDuplicateSources {
+		t.Fatalf("workers = %s, want duplicateSources", c.State)
+	}
+	if c := chartByID(charts, "readiness"); c.State == SubstrateChartDuplicateSources {
+		t.Fatal("readiness takes a maximum and should not be refused")
 	}
 }
 
