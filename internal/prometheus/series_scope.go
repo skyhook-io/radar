@@ -71,6 +71,9 @@ type scopeProbe struct {
 	allowUnlabeledDuplicate bool
 	singlePartition         bool
 	unverifiedNote          string
+	// strict rejects a partial or warning response from the probes instead of
+	// reading an incomplete identity set as a unique one.
+	strict bool
 }
 
 func (p scopeProbe) over(sel string) string {
@@ -85,6 +88,38 @@ func (p scopeProbe) over(sel string) string {
 	// Range functions drop metric names, so evaluate each metric before unioning
 	// to avoid identical labelsets in a single range-function result.
 	return strings.Join(probes, " or ")
+}
+
+func (p scopeProbe) querier(q seriesQuerier) seriesQuerier {
+	if p.strict {
+		return strictQuerier{q}
+	}
+	return q
+}
+
+// strictQuerier turns a partial or warning response into an error, so a
+// caller never reads an incomplete answer as a complete one.
+type strictQuerier struct{ inner seriesQuerier }
+
+func (s strictQuerier) Query(ctx context.Context, query string) (*prom.QueryResult, error) {
+	return requireComplete(s.inner.Query(ctx, query))
+}
+
+func (s strictQuerier) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*prom.QueryResult, error) {
+	return requireComplete(s.inner.QueryRange(ctx, query, start, end, step))
+}
+
+func requireComplete(res *prom.QueryResult, err error) (*prom.QueryResult, error) {
+	if err != nil {
+		return nil, err
+	}
+	if res != nil && res.Annotations.Partial {
+		return nil, prom.ErrPartialResponse
+	}
+	if res != nil && len(res.Annotations.Warnings) > 0 {
+		return nil, prom.ErrQueryWarning
+	}
+	return res, nil
 }
 
 // ResolvePVCScope decides the cluster-identity matchers for the named claims'
@@ -216,9 +251,9 @@ func (client *Client) resolveScope(ctx context.Context, namespace string, probe 
 			matchers[i] = label + `=""`
 		}
 		iso := SeriesIsolation{Mode: SeriesIsolationUnverified, Note: "Matched to stats without cluster identity labels, like this namespace's kube-state-metrics Pod evidence. Radar cannot distinguish unlabeled stats from another cluster"}
-		return decideVerifiedScope(ctx, client, probe, strings.Join(matchers, ","), iso)
+		return decideVerifiedScope(ctx, probe.querier(client), probe, strings.Join(matchers, ","), iso)
 	}
-	return decideScope(ctx, client, probe, verified)
+	return decideScope(ctx, probe.querier(client), probe, verified)
 }
 
 func decideScope(ctx context.Context, q seriesQuerier, probe scopeProbe, verified map[string]string) (string, SeriesIsolation, error) {

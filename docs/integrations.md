@@ -2244,6 +2244,25 @@ A claim forwards its Sandbox's reason; an in-progress or settled forwarded reaso
 
 **Worker Pods.** A Pod labelled `ate.dev/worker-pool` gets a note in its drawer: Substrate places actors on it in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
 
+**Agent Substrate charts (Prometheus).** With Prometheus connected, a WorkerPool's drawer and the drawer of a Node that runs Substrate's `atelet` show charts from the metrics Substrate exports. They are aggregates: Substrate keeps actor names out of metric labels.
+
+| Drawer | Chart | Series (each counts only what Substrate attributes) |
+|---|---|---|
+| WorkerPool | Workers by state | `ate_workerpool_workers`, averaged across API replicas (each reports the whole fleet) by pool, state and sandbox class; class `unknown` shown apart, since it is not capacity |
+| WorkerPool | Ready and desired workers | `ate_workerpool_{desired,ready}_workers` |
+| WorkerPool | Resume time (p50, p95), Failed resumes (%) | `ate_actor_lifecycle_operation_duration_seconds`, operation `resume`: only resumes of actors placed on this pool |
+| WorkerPool | Placement time (p95) | `ate_scheduler_assignment_duration_seconds`, outcome `assigned`. A placement that found no capacity names no pool, so it is not counted |
+| WorkerPool | Actor crashes per minute | `ate_actor_crashes_total`: only actors that had a worker of this pool |
+| Node | Oldest snapshot not yet in storage | `atelet_snapshot_undurable_age_max_seconds` |
+| Node | Actors with overdue uploads | `atelet_snapshot_upload_overdue_actors` by band |
+| Node | Snapshot upload time, Failed uploads | `atelet_snapshot_upload_duration_seconds` |
+| Node | Restore and checkpoint time | `ate_actor_{restore,checkpoint}_duration_seconds`, phase `total` (the two overlap; they are not added) |
+
+- **Names.** Radar reads the names Substrate's exporter and Prometheus's OTLP receiver produce by default (`ate_actor_crashes_total`, `*_seconds_bucket`, labels such as `ate_workerpool_name`). A pipeline that keeps UTF-8 names or sends native histograms reads as not found.
+- **Nodes.** atelet's series are attributed by the `node` label a Kubernetes scrape adds, as in Substrate's reference Prometheus configuration. Series without it are reported as not attributable rather than guessed from current Pods. A Node whose cluster serves no WorkerPools, or that runs no atelet, shows no section.
+- **Accuracy.** Each family's cluster identity is checked over the chart's range (ambiguous and mismatched identities are reported, not charted). A partial or warning answer from Prometheus is an error, not a chart. A counter family that arrives through more than one scrape job is reported instead of being added twice.
+- **Access.** `GET /api/prometheus/substrate/workerpools/{namespace}/{name}` requires `get` on that WorkerPool; `GET /api/prometheus/substrate/nodes/{name}` requires `get` on Nodes. Both are read-only and advertised by the `substrateHealthMetrics` capability, so Radar Hub asks only a Radar that serves them.
+
 **Not covered:** Substrate's actors, actor templates and worker assignments live in Substrate's own control plane (PostgreSQL behind a gRPC API), not in Kubernetes, so Radar does not see them. kagent's `api.kagent.dev` kinds are grouped in the sidebar but otherwise use generic discovery; the chart does not collect them by default. The drawer's conditions list shows each condition as recorded, so a settled sandbox's `Ready=False` keeps its red mark there. Topology shows the generic owner edges only (WorkerPool → Deployment → Pods; Sandbox → Pod).
 
 **Chart RBAC.** `rbac.crdGroups.agentSandbox` (`agents.x-k8s.io`, `extensions.agents.x-k8s.io`) and `rbac.crdGroups.agentSubstrate` (`ate.dev`) grant read access and are on by default. Sandboxes and SandboxTemplates carry Pod templates, which can hold inline environment values; with authentication on, users see them in namespaces they can read, like the Pods and Deployments there.

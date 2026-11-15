@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, useNodeRemovalPlan, useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
 import { getNodeLifecycle } from '@skyhook-io/k8s-ui/utils/node-lifecycle'
 import { serializeColumnFilters } from '../resource-utils'
+import { useAPIResources } from '../../../api/apiResources'
+import { SubstrateHealthCharts } from '../../resource/SubstrateHealthCharts'
 
 interface NodeRendererProps {
   data: any
@@ -34,8 +36,12 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
     s => s.dataPoints?.length > 0,
   ) ?? false)
   const hideMetricsServer = prometheusHasCPU || (prometheusConnected && prometheusCPULoading)
+  // Asked of Prometheus only on a cluster that serves Agent Substrate.
+  const { data: apiResources } = useAPIResources()
+  const servesSubstrate = apiResources?.some(r => r.group === 'ate.dev' && r.name === 'workerpools') === true
 
   return (
+    <>
     <BaseNodeRenderer
       data={data}
       removalPlan={removalPlan.data}
@@ -52,5 +58,7 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
       metricsUnavailable={metricsUnavailable}
       hideMetricsServer={hideMetricsServer}
     />
+    {servesSubstrate && nodeName && <SubstrateHealthCharts target={{ kind: 'node', name: nodeName }} />}
+    </>
   )
 }

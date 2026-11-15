@@ -32,6 +32,8 @@ func RegisterRoutes(r chi.Router) {
 	r.Get("/prometheus/pvc/{namespace}/{name}", handlePVCUsage)
 	r.Get("/prometheus/rightsizing/{kind}/{namespace}/{name}", handleRightsizing)
 	r.Get("/prometheus/workload/{kind}/{namespace}/{name}", handleWorkloadMetrics)
+	r.Get("/prometheus/substrate/workerpools/{namespace}/{name}", handleSubstrateWorkerPool)
+	r.Get("/prometheus/substrate/nodes/{name}", handleSubstrateNode)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
