@@ -9,7 +9,7 @@ function insight(rolledBack: boolean): GitOpsInsight {
     issues: rolledBack ? [{
       reason: 'RolledBack', scope: 'operation', severity: 'info',
       message: `Last rollback deployed ${'a'.repeat(40)} by alice.`,
-      cause: "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback.",
+      cause: "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback.",
     }] : [],
     changes: [{
       ref: { group: 'apps', kind: 'Deployment', namespace: 'default', name: 'demo' },
@@ -43,11 +43,11 @@ describe('rollback insights', () => {
   it('explains that resource Sync can undo the rollback', () => {
     const html = renderToString(<GitOpsChangesView insight={insight(true)} />)
     expect(html).toContain('Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.')
-    expect(html).not.toContain('Click Sync to apply the desired state.')
+    expect(html).not.toContain('Review the diff and sync policy before deciding whether to sync.')
   })
 
-  it('keeps ordinary manual-drift resource copy unchanged', () => {
-    expect(renderToString(<GitOpsChangesView insight={insight(false)} />)).toContain('Live state differs from Git. Click Sync to apply the desired state.')
+  it('asks for a review before deciding whether to sync ordinary drift', () => {
+    expect(renderToString(<GitOpsChangesView insight={insight(false)} />)).toContain('Live state differs from Git. Review the diff and sync policy before deciding whether to sync.')
   })
 })
 
@@ -69,5 +69,5 @@ it('keeps Missing health explanations rollback-aware without a confirmed missing
   data.changes![0].health = 'Missing'
   const html = renderToString(<GitOpsChangesView insight={data} />)
   expect(html).toContain('Declared in Git but not present in the cluster after a rollback. Sync can recreate it and undo the rollback.')
-  expect(html).not.toContain('Declared in Git but not present in the cluster. Sync to create it.')
+  expect(html).not.toContain('Declared in Git but not present in the cluster. Review the diff and sync policy before deciding whether to sync.')
 })

@@ -780,6 +780,29 @@ func TestDetectManualDriftWithoutAutoSync(t *testing.T) {
 	}
 }
 
+func TestManualDriftGuidanceDoesNotInferWhoInitiatesSync(t *testing.T) {
+	for _, explicitFalse := range []bool{false, true} {
+		t.Run(fmt.Sprint("explicit disabled: ", explicitFalse), func(t *testing.T) {
+			root := stuckLoopApp(t, func(u *unstructured.Unstructured) {
+				unstructured.RemoveNestedField(u.Object, "spec", "syncPolicy", "automated")
+				if explicitFalse {
+					_ = unstructured.SetNestedField(u.Object, false, "spec", "syncPolicy", "automated", "enabled")
+				}
+				_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{
+					"apiVersion": "argoproj.io/v1alpha1", "kind": "ApplicationSet", "name": "clusters", "uid": "parent", "controller": true,
+				}}, "metadata", "ownerReferences")
+			})
+			if describeArgoAutoSync(root) != "Manual" {
+				t.Fatal("auto-sync wire value changed")
+			}
+			issue := detectManualDriftWithoutAutoSync(root, "")
+			if issue == nil || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the diff in Changes and the sync policy before deciding whether to sync." {
+				t.Fatalf("unexpected guidance: %+v", issue)
+			}
+		})
+	}
+}
+
 func TestBuildIssuesArgoRollbackState(t *testing.T) {
 	ctx := context.Background()
 	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
@@ -838,7 +861,7 @@ func TestBuildIssuesArgoRollbackState(t *testing.T) {
 		{
 			name: "multi-source result names every revision", reason: "RolledBack",
 			message: "Last rollback deployed rev-a, rev-b by alice.",
-			cause:   "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revisions and can undo the rollback.",
+			cause:   "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revisions and can undo the rollback.",
 			mutate: func(u *unstructured.Unstructured) {
 				unstructured.RemoveNestedField(u.Object, "status", "operationState", "syncResult", "revision")
 				_ = unstructured.SetNestedStringSlice(u.Object, []string{"rev-a", "rev-b"}, "status", "operationState", "syncResult", "revisions")
@@ -929,13 +952,13 @@ func TestBuildIssuesArgoRollbackState(t *testing.T) {
 			if tc.reason == "RolledBack" {
 				wantCause := tc.cause
 				if wantCause == "" {
-					wantCause = "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback."
+					wantCause = "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current revision and can undo the rollback."
 				}
 				if issue.Cause != wantCause {
 					t.Fatalf("cause = %q, want %q", issue.Cause, wantCause)
 				}
 			}
-			if tc.reason == "ManualDrift" && (issue.Severity != SeverityWarning || issue.Message != "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync." || issue.Action != "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.") {
+			if tc.reason == "ManualDrift" && (issue.Severity != SeverityWarning || issue.Message != "Application is OutOfSync and auto-sync is disabled." || issue.Action != "Review the diff in Changes and the sync policy before deciding whether to sync.") {
 				t.Fatalf("manual drift changed: %+v", issue)
 			}
 		})
@@ -2332,7 +2355,7 @@ func TestBuildIssuesArgoDriftAdviceRespectsSyncHazards(t *testing.T) {
 		{"manual, shared", "ManualDrift", "also tracked by Application payments", nil, map[string]any{"conditions": shared}},
 		{"self-heal off, shared", "SelfHealDisabled", "also tracked by Application payments", map[string]any{"prune": true}, map[string]any{"conditions": shared}},
 		{"manual, empty render", "ManualDrift", "The render includes none of the resources this Application manages. A sync with Prune enabled could delete all of them. Prune=false blocks direct Argo pruning; Prune=confirm requires confirmation. Pruning a rendered Namespace deletes its contents, regardless of their Prune options.", nil, map[string]any{"resources": prunedResources()}},
-		{"manual, plain drift", "ManualDrift", "click Sync", nil, map[string]any{}},
+		{"manual, plain drift", "ManualDrift", "before deciding whether to sync", nil, map[string]any{}},
 	} {
 		status := map[string]any{"sync": map[string]any{"status": "OutOfSync"}}
 		for k, v := range tc.status {
@@ -2354,14 +2377,14 @@ func TestBuildIssuesArgoDriftAdviceRespectsSyncHazards(t *testing.T) {
 		if !strings.Contains(drift.Action, tc.wantAction) {
 			t.Errorf("%s: action %q, want %q", tc.name, drift.Action, tc.wantAction)
 		}
-		if tc.wantAction == "click Sync" {
+		if tc.wantAction == "before deciding whether to sync" {
 			if drift.Hazard != "" {
 				t.Errorf("%s: plain drift must not carry a hazard: %+v", tc.name, drift)
 			}
 		} else if drift.Hazard != drift.Action {
 			t.Errorf("%s: resource rows need the same hazard as the drift advice: %+v", tc.name, drift)
 		}
-		if tc.wantAction != "click Sync" && (strings.Contains(drift.Action, "click Sync") || strings.Contains(drift.Message, "click Sync") || strings.Contains(drift.Message, "until you sync")) {
+		if tc.wantAction != "before deciding whether to sync" && (strings.Contains(drift.Action, "click Sync") || strings.Contains(drift.Message, "click Sync") || strings.Contains(drift.Message, "until you sync")) {
 			t.Errorf("%s: sync advice despite the hazard: %+v", tc.name, drift)
 		}
 	}

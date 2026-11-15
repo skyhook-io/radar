@@ -667,11 +667,6 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			// OutOfSync badge — which the user has been staring at for hours.
 			out = append(out, *stuck)
 		} else if drift := detectManualDriftWithoutAutoSync(root, syncHazard); drift != nil {
-			// Manual drift without auto-sync: app is OutOfSync but auto-sync
-			// is off, so nothing will reconcile until a human clicks Sync.
-			// Common operator confusion: "I see drift, why isn't anything
-			// happening?" Answer: nothing is *supposed* to happen
-			// automatically.
 			out = append(out, *drift)
 		} else if drift := detectAutoDriftSelfHealOff(root, syncHazard); drift != nil {
 			// Auto-sync on but self-heal off: Argo deploys new Git revisions
@@ -2235,9 +2230,8 @@ func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
 }
 
 // detectManualDriftWithoutAutoSync emits a warning when an Argo Application
-// is OutOfSync but auto-sync is disabled. The user otherwise has no signal
-// that the drift won't resolve on its own. A proven successful rollback
-// instead records the last rollback without claiming the live state is unchanged.
+// is OutOfSync but auto-sync is disabled. A proven successful rollback
+// records the last rollback without claiming the live state is unchanged.
 //
 // Returns nil when conditions don't match — caller appends only on hit.
 func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazard string) *Issue {
@@ -2265,7 +2259,7 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazar
 			Scope:    ScopeOperation,
 			Reason:   "RolledBack",
 			Message:  message + ".",
-			Cause:    "Auto-sync is off, so Argo won't deploy a new revision on its own. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current " + revisionLabel + " and can undo the rollback.",
+			Cause:    "Auto-sync is off. Changes made since the rollback can also show as drift. Syncing or enabling auto-sync deploys the current " + revisionLabel + " and can undo the rollback.",
 		}
 		if syncHazard != "" {
 			issue.Action = syncHazard
@@ -2277,11 +2271,10 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured, syncHazar
 		Severity: SeverityWarning,
 		Scope:    ScopeOperation,
 		Reason:   "ManualDrift",
-		Message:  "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync.",
-		Action:   "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.",
+		Message:  "Application is OutOfSync and auto-sync is disabled.",
+		Action:   "Review the diff in Changes and the sync policy before deciding whether to sync.",
 	}
 	if syncHazard != "" {
-		issue.Message = "Application is OutOfSync and auto-sync is disabled, so nothing reconciles it automatically."
 		issue.Action = syncHazard
 		issue.Hazard = syncHazard
 	}

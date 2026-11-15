@@ -290,7 +290,7 @@ function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsigh
             <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
           )}
           <SummaryTiming summary={summary} />
-          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
+          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode === 'Manual' ? 'Auto-sync off' : summary.autoSyncMode} />}
         </div>
       </Collapse>
     </div>
@@ -1322,10 +1322,6 @@ function refKey(ref: { kind: string; namespace?: string; name: string }): string
 // nor a health message is available — otherwise those carry the truth and
 // this would just add noise. Empty string falls through to no row content.
 //
-// The "what to do" framing is intentional: badges already communicate state
-// ("OutOfSync"); the row should communicate what the operator should do
-// about it. With auto-sync on the answer is usually "wait, Argo will fix
-// it"; with manual mode the answer is "click Sync".
 function explainChangeStatus(
   sync: string | undefined,
   health: string | undefined,
@@ -1349,11 +1345,11 @@ function explainChangeStatus(
     if (inFlight) return 'Live state differs from Git. A sync is in progress — wait for it to finish.'
     if (context?.rolledBack) return 'Live state differs from Git after a rollback. Sync applies the desired state and can undo the rollback.'
     if (isAuto) return 'Live state differs from Git. Auto-sync should reconcile this within a few minutes; click Sync to force it.'
-    return 'Live state differs from Git. Click Sync to apply the desired state.'
+    return 'Live state differs from Git. Review the diff and sync policy before deciding whether to sync.'
   }
   if (health === 'Missing' && parentFailed) return 'Resource was not created — see the operation error above for the cause.'
   if (health === 'Degraded') return 'Resource reports an unhealthy state. Open the resource for events and logs.'
-  if (health === 'Missing') return 'Declared in Git but not present in the cluster. Sync to create it.'
+  if (health === 'Missing') return 'Declared in Git but not present in the cluster. Review the diff and sync policy before deciding whether to sync.'
   if (health === 'Progressing') return 'Resource is mid-rollout (e.g. pods coming up). Should converge shortly.'
   if (health === 'Suspended') return 'Resource is paused (e.g. CronJob suspended, HPA disabled). Intentional unless surprising.'
   return ''
