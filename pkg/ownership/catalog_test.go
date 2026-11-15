@@ -129,3 +129,38 @@ func TestZeroReadIsUnavailable(t *testing.T) {
 		t.Fatalf("zero read = %v; an unset read must never claim an answer", r.State)
 	}
 }
+
+func TestCatalogCoversOnlyGroupsDiscoveryAnswered(t *testing.T) {
+	groups := []string{"", "apps", "argoproj.io", "metrics.k8s.io", "external.metrics.k8s.io"}
+	for _, tc := range []struct {
+		name     string
+		complete bool
+		failed   []string
+	}{
+		{name: "complete", complete: true},
+		{name: "metrics failed", failed: []string{"metrics.k8s.io", "external.metrics.k8s.io"}},
+		{name: "Argo failed", failed: []string{"argoproj.io"}},
+		{name: "core failed", failed: []string{""}},
+		{name: "built-in group failed", failed: []string{"apps"}},
+		{name: "whole discovery failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCatalog(nil, tc.complete, tc.failed...)
+			for _, group := range groups {
+				want := tc.complete || len(tc.failed) > 0 && !slices.Contains(tc.failed, group)
+				if got := c.CoversGroup(group); got != want {
+					t.Errorf("CoversGroup(%q) = %v, want %v", group, got, want)
+				}
+			}
+			if c.Complete() != tc.complete {
+				t.Fatalf("Complete = %v, want %v", c.Complete(), tc.complete)
+			}
+		})
+	}
+	failed := []string{"metrics.k8s.io"}
+	c := NewCatalog(nil, false, failed...)
+	failed[0] = "argoproj.io"
+	if c.CoversGroup("metrics.k8s.io") || !c.CoversGroup("argoproj.io") {
+		t.Fatal("a caller's failed-group slice changed the immutable catalog")
+	}
+}

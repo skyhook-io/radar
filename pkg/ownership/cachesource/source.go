@@ -55,7 +55,7 @@ func catalogOf(discovery *k8score.ResourceDiscovery) *ownership.Catalog {
 			Group: r.Group, Version: r.Version, Kind: r.Kind, Resource: r.Name, Namespaced: r.Namespaced, Verbs: r.Verbs,
 		})
 	}
-	return ownership.NewCatalog(served, snapshot.Complete)
+	return ownership.NewCatalog(served, snapshot.Complete, snapshot.FailedGroups...)
 }
 
 // typedKinds are the kinds the typed cache holds, keyed to the built-in that
@@ -157,7 +157,7 @@ func (s *session) dynamicObject(ref resourceid.Ref, borrow func(*unstructured.Un
 	}
 	kind, known := s.catalog.Kind(ref.GroupKind())
 	if !known {
-		if !s.catalog.Complete() {
+		if !s.catalog.CoversGroup(ref.Group) {
 			// The group discovery missed may serve it.
 			return unavailable(ref, readreason.ReadError)
 		}
