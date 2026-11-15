@@ -33,6 +33,7 @@ var readStatus = map[readreason.Code]int{
 	readreason.KindSyncPending:            http.StatusServiceUnavailable,
 	readreason.KindSyncTimedOut:           http.StatusServiceUnavailable,
 	readreason.RadarKindNotCollected:      http.StatusServiceUnavailable,
+	readreason.IndexMissing:               http.StatusServiceUnavailable,
 	readreason.KindUnknown:                http.StatusBadRequest,
 	readreason.KindNotWatchable:           http.StatusBadRequest,
 	readreason.KindNotSearchable:          http.StatusBadRequest,
@@ -230,6 +231,8 @@ func dynamicPlanFailure(resource string, code readreason.Code) *resourceReadFail
 		return readFailuref(code, "Radar's access check for %s failed, so it can't say what exists there; retry", resource)
 	case readreason.RadarKindNotCollected:
 		return readFailuref(code, "Radar is not watching %s", resource)
+	case readreason.IndexMissing:
+		return readFailuref(code, "Radar's store of %s lacks an index this answer needs", resource)
 	default:
 		return readFailuref(code, "%s are still loading, please retry shortly", resource)
 	}
