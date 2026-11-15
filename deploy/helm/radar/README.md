@@ -763,6 +763,7 @@ retain their finite grants.
 | `tekton` | `tekton.dev` |
 | `traefik` | `traefik.io`, `traefik.containo.us` |
 | `trivy` | `aquasecurity.github.io` |
+| `longhorn` | `longhorn.io` (`volumes`, `engines`, `replicas`), read-only volume health; on by default. |
 | `velero` | `velero.io` |
 | `verticalPodAutoscaler` | `autoscaling.k8s.io` |
 

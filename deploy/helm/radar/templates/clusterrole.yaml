@@ -607,6 +607,11 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.longhorn }}
+  - apiGroups: ["longhorn.io"]
+    resources: ["volumes", "engines", "replicas"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.velero }}
   - apiGroups: ["velero.io"]
     resources: ["*"]

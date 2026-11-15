@@ -117,6 +117,7 @@
             "tekton": { "type": "boolean" },
             "traefik": { "type": "boolean" },
             "trivy": { "type": "boolean" },
+            "longhorn": { "type": "boolean" },
             "velero": { "type": "boolean" }
           }
         },

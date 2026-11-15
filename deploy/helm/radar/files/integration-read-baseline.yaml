@@ -878,6 +878,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "longhorn.io"
+    resources: ["volumes","engines","replicas"]
+    scope: Namespaced
+    collection: "longhorn"
+    decision: grant
+    reason: "Volume, engine and replica state: sizes, nodes, replica modes, rebuild progress and backup times. No credentials (spec.fromBackup is a backup URL, not a secret). They live in the Longhorn namespace, so a namespace-scoped caller usually can't read them."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
   - group: "velero.io"
     resources: ["backuprepositories","backups","backupstoragelocations","restores","schedules","volumesnapshotlocations"]
     scope: Namespaced

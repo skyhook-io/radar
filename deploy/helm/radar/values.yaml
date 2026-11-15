@@ -244,6 +244,7 @@ rbac:
     tekton: true            # tekton.dev
     traefik: true           # traefik.io, traefik.containo.us
     trivy: true             # aquasecurity.github.io
+    longhorn: true          # longhorn.io volumes, engines and replicas (read-only)
     velero: true            # velero.io
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
     volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh
