@@ -46,6 +46,20 @@ entries:
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "internal/k8s/dynamic_cache.go; existing cloud-rbac-cluster-read.yaml"
   - group: "kafka.strimzi.io"
+    resources: ["kafkas"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Broker configuration and listener authentication settings can contain credentials; the drawer adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-Kafka-reference"
+  - group: "kafka.strimzi.io"
+    resources: ["kafkanodepools"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Pool templates and JVM options can embed credentials; the drawer adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaNodePool-reference"
+  - group: "kafka.strimzi.io"
     resources: ["kafkaconnects"]
     scope: Namespaced
     collection: "strimzi"
