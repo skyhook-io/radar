@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -196,6 +198,12 @@ func withOwnershipDiscovery(t *testing.T) {
 			{Name: "services", Kind: "Service", Namespaced: true, Verbs: verbs},
 			{Name: "limitranges", Kind: "LimitRange", Namespaced: true, Verbs: verbs},
 			{Name: "namespaces", Kind: "Namespace", Verbs: verbs},
+			{Name: "nodes", Kind: "Node", Verbs: verbs},
+			{Name: "persistentvolumes", Kind: "PersistentVolume", Verbs: verbs},
+			{Name: "persistentvolumeclaims", Kind: "PersistentVolumeClaim", Namespaced: true, Verbs: verbs},
+		}},
+		{GroupVersion: "storage.k8s.io/v1", APIResources: []metav1.APIResource{
+			{Name: "storageclasses", Kind: "StorageClass", Verbs: verbs},
 		}},
 		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{
 			{Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: verbs},
@@ -273,36 +281,23 @@ func TestResourceGetAnswersOwnershipFromOwnerReferences(t *testing.T) {
 	}
 }
 
-// Until Radar can build a relationship graph, as after a context switch whose
-// build the switch overtook, a GET sends no relationships: the UI reads that as
-// owners not mapped yet, and its GitOps write guard warns instead of finding
-// no manager.
-func TestResourceGetWithoutAGraphSendsNoRelationships(t *testing.T) {
+func TestDrawerWithoutCapturedObjectSendsNoRelationships(t *testing.T) {
+	if rel := testServerSrv.relationshipsFor(httptest.NewRequest(http.MethodGet, "/", nil), "Deployment", "default", "nginx", nil); rel != nil {
+		t.Fatalf("relationships = %+v; want none without a captured object", rel)
+	}
+}
+
+func TestDrawerDoesNotRequireABroadcasterGraph(t *testing.T) {
 	withOwnershipDiscovery(t)
-	b := testServerSrv.broadcaster
-	b.cachedTopologyMu.Lock()
-	topo, idx, dirty, rebuild := b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty, b.rebuildTopology
-	b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty = nil, nil, false
-	b.rebuildTopology = func() bool { return false }
-	b.cachedTopologyMu.Unlock()
-	t.Cleanup(func() {
-		b.cachedTopologyMu.Lock()
-		b.cachedTopology, b.cachedTopologyIndex, b.cachedTopologyDirty, b.rebuildTopology = topo, idx, dirty, rebuild
-		b.cachedTopologyMu.Unlock()
-	})
-	resp, err := http.Get(testServer.URL + "/api/resources/deployments/default/nginx?group=apps")
+	obj, err := k8s.FetchResource(k8s.GetResourceCache(), "deployments", "default", "nginx")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	var body struct {
-		Relationships *topology.Relationships `json:"relationships"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusOK || body.Relationships != nil {
-		t.Fatalf("status %d, relationships %+v; want none without a graph", resp.StatusCode, body.Relationships)
+	k8s.SetTypeMeta(obj)
+	s := &Server{}
+	rel := s.relationshipsFor(httptest.NewRequest(http.MethodGet, "/", nil), "Deployment", "default", "nginx", obj)
+	if rel == nil || rel.Ownership == nil || len(rel.Children) != 1 || rel.Children[0].Name != "nginx-abc" {
+		t.Fatalf("family answer without a broadcaster = %+v", rel)
 	}
 }
 
@@ -529,5 +524,70 @@ func TestRelationshipAccessCountsAnUnservedMemberAsUnknown(t *testing.T) {
 	}
 	if !slices.ContainsFunc(got.Gaps, func(g ownership.Gap) bool { return g.Kind == gone.GroupKind() && g.Reason == readreason.KindUnknown }) {
 		t.Fatalf("gaps = %+v; want the unserved kind named as unknown", got.Gaps)
+	}
+}
+
+func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
+	withOwnershipDiscovery(t)
+	class := "fast"
+	objects := []runtime.Object{
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "visible"}, Spec: corev1.PodSpec{NodeName: "node", Volumes: []corev1.Volume{{Name: "secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "hidden-secret"}}}}}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "beta", Name: "hidden-pod"}, Spec: corev1.PodSpec{NodeName: "node"}},
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "claim"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "hidden-volume", StorageClassName: &class}},
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "beta", Name: "hidden-claim"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}},
+		&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "hidden-volume"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "hidden-secret"}},
+		&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}},
+	}
+	useTestResourceCache(t, fake.NewClientset(objects...))
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
+	perms.SetCanI("list", "*", "*", "", false)
+	perms.SetCanI("list", "", "nodes", "", true)
+	perms.SetCanI("list", "", "secrets", "alpha", false)
+	perms.SetCanI("list", "", "persistentvolumes", "", false)
+	perms.SetCanI("list", "storage.k8s.io", "storageclasses", "", false)
+	env.srv.permCache.Set("drawer", nil, perms)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "drawer"}))
+	answer := func(obj runtime.Object) *topology.Relationships {
+		k8s.SetTypeMeta(obj)
+		rel := env.srv.relationshipsFor(r, "", "", "", obj)
+		if rel == nil {
+			t.Fatal("missing family answer")
+		}
+		data, err := json.Marshal(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, hidden := range []string{"hidden-pod", "hidden-claim", "hidden-volume", "hidden-secret", `"name":"fast"`} {
+			if hidden == `"name":"fast"` && obj.GetObjectKind().GroupVersionKind().Kind == "StorageClass" {
+				continue
+			}
+			if strings.Contains(string(data), hidden) {
+				t.Fatalf("hidden reference %s in %s", hidden, data)
+			}
+		}
+		return rel
+	}
+	if rel := answer(objects[0]); len(rel.Pods) != 1 || rel.Pods[0].Name != "visible" {
+		t.Fatalf("Node pods = %+v", rel.Pods)
+	}
+	answer(objects[1])
+	answer(objects[3])
+	perms.SetCanI("list", "", "nodes", "", false)
+	if rel := answer(objects[1]); rel.Node != nil {
+		t.Fatalf("denied Node = %+v", rel.Node)
+	}
+	perms.SetCanI("list", "storage.k8s.io", "storageclasses", "", true)
+	if rel := answer(objects[7]); len(rel.Consumers) != 1 || rel.Consumers[0].Kind != "PersistentVolumeClaim" || rel.Consumers[0].Namespace != "alpha" {
+		t.Fatalf("StorageClass consumers = %+v", rel.Consumers)
+	}
+	perms.SetCanI("list", "", "secrets", "alpha", true)
+	k8s.SetTypeMeta(objects[1])
+	rel := env.srv.relationshipsFor(r, "", "", "", objects[1])
+	if rel == nil || !slices.ContainsFunc(rel.ConfigRefs, func(ref topology.ResourceRef) bool { return ref.Kind == "Secret" && ref.Name == "hidden-secret" }) {
+		t.Fatalf("allowed Secret missing: %+v", rel)
 	}
 }

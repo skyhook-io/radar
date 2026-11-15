@@ -6,6 +6,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
@@ -179,6 +180,10 @@ func AnswerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 		return nil, nil
 	}
 	provider := NewTopologyResourceProvider(&ResourceCache{ResourceCache: caches.Typed})
+	if istioDomain == "" {
+		deployments, _ := provider.Deployments()
+		istioDomain = configrefs.IstioServiceDomain(deployments)
+	}
 	var dp topology.DynamicProvider
 	if caches.Dynamic != nil && caches.Discovery != nil {
 		dp = NewTopologyDynamicProvider(&DynamicResourceCache{DynamicResourceCache: caches.Dynamic}, &ResourceDiscovery{ResourceDiscovery: caches.Discovery})

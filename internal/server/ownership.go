@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"slices"
 
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -166,41 +166,16 @@ func (a *requestAccess) Namespaces() ([]string, bool) {
 	return a.namespaces, a.namespaces == nil
 }
 
-// relationshipsFor is a fetched resource's Related Resources: the links the
-// relationship graph holds, with ownership answered from owner references
-// for the request's user. It is nil when Radar has no graph and can't build
-// one, as before it connects or when a context switch overtakes the build:
-// without one Radar can't say what manages the object, and the UI reads a missing field as owners not mapped
-// yet, which its GitOps write guard warns about.
+// relationshipsFor answers a fetched resource's Related Resources within the
+// request's namespace and kind access. Missing or replaced caches leave the
+// answer unavailable so the write guard cannot mistake it for no manager.
 func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string, resource any) *topology.Relationships {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil
-	}
-	cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex()
-	if cachedTopo == nil {
-		return nil
-	}
-	user := auth.UserFromContext(r.Context()) != nil
-	if user {
-		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
-		relIdx = nil
-	}
-	rel := topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
-		k8s.NewTopologyResourceProvider(cache),
-		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
-	if user && rel != nil {
-		s.withholdDirectLookups(r, rel)
-	}
-	fetched, ok := k8s.OwnershipObservation(resource)
+	obj, ok := resource.(runtime.Object)
 	if !ok {
-		return rel
+		return nil
 	}
-	if rel == nil {
-		rel = &topology.Relationships{}
-	}
-	owner, _ := apimeta.Accessor(resource)
-	k8s.AnswerOwnership(rel, fetched, owner, func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) })
+	access := func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }
+	rel, _ := k8s.AnswerRelationships(k8s.GetResourceCache(), obj, access, access, "")
 	return rel
 }
 

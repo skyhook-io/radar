@@ -6,15 +6,18 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/cachesource"
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -96,18 +99,17 @@ func charSource(t *testing.T, f *charFixture) ownership.Source {
 }
 
 // charDrawer records what the drawer and MCP get_resource show for every
-// fixture object: Related Resources from the relationship cache, with
+// fixture object: Related Resources from the families, with
 // ownership answered from owner references for a caller who may read
 // everything.
 func charDrawer(t *testing.T, f *charFixture) []byte {
 	t.Helper()
-	topo := charBuild(t, f, charSSEOptions())
-	idx := IndexByResource(topo)
 	s, err := charSource(t, f).Begin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := ownership.NewView(s, ownership.Unrestricted())
+	deployments, _ := f.provider.Deployments()
+	rs := s.(relations.Session)
 	type record struct {
 		Root          string         `json:"root"`
 		Relationships *Relationships `json:"relationships"`
@@ -115,12 +117,26 @@ func charDrawer(t *testing.T, f *charFixture) []byte {
 	records := make([]record, 0, len(f.objects))
 	for _, o := range f.objects {
 		ref := o.ref()
-		rel := GetRelationshipsWithObject(o.resource, ref.Namespace, ref.Name, o.obj, topo, f.provider, f.dynamic, idx)
-		if rel == nil {
-			// REST answers ownership for an object the graph links to nothing.
-			rel = &Relationships{}
+		obj := o.obj.(runtime.Object).DeepCopyObject()
+		obj.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{Group: o.group, Version: "v1", Kind: o.kind})
+		subject := resourceid.NewRef(o.group, o.kind, ref.Namespace, ref.Name)
+		captured, ok := relations.CaptureSubject(rs, subject, obj)
+		if !ok {
+			t.Fatalf("capture %s", o.key())
 		}
-		ApplyOwnership(rel, v, ownership.Observe(resourceid.Ref{Group: o.group, Kind: o.kind, Namespace: ref.Namespace, Name: ref.Name}, o.obj))
+		v := ownership.NewView(captured, ownership.Unrestricted())
+		rel, _ := RelationsAnswer(captured, ownership.Unrestricted(), ownership.Unrestricted(), v, subject, obj, configrefs.IstioServiceDomain(deployments), f.provider, f.dynamic)
+		ApplyOwnership(rel, v, ownership.Observe(subject, o.obj))
+		typed, _ := cachesource.TypedCache(s)
+		SplitOlderRevisions(rel, subject.GroupKind(), o.obj.GetAnnotations(), func(namespace, name string) (*appsv1.ReplicaSet, bool, bool) {
+			obj, found, ok := typed.ReadableObject(k8score.ReplicaSets, namespace, name)
+			rs, isReplicaSet := obj.(*appsv1.ReplicaSet)
+			if !ok || !found || !isReplicaSet {
+				return nil, false, false
+			}
+			pods, ok := typed.ReadableDependents(k8score.Pods, []string{namespace}, string(rs.UID))
+			return rs, len(pods) > 0, ok
+		})
 		canonicalRefLists(reflect.ValueOf(rel))
 		records = append(records, record{Root: o.key(), Relationships: rel})
 	}
