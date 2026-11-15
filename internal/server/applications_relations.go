@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -153,13 +154,37 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 		if !appNeedsDisposition(f.Projection) {
 			continue
 		}
-		var candidates []relations.Candidate
+		type labelPair struct{ key, value string }
+		type candidateBucket struct {
+			all    []relations.Candidate
+			labels map[labelPair][]int
+		}
+		candidates := map[resourceid.GroupKind]map[string]*candidateBucket{}
 		for _, selectable := range f.Selectables {
 			for _, o := range objects(selectable.Kind).Objects {
 				c, ok := selectable.Candidate(o.Object, lookup)
 				if ok {
 					c.Ref = o.Ref
-					candidates = append(candidates, c)
+					byNamespace := candidates[o.Ref.GroupKind()]
+					if byNamespace == nil {
+						byNamespace = map[string]*candidateBucket{}
+						candidates[o.Ref.GroupKind()] = byNamespace
+					}
+					bucket := byNamespace[o.Ref.Namespace]
+					if bucket == nil {
+						bucket = &candidateBucket{}
+						if f == relations.ServiceSelectors {
+							bucket.labels = map[labelPair][]int{}
+						}
+						byNamespace[o.Ref.Namespace] = bucket
+					}
+					bucket.all = append(bucket.all, c)
+					if bucket.labels != nil {
+						for key, value := range c.Labels {
+							pair := labelPair{key, value}
+							bucket.labels[pair] = append(bucket.labels[pair], len(bucket.all)-1)
+						}
+					}
 				}
 			}
 		}
@@ -186,21 +211,53 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 				if err != nil || !ok {
 					continue
 				}
-				for _, c := range candidates {
-					if len(selector.Selects) > 0 && !slices.Contains(selector.Selects, c.Ref.GroupKind()) {
+				for _, selectable := range f.Selectables {
+					if len(selector.Selects) > 0 && !slices.Contains(selector.Selects, selectable.Kind) {
 						continue
 					}
-					inScope := c.Ref.Namespace == o.Ref.Namespace
+					byNamespace := candidates[selectable.Kind]
+					matchBucket := func(bucket *candidateBucket) {
+						if bucket == nil {
+							return
+						}
+						project := func(c relations.Candidate) {
+							if yes, _ := selection.Matches(c, lookup); yes {
+								b.project(f.Projection, o.Ref, c.Ref)
+							}
+						}
+						if f == relations.ServiceSelectors {
+							service := o.Object.(*corev1.Service)
+							var matching []int
+							first := true
+							for key, value := range service.Spec.Selector {
+								subset := bucket.labels[labelPair{key, value}]
+								if first || len(subset) < len(matching) {
+									matching, first = subset, false
+								}
+							}
+							for _, index := range matching {
+								project(bucket.all[index])
+							}
+							return
+						}
+						for _, c := range bucket.all {
+							project(c)
+						}
+					}
 					if selection.AnyNamespace {
-						inScope = true
-					} else if len(selection.Namespaces) > 0 {
-						inScope = slices.Contains(selection.Namespaces, c.Ref.Namespace)
-					}
-					if !inScope {
-						continue
-					}
-					if yes, _ := selection.Matches(c, lookup); yes {
-						b.project(f.Projection, o.Ref, c.Ref)
+						for _, bucket := range byNamespace {
+							matchBucket(bucket)
+						}
+					} else {
+						namespaces := selection.Namespaces
+						if len(namespaces) == 0 {
+							namespaces = []string{o.Ref.Namespace}
+						}
+						for i, namespace := range namespaces {
+							if !slices.Contains(namespaces[:i], namespace) {
+								matchBucket(byNamespace[namespace])
+							}
+						}
 					}
 				}
 			}

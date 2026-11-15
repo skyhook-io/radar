@@ -1509,7 +1509,7 @@ func listDynamicByNamespaces(ctx context.Context, cache *k8s.ResourceCache, name
 func listDynamicByNamespacesGroup(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, kind, group string) []*unstructured.Unstructured {
 	var out []*unstructured.Unstructured
 	forEachWorkloadNamespace(namespaces, func(ns string) {
-		items, err := cache.ListDynamicWithGroup(ctx, kind, ns, group)
+		items, err := cache.ListDynamicReadOnlyWithGroup(ctx, kind, ns, group)
 		if err != nil {
 			return
 		}
@@ -1519,7 +1519,7 @@ func listDynamicByNamespacesGroup(ctx context.Context, cache *k8s.ResourceCache,
 }
 
 func listDynamicClusterScoped(ctx context.Context, cache *k8s.ResourceCache, kind, group string) []*unstructured.Unstructured {
-	items, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
+	items, err := cache.ListDynamicReadOnlyWithGroup(ctx, kind, "", group)
 	if err != nil {
 		return nil
 	}

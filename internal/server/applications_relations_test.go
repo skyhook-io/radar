@@ -96,6 +96,16 @@ func TestApplicationsBatchAttachmentParity(t *testing.T) {
 			t.Fatalf("watch %v: %v", gvr, err)
 		}
 	}
+	borrowed := map[*unstructured.Unstructured]*unstructured.Unstructured{}
+	for gvr := range kinds {
+		items, err := k8s.GetDynamicResourceCache().ListReadOnlyContext(context.Background(), gvr, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			borrowed[item] = item.DeepCopy()
+		}
+	}
 	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +144,17 @@ func TestApplicationsBatchAttachmentParity(t *testing.T) {
 		t.Fatalf("HTTPRoute attachments=%#v want nil", got)
 	}
 
+	clearApplicationsCache()
+	t.Cleanup(clearApplicationsCache)
+	if _, err := listApplicationsForRequest(context.Background(), []string{"prod"}, false); err != nil {
+		t.Fatal(err)
+	}
+	for item, before := range borrowed {
+		if !reflect.DeepEqual(item, before) {
+			t.Fatalf("Applications mutated %s/%s", item.GetKind(), item.GetName())
+		}
+	}
+
 }
 
 func TestApplicationsExistingControllerKeyParity(t *testing.T) {
@@ -153,5 +174,64 @@ func TestApplicationsExistingControllerKeyParity(t *testing.T) {
 	rows := groupApplications(inputs)
 	if len(rows) != 1 || rows[0].Key != "prod/HelmRelease/other" {
 		t.Fatalf("controller fixture keys changed: %+v", rows)
+	}
+}
+
+func TestApplicationsSelectorBatchScopesAndPredicates(t *testing.T) {
+	objects := testNamespaces("prod", "other")
+	for _, ns := range []string{"prod", "other"} {
+		for name, labels := range map[string]map[string]string{
+			"api":          {"app": "api", "tier": "web"},
+			"backend":      {"app": "api", "tier": "backend"},
+			"missing-tier": {"app": "api"},
+			"disabled":     {"app": "api", "tier": "web", "disabled": ""},
+		} {
+			objects = append(objects, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}}}})
+		}
+	}
+	objects = append(objects,
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "api"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "api", "tier": "web", "disabled": ""}}},
+		&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "budget"}, Spec: policyv1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}, MatchExpressions: []metav1.LabelSelectorRequirement{
+			{Key: "tier", Operator: metav1.LabelSelectorOpIn, Values: []string{"web"}},
+			{Key: "tier", Operator: metav1.LabelSelectorOpNotIn, Values: []string{"backend"}},
+			{Key: "app", Operator: metav1.LabelSelectorOpExists},
+			{Key: "disabled", Operator: metav1.LabelSelectorOpDoesNotExist},
+		}}}},
+	)
+	useTestResourceCache(t, fake.NewClientset(objects...))
+	gvr := schema.GroupVersionResource{Group: "projectcalico.org", Version: "v3", Resource: "globalnetworkpolicies"}
+	policy := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "projectcalico.org/v3", "kind": "GlobalNetworkPolicy", "metadata": map[string]any{"name": "global"},
+		"spec": map[string]any{"selector": "app == 'api' && tier == 'web'"},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "GlobalNetworkPolicyList"}, policy)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "GlobalNetworkPolicy", IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	addApplicationTypedDiscovery()
+	dc := k8s.GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 2*time.Second) {
+		t.Fatalf("watch %v: %v", gvr, err)
+	}
+	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := buildAppRelationBatch(context.Background(), session.(relations.Session), nil)
+	want := map[string]map[resourceid.Ref][]topology.ResourceRef{
+		"Services": {resourceid.NewRef("apps", "Deployment", "prod", "disabled"): {{Kind: "Service", Namespace: "prod", Name: "api"}}},
+		"PDBs":     {resourceid.NewRef("apps", "Deployment", "prod", "api"): {{Group: "policy", Kind: "PodDisruptionBudget", Namespace: "prod", Name: "budget"}}},
+	}
+	want["NetworkPolicies"] = map[resourceid.Ref][]topology.ResourceRef{}
+	for _, ns := range []string{"prod", "other"} {
+		for _, name := range []string{"api", "disabled"} {
+			want["NetworkPolicies"][resourceid.NewRef("apps", "Deployment", ns, name)] = []topology.ResourceRef{{Group: gvr.Group, Kind: "GlobalNetworkPolicy", Name: "global"}}
+		}
+	}
+	for field, refs := range want {
+		if !reflect.DeepEqual(batch.fields[field], refs) {
+			t.Fatalf("%s=%#v want=%#v", field, batch.fields[field], refs)
+		}
 	}
 }
