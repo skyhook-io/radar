@@ -388,7 +388,7 @@ func TestRelationshipReadBindsCapturedCache(t *testing.T) {
 		if _, err := BeginOwnershipRead(wrong); !errors.Is(err, ownership.ErrCachesReplaced) {
 			t.Fatalf("wrong cache: %v", err)
 		}
-		answer, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, "")
+		answer, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, nil, "")
 		if answer != nil {
 			t.Fatalf("answer after cache mismatch: %+v", answer)
 		}
@@ -417,5 +417,41 @@ func TestRelationshipCaptureIncludesManagerStatus(t *testing.T) {
 	members := captured.Members(ref)
 	if members.Manager.State != ownership.Present || members.Membership != ownership.MembersRecorded || len(members.Members) != 1 || members.Members[0].Name != "web" {
 		t.Fatalf("captured status not used: %+v", members)
+	}
+}
+
+func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
+	_, typed, source, deployment := historyFixture(t)
+	session, err := source.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, _ := cachesource.SessionCaches(session)
+	previous := ownershipSource
+	ownershipSource = cachesource.New(func() cachesource.Caches { return current })
+	t.Cleanup(func() { ownershipSource = previous })
+	captured := &ResourceCache{ResourceCache: typed}
+	obj := deployment.DeepCopy()
+	obj.SetAPIVersion("apps/v1")
+	obj.SetKind("Deployment")
+	obj.UID = "new-incarnation"
+	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+	rel, coverage := AnswerRelationships(captured, obj, access, access, "")
+	if rel == nil || coverage["subject"].SubjectState != "replaced" || rel.Owner != nil || len(rel.Children)+len(rel.Managers)+len(rel.ConfigRefs) > 0 {
+		t.Fatalf("replaced subject: %+v, %+v", rel, coverage)
+	}
+	obj.UID = deployment.UID
+	obj.ResourceVersion = "new-version"
+	rel, coverage = AnswerRelationships(captured, obj, access, access, "")
+	if rel == nil || coverage["subject"].SubjectState != "" {
+		t.Fatalf("same UID refused: %+v, %+v", rel, coverage)
+	}
+	switched := func(*ownership.Catalog) ownership.Access {
+		current.Typed = &k8score.ResourceCache{}
+		return ownership.Unrestricted()
+	}
+	rel, coverage = AnswerRelationships(captured, obj, switched, access, "")
+	if rel != nil || coverage != nil {
+		t.Fatalf("published after cache replacement: %+v, %+v", rel, coverage)
 	}
 }

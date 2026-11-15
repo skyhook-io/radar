@@ -89,6 +89,7 @@ type neighborhood struct {
 	nodes    map[resourceid.Ref]bool
 	edges    map[string]bool
 	coverage map[string]relations.Coverage
+	access   ownership.Access
 }
 
 // familyNodeID is a node ID parseNodeID can't read, so a node's identity
@@ -111,6 +112,9 @@ func (n *neighborhood) node(r resourceid.Ref) string {
 }
 
 func (n *neighborhood) edge(from, to resourceid.Ref, e relationEdge, partial bool) {
+	if !n.allowed(from) || !n.allowed(to) {
+		return
+	}
 	source, target := from, to
 	if e.reverse {
 		source, target = to, from
@@ -192,9 +196,12 @@ func (n *neighborhood) answer(v *relations.View, families []*relations.Family, s
 // Node's Pods, a Pod's spec) are made as before through provider. ov is the
 // ownership view the caller answers ownership with, whose searches it
 // shares. The coverage is keyed by family and holds only incomplete answers.
-func RelationsAnswer(session relations.Session, access ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
+func RelationsAnswer(session relations.Session, access, traverse ownership.Access, ov *ownership.View, subject resourceid.Ref, obj runtime.Object, istioDomain string, provider ResourceProvider, dp DynamicProvider) (*Relationships, map[string]relations.Coverage) {
+	if obj == nil || access.CanRead(subject.GroupKind(), subject.Namespace) != ownership.Allowed {
+		return &Relationships{}, nil
+	}
 	v := relations.NewView(session, access)
-	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}}
+	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access}
 	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
 	n.answer(v, families, selectors, subject, obj, false)
@@ -230,7 +237,12 @@ func RelationsAnswer(session relations.Session, access ownership.Access, ov *own
 		}
 	}
 
-	rel := GetRelationshipsWithObject(subject.Kind, subject.Namespace, subject.Name, obj, &n.topo, provider, dp, nil)
+	provider = &relationDirectProvider{ResourceProvider: provider, session: session, n: n}
+	rel := getRelationshipsWithObject(subject.Kind, subject.Namespace, subject.Name, obj, &n.topo, provider, dp, nil, n.allowedRef)
+	if rel == nil {
+		rel = &Relationships{}
+	}
+	n.networkEntrypoints(session, access, traverse, subject, obj, istioDomain, rel)
 	if rel != nil && subject.Kind == "Deployment" && subject.Group == "apps" {
 		// The graph's shortcut to a Deployment's Pods, through its ReplicaSets.
 		for _, rs := range children.Children {
@@ -293,7 +305,7 @@ func (n *neighborhood) nodePool(session relations.Session, r resourceid.Ref) (re
 	if r.GroupKind() != (resourceid.GroupKind{Group: karpenter.Group, Kind: "NodeClaim"}) {
 		return resourceid.Ref{}, false
 	}
-	obj, read := session.Borrow(r)
+	obj, read := n.borrow(session, r)
 	claim, err := apimeta.Accessor(obj)
 	if read.State != ownership.Present || err != nil {
 		return resourceid.Ref{}, false
@@ -307,7 +319,7 @@ func (n *neighborhood) nodePool(session relations.Session, r resourceid.Ref) (re
 		if name == "" {
 			continue
 		}
-		if p, got := session.Borrow(resourceid.NewRef(karpenter.Group, "NodePool", "", name)); got.State == ownership.Present {
+		if p, got := n.borrow(session, resourceid.NewRef(karpenter.Group, "NodePool", "", name)); got.State == ownership.Present {
 			if u, ok := p.(*unstructured.Unstructured); ok {
 				pools[name] = u
 			}
@@ -348,7 +360,7 @@ func (n *neighborhood) healthChecks(ov *ownership.View, subject resourceid.Ref, 
 func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View, subject resourceid.Ref, obj runtime.Object) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
-		borrowed, read := session.Borrow(subject)
+		borrowed, read := n.borrow(session, subject)
 		if read.State != ownership.Present {
 			return
 		}
@@ -356,7 +368,7 @@ func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View,
 			return
 		}
 	}
-	exists := func(r resourceid.Ref) bool { return session.Object(r).State == ownership.Present }
+	exists := func(r resourceid.Ref) bool { return n.present(session, r) }
 	resolve := func(referrerNS string, ref crossplaneRef) (resourceid.Ref, bool) {
 		candidates := []string{ref.namespace}
 		if ref.namespace == "" {
@@ -412,7 +424,7 @@ func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View,
 		}
 	}
 	for _, r := range referrers {
-		borrowed, read := session.Borrow(r)
+		borrowed, read := n.borrow(session, r)
 		if read.State != ownership.Present {
 			continue
 		}
@@ -431,7 +443,7 @@ func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View,
 func (n *neighborhood) knativeServing(session relations.Session, subject resourceid.Ref, obj runtime.Object) {
 	const serving = "serving.knative.dev"
 	read := func(r resourceid.Ref) (*unstructured.Unstructured, bool) {
-		o, got := session.Borrow(r)
+		o, got := n.borrow(session, r)
 		u, ok := o.(*unstructured.Unstructured)
 		return u, ok && got.State == ownership.Present
 	}
@@ -453,7 +465,7 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 		return names
 	}
 	frontDoor := func(svc resourceid.Ref) bool {
-		o, got := session.Borrow(svc)
+		o, got := n.borrow(session, svc)
 		m, err := apimeta.Accessor(o)
 		if got.State != ownership.Present || err != nil {
 			return false
@@ -478,13 +490,13 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 			n.edge(svc, subject, exposes, false)
 		}
 		for _, rev := range privateRevisions(ksvc) {
-			if svc := resourceid.NewRef("", "Service", subject.Namespace, rev+"-private"); session.Object(svc).State == ownership.Present {
+			if svc := resourceid.NewRef("", "Service", subject.Namespace, rev+"-private"); n.present(session, svc) {
 				n.edge(subject, svc, exposes, false)
 			}
 		}
 	case resourceid.GroupKind{Kind: "Service"}:
 		ksvcRef := resourceid.NewRef(serving, "Service", subject.Namespace, subject.Name)
-		if frontDoor(subject) && session.Object(ksvcRef).State == ownership.Present {
+		if frontDoor(subject) && n.present(session, ksvcRef) {
 			n.edge(subject, ksvcRef, exposes, false)
 		}
 		rev, private := strings.CutSuffix(subject.Name, "-private")
