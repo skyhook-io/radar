@@ -49,11 +49,11 @@ var scannedByOwner = map[string]bool{"ReplicaSet": true, "ReplicationController"
 // (Pending, Running, Unknown), init containers included, and of CronJobs that
 // aren't suspended, which run on schedule and usually have no Pod between
 // runs. canRead is the caller's access to a kind in a namespace (nil allows
-// all): Pods are read only in namespaces where the caller may read Pods, and
+// all): Pods are read only in namespaces where canListPods allows (nil: all), and
 // a target is listed only when the caller may read both the scanned object
 // and the workload it names. The caller checks that namespaces' Pods have
 // loaded (AssessKindRead); ok is false when Radar has no Pod cache.
-func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool) (live liveSet, ok bool) {
+func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(group, kind, namespace string) bool, canListPods func(namespace string) bool) (live liveSet, ok bool) {
 	if cache == nil || cache.Pods() == nil {
 		return liveSet{}, false
 	}
@@ -65,7 +65,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 	mayPods := func(ns string) bool {
 		allowed, seen := podAccess[ns]
 		if !seen {
-			allowed = may("", "Pod", ns)
+			allowed = canListPods == nil || canListPods(ns)
 			podAccess[ns] = allowed
 			if !allowed {
 				podDenied = append(podDenied, ns)

@@ -72,8 +72,10 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		NamespaceCheckFailed: checkFailed,
 		ReportAccess:         mcpSearchKindAccess(ctx, kindRBAC),
 		CanRead:              summaryRefReader(ctx),
-		View:                 view,
-		Filter:               filter,
+		// The inventory of what runs is a Pod list, as get_runtime_versions reads it.
+		CanListPods: func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "list") },
+		View:        view,
+		Filter:      filter,
 	})
 	switch {
 	case errors.Is(err, vulnerabilities.ErrNotInstalled):

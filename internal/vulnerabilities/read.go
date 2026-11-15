@@ -3,6 +3,7 @@ package vulnerabilities
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -43,8 +44,11 @@ type Request struct {
 	// CanRead is the caller's access to a workload kind in a namespace, for
 	// the scanned objects and workloads the answer names; nil allows all.
 	CanRead func(group, kind, namespace string) bool
-	View    View
-	Filter  Filter
+	// CanListPods is the caller's list access to Pods in a namespace, which
+	// the inventory of what runs is read with; nil allows all.
+	CanListPods func(namespace string) bool
+	View        View
+	Filter      Filter
 }
 
 // Read rolls up the reports the caller may read, joined with what runs in
@@ -102,13 +106,27 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	readable, accessGaps := readableNamespaces(gvr, req, namespaces)
 	gaps = append(gaps, accessGaps...)
 
+	// A namespace whose reports Radar can't read is a gap; the request fails
+	// only when nothing is left to answer from.
 	var items []*unstructured.Unstructured
+	var failed []string
 	for _, ns := range scopeNamespaces(readable) {
 		got, err := list(ns)
 		if err != nil {
-			return Response{}, err
+			if ns == "" || ctx.Err() != nil {
+				return Response{}, err
+			}
+			failed = append(failed, ns)
+			continue
 		}
 		items = append(items, got...)
+	}
+	if len(failed) > 0 {
+		if len(failed) == len(readable) {
+			return Response{}, fmt.Errorf("%w: no namespace's reports could be read", ErrNotReady)
+		}
+		readable = slices.DeleteFunc(slices.Clone(readable), func(ns string) bool { return slices.Contains(failed, ns) })
+		gaps = appendGap(gaps, readreason.ReadError, failed)
 	}
 
 	// Each join input answers only where Radar collects it and it has
@@ -123,7 +141,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	items = filterNamespaces(items, readable)
 	cronReadable, cronGaps, cronOK := narrowToTyped(cache.AssessKindRead("cronjobs", readable), readable, nil)
 
-	live, ready := liveTargets(cache, readable, req.CanRead)
+	live, ready := liveTargets(cache, readable, req.CanRead, req.CanListPods)
 	if !ready {
 		return Response{}, ErrNotReady
 	}
@@ -135,18 +153,17 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		items = withoutNamespaces(items, live.podDenied)
 		gaps = appendGap(gaps, readreason.UserForbidden, live.podDenied)
 	}
+	// Where CronJobs aren't read, a CronJob between runs is unknown whether
+	// or not it has a report yet.
 	if !cronOK || len(cronGaps) > 0 {
-		before := len(items)
 		items = slices.DeleteFunc(items, func(u *unstructured.Unstructured) bool {
 			r, ok := reportHeader(u)
 			return ok && r.owner.kind == "CronJob" && (!cronOK || (cronReadable != nil && !slices.Contains(cronReadable, r.owner.namespace)))
 		})
-		if len(items) < before {
-			if cronOK {
-				gaps = append(gaps, cronGaps...)
-			} else {
-				gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
-			}
+		if cronOK {
+			gaps = append(gaps, cronGaps...)
+		} else {
+			gaps = append(gaps, resourceapi.Gap{Code: readreason.KindSyncPending, Namespaces: resourceapi.UnknownNames()})
 		}
 	}
 	if len(live.withheld) > 0 {
@@ -278,6 +295,10 @@ func narrowToDynamic(plan readplan.Plan, readable []string, gaps []resourceapi.G
 	}
 	if whole {
 		return readable, gaps
+	}
+	if plan.CollectionLimited {
+		// Radar collects reports only in some namespaces; the rest are unknown.
+		gaps = append(gaps, resourceapi.Gap{Code: readreason.RadarNamespaceNotCollected, Namespaces: resourceapi.UnknownNames()})
 	}
 	if read == nil {
 		read = []string{}

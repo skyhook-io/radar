@@ -49,6 +49,12 @@ func TestNarrowToDynamic(t *testing.T) {
 	if !slices.Equal(read, []string{"a"}) || len(gaps) != 1 || gaps[0].Namespaces.Names[0] != "b" {
 		t.Fatalf("%v %+v", read, gaps)
 	}
+	limited := readplan.Plan{CollectionLimited: true, Partitions: []readplan.Partition{
+		{Extent: readplan.NamespaceSet, Namespaces: []string{"a"}, Verdict: readplan.Verdict{State: readplan.Readable}},
+	}}
+	if read, gaps := narrowToDynamic(limited, nil, nil); !slices.Equal(read, []string{"a"}) || len(gaps) != 1 || gaps[0].Code != readreason.RadarNamespaceNotCollected {
+		t.Fatalf("collection-limited: %v %+v", read, gaps)
+	}
 	whole := readplan.Plan{Partitions: []readplan.Partition{{Extent: readplan.AllNamespaces, Verdict: readplan.Verdict{State: readplan.Readable}}}}
 	if read, gaps := narrowToDynamic(whole, nil, nil); read != nil || len(gaps) != 0 {
 		t.Fatalf("whole: %v %+v", read, gaps)
