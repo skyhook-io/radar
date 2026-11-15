@@ -45,6 +45,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/loadtest"
+	"github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/static"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -59,7 +60,11 @@ func main() {
 	adminPort := flag.Int("admin-port", 0, "load-test: admin listener port for live scaling (0 = <port>+1)")
 	censusProfile := flag.String("census", "", "load-test: seed a named census profile (e.g. large-eks) instead of -pods")
 	censusScale := flag.Float64("census-scale", 1.0, "load-test: scale factor applied to -census counts")
+	replayPath := flag.String("replay", "", "replay a frozen .ndjson.gz cluster capture")
 	flag.Parse()
+	if *replayPath != "" && (*pods != 0 || *censusProfile != "") {
+		log.Fatal("-replay cannot be combined with -pods or -census")
+	}
 
 	// Isolate config/settings writes to a temp directory so e2e tests
 	// don't touch the developer's real ~/.radar/config.json.
@@ -75,8 +80,15 @@ func main() {
 	var (
 		fakeClient *fake.Clientset
 		gen        *loadtest.Generator
+		replay     *replayState
 	)
-	if *censusProfile != "" {
+	if *replayPath != "" {
+		replay, err = loadReplay(*replayPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fakeClient = replay.client
+	} else if *censusProfile != "" {
 		c, ok := loadtest.Profiles[*censusProfile]
 		if !ok {
 			log.Fatalf("unknown -census profile %q", *censusProfile)
@@ -113,6 +125,13 @@ func main() {
 		log.Fatalf("InitTestResourceCache: %v", err)
 	}
 
+	if replay != nil {
+		if err := replay.start(); err != nil {
+			log.Fatal(err)
+		}
+		defer k8s.ResetTestDynamicState()
+	}
+
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:   k8s.StateConnected,
 		Context: "fake-test",
@@ -132,6 +151,7 @@ func main() {
 		StaticFS:        static.FS,
 		StaticRoot:      "dist",
 		EffectiveConfig: effectiveCfg,
+		MCPHandler:      mcp.NewReadOnlyHandler(),
 	})
 
 	ready := make(chan struct{})
@@ -145,7 +165,13 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Test server ready on http://localhost:%d (fake k8s)\n", *port)
 
 	var adminSrv *http.Server
-	if gen != nil {
+	if replay != nil {
+		ap := *adminPort
+		if ap == 0 {
+			ap = *port + 1
+		}
+		adminSrv = startReplayAdmin(ap, replay)
+	} else if gen != nil {
 		ap := *adminPort
 		if ap == 0 {
 			ap = *port + 1
@@ -370,3 +396,21 @@ func seedObjects() []runtime.Object {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func startReplayAdmin(port int, replay *replayState) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/loadtest/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "objects": replay.objects, "unsupported": replay.unsupported})
+	})
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Print(err)
+		}
+	}()
+	return srv
+}
