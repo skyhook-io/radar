@@ -133,3 +133,9 @@ it('streams when the user turns a History tab to Live, but not before History is
   await act(async () => { await new Promise(r => setTimeout(r, 150)) })
   expect(createStream).toHaveBeenCalled()
 })
+
+it('labels init containers like Live and keeps the given order, appending containers only Loki knows', async () => {
+  const fetchHistory = vi.fn(async () => result({ containers: ['istio-proxy', 'migrate', 'web'], logs: { web: '2026-11-13T09:00:00Z a\n' } }))
+  await render({ containers: ['migrate', 'web'], initContainers: ['migrate'], fetchHistory, initialMode: 'history' })
+  expect([...element.querySelectorAll('option')].map(o => o.textContent).filter(t => !/hour|day/i.test(t ?? ''))).toEqual(['migrate (init)', 'web', 'istio-proxy'])
+})
