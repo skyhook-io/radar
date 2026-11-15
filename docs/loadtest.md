@@ -111,9 +111,9 @@ What each benchmark reports:
   of its size still held (building the new index happens later, on the next relationship read).
 - `BenchmarkDrawerRelationships`: one Related Resources read. `shared-index` is auth off; `per-user-copy` is
   auth on, where each request copies the graph, strips what the user may not list and rebuilds the index.
-- `BenchmarkSummaryRelationshipsPage`: a relationship read for every row of a 1,000-row Pod list, the most a list
-  page's summary context can spend on the graph. Production reads relationships only for rows with no readable
-  top controller, so a typical page spends far less.
+- `BenchmarkSummaryRelationshipsPage`: a relationship read from an already built graph for every row of a
+  1,000-row Pod list. Production reads relationships only for rows with no readable top controller, so a typical
+  page reads far fewer, but a read that finds the graph stale also waits for its rebuild and index.
 - `BenchmarkIndexRelist`: one relist (`Replace`) of a Pod store, with and without an index. Part of it, keying
   the list, runs outside the store's lock, so the total is an upper bound on how long readers wait; an index
   adds only to the locked part, so the difference is its cost. Pods follow the census: one owner each.
@@ -125,10 +125,10 @@ Baseline (Apple M1 Pro, 8 cores, Go 1.26, November 2026):
 |---|---|---|
 | Graph held | 200 MiB (184,512 nodes, 246,320 edges) | 656 MiB (615,036 nodes, 821,058 edges) |
 | Its index | 102 MiB | 353 MiB |
-| Rebuild | 1.5 s, 926 MB allocated | 8.6 s, 3.0 GB allocated |
+| Rebuild (three-run spread) | 1.5-2.0 s, 926 MB allocated | 9.0-10.9 s, 3.0 GB allocated |
 | Drawer read, shared index | 0.02-0.13 ms, 2-8 KB | |
 | Drawer read, per-user copy (half the namespaces, every cluster-scoped kind readable) | 341 ms, 139 MB | |
-| Summary page, a read for each of 1,000 Pods (upper bound) | 49 ms, 3 MB | |
+| Summary page, a warm read for each of 1,000 Pods | 49 ms, 3 MB | |
 | Pod relist, namespace index only | 16 ms | 62 ms |
 | Pod relist, plus the owner-UID index | 33 ms | 129 ms |
 | Pod update, alone, without / with the owner-UID index | 180 ns / 245 ns | |

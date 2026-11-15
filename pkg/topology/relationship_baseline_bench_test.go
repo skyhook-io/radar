@@ -84,22 +84,19 @@ func BenchmarkSharedRelationshipBuild(b *testing.B) {
 		b.Run(f.name, func(b *testing.B) {
 			builder := NewBuilder(newSyntheticProvider(fieldShape().fraction(f.num, f.den)))
 			opts := serverRelationshipOptions()
-			previous, err := builder.Build(opts)
+			held, err := builder.Build(opts)
 			if err != nil {
 				b.Fatalf("build: %v", err)
 			}
-			index := IndexByResource(previous)
+			heldIndex := IndexByResource(held)
 			b.ReportAllocs()
 			for b.Loop() {
-				next, err := builder.Build(opts)
-				if err != nil {
+				if _, err := builder.Build(opts); err != nil {
 					b.Fatalf("build: %v", err)
 				}
-				runtime.KeepAlive(previous)
-				previous = next
 			}
-			runtime.KeepAlive(previous)
-			runtime.KeepAlive(index)
+			runtime.KeepAlive(held)
+			runtime.KeepAlive(heldIndex)
 		})
 	}
 }
@@ -173,11 +170,11 @@ func BenchmarkDrawerRelationships(b *testing.B) {
 	})
 }
 
-// BenchmarkSummaryRelationshipsPage reads relationships from the shared graph
-// and its index for every row of a 1,000-row Pod list: the most a list page's
-// summary context can spend on the graph. Production asks only for rows whose
-// controller chain has no readable top controller, so a typical page spends
-// far less, and a page that needs none never loads the graph.
+// BenchmarkSummaryRelationshipsPage reads relationships from an already built
+// shared graph and index for every row of a 1,000-row Pod list. Production
+// asks only for rows whose controller chain has no readable top controller, so
+// a typical page reads far fewer; but a page that asks while the graph is
+// stale also waits for the rebuild and the index (see the benchmarks above).
 func BenchmarkSummaryRelationshipsPage(b *testing.B) {
 	provider := newSyntheticProvider(fieldShape())
 	topo, err := NewBuilder(provider).Build(serverRelationshipOptions())
