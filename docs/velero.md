@@ -28,7 +28,7 @@ Both are listed under the **Velero** category in the Resources sidebar, above th
 | Next run | `cron.Next(max(lastBackup or creationTimestamp, lastSkipped))`, robfig/cron v3 as Velero uses it | The zone below decides whether it is exact |
 | Zone | `CRON_TZ=`/`TZ=` in the expression; else the Velero server Deployment's literal `TZ` (none set → UTC) with its rollout complete | Inferred from the newest run's name (`<schedule>-YYYYMMDDhhmmss`, server local time): an estimate, prefixed `~`. Nothing: UTC, marked unknown |
 | Newest run, newest successful run | The schedule's Backups Velero still keeps (TTL deletes older ones) | "Unknown" when the namespace's Backups are unread; never "none" |
-| Default storage location | A location with `spec.default`; else the server's `--default-backup-storage-location` | "unknown" when neither can be read |
+| Default storage location | A location with `spec.default`; else the server's `--default-backup-storage-location` (an explicitly empty flag means no default, and a backup naming no location fails) | "unknown" when neither can be read |
 | Validation interval | `spec.validationFrequency` (> 0; `0` disables); else the server's `--store-validation-frequency` | No overdue verdict |
 | Backups targeting a location | Each Backup's `spec.storageLocation`, which Velero fills when it first processes the backup | A backup without one is "not yet assigned", never counted under today's default |
 
@@ -56,7 +56,7 @@ First match wins.
 | Due | Within the 5-minute grace | No |
 | On schedule | Otherwise | No |
 
-**A stopped server is named first.** When the Velero server Deployment can be read and has no pods (scaled to zero, or its pods cannot be created), it leads Needs attention, and late schedules and overdue locations say that is why. An unavailable but running pod does not count: it still processes schedules.
+**A stopped server is named first.** When the Velero server Deployment can be read and has no running replicas (scaled to zero, or its pods cannot be created), it leads Needs attention, and late schedules and overdue locations say that is why. An unavailable but running pod does not count: it still processes schedules. A pod still terminating is not counted either; its controllers stop on SIGTERM, so it submits nothing new.
 
 Storage locations need attention when **validation is overdue**: the interval is known and more than three intervals plus 5 minutes have passed since the last validation (Radar's threshold). An Unavailable location is already an Issue (`BackupStorageLocationUnavailable`).
 

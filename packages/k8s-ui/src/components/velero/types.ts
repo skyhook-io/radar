@@ -120,12 +120,12 @@ export interface VeleroServerConfig {
   defaultLocation?: string
   validationFrequencySeconds?: number
   schedulingDisabled?: boolean
-  /** The server Deployment's non-terminated pods (status.replicas), when the Deployment was found. */
-  pods?: number
+  /** The server Deployment's running replicas (status.replicas, terminating pods excluded), when the Deployment was found. */
+  replicas?: number
 }
 
 /** pkg/velero DefaultSource */
-export type VeleroDefaultSource = 'spec' | 'server' | 'unknown'
+export type VeleroDefaultSource = 'spec' | 'server' | 'unknown' | 'none'
 
 /** pkg/velero ValidationFrequency */
 export interface VeleroValidationFrequency {

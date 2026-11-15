@@ -76,7 +76,7 @@ export function veleroLocalTime(iso: string): string {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-const SERVER_DOWN = 'The Velero server has no pods, so nothing submits backups.'
+const SERVER_DOWN = 'The Velero server has no running replicas, so nothing submits backups.'
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
@@ -218,11 +218,11 @@ export function veleroFrequencyText(seconds: number): string {
 /** Why a storage location needs attention. */
 export function veleroLocationReasonText(loc: VeleroLocationReading): string {
   if (loc.neverValidated) {
-    const cause = loc.reason === 'serverDown' ? ' The Velero server has no pods, so nothing validates it.' : ''
+    const cause = loc.reason === 'serverDown' ? ' The Velero server has no running replicas, so nothing validates it.' : ''
     return `Velero has never validated this location; it validates a new location as soon as it sees it.${cause}`
   }
   if (loc.validationOverdue && loc.lastValidation && loc.frequency) {
-    const cause = loc.reason === 'serverDown' ? ' The Velero server has no pods, so nothing validates it.' : ''
+    const cause = loc.reason === 'serverDown' ? ' The Velero server has no running replicas, so nothing validates it.' : ''
     return `Velero last validated this location ${formatAge(loc.lastValidation)} ago; it validates every ${veleroFrequencyText(loc.frequency.seconds)}.${cause}`
   }
   return ''
@@ -230,13 +230,14 @@ export function veleroLocationReasonText(loc: VeleroLocationReading): string {
 
 /** Why an installation needs attention: its server Deployment has no available pod. */
 export function veleroServerDownText(namespace: string, deployment?: string): string {
-  return `Deployment ${deployment ?? 'velero'} in ${namespace} has no pods, so no schedule submits backups and no storage location is validated.`
+  return `Deployment ${deployment ?? 'velero'} in ${namespace} has no running replicas, so no new scheduled backups are submitted and no storage location is validated.`
 }
 
 const DEFAULT_SOURCE_DETAIL: Record<VeleroDefaultSource, string> = {
   spec: 'A location in this namespace sets spec.default.',
   server: 'No location sets spec.default; the Velero server’s --default-backup-storage-location names it.',
   unknown: 'No location sets spec.default, and Radar couldn’t read the Velero server’s flags.',
+  none: 'No location sets spec.default and the Velero server’s --default-backup-storage-location is empty, so a backup that names no location fails.',
 }
 
 /** Whether a location is its installation's default, with the source of that answer. */

@@ -51,20 +51,22 @@ type ServerConfig struct {
 	// SchedulingDisabled: --restore-only or --disable-controllers removes the
 	// schedule controller, so no Schedule runs.
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
-	// Pods is the server Deployment's non-terminated pod count
-	// (status.replicas), set whenever the Deployment was found. Availability
-	// is not used: a running pod can be unavailable while its readiness probe
-	// fails or during minReadySeconds, and still process schedules.
-	Pods *int32 `json:"pods,omitempty"`
+	// Replicas is the server Deployment's running replica count
+	// (status.replicas: pods not terminating), set whenever the Deployment was
+	// found. Availability is not used: a running pod can be unavailable while
+	// its readiness probe fails or during minReadySeconds, and still process
+	// schedules. A terminating pod is not counted; its controllers stop on
+	// SIGTERM, so it submits nothing new.
+	Replicas *int32 `json:"replicas,omitempty"`
 
 	zone     *time.Location
 	flagsSet bool
 }
 
-// Down reports that the server Deployment was read and has no pod at all
-// (scaled to zero, or its pods cannot be created), so nothing submits
+// Down reports that the server Deployment was read and has no running replica
+// (scaled to zero, or its pods cannot be created), so nothing new submits
 // scheduled backups or validates locations.
-func (c ServerConfig) Down() bool { return c.Pods != nil && *c.Pods == 0 }
+func (c ServerConfig) Down() bool { return c.Replicas != nil && *c.Replicas == 0 }
 
 // FlagsKnown reports whether the server's flags were read in full.
 func (c ServerConfig) FlagsKnown() bool { return c.flagsSet }
@@ -83,8 +85,8 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 		if !ok {
 			continue
 		}
-		pods := d.Status.Replicas
-		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, Pods: &pods}
+		replicas := d.Status.Replicas
+		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, Replicas: &replicas}
 		if !rolloutComplete(d) {
 			cfg.Source = ServerRolling
 			return cfg
@@ -186,7 +188,9 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 		}
 		switch name {
 		case "default-backup-storage-location":
-			if v, ok := takeValue(); ok && v != "" {
+			// An explicitly empty value is kept: Velero then has no default,
+			// and a backup that names no location fails to resolve one.
+			if v, ok := takeValue(); ok {
 				cfg.DefaultLocation = v
 			}
 		case "store-validation-frequency":

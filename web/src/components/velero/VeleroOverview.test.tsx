@@ -67,11 +67,11 @@ describe('Velero overview', () => {
     const late = schedule({ name: 'late-one', state: 'late', attention: true, missedRuns: 2, reason: 'serverDown' })
     const html = text(render(workspace({
       schedules: [late],
-      installations: [{ namespace: 'velero', server: { source: 'deployment', deployment: 'velero', pods: 0 }, defaultSource: 'spec' }],
+      installations: [{ namespace: 'velero', server: { source: 'deployment', deployment: 'velero', replicas: 0 }, defaultSource: 'spec' }],
     })))
     expect(html).toContain('Velero server not running')
     expect(html.indexOf('Velero server not running')).toBeLessThan(html.indexOf('late-one'))
-    expect(html).toContain('The Velero server has no pods, so nothing submits backups.')
+    expect(html).toContain('The Velero server has no running replicas, so nothing submits backups.')
   })
 
   it('says a next run in the past was due, not that it ran', () => {

@@ -318,6 +318,10 @@ func TestReadLocation(t *testing.T) {
 	if name, src := DefaultLocation([]*unstructured.Unstructured{location("dr")}, utcServer); name != "default" || src != DefaultFromServer {
 		t.Fatalf("server default %s %s", name, src)
 	}
+	emptyFlag := ServerConfigFromDeployments([]*appsv1.Deployment{veleroDeployment(nil, []string{"--default-backup-storage-location="})}, true)
+	if name, src := DefaultLocation([]*unstructured.Unstructured{location("default")}, emptyFlag); name != "" || src != DefaultNone {
+		t.Fatalf("an explicitly empty flag means no default, got %q %s", name, src)
+	}
 	if name, src := DefaultLocation(nil, ServerConfig{Source: ServerUnread}); name != "" || src != DefaultUnknown {
 		t.Fatalf("unknown default %s %s", name, src)
 	}

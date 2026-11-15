@@ -30,6 +30,9 @@ const (
 	DefaultFromServer DefaultSource = "server"
 	// DefaultUnknown: none does and the server's flags could not be read.
 	DefaultUnknown DefaultSource = "unknown"
+	// DefaultNone: no location sets spec.default and the server's flag is
+	// explicitly empty, so Velero has no default.
+	DefaultNone DefaultSource = "none"
 )
 
 // DefaultLocation resolves an installation's default storage location: the
@@ -44,6 +47,9 @@ func DefaultLocation(locations []*unstructured.Unstructured, server ServerConfig
 		}
 	}
 	if server.FlagsKnown() {
+		if server.DefaultLocation == "" {
+			return "", DefaultNone
+		}
 		return server.DefaultLocation, DefaultFromServer
 	}
 	return "", DefaultUnknown
