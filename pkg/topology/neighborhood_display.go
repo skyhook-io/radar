@@ -22,13 +22,13 @@ import (
 // The display builder sees only admitted objects. Its edges and synthesized
 // nodes never participate in admission or traversal; the family walk owns both.
 func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provider ResourceProvider, dp DynamicProvider) (map[resourceid.Ref]Node, error) {
-	p := &neighborhoodDisplayProvider{ResourceProvider: provider, objects: objects}
+	p := newNeighborhoodDisplayProvider(objects, provider)
 	opts := DefaultBuildOptions()
 	opts.IncludeReplicaSets, opts.IncludeSecrets, opts.ForRelationshipCache = true, true, true
 	opts.MaxIndividualPods = int(^uint(0) >> 1)
 	var dynamic DynamicProvider
 	if dp != nil {
-		dynamic = &neighborhoodDisplayDynamic{DynamicProvider: dp, objects: objects}
+		dynamic = newNeighborhoodDisplayDynamic(objects, p.dynamic, dp)
 	}
 	topo, err := NewBuilder(p).WithDynamic(dynamic).Build(opts)
 	if err != nil {
@@ -52,30 +52,80 @@ func neighborhoodDisplayNodes(objects map[resourceid.Ref]runtime.Object, provide
 
 type neighborhoodDisplayProvider struct {
 	ResourceProvider
-	objects map[resourceid.Ref]runtime.Object
+	pods            []*corev1.Pod
+	services        []*corev1.Service
+	deployments     []*appsv1.Deployment
+	daemonSets      []*appsv1.DaemonSet
+	statefulSets    []*appsv1.StatefulSet
+	replicaSets     []*appsv1.ReplicaSet
+	jobs            []*batchv1.Job
+	cronJobs        []*batchv1.CronJob
+	ingresses       []*networkingv1.Ingress
+	configMaps      []*corev1.ConfigMap
+	secrets         []*corev1.Secret
+	serviceAccounts []*corev1.ServiceAccount
+	namespaces      []*corev1.Namespace
+	pvcs            []*corev1.PersistentVolumeClaim
+	pvs             []*corev1.PersistentVolume
+	hpas            []*autoscalingv2.HorizontalPodAutoscaler
+	pdbs            []*policyv1.PodDisruptionBudget
+	networkPolicies []*networkingv1.NetworkPolicy
+	nodes           []*corev1.Node
+	dynamic         []*unstructured.Unstructured
 }
 
-func neighborhoodDisplayObjects[T runtime.Object](p *neighborhoodDisplayProvider) []T {
-	refs := make([]resourceid.Ref, 0, len(p.objects))
-	for r := range p.objects {
+func newNeighborhoodDisplayProvider(objects map[resourceid.Ref]runtime.Object, provider ResourceProvider) *neighborhoodDisplayProvider {
+	p := &neighborhoodDisplayProvider{ResourceProvider: provider}
+	refs := make([]resourceid.Ref, 0, len(objects))
+	for r := range objects {
 		refs = append(refs, r)
 	}
-	slices.SortFunc(refs, func(a, b resourceid.Ref) int {
-		if a.Key() < b.Key() {
-			return -1
-		}
-		if a == b {
-			return 0
-		}
-		return 1
-	})
-	var out []T
+	slices.SortFunc(refs, func(a, b resourceid.Ref) int { return strings.Compare(a.Key(), b.Key()) })
 	for _, r := range refs {
-		if obj, ok := p.objects[r].(T); ok {
-			out = append(out, obj)
+		switch obj := objects[r].(type) {
+		case *corev1.Pod:
+			p.pods = append(p.pods, obj)
+		case *corev1.Service:
+			p.services = append(p.services, obj)
+		case *appsv1.Deployment:
+			p.deployments = append(p.deployments, obj)
+		case *appsv1.DaemonSet:
+			p.daemonSets = append(p.daemonSets, obj)
+		case *appsv1.StatefulSet:
+			p.statefulSets = append(p.statefulSets, obj)
+		case *appsv1.ReplicaSet:
+			p.replicaSets = append(p.replicaSets, obj)
+		case *batchv1.Job:
+			p.jobs = append(p.jobs, obj)
+		case *batchv1.CronJob:
+			p.cronJobs = append(p.cronJobs, obj)
+		case *networkingv1.Ingress:
+			p.ingresses = append(p.ingresses, obj)
+		case *corev1.ConfigMap:
+			p.configMaps = append(p.configMaps, obj)
+		case *corev1.Secret:
+			p.secrets = append(p.secrets, obj)
+		case *corev1.ServiceAccount:
+			p.serviceAccounts = append(p.serviceAccounts, obj)
+		case *corev1.Namespace:
+			p.namespaces = append(p.namespaces, obj)
+		case *corev1.PersistentVolumeClaim:
+			p.pvcs = append(p.pvcs, obj)
+		case *corev1.PersistentVolume:
+			p.pvs = append(p.pvs, obj)
+		case *autoscalingv2.HorizontalPodAutoscaler:
+			p.hpas = append(p.hpas, obj)
+		case *policyv1.PodDisruptionBudget:
+			p.pdbs = append(p.pdbs, obj)
+		case *networkingv1.NetworkPolicy:
+			p.networkPolicies = append(p.networkPolicies, obj)
+		case *corev1.Node:
+			p.nodes = append(p.nodes, obj)
+		case *unstructured.Unstructured:
+			p.dynamic = append(p.dynamic, obj)
 		}
 	}
-	return out
+	return p
 }
 func (p *neighborhoodDisplayProvider) GetResourceStatus(kind, namespace, name string) *ResourceStatus {
 	if p.ResourceProvider == nil {
@@ -84,68 +134,123 @@ func (p *neighborhoodDisplayProvider) GetResourceStatus(kind, namespace, name st
 	return p.ResourceProvider.GetResourceStatus(kind, namespace, name)
 }
 func (p *neighborhoodDisplayProvider) Pods() ([]*corev1.Pod, error) {
-	return neighborhoodDisplayObjects[*corev1.Pod](p), nil
+	return p.pods, nil
 }
 func (p *neighborhoodDisplayProvider) Services() ([]*corev1.Service, error) {
-	return neighborhoodDisplayObjects[*corev1.Service](p), nil
+	return p.services, nil
 }
 func (p *neighborhoodDisplayProvider) Deployments() ([]*appsv1.Deployment, error) {
-	return neighborhoodDisplayObjects[*appsv1.Deployment](p), nil
+	return p.deployments, nil
 }
 func (p *neighborhoodDisplayProvider) DaemonSets() ([]*appsv1.DaemonSet, error) {
-	return neighborhoodDisplayObjects[*appsv1.DaemonSet](p), nil
+	return p.daemonSets, nil
 }
 func (p *neighborhoodDisplayProvider) StatefulSets() ([]*appsv1.StatefulSet, error) {
-	return neighborhoodDisplayObjects[*appsv1.StatefulSet](p), nil
+	return p.statefulSets, nil
 }
 func (p *neighborhoodDisplayProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error) {
-	return neighborhoodDisplayObjects[*appsv1.ReplicaSet](p), nil
+	return p.replicaSets, nil
 }
 func (p *neighborhoodDisplayProvider) Jobs() ([]*batchv1.Job, error) {
-	return neighborhoodDisplayObjects[*batchv1.Job](p), nil
+	return p.jobs, nil
 }
 func (p *neighborhoodDisplayProvider) CronJobs() ([]*batchv1.CronJob, error) {
-	return neighborhoodDisplayObjects[*batchv1.CronJob](p), nil
+	return p.cronJobs, nil
 }
 func (p *neighborhoodDisplayProvider) Ingresses() ([]*networkingv1.Ingress, error) {
-	return neighborhoodDisplayObjects[*networkingv1.Ingress](p), nil
+	return p.ingresses, nil
 }
 func (p *neighborhoodDisplayProvider) ConfigMaps() ([]*corev1.ConfigMap, error) {
-	return neighborhoodDisplayObjects[*corev1.ConfigMap](p), nil
+	return p.configMaps, nil
 }
 func (p *neighborhoodDisplayProvider) Secrets() ([]*corev1.Secret, error) {
-	return neighborhoodDisplayObjects[*corev1.Secret](p), nil
+	return p.secrets, nil
 }
 func (p *neighborhoodDisplayProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
-	return neighborhoodDisplayObjects[*corev1.ServiceAccount](p), nil
+	return p.serviceAccounts, nil
 }
 func (p *neighborhoodDisplayProvider) Namespaces() ([]*corev1.Namespace, error) {
-	return neighborhoodDisplayObjects[*corev1.Namespace](p), nil
+	return p.namespaces, nil
 }
 func (p *neighborhoodDisplayProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
-	return neighborhoodDisplayObjects[*corev1.PersistentVolumeClaim](p), nil
+	return p.pvcs, nil
 }
 func (p *neighborhoodDisplayProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
-	return neighborhoodDisplayObjects[*corev1.PersistentVolume](p), nil
+	return p.pvs, nil
 }
 func (p *neighborhoodDisplayProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
-	return neighborhoodDisplayObjects[*autoscalingv2.HorizontalPodAutoscaler](p), nil
+	return p.hpas, nil
 }
 func (p *neighborhoodDisplayProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
-	return neighborhoodDisplayObjects[*policyv1.PodDisruptionBudget](p), nil
+	return p.pdbs, nil
 }
 func (p *neighborhoodDisplayProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) {
-	return neighborhoodDisplayObjects[*networkingv1.NetworkPolicy](p), nil
+	return p.networkPolicies, nil
 }
 func (p *neighborhoodDisplayProvider) Nodes() ([]*corev1.Node, error) {
-	return neighborhoodDisplayObjects[*corev1.Node](p), nil
+	return p.nodes, nil
 }
 
 type neighborhoodDisplayDynamic struct {
 	DynamicProvider
 	objects map[resourceid.Ref]runtime.Object
+	byKind  map[resourceid.GroupKind][]*unstructured.Unstructured
+	kinds   map[schema.GroupVersionResource]string
+	aliases map[resourceid.GroupKind]bool
+	names   map[string]bool
+	gvrs    map[resourceid.GroupKind]schema.GroupVersionResource
+	watched []schema.GroupVersionResource
 }
 
+func newNeighborhoodDisplayDynamic(objects map[resourceid.Ref]runtime.Object, ordered []*unstructured.Unstructured, dp DynamicProvider) *neighborhoodDisplayDynamic {
+	p := &neighborhoodDisplayDynamic{DynamicProvider: dp, objects: objects,
+		byKind: map[resourceid.GroupKind][]*unstructured.Unstructured{}, kinds: map[schema.GroupVersionResource]string{},
+		aliases: map[resourceid.GroupKind]bool{}, names: map[string]bool{}, gvrs: map[resourceid.GroupKind]schema.GroupVersionResource{}}
+	for _, obj := range ordered {
+		gk := resourceid.GroupKind{Group: resourceid.GroupFromAPIVersion(obj.GetAPIVersion()), Kind: obj.GetKind()}
+		if _, seen := p.byKind[gk]; !seen {
+			name := strings.ToLower(gk.Kind)
+			alias := resourceid.GroupKind{Group: gk.Group, Kind: name}
+			p.aliases[alias], p.names[name] = true, true
+			if gvr, ok := dp.GetGVRWithGroup(gk.Kind, gk.Group); ok {
+				p.gvrs[alias] = gvr
+				p.kinds[gvr] = gk.Kind
+				p.watched = append(p.watched, gvr)
+				p.aliases[resourceid.GroupKind{Group: gk.Group, Kind: strings.ToLower(gvr.Resource)}] = true
+				p.names[strings.ToLower(gvr.Resource)] = true
+			}
+		}
+		p.byKind[gk] = append(p.byKind[gk], obj)
+	}
+	slices.SortFunc(p.watched, func(a, b schema.GroupVersionResource) int { return strings.Compare(a.String(), b.String()) })
+	return p
+}
+
+func (p *neighborhoodDisplayDynamic) GetGVRWithGroup(name, group string) (schema.GroupVersionResource, bool) {
+	if group == "" {
+		return p.GetGVR(name)
+	}
+	key := resourceid.GroupKind{Group: group, Kind: strings.ToLower(name)}
+	if !p.aliases[key] {
+		return schema.GroupVersionResource{}, false
+	}
+	if gvr, ok := p.gvrs[key]; ok {
+		return gvr, true
+	}
+	return p.DynamicProvider.GetGVRWithGroup(name, group)
+}
+func (p *neighborhoodDisplayDynamic) GetGVR(name string) (schema.GroupVersionResource, bool) {
+	if !p.names[strings.ToLower(name)] {
+		return schema.GroupVersionResource{}, false
+	}
+	return p.DynamicProvider.GetGVR(name)
+}
+func (p *neighborhoodDisplayDynamic) GetKindForGVR(gvr schema.GroupVersionResource) string {
+	return p.kinds[gvr]
+}
+func (p *neighborhoodDisplayDynamic) IsCRD(name string) bool {
+	return p.names[strings.ToLower(name)] && p.DynamicProvider.IsCRD(name)
+}
 func (p *neighborhoodDisplayDynamic) List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	var namespaces []string
 	if namespace != "" {
@@ -155,21 +260,11 @@ func (p *neighborhoodDisplayDynamic) List(gvr schema.GroupVersionResource, names
 }
 func (p *neighborhoodDisplayDynamic) ListNamespaces(gvr schema.GroupVersionResource, namespaces []string) ([]*unstructured.Unstructured, error) {
 	var out []*unstructured.Unstructured
-	kind := p.GetKindForGVR(gvr)
-	for r, o := range p.objects {
-		if r.Group != gvr.Group || r.Kind != kind || len(namespaces) > 0 && r.Namespace != "" && !slices.Contains(namespaces, r.Namespace) {
-			continue
-		}
-		if u, ok := o.(*unstructured.Unstructured); ok {
-			out = append(out, u)
+	for _, obj := range p.byKind[resourceid.GroupKind{Group: gvr.Group, Kind: p.GetKindForGVR(gvr)}] {
+		if len(namespaces) == 0 || obj.GetNamespace() == "" || slices.Contains(namespaces, obj.GetNamespace()) {
+			out = append(out, obj)
 		}
 	}
-	slices.SortFunc(out, func(a, b *unstructured.Unstructured) int {
-		if a.GetNamespace()+"/"+a.GetName() < b.GetNamespace()+"/"+b.GetName() {
-			return -1
-		}
-		return 1
-	})
 	return out, nil
 }
 func (p *neighborhoodDisplayDynamic) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
@@ -177,22 +272,7 @@ func (p *neighborhoodDisplayDynamic) Get(gvr schema.GroupVersionResource, namesp
 	return u, nil
 }
 func (p *neighborhoodDisplayDynamic) GetWatchedResources() []schema.GroupVersionResource {
-	var out []schema.GroupVersionResource
-	for r := range p.objects {
-		if _, ok := p.objects[r].(*unstructured.Unstructured); !ok {
-			continue
-		}
-		if gvr, ok := p.GetGVRWithGroup(r.Kind, r.Group); ok && !slices.Contains(out, gvr) {
-			out = append(out, gvr)
-		}
-	}
-	slices.SortFunc(out, func(a, b schema.GroupVersionResource) int {
-		if a.String() < b.String() {
-			return -1
-		}
-		return 1
-	})
-	return out
+	return slices.Clone(p.watched)
 }
 
 func neighborhoodStandaloneNode(r resourceid.Ref, obj runtime.Object, node Node) Node {
