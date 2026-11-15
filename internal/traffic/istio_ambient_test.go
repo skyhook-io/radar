@@ -291,6 +291,7 @@ func TestIstioQueryFailureOmitsTheQuery(t *testing.T) {
 	for _, err := range []error{
 		fmt.Errorf("prom.HTTPTransport: %w", &url.Error{Op: "Get", URL: full, Err: errors.New("dial tcp: connection refused")}),
 		&prom.HTTPError{StatusCode: 503, URL: full, Body: []byte(`{"error":"query timed out"}`)},
+		fmt.Errorf("prom: query error from http://prom:9090: rejected query %s (bad_data)", query),
 	} {
 		s := newTestIstio(func(context.Context, string) (*prom.QueryResult, error) { return nil, err })
 		s.ambientNamespaceFn = func() []string { return []string{"secret-ns"} }
@@ -313,6 +314,16 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 	for i := 0; len(url.QueryEscape(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many))) <= istioQueryBudget; i++ {
 		many = append(many, fmt.Sprintf("ns-%04d", i))
 	}
+	useConfiguredStore(t)
+	var httpScopeSelectors []string
+	prev := resolveTrafficScope
+	resolveTrafficScope = func(_ context.Context, metric, selector string) (string, promclient.SeriesIsolation, error) {
+		if metric == "istio_requests_total" {
+			httpScopeSelectors = append(httpScopeSelectors, selector)
+		}
+		return "", promclient.SeriesIsolation{}, nil
+	}
+	t.Cleanup(func() { resolveTrafficScope = prev })
 	var queries []string
 	fake := fakeIstioProm(raw, nil)
 	s := newTestIstio(func(ctx context.Context, q string) (*prom.QueryResult, error) {
@@ -328,6 +339,9 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 		if strings.Contains(q, `reporter="source"`) {
 			t.Fatalf("over budget, no query may name the ambient namespaces: %s", q)
 		}
+	}
+	if n := len(httpScopeSelectors); n == 0 || httpScopeSelectors[n-1] != istioReporterSelector {
+		t.Errorf("HTTP scope last checked with %v, want the receiving-side selector once client reports are skipped", httpScopeSelectors)
 	}
 	if len(resp.Flows) != 1 || !strings.Contains(resp.Warning, "too many ambient namespaces") || resp.WarningKind != WarningIncomplete {
 		t.Errorf("want the waypoint flow and an incomplete warning, got flows %+v warning %q kind %q", resp.Flows, resp.Warning, resp.WarningKind)

@@ -25,8 +25,8 @@ type istioWorkload struct {
 }
 
 // isIstioWaypoint reports whether a workload's labels mark an Istio waypoint
-// proxy. Telemetry cannot tell (istio/ztunnel#1128), so this follows Kiali's
-// label rule: Istio's mesh-controller label, or a Gateway API gateway name
+// proxy. Telemetry does not say which workloads are waypoints, so this follows
+// Kiali's label rule: Istio's mesh-controller label, or a Gateway API gateway name
 // containing "waypoint". The name test applies only when Istio does not manage
 // the gateway, so an Istio ingress gateway named "*waypoint*" stays visible.
 func isIstioWaypoint(l map[string]string) bool {

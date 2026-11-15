@@ -233,10 +233,11 @@ func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc c
 }
 
 // istioQueryFailure describes a failed query for the viewer without the
-// request URL. The URL carries the query, which names every ambient namespace
-// in the cluster, including ones the viewer cannot see; the server log keeps
-// the full error.
-func istioQueryFailure(err error) string {
+// query itself. The request URL carries it, and a store's error message may
+// quote it; when it names the cluster's ambient namespaces, including ones the
+// viewer cannot see, only a generic reason is shown. The server log keeps the
+// full error.
+func istioQueryFailure(err error, namesAmbient bool) string {
 	var httpErr *prom.HTTPError
 	if errors.As(err, &httpErr) {
 		return fmt.Sprintf("Prometheus answered HTTP %d", httpErr.StatusCode)
@@ -244,6 +245,9 @@ func istioQueryFailure(err error) string {
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
 		return urlErr.Err.Error()
+	}
+	if namesAmbient {
+		return "Prometheus returned an error; Radar's server log has the details"
 	}
 	return err.Error()
 }
@@ -266,6 +270,10 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	if ambientOverBudget {
 		log.Printf("[istio] %d ambient namespaces are too many to name in one query; client reports into them are not read", len(ambientNamespaces))
 		ambientNamespaces = nil
+		// The HTTP scope was checked against client reports that will not be read.
+		if scopes, err = s.resolveScopes(ctx, nil); err != nil {
+			return scopeCheckFailed("istio"), nil
+		}
 	}
 
 	httpFlows, err := s.queryHTTPFlows(ctx, opts, scopes.http, ambientNamespaces, &missing)
@@ -283,7 +291,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 			Source:    "istio",
 			Timestamp: time.Now(),
 			Flows:     []Flow{},
-			Warning:   fmt.Sprintf("Failed to query Prometheus for Istio metrics: %s", istioQueryFailure(err)),
+			Warning:   fmt.Sprintf("Failed to query Prometheus for Istio metrics: %s", istioQueryFailure(err, len(ambientNamespaces) > 0)),
 		}, nil
 	}
 
