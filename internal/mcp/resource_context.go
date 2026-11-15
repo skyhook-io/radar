@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/auditcontext"
 	"github.com/skyhook-io/radar/internal/issues"
@@ -208,6 +209,8 @@ func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group
 	summary, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name, auditOptions(ctx))
 	return summary
 }
+
+var summaryCtxTopoMemo = topo.NewMemoizer(5 * time.Second)
 
 // RelationshipTopologySource returns the host's maintained full relationship
 // graph and its index, or nil while none has been built.

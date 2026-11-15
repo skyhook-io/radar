@@ -19,7 +19,6 @@ import (
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/resourceid"
-	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 type summaryAccess struct {
@@ -97,61 +96,29 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 		access ownership.Access
 		want   string
 		note   resourcecontext.OmittedReason
-		graph  bool
 	}{
-		{"excluded Event", &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "event", UID: "uid-event"}}, "Event", ownership.Unrestricted(), "", "", false},
-		{"operator beats copied labels", pod, "Pod", ownership.Unrestricted(), "Widget", "", false},
-		{"denied top", pod, "Pod", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, "Deployment", resourcecontext.OmittedRBACDenied, false},
-		{"recorded without metadata", standalone, "Deployment", ownership.Unrestricted(), "Application", "", true},
-		{"budget during graph", standalone, "Deployment", ownership.Unrestricted(), "Application", resourcecontext.OmittedBudgetExceeded, true},
-		{"recorded without graph", standalone, "Deployment", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, true},
-		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, false},
-		{"GitOps lead beside unknown owner", managedGap, "Pod", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable, false},
-		{"certificate spec", secret, "Secret", ownership.Unrestricted(), "Certificate", "", true},
-		{"sealed secret spec", sealed, "Secret", ownership.Unrestricted(), "SealedSecret", "", true},
-		{"no graph or manager", unmanaged, "ConfigMap", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable, true},
-		{"GitOps edge is not a fallback", unmanaged, "ConfigMap", ownership.Unrestricted(), "", "", true},
+		{"excluded Event", &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "event", UID: "uid-event"}}, "Event", ownership.Unrestricted(), "", ""},
+		{"operator beats copied labels", pod, "Pod", ownership.Unrestricted(), "Widget", ""},
+		{"denied top", pod, "Pod", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "example.io", Kind: "Widget"}}, "Deployment", resourcecontext.OmittedRBACDenied},
+		{"recorded without metadata", standalone, "Deployment", ownership.Unrestricted(), "Application", ""},
+		{"unserved owner", missing, "Pod", ownership.Unrestricted(), "", resourcecontext.OmittedUnavailable},
+		{"GitOps lead beside unknown owner", managedGap, "Pod", ownership.Unrestricted(), "Application", resourcecontext.OmittedUnavailable},
+		{"certificate spec", secret, "Secret", ownership.Unrestricted(), "Certificate", ""},
+		{"sealed secret spec", sealed, "Secret", ownership.Unrestricted(), "SealedSecret", ""},
+		{"no spec generator or manager", unmanaged, "ConfigMap", ownership.Unrestricted(), "", ""},
+		{"denied certificate spec", secret, "Secret", summaryAccess{ownership.Unrestricted(), resourceid.GroupKind{Group: "cert-manager.io", Kind: "Certificate"}}, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			loaded := false
-			graph := func() IndexedTopology {
-				loaded = true
-				if tc.name == "budget during graph" {
-					cancel()
-					return IndexedTopology{}
-				}
-				if tc.name == "recorded without graph" || tc.name == "no graph or manager" {
-					return IndexedTopology{}
-				}
-				nodes := []topology.Node{
-					{ID: "deployment/shop/standalone", Kind: topology.KindDeployment, Name: "standalone", Data: map[string]any{"namespace": "shop", "apiVersion": "apps/v1"}},
-					{ID: "secret/shop/tls", Kind: topology.KindSecret, Name: "tls", Data: map[string]any{"namespace": "shop"}},
-					{ID: "secret/shop/sealed", Kind: topology.KindSecret, Name: "sealed", Data: map[string]any{"namespace": "shop"}},
-					{ID: "configmap/shop/unmanaged", Kind: topology.KindConfigMap, Name: "unmanaged", Data: map[string]any{"namespace": "shop"}},
-					{ID: "certificate/shop/tls", Kind: topology.KindCertificate, Name: "tls", Data: map[string]any{"namespace": "shop", "apiVersion": "cert-manager.io/v1"}},
-					{ID: "sealedsecret/shop/sealed", Kind: topology.KindSealedSecret, Name: "sealed", Data: map[string]any{"namespace": "shop", "apiVersion": "bitnami.com/v1alpha1"}},
-					{ID: "application/argocd/web", Kind: topology.KindApplication, Name: "web", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
-				}
-				value := &topology.Topology{Nodes: nodes, Edges: []topology.Edge{
-					{Source: "certificate/shop/tls", Target: "secret/shop/tls", Type: topology.EdgeManages},
-					{Source: "sealedsecret/shop/sealed", Target: "secret/shop/sealed", Type: topology.EdgeManages},
-					{Source: "application/argocd/web", Target: "configmap/shop/unmanaged", Type: topology.EdgeManages},
-				}}
-				return IndexedTopology{Topology: value, Index: topology.IndexByResource(value)}
-			}
 			owners := k8s.NewAgentOwnership(func(*ownership.Catalog) ownership.Access { return tc.access })
-			build := BuilderFromIndexes(ctx, graph, nil, nil, nil, owners)
+			build := BuilderFromIndexes(ctx, nil, nil, nil, owners)
 			meta := tc.obj.(metav1.Object)
 			group := ""
 			if tc.kind == "Deployment" {
 				group = "apps"
 			}
 			got := build(tc.obj, nil, group, tc.kind, meta.GetNamespace(), meta.GetName())
-			if loaded != tc.graph {
-				t.Fatalf("loaded graph=%v, want %v", loaded, tc.graph)
-			}
 			if got == nil {
 				if tc.want == "" && tc.note == "" {
 					return
@@ -164,9 +131,6 @@ func TestOwnershipSummariesUseCanonicalAnswers(t *testing.T) {
 				}
 			} else if got.ManagedBy == nil || got.ManagedBy.Kind != tc.want {
 				t.Fatalf("pointer %+v, want %s", got.ManagedBy, tc.want)
-			}
-			if loaded != tc.graph {
-				t.Fatalf("loaded graph=%v, want %v", loaded, tc.graph)
 			}
 			if tc.note == "" {
 				if len(got.Omitted) != 0 {

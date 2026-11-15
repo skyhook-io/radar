@@ -298,13 +298,27 @@ func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.Con
 
 // OtherManagers reads residual spec relations for the resource most recently
 // passed to Of. The bool reports unchecked sources, never denied ones.
-func (c *AgentOwnership) OtherManagers(rel *topology.Relationships, ref resourceid.Ref) ([]topology.ResourceRef, bool) {
-	if c.view == nil || c.failed || c.active != ref {
+func (c *AgentOwnership) OtherManagers(obj runtime.Object, ref resourceid.Ref) ([]topology.ResourceRef, bool) {
+	if c.view == nil || c.failed || c.active != ref || c.session.ValidateCaches() != nil {
 		return nil, true
 	}
-	out, incomplete := topology.OtherManagingControllers(rel, c.view, ref)
-	if c.session.ValidateCaches() != nil {
-		c.failed = true
+	// A summary may abandon enrichment at its deadline. Keep that read's
+	// memoized objects private so later rows cannot race its unfinished work.
+	session, err := c.source.Begin()
+	if err != nil {
+		return nil, true
+	}
+	rs, ok := session.(relations.Session)
+	if !ok {
+		return nil, true
+	}
+	captured, ok := relations.CaptureSubject(rs, ref, obj)
+	if !ok {
+		return nil, true
+	}
+	access := c.access(session.Catalog())
+	out, incomplete := topology.RelationSpecGenerators(captured, access, ownership.NewView(captured, access), ref, obj)
+	if session.ValidateCaches() != nil || c.session.ValidateCaches() != nil {
 		return nil, true
 	}
 	return out, incomplete

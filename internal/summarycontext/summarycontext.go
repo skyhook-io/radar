@@ -151,55 +151,19 @@ func WithinContext[T any](ctx context.Context, gate *BudgetGate, build func() T)
 	}
 }
 
-// IndexedTopology pairs a graph with its own index; a nil Index permits inline
-// edge scans. A nil Topology means the graph is unavailable.
-type IndexedTopology struct {
-	Topology *topology.Topology
-	Index    *topology.RelationshipsIndex
-}
-
-// BuilderFromIndexes composes canonical ownership next hops and optional issue
-// counts. The graph is obtained only for residual spec-declared relations.
-// canRead gates Trivy scan targets. A nil owners skips other ownership enrichment
-// without an omission note; production callers supply a caller-scoped session.
-func BuilderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx *IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
-	return builderFromIndexes(ctx, topologySource, namespacedIdx, clusterIdx, canRead, owners, true)
+// BuilderFromIndexes composes canonical ownership next hops and optional
+// issue counts. canRead gates Trivy scan targets; owners reads other leads.
+func BuilderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership) Builder {
+	return builderFromIndexes(ctx, namespacedIdx, clusterIdx, canRead, owners, true)
 }
 
 // StatusBuilderFromIndexes uses already-authorized issue counts and cached health;
 // it performs no ownership, topology or live scan-target reads.
 func StatusBuilderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueIndex) Builder {
-	return builderFromIndexes(ctx, nil, namespacedIdx, clusterIdx, nil, nil, false)
+	return builderFromIndexes(ctx, namespacedIdx, clusterIdx, nil, nil, false)
 }
 
-func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopology, namespacedIdx, clusterIdx *IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership, navigation bool) Builder {
-	var topo *topology.Topology
-	var relIdx *topology.RelationshipsIndex
-	var resourceProvider topology.ResourceProvider
-	var dynamicProvider topology.DynamicProvider
-	loaded := false
-	relationships := func(kind, namespace, name string, obj any) *topology.Relationships {
-		if !loaded {
-			loaded = true
-			if topologySource != nil {
-				snapshot := topologySource()
-				topo, relIdx = snapshot.Topology, snapshot.Index
-			}
-			if topo != nil {
-				resourceProvider = k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
-				dynamicProvider = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
-			}
-		}
-		if topo == nil {
-			return nil
-		}
-		rel := topology.GetRelationshipsWithObject(kind, namespace, name, obj, topo,
-			resourceProvider, dynamicProvider, relIdx)
-		if rel == nil {
-			return &topology.Relationships{}
-		}
-		return rel
-	}
+func builderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueIndex, canRead func(group, kind, namespace string) bool, owners *k8s.AgentOwnership, navigation bool) Builder {
 	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		var source runtime.Object = obj
 		if source == nil && u != nil {
@@ -234,13 +198,22 @@ func builderFromIndexes(ctx context.Context, topologySource func() IndexedTopolo
 			} else if chain == nil || chain.Stop != "" || len(chain.Refs) > 0 {
 				var other []topology.ResourceRef
 				if chain != nil && chain.Stop == "" && len(chain.Refs) > 0 {
-					rel := relationships(kind, namespace, name, source)
-					other, residualUnavailable = owners.OtherManagers(rel, ref)
+					answer := WithinContext(ctx, specGeneratorGate, func() *specGenerators {
+						refs, incomplete := owners.OtherManagers(source, ref)
+						return &specGenerators{refs: refs, incomplete: incomplete}
+					})
+					residualUnavailable = answer == nil || answer.incomplete
+					if answer != nil {
+						other = answer.refs
+					}
 				}
 				if len(other) > 0 {
 					managedBy = resourcecontext.ControllerSummary(other[0])
 				} else {
-					answer := owners.Manager(ref)
+					answer := ownership.ManagerAnswer{}
+					if ctx.Err() == nil {
+						answer = owners.Manager(ref)
+					}
 					managedBy = resourcecontext.ManagerSummary(answer)
 					if managedBy == nil && answer.State != ownership.ManagerNone {
 						omitted = []resourcecontext.OmittedField{{Field: "managedBy", Reason: resourcecontext.OmittedUnavailable}}
@@ -439,4 +412,11 @@ func BuildIssueIndex(p issues.Provider, filters issues.Filters) *IssueIndex {
 		idx.counts[k] = len(ids)
 	}
 	return idx
+}
+
+var specGeneratorGate = NewBudgetGate(1)
+
+type specGenerators struct {
+	refs       []topology.ResourceRef
+	incomplete bool
 }
