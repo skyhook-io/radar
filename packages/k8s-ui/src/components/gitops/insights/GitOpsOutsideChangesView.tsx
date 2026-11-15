@@ -12,15 +12,17 @@ import { AlertBanner } from '../../ui/drawer-components'
 export function outsideOutcomeText(code: GitOpsOutsideOutcome): string {
   switch (code) {
     case 'reverted':
-      return 'Flux reverts this on its next run'
+      return 'Flux reverts this on its next run if the chart sets this field'
     case 'reported':
       return 'Flux reports this drift and leaves it'
     case 'stays':
-      return 'Stays until a Helm upgrade changes this field'
+      return 'Stays until a Helm upgrade or rollback, which resets it if the chart sets this field'
     case 'may-overwrite':
       return 'Flux may overwrite this on its next run'
     case 'ignored':
       return "Ignored by this release's drift rules"
+    case 'excluded':
+      return 'This object is excluded from drift detection; a Helm upgrade or rollback resets this field if the chart sets it'
     case 'opted-out':
       return 'This object opts out of Flux reconciliation'
     case 'suspended':

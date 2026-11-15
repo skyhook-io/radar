@@ -201,6 +201,11 @@ func outsideOutcome(policy *gitOpsWritePolicy, ignore string) string {
 		return "unknown"
 	case policy.Suspended != nil && *policy.Suspended:
 		return "suspended"
+	// helm-controller's driftDetection: disabled annotation only drops the
+	// object from drift detection; upgrades still apply it. DriftDetection is
+	// set only for a HelmRelease.
+	case policy.ObjectReconcile != "" && policy.DriftDetection != "":
+		return "excluded"
 	case policy.ObjectReconcile != "":
 		return "opted-out"
 	case ignore == "effective":

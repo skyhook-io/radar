@@ -1,7 +1,7 @@
 // GET /api/gitops/outside-changes/{kind}/{namespace}/{name}: fields of a Flux
 // root's managed objects last written by a person's tool rather than Flux.
 
-export type GitOpsOutsideOutcome = 'reverted' | 'reported' | 'stays' | 'may-overwrite' | 'ignored' | 'opted-out' | 'suspended' | 'unknown'
+export type GitOpsOutsideOutcome = 'reverted' | 'reported' | 'stays' | 'may-overwrite' | 'ignored' | 'excluded' | 'opted-out' | 'suspended' | 'unknown'
 
 export interface GitOpsOutsideRef {
   group: string

@@ -127,7 +127,8 @@ func TestOutsideOutcome(t *testing.T) {
 	}{
 		{nil, "", "unknown"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &yes, DriftDetection: "enabled"}, "", "suspended"},
-		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, DriftDetection: "enabled", ObjectReconcile: "ignore"}, "", "opted-out"},
+		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, DriftDetection: "enabled", ObjectReconcile: "ignore"}, "", "excluded"},
+		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, ObjectReconcile: "ignore"}, "", "opted-out"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, ObjectReconcile: "if-not-present"}, "", "opted-out"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no, DriftDetection: "enabled"}, "effective", "ignored"},
 		{&gitOpsWritePolicy{Tool: "fluxcd", Suspended: &no}, "", "may-overwrite"},
