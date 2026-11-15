@@ -15,7 +15,6 @@ import (
 	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"runtime/pprof"
@@ -24,14 +23,13 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/labels"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/client-go/util/homedir"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -98,11 +96,12 @@ type report struct {
 	// A user who may read half the namespaces and everything cluster-scoped,
 	// asked about the objects they may read: today's per-user graph copy
 	// against the families answering with their access.
-	RestrictedNamespaces int                `json:"restrictedNamespaces"`
-	RestrictedTimings    map[string]*timing `json:"restrictedTimings"`
-	RestrictedEqual      int                `json:"restrictedEqual"`
-	RestrictedDiffer     int                `json:"restrictedDiffer"`
-	RestrictedDiffs      []diffGroup        `json:"restrictedDiffs"`
+	RestrictedSkippedReason string             `json:"restrictedSkippedReason,omitempty"`
+	RestrictedNamespaces    int                `json:"restrictedNamespaces"`
+	RestrictedTimings       map[string]*timing `json:"restrictedTimings"`
+	RestrictedEqual         int                `json:"restrictedEqual"`
+	RestrictedDiffer        int                `json:"restrictedDiffer"`
+	RestrictedDiffs         []diffGroup        `json:"restrictedDiffs"`
 
 	ManagedBy                      map[string]int      `json:"managedBy"`
 	Examples                       map[string][]string `json:"managedByExamples"`
@@ -152,6 +151,22 @@ func withholdNamespaces(rel *topology.Relationships, namespaces []string) {
 	})
 }
 
+func comparisonNamespaces(p topology.NamespaceProvider) ([]string, string) {
+	nss, err := p.Namespaces()
+	if err != nil {
+		return nil, fmt.Sprintf("cannot enumerate namespaces: %v", err)
+	}
+	if len(nss) == 0 {
+		return nil, "no cached namespaces to compare"
+	}
+	names := make([]string, 0, len(nss))
+	for _, ns := range nss {
+		names = append(names, ns.Name)
+	}
+	slices.Sort(names)
+	return names, ""
+}
+
 func main() {
 	exitCode := 0
 	defer func() {
@@ -183,8 +198,11 @@ func main() {
 	rep.TimingMethod = "Per-kind: median of per-subject medians; pooled: all repeated samples, nearest-rank p50/p95/p99; separate passes with GC between them"
 	rep.AllocationMethod = "Process-wide MemStats Mallocs and TotalAlloc deltas per answer, averaged over repeats; includes concurrent informer/background allocations"
 
-	kubeconfig := cmp.Or(os.Getenv("KUBECONFIG"), filepath.Join(homedir.HomeDir(), ".kube", "config"))
-	if err := k8s.Initialize(k8s.InitOptions{KubeconfigPath: kubeconfig, PreferredContext: k8s.ContextRef{Name: *contextName, SourceFile: kubeconfig, InFileName: *contextName}}); err != nil {
+	preferred, err := k8s.ResolveContextSource(k8s.InitOptions{}, *contextName)
+	if err != nil {
+		log.Fatalf("resolve context: %v", err)
+	}
+	if err := k8s.Initialize(k8s.InitOptions{PreferredContext: preferred}); err != nil {
 		log.Fatalf("initialize: %v", err)
 	}
 	if got := k8s.GetContextName(); got != *contextName {
@@ -258,7 +276,7 @@ func main() {
 	rep.GraphNodes, rep.GraphEdges = len(topo.Nodes), len(topo.Edges)
 	log.Printf("graph: %d nodes, %d edges, built in %v ms, holds %.1f MiB", rep.GraphNodes, rep.GraphEdges, rep.GraphBuildMS, rep.GraphHeldMiB)
 
-	subjects := collect(provider, dc, crds, crdKind, *perKind)
+	subjects := collect(provider, cache.ResourceCache, dc, crds, crdKind, *perKind)
 	if *only != "" {
 		kinds := strings.Split(*only, ",")
 		subjects = slices.DeleteFunc(subjects, func(s subject) bool {
@@ -276,13 +294,8 @@ func main() {
 	}
 	unrestricted := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
 
-	var allNamespaces []string
-	if nss, err := cache.Namespaces().List(labels.Everything()); err == nil {
-		for _, ns := range nss {
-			allNamespaces = append(allNamespaces, ns.Name)
-		}
-	}
-	slices.Sort(allNamespaces)
+	allNamespaces, reason := comparisonNamespaces(provider.(topology.NamespaceProvider))
+	rep.RestrictedSkippedReason = reason
 	var half namespacesAccess
 	for i := 0; i < len(allNamespaces); i += 2 {
 		half = append(half, allNamespaces[i])
@@ -334,7 +347,10 @@ func main() {
 	before := measurePass(subjects, *repeats, rep.Timings, &rep.Pooled, false, beforeAnswer(false))
 	runtime.GC()
 	after := measurePass(subjects, *repeats, rep.Timings, &rep.Pooled, true, afterAnswer(unrestricted))
-	restrictedSubjects := slices.DeleteFunc(slices.Clone(subjects), func(s subject) bool { return s.ref.Namespace != "" && !slices.Contains(half, s.ref.Namespace) })
+	var restrictedSubjects []subject
+	if rep.RestrictedSkippedReason == "" {
+		restrictedSubjects = slices.DeleteFunc(slices.Clone(subjects), func(s subject) bool { return s.ref.Namespace != "" && !slices.Contains(half, s.ref.Namespace) })
+	}
 	runtime.GC()
 	restrictedBefore := measurePass(restrictedSubjects, *repeats, rep.RestrictedTimings, &rep.RestrictedPooled, false, beforeAnswer(true))
 	runtime.GC()
@@ -409,12 +425,35 @@ func main() {
 			log.Fatalf("write report: %v", err)
 		}
 	}
+	if rep.RestrictedSkippedReason != "" {
+		fmt.Printf("restricted comparison skipped: %s\n", rep.RestrictedSkippedReason)
+	}
 	fmt.Printf("%s: %d objects, %d equal, %d differ, %d diff groups; restricted user (%d of %d namespaces): %d equal, %d differ, %d groups\n", rep.Context, rep.Objects, rep.SubjectsEqual, rep.SubjectsDiffer, len(rep.Diffs), len(half), len(allNamespaces), rep.RestrictedEqual, rep.RestrictedDiffer, len(rep.RestrictedDiffs))
 	fmt.Printf("pooled p50/p95/p99 (µs): before %v, after %v; unexplained ManagedBy losses: %d unrestricted, %d restricted\n", rep.Pooled.BeforeUS, rep.Pooled.AfterUS, rep.ManagedByUnexplained, rep.RestrictedManagedByUnexplained)
 	if rep.ManagedByUnexplained+rep.RestrictedManagedByUnexplained > 0 {
 		exitCode = 1
 	}
 
+}
+
+// implementationClass: the graph named a Gateway's GatewayClass, which
+// implements it rather than owning or generating it.
+func implementationClass(s subject, before []topology.ResourceRef) bool {
+	return s.ref.Kind == "Gateway" && s.ref.Group == "gateway.networking.k8s.io" && len(before) == 1 &&
+		before[0].Kind == "GatewayClass" && before[0].Group == "gateway.networking.k8s.io"
+}
+
+// unownedCrossplaneManaged: the graph found a Crossplane composite by
+// scanning composites' resourceRefs for a managed resource that carries no
+// owner reference. Crossplane always sets one on what it composes; only a
+// hand-made fixture lacks it, and the families answer the reverse question
+// through owner references and claimRef.
+func unownedCrossplaneManaged(s subject, before []topology.ResourceRef) bool {
+	m, err := meta.Accessor(s.obj)
+	if err != nil || len(m.GetOwnerReferences()) != 0 || len(before) != 1 || !strings.HasSuffix(s.ref.Group, ".crossplane.io") {
+		return false
+	}
+	return before[0].Group != "" && !strings.HasSuffix(before[0].Group, ".k8s.io")
 }
 
 func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access ownership.Access, subject subject, before, after []topology.ResourceRef) string {
@@ -427,6 +466,12 @@ func managedByOutcome(cache *k8s.ResourceCache, graph *topology.Topology, access
 		return ""
 	}
 	if len(after) == 0 {
+		if implementationClass(subject, before) {
+			return "lost-implementation-class"
+		}
+		if unownedCrossplaneManaged(subject, before) {
+			return "lost-unowned-managed-resource"
+		}
 		return "lost"
 	}
 	if len(before) == 0 {
@@ -695,7 +740,7 @@ func refSet(v reflect.Value) sets.Set[string] {
 
 // collect lists every cached object: the typed kinds the provider serves and
 // every watched CRD kind.
-func collect(p topology.ResourceProvider, dc *k8s.DynamicResourceCache, crds []schema.GroupVersionResource, crdKind map[schema.GroupVersionResource]string, perKind int) []subject {
+func collect(p topology.ResourceProvider, typed *k8score.ResourceCache, dc *k8s.DynamicResourceCache, crds []schema.GroupVersionResource, crdKind map[schema.GroupVersionResource]string, perKind int) []subject {
 	var out []subject
 	add := func(group, kind string, objs []any) {
 		if perKind > 0 && len(objs) > perKind {
@@ -743,13 +788,20 @@ func collect(p topology.ResourceProvider, dc *k8s.DynamicResourceCache, crds []s
 	add("", "ConfigMap", anys(p.ConfigMaps()))
 	add("", "Secret", anys(p.Secrets()))
 	add("", "PersistentVolumeClaim", anys(p.PersistentVolumeClaims()))
-	add("", "PersistentVolume", anys(p.PersistentVolumes()))
 	add("autoscaling", "HorizontalPodAutoscaler", anys(p.HorizontalPodAutoscalers()))
 	add("policy", "PodDisruptionBudget", anys(p.PodDisruptionBudgets()))
 	add("networking.k8s.io", "NetworkPolicy", anys(p.NetworkPolicies()))
-	add("", "Node", anys(p.Nodes()))
 	if sa, ok := p.(topology.ServiceAccountProvider); ok {
 		add("", "ServiceAccount", anys(sa.ServiceAccounts()))
+	}
+	for _, kl := range k8score.AllKindListers() {
+		b, ok := resourceid.BuiltinForKind(kl.Kind())
+		if !ok || b.Group != kl.Group() || b.Namespaced {
+			continue
+		}
+		if objects, ready := typed.ReadableIndexedObjects(b.Resource, nil, ""); ready {
+			add(b.Group, b.Kind, anys(objects, nil))
+		}
 	}
 	for _, gvr := range crds {
 		objs, err := dc.List(gvr, "")

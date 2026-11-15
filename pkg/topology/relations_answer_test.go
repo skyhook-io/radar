@@ -1,12 +1,14 @@
 package topology
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -23,6 +26,7 @@ type projectionSession struct {
 	ownership.ReadSession
 	objects map[resourceid.Ref]runtime.Object
 	reads   []resourceid.Ref
+	gaps    map[resourceid.GroupKind]ownership.Gap
 }
 
 func projectionRef(obj runtime.Object) resourceid.Ref {
@@ -58,6 +62,9 @@ func newProjectionSession(t *testing.T, objects ...runtime.Object) *projectionSe
 }
 func (s *projectionSession) Borrow(ref resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
 	s.reads = append(s.reads, ref)
+	if gap, ok := s.gaps[ref.GroupKind()]; ok && (gap.Namespace == "" || gap.Namespace == ref.Namespace) {
+		return nil, ownership.ObjectRead{State: ownership.Unavailable, Gap: gap}
+	}
 	if obj := s.objects[ref]; obj != nil {
 		m, _ := apimeta.Accessor(obj)
 		return obj, ownership.ObjectRead{State: ownership.Present, Object: ownership.Observe(ref, m)}
@@ -70,7 +77,14 @@ func (s *projectionSession) Object(ref resourceid.Ref) ownership.ObjectRead {
 }
 func (s *projectionSession) Indexed(gk resourceid.GroupKind, _ string, _ []string, scope ownership.SearchScope) relations.IndexedRead {
 	var out relations.IndexedRead
+	gap, incomplete := s.gaps[gk]
+	if incomplete {
+		out.Gaps = []ownership.Gap{gap}
+	}
 	for ref, obj := range s.objects {
+		if incomplete && (gap.Namespace == "" || gap.Namespace == ref.Namespace) {
+			continue
+		}
 		if ref.GroupKind() == gk && (ref.Namespace == "" && scope.IncludeClusterScoped || ref.Namespace != "" && (scope.AllNamespaces || slices.Contains(scope.Namespaces, ref.Namespace))) {
 			out.Objects = append(out.Objects, relations.IndexedObject{Ref: ref, Object: obj})
 		}
@@ -317,8 +331,8 @@ func TestRelationsAnswerManagedByControllerTop(t *testing.T) {
 	}
 	s = newProjectionSession(t, pod, rs, deployment)
 	rel = projectionAnswer(t, s, pod, projectionAccess{denied: []string{"HelmRelease"}}, ownership.Unrestricted())
-	if len(rel.ManagedBy) != 0 {
-		t.Fatalf("hidden metadata manager: %+v", rel.ManagedBy)
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Name != "release" {
+		t.Fatalf("a manager the subject's own labels name: %+v", rel.ManagedBy)
 	}
 }
 
@@ -353,5 +367,172 @@ func TestRelationsAnswerManagedByClimbsNonControllerOwners(t *testing.T) {
 	rel = projectionAnswer(t, s, endpoint, projectionAccess{denied: []string{"ReplicaSet"}}, ownership.Unrestricted())
 	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Pod" {
 		t.Fatalf("stop below an unreadable owner: %+v", rel.ManagedBy)
+	}
+}
+
+func TestRelationsAnswerKnativePrivateServiceNeedsNoRevision(t *testing.T) {
+	for _, state := range []string{"denied", "absent", "uncollected"} {
+		for _, latest := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/latest=%v", state, latest), func(t *testing.T) {
+				status := map[string]any{"traffic": []any{map[string]any{"revisionName": "web-1"}}}
+				if latest {
+					status = map[string]any{"latestReadyRevisionName": "web-1"}
+				}
+				ksvc := projectionCR("serving.knative.dev", "Service", "shop", "web", map[string]any{"status": status})
+				svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-1-private"}}, "", "Service")
+				revision := projectionCR("serving.knative.dev", "Revision", "shop", "web-1", map[string]any{})
+				revision.SetLabels(map[string]string{"serving.knative.dev/service": "web"})
+				s := newProjectionSession(t, ksvc, svc, revision)
+				var emit ownership.Access = ownership.Unrestricted()
+				switch state {
+				case "denied":
+					emit = projectionAccess{denied: []string{"Revision"}}
+				case "absent":
+					delete(s.objects, projectionRef(revision))
+				case "uncollected":
+					delete(s.objects, projectionRef(revision))
+					s.gaps = map[resourceid.GroupKind]ownership.Gap{projectionRef(revision).GroupKind(): {Kind: projectionRef(revision).GroupKind(), Namespace: "shop", Reason: readreason.RadarKindNotCollected}}
+				}
+				forward := projectionAnswer(t, s, ksvc, emit, emit)
+				reverse := projectionAnswer(t, s, svc, emit, emit)
+				if !slices.Equal(forward.Backends, []ResourceRef{refOf(projectionRef(svc))}) || !slices.Equal(reverse.RoutedFrom, []ResourceRef{refOf(projectionRef(ksvc))}) {
+					t.Fatalf("forward %v, reverse %v", forward.Backends, reverse.RoutedFrom)
+				}
+				front := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", OwnerReferences: []metav1.OwnerReference{{APIVersion: "serving.knative.dev/v1", Kind: "Route", Name: "web"}}}}, "", "Service")
+				s.objects[projectionRef(front)] = front
+				forward = projectionAnswer(t, s, ksvc, emit, emit)
+				reverse = projectionAnswer(t, s, front, emit, emit)
+				if !slices.Contains(forward.Services, refOf(projectionRef(front))) || !slices.Contains(reverse.Backends, refOf(projectionRef(ksvc))) {
+					t.Fatalf("front door forward %+v, reverse %+v", forward, reverse)
+				}
+			})
+		}
+	}
+}
+
+type hiddenNetworkAccess struct{ ownership.Access }
+
+func (a hiddenNetworkAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.Decision {
+	if gk.Kind == "Service" || gk.Kind == "HTTPRoute" || gk.Kind == "Gateway" && ns == "shop" {
+		return ownership.Denied
+	}
+	return a.Access.CanRead(gk, ns)
+}
+
+func TestRelationsAnswerNetworkingHiddenHopsHaveNoOutputLimit(t *testing.T) {
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	hiddenGateway := projectionCR("gateway.networking.k8s.io", "Gateway", "shop", "hidden", map[string]any{})
+	gateway := projectionCR("gateway.networking.k8s.io", "Gateway", "public", "front", map[string]any{})
+	for _, manyServices := range []bool{false, true} {
+		t.Run(fmt.Sprintf("manyServices=%v", manyServices), func(t *testing.T) {
+			objects := []runtime.Object{deployment, hiddenGateway, gateway}
+			for i := 0; i <= relations.DefaultLimit; i++ {
+				service := "web"
+				if manyServices {
+					service = fmt.Sprintf("web-%04d", i)
+				}
+				if manyServices || i == 0 {
+					objects = append(objects, projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: service}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "Service"))
+				}
+				parent := map[string]any{"name": "hidden"}
+				if i == relations.DefaultLimit {
+					parent = map[string]any{"name": "front", "namespace": "public"}
+				}
+				objects = append(objects, projectionCR("gateway.networking.k8s.io", "HTTPRoute", "shop", fmt.Sprintf("route-%04d", i), map[string]any{"spec": map[string]any{"parentRefs": []any{parent}, "rules": []any{map[string]any{"backendRefs": []any{map[string]any{"name": service}}}}}}))
+			}
+			s := newProjectionSession(t, objects...)
+			emit := hiddenNetworkAccess{ownership.Unrestricted()}
+			captured, ok := relations.CaptureSubject(s, projectionRef(deployment), deployment)
+			if !ok {
+				t.Fatal("capture failed")
+			}
+			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, "", nil, nil)
+			if !slices.Equal(rel.Gateways, []ResourceRef{refOf(projectionRef(gateway))}) || len(rel.Services)+len(rel.Routes) != 0 {
+				t.Fatalf("gateways %v, services %v, routes %v", rel.Gateways, rel.Services, rel.Routes)
+			}
+			for name, c := range coverage {
+				if c.Total != 0 || c.Truncated {
+					t.Fatalf("%s leaked hidden-hop count or truncated traversal: %+v", name, c)
+				}
+			}
+		})
+	}
+}
+
+func TestRelationsAnswerNetworkingHiddenStoreGaps(t *testing.T) {
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "Service")
+	route := projectionCR("gateway.networking.k8s.io", "HTTPRoute", "shop", "web", map[string]any{})
+	for _, gk := range []resourceid.GroupKind{projectionRef(svc).GroupKind(), projectionRef(route).GroupKind()} {
+		t.Run(gk.Kind, func(t *testing.T) {
+			s := newProjectionSession(t, deployment, svc, route)
+			gap := ownership.Gap{Kind: gk, Namespace: "shop", Reason: readreason.KindSyncPending}
+			s.gaps = map[resourceid.GroupKind]ownership.Gap{gk: gap}
+			emit := hiddenNetworkAccess{ownership.Unrestricted()}
+			captured, ok := relations.CaptureSubject(s, projectionRef(deployment), deployment)
+			if !ok {
+				t.Fatal("capture failed")
+			}
+			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, "", nil, nil)
+			key := relations.GatewayParents.Name
+			if gk.Kind == "Service" {
+				key = relations.ServiceSelectors.Name
+			}
+			c, found := coverage[key]
+			if !found || c.Complete() || c.Total != 0 || !slices.Contains(c.NotChecked, gap) {
+				t.Fatalf("missing count-free intermediate gap: %+v", coverage)
+			}
+			if len(rel.Gateways)+len(rel.Services)+len(rel.Routes) != 0 {
+				t.Fatalf("unreadable hops emitted: %+v", rel)
+			}
+		})
+	}
+}
+
+func TestRelationsAnswerStorageClassReverseLists(t *testing.T) {
+	class := "fast"
+	sc := projectionObject(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: class}}, "storage.k8s.io", "StorageClass")
+	pv := projectionObject(&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "volume"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: class}}, "", "PersistentVolume")
+	pvc := projectionObject(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "disk"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}}, "", "PersistentVolumeClaim")
+	other := pvc.(*corev1.PersistentVolumeClaim).DeepCopy()
+	other.Namespace = "other"
+	for _, tc := range []struct {
+		name    string
+		emit    ownership.Access
+		partial bool
+		want    []ResourceRef
+	}{
+		{"allowed", ownership.Unrestricted(), false, []ResourceRef{refOf(projectionRef(pv)), refOf(projectionRef(pvc)), refOf(projectionRef(other))}},
+		{"claims denied", projectionAccess{denied: []string{"PersistentVolumeClaim"}}, false, []ResourceRef{refOf(projectionRef(pv))}},
+		{"volumes denied", projectionAccess{denied: []string{"PersistentVolume"}}, false, []ResourceRef{refOf(projectionRef(pvc)), refOf(projectionRef(other))}},
+		{"namespace denied", projectionAccess{namespaces: []string{"shop"}}, false, []ResourceRef{refOf(projectionRef(pv)), refOf(projectionRef(pvc))}},
+		{"claims partially collected", ownership.Unrestricted(), true, []ResourceRef{refOf(projectionRef(pv)), refOf(projectionRef(pvc))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newProjectionSession(t, sc, pv, pvc, other)
+			gap := ownership.Gap{Kind: projectionRef(pvc).GroupKind(), Namespace: "other", Reason: readreason.RadarNamespaceNotCollected}
+			if tc.partial {
+				s.gaps = map[resourceid.GroupKind]ownership.Gap{gap.Kind: gap}
+			}
+			captured, ok := relations.CaptureSubject(s, projectionRef(sc), sc)
+			if !ok {
+				t.Fatal("capture failed")
+			}
+			rel, coverage := RelationsAnswer(captured, tc.emit, ownership.Unrestricted(), ownership.NewView(captured, tc.emit), projectionRef(sc), sc, "", nil, nil)
+			if len(rel.Consumers) != len(tc.want) {
+				t.Fatalf("consumers %v, want %v", rel.Consumers, tc.want)
+			}
+			for _, ref := range tc.want {
+				if !slices.Contains(rel.Consumers, ref) {
+					t.Errorf("missing consumer %v in %v", ref, rel.Consumers)
+				}
+			}
+			if tc.partial {
+				c := coverage["direct"]
+				if c.Complete() || !slices.Contains(c.NotChecked, gap) {
+					t.Fatalf("partial collection lost: %+v", coverage)
+				}
+			}
+		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/karpenter"
@@ -251,9 +252,10 @@ func RelationsAnswer(session relations.Session, access, traverse ownership.Acces
 	}
 	if m, err := apimeta.Accessor(obj); err == nil {
 		if meta := ManagedByFromMeta(m); meta != nil {
-			if n.allowedRef(*meta) {
-				rel.ManagedBy = []ResourceRef{*meta}
-			}
+			// Named by the subject's own labels and annotations, which the
+			// caller reads: a declared name, like a spec reference, shown
+			// whether or not the caller may read the manager itself.
+			rel.ManagedBy = []ResourceRef{*meta}
 		} else if top := n.topManager(session, ov, subject); top != nil {
 			rel.ManagedBy = []ResourceRef{*top}
 		} else {
@@ -508,7 +510,7 @@ func (n *neighborhood) crossplane(session relations.Session, ov *ownership.View,
 // owns, which exposes it, and the private Service of each Revision its status
 // sends traffic to (or its latest ready one), which it exposes. From a core
 // Service's side the Knative Service is found by the Route that owns it, or
-// for a private Service by its Revision's service label.
+// for a private Service by the Knative Services' traffic status.
 func (n *neighborhood) knativeServing(session relations.Session, subject resourceid.Ref, obj runtime.Object) {
 	const serving = "serving.knative.dev"
 	read := func(r resourceid.Ref) (*unstructured.Unstructured, bool) {
@@ -572,13 +574,16 @@ func (n *neighborhood) knativeServing(session relations.Session, subject resourc
 		if !private {
 			return
 		}
-		revision, ok := read(resourceid.NewRef(serving, "Revision", subject.Namespace, rev))
-		if !ok {
+		gk := resourceid.GroupKind{Group: serving, Kind: "Service"}
+		if n.access.CanRead(gk, subject.Namespace) != ownership.Allowed {
 			return
 		}
-		ksvcRef = resourceid.NewRef(serving, "Service", subject.Namespace, revision.GetLabels()["serving.knative.dev/service"])
-		if ksvc, ok := read(ksvcRef); ok && slices.Contains(privateRevisions(ksvc), rev) {
-			n.edge(ksvcRef, subject, exposes, false)
+		services := session.Indexed(gk, cache.NamespaceIndex, []string{subject.Namespace}, ownership.InNamespace(subject.Namespace))
+		n.cover("KnativeServing", relations.Coverage{NotChecked: services.Gaps})
+		for _, service := range services.Objects {
+			if ksvc, ok := service.Object.(*unstructured.Unstructured); ok && slices.Contains(privateRevisions(ksvc), rev) {
+				n.edge(service.Ref, subject, exposes, false)
+			}
 		}
 	}
 }
