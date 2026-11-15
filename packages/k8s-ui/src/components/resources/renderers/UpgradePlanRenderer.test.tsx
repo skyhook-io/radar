@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { UpgradePlanRenderer } from './UpgradePlanRenderer'
+import type { PlanNode } from '../resource-utils-upgrade-plan'
 
 const CP = 'node-role.kubernetes.io/control-plane'
 const data = {
@@ -10,7 +11,7 @@ const data = {
     prepare: { image: 'rancher/k3s-upgrade', envs: [{ name: 'P', value: 'ENV-SENTINEL' }] } },
   status: { latestHash: 'h1', applying: ['n2'], conditions: [{ type: 'Validated', status: 'True' }] },
 }
-const nodes = [
+const nodes: PlanNode[] = [
   { name: 'n1', labels: { 'kubernetes.io/hostname': 'n1', [CP]: 'true', 'plan.upgrade.cattle.io/k3s-server': 'h1' } },
   { name: 'n2', labels: { 'kubernetes.io/hostname': 'n2', [CP]: 'true' } },
   { name: 'n3', labels: { 'kubernetes.io/hostname': 'n3', [CP]: 'true' } },

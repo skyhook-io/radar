@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getUpgradePlanColumnValue, getUpgradePlanStatus, isDistributionUpgradePlan, upgradePlanProgress, upgradePlanTarget } from './resource-utils-upgrade-plan'
+import { getUpgradePlanColumnValue, getUpgradePlanStatus, isDistributionUpgradePlan, upgradePlanProgress, upgradePlanTarget, type PlanNode } from './resource-utils-upgrade-plan'
 import { hasCuratedColumns } from './ResourcesView'
 
 const CP = 'node-role.kubernetes.io/control-plane'
@@ -10,7 +10,7 @@ const plan = (patch: any = {}) => ({
   status: { latestHash: 'h1', applying: ['n2'], ...patch.status },
 })
 const H = 'kubernetes.io/hostname'
-const nodes = [
+const nodes: PlanNode[] = [
   { name: 'n1', labels: { [H]: 'n1', [CP]: 'true', [LABEL]: 'h1' } },
   { name: 'n2', labels: { [H]: 'n2', [CP]: 'true' } },
   { name: 'n3', labels: { [H]: 'n3', [CP]: 'true', [LABEL]: 'h0' } },
