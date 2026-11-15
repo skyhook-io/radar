@@ -736,15 +736,19 @@ export function useDashboard(
 }
 
 // Best practices
-export function useAudit(namespaces: string[] = []) {
+export function useAudit(
+  namespaces: string[] = [],
+  options: { enabled?: boolean } = {},
+) {
   const params =
     namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
-  // Mounted app-wide, so without this it keeps polling a cluster that is down.
+  // Without the connection check a mounted view keeps polling a cluster that
+  // is down.
   const connected = useClusterConnected();
   return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
     queryFn: () => fetchJSON(`/audit${params}`),
-    enabled: connected,
+    enabled: connected && (options.enabled ?? true),
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
     placeholderData: (prev) => prev,

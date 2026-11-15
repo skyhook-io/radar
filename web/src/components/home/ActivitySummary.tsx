@@ -81,6 +81,9 @@ export function ActivitySummary({ namespaces, topology, onNavigate }: ActivitySu
     includeK8sEvents: true,
     includeManaged: true,
     limit: 1000,
+    // Cluster activity refetches this every few seconds; fetch only what
+    // arrived since the last page instead of the whole hour.
+    deltaSync: true,
   })
 
   // Intentionally re-sample 'now' only when events refresh (not every render),
