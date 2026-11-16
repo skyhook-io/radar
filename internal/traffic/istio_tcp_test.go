@@ -187,11 +187,15 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 			if aggregateSent != wantTCPSent+wantHTTPSent || aggregateRecv != wantTCPRecv+wantHTTPRecv || recordsSent != aggregateSent || recordsRecv != aggregateRecv {
 				t.Errorf("aggregate bytes %d/%d, records %d/%d; want %d/%d", aggregateSent, aggregateRecv, recordsSent, recordsRecv, wantTCPSent+wantHTTPSent, wantTCPRecv+wantHTTPRecv)
 			}
-			if got := strings.Contains(resp.Warning, istioByteOverlapNote); got != tc.wantOverlap {
-				t.Errorf("overlap note present = %v, want %v: %q", got, tc.wantOverlap, resp.Warning)
+			wantNote := ""
+			if tc.wantOverlap {
+				wantNote = istioByteOverlapNote
+			}
+			if resp.DataNote != wantNote {
+				t.Errorf("data note = %q, want %q", resp.DataNote, wantNote)
 			}
 			wantKind := ""
-			if tc.wantOverlap {
+			if tc.missingErrors {
 				wantKind = WarningPartial
 			}
 			if tc.failTCP {
@@ -203,6 +207,9 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 			if resp.WarningKind != wantKind {
 				t.Errorf("warning kind = %q, want %q: %q", resp.WarningKind, wantKind, resp.Warning)
 			}
+			if wantKind == "" && resp.Warning != "" {
+				t.Errorf("overlap alone must not warn: %q", resp.Warning)
+			}
 			if tc.missingErrors && !strings.Contains(resp.Warning, "5xx error rates") {
 				t.Errorf("missing figures warning lost: %q", resp.Warning)
 			}
@@ -213,17 +220,17 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 	}
 }
 
-func TestIstioByteOverlapWarningPrecedence(t *testing.T) {
+func TestIstioByteOverlapPreservesWarning(t *testing.T) {
 	for _, kind := range []string{"", WarningPartial, WarningTransient, WarningIncomplete, WarningCluster} {
 		t.Run(kind, func(t *testing.T) {
-			response := &FlowsResponse{Warning: "Existing warning.", WarningKind: kind}
+			const warning = "Istio metrics are incomplete: 5xx error rates could not be read."
+			response := &FlowsResponse{Warning: warning, WarningKind: kind}
 			noteIstioByteOverlap(response)
-			wantKind := kind
-			if wantKind == "" {
-				wantKind = WarningPartial
+			if response.DataNote != istioByteOverlapNote {
+				t.Errorf("data note = %q, want %q", response.DataNote, istioByteOverlapNote)
 			}
-			if response.Warning != "Existing warning. "+istioByteOverlapNote || response.WarningKind != wantKind {
-				t.Errorf("warning = %q (%s), want appended overlap note (%s)", response.Warning, response.WarningKind, wantKind)
+			if response.Warning != warning || response.WarningKind != kind {
+				t.Errorf("warning = %q (%s), want unchanged %q (%s)", response.Warning, response.WarningKind, warning, kind)
 			}
 		})
 	}

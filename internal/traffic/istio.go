@@ -614,10 +614,7 @@ func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (m
 const istioByteOverlapNote = "Data on some edges may count the same calls twice: when no waypoint receives a call into an ambient workload, Radar can show both the calling proxy's HTTP bytes and ztunnel's TCP bytes."
 
 func noteIstioByteOverlap(response *FlowsResponse) {
-	response.Warning = strings.TrimSpace(response.Warning + " " + istioByteOverlapNote)
-	if response.WarningKind == "" {
-		response.WarningKind = WarningPartial
-	}
+	response.DataNote = istioByteOverlapNote
 }
 
 // queryHTTPFlows queries istio_requests_total for HTTP/gRPC traffic.
