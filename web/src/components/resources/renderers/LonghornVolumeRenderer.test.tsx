@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
-const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy' } }
+const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy', kubernetesStatus: { namespace: 'shop', pvcName: 'data-db-0', lastPVCRefAt: '' } } }
 
-async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean }) {
+async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean }, namespaces?: { name: string }[]) {
   vi.resetModules()
   vi.doMock('../../../api/client', () => ({
     useResources: () => ({ data: engines.data, error: engines.error ?? null, isError: !!engines.error, isLoading: !!engines.isLoading }),
+    useNamespaces: () => ({ data: namespaces }),
   }))
   const { LonghornVolumeRenderer } = await import('./LonghornVolumeRenderer')
   const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume} />)
@@ -52,5 +53,11 @@ describe('LonghornVolumeRenderer (host)', () => {
   it('says the Engine is not running once the lookup finds none for this volume', async () => {
     const html = await render({ data: [{ spec: { volumeName: 'other' }, status: { replicaModeMap: { x: 'RW' } } }] })
     expect(html).toContain('? of 3 (Engine not running)')
+  })
+
+  it('shows Longhorn\'s recorded PVC only when the caller\'s namespace list includes it', async () => {
+    expect(await render({ data: [] }, [{ name: 'shop' }])).toContain('shop/data-db-0')
+    expect(await render({ data: [] }, [{ name: 'other' }])).not.toContain('data-db-0')
+    expect(await render({ data: [] })).not.toContain('data-db-0')
   })
 })

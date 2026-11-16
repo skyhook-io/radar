@@ -1,7 +1,7 @@
 import { LonghornVolumeRenderer as BaseLonghornVolumeRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/LonghornVolumeRenderer'
 import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
 import { LONGHORN_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-longhorn'
-import { useResources } from '../../../api/client'
+import { useNamespaces, useResources } from '../../../api/client'
 
 /** Host wrapper: reads the Volume's Engine, the only source of healthy replicas and rebuild progress. */
 export function LonghornVolumeRenderer({ data }: { data: any }) {
@@ -12,9 +12,12 @@ export function LonghornVolumeRenderer({ data }: { data: any }) {
   const engine = candidates.length === 1 ? candidates[0] : candidates.find((e) => e?.spec?.active === true)
   const engineUnknown = !!engines.error || (candidates.length > 1 && !engine)
   const engineLookedUp = !engines.isLoading && !engines.error && engines.data !== undefined
+  // The namespace list is the caller's own; while it loads or fails, Longhorn's recorded names stay hidden.
+  const readable = useNamespaces().data
+  const canReadNamespace = (ns: string) => !!readable?.some((n) => n.name === ns)
   return (
     <>
-      <BaseLonghornVolumeRenderer data={data} engine={engine} engineUnknown={engineUnknown} engineLookedUp={engineLookedUp} />
+      <BaseLonghornVolumeRenderer data={data} engine={engine} engineUnknown={engineUnknown} engineLookedUp={engineLookedUp} canReadNamespace={canReadNamespace} />
       <LookupFailureNote errors={[engines.error]} what="this volume's engine (healthy replicas, rebuilds)" />
     </>
   )

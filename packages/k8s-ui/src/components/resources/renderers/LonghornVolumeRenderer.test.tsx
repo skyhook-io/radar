@@ -38,6 +38,22 @@ describe('LonghornVolumeRenderer', () => {
     expect(html).toContain('No replica')
   })
 
+  it('shows what Longhorn last recorded as history with times, only for a namespace the caller can read', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-15T12:00:00Z'))
+    const data = volume({ state: 'detached', robustness: 'unknown', kubernetesStatus: { namespace: 'shop', pvcName: 'data-db-0', lastPVCRefAt: '', lastPodRefAt: '2026-11-15T09:00:00Z', workloadsStatus: [{ podName: 'db-0', workloadName: 'db', workloadType: 'StatefulSet' }] } })
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={data} canReadNamespace={(ns) => ns === 'shop'} />)
+    const hidden = renderToStaticMarkup(<LonghornVolumeRenderer data={data} canReadNamespace={() => false} />)
+    vi.useRealTimers()
+    expect(html).toContain('Last seen by Longhorn')
+    expect(html).toContain('shop/data-db-0')
+    expect(html).toContain('db-0')
+    expect(html).toContain('StatefulSet db')
+    expect(html).toContain('3h ago')
+    expect(html).toContain('still referenced at Longhorn&#x27;s last update')
+    expect(hidden).not.toContain('data-db-0')
+    expect(hidden).not.toContain('Last seen by Longhorn')
+  })
+
   it('names no PVC, pod or workload (last-seen history comes separately)', () => {
     const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'healthy' })} />)
     expect(html).not.toContain('data-db-0')

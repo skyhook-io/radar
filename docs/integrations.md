@@ -22,7 +22,10 @@ Cluster-scoped drawers retain refresh-on-reopen/focus instead of automatic polli
 - **Degraded** is amber: how long it has lasted (from `lastDegradedAt`), and "Rebuilding" with each replica's progress only when the Engine's `status.rebuildStatus` reports one (the replica is named from `status.currentReplicaAddressMap`, otherwise shown by address). When the Volume's `Scheduled` condition is False, it says Longhorn can't place a new replica. **Faulted** (no usable replica) is the red banner. With Longhorn's `auto-salvage` setting on (the default), a faulted Volume is often salvaged within seconds; `lastAutoSalvagedAt` then shows when.
 - Conditions whose normal value is False (`Restore`, `TooManySnapshots`, `WaitForBackingImage`, `BackingImageIncompatible`, `OfflineRebuilding`) read as fine when False.
 - While a volume migrates it has two Engines; Radar reads the active one (`spec.active`), and unknown when it can't tell. A detached volume's Engine isn't running, so its healthy count reads `?` with that reason.
-- No PVC, pod or workload names: `status.kubernetesStatus` records what Longhorn last saw, not current use.
+- **Last seen by Longhorn:** the PVC and pods from `status.kubernetesStatus`, as history. Each row has its time: "last seen 3h ago" from `lastPVCRefAt` / `lastPodRefAt`, or "still referenced at Longhorn's last update" when Longhorn records no end. They are plain text, never relationships or topology edges, and the section shows only when the caller's namespace list includes that namespace.
+- **Current use** is under Related Resources: the PV whose `spec.csi.driver` is `driver.longhorn.io` and whose `volumeHandle` is the Volume's name. From there the PV leads on to its claim and the pods using it.
+
+**PersistentVolume drawer:** a Longhorn PV's Related Resources include its Volume, when Radar has that Volume cached and the caller may list Longhorn Volumes in its namespace.
 
 **Status badge (drawer header):** Healthy, Degraded (amber), Faulted (red), Detached (neutral), Unknown. The Volumes table keeps the CRD's printer columns (State, Robustness, Scheduled, Size, Node), so robustness reads there as Longhorn writes it.
 
