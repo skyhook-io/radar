@@ -203,7 +203,7 @@ describe('TrafficView protocol byte merges', () => {
       const snapshot = structuredClone(state.flows)
       await render()
       expect(rows()).toHaveLength(1)
-      expect(rows()[0].textContent).toContain('HTTP 260.7 KB · TCP 414.2 KB')
+      expect(Array.from(rows()[0].querySelectorAll('div.whitespace-nowrap')).map(line => line.textContent)).toEqual(['HTTP 260.7 KB', 'TCP 414.2 KB'])
       expect(rows()[0].textContent).not.toMatch(/674\.9 KB|691,?072/)
       expect(state.flows).toEqual(snapshot)
     })
