@@ -7,7 +7,7 @@ import { useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type Sub
 
 const RANGE = '1h'
 
-const NO_WORKERS = 'This pool has no worker Pods yet (its status reports 0), so Substrate has nothing to report for it.'
+const NO_WORKERS = 'The controller reports 0 worker Pods for this pool, and Prometheus has no Agent Substrate metrics for it.'
 
 const NOT_FOUND = {
   workerpool: 'Prometheus has no Agent Substrate metrics for this pool. Radar reads them under the underscore names Substrate\'s exporter gives them by default (ate_workerpool_workers) or the dotted ones Google Managed Prometheus keeps (ate.workerpool.workers); native histograms are not read.',

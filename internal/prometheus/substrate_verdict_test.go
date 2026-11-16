@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 const (
@@ -28,6 +30,13 @@ func poolVerdict(t *testing.T, rules []fakeRule, charts []SubstrateChart) (*Subs
 	return newSubstrateRun(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts())).poolVerdict(charts), f
 }
 
+// held answers the shortfall query: its hold, without the counts it compares.
+func held(v float64) *prom.QueryResult { return result(operand("held", v)) }
+
+func operand(name string, v float64) prom.Series {
+	return series(map[string]string{"operand": name}, v)
+}
+
 func fact(v *SubstrateVerdict, id string) SubstrateFact {
 	for _, f := range v.Facts {
 		if f.ID == id {
@@ -44,12 +53,12 @@ func TestSubstratePoolVerdictStates(t *testing.T) {
 		rules []fakeRule
 		want  string
 	}{
-		{"worker shortfall", []fakeRule{{verdictShort, result(series(nil, 1))}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 2))}}, SubstrateVerdictWorkerShortfall},
-		{"no free actor slots", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 0))}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictNoFreeActorSlots},
+		{"worker shortfall", []fakeRule{{verdictShort, held(1)}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 2))}}, SubstrateVerdictWorkerShortfall},
+		{"no free actor slots", []fakeRule{{verdictShort, held(0)}, {verdictAnyFree, result(series(nil, 0))}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictNoFreeActorSlots},
 		// No idle or partial series at all while workers exist: nothing free.
-		{"no free actor slots without free series", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictNoFreeActorSlots},
-		{"free actor slots", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictFreeActorSlots},
-		{"no schedulable workers", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictTotal, result(series(nil, 0))}}, SubstrateVerdictNoSchedulableWorkers},
+		{"no free actor slots without free series", []fakeRule{{verdictShort, held(0)}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictNoFreeActorSlots},
+		{"free actor slots", []fakeRule{{verdictShort, held(0)}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictFreeActorSlots},
+		{"no schedulable workers", []fakeRule{{verdictShort, held(0)}, {verdictTotal, result(series(nil, 0))}}, SubstrateVerdictNoSchedulableWorkers},
 		{"no counts", nil, SubstrateVerdictUnknown},
 	}
 	for _, tc := range cases {
@@ -77,7 +86,7 @@ func TestSubstrateShortRequiresAFullHold(t *testing.T) {
 }
 
 func TestSubstratePoolVerdictFreeWorkers(t *testing.T) {
-	v, _ := poolVerdict(t, []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, okCharts())
+	v, _ := poolVerdict(t, []fakeRule{{verdictShort, held(0)}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, okCharts())
 	free := fact(v, "workersWithFreeActorSlots")
 	if free.State != SubstrateFactOK || *free.Value != 1.5 || *free.Of != 4 {
 		t.Fatalf("free = %+v", free)
@@ -93,7 +102,7 @@ func TestSubstratePoolVerdictFreeWorkers(t *testing.T) {
 func TestSubstratePoolVerdictRefusesDuplicateWorkers(t *testing.T) {
 	f := &fakeSubstrateProm{rules: []fakeRule{
 		{"count by (job) (count_over_time(ate_workerpool_workers", result(series(map[string]string{"job": "a"}, 1), series(map[string]string{"job": "b"}, 1))},
-		{verdictShort, result(series(nil, 1))},
+		{verdictShort, held(1)},
 	}}
 	v := newSubstrateRun(context.Background(), f, unverifiedScope, poolRequest(substratePoolCharts())).poolVerdict(okCharts())
 	if v.State != SubstrateVerdictUnknown || !strings.Contains(v.Reason, "more than one scrape job") {
@@ -234,9 +243,8 @@ func TestSubstrateRangeFactFreshnessIsPerPopulation(t *testing.T) {
 // leads with the comparison that makes it short.
 func TestSubstratePoolShortfallCarriesItsEvidence(t *testing.T) {
 	rules := []fakeRule{
-		{verdictShort, result(series(nil, 1))},
-		{"max by (ate_worker_state, ate_sandbox_class)", result(series(nil, 4))},
-		{"min(min_over_time(ate_workerpool_desired_workers", result(series(nil, 6))},
+		// The hold and the counts it compares arrive in one answer.
+		{verdictShort, result(operand("held", 1), operand("have", 4), operand("want", 6))},
 		{verdictFree, result(series(nil, 3))},
 		{verdictTotal, result(series(nil, 4))},
 	}
@@ -252,8 +260,15 @@ func TestSubstratePoolShortfallCarriesItsEvidence(t *testing.T) {
 		t.Errorf("free slots = %+v, want 3 still reported", free)
 	}
 
+	// Short, but the answer left out the counts: say so rather than drop the fact.
+	rules[0] = fakeRule{verdictShort, held(1)}
+	v, _ = poolVerdict(t, rules, okCharts("resumeTime", "resumeFailures", "crashes"))
+	if got := v.Facts[0]; got.ID != "schedulableWorkers" || got.State != SubstrateFactUnavailable || got.Reason == "" {
+		t.Errorf("first fact = %+v, want schedulableWorkers unavailable with a reason", got)
+	}
+
 	// Not short: no shortfall fact.
-	rules[0] = fakeRule{verdictShort, result(series(nil, 0))}
+	rules[0] = fakeRule{verdictShort, held(0)}
 	v, _ = poolVerdict(t, append(rules, fakeRule{verdictAnyFree, result(series(nil, 1))}), okCharts("resumeTime", "resumeFailures", "crashes"))
 	if f := fact(v, "schedulableWorkers"); f.ID != "" {
 		t.Errorf("not short, but got %+v", f)

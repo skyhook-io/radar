@@ -62,10 +62,10 @@ describe('SubstrateHealthCharts', () => {
     expect(render(pool)).toContain('Prometheus has no Agent Substrate metrics for this pool')
   })
 
-  it('says a pool with no worker Pods has nothing to report, without the metric-naming hint', () => {
+  it('says a pool reports no worker Pods, without the metric-naming hint', () => {
     health = { data: { ...base, status: 'notFound' } }
     const none = renderToStaticMarkup(<SubstrateHealthCharts target={pool} workerPods={0} />)
-    expect(none).toContain('This pool has no worker Pods yet')
+    expect(none).toContain('The controller reports 0 worker Pods for this pool')
     expect(none).not.toContain('underscore names')
     expect(renderToStaticMarkup(<SubstrateHealthCharts target={pool} workerPods={2} />)).toContain('underscore names')
   })
