@@ -19,6 +19,9 @@ func TestToolPanicFailsTheCallNotTheServer(t *testing.T) {
 		_ = m["pods"].([]map[string]any)
 		return nil, nil
 	})
+	server.AddTool(&mcpsdk.Tool{Name: "ok", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		return &mcpsdk.CallToolResult{Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "fine"}}}, nil
+	})
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test", Version: "test"}, nil)
 	st, ct := mcpsdk.NewInMemoryTransports()
 	ss, err := server.Connect(ctx, st, nil)
@@ -47,5 +50,8 @@ func TestToolPanicFailsTheCallNotTheServer(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("tool ran %d times, want 2", calls)
+	}
+	if res, err := cs.CallTool(ctx, &mcpsdk.CallToolParams{Name: "ok"}); err != nil || res.IsError {
+		t.Fatalf("a normal call after the panics: %+v, %v", res, err)
 	}
 }
