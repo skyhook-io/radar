@@ -339,8 +339,8 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		tcpFlows, reportedInto, destinationTCP, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
 		ztunnelReported = slices.ContainsFunc(reportedInto, func(ns string) bool { return slices.Contains(ambientKnown, ns) })
 		tcpFlows = withoutWaypointHops(tcpFlows, waypoints)
-		if tcpErr == nil {
-			reconcileAmbientHTTPBytes(httpFlows, destinationTCP, ambientKnown)
+		if tcpErr == nil && len(ambientNamespaces) > 0 {
+			s.reconcileClientReportedBytes(ctx, opts, scopes.http, ambientNamespaces, httpFlows, destinationTCP)
 		}
 	}
 	if tcpErr != nil {
@@ -602,6 +602,39 @@ func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (m
 		rates[istioSeriesKeyFrom(series.Labels)] += series.DataPoints[0].Value
 	}
 	return rates, nil
+}
+
+// reconcileClientReportedBytes drops the byte figures of HTTP flows into an
+// ambient namespace that were read from the client's report and that ztunnel
+// also reported as TCP: with no receiving proxy, ztunnel's wire bytes cover the
+// same requests. A flow whose figures came from a receiving proxy (a sidecar
+// still running in a namespace being moved to ambient, or a waypoint) keeps
+// them, since that proxy reports opaque TCP apart from HTTP. The check is a
+// query, run only when some flow could match; when it fails nothing is dropped.
+func (s *IstioSource) reconcileClientReportedBytes(ctx context.Context, opts FlowOptions, sc clusterScope, ambientNamespaces []string, http []Flow, destinationTCP map[istioSeriesKey]bool) {
+	if !slices.ContainsFunc(http, func(f Flow) bool {
+		return slices.Contains(ambientNamespaces, f.Destination.Namespace) && destinationTCP[conversationOf(f)]
+	}) {
+		return
+	}
+	intoAmbient := fmt.Sprintf(`%s, destination_workload_namespace=~"%s"`, istioReporterSelector, strings.Join(ambientNamespaces, "|"))
+	received, err := s.queryHTTPSeriesRates(ctx, istioRateQuery(istioHTTPGroupBy, "istio_requests_total", intoAmbient, opts.Namespace, sc, rateWindowFor(opts.Since)))
+	if err != nil {
+		log.Printf("[istio] Could not tell client-reported requests apart; keeping their byte figures: %v", err)
+		return
+	}
+	receiverCounted := make(map[istioSeriesKey]bool, len(received))
+	for key := range received {
+		key.protocol = ""
+		receiverCounted[key] = true
+	}
+	for i, f := range http {
+		key := conversationOf(f)
+		if slices.Contains(ambientNamespaces, f.Destination.Namespace) && destinationTCP[key] && !receiverCounted[key] {
+			http[i].BytesSent = 0
+			http[i].BytesRecv = 0
+		}
+	}
 }
 
 // queryHTTPFlows queries istio_requests_total for HTTP/gRPC traffic.

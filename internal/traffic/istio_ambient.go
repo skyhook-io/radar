@@ -2,7 +2,6 @@ package traffic
 
 import (
 	"log"
-	"slices"
 	"sort"
 	"strings"
 
@@ -110,24 +109,14 @@ func withoutWaypointHops(flows []Flow, waypoints map[istioWorkload]bool) []Flow 
 	return kept
 }
 
-// Destination TCP reports into ambient namespaces include HTTP wire bytes and
-// may also include opaque TCP on the same Service. Keep that complete measurement
-// and the HTTP rates; waypoint TCP measures independent traffic and stays separate.
-func reconcileAmbientHTTPBytes(http []Flow, destinationTCP map[istioSeriesKey]bool, ambient []string) {
-	for i, f := range http {
-		if !slices.Contains(ambient, f.Destination.Namespace) {
-			continue
-		}
-		conversation := istioSeriesKey{
-			flowKey: flowKey{
-				srcWorkload: f.Source.Workload, srcNs: f.Source.Namespace,
-				dstWorkload: f.Destination.Workload, dstNs: f.Destination.Namespace,
-			},
-			dstService: f.DestService,
-		}
-		if destinationTCP[conversation] {
-			http[i].BytesSent = 0
-			http[i].BytesRecv = 0
-		}
+// conversationOf keys a flow by workloads and destination Service, without the
+// HTTP protocol, so HTTP and TCP reports of one conversation match.
+func conversationOf(f Flow) istioSeriesKey {
+	return istioSeriesKey{
+		flowKey: flowKey{
+			srcWorkload: f.Source.Workload, srcNs: f.Source.Namespace,
+			dstWorkload: f.Destination.Workload, dstNs: f.Destination.Namespace,
+		},
+		dstService: f.DestService,
 	}
 }

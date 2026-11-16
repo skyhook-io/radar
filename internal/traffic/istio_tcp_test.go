@@ -72,6 +72,9 @@ func TestIstioAmbientHTTPByteReconciliation(t *testing.T) {
 		{"ambient same Service", "amb", "httpbin", "curl", "side", "httpbin", "source", "destination", true},
 		{"waypoint same Service", "amb", "httpbin", "curl", "side", "httpbin", "waypoint", "waypoint", false},
 		{"sidecar same Service", "side", "httpbin", "curl", "side", "httpbin", "destination", "destination", false},
+		// A namespace labelled ambient whose pods still run sidecars: the sidecar
+		// reports HTTP and an opaque TCP port separately, so neither covers the other.
+		{"sidecar in an ambient namespace, same Service", "amb", "httpbin", "curl", "side", "httpbin", "destination", "destination", false},
 		{"ambient other Service", "amb", "db", "curl", "side", "httpbin", "source", "destination", false},
 		{"ambient other source", "amb", "httpbin", "other", "side", "httpbin", "source", "destination", false},
 		{"ambient other source namespace", "amb", "httpbin", "curl", "other", "httpbin", "source", "destination", false},
