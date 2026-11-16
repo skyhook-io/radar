@@ -1,15 +1,24 @@
 package server
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"io"
+	"math/big"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -37,13 +46,13 @@ func traefikIR(ns, name, match string, svcNs string, mw string, tls map[string]a
 	return cnpgObj("traefik.io/v1alpha1", "IngressRoute", ns, name, spec, nil)
 }
 
-func seedTraefikFixture(t *testing.T) {
+func seedTraefikFixture(t *testing.T, extra ...runtime.Object) {
 	t.Helper()
 	restoreFixtureCache(t)
 	k8s.ResetResourceCache()
-	if err := k8s.InitTestResourceCache(fake.NewClientset(
+	if err := k8s.InitTestResourceCache(fake.NewClientset(append([]runtime.Object{
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "ui"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "ui"}}},
-	)); err != nil {
+	}, extra...)...)); err != nil {
 		t.Fatal(err)
 	}
 	seedCNPGWorkspace(t, traefikKinds,
@@ -148,6 +157,44 @@ func TestTraefikRoutesSingleRouteAndMiddlewareModes(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("both modes: status %d, want 400", resp.StatusCode)
 	}
+}
+
+// Traefik loads tls.crt from a Secret of any type, so an Opaque Secret's
+// expiry is read like a kubernetes.io/tls one's.
+func TestTraefikRoutesReadsCertificateExpiry(t *testing.T) {
+	for _, typ := range []corev1.SecretType{corev1.SecretTypeTLS, corev1.SecretTypeOpaque} {
+		t.Run(string(typ), func(t *testing.T) {
+			notAfter := time.Now().Add(90 * 24 * time.Hour).UTC().Truncate(time.Second)
+			seedTraefikFixture(t, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "ui-tls"}, Type: typ,
+				Data: map[string][]byte{"tls.crt": traefikTestCertPEM(t, notAfter), "tls.key": []byte("k")}})
+			resp, err := http.Get(testServer.URL + "/api/traefik/routes?namespace=shop&name=ui")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, _ := decodeTraefik(t, resp)
+			if len(got.Routes) != 1 {
+				t.Fatalf("routes = %+v", got.Routes)
+			}
+			tlsFact := got.Routes[0].TLS
+			if tlsFact.Certificate != "read" || tlsFact.NotAfter == nil || !tlsFact.NotAfter.Equal(notAfter) {
+				t.Fatalf("tls = %+v, want read with notAfter %v", tlsFact, notAfter)
+			}
+		})
+	}
+}
+
+func traefikTestCertPEM(t *testing.T, notAfter time.Time) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "ui.example.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: notAfter}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 func TestTraefikRoutesWithoutAuthReadsAsRadar(t *testing.T) {

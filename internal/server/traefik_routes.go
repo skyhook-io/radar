@@ -610,7 +610,7 @@ func readTraefikCert(s *Server, r *http.Request, cache *k8s.ResourceCache, ns, n
 	if !isSecret {
 		return traefikCertAnswer{state: "notTLS"}
 	}
-	cert, isTLS := certs.FromTLSSecret(sec)
+	cert, isTLS := certs.FromSecretTLSCrt(sec)
 	if !isTLS || cert.NotAfter == nil {
 		return traefikCertAnswer{state: "notTLS"}
 	}
