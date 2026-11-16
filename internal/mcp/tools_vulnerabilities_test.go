@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -302,5 +304,34 @@ func TestListVulnerabilitiesWithoutPods(t *testing.T) {
 	got := listVulns(t, context.Background(), listVulnerabilitiesInput{})
 	if got.Coverage.Complete || len(got.Coverage.Gaps) != 1 || got.Coverage.Gaps[0].Code != readreason.RadarKindNotCollected {
 		t.Fatalf("coverage: %+v", got.Coverage)
+	}
+}
+
+// Without Trivy's report kind, agents aren't offered the tool at all.
+func TestToolListHidesVulnerabilitiesWithoutTrivy(t *testing.T) {
+	setupRunningVulnerableWeb(t)
+	tools := func() []string {
+		next := func(context.Context, string, mcp.Request) (mcp.Result, error) {
+			return &mcp.ListToolsResult{Tools: []*mcp.Tool{{Name: "list_resources"}, {Name: "list_vulnerabilities"}}}, nil
+		}
+		res, err := hideVulnerabilitiesWithoutTrivy(next)(context.Background(), "tools/list", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, tool := range res.(*mcp.ListToolsResult).Tools {
+			names = append(names, tool.Name)
+		}
+		return names
+	}
+	if got := tools(); len(got) != 2 {
+		t.Fatalf("with Trivy: %v", got)
+	}
+	k8s.ResetTestDynamicState()
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := tools(); len(got) != 1 || got[0] != "list_resources" {
+		t.Fatalf("without Trivy: %v", got)
 	}
 }

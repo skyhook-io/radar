@@ -59,6 +59,17 @@ type Request struct {
 	Filter      Filter
 }
 
+// Served is whether the connected cluster serves the report kind the rollup
+// reads: false without Trivy Operator, or before discovery has run.
+func Served() bool {
+	discovery := k8s.GetResourceDiscovery()
+	if discovery == nil {
+		return false
+	}
+	_, ok := discovery.GetGVRWithGroup("VulnerabilityReport", aicontext.TrivyGroup)
+	return ok
+}
+
 // Read rolls up the reports the caller may read, joined with what runs in
 // those namespaces.
 func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response, error) {

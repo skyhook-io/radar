@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -120,6 +121,23 @@ func clusterWideFirst(ctx context.Context, read func(group, kind, namespace stri
 			wide[key] = allowed
 		}
 		return allowed || read(group, kind, namespace)
+	}
+}
+
+// hideVulnerabilitiesWithoutTrivy leaves list_vulnerabilities out of the
+// tool list where the cluster doesn't serve Trivy's report kind, so agents
+// elsewhere never carry it. A client lists tools when it connects, so the
+// tool appears on the next connection after Trivy is installed.
+func hideVulnerabilitiesWithoutTrivy(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		res, err := next(ctx, method, req)
+		if method != "tools/list" || err != nil || vulnerabilities.Served() {
+			return res, err
+		}
+		if list, ok := res.(*mcp.ListToolsResult); ok {
+			list.Tools = slices.DeleteFunc(slices.Clone(list.Tools), func(t *mcp.Tool) bool { return t.Name == "list_vulnerabilities" })
+		}
+		return res, err
 	}
 }
 
