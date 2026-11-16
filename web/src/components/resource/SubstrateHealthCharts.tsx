@@ -1,11 +1,13 @@
 import { Info, LineChart, Loader2, Lock, Wifi } from 'lucide-react'
 import { clsx } from 'clsx'
 import { AlertBanner, RadarUpgradeNote, Section, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
-import { AreaChart, SeriesLegend, formatMetricValue } from '@skyhook-io/k8s-ui/components/charts'
+import { AreaChart, SeriesLegend, formatMetricValue, formatTimestamp } from '@skyhook-io/k8s-ui/components/charts'
 import { isForbiddenError, useAutoPromConnect, usePrometheusConnect, usePrometheusStatus } from '../../api/client'
 import { useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type SubstrateTarget } from '../../api/substrateHealth'
 
 const RANGE = '1h'
+
+const NO_WORKERS = 'This pool has no worker Pods yet (its status reports 0), so Substrate has nothing to report for it.'
 
 const NOT_FOUND = {
   workerpool: 'Prometheus has no Agent Substrate metrics for this pool. Radar reads them under the underscore names Substrate\'s exporter gives them by default (ate_workerpool_workers) or the dotted ones Google Managed Prometheus keeps (ate.workerpool.workers); native histograms are not read.',
@@ -19,7 +21,13 @@ const NOT_FOUND = {
  * when Prometheus is not connected unless standalone (the only content of its
  * tab), which offers to connect; every other state says why there is no chart.
  */
-export function SubstrateHealthCharts({ target, standalone = false, collapsible = true }: { target: SubstrateTarget; standalone?: boolean; collapsible?: boolean }) {
+export function SubstrateHealthCharts({ target, standalone = false, collapsible = true, workerPods }: {
+  target: SubstrateTarget
+  standalone?: boolean
+  collapsible?: boolean
+  /** A WorkerPool's status.replicas, when the caller has it: with none, the empty charts need no metric-naming hint. */
+  workerPods?: number
+}) {
   useAutoPromConnect()
   const { data: status } = usePrometheusStatus()
   const connect = usePrometheusConnect()
@@ -70,7 +78,8 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
     case 'notOnNode':
       return null
     case 'notFound':
-      return target.kind === 'workerpool' ? <Frame collapsible={collapsible}><Muted>{NOT_FOUND.workerpool}</Muted></Frame> : null
+      if (target.kind !== 'workerpool') return null
+      return <Frame collapsible={collapsible}><Muted>{workerPods === 0 ? NO_WORKERS : NOT_FOUND.workerpool}</Muted></Frame>
     case 'notAttributable':
     case 'error':
       return <Frame collapsible={collapsible}><Muted tone={data.status === 'error' ? 'warning' : undefined}>{data.reason}</Muted></Frame>
@@ -171,6 +180,7 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
     const v = lastValue(s.dataPoints, since)
     return v === undefined ? undefined : formatMetricValue(v, unit)
   })
+  const lateStart = chart.state === 'ok' ? lateFirstSample(series, health) : undefined
   return (
     <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 flex flex-col min-w-0">
       <header className="flex items-baseline justify-between gap-2 mb-1">
@@ -198,6 +208,7 @@ function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHeal
             stepSeconds={health.stepSeconds}
           />
           {series.length > 1 && <SeriesLegend series={series} color="var(--accent)" seriesLabels={seriesLabels} values={legendValues} />}
+          {lateStart !== undefined && <Muted>No samples before {formatTimestamp(lateStart)}.</Muted>}
           {chart.omitted ? <Muted>{chart.omitted} more series not shown.</Muted> : null}
           {chart.reason ? <Muted>{capitalize(chart.reason)}.</Muted> : null}
         </>
@@ -222,6 +233,18 @@ function chartReason(chart: SubstrateChart): string {
     default:
       return `Not shown: ${reason}.`
   }
+}
+
+// The first sample, when it comes well after the range starts: a mostly empty
+// plot otherwise reads as a broken chart. It says when samples begin, not why.
+function lateFirstSample(series: { dataPoints: { timestamp: number; value: number | null }[] }[], health: SubstrateHealth): number | undefined {
+  let first: number | undefined
+  for (const s of series) {
+    const p = s.dataPoints.find(d => d.value != null && Number.isFinite(d.value))
+    if (p && (first === undefined || p.timestamp < first)) first = p.timestamp
+  }
+  const gap = Math.max(2 * health.stepSeconds, (health.end - health.start) / 10)
+  return first !== undefined && first - health.start > gap ? first : undefined
 }
 
 function lastValue(points: { timestamp: number; value: number | null }[], since: number): number | undefined {

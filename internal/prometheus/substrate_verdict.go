@@ -61,8 +61,10 @@ type SubstrateFact struct {
 	Unit  string   `json:"unit"`
 	State string   `json:"state"`
 	Value *float64 `json:"value,omitempty"`
-	// Of is the total Value is out of, set only on an ok workersWithFreeActorSlots: the
-	// schedulable workers of known classes, averaged across API replicas.
+	// Of is the total Value is out of, set only on an ok fact that compares:
+	// workersWithFreeActorSlots, out of the schedulable workers of known classes
+	// averaged across API replicas; schedulableWorkers, out of the fewest desired
+	// over five minutes.
 	Of     *float64 `json:"of,omitempty"`
 	Reason string   `json:"reason,omitempty"`
 	// Parts breaks an ok overdueUploads down by upload_overdue_band, worst
@@ -167,8 +169,11 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	defs := r.req.charts
 	v := &SubstrateVerdict{State: SubstrateVerdictUnknown}
 	freeFact := unavailableFact("workersWithFreeActorSlots", "Workers with free slots", "workers", "")
+	// The shortfall's own evidence leads when the pool is short: free slots
+	// alone read as room.
+	var shortfall []SubstrateFact
 	defer func() {
-		v.Facts = append([]SubstrateFact{freeFact},
+		v.Facts = append(append(shortfall, freeFact),
 			r.chartFact(findSubstrateChart(charts, "resumeTime"), chartDef(defs, "resumeTime"), "resumeP95", "Resume p95", "seconds", succeededResumes, func(x substrateExpr) string {
 				return x.quantile("0.95", instLifecycle, succeededResumes(x)...)
 			}),
@@ -234,12 +239,15 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	}
 	freeFact = SubstrateFact{ID: "workersWithFreeActorSlots", Label: "Workers with free slots", Unit: "workers", State: SubstrateFactOK, Value: freeNow, Of: total}
 
-	short, err := r.poolShort()
+	short, evidence, err := r.poolShort()
 	switch {
 	case err != nil:
 		v.Reason = err.Error()
 	case short:
 		v.State = SubstrateVerdictWorkerShortfall
+		if evidence != nil {
+			shortfall = []SubstrateFact{*evidence}
+		}
 		return v
 	}
 	if *total == 0 {
@@ -270,13 +278,17 @@ func succeededResumes(x substrateExpr) []string {
 
 // poolShort reports whether Substrate's capacity alert condition holds for
 // the pool. Its error says why the shortfall cannot be judged.
-func (r *substrateRun) poolShort() (bool, error) {
+//
+// When the pool is short it also returns the comparison now: the most
+// schedulable workers any replica reports, out of the fewest desired over
+// five minutes. Nil when either has no current value.
+func (r *substrateRun) poolShort() (bool, *SubstrateFact, error) {
 	cannot := func(why string) error {
 		return errors.New("Radar cannot tell whether the pool is short of workers: " + why)
 	}
 	check := r.check([]substrateInstrument{instWorkers, instDesired})
 	if check.state != "" {
-		return false, cannot(check.reason)
+		return false, nil, cannot(check.reason)
 	}
 	xw, xd := r.expr(instWorkers, check.matchers, ""), r.expr(instDesired, check.matchers, "")
 	// Substrate's alert, for one pool: the most any replica reports
@@ -293,12 +305,19 @@ func (r *substrateRun) poolShort() (bool, error) {
 	short, err := instantValue(r.ctx, r.q, "min_over_time("+cond+"[6m:1m]) * (count_over_time("+cond+"[6m:1m]) >= bool 6) * "+cond)
 	switch {
 	case err != nil:
-		return false, cannot(queryFailed(err))
+		return false, nil, cannot(queryFailed(err))
 	case short == nil:
 		// The worker counts are there (poolVerdict read them), so the desired count is not.
-		return false, cannot("Substrate's controller reported no desired worker count for it in the last 5 minutes. Substrate's bundled Prometheus does not collect the controller's metrics")
+		return false, nil, cannot("Substrate's controller reported no desired worker count for it in the last 5 minutes. Substrate's bundled Prometheus does not collect the controller's metrics")
+	case *short != 1:
+		return false, nil, nil
 	}
-	return *short == 1, nil
+	have, errHave := instantValue(r.ctx, r.q, actual)
+	want, errWant := instantValue(r.ctx, r.q, desired)
+	if errHave != nil || errWant != nil || have == nil || want == nil {
+		return true, nil, nil
+	}
+	return true, &SubstrateFact{ID: "schedulableWorkers", Label: "Schedulable workers", Unit: "workers", State: SubstrateFactOK, Value: have, Of: want}, nil
 }
 
 // nodeVerdict judges whether actor state on this node is reaching storage.

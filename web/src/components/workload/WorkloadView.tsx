@@ -1323,7 +1323,12 @@ export function WorkloadView({
           <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />
         )}
         renderMetricsTab={({ kind, namespace: ns, name: n }) => isSubstrateWorkerPool ? (
-          <SubstrateHealthCharts target={{ kind: 'workerpool', namespace: ns, name: n }} standalone collapsible={!expanded} />
+          <SubstrateHealthCharts
+            target={{ kind: 'workerpool', namespace: ns, name: n }}
+            standalone
+            collapsible={!expanded}
+            workerPods={typeof resource?.status?.replicas === 'number' ? resource.status.replicas : undefined}
+          />
         ) : (
           <>
             <MetricsTabContent

@@ -169,7 +169,7 @@ func substratePoolCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "crashes", title: "Actor crashes", unit: "per minute",
+			id: "crashes", title: "Actor crashes per minute", unit: "per minute",
 			population:  "Crashes of actors running on this pool's workers. An actor that crashed before it got a worker carries no pool and is not counted.",
 			inst:        instCrashes,
 			emptyReason: "no actor on this pool crashed in this range",

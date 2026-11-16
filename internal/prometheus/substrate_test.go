@@ -415,3 +415,14 @@ func TestSubstrateRequestBoundsEchoesTheServedRange(t *testing.T) {
 		}
 	}
 }
+
+// The UI's value formatter prints these units itself; a chart in any other
+// unit shows a bare number, so its title has to name the unit.
+func TestSubstrateChartTitlesNameUnformattedUnits(t *testing.T) {
+	formatted := map[string]bool{"workers": true, "count": true, "seconds": true, "percent": true}
+	for _, d := range append(substratePoolCharts(), substrateNodeCharts()...) {
+		if !formatted[d.unit] && !strings.Contains(d.title, d.unit) {
+			t.Errorf("chart %s: title %q does not name its unit %q", d.id, d.title, d.unit)
+		}
+	}
+}

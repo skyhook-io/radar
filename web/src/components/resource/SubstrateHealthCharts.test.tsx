@@ -62,6 +62,14 @@ describe('SubstrateHealthCharts', () => {
     expect(render(pool)).toContain('Prometheus has no Agent Substrate metrics for this pool')
   })
 
+  it('says a pool with no worker Pods has nothing to report, without the metric-naming hint', () => {
+    health = { data: { ...base, status: 'notFound' } }
+    const none = renderToStaticMarkup(<SubstrateHealthCharts target={pool} workerPods={0} />)
+    expect(none).toContain('This pool has no worker Pods yet')
+    expect(none).not.toContain('underscore names')
+    expect(renderToStaticMarkup(<SubstrateHealthCharts target={pool} workerPods={2} />)).toContain('underscore names')
+  })
+
   it('stays out of the way on a node that runs no Substrate', () => {
     health = { data: { ...base, status: 'notFound' } }
     expect(render(node)).toBe('')
@@ -117,5 +125,19 @@ describe('SubstrateHealthCharts', () => {
       { labels: { series: 'partial (gvisor)' }, dataPoints: [{ timestamp: 1000, value: 1 }] },
     ] })] } }
     expect(render(pool)).not.toMatch(/<\/span><span class="tabular-nums/)
+  })
+
+  it('says when samples begin only when they begin well after the range', () => {
+    const late = new Date(4000 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    // Gaps and non-finite values before the first sample don't count; a zero does.
+    health = { data: { ...base, status: 'available', charts: [chart({ series: [
+      { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 1000, value: null }, { timestamp: 4000, value: 0 }] },
+      { labels: { series: 'partial (gvisor)' }, dataPoints: [{ timestamp: 4300, value: 1 }] },
+    ] })] } }
+    expect(render(pool)).toContain(`No samples before ${late}.`)
+    health = { data: { ...base, status: 'available', charts: [chart({ series: [
+      { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 1060, value: 2 }, { timestamp: 4600, value: 2 }] },
+    ] })] } }
+    expect(render(pool)).not.toContain('No samples before')
   })
 })

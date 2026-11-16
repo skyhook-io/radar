@@ -28,11 +28,12 @@ const ok = (id: string, label: string, unit: SubstrateFact['unit'], value: numbe
 
 describe('SubstrateVerdictLine', () => {
   it('flags a pool short of workers in amber and keeps its facts uncolored', () => {
-    withVerdict({ state: 'workerShortfall', facts: [ok('workersWithFreeActorSlots', 'Workers with free slots', 'workers', 0, { of: 3 })] })
+    withVerdict({ state: 'workerShortfall', facts: [ok('schedulableWorkers', 'Schedulable workers', 'workers', 4, { of: 6 }), ok('workersWithFreeActorSlots', 'Workers with free slots', 'workers', 0, { of: 3 })] })
     const html = render(pool)
     expect(html).toContain('Capacity')
     expect(html).toContain('Short of workers')
     expect(html).toMatch(/bg-amber-100/)
+    expect(html).toMatch(/Schedulable workers <\/span><span>4 of 6 desired/)
     expect(html).toContain('0 of 3')
     expect(html).toContain('View metrics')
   })

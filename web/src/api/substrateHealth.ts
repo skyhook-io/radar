@@ -58,7 +58,12 @@ export interface SubstrateFact {
   /** ok has a value; empty means the series exist and recorded nothing here; unavailable says why. */
   state: 'ok' | 'empty' | 'unavailable'
   value?: number
-  /** Only on an ok workersWithFreeActorSlots: the schedulable workers of known classes it is out of. */
+  /**
+   * Only on an ok fact that compares: workersWithFreeActorSlots, out of the
+   * schedulable workers of known classes; schedulableWorkers (present only on a
+   * workerShortfall verdict, listed first), out of the fewest desired over five
+   * minutes.
+   */
   of?: number
   reason?: string
   /** Only on an ok overdueUploads: Substrate's band keys with actors in them, worst first. */

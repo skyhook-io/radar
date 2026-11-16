@@ -229,3 +229,33 @@ func TestSubstrateRangeFactFreshnessIsPerPopulation(t *testing.T) {
 	}
 	t.Fatalf("no freshness check of successful resumes in %v", f.queries)
 }
+
+// A short pool can still have free slots on the workers it has; the verdict
+// leads with the comparison that makes it short.
+func TestSubstratePoolShortfallCarriesItsEvidence(t *testing.T) {
+	rules := []fakeRule{
+		{verdictShort, result(series(nil, 1))},
+		{"max by (ate_worker_state, ate_sandbox_class)", result(series(nil, 4))},
+		{"min(min_over_time(ate_workerpool_desired_workers", result(series(nil, 6))},
+		{verdictFree, result(series(nil, 3))},
+		{verdictTotal, result(series(nil, 4))},
+	}
+	v, _ := poolVerdict(t, rules, okCharts("resumeTime", "resumeFailures", "crashes"))
+	if v.State != SubstrateVerdictWorkerShortfall {
+		t.Fatalf("state = %s (%q), want %s", v.State, v.Reason, SubstrateVerdictWorkerShortfall)
+	}
+	got := v.Facts[0]
+	if got.ID != "schedulableWorkers" || got.State != SubstrateFactOK || *got.Value != 4 || *got.Of != 6 {
+		t.Fatalf("first fact = %+v, want schedulableWorkers 4 of 6", got)
+	}
+	if free := fact(v, "workersWithFreeActorSlots"); *free.Value != 3 {
+		t.Errorf("free slots = %+v, want 3 still reported", free)
+	}
+
+	// Not short: no shortfall fact.
+	rules[0] = fakeRule{verdictShort, result(series(nil, 0))}
+	v, _ = poolVerdict(t, append(rules, fakeRule{verdictAnyFree, result(series(nil, 1))}), okCharts("resumeTime", "resumeFailures", "crashes"))
+	if f := fact(v, "schedulableWorkers"); f.ID != "" {
+		t.Errorf("not short, but got %+v", f)
+	}
+}

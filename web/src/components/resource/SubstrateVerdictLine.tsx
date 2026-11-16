@@ -120,6 +120,8 @@ function FactValue({ fact }: { fact: SubstrateFact }) {
   switch (fact.id) {
     case 'workersWithFreeActorSlots':
       return <span>{count(value)}{fact.of !== undefined ? ` of ${count(fact.of)}` : ''}</span>
+    case 'schedulableWorkers':
+      return <span>{count(value)}{fact.of !== undefined ? ` of ${count(fact.of)} desired` : ''}</span>
     case 'crashes':
       return <span>{count(value)}</span>
     case 'overdueUploads': {
