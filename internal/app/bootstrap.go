@@ -365,6 +365,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 	prometheuspkg.RegisterRediscoverySignals()
 	loki.RegisterSignals()
+	// Where other users can create Services, discovery stays in namespaces
+	// they are unlikely to control.
+	loki.SetDiscoveryScope(k8s.IsInCluster() || cfg.AuthConfig.Enabled(), os.Getenv("MY_POD_NAMESPACE"))
 	if cfg.LocalConnections == nil {
 		// Shared installations: the operator's flags, or discovery.
 		if cfg.LokiURL != "" {

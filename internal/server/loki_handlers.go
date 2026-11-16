@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -57,10 +58,52 @@ type lokiPodLogsResponse struct {
 const lokiTimeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 // radarCanReadPodLogs asks whether Radar's own identity may get pods/log in
-// namespace (a SelfSubjectAccessReview).
+// namespace (a SelfSubjectAccessReview), remembered per context and namespace
+// for a short while so each read doesn't cost a review.
 var radarCanReadPodLogs = func(ctx context.Context, namespace string) bool {
-	allowed, _ := k8score.CanI(ctx, k8s.GetClientInterface(), namespace, "", "pods/log", "get")
-	return allowed
+	return radarPodLogAccess(ctx, k8s.GetContextName()+"\x00"+namespace)
+}
+
+var radarPodLogAccess = memoizeAccess(30*time.Second, time.Now, func(ctx context.Context, key string) (bool, error) {
+	_, namespace, _ := strings.Cut(key, "\x00")
+	allowed, apiErr := k8score.CanI(ctx, k8s.GetClientInterface(), namespace, "", "pods/log", "get")
+	if apiErr {
+		return false, errors.New("access review failed")
+	}
+	return allowed, nil
+})
+
+// memoizeAccessMax bounds the memo: the namespace comes from the URL.
+const memoizeAccessMax = 1024
+
+// memoizeAccess remembers check's answers for ttl. A failed check is not
+// remembered.
+func memoizeAccess(ttl time.Duration, now func() time.Time, check func(context.Context, string) (bool, error)) func(context.Context, string) bool {
+	type entry struct {
+		allowed bool
+		at      time.Time
+	}
+	var mu sync.Mutex
+	seen := map[string]entry{}
+	return func(ctx context.Context, key string) bool {
+		mu.Lock()
+		e, ok := seen[key]
+		mu.Unlock()
+		if ok && now().Sub(e.at) < ttl {
+			return e.allowed
+		}
+		allowed, err := check(ctx, key)
+		if err != nil {
+			return false
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if len(seen) >= memoizeAccessMax {
+			clear(seen)
+		}
+		seen[key] = entry{allowed, now()}
+		return allowed
+	}
 }
 
 // noContainerLabel keys the lines when Loki's streams carry no container.
@@ -351,11 +394,14 @@ func (s *Server) lokiLabels(r *http.Request) (loki.StreamLabels, error) {
 	return labels, nil
 }
 
-// writeLokiError: 502 when Loki answered with an error (its message,
-// redacted), 503 when Loki is off or unreachable.
+// writeLokiError: 429 when too many reads are running, 502 when Loki
+// answered with an error (its message, redacted), 503 when Loki is off or
+// unreachable.
 func (s *Server) writeLokiError(w http.ResponseWriter, err error) {
 	var upstream *loki.UpstreamError
 	switch {
+	case errors.Is(err, loki.ErrBusy):
+		s.writeError(w, http.StatusTooManyRequests, err.Error())
 	case errors.As(err, &upstream):
 		s.writeError(w, http.StatusBadGateway, "Loki answered: "+upstream.Message)
 	case errors.Is(err, loki.ErrNotConfigured):

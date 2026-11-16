@@ -80,7 +80,7 @@ const (
 	discoveryTimeout   = 30 * time.Second
 	requestTimeout     = 30 * time.Second
 	retryAfter         = 30 * time.Second
-	maxResponseBytes   = 32 << 20
+	maxResponseBytes   = 8 << 20
 )
 
 // client is the process-wide Loki connection for the current context.
@@ -102,6 +102,17 @@ var client struct {
 	// cluster* come from --loki-cluster and outlive Configure and Retire.
 	clusterLabel, clusterValue string
 	clusterRequired            bool
+	// discovery* come from how Radar runs and outlive Configure and Retire.
+	discoveryRestricted bool
+	ownNamespace        string
+}
+
+// SetDiscoveryScope: restricted limits discovery to the known Loki
+// namespaces and own (Radar's namespace, may be empty).
+func SetDiscoveryScope(restricted bool, own string) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.discoveryRestricted, client.ownNamespace = restricted, own
 }
 
 // SetCluster sets this cluster's value for Loki's cluster label (label ""
@@ -195,7 +206,8 @@ func startAttemptLocked() chan struct{} {
 	done := make(chan struct{})
 	ctx, cancel := context.WithTimeout(context.Background(), discoveryTimeout)
 	client.inflight, client.cancel, client.attemptGen = done, cancel, client.generation
-	go attempt(ctx, done, client.generation, client.manualURL, maps.Clone(client.headers), currentContext())
+	scope := discoveryScope{client.discoveryRestricted, client.ownNamespace}
+	go attempt(ctx, done, client.generation, client.manualURL, maps.Clone(client.headers), currentContext(), scope)
 	return done
 }
 
@@ -215,6 +227,11 @@ func EnsureConnected(ctx context.Context) error {
 		}
 		wait, generation, contextName := client.inflight, client.generation, currentContext()
 		stale := wait != nil && client.attemptGen != generation // cancelled; a new one starts once it ends
+		if wait == nil && time.Since(client.failedAt) < retryAfter {
+			lastErr := client.lastErr
+			client.mu.Unlock()
+			return fmt.Errorf("%w: %s", ErrUnavailable, lastErr)
+		}
 		if wait == nil {
 			wait = startAttemptLocked()
 		}
@@ -244,8 +261,8 @@ func EnsureConnected(ctx context.Context) error {
 // Configure, Retire or context switch during it wins: its result is dropped,
 // and a forward it opened is stopped (no newer attempt can own one while this
 // one is in flight).
-func attempt(ctx context.Context, done chan struct{}, generation int, manual string, headers map[string]string, contextName string) {
-	base, source, found, err := connect(ctx, manual, headers, contextName)
+func attempt(ctx context.Context, done chan struct{}, generation int, manual string, headers map[string]string, contextName string, scope discoveryScope) {
+	base, source, found, err := connect(ctx, manual, headers, contextName, scope)
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	client.cancel()
@@ -264,7 +281,12 @@ func attempt(ctx context.Context, done chan struct{}, generation int, manual str
 	}
 }
 
-func connect(ctx context.Context, manual string, headers map[string]string, contextName string) (base, source string, found StreamLabels, err error) {
+type discoveryScope struct {
+	restricted bool
+	own        string
+}
+
+func connect(ctx context.Context, manual string, headers map[string]string, contextName string, scope discoveryScope) (base, source string, found StreamLabels, err error) {
 	if manual != "" {
 		found, err = probe(ctx, manual, headers)
 		return manual, "manual", found, err
@@ -279,6 +301,9 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 	candidates := Candidates(services)
 	if len(candidates) == 0 {
 		return "", "", found, errors.New("no Loki Service among the Services Radar can read; set the Loki URL")
+	}
+	if candidates, err = chooseCandidates(candidates, scope.restricted, scope.own); err != nil {
+		return "", "", found, err
 	}
 	var lastErr error
 	for _, c := range candidates {
@@ -467,6 +492,11 @@ func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Win
 		"limit":     {strconv.Itoa(limit)},
 		"direction": {"backward"},
 	}
+	release, err := acquireRead(readerKey(ctx))
+	if err != nil {
+		return Lines{}, err
+	}
+	defer release()
 	body, err := Get(ctx, "/loki/api/v1/query_range", params)
 	if err != nil {
 		return Lines{}, err

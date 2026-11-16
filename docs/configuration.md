@@ -676,19 +676,23 @@ to start.
 
 Without a URL Radar finds Loki in the cluster: a Service named `loki-gateway`,
 `loki-query-frontend`, `loki-read` or `loki`, or labelled
-`app.kubernetes.io/name=loki`. A Service in the `loki`, `logging`, `monitoring`
-or `observability` namespace comes before any other, so a Service someone
-creates in their own namespace can't take Loki's place; within that order a
-gateway or query frontend comes first. If Loki runs elsewhere and other teams
-can create Services, set its URL. It tries
+`app.kubernetes.io/name=loki`. Running in the cluster or with authentication,
+Radar looks only in the `loki`, `logging`, `monitoring` and `observability`
+namespaces and its own, so a Service someone creates in their own namespace
+can't take Loki's place; if Loki runs elsewhere, set `--loki-url`, and the
+status says so. A local Radar searches every namespace it can read, with those
+namespaces first. Within that order a gateway or query frontend comes first,
+and when the two best Services are equally good and in different namespaces,
+Radar connects to neither and asks for the URL. It tries
 the Service address first, then a port-forward to the port the Service targets
 on its pod (locally this needs `create pods/portforward` in Loki's namespace).
 Gossip, canary and headless Services are skipped unless nothing else matches.
 Each candidate gets a few seconds through its forward before Radar tries the
 next. When Radar can't list Services, Settings says so rather than reporting
 that no Loki was found.
-After a failed attempt, reading the status starts another one at most every
-30 seconds; a cancelled or slow read keeps the connection.
+After a failed attempt, neither reading the status nor reading logs starts
+another one for 30 seconds; reads in that time return the last error. A
+cancelled or slow read keeps the connection.
 
 On connecting, Radar reads Loki's label names and picks the stream labels that
 carry the namespace, pod, container and Job name (`namespace`/`pod`/`container`

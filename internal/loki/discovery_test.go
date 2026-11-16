@@ -2,6 +2,7 @@ package loki
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -44,6 +45,36 @@ func TestCandidates(t *testing.T) {
 	} {
 		if got := Candidates(tc.in); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestChooseCandidates(t *testing.T) {
+	c := func(ns, name string, score int) Candidate { return Candidate{Namespace: ns, Name: name, Score: score} }
+	for _, tc := range []struct {
+		name       string
+		in         []Candidate
+		restricted bool
+		own        string
+		want       []Candidate
+		wantErr    string
+	}{
+		{"local keeps any namespace", []Candidate{c("team-a", "loki", 20)}, false, "", []Candidate{c("team-a", "loki", 20)}, ""},
+		{"local refuses a tie across namespaces", []Candidate{c("team-a", "loki-gateway", 40), c("team-b", "loki-gateway", 40)}, false, "", nil, "team-a/loki-gateway and team-b/loki-gateway"},
+		{"a tie in one namespace is fine", []Candidate{c("loki", "loki-gateway", 40), c("loki", "loki-gateway-2", 40)}, false, "", []Candidate{c("loki", "loki-gateway", 40), c("loki", "loki-gateway-2", 40)}, ""},
+		{"a known namespace breaks a tie", []Candidate{c("loki", "loki", 20), c("team-a", "loki", 20)}, false, "", []Candidate{c("loki", "loki", 20), c("team-a", "loki", 20)}, ""},
+		{"restricted drops other namespaces", []Candidate{c("loki", "loki-read", 30), c("team-a", "loki-gateway", 40), c("radar", "loki", 20)}, true, "radar", []Candidate{c("loki", "loki-read", 30), c("radar", "loki", 20)}, ""},
+		{"restricted with nothing left", []Candidate{c("team-a", "loki-gateway", 40)}, true, "radar", nil, "--loki-url"},
+	} {
+		got, err := chooseCandidates(tc.in, tc.restricted, tc.own)
+		if tc.wantErr != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("%s: error = %v, want %q", tc.name, err, tc.wantErr)
+			}
+			continue
+		}
+		if err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: got %+v, %v", tc.name, got, err)
 		}
 	}
 }

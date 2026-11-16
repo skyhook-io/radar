@@ -539,3 +539,56 @@ func TestClusterSettingOverlaysLabels(t *testing.T) {
 		t.Fatalf("status = %+v", st)
 	}
 }
+
+// A read inside the cooldown after a failure doesn't start discovery again.
+func TestEnsureConnectedBacksOffAfterAFailure(t *testing.T) {
+	reset(t)
+	var lists atomic.Int32
+	listServices = func() ([]corev1.Service, bool) { lists.Add(1); return nil, true }
+	Configure("", nil)
+	_ = EnsureConnected(context.Background())
+	for range 5 {
+		if err := EnsureConnected(context.Background()); !errors.Is(err, ErrUnavailable) || !strings.Contains(err.Error(), "no Loki Service") {
+			t.Fatalf("error = %v", err)
+		}
+	}
+	if n := lists.Load(); n != 1 {
+		t.Fatalf("discovery ran %d times, want 1", n)
+	}
+}
+
+// A shared Radar only takes a Loki from the known Loki namespaces or its own.
+func TestRestrictedDiscoveryIgnoresOtherNamespaces(t *testing.T) {
+	reset(t)
+	t.Cleanup(func() { SetDiscoveryScope(false, "") })
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("team-a", "loki-gateway", nil, port("http", 80))}, true
+	}
+	startForward = func(context.Context, string, string, int, string) (string, error) {
+		t.Error("forwarded to a Service outside the Loki namespaces")
+		return "", errors.New("no")
+	}
+	SetDiscoveryScope(true, "radar")
+	Configure("", nil)
+	if err := EnsureConnected(context.Background()); err == nil || !strings.Contains(err.Error(), "--loki-url") {
+		t.Fatalf("error = %v", err)
+	}
+	if st := CurrentStatus(); !strings.Contains(st.Error, "--loki-url") {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestRestrictedDiscoveryTakesRadarsNamespace(t *testing.T) {
+	reset(t)
+	t.Cleanup(func() { SetDiscoveryScope(false, "") })
+	srv := fakeLoki(t, 200, labelsOK, nil)
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("radar", "loki", nil, port("http-metrics", 3100))}, true
+	}
+	startForward = func(context.Context, string, string, int, string) (string, error) { return srv.URL, nil }
+	SetDiscoveryScope(true, "radar")
+	Configure("", nil)
+	if err := EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
