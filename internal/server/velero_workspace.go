@@ -79,6 +79,17 @@ func (s *Server) handleVeleroScheduleActivity(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// refuseOutsideVeleroPin answers 403 for a namespace Radar's --namespace-scope
+// pin excludes. A read there would find an empty cache and report absence, and
+// a write would reach past the scope Radar was started with.
+func (s *Server) refuseOutsideVeleroPin(w http.ResponseWriter, namespace string) bool {
+	if outsideNamespacePin(namespace) == nil {
+		return false
+	}
+	s.writeError(w, http.StatusForbidden, "namespace is outside Radar's namespace scope")
+	return true
+}
+
 // veleroReader captures the connection once and binds every read to the
 // caller. ok=false when the cluster connection changes during capture.
 func (s *Server) veleroReader(r *http.Request) (*velerosvc.Reader, bool) {

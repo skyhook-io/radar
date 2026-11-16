@@ -142,6 +142,9 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusBadRequest, "namespace and name are required")
 		return
 	}
+	if s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
 
 	// Creating a DownloadRequest is the mechanism, not the permission being
 	// asked about. The apiserver will enforce `create downloadrequests` below,

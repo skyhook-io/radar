@@ -54,6 +54,9 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+	if s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
 	var req VeleroBackupNowRequest
 	if err := decodeBoundedJSONBody(w, r, 4<<10, &req); err != nil {
 		var tooLarge *http.MaxBytesError

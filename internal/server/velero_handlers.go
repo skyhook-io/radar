@@ -89,6 +89,9 @@ func (s *Server) handleVeleroStoredBackups(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusBadRequest, "storage location namespace and name are required")
 		return
 	}
+	if s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
 	if !s.canRead(r, veleroGroup, "backups", namespace, "list") {
 		s.writeError(w, http.StatusForbidden, "no access to Velero backups")
 		return
