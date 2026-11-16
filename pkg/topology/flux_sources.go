@@ -20,26 +20,22 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 			}
 		}
 	}
-	nodes, edges, warnings := addObservedDependencyEdges(nodes, edges, refs, provider, opts)
 	if provider == nil {
-		return nodes, edges, warnings
+		return nodes, edges, nil
 	}
+	byResource := nodeIDsByResource(nodes)
+	nodes, edges, warnings := addIndexedDependencyEdges(nodes, edges, refs, provider, opts, byResource)
 	// Follow observed upstream sources (a chart to its source, an artifact to
 	// its generator, a generator to its sources) a few levels at most. Each
 	// kind is one cached list, shared by every reference, never a per-object
 	// Get, and only objects already in the graph are followed.
 	listed := map[resourceid.GroupKind][]*unstructured.Unstructured{}
 	followed := map[string]bool{}
+	present := func(key string) bool { return byResource[key] != "" }
 	for level := 0; level < gitops.MaxFluxSourceLevels && len(upstream) > 0; level++ {
-		present := map[string]bool{}
-		for i := range nodes {
-			for _, key := range nodeResourceKeys(&nodes[i]) {
-				present[key] = true
-			}
-		}
 		byKind := map[resourceid.GroupKind]bool{}
 		for key, ref := range upstream {
-			if present[key] && !followed[key] {
+			if present(key) && !followed[key] {
 				byKind[ref.GroupKind()] = true
 			}
 		}
@@ -70,7 +66,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 					continue
 				}
 				self := resourceid.NewRef(kind.Group, kind.Kind, obj.GetNamespace(), obj.GetName())
-				if _, wanted := upstream[self.Key()]; !wanted || !present[self.Key()] || followed[self.Key()] {
+				if _, wanted := upstream[self.Key()]; !wanted || !present(self.Key()) || followed[self.Key()] {
 					continue
 				}
 				followed[self.Key()] = true
@@ -83,7 +79,7 @@ func addFluxSourceEdges(nodes []Node, edges []Edge, roots []*unstructured.Unstru
 			}
 		}
 		var sourceWarnings []string
-		nodes, edges, sourceWarnings = addObservedDependencyEdges(nodes, edges, refs, provider, opts)
+		nodes, edges, sourceWarnings = addIndexedDependencyEdges(nodes, edges, refs, provider, opts, byResource)
 		warnings = append(warnings, sourceWarnings...)
 		upstream = next
 	}
