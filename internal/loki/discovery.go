@@ -4,6 +4,7 @@
 package loki
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -93,4 +94,31 @@ func lokiPort(s corev1.Service, gateway bool) corev1.ServicePort {
 		}
 	}
 	return corev1.ServicePort{Port: 3100}
+}
+
+// chooseCandidates narrows ranked candidates to the ones Radar may connect to.
+// Restricted (in-cluster, or with authentication) keeps only the known Loki
+// namespaces and Radar's own: there, other users can create Services. Either
+// way two equally good candidates in different namespaces are refused rather
+// than guessed between.
+func chooseCandidates(found []Candidate, restricted bool, own string) ([]Candidate, error) {
+	if restricted {
+		kept := found[:0:0]
+		for _, c := range found {
+			if lokiNamespaces[c.Namespace] || (own != "" && c.Namespace == own) {
+				kept = append(kept, c)
+			}
+		}
+		if len(kept) == 0 {
+			return nil, fmt.Errorf("no Loki Service in the loki, logging, monitoring or observability namespace or Radar's own; Radar doesn't look elsewhere when it is shared, so set the Loki URL (--loki-url)")
+		}
+		found = kept
+	}
+	if len(found) > 1 {
+		a, b := found[0], found[1]
+		if a.Namespace != b.Namespace && a.Score == b.Score && lokiNamespaces[a.Namespace] == lokiNamespaces[b.Namespace] {
+			return nil, fmt.Errorf("Services %s/%s and %s/%s look equally like Loki; set the Loki URL", a.Namespace, a.Name, b.Namespace, b.Name)
+		}
+	}
+	return found, nil
 }
