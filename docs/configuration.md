@@ -676,10 +676,17 @@ to start.
 
 Without a URL Radar finds Loki in the cluster: a Service named `loki-gateway`,
 `loki-query-frontend`, `loki-read` or `loki`, or labelled
-`app.kubernetes.io/name=loki`, preferring a gateway or query frontend. It tries
+`app.kubernetes.io/name=loki`. A Service in the `loki`, `logging`, `monitoring`
+or `observability` namespace comes before any other, so a Service someone
+creates in their own namespace can't take Loki's place; within that order a
+gateway or query frontend comes first. If Loki runs elsewhere and other teams
+can create Services, set its URL. It tries
 the Service address first, then a port-forward to the port the Service targets
 on its pod (locally this needs `create pods/portforward` in Loki's namespace).
 Gossip, canary and headless Services are skipped unless nothing else matches.
+Each candidate gets a few seconds through its forward before Radar tries the
+next. When Radar can't list Services, Settings says so rather than reporting
+that no Loki was found.
 After a failed attempt, reading the status starts another one at most every
 30 seconds; a cancelled or slow read keeps the connection.
 

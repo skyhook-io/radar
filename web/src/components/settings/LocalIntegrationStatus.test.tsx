@@ -70,6 +70,6 @@ describe('LocalIntegrationStatus for Loki', () => {
     expect(html).toContain('History needs both')
   })
   it('shows the connection error', () => {
-    expect(renderLoki({ configured: true, connected: false, discovering: false, error: 'no Loki Service found in the cluster' })).toContain('no Loki Service found in the cluster')
+    expect(renderLoki({ configured: true, connected: false, discovering: false, error: 'no Loki Service among the Services Radar can read; set the Loki URL' })).toContain('no Loki Service among the Services Radar can read; set the Loki URL')
   })
 })

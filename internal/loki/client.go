@@ -68,6 +68,11 @@ var (
 	namedPodPort = cachedNamedPodPort
 )
 
+// forwardProbeTimeout bounds one candidate's probe through its forward, so
+// a pod that accepts the connection and never answers can't use up the whole
+// discovery budget.
+var forwardProbeTimeout = 8 * time.Second
+
 const (
 	directProbeTimeout = 2 * time.Second
 	discoveryTimeout   = 30 * time.Second
@@ -245,9 +250,13 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 	if len(headers) > 0 {
 		return "", "", found, ErrHeadersRequireURL
 	}
-	candidates := Candidates(listServices())
+	services, ok := listServices()
+	if !ok {
+		return "", "", found, errors.New("Radar can't list Services, so it can't find Loki; set the Loki URL")
+	}
+	candidates := Candidates(services)
 	if len(candidates) == 0 {
-		return "", "", found, errors.New("no Loki Service found in the cluster")
+		return "", "", found, errors.New("no Loki Service among the Services Radar can read; set the Loki URL")
 	}
 	var lastErr error
 	for _, c := range candidates {
@@ -263,7 +272,10 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 			lastErr = fmt.Errorf("%s/%s: %w", c.Namespace, c.Name, ferr)
 			continue
 		}
-		if found, err = probe(ctx, address, headers); err == nil {
+		probeCtx, cancel = context.WithTimeout(ctx, forwardProbeTimeout)
+		found, err = probe(probeCtx, address, headers)
+		cancel()
+		if err == nil {
 			return address, "discovered", found, nil
 		}
 		stopForward()
@@ -384,20 +396,21 @@ func forwardLost(_ portforward.Owner, address string) {
 	}
 }
 
-func cachedServices() []corev1.Service {
+// cachedServices: ok is false when Radar can't list Services at all.
+func cachedServices() ([]corev1.Service, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Services() == nil {
-		return nil
+		return nil, false
 	}
 	list, err := cache.Services().List(labels.Everything())
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	out := make([]corev1.Service, 0, len(list))
 	for _, s := range list {
 		out = append(out, *s)
 	}
-	return out
+	return out, true
 }
 
 // podPort is the port a forward to the Service's pod must use: the Service
