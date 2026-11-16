@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   formatSandboxExpiry,
   getAgentRuntimeSortValue,
@@ -113,8 +113,11 @@ describe('Agent Sandbox warm pools and expiry', () => {
 const poolVectors = JSON.parse(readFileSync(new URL('../../../../../pkg/health/testdata/substrate_workerpool.json', import.meta.url), 'utf8'))
 
 describe('Agent Substrate WorkerPool status (shared with pkg/health)', () => {
+  afterEach(() => { vi.useRealTimers() })
   for (const vector of poolVectors) {
     it(vector.name, () => {
+      // Same default as pkg/health's test: inside the provisioning grace period.
+      vi.useFakeTimers({ now: Date.parse(vector.now ?? '2026-11-14T10:05:00Z'), toFake: ['Date'] })
       const expected = { text: vector.text, level: vector.uiLevel }
       expect(getWorkerPoolStatus(vector.object)).toMatchObject(expected)
       expect(getResourceStatus('workerpools', vector.object)).toMatchObject(expected)

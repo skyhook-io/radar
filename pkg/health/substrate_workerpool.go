@@ -1,8 +1,15 @@
 package health
 
 import (
+	"time"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
+
+// WorkerPoolProvisionGrace covers the controller's next pass: it creates the
+// worker Deployment after writing the resolved classes, and records the
+// Deployment's selector in status only on the pass after that.
+const WorkerPoolProvisionGrace = 10 * time.Minute
 
 // SubstrateWorkerPool returns the health of an Agent Substrate WorkerPool
 // (ate.dev) from its per-class Resolved conditions and its desired and ready
@@ -11,6 +18,11 @@ import (
 // Mirrored by getWorkerPoolStatus in k8s-ui; testdata/substrate_workerpool.json
 // pins both.
 func SubstrateWorkerPool(u *unstructured.Unstructured) Verdict {
+	return SubstrateWorkerPoolAt(u, time.Now())
+}
+
+// SubstrateWorkerPoolAt is SubstrateWorkerPool judged at now.
+func SubstrateWorkerPoolAt(u *unstructured.Unstructured, now time.Time) Verdict {
 	if u == nil {
 		return Verdict{Level: LevelUnknown, Reason: "Not reported"}
 	}
@@ -85,5 +97,56 @@ func SubstrateWorkerPool(u *unstructured.Unstructured) Verdict {
 	if hasDesired && ready >= desired {
 		return Verdict{Level: LevelHealthy, Reason: "Ready"}
 	}
+	if _, stalled := SubstrateWorkerPoolStalled(u, now); stalled {
+		return Verdict{Level: LevelUnhealthy, Reason: "Provisioning stalled"}
+	}
 	return Verdict{Level: LevelDegraded, Reason: "Scaling"}
+}
+
+// SubstrateWorkerPoolStalled reports a pool that wants workers, has every class
+// resolved on its current generation, and still has no worker Deployment past
+// WorkerPoolProvisionGrace, with the time the last class resolved (or the
+// pool's creation). The controller only logs a Deployment or ServiceAccount
+// create the API server rejects, so an empty status.selector with no worker
+// Pods is the only trace it leaves.
+func SubstrateWorkerPoolStalled(u *unstructured.Unstructured, now time.Time) (time.Time, bool) {
+	if u == nil || u.GetDeletionTimestamp() != nil {
+		return time.Time{}, false
+	}
+	desired, _, _ := unstructured.NestedInt64(u.Object, "spec", "replicas")
+	selector, _, _ := unstructured.NestedString(u.Object, "status", "selector")
+	pods, _, _ := unstructured.NestedInt64(u.Object, "status", "replicas")
+	classes, _, _ := unstructured.NestedSlice(u.Object, "status", "sandboxClasses")
+	if desired <= 0 || selector != "" || pods > 0 || len(classes) == 0 {
+		return time.Time{}, false
+	}
+	since := u.GetCreationTimestamp().Time
+	generation := u.GetGeneration()
+	for _, raw := range classes {
+		class, _ := raw.(map[string]any)
+		conds, _ := class["conditions"].([]any)
+		resolved := false
+		for _, rawCond := range conds {
+			cond, _ := rawCond.(map[string]any)
+			if cond["type"] != "Resolved" || cond["status"] != "True" {
+				continue
+			}
+			if observed, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok && generation > 0 && observed > 0 && observed < generation {
+				continue
+			}
+			resolved = true
+			if ts, _ := cond["lastTransitionTime"].(string); ts != "" {
+				if at, err := time.Parse(time.RFC3339, ts); err == nil && at.After(since) {
+					since = at
+				}
+			}
+		}
+		if !resolved {
+			return time.Time{}, false
+		}
+	}
+	if since.IsZero() || now.Sub(since) < WorkerPoolProvisionGrace {
+		return time.Time{}, false
+	}
+	return since, true
 }

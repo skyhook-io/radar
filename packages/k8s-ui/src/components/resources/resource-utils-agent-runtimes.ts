@@ -77,6 +77,32 @@ function workerPoolResolvedConditions(resource: any): { condition: any; stale: b
   })
 }
 
+// Mirrors pkg/health WorkerPoolProvisionGrace.
+const WORKER_POOL_PROVISION_GRACE_MS = 10 * 60 * 1000
+
+/**
+ * Mirrors pkg/health SubstrateWorkerPoolStalled: a pool that wants workers,
+ * has every class resolved on its current generation, and still has no worker
+ * Deployment past the grace period. Returns when the last class resolved (or
+ * the pool's creation), or undefined.
+ */
+function workerPoolStalledSince(resource: any, now: number): number | undefined {
+  if (resource?.metadata?.deletionTimestamp) return undefined
+  const desired = count(resource?.spec?.replicas) ?? 0
+  const pods = count(resource?.status?.replicas) ?? 0
+  const resolved = workerPoolResolvedConditions(resource)
+  if (desired <= 0 || resource?.status?.selector || pods > 0 || resolved.length === 0) return undefined
+  const created = Date.parse(resource?.metadata?.creationTimestamp ?? '')
+  let since = Number.isNaN(created) ? 0 : created
+  for (const { condition, stale } of resolved) {
+    if (condition?.status !== 'True' || stale) return undefined
+    const at = Date.parse(condition.lastTransitionTime ?? '')
+    if (!Number.isNaN(at) && at > since) since = at
+  }
+  if (since === 0 || now - since < WORKER_POOL_PROVISION_GRACE_MS) return undefined
+  return since
+}
+
 /**
  * Mirrors pkg/health SubstrateWorkerPool, which AI summaries use;
  * pkg/health/testdata/substrate_workerpool.json pins both. The UI shows
@@ -88,7 +114,7 @@ function workerPoolResolvedConditions(resource: any): { condition: any; stale: b
  * resolve, the controller keeps applying an existing worker Deployment, so
  * workers that are ready stay up on the last resolved config.
  */
-export function getWorkerPoolStatus(resource: any): StatusBadge {
+export function getWorkerPoolStatus(resource: any, now = Date.now()): StatusBadge {
   if (resource?.metadata?.deletionTimestamp) return badge('Terminating', 'degraded')
   const status = resource?.status
   const resolved = workerPoolResolvedConditions(resource)
@@ -108,10 +134,11 @@ export function getWorkerPoolStatus(resource: any): StatusBadge {
   if (!status || resolved.length === 0) return badge('Pending', 'degraded')
   if (resolved.some(r => r.stale || r.condition?.status !== 'True')) return badge('Resolving', 'degraded')
   if (desired !== undefined && ready >= desired) return badge('Ready', 'healthy')
+  if (workerPoolStalledSince(resource, now) !== undefined) return badge('Provisioning stalled', 'unhealthy')
   return badge('Scaling', 'degraded')
 }
 
-function workerPoolStatusMessage(resource: any): string | undefined {
+function workerPoolStatusMessage(resource: any, now = Date.now()): string | undefined {
   const generation = count(resource?.metadata?.generation)
   for (const { condition, stale } of workerPoolResolvedConditions(resource)) {
     if (condition?.status !== 'False') continue
@@ -123,7 +150,9 @@ function workerPoolStatusMessage(resource: any): string | undefined {
   // No condition explains it: say what the reading means rather than repeat it.
   const ready = count(resource?.status?.readyReplicas) ?? 0
   const desired = count(resource?.spec?.replicas)
-  switch (getWorkerPoolStatus(resource).text) {
+  switch (getWorkerPoolStatus(resource, now).text) {
+    case 'Provisioning stalled':
+      return `${desired} workers wanted, but no worker Deployment has appeared since every sandbox class resolved. Substrate's controller only logs a rejected create, so check its logs for the reason.`
     case 'Pending':
       return "Substrate's controller hasn't reported on this pool yet."
     case 'Resolving':

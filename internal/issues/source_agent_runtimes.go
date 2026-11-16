@@ -18,11 +18,6 @@ const (
 
 const agentSandboxProgressGrace = 30 * time.Minute
 
-// workerPoolProvisionGrace covers the controller's next pass: it creates the
-// worker Deployment after writing the resolved classes, and records the
-// Deployment's selector in status only on the pass after that.
-const workerPoolProvisionGrace = 10 * time.Minute
-
 // agentSandboxSuppressesGenericConditions reports whether the generic
 // Ready=False warning should stay silent for an Agent Sandbox Sandbox or
 // SandboxClaim (pkg/health reads the reasons). A settled state is never an
@@ -113,48 +108,19 @@ func detectWorkerPoolIssues(gvr schema.GroupVersionResource, kind string, u *uns
 		}
 	}
 	if len(out) == 0 {
-		if issue, ok := workerPoolDeploymentMissing(gvr, kind, u, classes, desired, time.Now()); ok {
+		if issue, ok := workerPoolDeploymentMissing(gvr, kind, u, desired, time.Now()); ok {
 			out = append(out, issue)
 		}
 	}
 	return out
 }
 
-// workerPoolDeploymentMissing reports a pool that wants workers, has every
-// class resolved, and still has no worker Deployment past the grace period.
-// The controller only logs a Deployment or ServiceAccount create the API
-// server rejects, so an empty status.selector with no worker Pods is the only
-// trace it leaves.
-func workerPoolDeploymentMissing(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, classes []any, desired int64, now time.Time) (Issue, bool) {
-	selector, _, _ := unstructured.NestedString(u.Object, "status", "selector")
-	pods, _, _ := unstructured.NestedInt64(u.Object, "status", "replicas")
-	if desired <= 0 || selector != "" || pods > 0 || len(classes) == 0 || u.GetDeletionTimestamp() != nil {
-		return Issue{}, false
-	}
-	since := u.GetCreationTimestamp().Time
-	generation := u.GetGeneration()
-	for _, raw := range classes {
-		class, _ := raw.(map[string]any)
-		conds, _ := class["conditions"].([]any)
-		resolved := false
-		for _, rawCond := range conds {
-			cond, _ := rawCond.(map[string]any)
-			if cond["type"] != "Resolved" || cond["status"] != "True" {
-				continue
-			}
-			if observed, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok && generation > 0 && observed > 0 && observed < generation {
-				continue
-			}
-			resolved = true
-			if at, ok := conditionTransitionTime(cond); ok && at.After(since) {
-				since = at
-			}
-		}
-		if !resolved {
-			return Issue{}, false
-		}
-	}
-	if since.IsZero() || now.Sub(since) < workerPoolProvisionGrace {
+// workerPoolDeploymentMissing reports a pool whose worker Deployment never
+// appeared (health.SubstrateWorkerPoolStalled), which its status reads as
+// Provisioning stalled.
+func workerPoolDeploymentMissing(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, desired int64, now time.Time) (Issue, bool) {
+	since, stalled := health.SubstrateWorkerPoolStalled(u, now)
+	if !stalled {
 		return Issue{}, false
 	}
 	message := fmt.Sprintf("%d workers wanted, but no worker Deployment has appeared; every sandbox class resolved %s ago. Substrate's controller only logs a rejected create, so check its logs for the reason, for example an admission policy or a missing permission.", desired, timeutil.FormatAgeShort(now.Sub(since)))

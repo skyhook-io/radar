@@ -21,12 +21,16 @@ func TestAgentRuntimeSummaryHealthContract(t *testing.T) {
 			Name   string
 			Object unstructured.Unstructured
 			Level  health.Level
+			Now    string
 		}
 		if err := json.Unmarshal(raw, &cases); err != nil {
 			t.Fatal(err)
 		}
 		for _, tc := range cases {
 			t.Run(tc.Name, func(t *testing.T) {
+				if tc.Now != "" {
+					t.Skip("summaries judge at the current time; pkg/health pins this vector's clock")
+				}
 				if got := unstructuredHealth(&tc.Object); got != levelToString(tc.Level) {
 					t.Fatalf("got %q, want %q", got, levelToString(tc.Level))
 				}

@@ -495,6 +495,145 @@
     "text": "Scaling"
   },
   {
+    "name": "worker Deployment never created",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "unhealthy",
+    "uiLevel": "unhealthy",
+    "text": "Provisioning stalled",
+    "now": "2026-11-14T10:11:00Z"
+  },
+  {
+    "name": "no worker Deployment yet, within the grace period",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Scaling",
+    "now": "2026-11-14T10:09:00Z"
+  },
+  {
+    "name": "worker Deployment recorded, no Pod yet",
+    "object": {
+      "apiVersion": "ate.dev/v1",
+      "kind": "WorkerPool",
+      "metadata": {
+        "name": "a",
+        "namespace": "agents",
+        "generation": 1
+      },
+      "spec": {
+        "sandboxClasses": [
+          {
+            "name": "gvisor"
+          }
+        ],
+        "replicas": 3
+      },
+      "status": {
+        "replicas": 0,
+        "readyReplicas": 0,
+        "sandboxClasses": [
+          {
+            "name": "gvisor",
+            "configRef": {
+              "name": "gvisor-default"
+            },
+            "conditions": [
+              {
+                "type": "Resolved",
+                "status": "True",
+                "reason": "Resolved",
+                "message": "m",
+                "observedGeneration": 1,
+                "lastTransitionTime": "2026-11-14T10:00:00Z"
+              }
+            ]
+          }
+        ],
+        "selector": "ate.dev/worker-pool=a"
+      }
+    },
+    "level": "degraded",
+    "uiLevel": "degraded",
+    "text": "Scaling",
+    "now": "2026-11-14T10:30:00Z"
+  },
+  {
     "name": "no status yet",
     "object": {
       "apiVersion": "ate.dev/v1",
