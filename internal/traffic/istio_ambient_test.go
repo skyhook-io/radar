@@ -582,3 +582,12 @@ func TestIstioGetFlows_SaysWhenTheRangeHasTooFewSamples(t *testing.T) {
 		})
 	}
 }
+
+// A fractional range is rounded to whole seconds once, so the cluster check's
+// window is valid PromQL and matches the rates' window.
+func TestRateWindowForRoundsToWholeSeconds(t *testing.T) {
+	w := rateWindowFor(90*time.Second + 500*time.Millisecond)
+	if w.promQL != "90s" || w.seconds != 90 || w.span() != 90*time.Second {
+		t.Errorf("got %q / %v / %v, want 90s throughout", w.promQL, w.seconds, w.span())
+	}
+}

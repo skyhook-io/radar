@@ -32,7 +32,9 @@ func rateWindowFor(since time.Duration) rateWindow {
 	if since < time.Minute {
 		return rateWindow{promQL: "5m", seconds: defaultRateWindowSeconds}
 	}
-	// Expressed in seconds so any duration the caller asks for is valid PromQL.
-	// time.Duration's own format is not: it renders an hour as "1h0m0s".
-	return rateWindow{promQL: fmt.Sprintf("%ds", int(since.Seconds())), seconds: since.Seconds()}
+	// Whole seconds, so any duration the caller asks for is valid PromQL
+	// (time.Duration's own format renders 90.5s as "1m30.5s", which PromQL
+	// rejects) and the rate, byte totals and scope checks all use one span.
+	secs := int(since.Seconds())
+	return rateWindow{promQL: fmt.Sprintf("%ds", secs), seconds: float64(secs)}
 }
