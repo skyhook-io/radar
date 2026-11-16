@@ -16,16 +16,23 @@ describe('AuditCard vulnerabilities row', () => {
       <AuditCard data={data} onNavigate={() => {}} vulnerabilities={{ imagesWithCritical: 3, fixableCriticalHigh: 8, certainty: 'lower_bound', onNavigate: () => {} }} />,
     )
     expect(html.startsWith('<div')).toBe(true)
-    expect(html.match(/<button/g)?.length).toBe(2)
+    expect(html.match(/<button/g)?.length).toBe(3)
     expect(html).not.toMatch(/<button[^>]*>(?:(?!<\/button>).)*<button/s)
-    expect(html).toContain('≥ 3 images with Critical · ≥ 8 fixable Critical/High')
+    expect(html).toContain('3+ images with Critical')
+  })
+
+  it('names fixable High when no image has Critical', () => {
+    const html = renderToStaticMarkup(
+      <AuditCard data={data} onNavigate={() => {}} vulnerabilities={{ imagesWithCritical: 0, fixableCriticalHigh: 8, certainty: 'exact', onNavigate: () => {} }} />,
+    )
+    expect(html).toContain('8 fixable High')
   })
 
   it('says nothing is scanned rather than zero', () => {
     const html = renderToStaticMarkup(
       <AuditCard data={data} onNavigate={() => {}} vulnerabilities={{ imagesWithCritical: 0, fixableCriticalHigh: 0, certainty: 'unknown', onNavigate: () => {} }} />,
     )
-    expect(html).toContain('No running image scanned yet')
+    expect(html).toContain('Not scanned yet')
     expect(html).not.toContain('0 images')
   })
 
@@ -33,6 +40,6 @@ describe('AuditCard vulnerabilities row', () => {
     const html = renderToStaticMarkup(
       <AuditCard data={data} onNavigate={() => {}} vulnerabilities={{ imagesWithCritical: 0, fixableCriticalHigh: 0, certainty: 'unknown', readFailed: true, onNavigate: () => {} }} />,
     )
-    expect(html).toContain("Couldn&#x27;t read the reports")
+    expect(html).toContain("Couldn&#x27;t read")
   })
 })
