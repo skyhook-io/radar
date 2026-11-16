@@ -123,7 +123,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, initC
           onClear={clear}
           emptyMessage={
             <div className="space-y-1">
-              <div>Loki has no lines for this pod in this window. If the pod&apos;s logs aren&apos;t shipped to Loki, they were never stored.</div>
+              <div>Loki returned no lines for this pod in this window, matched by its namespace and pod name labels. Logs not shipped to Loki, or shipped under other labels, don&apos;t show here.</div>
               {historyEmptyHint}
             </div>
           }

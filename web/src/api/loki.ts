@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { FetchHistory, LogsHistoryResult } from '@skyhook-io/k8s-ui'
 import { fetchJSON, useRadarFeature } from './client'
@@ -76,5 +76,9 @@ export function usePodHistory(namespace: string, podName: string): FetchHistory 
     const data = await guard(() => fetchJSON<LokiPodLogs>(`/loki/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/logs?${query}`))
     return { containers: data.containers, logs: data.logs, truncated: data.truncated, limit: data.limit, window: data.window } satisfies LogsHistoryResult
   }, [guard, namespace, podName])
-  return ready ? fetchHistory : undefined
+  // Once History was offered it stays: a status poll that catches Loki
+  // reconnecting must not switch an open History tab to Live.
+  const [offered, setOffered] = useState(ready)
+  if (ready && !offered) setOffered(true)
+  return ready || offered ? fetchHistory : undefined
 }
