@@ -42,7 +42,14 @@ describe('TraefikIngressRouteRenderer request path', () => {
     const denied = render([facts({ tls: { mode: 'secret', secret: 'ui-tls', certificate: 'denied' } })])
     expect(denied).toContain('no access')
     expect(render([facts()])).toMatch(/certificate expires in \d+d/)
-    expect(render([facts({ tls: { mode: 'default' } })])).toContain('default certificate')
+    const store = render([facts({ tls: { mode: 'default' } })])
+    expect(store).toContain('TLS store')
+    expect(store).not.toContain("Traefik's default certificate")
+  })
+  it('warns when the named Secret is not found, since Traefik serves another certificate', () => {
+    const line = tlsLine({ mode: 'secret', secret: 'ui-tls', certificate: 'notFound' })
+    expect(line.severity).toBe('warning')
+    expect(line.text).toContain('another certificate')
   })
   it('shows a failed load as an alert', () => {
     const html = render(null)

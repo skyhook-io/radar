@@ -33,8 +33,8 @@ function podsFact(s: TraefikBackendFact): Fact {
 export function tlsLine(tls: TraefikTLSFact, now = Date.now()): { text: string; severity?: 'warning' | 'error' } {
   switch (tls.mode) {
     case 'none': return { text: 'No TLS on this route' }
-    case 'resolver': return { text: `Certificate issued by Traefik (ACME resolver ${tls.resolver})` }
-    case 'default': return { text: "TLS with Traefik's default certificate" }
+    case 'resolver': return { text: `Certificate requested from ACME resolver ${tls.resolver}` }
+    case 'default': return { text: 'TLS, no Secret named: Traefik picks the certificate from its TLS store by SNI' }
     case 'secret': break
   }
   const secret = `Secret ${tls.secret}`
@@ -49,7 +49,7 @@ export function tlsLine(tls: TraefikTLSFact, now = Date.now()): { text: string; 
       return { text: `${secret}: certificate expires in ${Math.floor(left / DAY)}d`, severity: left <= EXPIRING_WITHIN ? 'warning' : undefined }
     }
     case 'denied': return { text: `${secret}: no access to Secrets in this namespace` }
-    case 'notFound': return { text: `${secret}: not found` }
+    case 'notFound': return { text: `${secret}: not found; Traefik serves another certificate from its TLS store`, severity: 'warning' }
     case 'notTLS': return { text: `${secret}: no TLS certificate in it` }
     case 'loading': return { text: `${secret}: Secrets are still loading` }
     case 'notCollected': return { text: `${secret}: Radar does not collect Secrets in this namespace` }
