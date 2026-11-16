@@ -36,64 +36,88 @@ func (v *View) heldSubject(subject resourceid.Ref, fetched runtime.Object, c *Co
 
 // search is where an answer reads the objects that may relate to a subject:
 // the subject's namespace, read through the namespace index every store
-// keeps, or, across namespaces, as ownership.View.Children answers a
-// cluster-scoped owner: the namespaces the caller may read something in,
-// each object checked where it is, and a gap kept only if it covers what
-// the caller may read.
+// keeps, or, across namespaces, every namespace Radar holds. Each object is
+// matched against the subject first and checked against the caller's access
+// only if it relates, so an answer says it withheld something exactly when a
+// related object is hidden from the caller, and a kind with nothing related
+// costs no permission check. A gap is kept only if it covers what the caller
+// may read.
 type search struct {
 	v         *View
 	namespace string
 	across    bool
 	scope     ownership.SearchScope
-	index     string
-	keys      []string
+	// readable is what the caller may read of scope, for keeping gaps.
+	readable ownership.SearchScope
+	index    string
+	keys     []string
 }
 
-func (v *View) newSearch(namespace string, across bool, c *Coverage) search {
+func (v *View) newSearch(namespace string, across bool) search {
 	s := search{v: v, namespace: namespace, across: across, scope: ownership.InNamespace(namespace), index: cache.NamespaceIndex, keys: []string{namespace}}
+	s.readable = s.scope
 	if across {
-		namespaces, all := v.access.Namespaces()
-		s.scope = ownership.SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: true}
+		s.scope = ownership.SearchScope{AllNamespaces: true, IncludeClusterScoped: true}
 		s.index, s.keys = "", nil
-		if !all {
-			// Cluster-scoped objects file under "" in the namespace index.
-			s.index, s.keys = cache.NamespaceIndex, append(slices.Clone(namespaces), "")
-		}
-		c.Narrowed = c.Narrowed || v.access != ownership.Unrestricted()
+		namespaces, all := v.access.Namespaces()
+		s.readable = ownership.SearchScope{AllNamespaces: all, Namespaces: namespaces, IncludeClusterScoped: true}
 	}
 	return s
 }
 
 // newSearchIn searches the namespaces a selector names, as an across search
-// does: each object checked where it is, gaps kept only where the caller may
-// read.
-func (v *View) newSearchIn(namespaces []string, c *Coverage) search {
+// does.
+func (v *View) newSearchIn(namespaces []string) search {
 	namespaces = slices.Compact(slices.Sorted(slices.Values(namespaces)))
-	c.Narrowed = c.Narrowed || v.access != ownership.Unrestricted()
-	return search{v: v, across: true, scope: ownership.SearchScope{Namespaces: namespaces}, index: cache.NamespaceIndex, keys: namespaces}
+	scope := ownership.SearchScope{Namespaces: namespaces}
+	return search{v: v, across: true, scope: scope, readable: scope, index: cache.NamespaceIndex, keys: namespaces}
 }
 
-// each hands fn every object of gk in the search the caller may read.
-func (s search) each(gk resourceid.GroupKind, c *Coverage, fn func(IndexedObject)) {
-	if !s.across && !s.v.mayRead(gk, s.namespace, c) {
-		return
-	}
+// each asks relate about every object of gk in the search and emits those
+// that relate and the caller may read. relate records into its own coverage
+// and returns how to emit the object, or nil when it doesn't relate; what it
+// records about an object is kept only if the object is emitted, or, when
+// relate couldn't tell, if the caller may read it.
+func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o IndexedObject, c *Coverage) (emit func())) {
 	read := s.v.session.Indexed(gk, s.index, s.keys, s.scope)
-	for _, g := range read.Gaps {
-		if g.Namespace != "" && !s.scope.AllNamespaces && !slices.Contains(s.scope.Namespaces, g.Namespace) {
-			continue
-		}
-		if !s.across || ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, s.scope) {
-			c.addGap(g)
+	if len(read.Gaps) > 0 && (s.across || s.v.mayRead(gk, s.namespace, c)) {
+		for _, g := range read.Gaps {
+			if g.Namespace != "" && !s.readable.AllNamespaces && !slices.Contains(s.readable.Namespaces, g.Namespace) {
+				continue
+			}
+			if !s.across || ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, s.readable) {
+				c.addGap(g)
+			}
 		}
 	}
 	for _, o := range read.Objects {
-		// Saying a check failed would say an object may be there, so an
-		// undecided one narrows the answer as a denied one does.
-		if s.across && s.v.decide(gk, o.Ref.Namespace) != ownership.Allowed {
-			c.Narrowed = true
+		var own Coverage
+		emit := relate(o, &own)
+		if emit == nil && len(own.NotChecked) == 0 {
 			continue
 		}
-		fn(o)
+		if !s.admits(gk, o.Ref.Namespace, c) {
+			continue
+		}
+		c.merge(own)
+		if emit != nil {
+			emit()
+		}
 	}
+}
+
+// admits decides whether the caller may read a related object of gk in
+// namespace. In the subject's namespace a check that couldn't be made leaves
+// the answer incomplete; across namespaces, saying a check failed would say
+// an object may be there, so an undecided one narrows the answer as a denied
+// one does.
+func (s search) admits(gk resourceid.GroupKind, namespace string, c *Coverage) bool {
+	if !s.across {
+		return s.v.mayRead(gk, namespace, c)
+	}
+	if s.v.decide(gk, namespace) != ownership.Allowed {
+		c.Narrowed = true
+		return false
+	}
+	return true
 }

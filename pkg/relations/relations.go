@@ -137,6 +137,14 @@ func (v *View) mayRead(gk resourceid.GroupKind, namespace string, c *Coverage) b
 	return false
 }
 
+// merge adds what other records to c.
+func (c *Coverage) merge(other Coverage) {
+	for _, g := range other.NotChecked {
+		c.addGap(g)
+	}
+	c.Narrowed = c.Narrowed || other.Narrowed
+}
+
 func (c *Coverage) addGap(g ownership.Gap) {
 	if !slices.Contains(c.NotChecked, g) {
 		c.NotChecked = append(c.NotChecked, g)
