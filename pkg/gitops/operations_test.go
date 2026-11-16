@@ -50,7 +50,46 @@ func newFakeArgo(objs ...runtime.Object) *fake.FakeDynamicClient {
 	scheme.AddKnownTypeWithName(argoAppGVR.GroupVersion().WithKind("ApplicationList"), &unstructured.UnstructuredList{})
 	// Pull in the core scheme so non-Argo objects don't break the client init.
 	_ = corev1.AddToScheme(scheme)
-	return fake.NewSimpleDynamicClient(scheme, objs...)
+	client := fake.NewSimpleDynamicClient(scheme, objs...)
+	client.PrependReactor("patch", "applications", dryRunPatchReactor(client, false))
+	return client
+}
+
+// dryRunPatchReactor answers a dry-run patch with the object the API server
+// would store, without storing it. pruneEnabled models an Argo CD CRD older
+// than 3.1, whose schema drops syncPolicy.automated.enabled.
+func dryRunPatchReactor(client *fake.FakeDynamicClient, pruneEnabled bool) clienttesting.ReactionFunc {
+	return func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patchAction := action.(clienttesting.PatchActionImpl)
+		dryRun := len(patchAction.GetPatchOptions().DryRun) > 0
+		if !dryRun && !pruneEnabled {
+			return false, nil, nil
+		}
+		var patch map[string]any
+		if err := json.Unmarshal(patchAction.GetPatch(), &patch); err != nil {
+			return true, nil, err
+		}
+		current, err := client.Tracker().Get(argoAppGVR, patchAction.GetNamespace(), patchAction.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		app := current.(*unstructured.Unstructured).DeepCopy()
+		app.Object = jsonMergePatch(app.Object, patch)
+		if pruneEnabled {
+			if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+				delete(automated, "enabled")
+				_ = unstructured.SetNestedMap(app.Object, automated, "spec", "syncPolicy", "automated")
+			}
+		}
+		if dryRun {
+			return true, app, nil
+		}
+		app.SetResourceVersion("")
+		if err := client.Tracker().Update(argoAppGVR, app, patchAction.GetNamespace()); err != nil {
+			return true, nil, err
+		}
+		return true, app, nil
+	}
 }
 
 // captureLastPatch returns the body of the most recent merge-patch action,
@@ -2544,28 +2583,7 @@ func TestArgoSyncOperationUsesHydratedSyncSource(t *testing.T) {
 // prunes the field from every write.
 func newFakeArgoPre31(objs ...runtime.Object) *fake.FakeDynamicClient {
 	client := newFakeArgo(objs...)
-	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		patchAction := action.(clienttesting.PatchAction)
-		var patch map[string]any
-		if err := json.Unmarshal(patchAction.GetPatch(), &patch); err != nil {
-			return true, nil, err
-		}
-		current, err := client.Tracker().Get(argoAppGVR, patchAction.GetNamespace(), patchAction.GetName())
-		if err != nil {
-			return true, nil, err
-		}
-		app := current.(*unstructured.Unstructured).DeepCopy()
-		app.Object = jsonMergePatch(app.Object, patch)
-		if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
-			delete(automated, "enabled")
-			_ = unstructured.SetNestedMap(app.Object, automated, "spec", "syncPolicy", "automated")
-		}
-		app.SetResourceVersion("")
-		if err := client.Tracker().Update(argoAppGVR, app, patchAction.GetNamespace()); err != nil {
-			return true, nil, err
-		}
-		return true, app, nil
-	})
+	client.PrependReactor("patch", "applications", dryRunPatchReactor(client, true))
 	return client
 }
 
@@ -2613,11 +2631,24 @@ func TestSetArgoAutoSyncSuspendsInPlaceWhereArgoKeepsEnabled(t *testing.T) {
 	}
 }
 
-// Before 3.1 the API server prunes enabled, so the in-place write changes
-// nothing; suspend then removes the block as it always has.
+// Before 3.1 the API server prunes enabled, so an ApplicationSet-owned
+// Application is suspended by removing the block, in one write, and the
+// result says the ApplicationSet may turn auto-sync back on.
 func TestSetArgoAutoSyncFallsBackToRemovalWhereArgoPrunesEnabled(t *testing.T) {
 	client := newFakeArgoPre31(appSetOwned(appWithAutomated(map[string]any{"prune": true, "selfHeal": false}, nil)))
-	setAutoSync(t, client, false)
+	result := setAutoSync(t, client, false)
+	if !strings.Contains(result.Message, "ApplicationSet") {
+		t.Errorf("result = %q, want a note that the ApplicationSet may turn auto-sync back on", result.Message)
+	}
+	writes := 0
+	for _, action := range client.Actions() {
+		if p, ok := action.(clienttesting.PatchActionImpl); ok && len(p.GetPatchOptions().DryRun) == 0 {
+			writes++
+		}
+	}
+	if writes != 1 {
+		t.Errorf("suspend made %d writes, want one: the settings and the removal together", writes)
+	}
 	suspended := getTestApp(t, client)
 	if _, found := automatedOf(suspended); found {
 		t.Fatalf("suspend left automated in place on an Argo CD that prunes enabled: %#v", suspended.Object["spec"])

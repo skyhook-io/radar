@@ -421,21 +421,14 @@ func getArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, nam
 // returned as they are; a failed write is wrapped with verb, and a conflict
 // on the last attempt maps to ErrOperationInProgress.
 func updateArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name, verb string, build func(app *unstructured.Unstructured) (map[string]any, error)) error {
-	_, err := updateArgoAppObject(ctx, dynClient, namespace, name, verb, build)
-	return err
-}
-
-// updateArgoAppObject is updateArgoApp returning the Application as the API
-// server stored it, or nil when build wrote nothing.
-func updateArgoAppObject(ctx context.Context, dynClient dynamic.Interface, namespace, name, verb string, build func(app *unstructured.Unstructured) (map[string]any, error)) (*unstructured.Unstructured, error) {
 	for attempt := 1; ; attempt++ {
 		app, err := getArgoApp(ctx, dynClient, namespace, name)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		patch, err := build(app)
 		if err != nil || patch == nil {
-			return nil, err
+			return err
 		}
 		metadata, _ := patch["metadata"].(map[string]any)
 		if metadata == nil {
@@ -443,14 +436,14 @@ func updateArgoAppObject(ctx context.Context, dynClient dynamic.Interface, names
 			patch["metadata"] = metadata
 		}
 		metadata["resourceVersion"] = app.GetResourceVersion()
-		stored, err := mergePatchObject(ctx, dynClient, argoAppGVR, namespace, name, patch)
+		err = mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch)
 		switch {
 		case err == nil:
-			return stored, nil
+			return nil
 		case !apierrors.IsConflict(err):
-			return nil, fmt.Errorf("failed to %s Application %s/%s: %w", verb, namespace, name, err)
+			return fmt.Errorf("failed to %s Application %s/%s: %w", verb, namespace, name, err)
 		case attempt == argoOperationAttempts:
-			return nil, fmt.Errorf("the Application %s/%s kept changing before %s could start; try again: %w", namespace, name, verb, ErrOperationInProgress)
+			return fmt.Errorf("the Application %s/%s kept changing before %s could start; try again: %w", namespace, name, verb, ErrOperationInProgress)
 		}
 	}
 }
@@ -755,10 +748,11 @@ func stringValue(value any) string {
 // sync on an ArgoCD Application.
 //
 // Suspend saves the whole spec.syncPolicy.automated block in annotations and
-// removes the block, except on an Application an ApplicationSet owns, where it
-// switches the block off in place with `enabled: false` (Argo CD 3.1+) so the
-// ApplicationSet has no prune or selfHeal to put back; where the API server
-// prunes `enabled` it removes the block there too. If auto-sync is already off
+// removes the block, in one write, except on an Application an ApplicationSet
+// owns, where it switches the block off in place with `enabled: false` (Argo
+// CD 3.1+) so the ApplicationSet has no prune or selfHeal to put back. A dry
+// run tells whether the API server keeps `enabled`; where it doesn't, the
+// block is removed and the result says the ApplicationSet may undo it. If auto-sync is already off
 // it changes nothing, so a second suspend can't replace the saved settings
 // with empty ones.
 //
@@ -779,7 +773,8 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 		operation, pastAction = "resume", "resumed"
 	}
 	noChange := false
-	stored, err := updateArgoAppObject(ctx, dynClient, namespace, name, operation, func(app *unstructured.Unstructured) (map[string]any, error) {
+	appSetRemoved := false
+	err := updateArgoApp(ctx, dynClient, namespace, name, operation, func(app *unstructured.Unstructured) (map[string]any, error) {
 		if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
 			return nil, err
 		}
@@ -787,27 +782,26 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 		var err error
 		if enable {
 			patch, noChange = argoResumePatch(app)
-		} else {
-			patch, noChange, err = argoSuspendPatch(app)
+			return patch, nil
 		}
+		inPlace := false
+		if argoApplicationSetOwned(app) && ArgoAutoSyncEnabled(app) {
+			if inPlace, err = argoKeepsAutomatedEnabled(ctx, dynClient, namespace, name); err != nil {
+				return nil, fmt.Errorf("failed to check whether the Application keeps automated.enabled: %w", err)
+			}
+			appSetRemoved = !inPlace
+		}
+		patch, noChange, err = argoSuspendPatch(app, inPlace)
 		return patch, err
 	})
-	if err == nil && !enable && stored != nil && ArgoAutoSyncEnabled(stored) {
-		// An Argo CD older than 3.1 has no automated.enabled: the API server
-		// pruned it, so auto-sync is still on. Remove the block instead; the
-		// settings were saved by the write above.
-		err = updateArgoApp(ctx, dynClient, namespace, name, operation, func(app *unstructured.Unstructured) (map[string]any, error) {
-			if !ArgoAutoSyncEnabled(app) {
-				return nil, nil
-			}
-			return map[string]any{"spec": map[string]any{"syncPolicy": map[string]any{"automated": nil}}}, nil
-		})
-	}
 	if err != nil {
 		return OperationResult{}, err
 	}
 
 	message := fmt.Sprintf("ArgoCD Application %s/%s auto-sync %s", namespace, name, pastAction)
+	if appSetRemoved && !noChange {
+		message += "; this Argo CD has no automated.enabled, so an ApplicationSet that manages prune or selfHeal may turn it back on"
+	}
 	if noChange && enable {
 		message = fmt.Sprintf("ArgoCD Application %s/%s auto-sync is already on", namespace, name)
 	} else if noChange {
@@ -824,7 +818,7 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 	}, nil
 }
 
-func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, error) {
+func argoSuspendPatch(app *unstructured.Unstructured, inPlace bool) (map[string]any, bool, error) {
 	if !ArgoAutoSyncEnabled(app) {
 		return nil, true, nil
 	}
@@ -846,24 +840,44 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 			},
 		},
 		"spec": map[string]any{
-			"syncPolicy": map[string]any{"automated": argoSuspendedAutomated(app)},
+			"syncPolicy": map[string]any{"automated": argoSuspendedAutomated(inPlace)},
 		},
 	}, false, nil
 }
 
-// argoSuspendedAutomated is the automated value a suspend writes. Removing the
-// block works with every controller, but an ApplicationSet that manages prune
-// or selfHeal puts the block back, which Argo CD reads as auto-sync on. For an
-// Application an ApplicationSet owns it writes enabled: false instead (Argo CD
-// 3.1+), keeping the fields the ApplicationSet manages; SetArgoAutoSync removes
-// the block after all where the API server prunes enabled.
-func argoSuspendedAutomated(app *unstructured.Unstructured) any {
-	for _, owner := range app.GetOwnerReferences() {
-		if owner.Kind == "ApplicationSet" && schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind).Group == "argoproj.io" {
-			return map[string]any{"enabled": false}
-		}
+// argoSuspendedAutomated is the automated value a suspend writes: removal
+// works with every controller; enabled: false (Argo CD 3.1+) keeps the fields
+// an owning ApplicationSet manages, so it has no block to put back.
+func argoSuspendedAutomated(inPlace bool) any {
+	if inPlace {
+		return map[string]any{"enabled": false}
 	}
 	return nil
+}
+
+func argoApplicationSetOwned(app *unstructured.Unstructured) bool {
+	for _, owner := range app.GetOwnerReferences() {
+		if owner.Kind == "ApplicationSet" && schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind).Group == "argoproj.io" {
+			return true
+		}
+	}
+	return false
+}
+
+// argoKeepsAutomatedEnabled asks the API server, with a dry run, whether it
+// stores automated.enabled: Argo CD's CRD has it from 3.1; an older schema
+// prunes it. The dry run needs the same permission as the write it precedes.
+func argoKeepsAutomatedEnabled(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (bool, error) {
+	body, err := json.Marshal(map[string]any{"spec": map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"enabled": false}}}})
+	if err != nil {
+		return false, err
+	}
+	stored, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{DryRun: []string{metav1.DryRunAll}})
+	if err != nil {
+		return false, err
+	}
+	enabled, found, _ := unstructured.NestedBool(stored.Object, "spec", "syncPolicy", "automated", "enabled")
+	return found && !enabled, nil
 }
 
 func argoResumePatch(app *unstructured.Unstructured) (map[string]any, bool) {
@@ -1498,16 +1512,12 @@ func syncSourceFor(resource *unstructured.Unstructured) (FluxSourceRef, bool) {
 
 // mergePatch is a helper that applies a merge patch to a resource.
 func mergePatch(ctx context.Context, dynClient dynamic.Interface, gvr schema.GroupVersionResource, namespace, name string, patch map[string]any) error {
-	_, err := mergePatchObject(ctx, dynClient, gvr, namespace, name, patch)
-	return err
-}
-
-func mergePatchObject(ctx context.Context, dynClient dynamic.Interface, gvr schema.GroupVersionResource, namespace, name string, patch map[string]any) (*unstructured.Unstructured, error) {
 	patchBytes, err := json.Marshal(patch)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal patch: %w", err)
+		return fmt.Errorf("failed to marshal patch: %w", err)
 	}
-	return dynClient.Resource(gvr).Namespace(namespace).Patch(
+	_, err = dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{},
 	)
+	return err
 }
