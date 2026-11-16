@@ -196,9 +196,10 @@ type FeatureCapabilities struct {
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`
 	// GET /api/velero/workspace and GET /api/velero/schedules/{namespace}/{name}/activity
-	VeleroWorkspace bool `json:"veleroWorkspace"`
-	VeleroBackupNow bool `json:"veleroBackupNow"` // POST /api/velero/schedules/{namespace}/{name}/backup
-	VeleroRuns      bool `json:"veleroRuns"`      // GET /api/velero/runs/{backups|restores}
+	VeleroWorkspace     bool `json:"veleroWorkspace"`
+	VeleroBackupNow     bool `json:"veleroBackupNow"`     // POST /api/velero/schedules/{namespace}/{name}/backup
+	VeleroSchedulePause bool `json:"veleroSchedulePause"` // POST /api/velero/schedules/{namespace}/{name}/{pause|resume}
+	VeleroRuns          bool `json:"veleroRuns"`          // GET /api/velero/runs/{backups|restores}
 	// POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion
 	VeleroDeleteBackup    bool `json:"veleroDeleteBackup"`
 	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices

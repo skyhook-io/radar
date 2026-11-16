@@ -687,6 +687,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/velero/{kind}/{namespace}/{name}/messages", s.handleVeleroRunMessages)
 			// POST: creates a Backup from the schedule's template, as the caller.
 			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
+			// POST: sets spec.paused as the caller, as `velero schedule pause|unpause` does.
+			r.Post("/velero/schedules/{namespace}/{name}/pause", s.handleVeleroSchedulePause(true))
+			r.Post("/velero/schedules/{namespace}/{name}/resume", s.handleVeleroSchedulePause(false))
 			// POST: creates a DeleteBackupRequest, the way Velero deletes a backup.
 			r.Post("/velero/backups/{namespace}/{name}/delete", s.handleVeleroDeleteBackup)
 			r.Get("/velero/backups/{namespace}/{name}/deletion", s.handleVeleroBackupDeletion)
@@ -1514,6 +1517,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		CNPGProtectionSetup:      true,
 		VeleroWorkspace:          true,
 		VeleroBackupNow:          true,
+		VeleroSchedulePause:      true,
 		VeleroRuns:               true,
 		VeleroDeleteBackup:       true,
 		ServiceEndpointSlices:    true,

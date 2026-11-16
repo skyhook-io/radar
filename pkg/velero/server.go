@@ -2,6 +2,7 @@ package velero
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +55,10 @@ type ServerConfig struct {
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
 	// BackupsDisabled is independent of scheduling: manual Backups need the backup controller too.
 	BackupsDisabled bool `json:"backupsDisabled,omitempty"`
+	// ScheduleSkipImmediately is --schedule-skip-immediately, what the
+	// controller does with a Schedule whose spec.skipImmediately is unset; nil
+	// when the flags could not be read.
+	ScheduleSkipImmediately *bool `json:"scheduleSkipImmediately,omitempty"`
 	// Replicas counts non-terminating pods, including Pending and CrashLoop.
 	// Readiness is separate: a pod can fail its readiness probe while still
 	// processing schedules. Terminating pods stop their controllers on SIGTERM.
@@ -182,6 +187,7 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 		}
 	}
 	freq := defaultValidationFrequency
+	skipImmediately := false
 	cfg.DefaultLocation = defaultLocationName
 	for i := 0; i < len(tokens); i++ {
 		name, value, hasValue := strings.Cut(strings.TrimLeft(tokens[i], "-"), "=")
@@ -215,6 +221,17 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 				return
 			}
 			freq = d
+		case "schedule-skip-immediately":
+			// A boolean flag: a separate "false" token is not its value.
+			if !hasValue {
+				skipImmediately = true
+				break
+			}
+			v, err := strconv.ParseBool(value)
+			if err != nil {
+				return
+			}
+			skipImmediately = v
 		case "restore-only":
 			if !hasValue || value == "true" {
 				cfg.SchedulingDisabled = true
@@ -235,6 +252,7 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 	}
 	secs := int64(freq / time.Second)
 	cfg.ValidationFrequencySeconds = &secs
+	cfg.ScheduleSkipImmediately = &skipImmediately
 	cfg.flagsSet = true
 }
 

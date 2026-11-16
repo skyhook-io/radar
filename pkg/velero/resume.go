@@ -1,0 +1,134 @@
+package velero
+
+import (
+	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
+
+// ResumeOutcome is what Velero's schedule controller does on its first pass
+// over a Schedule after it is resumed.
+type ResumeOutcome string
+
+const (
+	// ResumeNothing: the server runs without its schedule controller.
+	ResumeNothing ResumeOutcome = "nothing"
+	// ResumeWontRun: Velero rejects the schedule, or every run of it fails.
+	ResumeWontRun ResumeOutcome = "wontRun"
+	// ResumeWaits: no run is due; the next one comes at its scheduled time.
+	ResumeWaits ResumeOutcome = "waits"
+	// ResumeSkips: the run due now, if any, is skipped once.
+	ResumeSkips ResumeOutcome = "skips"
+	// ResumeHeld: a run is due, but one of the schedule's runs is still New or
+	// InProgress, so nothing is submitted while it is.
+	ResumeHeld ResumeOutcome = "held"
+	// ResumeRunsNow: a run is due and Velero submits it at once.
+	ResumeRunsNow ResumeOutcome = "runsNow"
+	// ResumeMayRunNow: Velero may submit a run at once; Reason says what Radar
+	// could not establish.
+	ResumeMayRunNow ResumeOutcome = "mayRunNow"
+)
+
+// Reasons for ResumeWontRun and ResumeMayRunNow.
+const (
+	ResumeReasonRejected = "rejected"
+	// ResumeReasonSkipUnknown: the server's --schedule-skip-immediately could
+	// not be read.
+	ResumeReasonSkipUnknown = "skipUnknown"
+	// ResumeReasonSkipOnce: the server sets --schedule-skip-immediately, but
+	// Velero 1.16–1.18 apply it to only the first unset Schedule each server
+	// process reconciles: the reconciler stores a pointer to its own default
+	// and clears it when consuming the skip (schedule_controller.go Reconcile).
+	ResumeReasonSkipOnce     = "skipServerOnce"
+	ResumeReasonTiming       = "timingUncertain"
+	ResumeReasonNotEvaluated = "notEvaluated"
+)
+
+// ResumeOutlook says what resuming a paused Schedule does.
+type ResumeOutlook struct {
+	Outcome ResumeOutcome `json:"outcome"`
+	Reason  string        `json:"reason,omitempty"`
+	// Due: a run is due now, or may be, so skipping it would change something.
+	Due     bool   `json:"due"`
+	Summary string `json:"summary"`
+	// NextRun is the run Velero waits for, when nothing is due.
+	NextRun        *time.Time `json:"nextRun,omitempty"`
+	NextRunCertain bool       `json:"nextRunCertain,omitempty"`
+	// Blocker is the run that holds a due run.
+	Blocker *Run `json:"blocker,omitempty"`
+}
+
+// DescribeResume says what resuming in.Schedule does when the resume writes
+// skip into spec.skipImmediately (nil leaves it unset, as `velero schedule
+// unpause` does without --skip-immediately). It follows the controller's
+// order: an unset field takes the server's flag, and a skip is consumed (moving
+// lastSkipped to now) before validation and before the check for a run still
+// New or InProgress.
+func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
+	if in.Server.SchedulingDisabled {
+		return ResumeOutlook{Outcome: ResumeNothing, Summary: "The Velero server runs with scheduling turned off, so resuming runs nothing."}
+	}
+	// The schedule as the controller sees it once resumed. Velero validates
+	// it again on that pass with the same parser Radar uses, so a cron Radar
+	// parses is enabled whatever the status says now (a paused schedule is
+	// never validated, and its errors may predate an edit).
+	resumed := in.Schedule.DeepCopy()
+	unstructured.RemoveNestedField(resumed.Object, "spec", "paused")
+	unstructured.RemoveNestedField(resumed.Object, "spec", "skipImmediately")
+	cronExpr, _, _ := unstructured.NestedString(resumed.Object, "spec", "schedule")
+	if _, err := parseCron(cronExpr); err == nil {
+		_ = unstructured.SetNestedField(resumed.Object, "Enabled", "status", "phase")
+		unstructured.RemoveNestedField(resumed.Object, "status", "validationErrors")
+	}
+	in.Schedule = resumed
+	r := readSchedule(in)
+
+	due, certain := false, true
+	switch r.State {
+	case StateRejected:
+		return ResumeOutlook{Outcome: ResumeWontRun, Reason: ResumeReasonRejected, Summary: "Velero rejects this schedule, so resuming runs nothing until it is fixed."}
+	case StateCannotRun:
+		return ResumeOutlook{Outcome: ResumeWontRun, Reason: ReasonNameTooLong, Summary: "This schedule's name is longer than 63 characters, so every run Velero submits fails."}
+	case StateOnSchedule:
+		return ResumeOutlook{Outcome: ResumeWaits, Summary: "No run is due, so Velero submits the next one at its scheduled time.", NextRun: r.NextRun, NextRunCertain: r.NextRunCertain}
+	case StateDue, StateLate, StateProbablyLate, StateLateOrHeld, StateHeld, StateAlwaysDue:
+		due = true
+	default:
+		// StatePossiblyLate, and a cron Velero accepted that Radar cannot
+		// evaluate (StateUnknown, StateNotValidated).
+		due, certain = true, false
+	}
+
+	out := ResumeOutlook{Due: due}
+	if skip != nil && *skip {
+		out.Outcome, out.Summary = ResumeSkips, "Velero skips the run due now, if any, and submits the next one at its scheduled time."
+		return out
+	}
+	runs := runsOf(r.Name, in.Backups)
+	if b := blockerOf(runs); b != nil {
+		out.Outcome, out.Blocker = ResumeHeld, b
+		out.Summary = "A run is due, but " + b.Name + " has not finished, so Velero submits nothing while it is new or in progress."
+		return out
+	}
+	out.Outcome = ResumeMayRunNow
+	switch {
+	case skip == nil && in.Server.ScheduleSkipImmediately == nil:
+		out.Reason = ResumeReasonSkipUnknown
+		out.Summary = "A run is due. Radar could not read whether the Velero server skips it (--schedule-skip-immediately), so Velero may submit it at once."
+	case skip == nil && *in.Server.ScheduleSkipImmediately:
+		out.Reason = ResumeReasonSkipOnce
+		out.Summary = "A run is due. The Velero server is set to skip it, but Velero 1.18 and earlier skip only the first such schedule after the server starts, so Velero may submit it at once."
+	case !certain && r.State == StatePossiblyLate:
+		out.Reason = ResumeReasonTiming
+		out.Summary = "A run may be due: Radar is not certain which time zone the schedule runs in. If one is, Velero submits it at once."
+	case !certain:
+		out.Reason = ResumeReasonNotEvaluated
+		out.Summary = "Radar cannot evaluate this schedule's cron expression, so Velero may submit a run as soon as it resumes."
+	case !in.BackupsRead:
+		out.Reason = ReasonBackupsUnread
+		out.Summary = "A run is due. Radar could not read this schedule's backups, so one still in progress may hold it; otherwise Velero submits it at once."
+	default:
+		out.Outcome, out.Summary = ResumeRunsNow, "A run is due, so Velero submits it as soon as the schedule resumes."
+	}
+	return out
+}
