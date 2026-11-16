@@ -1,10 +1,18 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { FetchHistory, LogsHistoryResult, WorkloadLogsResult } from '@skyhook-io/k8s-ui'
 import { fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
-export interface LokiStreamLabels { namespace: string; pod: string; container: string; job?: string }
+export interface LokiStreamLabels {
+  namespace: string
+  pod: string
+  container: string
+  job?: string
+  /** The label naming a cluster in a Loki shared by several, and this cluster's value for it (--loki-cluster). */
+  cluster?: string
+  clusterValue?: string
+}
 
 // GET /api/loki/status. Never carries a header value or a full URL.
 export interface LokiStatus {
@@ -40,9 +48,10 @@ export function useLokiStatus(enabled = true) {
   return { ...query, support }
 }
 
-/** "namespace, pod, container, job job_name": the stream labels Radar reads. */
+/** "namespace, pod, container, job job_name, cluster=\"prod\"": the stream labels Radar reads. */
 export function describeLokiLabels(l: LokiStreamLabels): string {
-  return [l.namespace, l.pod, l.container, l.job && `job ${l.job}`].filter(Boolean).join(', ')
+  const cluster = l.cluster && (l.clusterValue ? `${l.cluster}="${l.clusterValue}"` : l.cluster)
+  return [l.namespace, l.pod, l.container, l.job && `job ${l.job}`, cluster].filter(Boolean).join(', ')
 }
 
 interface LokiPodLogs { containers: string[]; logs: Record<string, string>; truncated: boolean; limit: number; window: { start: string; end: string } }
@@ -67,7 +76,11 @@ export function usePodHistory(namespace: string, podName: string): FetchHistory 
     const data = await guard(() => fetchJSON<LokiPodLogs>(`/loki/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/logs?${query}`))
     return { containers: data.containers, logs: data.logs, truncated: data.truncated, limit: data.limit, window: data.window } satisfies LogsHistoryResult
   }, [guard, namespace, podName])
-  return ready ? fetchHistory : undefined
+  // Once History was offered it stays: a status poll that catches Loki
+  // reconnecting must not switch an open History tab to Live.
+  const [offered, setOffered] = useState(ready)
+  if (ready && !offered) setOffered(true)
+  return ready || offered ? fetchHistory : undefined
 }
 
 /** Whether this Radar can read finished Job runs from Loki now. */

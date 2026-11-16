@@ -99,6 +99,7 @@ type AppConfig struct {
 	LokiHeaders            map[string]string
 	LokiURLFlag            bool
 	LokiHeaderFlag         bool
+	LokiCluster            string // --loki-cluster: [label=]value, shared installations only
 	LocalConnections       *connections.Resolver
 	LocalRuntime           *connectionruntime.Runtime
 	operatorSettingsLoaded bool
@@ -373,6 +374,12 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		} else if len(cfg.LokiHeaders) > 0 {
 			log.Fatalf("Invalid Loki configuration: %v", loki.ErrHeadersRequireURL)
 		}
+		label, value, err := loki.ParseCluster(cfg.LokiCluster)
+		if err != nil {
+			log.Fatalf("Invalid Loki configuration: %v", err)
+		}
+		// With authentication a History read must stay within this cluster.
+		loki.SetCluster(label, value, cfg.AuthConfig.Enabled())
 		loki.Configure(cfg.LokiURL, cfg.LokiHeaders)
 	}
 

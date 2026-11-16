@@ -259,3 +259,16 @@ func TestLokiHeaderFlagNeedsURL(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestLokiClusterFlagIsSharedOnly(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+	if _, err := preparePrometheusConfiguration(AppConfig{LokiCluster: "prod"}); err == nil || err.Error() != "--loki-cluster applies to shared installations; a local Radar reads Loki with the connection you saved" {
+		t.Fatalf("err = %v", err)
+	}
+}

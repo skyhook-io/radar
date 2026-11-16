@@ -69,12 +69,18 @@ const noContainerLabel = "(all containers)"
 // handleLokiPodLogs reads one pod's log history from Loki: the pod may be
 // gone, so it is not looked up. Gate: namespace access plus get pods/log, the
 // same as live logs, checked before Loki is contacted. The query is built
-// only from the namespace, pod, container and window (fixed LogQL, values
+// only from the namespace, pod, container, window and the --loki-cluster
+// value (fixed LogQL, values
 // escaped); no other parameter reaches Loki. Through Radar Hub it is a GET.
 // --namespace-scope applies. Without authentication there is no caller to
 // check, and Loki never asks Kubernetes, so Radar's own identity must be able
-// to get pods/log in the namespace: History never reads more than live logs
-// could. A cross-site request is refused by requireSameOrigin.
+// to get pods/log in the namespace. Loki is matched by namespace and pod
+// name only, not by this cluster: when one Loki holds several clusters' logs
+// the read adds a cluster matcher only from --loki-cluster (and with
+// authentication refuses while Loki has a cluster label and no value is
+// set); a cluster label Radar doesn't detect and nobody named is not
+// matched, and the same namespace and pod name in another cluster then
+// reads too. A cross-site request is refused by requireSameOrigin.
 func (s *Server) handleLokiPodLogs(w http.ResponseWriter, r *http.Request) {
 	namespace, podName := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if allowed := s.getUserNamespaces(r, []string{namespace}); readscope.NoNamespaceAccess(allowed) {
@@ -125,7 +131,12 @@ func (s *Server) handleLokiPodLogs(w http.ResponseWriter, r *http.Request) {
 			b[c] = &strings.Builder{}
 			resp.Containers = append(resp.Containers, c)
 		}
-		b[c].WriteString(l.Time.Format(lokiTimeLayout) + " " + l.Text + "\n")
+		// A multi-line entry (a stack trace) is one Loki entry: each of its
+		// lines carries the entry's time, so the viewer keeps them in place.
+		ts := l.Time.Format(lokiTimeLayout) + " "
+		for _, text := range strings.Split(strings.TrimRight(l.Text, "\n"), "\n") {
+			b[c].WriteString(ts + text + "\n")
+		}
 	}
 	sort.Strings(resp.Containers)
 	for c, sb := range b {

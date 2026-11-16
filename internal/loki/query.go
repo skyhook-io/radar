@@ -53,7 +53,8 @@ func quoteLogQL(s string) string {
 
 // PodSelector is the stream selector for one pod, and one container when
 // given and Loki labels containers (otherwise the whole pod is read; its lines
-// then carry no container). Only these values reach the query.
+// then carry no container), in this cluster when Loki labels clusters and
+// --loki-cluster names this one. Only these values reach the query.
 func PodSelector(l StreamLabels, namespace, pod, container string) (string, error) {
 	if reason := l.HistoryReason(); reason != "" {
 		return "", errors.New(reason)
@@ -62,7 +63,16 @@ func PodSelector(l StreamLabels, namespace, pod, container string) (string, erro
 	if container != "" && l.Container != "" {
 		parts = append(parts, l.Container+"="+quoteLogQL(container))
 	}
-	return "{" + strings.Join(parts, ", ") + "}", nil
+	return "{" + strings.Join(append(parts, clusterMatcher(l)...), ", ") + "}", nil
+}
+
+// clusterMatcher keeps a read to this cluster in a Loki shared by several;
+// HistoryReason refuses the read when it can't.
+func clusterMatcher(l StreamLabels) []string {
+	if l.Cluster == "" || l.ClusterValue == "" {
+		return nil
+	}
+	return []string{l.Cluster + "=" + quoteLogQL(l.ClusterValue)}
 }
 
 // generatedNameLimit: Kubernetes cuts a generateName prefix to 58 characters

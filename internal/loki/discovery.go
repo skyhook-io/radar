@@ -23,8 +23,15 @@ type Candidate struct {
 var nameScores = map[string]int{"loki-gateway": 40, "loki-query-frontend": 35, "loki-read": 30, "loki": 20}
 var componentScores = map[string]int{"gateway": 30, "query-frontend": 25, "read": 20}
 
-// Candidates ranks Services that look like a Loki read path, best first: a
-// gateway or query frontend before a read path before a single binary. Gossip
+// lokiNamespaces are where Loki is commonly installed. A Service there
+// outranks any Service elsewhere, whatever its name: anyone who can create a
+// Service in their own namespace could otherwise plant a "loki-gateway" and
+// receive every History query.
+var lokiNamespaces = map[string]bool{"loki": true, "logging": true, "monitoring": true, "observability": true}
+
+// Candidates ranks Services that look like a Loki read path, best first: one
+// in a known Loki namespace before any other, then a gateway or query
+// frontend before a read path before a single binary. Gossip
 // and canary Services never qualify; a headless one only when nothing else does.
 func Candidates(services []corev1.Service) []Candidate {
 	var found, headless []Candidate
@@ -54,6 +61,9 @@ func Candidates(services []corev1.Service) []Candidate {
 	}
 	sort.SliceStable(found, func(i, j int) bool {
 		a, b := found[i], found[j]
+		if ka, kb := lokiNamespaces[a.Namespace], lokiNamespaces[b.Namespace]; ka != kb {
+			return ka
+		}
 		if a.Score != b.Score {
 			return a.Score > b.Score
 		}

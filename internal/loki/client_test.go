@@ -43,7 +43,7 @@ func reset(t *testing.T) {
 		Retire(nil)
 	})
 	currentContext = func() string { return "ctx" }
-	listServices = func() []corev1.Service { return nil }
+	listServices = func() ([]corev1.Service, bool) { return nil, true }
 	startForward = func(context.Context, string, string, int, string) (string, error) {
 		return "", errors.New("no forward in tests")
 	}
@@ -111,8 +111,8 @@ func TestRetireDisables(t *testing.T) {
 func TestForwardLostDropsAddress(t *testing.T) {
 	reset(t)
 	srv := fakeLoki(t, 200, labelsOK, nil)
-	listServices = func() []corev1.Service {
-		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}, true
 	}
 	startForward = func(context.Context, string, string, int, string) (string, error) { return srv.URL, nil }
 	Configure("", nil)
@@ -132,8 +132,8 @@ func TestForwardLostDropsAddress(t *testing.T) {
 func TestDiscoveryPrefersDirectThenForward(t *testing.T) {
 	reset(t)
 	srv := fakeLoki(t, 200, labelsOK, nil)
-	listServices = func() []corev1.Service {
-		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}, true
 	}
 	var forwarded atomic.Bool
 	startForward = func(_ context.Context, ns, name string, p int, ctxName string) (string, error) {
@@ -176,9 +176,9 @@ func TestNoLokiFound(t *testing.T) {
 // discovery doesn't run.
 func TestDiscoveryNeverSendsHeaders(t *testing.T) {
 	reset(t)
-	listServices = func() []corev1.Service {
+	listServices = func() ([]corev1.Service, bool) {
 		t.Error("discovery ran with credentials and no URL")
-		return nil
+		return nil, true
 	}
 	Configure("", map[string]string{"Authorization": "Bearer zzz"})
 	if err := EnsureConnected(context.Background()); err == nil || !strings.Contains(err.Error(), "URL") {
@@ -197,9 +197,9 @@ func TestEnsureConnectedHonoursCallerDeadline(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	})
-	listServices = func() []corev1.Service {
+	listServices = func() ([]corev1.Service, bool) {
 		<-release
-		return nil
+		return nil, true
 	}
 	Configure("", nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -216,8 +216,8 @@ func TestEnsureConnectedHonoursCallerDeadline(t *testing.T) {
 func TestRetireDuringDiscoveryStopsItsForward(t *testing.T) {
 	reset(t)
 	srv := fakeLoki(t, 200, labelsOK, nil)
-	listServices = func() []corev1.Service {
-		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}, true
 	}
 	var stops atomic.Int32
 	savedStop := stopForward
@@ -316,7 +316,7 @@ func TestForwardUsesThePodPort(t *testing.T) {
 			srv := fakeLoki(t, 200, labelsOK, nil)
 			gw := svc("loki", "loki-gateway", nil, corev1.ServicePort{Name: "http", Port: 80, TargetPort: tc.target})
 			gw.Spec.Selector = map[string]string{"app": "gw"}
-			listServices = func() []corev1.Service { return []corev1.Service{gw} }
+			listServices = func() ([]corev1.Service, bool) { return []corev1.Service{gw}, true }
 			savedNamed := namedPodPort
 			t.Cleanup(func() { namedPodPort = savedNamed })
 			namedPodPort = func(ns string, sel map[string]string, name string) int {
@@ -344,8 +344,8 @@ func TestForwardUsesThePodPort(t *testing.T) {
 // discoveredAt connects through a "forward" to srv, as discovery does.
 func discoveredAt(t *testing.T, srv *httptest.Server) {
 	t.Helper()
-	listServices = func() []corev1.Service {
-		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}, true
 	}
 	startForward = func(context.Context, string, string, int, string) (string, error) { return srv.URL, nil }
 	Configure("", nil)
@@ -429,8 +429,8 @@ func TestOldFailedReadKeepsANewConnection(t *testing.T) {
 func TestConfigureCancelsARunningAttempt(t *testing.T) {
 	reset(t)
 	srv := fakeLoki(t, 200, labelsOK, nil)
-	listServices = func() []corev1.Service {
-		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("logging", "loki", nil, port("http-metrics", 3100))}, true
 	}
 	started := make(chan struct{})
 	startForward = func(ctx context.Context, _, _ string, _ int, _ string) (string, error) {
@@ -456,7 +456,7 @@ func TestConfigureCancelsARunningAttempt(t *testing.T) {
 func TestKickBacksOffAfterAFailure(t *testing.T) {
 	reset(t)
 	var lists atomic.Int32
-	listServices = func() []corev1.Service { lists.Add(1); return nil }
+	listServices = func() ([]corev1.Service, bool) { lists.Add(1); return nil, true }
 	Configure("", nil)
 	_ = EnsureConnected(context.Background())
 	for range 5 {
@@ -478,6 +478,64 @@ func TestRetireForgetsTheAddress(t *testing.T) {
 	Retire(errors.New("bad header Bearer secret-token"))
 	st := CurrentStatus()
 	if st.Address != "" || strings.Contains(st.Error, "secret-token") {
+		t.Fatalf("status = %+v", st)
+	}
+}
+
+// Services Radar can't list are not "no Loki".
+func TestServicesUnreadable(t *testing.T) {
+	reset(t)
+	listServices = func() ([]corev1.Service, bool) { return nil, false }
+	Configure("", nil)
+	if err := EnsureConnected(context.Background()); err == nil || !strings.Contains(err.Error(), "Radar can't list Services") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// A candidate whose forward never answers leaves time for the next one.
+func TestHungForwardDoesNotStallDiscovery(t *testing.T) {
+	reset(t)
+	saved := forwardProbeTimeout
+	t.Cleanup(func() { forwardProbeTimeout = saved })
+	forwardProbeTimeout = 100 * time.Millisecond
+	hung := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-hung }))
+	t.Cleanup(func() { close(hung); slow.Close() })
+	good := fakeLoki(t, 200, labelsOK, nil)
+	listServices = func() ([]corev1.Service, bool) {
+		return []corev1.Service{svc("logging", "loki-gateway", nil, port("http", 80)), svc("logging", "loki", nil, port("http-metrics", 3100))}, true
+	}
+	startForward = func(_ context.Context, _, name string, _ int, _ string) (string, error) {
+		if name == "loki-gateway" {
+			return slow.URL, nil
+		}
+		return good.URL, nil
+	}
+	Configure("", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := EnsureConnected(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The configured cluster reaches the labels History reads, and a label the
+// operator named replaces the detected one.
+func TestClusterSettingOverlaysLabels(t *testing.T) {
+	reset(t)
+	t.Cleanup(func() { SetCluster("", "", false) })
+	srv := fakeLoki(t, 200, `{"status":"success","data":["namespace","pod","cluster","region_cluster"]}`, nil)
+	SetCluster("region_cluster", "prod", true)
+	Configure(srv.URL, nil)
+	if err := EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := Labels()
+	if l.Cluster != "region_cluster" || l.ClusterValue != "prod" || !l.ClusterRequired {
+		t.Fatalf("labels = %+v", l)
+	}
+	SetCluster("", "", true)
+	if st := CurrentStatus(); st.HistoryReason == "" {
 		t.Fatalf("status = %+v", st)
 	}
 }

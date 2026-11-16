@@ -15,6 +15,10 @@ describe('LokiStatusCard', () => {
     expect(html).toContain('http://loki-gateway.loki')
     expect(html).toContain('Stream labels: namespace, pod, container')
   })
+  it('shows the cluster label and this cluster\'s value', () => {
+    state.value = { data: { configured: true, connected: true, discovering: false, labels: { namespace: 'namespace', pod: 'pod', container: 'container', cluster: 'cluster', clusterValue: 'prod' } } }
+    expect(renderToStaticMarkup(<LokiStatusCard active />)).toContain('Stream labels: namespace, pod, container, cluster=&quot;prod&quot;')
+  })
   it('shows an older Radar as an upgrade note, not an error', () => {
     state.value = { error: new RadarFeatureUnsupportedError('lokiConnection', {}) }
     expect(renderToStaticMarkup(<LokiStatusCard active />)).toContain('need a newer Radar')

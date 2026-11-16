@@ -228,6 +228,9 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		} else if err != nil {
 			log.Printf("[connections] Saved Loki connection check failed: %s", sanitizeForLog(err.Error()))
 			response.Error = "Saved, but Loki could not be reached. Check its URL, headers and network access."
+			if l := selection.Settings.Loki; l == nil || l.URL == "" {
+				response.Error = "Saved, but Radar couldn't find or reach Loki in this cluster. Settings shows why; enter Loki's URL to skip discovery."
+			}
 		}
 		if s.localRuntime.CheckCurrent(selection.View.Target, selection) != nil {
 			response.Connected = false

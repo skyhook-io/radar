@@ -61,7 +61,7 @@ it('says when Loki cut the result', async () => {
 
 it('says why History may be empty', async () => {
   await render({ fetchHistory: async () => result({ containers: [], logs: {} }), initialMode: 'history', historyEmptyHint: <span>See Log shipping</span> })
-  expect(element.textContent).toContain("Loki has no lines for this pod in this window. If the pod's logs aren't shipped to Loki, they were never stored.")
+  expect(element.textContent).toContain("Loki returned no lines for this pod in this window, matched by its namespace and pod name labels. Logs not shipped to Loki, or shipped under other labels, don't show here.")
   expect(element.textContent).toContain('See Log shipping')
 })
 
