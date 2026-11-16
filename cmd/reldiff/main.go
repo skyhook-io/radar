@@ -122,7 +122,7 @@ func run(a, b, capture, out string, max int, adminA, adminB, baseline string) er
 		fmt.Fprintf(os.Stderr, "Warning: incomplete capture: %d failed groups, %d skipped resources; see capture_gaps in the report\n", len(header.FailedGroups), len(header.Skipped))
 	}
 	for _, side := range []struct{ Name, Base, Admin string }{{"a", a, adminA}, {"b", b, adminB}} {
-		status, err := waitReady(client, side.Base, side.Admin)
+		status, err := waitReady(side.Base, side.Admin)
 		if err != nil {
 			return fmt.Errorf("%s readiness: %w", side.Name, err)
 		}
@@ -270,7 +270,7 @@ func identity(o *unstructured.Unstructured) string {
 }
 func percentile(v []float64, p float64) float64 { return v[int(math.Ceil(float64(len(v))*p))-1] }
 
-func waitReady(_ *http.Client, base, admin string) (any, error) {
+func waitReady(base, admin string) (any, error) {
 	if admin == "" {
 		u, err := url.Parse(base)
 		if err != nil {
@@ -429,8 +429,13 @@ func normalize(v any) any {
 }
 
 // elementKey identifies an array element the readers return in no particular
-// order: a resource ref, a listed object, or a graph node or edge. "" means the
-// array's order is part of the answer.
+// order: a listed object, a graph or tree node, a resource ref, or an edge. ""
+// means the array's order is part of the answer. A key is "<class>#<instance>",
+// where class names the element's kind, so a baseline can generalize noise over
+// the instances of one kind without hiding changes to another.
+//
+// Graph nodes are matched by id before ref fields: a topology node carries
+// kind and name at the top level but its namespace in data.namespace.
 func elementKey(v any) string {
 	m, ok := v.(map[string]any)
 	if !ok {
@@ -438,27 +443,44 @@ func elementKey(v any) string {
 	}
 	str := func(m map[string]any, k string) string { s, _ := m[k].(string); return s }
 	if md, ok := m["metadata"].(map[string]any); ok && str(md, "name") != "" {
-		return "obj|" + str(m, "apiVersion") + "|" + str(m, "kind") + "|" + str(md, "namespace") + "|" + str(md, "name")
+		return "obj|" + str(m, "apiVersion") + "|" + str(m, "kind") + "#" + str(md, "namespace") + "|" + str(md, "name")
+	}
+	if id := str(m, "id"); id != "" {
+		class := ""
+		switch ref, _ := m["ref"].(map[string]any); {
+		case str(m, "kind") != "":
+			data, _ := m["data"].(map[string]any)
+			gv, _ := schema.ParseGroupVersion(str(data, "apiVersion"))
+			class = gv.Group + "/" + str(m, "kind")
+		case ref != nil:
+			class = str(ref, "group") + "/" + str(ref, "kind")
+		case m["source"] != nil && m["target"] != nil:
+			class = "edge/" + str(m, "type")
+		}
+		return "id|" + class + "#" + id
 	}
 	if str(m, "name") != "" && (m["kind"] != nil || m["namespace"] != nil) {
-		return "ref|" + str(m, "group") + "|" + str(m, "kind") + "|" + str(m, "namespace") + "|" + str(m, "name")
-	}
-	if str(m, "id") != "" {
-		return "id|" + str(m, "id")
+		return "ref|" + str(m, "group") + "|" + str(m, "kind") + "#" + str(m, "namespace") + "|" + str(m, "name")
 	}
 	if m["source"] != nil && m["target"] != nil {
-		return "edge|" + fmt.Sprint(m["source"]) + "|" + fmt.Sprint(m["target"]) + "|" + str(m, "type")
+		return "edge|" + str(m, "type") + "#" + fmt.Sprint(m["source"]) + "|" + fmt.Sprint(m["target"])
 	}
 	return ""
 }
 
-var (
-	indexSegment = regexp.MustCompile(`/(\d+|\[[^\]]*\])`)
-)
+var indexSegment = regexp.MustCompile(`/(\d+|\[[^\]]*\])`)
 
-// fieldPattern generalizes a delta's path over array positions and element
-// keys, so a baseline field matches the same field on any element.
-func fieldPattern(field string) string { return indexSegment.ReplaceAllString(field, "/*") }
+// fieldPattern generalizes a delta's path over array positions and over the
+// instances within an element class, so a baseline field matches the same
+// field on any element of that kind.
+func fieldPattern(field string) string {
+	return indexSegment.ReplaceAllStringFunc(field, func(seg string) string {
+		if class, _, ok := strings.Cut(seg, "#"); ok && strings.HasPrefix(seg, "/[") {
+			return class + "#*]"
+		}
+		return "/*"
+	})
+}
 
 func loadNoise(path string) (map[string]bool, error) {
 	noise := map[string]bool{}

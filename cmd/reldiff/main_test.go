@@ -183,15 +183,64 @@ func TestRunReportsCaptureGapsAndScopesNoiseByKind(t *testing.T) {
 }
 
 func TestLoadNoiseGeneralizesFieldsWithinKind(t *testing.T) {
+	pod := func(name string) string {
+		return "/children/[" + elementKey(map[string]any{"kind": "Pod", "namespace": "default", "name": name}) + "]/name"
+	}
 	path := filepath.Join(t.TempDir(), "baseline.json")
-	if err := os.WriteFile(path, []byte(`{"deltas":[{"reader":"relationships","kind":"Pod.","field":"/children/[ref|Pod|one]/name"}]}`), 0600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"deltas":[{"reader":"relationships","kind":"Pod.","field":"`+pod("one")+`"}]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	noise, err := loadNoise(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !noise["relationships\x00Pod.\x00"+fieldPattern("/children/[ref|Pod|two]/name")] || noise["relationships\x00Service.\x00"+fieldPattern("/children/[ref|Pod|two]/name")] {
+	if !noise["relationships\x00Pod.\x00"+fieldPattern(pod("two"))] || noise["relationships\x00Service.\x00"+fieldPattern(pod("two"))] {
 		t.Fatal(noise)
+	}
+}
+
+func topologyNode(kind, apiVersion, namespace, name string) map[string]any {
+	return map[string]any{"id": strings.ToLower(kind) + "/" + namespace + "/" + name, "kind": kind, "name": name, "data": map[string]any{"namespace": namespace, "apiVersion": apiVersion}}
+}
+
+func TestNoiseOnOneNodeKindDoesNotHideAnother(t *testing.T) {
+	deltas := func(a, b []any) []string {
+		out := map[string][2]any{}
+		compare("", normalize(map[string]any{"nodes": a}), normalize(map[string]any{"nodes": b}), out)
+		var fields []string
+		for f := range out {
+			fields = append(fields, f)
+		}
+		return fields
+	}
+	keep := topologyNode("Pod", "v1", "default", "web-0")
+	endpoint := topologyNode("CiliumEndpoint", "cilium.io/v2", "default", "web-1")
+	service := topologyNode("Service", "v1", "default", "web")
+	noisy := deltas([]any{keep, endpoint}, []any{keep})
+	dropped := deltas([]any{keep, service}, []any{keep})
+	if len(noisy) != 1 || len(dropped) != 1 {
+		t.Fatalf("noisy=%v dropped=%v", noisy, dropped)
+	}
+	other := deltas([]any{keep, topologyNode("CiliumEndpoint", "cilium.io/v2", "default", "web-2")}, []any{keep})
+	if fieldPattern(other[0]) != fieldPattern(noisy[0]) {
+		t.Fatalf("noise does not generalize within CiliumEndpoint: %s vs %s", other[0], noisy[0])
+	}
+	if fieldPattern(dropped[0]) == fieldPattern(noisy[0]) {
+		t.Fatalf("CiliumEndpoint noise hides a dropped Service: %s", fieldPattern(dropped[0]))
+	}
+}
+
+func TestSameNameNodesInTwoNamespacesMatchByID(t *testing.T) {
+	a := []any{topologyNode("Deployment", "apps/v1", "ns-a", "api"), topologyNode("Deployment", "apps/v1", "ns-b", "api")}
+	b := []any{topologyNode("Deployment", "apps/v1", "ns-b", "api")}
+	out := map[string][2]any{}
+	compare("", normalize(a), normalize(b), out)
+	if len(out) != 1 {
+		t.Fatalf("want one missing node, got %v", out)
+	}
+	for field, v := range out {
+		if !strings.Contains(field, "deployment/ns-a/api") || !reflect.DeepEqual(v[1], map[string]any{"$missing": true}) {
+			t.Fatalf("wrong delta %s: %v", field, v)
+		}
 	}
 }
