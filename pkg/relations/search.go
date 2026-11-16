@@ -82,11 +82,14 @@ func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o Indexed
 	read := s.v.session.Indexed(gk, s.index, s.keys, s.scope)
 	if len(read.Gaps) > 0 && (s.across || s.v.mayRead(gk, s.namespace, c)) {
 		for _, g := range read.Gaps {
-			if g.Namespace != "" && !s.readable.AllNamespaces && !slices.Contains(s.readable.Namespaces, g.Namespace) {
-				continue
-			}
-			if !s.across || ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, s.readable) {
+			unreadable := g.Namespace != "" && !s.readable.AllNamespaces && !slices.Contains(s.readable.Namespaces, g.Namespace)
+			switch {
+			case !unreadable && (!s.across || ownership.GapCoversReadable(s.v.access, s.v.session.Catalog(), g, s.readable)):
 				c.addGap(g)
+			default:
+				// Unread where the caller may not read, so a related object
+				// there may be hidden.
+				c.Narrowed = true
 			}
 		}
 	}

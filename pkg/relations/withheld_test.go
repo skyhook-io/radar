@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -81,5 +82,17 @@ func TestAnswersAcrossNamespacesWithholdOnlyRelatedObjects(t *testing.T) {
 		if got.Coverage.Narrowed != tc.wantNarrow || len(got.Matches) != 0 {
 			t.Errorf("%s: narrowed=%v matches=%v; want narrowed=%v and nothing listed", tc.name, got.Coverage.Narrowed, got.Matches, tc.wantNarrow)
 		}
+	}
+}
+
+// A kind Radar hasn't read yet where the caller may not read could hide a
+// related object, so the answer says it may have withheld one.
+func TestAnswersAcrossNamespacesNarrowOnUnreadableGaps(t *testing.T) {
+	svc := labelled(typed(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: "web"}}, "", "v1", "Service"), map[string]string{"metrics": "on"})
+	monitors := resourceid.GroupKind{Group: "monitoring.coreos.com", Kind: "ServiceMonitor"}
+	cold := allNamespaces{cluster: cluster{objects: []runtime.Object{svc}}, gaps: []ownership.Gap{{Kind: monitors, Namespace: "monitoring", Reason: readreason.KindSyncPending}}}
+	got := NewView(cold, namespaceAccess{namespace: "apps"}).SelectedBy(Monitors, refOf(svc), nil)
+	if !got.Coverage.Narrowed || len(got.Coverage.NotChecked) != 0 {
+		t.Errorf("an unread kind where the caller may not read: %+v", got.Coverage)
 	}
 }
