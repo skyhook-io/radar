@@ -308,7 +308,7 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 	}
 	// A namespaced target's sources are in its namespace; a cluster-scoped
 	// one's, or a CrossNamespace family's, can be anywhere.
-	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace || f.ReferrersIndex != nil, &a.Coverage)
+	s := v.newSearch(subject.Namespace, subject.Namespace == "" || f.CrossNamespace || f.ReferrersIndex != nil)
 	if f.ReferrersIndex != nil {
 		s.index, s.keys = f.ReferrersIndex.Name, []string{f.ReferrersIndex.Key(subject)}
 	}
@@ -316,22 +316,23 @@ func (v *View) Referrers(f *Family, subject resourceid.Ref, fetched runtime.Obje
 		if !source.declares(subject.GroupKind()) {
 			continue
 		}
-		s.each(source.Kind, &a.Coverage, func(o IndexedObject) {
+		s.each(source.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
 			var paths []string
 			err := f.Declared(o.Object, func(d Declaration) {
 				if slices.Contains(paths, d.Path) || d.Target != subject && !slices.Contains(d.Or, subject) {
 					return
 				}
-				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, &a.Coverage) {
+				if len(d.Or) == 0 || v.resolvesTo(d.candidates(f, source), subject, own) {
 					paths = append(paths, d.Path)
 				}
 			})
 			if err != nil {
-				a.Coverage.addGap(ownership.Gap{Kind: source.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
+				own.addGap(ownership.Gap{Kind: source.Kind, Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 			}
-			if len(paths) > 0 {
-				a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths})
+			if len(paths) == 0 {
+				return nil
 			}
+			return func() { a.Referrers = append(a.Referrers, Referrer{Ref: o.Ref, Paths: paths}) }
 		})
 	}
 	slices.SortStableFunc(a.Referrers, func(x, y Referrer) int {

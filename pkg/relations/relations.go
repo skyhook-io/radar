@@ -76,11 +76,10 @@ func (c Coverage) Complete() bool {
 // not safe for concurrent use, and its answers hold only if the session's
 // ValidateCaches passes once they are built.
 type View struct {
-	session     Session
-	access      ownership.Access
-	limit       int
-	decided     map[accessKey]ownership.Decision
-	decideFound bool
+	session Session
+	access  ownership.Access
+	limit   int
+	decided map[accessKey]ownership.Decision
 }
 
 type accessKey struct {
@@ -95,16 +94,6 @@ const DefaultLimit = 500
 // DefaultLimit items per answer.
 func NewView(s Session, access ownership.Access) *View {
 	return &View{session: s, access: access, limit: DefaultLimit, decided: map[accessKey]ownership.Decision{}}
-}
-
-// DecidingFound decides the caller's access to a kind in the subject's
-// namespace only once a search there finds something of it, so a kind with
-// nothing there costs no permission check, and withholds what it finds as
-// before. The answer then says it withheld something only where there was
-// something to withhold.
-func (v *View) DecidingFound() *View {
-	v.decideFound = true
-	return v
 }
 
 // WithLimit sets the most items an answer lists.
@@ -138,6 +127,14 @@ func (v *View) mayRead(gk resourceid.GroupKind, namespace string, c *Coverage) b
 		c.Narrowed = true
 	}
 	return false
+}
+
+// merge adds what other records to c.
+func (c *Coverage) merge(other Coverage) {
+	for _, g := range other.NotChecked {
+		c.addGap(g)
+	}
+	c.Narrowed = c.Narrowed || other.Narrowed
 }
 
 func (c *Coverage) addGap(g ownership.Gap) {
