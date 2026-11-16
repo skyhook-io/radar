@@ -94,12 +94,14 @@ describe('sameResource', () => {
     expect(sameResource(subject, { kind: 'persistentvolumeclaims', namespace: 'demo', name: 'other' })).toBe(false)
   })
 
-  it('does not match the same kind name in another API group', () => {
+  it('requires the same API group, a missing one being core', () => {
     const velero = { kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'nightly' }
-    expect(sameResource(velero, { kind: 'backups', group: 'postgresql.cnpg.io', namespace: 'velero', name: 'nightly' })).toBe(false)
     expect(sameResource(velero, { kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly' })).toBe(true)
-    // An issue from a Radar that sends no group still matches by the rest.
-    expect(sameResource({ ...velero, group: '' }, { kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly' })).toBe(true)
+    expect(sameResource(velero, { kind: 'backups', group: 'postgresql.cnpg.io', namespace: 'velero', name: 'nightly' })).toBe(false)
+    // A core Pod's feed can hold an issue about a same-named owner in another group.
+    expect(sameResource({ kind: 'Pod', group: 'example.com', namespace: 'demo', name: 'worker' }, { kind: 'pods', namespace: 'demo', name: 'worker' })).toBe(false)
+    // An issue with no group under a non-core drawer keeps its name rather than risk hiding another's.
+    expect(sameResource({ ...velero, group: undefined }, { kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly' })).toBe(false)
   })
 
   it('does not match a different kind', () => {

@@ -58,13 +58,14 @@ export function ResourceIssuesSection({
 
 // Identity match tolerant of singular/plural + casing on kind (the subject ref
 // carries the wire kind, the host typically passes the plural API name). A
-// match hides the card's kind and name, so two kinds that share a name in
-// different API groups (Velero's and CloudNativePG's Backup) must not match.
-// A missing group is not evidence either way: core kinds and older Radars send
-// none, and the per-resource feed is already scoped to one resource.
+// match hides the card's kind and name, and a resource's feed also holds issues
+// about its owners, so the API group must match exactly: a missing group is the
+// core group. An issue that carries no group for a non-core kind (an older
+// Radar) then keeps its name, which repeats the header rather than hiding
+// another resource.
 export function sameResource(a: IssueResourceRef, b: IssueResourceRef): boolean {
-  if (a.group && b.group && a.group !== b.group) return false
   return (
+    (a.group ?? '') === (b.group ?? '') &&
     a.name === b.name &&
     (a.namespace ?? '') === (b.namespace ?? '') &&
     kindToPluralWithGroup(a.kind, a.group ?? '').toLowerCase() ===
