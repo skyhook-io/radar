@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { getApiBase } from './config'
+import type { TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
 import { ApiError, fetchJSON, useClusterInfo, useRadarFeature, type PrometheusTimeRange } from './client'
 
 export type SubstrateChartState =
@@ -24,7 +25,7 @@ export interface SubstrateChart {
   reason?: string
   isolation: { mode: 'configured' | 'verified' | 'unverified' | ''; labels?: Record<string, string>; note: string }
   /** One display label per series, under `series`. A null value is a gap. */
-  series: { labels: Record<string, string>; dataPoints: { timestamp: number; value: number | null }[] }[]
+  series: TimeSeries[]
   /** Series beyond the first 12. */
   omitted?: number
 }
@@ -113,7 +114,11 @@ function substratePath(target: SubstrateTarget, range: PrometheusTimeRange): str
  * Radar that advertises the endpoints: Radar Hub can embed this UI against an
  * older Radar, which would answer with a 404.
  */
-export function useSubstrateHealth(target: SubstrateTarget, range: PrometheusTimeRange, enabled: boolean) {
+/** The verdict and the charts read one response, so they share one range. */
+export const SUBSTRATE_RANGE: PrometheusTimeRange = '1h'
+
+export function useSubstrateHealth(target: SubstrateTarget, enabled: boolean) {
+  const range = SUBSTRATE_RANGE
   const { data: cluster } = useClusterInfo()
   const feature = useRadarFeature('substrateHealthMetrics')
   const query = useQuery<SubstrateHealth>({

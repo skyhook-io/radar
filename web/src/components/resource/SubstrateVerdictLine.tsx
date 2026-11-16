@@ -23,7 +23,7 @@ const OVERDUE_BANDS: Record<string, string> = {
 export function SubstrateVerdictLine({ target, onOpenMetrics }: { target: SubstrateTarget; onOpenMetrics?: () => void }) {
   const { data: status } = usePrometheusStatus()
   const connected = status?.connected === true
-  const { data, error } = useSubstrateHealth(target, '1h', connected && Boolean(target.name))
+  const { data, error } = useSubstrateHealth(target, connected && Boolean(target.name))
   // A failed refresh leaves the last answer cached; it must not keep asserting it.
   const verdict: SubstrateVerdict | undefined = !connected || isForbiddenError(error)
     ? undefined
@@ -137,7 +137,7 @@ function Fact({ fact }: { fact: SubstrateFact }) {
 }
 
 function FactValue({ fact }: { fact: SubstrateFact }) {
-  if (fact.state === 'unavailable' || (fact.state === 'ok' && fact.value === undefined)) {
+  if (fact.state === 'unavailable') {
     return (
       <Tooltip content={fact.reason || 'Radar could not read this from Prometheus'}>
         <span className="text-theme-text-tertiary">Unavailable</span>

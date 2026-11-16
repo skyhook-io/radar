@@ -1,11 +1,9 @@
 import { Info, LineChart, Loader2, Lock, Wifi } from 'lucide-react'
 import { clsx } from 'clsx'
 import { AlertBanner, RadarUpgradeNote, Section, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
-import { AreaChart, SeriesLegend, formatMetricValue, formatTimestamp } from '@skyhook-io/k8s-ui/components/charts'
+import { AreaChart, SeriesLegend, formatMetricValue, formatTimestamp, type TimeSeries, type TimeSeriesPoint } from '@skyhook-io/k8s-ui/components/charts'
 import { isForbiddenError, useAutoPromConnect, usePrometheusConnect, usePrometheusStatus } from '../../api/client'
-import { useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type SubstrateTarget } from '../../api/substrateHealth'
-
-const RANGE = '1h'
+import { SUBSTRATE_RANGE, useSubstrateHealth, type SubstrateChart, type SubstrateHealth, type SubstrateTarget } from '../../api/substrateHealth'
 
 const NO_WORKERS = 'The controller reports 0 worker Pods for this pool, and Prometheus has no Agent Substrate metrics for it.'
 
@@ -32,7 +30,7 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
   const { data: status } = usePrometheusStatus()
   const connect = usePrometheusConnect()
   const connected = status?.connected === true
-  const { data, error, upgrade, blockedReason, support } = useSubstrateHealth(target, RANGE, connected && Boolean(target.name))
+  const { data, error, upgrade, blockedReason, support } = useSubstrateHealth(target, connected && Boolean(target.name))
 
   if (!connected) {
     if (!standalone || !status) return null
@@ -91,7 +89,7 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
 // Collapsible among the drawer's sections; a plain heading on a Metrics tab,
 // where collapsing it would only empty the tab.
 function Frame({ children, collapsible }: { children: React.ReactNode; collapsible: boolean }) {
-  const title = `Agent Substrate · last ${RANGE}`
+  const title = `Agent Substrate · last ${SUBSTRATE_RANGE}`
   return (
     <section aria-label="Agent Substrate metrics">
       {collapsible ? (
@@ -168,7 +166,7 @@ function SharedReason({ charts }: { charts: SubstrateChart[] }) {
 }
 
 function Chart({ chart, health }: { chart: SubstrateChart; health: SubstrateHealth }) {
-  const series = chart.series.map(s => ({ labels: s.labels, dataPoints: s.dataPoints }))
+  const series = chart.series
   const seriesLabels = series.map(s => s.labels.series || chart.title)
   // Only a sample from the last two steps is "now"; an older one ended earlier in the range.
   const since = health.end - 2 * health.stepSeconds
@@ -237,7 +235,7 @@ function chartReason(chart: SubstrateChart): string {
 
 // The first sample, when it comes well after the range starts: a mostly empty
 // plot otherwise reads as a broken chart. It says when samples begin, not why.
-function lateFirstSample(series: { dataPoints: { timestamp: number; value: number | null }[] }[], health: SubstrateHealth): number | undefined {
+function lateFirstSample(series: TimeSeries[], health: SubstrateHealth): number | undefined {
   let first: number | undefined
   for (const s of series) {
     const p = s.dataPoints.find(d => d.value != null && Number.isFinite(d.value))
@@ -247,7 +245,7 @@ function lateFirstSample(series: { dataPoints: { timestamp: number; value: numbe
   return first !== undefined && first - health.start > gap ? first : undefined
 }
 
-function lastValue(points: { timestamp: number; value: number | null }[], since: number): number | undefined {
+function lastValue(points: TimeSeriesPoint[], since: number): number | undefined {
   for (let i = points.length - 1; i >= 0 && points[i].timestamp >= since; i--) {
     const v = points[i].value
     if (v != null && Number.isFinite(v)) return v

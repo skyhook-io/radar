@@ -37,6 +37,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { SUBSTRATE_GROUP } from '@skyhook-io/k8s-ui/components/resources/resource-utils-agent-runtimes'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { CronJobSchedulingContext, CronJobSchedulingDetails } from './CronJobSchedulingEvidence'
 import { NodeCertificateContext, NodeCertificateDetails, nodeCertificateContextVisible } from './NodeCertificateEvidence'
@@ -635,10 +636,10 @@ export function WorkloadView({
   // '' whenever a link left ?apiGroup out.
   const identityGroup = resource?.apiVersion ? resourceGroup : effectiveGroup
   const isNode = apiKind === 'nodes' && !effectiveGroup
-  const isSubstrateWorkerPool = apiKind === 'workerpools' && effectiveGroup === 'ate.dev'
+  const isSubstrateWorkerPool = apiKind === 'workerpools' && effectiveGroup === SUBSTRATE_GROUP
   // Substrate's node charts are asked of Prometheus only on a cluster that serves it.
   const { data: apiResources } = useAPIResources()
-  const servesSubstrate = isNode && apiResources?.some(r => r.group === 'ate.dev' && r.name === 'workerpools') === true
+  const servesSubstrate = isNode && apiResources?.some(r => r.group === SUBSTRATE_GROUP && r.name === 'workerpools') === true
   const batchKind = pluralToKind(apiKind)
   const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
