@@ -66,7 +66,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   // Each image box opens the tab narrowed to this workload: one destination,
   // so one obvious thing to click.
   const card = (key: string, children: React.ReactNode) => (
-    <WithTooltip key={key} tip="Open in Vulnerabilities. Only images this workload runs now count; older revisions are left out.">
+    <WithTooltip key={key} tip="Open in Vulnerabilities">
       <button type="button" onClick={() => open()} className="group flex w-full items-center gap-2 rounded-md border border-theme-border bg-theme-surface px-3 py-2 text-left transition-colors hover:border-theme-text-tertiary hover:bg-theme-hover/50">
         <span className="flex min-w-0 flex-1 flex-col gap-1">{children}</span>
         <ChevronRight className="h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform group-hover:translate-x-0.5" aria-hidden />
