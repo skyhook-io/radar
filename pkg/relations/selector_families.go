@@ -71,10 +71,6 @@ var (
 	}}
 )
 
-// rolloutWorkloadGroups are the kinds an Argo Rollout's workloadRef may
-// take its pod template from, by group.
-var rolloutWorkloadGroups = map[string]string{"Deployment": "apps", "ReplicaSet": "apps", "PodTemplate": ""}
-
 // rolloutCandidate is a Rollout's pods: its own template, or, for a Rollout
 // whose workloadRef names one, the referenced workload's (an auxiliary read:
 // see Lookup).
@@ -87,11 +83,13 @@ func rolloutCandidate(obj runtime.Object, lookup Lookup) (Candidate, bool) {
 	if !ref {
 		return unstructuredTemplate(u, []string{"spec", "template"})
 	}
-	group, known := rolloutWorkloadGroups[kind]
-	if !known {
+	// Argo Rollouts resolves a reference only to a supported kind in its own
+	// API group; a matching name in another group is not the workload.
+	target, err := rollouts.ResolveTemplateTarget(u)
+	if err != nil {
 		return Candidate{}, false
 	}
-	workload, found := lookup(resourceid.NewRef(group, kind, u.GetNamespace(), name))
+	workload, found := lookup(resourceid.NewRef(target.GVR.Group, kind, u.GetNamespace(), name))
 	if !found {
 		return Candidate{}, false
 	}
