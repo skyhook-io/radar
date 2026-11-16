@@ -806,6 +806,7 @@
       "data": {
         "apiVersion": "v1",
         "auditKey": "|Node||node-a",
+        "instanceType": "",
         "labels": {
           "karpenter.sh/nodepool": "default"
         },
@@ -840,6 +841,7 @@
       "data": {
         "apiVersion": "v1",
         "auditKey": "|Node||node-b",
+        "instanceType": "",
         "labels": {
           "karpenter.sh/nodepool": "default"
         },
