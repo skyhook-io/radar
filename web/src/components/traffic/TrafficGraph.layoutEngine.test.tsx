@@ -98,6 +98,9 @@ async function load({ failElk = false } = {}) {
   vi.resetModules()
   mockElk(failElk)
   ;({ TrafficGraph } = await import('./TrafficGraph'))
+  // TrafficGraph imports the engine on its first layout; load the mock here so
+  // that import doesn't land inside the first test's time limit either.
+  if (!failElk) await import('elkjs/lib/elk.bundled.js')
 }
 
 beforeEach(() => {
