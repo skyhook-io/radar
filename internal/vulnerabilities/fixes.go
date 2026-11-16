@@ -17,6 +17,7 @@ type imagePackage struct {
 
 type fixAgg struct {
 	row    Fix
+	eco    string
 	from   map[string]bool
 	listed map[string]bool
 	cves   map[string]Severity
@@ -84,6 +85,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			if a == nil {
 				a = &fixAgg{
 					row:  Fix{Package: p.pkg, PackageType: p.pkgType, To: to},
+					eco:  p.eco,
 					from: map[string]bool{}, listed: map[string]bool{}, cves: map[string]Severity{},
 					images: map[string]bool{},
 				}
@@ -111,7 +113,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 					fi := &a.row.Affected[i]
 					if fi.ImageID == r.imageID && !slices.Contains(fi.InstalledVersions, p.installed) {
 						fi.InstalledVersions = append(fi.InstalledVersions, p.installed)
-						slices.Sort(fi.InstalledVersions)
+						sortVersions(p.eco, fi.InstalledVersions)
 					}
 				}
 			}
@@ -125,9 +127,9 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			return nil, err
 		}
 		row := a.row
-		row.From = sortedKeys(a.from)
+		row.From = sortVersions(a.eco, sortedKeys(a.from))
 		if row.To == "" {
-			row.FixedVersions = sortedKeys(a.listed)
+			row.FixedVersions = sortVersions(a.eco, sortedKeys(a.listed))
 		}
 		ids := make([]string, 0, len(a.cves))
 		for id, sev := range a.cves {

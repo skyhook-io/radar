@@ -113,7 +113,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			continue
 		}
 		for _, pod := range pods {
-			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed || !mayPods(pod.Namespace) {
+			if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed || !mayPods(pod.Namespace) || trivysOwnJob(cache, pod) {
 				continue
 			}
 			kind, group, name, uid := scannedOwner(cache, pod)
@@ -179,6 +179,26 @@ type liveSet struct {
 // runningDigests are the registry digests the kubelet reports for a Pod's
 // started containers, by name. A bare "sha256:…" imageID is a local image
 // ID, not a registry digest, and says nothing a report can be matched to.
+// trivysOwnJob is whether the Pod is one of Trivy Operator's scan or node
+// collector Jobs: short-lived, never scanned, and nothing a user upgrades,
+// so they would only pad the not-scanned list.
+func trivysOwnJob(cache *k8s.ResourceCache, pod *corev1.Pod) bool {
+	if pod.Labels[trivyManagedByLabel] == trivyManagedBy {
+		return true
+	}
+	owner := controllerOf(pod.OwnerReferences)
+	if owner == nil || owner.Kind != "Job" || cache.Jobs() == nil {
+		return false
+	}
+	job, err := cache.Jobs().Jobs(pod.Namespace).Get(owner.Name)
+	return err == nil && job.Labels[trivyManagedByLabel] == trivyManagedBy
+}
+
+const (
+	trivyManagedByLabel = "app.kubernetes.io/managed-by"
+	trivyManagedBy      = "trivy-operator"
+)
+
 func runningDigests(pod *corev1.Pod) map[string]string {
 	digests := map[string]string{}
 	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {

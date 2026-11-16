@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { ReadGap } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { APIResource } from '../types'
 import { ApiError, fetchJSON, useRadarFeature } from './client'
+import { readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
 // Mirrors internal/vulnerabilities/types.go.
@@ -227,9 +228,15 @@ export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
     queryKey: ['vulnerabilities', path, ...gatedKey],
     queryFn: ({ signal }) => guard(() => fetchJSON<VulnerabilitiesResponse>(path, signal)),
     enabled,
-    retry: shouldRetryRadarQuery,
+    // A read that settles by itself (the kind still syncing on a cold start,
+    // the connection just changed) keeps retrying, so callers show their
+    // loading state rather than an error.
+    retry: (failures, error) => (readSettles(error) ? failures < 8 : shouldRetryRadarQuery(failures, error)),
     staleTime: 30_000,
-    refetchInterval: 60_000,
+    // The tab's tables can run to megabytes and scans change hourly, so they
+    // refresh every five minutes; Home's totals and one workload's rows are
+    // small and stay at a minute.
+    refetchInterval: p.view === 'summary' || p.workload ? 60_000 : 300_000,
     refetchIntervalInBackground: false,
     // Keep showing the last answer, dimmed, while the tab's filters or view
     // change (the summary is the same in every view; a caller shows rows
@@ -237,4 +244,12 @@ export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
     // namespace scope's answer to another.
     placeholderData: (prev, prevQuery) => (subjectOfPath(prevQuery?.queryKey[1]) === subjectOfPath(path) ? prev : undefined),
   })
+}
+
+// Whether a failed read settles by itself: Radar still loading the kind, or
+// its connection just changed. A 503 naming something to fix doesn't.
+export function readSettles(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false
+  const code = error.data?.error_code
+  return error.status === 409 || (error.status === 503 && (code === undefined || readActionFor(code) === 'retry'))
 }

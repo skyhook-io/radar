@@ -1,10 +1,9 @@
 import { useNavigate } from 'react-router-dom'
 import type { AuditCardVulnerabilities } from '@skyhook-io/k8s-ui'
-import { readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import { useAPIResources } from '../../api/apiResources'
 import { ApiError, useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
-import { hasVulnerabilityReports, isKindUnknown, useVulnerabilities } from '../../api/vulnerabilities'
+import { hasVulnerabilityReports, isKindUnknown, readSettles, useVulnerabilities } from '../../api/vulnerabilities'
 import { findingsCertainty } from '../vulnerabilities/parts'
 
 // The Vulnerabilities row of the Home Checks card: present only where a
@@ -46,8 +45,6 @@ export function useVulnerabilitiesRow(namespaces: string[]): AuditCardVulnerabil
 // settle by itself.
 export function rowOnError(error: unknown): 'keep' | 'hide' | 'failed' {
   if (isRadarFeatureUnsupported(error) || isKindUnknown(error)) return 'hide'
-  if (!(error instanceof ApiError)) return 'failed'
-  const code = error.data?.error_code
-  if (error.status === 409 || (error.status === 503 && (code === undefined || readActionFor(code) === 'retry'))) return 'keep'
-  return error.status === 403 ? 'hide' : 'failed'
+  if (readSettles(error)) return 'keep'
+  return error instanceof ApiError && error.status === 403 ? 'hide' : 'failed'
 }

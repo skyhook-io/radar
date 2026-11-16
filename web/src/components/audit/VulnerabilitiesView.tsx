@@ -51,6 +51,7 @@ import {
   distinctNamespaces,
   totalFindings,
   FindingTotal,
+  installedLabel,
   ImageName,
   FixVersion,
   ecosystemLabel,
@@ -146,6 +147,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     ((data.unscanned ?? []).length > 0 || (data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0)
   const rows = view === 'cve' ? data.cves ?? [] : view === 'workload' ? data.workloads ?? [] : view === 'fix' ? data.fixes ?? [] : data.images ?? []
 
+  // With nothing scanned or readable there are no counts to show or filter.
+  const known = findingsCertainty(data) !== 'unknown'
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
       <ChecksViewTabs />
@@ -174,13 +177,13 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           </div>
         </div>
 
-        <DistributionBar
+        {known && <DistributionBar
           ariaLabel="Findings by severity"
           segments={LEGEND.map((s) => ({ key: s.key, count: data.summary.counts[s.key], fillClass: VULN_SEVERITY_BAR[s.key.toUpperCase()] }))}
-        />
+        />}
 
         <div className="flex flex-wrap items-center gap-1.5">
-          {LEGEND.map((s) => (
+          {known && LEGEND.map((s) => (
             <DistributionLegendChip
               key={s.key}
               label={s.label}
@@ -191,7 +194,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               onClick={() => toggleSeverity(s.key)}
             />
           ))}
-          {view !== 'fix' && (
+          {known && view !== 'fix' && (
             <>
               <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />
               <FilterPill label="Has a fix" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />
@@ -329,7 +332,10 @@ function SummaryHeadline({ data }: { data: VulnerabilitiesResponse }) {
   const s = data.summary
   const certainty = findingsCertainty(data)
   if (certainty === 'unknown') {
-    return <span className="text-sm text-theme-text-secondary">No running image is scanned yet{s.imagesUnscanned > 0 ? ` · ${s.imagesUnscanned} not scanned` : ''}</span>
+    // Unknown because reports couldn't be read is not the same as unscanned;
+    // the coverage notes below say what couldn't be read.
+    const unread = data.coverage.gaps.length > 0
+    return <span className="text-sm text-theme-text-secondary">{unread ? 'Findings unknown' : 'No running image is scanned yet'}{!unread && s.imagesUnscanned > 0 ? ` · ${s.imagesUnscanned} not scanned` : ''}</span>
   }
   const bound = certainty === 'lower_bound' ? '≥ ' : ''
   return (
@@ -528,7 +534,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                     </span>
                     <WithTooltip tip={f.to ? `${f.from.join(', ')} → ${f.to}` : "Radar can't pick one release that fixes every CVE here: it can't order this package's versions, or no listed release is above the installed one. These are the fixed releases the scanner lists."}>
                       <span className="min-w-0 truncate font-mono text-xs">
-                        <span className="text-theme-text-tertiary">{f.from.join(', ')} → </span>
+                        <span className="text-theme-text-tertiary">{installedLabel(f.from)}{f.to ? ' → ' : ' · '}</span>
                         {f.to
                           ? <span className={SEVERITY_TEXT.success}>{f.to}</span>
                           : <span className="text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
@@ -542,7 +548,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                 }
               >
                 <div className={clsx(SUB, FIX_COLS)}>
-                  <span className="text-theme-text-tertiary">{f.cvesTotal} {f.cvesTotal === 1 ? 'CVE' : 'CVEs'} cleared</span>
+                  <span className="text-theme-text-tertiary">{f.cvesTotal} {f.cvesTotal === 1 ? 'CVE' : 'CVEs'}{f.to ? ' cleared' : ''}</span>
                   <span className="col-span-5 flex flex-wrap gap-1.5">
                     {f.cves.map((id) => (
                       <button key={id} type="button" onClick={() => onShowCVE(id)} className="badge-sm bg-theme-elevated font-mono text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary">{id}</button>
@@ -760,7 +766,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
             <ClearedCount count={f.counts.critical} severity="critical" />
             <ClearedCount count={f.counts.high} severity="high" />
             {f.to
-              ? <FixVersion installed={f.from.join(', ')} target={f.to} />
+              ? <WithTooltip tip={`${f.from.join(', ')} → ${f.to}`}><FixVersion installed={installedLabel(f.from)} target={f.to} /></WithTooltip>
               : <span className="truncate font-mono text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
           </span>
           <span className="flex min-w-0 flex-wrap gap-x-3">

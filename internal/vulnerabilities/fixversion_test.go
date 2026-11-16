@@ -1,6 +1,9 @@
 package vulnerabilities
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // The fix to move to is the smallest listed fix above the installed version,
 // read with each ecosystem's own ordering; anything Radar can't order shows
@@ -91,5 +94,15 @@ func TestUpgradeForCrossesBranches(t *testing.T) {
 	unknown := &imagePackage{pkg: "lib", eco: "conan", installed: "1.0", findings: []Finding{{FixedVersion: "1.1"}, {FixedVersion: "1.2"}}}
 	if got, listed := upgradeFor(unknown); got != "" || len(listed) != 2 {
 		t.Errorf("unordered versions keep the scanner's lists: %q %v", got, listed)
+	}
+}
+
+func TestSortVersionsUsesTheEcosystemsOrder(t *testing.T) {
+	got := sortVersions("golang", []string{"v1.19.10", "v1.18", "v1.19.4"})
+	if want := []string{"v1.18", "v1.19.4", "v1.19.10"}; !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	if got := sortVersions("unknown", []string{"b", "a"}); !slices.Equal(got, []string{"b", "a"}) {
+		t.Fatalf("an unknown ecosystem keeps the given order, got %v", got)
 	}
 }

@@ -338,11 +338,6 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 	return resp, nil
 }
 
-// readableNamespaces is where the caller may list the report kind: the whole
-// ceiling with a cluster-wide grant (or with auth off), else the namespaces a
-// per-namespace check allowed. Asked for every namespace without the
-// cluster-wide grant, it checks the cluster's namespaces, which the caller
-// may see.
 // clusterWide is whether the caller may list the reports in every namespace,
 // when no namespace list is needed to check access.
 func clusterWide(access *search.DynamicKindAccess, gvr schema.GroupVersionResource) bool {
@@ -350,6 +345,11 @@ func clusterWide(access *search.DynamicKindAccess, gvr schema.GroupVersionResour
 	return allowed
 }
 
+// readableNamespaces is where the caller may list the report kind: the whole
+// ceiling with a cluster-wide grant (or with auth off), else the namespaces a
+// per-namespace check allowed. Asked for every namespace without the
+// cluster-wide grant, it checks the cluster's namespaces, which the caller
+// may see.
 func readableNamespaces(gvr schema.GroupVersionResource, req Request, clusterNamespaces []string) (readable []string, gaps []resourceapi.Gap) {
 	access := req.ReportAccess
 	if access == nil {

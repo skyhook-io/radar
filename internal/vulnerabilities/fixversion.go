@@ -80,6 +80,22 @@ func comparerFor(eco string) compareFunc {
 	return nil
 }
 
+// sortVersions orders versions the way their ecosystem does, so v1.19.4
+// comes before v1.19.10; versions it can't order keep their text order.
+func sortVersions(eco string, vs []string) []string {
+	compare := comparerFor(eco)
+	if compare == nil {
+		return vs
+	}
+	slices.SortStableFunc(vs, func(a, b string) int {
+		if c, ok := compare(a, b); ok {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+	return vs
+}
+
 // fixedReleases splits a scanner's fixed-version list ("8.0.1, 7.5.5,
 // 6.11.6": one fix per maintained branch).
 func fixedReleases(fixed string) []string {

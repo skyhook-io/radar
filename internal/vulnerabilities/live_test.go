@@ -143,3 +143,24 @@ func TestLiveTargetsCarryTheRunningDigest(t *testing.T) {
 		t.Fatalf("a local image ID is no registry digest: %+v", live.targets)
 	}
 }
+
+// Trivy Operator's own scan and node-collector Jobs are never scanned and
+// aren't anything a user upgrades: they stay out of the running set.
+func TestTrivysOwnJobsAreLeftOut(t *testing.T) {
+	trivy := map[string]string{"app.kubernetes.io/managed-by": "trivy-operator"}
+	collector := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "node-collector-1", Namespace: "shop", UID: "uid-node-collector-1", Labels: trivy}}
+	scan := pod("scan-vulnerabilityreport-1", corev1.PodRunning, nil, "aquasec/trivy:0.76.1")
+	scan.Labels = trivy
+	cache := syncedCache(t, collector, scan,
+		pod("node-collector-1-x", corev1.PodPending, owned("batch/v1", "Job", "node-collector-1"), "aquasec/node-collector:1"),
+		pod("web", corev1.PodRunning, nil, "acme/web:2"),
+	)
+	live, _ := liveTargets(cache, nil, nil, nil)
+	var images []string
+	for _, tg := range live.targets {
+		images = append(images, tg.image)
+	}
+	if !slices.Equal(images, []string{"acme/web:2"}) {
+		t.Fatalf("got %v, want only acme/web:2", images)
+	}
+}

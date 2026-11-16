@@ -22,14 +22,14 @@ type listVulnerabilitiesInput struct {
 	Fixable   bool   `json:"fixable,omitempty" jsonschema:"keep only findings with a fixed version"`
 	Query     string `json:"query,omitempty" jsonschema:"image, CVE ID, package or workload substring"`
 	Workload  string `json:"workload,omitempty" jsonschema:"Kind/namespace/name, e.g. Deployment/shop/checkout"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"max rows (default 20, max 100)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max rows (default 10, max 100)"`
 }
 
 const (
-	defaultVulnerabilityRows = 20
+	defaultVulnerabilityRows = 10
 	maxVulnerabilityRows     = 100
 	// Per row, an agent needs the worst few findings or images, not all.
-	vulnerabilityDetailsPerRow = 10
+	vulnerabilityDetailsPerRow = 5
 )
 
 // handleListVulnerabilities answers with the same rollup as GET

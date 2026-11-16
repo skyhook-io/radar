@@ -89,17 +89,26 @@ export function SeverityBadge({ severity, fromScore, score }: { severity: Vulner
 /**
  * An installed version and the one to move to. The scanner lists one fix
  * per maintained branch ("v0.38.0, v0.36.1"); the target is the smallest
- * above the installed version, with the full list on hover. Without a
- * target the list stands as the scanner wrote it.
+ * above the installed version, with the full list on hover. When Radar
+ * couldn't pick a target, the scanner's list stands as written, without
+ * an arrow or the color of a recommendation.
  */
 export function FixVersion({ installed, fixed, target, showInstalled = true, className }: { installed: string; fixed?: string; target?: string; showInstalled?: boolean; className?: string }) {
-  const to = target || fixed
-  const tip = to ? `${installed} → ${to}${target && fixed && fixed !== target ? ` (fixed releases: ${fixed})` : ''}` : undefined
+  if (!target && fixed) {
+    return (
+      <WithTooltip tip={`Installed ${installed}. The scanner lists ${fixed} as fixed, but Radar couldn't confirm it's above the installed version.`}>
+        <span className={clsx('min-w-0 truncate font-mono text-theme-text-secondary', className)}>
+          {showInstalled && <span className="text-theme-text-tertiary">{installed} · </span>}fixed in {fixed}
+        </span>
+      </WithTooltip>
+    )
+  }
+  const tip = target ? `${installed} → ${target}${fixed && fixed !== target ? ` (fixed releases: ${fixed})` : ''}` : undefined
   return (
     <WithTooltip tip={tip}>
       <span className={clsx('min-w-0 truncate font-mono', className)}>
         {showInstalled && <span className="text-theme-text-tertiary">{installed} → </span>}
-        {to ? <span className={SEVERITY_TEXT.success}>{to}</span> : <span className="text-theme-text-tertiary">no fix yet</span>}
+        {target ? <span className={SEVERITY_TEXT.success}>{target}</span> : <span className="text-theme-text-tertiary">no fix yet</span>}
       </span>
     </WithTooltip>
   )
@@ -270,4 +279,11 @@ export function FindingTotal({ value, certainty, className }: { value: number; c
       <span className="font-mono">{value}</span>
     </span>
   )
+}
+
+// The installed side of an upgrade: two versions read fine, more push the
+// version to move to out of the cell, so they collapse to a count (the
+// full list is in the row's tooltip and expanded detail).
+export function installedLabel(from: string[]): string {
+  return from.length > 2 ? `${from.length} versions` : from.join(', ')
 }

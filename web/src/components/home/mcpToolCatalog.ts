@@ -38,7 +38,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'kind', desc: 'pods (default), workloads, or nodes' },
       { arg: 'namespace', desc: 'filter pods/workloads to a namespace' },
       { arg: 'sort', desc: 'cpu (default) or memory' },
-      { arg: 'limit', desc: 'max rows (default 20, max 100)' },
+      { arg: 'limit', desc: 'max rows (default 10, max 100)' },
     ],
   },
   {
@@ -163,15 +163,15 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'list_vulnerabilities',
-    desc: 'Which running images carry known CVEs and which workloads run them, from Trivy Operator reports: by image, by CVE (what to fix first), or by workload. Running images without a report are listed as unscanned, not clean.',
+    desc: 'Which running images carry known CVEs and which workloads run them, from Trivy Operator reports: by image, by CVE, by package upgrade (fix), or by workload. Running images without a report are listed as unscanned, not clean. Listed only where Trivy Operator runs.',
     params: [
-      { arg: 'view', desc: 'image (default), cve, or workload' },
+      { arg: 'view', desc: 'image (default), cve, fix, workload, or summary' },
       { arg: 'namespace', desc: 'limit to one namespace' },
       { arg: 'severity', desc: 'comma-separated: critical, high, medium, low, unknown' },
       { arg: 'fixable', desc: 'only findings with a fixed version' },
       { arg: 'query', desc: 'image, CVE ID, package, or workload substring' },
       { arg: 'workload', desc: 'one workload as Kind/namespace/name' },
-      { arg: 'limit', desc: 'max rows (default 20, max 100)' },
+      { arg: 'limit', desc: 'max rows (default 10, max 100)' },
     ],
   },
   {
@@ -299,7 +299,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'name', desc: 'workloads: exact workload name (needs kind); nodes: exact node name' },
       { arg: 'range', desc: 'trend only: 6h, 24h (default), or 7d' },
       { arg: 'include_points', desc: 'trend only: include raw points (default false); summaries are always returned' },
-      { arg: 'limit', desc: 'max rows (default 20, max 100)' },
+      { arg: 'limit', desc: 'max rows (default 10, max 100)' },
     ],
   },
   {
