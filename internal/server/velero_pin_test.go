@@ -53,6 +53,25 @@ func TestVeleroRoutesRefuseNamespacesOutsideThePin(t *testing.T) {
 		assertOutsidePin(t, resp, readBody(t, resp))
 	})
 
+	t.Run("delete backup", func(t *testing.T) {
+		srv, dyn := deleteServer(t, deletableBackup("nightly-1", "uid-1", "Completed", "default"), storageLocation("default", "ReadWrite", "Available"))
+		rec := serve(srv, http.MethodPost, "/api/velero/backups/velero/nightly-1/delete", `{"uid":"uid-1"}`)
+		resp := rec.Result()
+		defer resp.Body.Close()
+		assertOutsidePin(t, resp, rec.Body.String())
+		if n := len(deleteRequests(t, dyn)); n != 0 {
+			t.Errorf("%d delete requests created outside the pin", n)
+		}
+	})
+
+	t.Run("a deletion's status", func(t *testing.T) {
+		srv, _ := deleteServer(t)
+		rec := serve(srv, http.MethodGet, "/api/velero/backups/velero/nightly-1/deletion?uid=u", "")
+		resp := rec.Result()
+		defer resp.Body.Close()
+		assertOutsidePin(t, resp, rec.Body.String())
+	})
+
 	t.Run("back up now", func(t *testing.T) {
 		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
 		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7"}`, nil)

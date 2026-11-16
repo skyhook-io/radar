@@ -14,6 +14,7 @@ import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { useVeleroSidebarWorkspace } from '../velero/useVeleroSidebarWorkspace'
+import { isVeleroBackupKind } from '../velero/routes'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
 import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
@@ -430,7 +431,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onCreateResource={handleCreateResource}
       renderKindView={renderKindView}
       // Bulk operations
-      onBulkDelete={(items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: results => { if (!results.some(({ result }) => result.outcomeUnknown)) options?.onSuccess?.() } })}
+      // A Velero backup is deleted one at a time, through Velero (Delete backup in its drawer).
+      onBulkDelete={isVeleroBackupKind(selectedKind?.name, selectedKind?.group) ? undefined : (items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: results => { if (!results.some(({ result }) => result.outcomeUnknown)) options?.onSuccess?.() } })}
       isBulkDeleting={bulkDeleteMutation.isPending}
       onBulkRestart={canBulkRestartSelectedKind ? (items, options) => bulkRestartMutation.mutate({ items }, { onSuccess: options?.onSuccess }) : undefined}
       isBulkRestarting={canBulkRestartSelectedKind && bulkRestartMutation.isPending}

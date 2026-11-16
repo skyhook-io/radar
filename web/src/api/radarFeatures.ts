@@ -51,6 +51,7 @@ export const RADAR_FEATURES = {
   veleroWorkspace: { label: 'Velero views', flag: 'veleroWorkspace', flagShippedWithEndpoint: true },
   veleroBackupNow: { label: 'Back up now', flag: 'veleroBackupNow', flagShippedWithEndpoint: true },
   veleroRuns: { label: 'Velero backup and restore lists', flag: 'veleroRuns', flagShippedWithEndpoint: true },
+  veleroDeleteBackup: { label: 'Delete a Velero backup', flag: 'veleroDeleteBackup', flagShippedWithEndpoint: true },
   gitopsWriteEvidence: { label: 'GitOps revert warnings', flag: 'gitopsWriteEvidence', flagShippedWithEndpoint: true },
   serviceEndpointSlices: { label: 'Service EndpointSlice inventories', flag: 'serviceEndpointSlices', flagShippedWithEndpoint: true },
   trafficRecords: { label: 'Flow records for a graph selection', flag: 'trafficRecords', flagShippedWithEndpoint: true },

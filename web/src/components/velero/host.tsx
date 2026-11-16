@@ -8,6 +8,7 @@ import { VeleroScheduleRenderer } from '../resources/renderers/VeleroScheduleRen
 import { VELERO_DETAIL_KINDS, VELERO_GROUP as VELERO_GROUP_NAME, VELERO_BACKUP_KIND, VELERO_LOCATION_KIND, VELERO_RESTORE_KIND, VELERO_SCHEDULE_KIND, veleroDetailKindFor, veleroDetailPath, veleroKindListMode } from './routes'
 import { renderVeleroSummary } from './VeleroPages'
 import { VeleroBackupsKindList, VeleroLocationsKindList, VeleroRestoresKindList, VeleroSchedulesKindList } from './VeleroKindLists'
+import { VeleroDeleteBackup } from './VeleroDeleteBackup'
 import { VeleroBackupNow } from './VeleroBackupNow'
 import { VeleroScheduleStatusBadge } from './VeleroScheduleStatusBadge'
 import { VeleroRunIssueMessages } from './VeleroRunMessagesHost'
@@ -61,6 +62,10 @@ export const veleroResourceHost: ResourceHost = {
   // action row with every resource's actions.
   detailSlots: (resource): DetailSlots => {
     const summary: DetailSlots = { renderSummary: (props) => renderVeleroSummary(props) }
+    if (detailKind(resource) === VELERO_BACKUP_KIND.name) return {
+      ...summary,
+      renderHeaderActions: ({ resource: data }) => isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroDeleteBackup backup={data} /> : null,
+    }
     if (kindToPluralWithGroup(resource.kind, resource.group ?? VELERO_GROUP_NAME) !== VELERO_SCHEDULE_KIND.name) return summary
     return {
       ...summary,

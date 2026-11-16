@@ -43,6 +43,18 @@ Runs and stored backups are what Velero still keeps: each is deleted once its re
 - **Refused when it would fail:** a schedule whose name does not fit a label (409; the button is disabled).
 - `POST /api/velero/schedules/{namespace}/{name}/backup`, behind capability `veleroBackupNow`.
 
+## Delete backup
+
+A Backup object is not the backup. Deleting it leaves the backup's files in the bucket and its volume snapshots with the provider, and Velero's backup sync recreates the object from the bucket. Velero deletes a backup through a **DeleteBackupRequest**, as `velero backup delete` does, so that is the only delete the UI offers for one: the Backup page and drawer header's **Delete backup**, in place of the generic Delete, and bulk delete is not offered for Velero backups. Deleting the object stays possible as a low-level operation (`DELETE /api/resources/...`, MCP `delete_resource`), whose preview says what it does not delete and how to delete the backup through Velero.
+
+- **What Velero deletes:** the backup's files in its storage location, its volume snapshots and uploaded volume data, the Restores made from it, then the Backup object. The confirmation says so and asks for the backup's name.
+- **Refused when Velero would refuse:** a backup still running (`InProgress`, `WaitingForPluginOperations*`, `Finalizing*`, the phases Velero's backup tracker holds), a storage location that is read-only or not Available, a stopped Velero server (nothing would be deleted until it starts), or a Backup whose `spec.storageLocation` has not been assigned yet. When the location can't be read, Velero's own refusal is reported once it processes the request.
+- **Bound to what was reviewed:** the request carries the backup's UID, and a backup recreated under the same name is refused (409). A DeleteBackupRequest names a backup only by name, so this protects the submission, not Velero's later processing: a backup deleted and recreated under the same name before Velero picks the request up would be the one deleted.
+- **Reuse an open request:** the server lists DeleteBackupRequests in the namespace by `velero.io/backup-name=ValidLabelValue(name),velero.io/backup-uid=<uid>`. POST returns the newest open (not `Processed`) request if there is one; otherwise it creates one with `generateName: <backup>-`, as the CLI does. Concurrent submissions can still create two requests before either list sees one; Velero serializes deletion.
+- **Followed wherever opened:** GET reads the newest matching request. The page and drawer show waiting, deleting, refused, failed (some data may already be gone), or unknown; failure toasts appear once per request. The page's gone state covers completion. A 4xx stops polling; error with no data reads unavailable, while a refresh error keeps the last reading. A missing request while the Backup remains cannot distinguish a cleaned-up old request from no request ever made.
+- As the caller: `get backups`, `list deletebackuprequests` for both lookup and submission, and `create deletebackuprequests` for a new request. `POST /api/velero/backups/{namespace}/{name}/delete` `{uid}` and `GET /api/velero/backups/{namespace}/{name}/deletion?uid=`, behind capability `veleroDeleteBackup`. GET includes `request` when one exists; neither response echoes the UID. A Radar without the capability shows no delete for Velero backups.
+
+
 ## Data
 
 - `GET /api/velero/workspace`: every installation the caller can read. Readings, not objects; every time is absolute, with `observedAt` saying when the readings were computed.

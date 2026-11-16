@@ -125,3 +125,48 @@ export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string) 
     retry: shouldRetryRadarQuery,
   })
 }
+
+export interface VeleroDeletion {
+  state: 'waiting' | 'inProgress' | 'refused' | 'failed' | 'deleted' | 'unknown'
+  errors?: string[]
+  request?: string
+  serverStopped?: boolean
+}
+
+// POST /api/velero/backups/{namespace}/{name}/delete
+//
+// Asks Velero to delete a backup through a DeleteBackupRequest, bound to the
+// backup the user reviewed (its UID). An open request is reused by the server.
+export function useVeleroDeleteBackup() {
+  return useMutation({
+    // fetchJSON throws ApiError, so the dialog can tell a refusal (4xx) from a
+    // write whose outcome is unknown.
+    mutationFn: ({ namespace, name, uid }: { namespace: string; name: string; uid: string }) =>
+      fetchJSON<{ request: string }>(
+        `/velero/backups/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/delete`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uid }) },
+      ),
+  })
+}
+
+const SETTLED = ['refused', 'failed', 'deleted', 'unknown']
+
+export function useVeleroBackupDeletion(namespace: string, name: string, uid: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('veleroDeleteBackup')
+  const base = getApiBase()
+  return useQuery<VeleroDeletion>({
+    queryKey: ['velero', 'deletion', base, namespace, name, uid, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<VeleroDeletion>(
+      `/velero/backups/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/deletion?uid=${encodeURIComponent(uid)}`, signal)),
+    enabled: enabled && !!uid && !!namespace && !!name,
+    refetchInterval: (query) => {
+      const status = (query.state.error as { status?: number } | null)?.status
+      if (status && status >= 400 && status < 500) return false
+      return query.state.data && SETTLED.includes(query.state.data.state) ? false : 2_000
+    },
+    retry: (count, error) => {
+      const status = (error as { status?: number } | null)?.status
+      return status && status >= 400 && status < 500 ? false : shouldRetryRadarQuery(count, error)
+    },
+  })
+}

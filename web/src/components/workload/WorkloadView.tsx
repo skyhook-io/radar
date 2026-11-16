@@ -141,6 +141,7 @@ import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { NodeDrainStatus } from './NodeDrainStatus'
 import { recordUsageEvent } from '../../api/usage-data'
 import { issueResourceOpener } from './issueResourceOpener'
+import { isVeleroBackupKind } from '../velero/routes'
 
 type TabType = WorkloadTabType
 
@@ -428,10 +429,14 @@ function useActionsBarProps(
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
     renderDiagnose: decorateResourceDiagnose(renderDiagnose),
-    onDelete: (
-      params: Parameters<typeof deleteMutation.mutate>[0],
-      callbacks?: { onSuccess?: () => void },
-    ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
+    // Deleting a Velero Backup object leaves the backup in storage and Velero
+    // recreates the object; the Velero host offers Delete backup instead.
+    onDelete: isVeleroBackupKind(kind, group)
+      ? undefined
+      : (
+          params: Parameters<typeof deleteMutation.mutate>[0],
+          callbacks?: { onSuccess?: () => void },
+        ) => deleteMutation.mutate(params, { onSuccess: result => { if (!result.outcomeUnknown) callbacks?.onSuccess?.() } }),
     isDeleting: deleteMutation.isPending,
     onDeletePreviewOpenChange: setDeletePreviewOpen,
     cascadeDetail: cascadePreview,

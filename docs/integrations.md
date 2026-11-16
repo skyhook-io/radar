@@ -906,7 +906,7 @@ Service links accept short names in the rule's namespace or full `name.namespace
 
 ### What Radar Shows
 
-**Velero views** (the Overview at `/velero`, under the Velero category in the Resources sidebar, and Radar's own lists for the Schedule and BackupStorageLocation kinds): what needs attention, every schedule read against Velero's controller (next run, late or held, newest and newest successful run), and each storage location with the backups targeting it and the schedules writing to it. The Schedule drawer adds a Schedule activity section with recent runs. Sources, certainty and states: [velero.md](velero.md).
+**Velero views** (the Overview at `/velero`, under the Velero category in the Resources sidebar, and Radar's own lists for the Schedule and BackupStorageLocation kinds): what needs attention, every schedule read against Velero's controller (next run, late or held, newest and newest successful run), and each storage location with the backups targeting it and the schedules writing to it. The Schedule drawer adds a Schedule activity section with recent runs. A Backup's drawer offers **Delete backup**, which asks Velero to delete it through a DeleteBackupRequest; the generic Delete, which would only remove the object, is not offered. Sources, certainty and states: [velero.md](velero.md).
 
 **Backup Detail View:**
 - Phase with color-coded badge, start/completion timestamps, duration
