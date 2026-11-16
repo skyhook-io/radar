@@ -3,6 +3,7 @@ package logging
 import (
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -186,5 +187,38 @@ func TestLoggingAndOutputFlags(t *testing.T) {
 	}
 	if o := OutputFrom(obj("ClusterOutput", "logging", "audit", map[string]any{"protected": true, "loki": map[string]any{}}, nil)); !o.Protected || o.Type != "loki" {
 		t.Errorf("protected output = %+v", o)
+	}
+}
+
+// FlowFrom compiles a rule's namespaces_regex once, so matching many pods
+// against it compiles nothing, and decides as an uncompiled rule would.
+func TestFlowFromCompilesNamespaceRegexOnce(t *testing.T) {
+	compiles := 0
+	orig := compileRegex
+	compileRegex = func(p string) (*regexp.Regexp, error) { compiles++; return orig(p) }
+	defer func() { compileRegex = orig }()
+	f := FlowFrom(obj("ClusterFlow", "logging", "re", map[string]any{"match": []any{
+		map[string]any{"exclude": map[string]any{"namespaces_regex": []any{"(?<=x)kube"}}},
+		map[string]any{"select": map[string]any{"namespaces_regex": []any{"^team-", "^prod"}}},
+	}}, nil))
+	parsed := compiles
+	if parsed != 3 {
+		t.Fatalf("FlowFrom compiled %d patterns, want 3", parsed)
+	}
+	for _, ns := range []string{"team-a", "prod", "other", "kube"} {
+		pod := PodFacts{Namespace: ns, Containers: []string{"app"}}
+		got := Selects(f, pod)
+		uncompiled := f
+		uncompiled.Match = []Rule{{Exclude: true, NamespacesRegex: f.Match[0].NamespacesRegex}, {NamespacesRegex: f.Match[1].NamespacesRegex}}
+		if want := Selects(uncompiled, pod); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: compiled %+v, uncompiled %+v", ns, got, want)
+		}
+	}
+	compiles = parsed
+	for range 100 {
+		Selects(f, PodFacts{Namespace: "team-a", Containers: []string{"app"}})
+	}
+	if compiles != parsed {
+		t.Fatalf("matching compiled %d more patterns", compiles-parsed)
 	}
 }

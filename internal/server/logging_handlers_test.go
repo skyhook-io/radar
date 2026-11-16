@@ -546,8 +546,8 @@ func seedLoggingPod(t *testing.T, pod *corev1.Pod, objs ...runtime.Object) {
 // A caller who can get the pod learns which routes decide it, not every
 // ClusterFlow in the cluster: only routes that select, may select or exclude
 // it, invalid ones that would select it, and the single closest miss, whose
-// namespace and node conditions are withheld unless the caller may list that
-// route's kind.
+// namespace and node conditions, own namespace and destination namespaces are
+// withheld unless the caller may list that route's kind.
 func TestLoggingPodShippingWithholdsUnrelatedRoutes(t *testing.T) {
 	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil)
 	seedLoggingWith(t, l,
@@ -578,8 +578,11 @@ func TestLoggingPodShippingWithholdsUnrelatedRoutes(t *testing.T) {
 				t.Errorf("%s: body names %q: %s", c.user, leak, raw)
 			}
 		}
-		if !c.canList && (strings.Contains(raw, "secret-a") || strings.Contains(raw, "node-9")) {
-			t.Errorf("%s: body leaks namespace or node conditions: %s", c.user, raw)
+		if !c.canList && (strings.Contains(raw, "secret-a") || strings.Contains(raw, "node-9") || strings.Contains(raw, "logging-system")) {
+			t.Errorf("%s: body leaks namespace or node conditions, or the route's namespace: %s", c.user, raw)
+		}
+		if c.canList && (got.Routes[0].Namespace != "logging-system" || got.Routes[0].Destinations[0].Namespace != "logging-system") {
+			t.Errorf("%s: route namespaces withheld from a caller who may list them: %+v", c.user, got.Routes[0])
 		}
 	}
 }
