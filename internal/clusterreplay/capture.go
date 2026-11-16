@@ -107,7 +107,7 @@ func Capture(ctx context.Context, d discovery.DiscoveryInterface, c dynamic.Inte
 				for _, obj := range page.Items {
 					obj.SetAPIVersion(gv.String())
 					obj.SetKind(r.Kind)
-					Sanitize(obj.Object)
+					sanitize(obj.Object)
 					if err := enc.Encode(obj.Object); err != nil {
 						return count, skipped, err
 					}
@@ -147,7 +147,7 @@ func Capture(ctx context.Context, d discovery.DiscoveryInterface, c dynamic.Inte
 	return count, skipped, z.Close()
 }
 
-func Sanitize(obj map[string]any) {
+func sanitize(obj map[string]any) {
 	kind, _ := obj["kind"].(string)
 	if kind == "Secret" || kind == "ConfigMap" {
 		for _, field := range []string{"data", "stringData", "binaryData"} {

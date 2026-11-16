@@ -82,7 +82,7 @@ func TestCapturePagedSanitizedReplay(t *testing.T) {
 
 func TestSanitizeConfigMapKeepsKeysAndInputStructure(t *testing.T) {
 	o := map[string]any{"kind": "ConfigMap", "data": map[string]any{"token": "abc", "foo": "xyz", "managedFields": "sensitive", "kubectl.kubernetes.io/last-applied-configuration": "sensitive"}, "binaryData": map[string]any{"bin": "aA=="}, "spec": map[string]any{"automountServiceAccountToken": false, "tokenSecretName": "my-token-secret", "serviceAccountToken": map[string]any{"expirationSeconds": int64(3600)}}}
-	Sanitize(o)
+	sanitize(o)
 	if len(o["data"].(map[string]any)) != 4 {
 		t.Fatal("data keys lost")
 	}
@@ -145,7 +145,7 @@ func TestSanitizeCommandAndArgs(t *testing.T) {
 				t.Run(field+"/"+flag, func(t *testing.T) {
 					args := []any{"pilot-discovery", flag, "hunter2", flag + "=hunter2", "--domain", "mesh.internal", "--domain=mesh.internal", "--trust-domain", "trust.internal", "--trust-domain=trust.internal", "--log-level=debug"}
 					obj := map[string]any{"kind": "Deployment", "spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{field: args}}}}}}
-					Sanitize(obj)
+					sanitize(obj)
 					want := []any{"pilot-discovery", flag, "", flag + "=", "--domain", "mesh.internal", "--domain=mesh.internal", "--trust-domain", "trust.internal", "--trust-domain=trust.internal", "--log-level=debug"}
 					if !reflect.DeepEqual(args, want) {
 						t.Fatalf("args=%#v, want %#v", args, want)
