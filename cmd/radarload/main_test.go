@@ -26,7 +26,7 @@ func TestParseHeap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Alloc != 1024 || h.Inuse != 4096 || h.Sys != 8192 || h.GC != 257 || h.PauseTotal != nil {
+	if h.Alloc != 1024 || h.Inuse != 4096 || h.Sys != 8192 || h.GC != 257 {
 		t.Fatalf("bad heap: %+v", h)
 	}
 	d, err := pauseDelta(&heapStats{GC: 255}, h)
@@ -35,10 +35,6 @@ func TestParseHeap(t *testing.T) {
 	}
 	if _, err := pauseDelta(&heapStats{GC: 0}, h); err == nil {
 		t.Fatal("overwritten ring reported as exact")
-	}
-	explicit, err := parseHeap(text + "# PauseTotalNs = 1000\n")
-	if err != nil || explicit.PauseTotal == nil || *explicit.PauseTotal != 1000 {
-		t.Fatalf("explicit total: %+v, %v", explicit, err)
 	}
 	for _, bad := range []string{"<html>SPA</html>", strings.Replace(text, "# HeapAlloc = 1024\n", "", 1), strings.Replace(text, "HeapInuse = 4096", "HeapInuse = bad", 1)} {
 		if _, err := parseHeap(bad); err == nil {
@@ -90,6 +86,15 @@ func TestParseCPU(t *testing.T) {
 
 type subjectProbeTransport func(*http.Request) (*http.Response, error)
 
+// emptyBody answers resource lists with an empty envelope and everything else
+// (API discovery, single-object GETs) with an empty array.
+func emptyBody(path string) string {
+	if rest, ok := strings.CutPrefix(strings.TrimPrefix(path, "/prefix"), "/api/resources/"); ok && !strings.Contains(rest, "/") {
+		return `{"items":[]}`
+	}
+	return `[]`
+}
+
 func (f subjectProbeTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestReadableSubjectsRejectsListedAndReplayedSubjects(t *testing.T) {
@@ -97,15 +102,15 @@ func TestReadableSubjectsRejectsListedAndReplayedSubjects(t *testing.T) {
 	secret := subject{Kind: "Secret", Namespace: "default", Name: "denied"}
 	node := subject{Kind: "Node", Name: "node"}
 	deleted := subject{Kind: "Widget", Group: "example.io", Namespace: "default", Name: "deleted"}
-	c, err := newClient(config{URL: "http://radar.invalid/prefix", Timeout: time.Second, PerKind: 10, User: "reader", Groups: "viewers", UserHeader: "X-User", GroupsHeader: "X-Groups"})
+	c, err := newClient(config{URL: "http://radar.invalid/prefix", PerKind: 10, User: "reader", Groups: "viewers"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	c.http.Transport = subjectProbeTransport(func(r *http.Request) (*http.Response, error) {
-		if r.Header.Get("X-User") != "reader" || r.Header.Get("X-Groups") != "viewers" {
+		if r.Header.Get("X-Forwarded-User") != "reader" || r.Header.Get("X-Forwarded-Groups") != "viewers" {
 			t.Fatal("configured identity missing from request")
 		}
-		status, body := 200, `[]`
+		status, body := 200, emptyBody(r.URL.Path)
 		switch r.URL.Path {
 		case "/prefix/api/resources/Pod":
 			body = `{"items":[{"apiVersion":"v1","metadata":{"namespace":"default","name":"readable"}}]}`
@@ -151,16 +156,12 @@ func TestReadableSubjectsRejectsListedAndReplayedSubjects(t *testing.T) {
 	if !reflect.DeepEqual(readable, []subject{pod, node}) || !reflect.DeepEqual(rejected, map[string]int{"Secret.": 1, "Widget.example.io": 1}) {
 		t.Fatalf("replay rejections not counted: %+v rejected=%v", readable, rejected)
 	}
-	data, err = json.Marshal(result{SubjectProbeErrors: rejected})
-	if err != nil || !strings.Contains(string(data), `"subject_probe_errors":{"Secret.":1,"Widget.example.io":1}`) {
-		t.Fatalf("rejections missing from result: %s err=%v", data, err)
-	}
 }
 
 func TestRunPreflightsFreshAndReplayedSubjectsBeforeSampling(t *testing.T) {
 	for _, replay := range []bool{false, true} {
 		t.Run(fmt.Sprint("replay=", replay), func(t *testing.T) {
-			cfg := config{URL: "http://radar.invalid", PID: os.Getpid(), Timeout: time.Second, ReadyTimeout: time.Second, PerKind: 10}
+			cfg := config{URL: "http://radar.invalid", PID: os.Getpid(), ReadyTimeout: time.Second, PerKind: 10}
 			if replay {
 				cfg.SubjectsFrom = filepath.Join(t.TempDir(), "prior.json")
 				old := result{Schema: 1, Subjects: []subject{{Kind: "Pod", Name: "ok", Namespace: "default"}, {Kind: "Secret", Name: "denied", Namespace: "default"}}}
@@ -179,8 +180,8 @@ func TestRunPreflightsFreshAndReplayedSubjectsBeforeSampling(t *testing.T) {
 			}
 			gets := map[string]int{}
 			c.http.Transport = subjectProbeTransport(func(r *http.Request) (*http.Response, error) {
-				status, body := 200, `[]`
 				path := r.URL.Path
+				status, body := 200, emptyBody(path)
 				gets[path]++
 				switch path {
 				case "/api/connection":
@@ -215,9 +216,13 @@ func TestRunPreflightsFreshAndReplayedSubjectsBeforeSampling(t *testing.T) {
 
 func TestSampleWindowExcludesSampleCompletedAfterCancellation(t *testing.T) {
 	start := time.Now()
+	ring := make([]uint64, 256)
+	for i := range ring {
+		ring[i] = 10
+	}
 	makeSample := func(seconds int, value uint64) sample {
-		rss, cpu, pause := value, float64(value), value*10
-		return sample{At: start.Add(time.Duration(seconds) * time.Second), RSS: &rss, CPU: &cpu, Heap: &heapStats{Inuse: value, GC: value, PauseTotal: &pause}}
+		rss, cpu := value, float64(value)
+		return sample{At: start.Add(time.Duration(seconds) * time.Second), RSS: &rss, CPU: &cpu, Heap: &heapStats{Inuse: value, GC: value, pauses: ring}}
 	}
 	sequence := []sample{makeSample(2, 12), makeSample(4, 14), makeSample(7, 9999)}
 	ticks := make(chan time.Time, len(sequence))
@@ -242,5 +247,20 @@ func TestSampleWindowExcludesSampleCompletedAfterCancellation(t *testing.T) {
 	s := summarize(samples, &workloadCounters{}, 6)
 	if s.RSS.Count != 3 || s.RSS.Mean != 12 || s.RSS.Peak != 14 || s.RSS.P95 != 14 || s.HeapInuse != s.RSS || s.CPUSeconds == nil || *s.CPUSeconds != 4 || s.CPUPerMinute == nil || *s.CPUPerMinute != 60 || s.GCCount == nil || *s.GCCount != 4 || s.PauseNS == nil || *s.PauseNS != 40 {
 		t.Fatalf("summary includes post-window values: %+v", s)
+	}
+}
+
+func TestRuntimeReadForcedOnFinalTick(t *testing.T) {
+	start := time.Now()
+	deadline := start.Add(6 * time.Minute)
+	last := deadline.Add(-10 * time.Second)
+	if runtimeDue(deadline.Add(-8*time.Second), last, deadline) {
+		t.Fatal("heap read before runtimeEvery elapsed and away from the window end")
+	}
+	if !runtimeDue(deadline.Add(-sampleEvery+50*time.Millisecond), last, deadline) {
+		t.Fatal("last in-window tick skipped the heap read, so GCs after the previous read are missing")
+	}
+	if !runtimeDue(start, time.Time{}, deadline) {
+		t.Fatal("first tick did not read the heap")
 	}
 }

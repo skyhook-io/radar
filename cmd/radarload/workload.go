@@ -63,7 +63,7 @@ func startWorkload(ctx context.Context, c *radarClient, subjects, neighborhoods 
 		go func() {
 			defer workers.Done()
 			for job := range jobs {
-				reqCtx, cancel := context.WithTimeout(ctx, c.c.Timeout)
+				reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 				start := time.Now()
 				resp, err := c.get(reqCtx, job.Path)
 				var bytes int64

@@ -18,9 +18,9 @@ go run ./cmd/radarload compare old.json new.json
 Use the **binary's PID**, not the `go run` parent. RSS and CPU come from local
 `ps`; the URL and PID must identify the same process. Use matching startup flags,
 identity, subject manifest, cluster activity, and warmup for both builds.
-`-user fleet-argo -groups team-a,viewers` adds proxy headers to every request,
-including SSE and pprof. Header names are configurable through `-user-header`
-and `-groups-header` (defaults: `X-Forwarded-User`, `X-Forwarded-Groups`).
+`-user fleet-argo -groups team-a,viewers` sends Radar's default proxy headers
+(`X-Forwarded-User`, `X-Forwarded-Groups`) on every request, including SSE and
+pprof, for a target running `--auth-mode=proxy`.
 
 Readiness requires `/api/connection?contexts=0` to say `connected` and
 `/api/diagnostics` to report `informers.syncStatus.phase=complete`, including
@@ -31,21 +31,21 @@ which can trigger an external update lookup.
 Inventory uses Pod, Deployment, Service, ConfigMap, Secret, Ingress, Node and
 PersistentVolumeClaim lists. `/api/api-resources` adds discovered HTTPRoute,
 GRPCRoute, Gateway, VirtualService, DestinationRule, Application, Kustomization,
-HelmRelease and Certificate kinds. Subjects are sorted before seeded sampling,
-and saved in the JSON. Unreadable kinds, unavailable discovery, and resource
-coverage are recorded. The testserver has no dynamic discovery or CRD fixtures.
-The tool understands the actual array and coverage-envelope list contracts.
-Lists above the server's 50,000-object limit fail explicitly in inventory; they
-are not silently truncated. `-subjects-from` reuses the prior sampled subjects;
-current inventory is still recorded for comparison. Each fresh or replayed subject
-is GET-probed with the configured identity before measurement. Unreadable subjects
-are excluded and counted by kind and group in `subject_probe_errors`.
-Neighborhood roots are probed
-once before measurement and saved separately: grouped Pods and ordinary Nodes
-can be present in resource lists while absent from the topology. Probe rejection
-counts are recorded. Replay performs the same probes for warmup, preserves the
-saved neighborhood root set after filtering subjects rejected by the resource GET,
-and fails if a remaining saved root is no longer readable as a neighborhood.
+HelmRelease and Certificate kinds. Subjects are sorted before seeded sampling
+and saved in the JSON; unreadable kinds, unavailable discovery and each list's
+coverage are recorded. For an offline target, point it at the replay or census
+testservers. Lists above the server's 50,000-object limit fail in inventory
+rather than being truncated.
+
+`-subjects-from` reuses a prior run's subjects; current inventory is still
+recorded. Every subject, fresh or replayed, is GET-probed with the configured
+identity before measurement, and unreadable ones are dropped and counted by kind
+and group in `subject_probe_errors`, so two builds compared against one manifest
+run the same subjects only when neither drops any (`compare` warns when they
+differ). Neighborhood roots are probed and saved separately, since grouped Pods
+and ordinary Nodes can be listed yet absent from the topology. Replay keeps the
+saved roots that survive the subject probe and fails if one of them no longer
+returns a neighborhood.
 
 A seeded 20-request cycle fixes the offered mix:
 
@@ -58,9 +58,8 @@ A seeded 20-request cycle fixes the offered mix:
 | 5% | `/api/applications` |
 | 5% | `/api/resources/{kind}?include=summary` |
 
-There is no distinct non-AI REST neighborhood route in the current server; both
-neighborhood groups use the existing read-only REST endpoint. No new server
-endpoint is needed. Subjects retain API group, and cluster-scoped paths use `_`.
+Both neighborhood shares use the same read-only route; there is no separate
+non-AI neighborhood endpoint.
 
 QPS is combined across workers. A slot without a free worker is dropped and
 counted, with no growing queue. Compare achieved QPS, drops and errors alongside
@@ -71,19 +70,14 @@ and reconnect after errors. The tool does **not** mutate the cluster: a quiet
 cluster has fewer change-driven topology broadcasts. Keep the external change
 workload fixed when comparing builds.
 
-Before the workload and every two seconds while it runs, radarload captures RSS
-(bytes),
-cumulative process CPU (seconds), Go HeapAlloc/HeapInuse/HeapSys/NumGC, and
-goroutine count. `ps` CPU precision is platform-dependent (Linux commonly whole
-seconds). Samples that finish after the workload window are discarded; the last
-in-window sample supplies the final CPU/GC counters. Pprof sampling itself adds
-overhead, so use identical settings.
-`PauseTotalNs` is parsed when supplied, but standard Go heap text does **not**
-emit it. Run GC pause time is instead calculated from the 256-entry `PauseNs`
-ring and consecutive NumGC values; per-interval pause deltas are saved with samples. If that ring is missing or overwritten
-between samples, the summary reports `gc_pause_ns: null` and an explicit reason;
-it never substitutes zero for missing data. Absolute cumulative pause totals
-remain null when Go doesn't supply them.
+RSS and cumulative process CPU are read every two seconds. Go heap figures
+(HeapAlloc/HeapInuse/HeapSys/NumGC) and the goroutine count are read before the
+workload, every 30 seconds and on the window's last tick, because producing a
+heap profile costs the target CPU. `ps` CPU precision is platform-dependent
+(Linux commonly whole seconds). Samples that finish after the window are
+discarded. GC pause time comes from the 256-entry `PauseNs` ring between
+consecutive heap reads; if the ring was overwritten (more than 256 GCs between
+reads), `gc_pause_ns` is null with a reason, never zero.
 
 Pprof must be reachable: loopback listeners enable it by default; authenticated
 installations also enable it; shared unauthenticated listeners require
@@ -91,11 +85,9 @@ installations also enable it; shared unauthenticated listeners require
 profiles fail preflight instead of running without heap samples. Sample and
 binary-profile failures during a run are saved and return a nonzero exit.
 
-The 30-second CPU profile is centered inside the measurement window (minimum
-run duration: 35s), and a binary heap profile is fetched afterward. Files beside
-`old.json` are `old.cpu.pprof` and `old.heap.pprof`. JSON includes config,
-subjects/inventory, sample series, build metadata, profiles, RSS/HeapInuse
-mean/p95/peak, CPU and GC deltas, SSE counts and endpoint count/errors/p50/p95/p99.
-Percentiles use nearest rank. Compare prints B−A and `(B−A)/abs(A)`; changes from
-a zero baseline are `n/a` unless both values are zero. It warns when workload
-settings or subjects differ. SIGINT saves partial results and returns nonzero.
+A 30-second CPU profile is taken in the middle of the window (minimum run:
+35s) and a binary heap profile afterward, saved beside the JSON as
+`old.cpu.pprof` and `old.heap.pprof`. Percentiles use nearest rank. `compare`
+prints B−A and `(B−A)/abs(A)` (`n/a` from a zero baseline) and warns when
+workload settings or subjects differ. SIGINT saves partial results and returns
+nonzero.

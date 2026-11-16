@@ -43,16 +43,16 @@ func (c *radarClient) get(ctx context.Context, path string) (*http.Response, err
 		return nil, err
 	}
 	if c.c.User != "" {
-		req.Header.Set(c.c.UserHeader, c.c.User)
+		req.Header.Set("X-Forwarded-User", c.c.User)
 	}
 	if c.c.Groups != "" {
-		req.Header.Set(c.c.GroupsHeader, c.c.Groups)
+		req.Header.Set("X-Forwarded-Groups", c.c.Groups)
 	}
 	return c.http.Do(req)
 }
 
 func (c *radarClient) bytes(ctx context.Context, path string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.c.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	resp, err := c.get(ctx, path)
 	if err != nil {
@@ -173,23 +173,17 @@ func (c *radarClient) subjects(ctx context.Context) ([]subject, []inventory, []s
 				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 		}
-		// Resource lists shipped as arrays before the coverage envelope; both are real wire contracts.
-		b = []byte(strings.TrimSpace(string(b)))
-		if len(b) > 0 && b[0] == '[' {
-			err = json.Unmarshal(b, &items)
-		} else {
-			var envelope struct {
-				Items    json.RawMessage `json:"items"`
-				Coverage json.RawMessage `json:"coverage"`
-			}
-			err = json.Unmarshal(b, &envelope)
-			if err == nil {
-				if len(envelope.Items) == 0 {
-					err = fmt.Errorf("resource list missing items")
-				} else {
-					err = json.Unmarshal(envelope.Items, &items)
-					row.Coverage = envelope.Coverage
-				}
+		var envelope struct {
+			Items    json.RawMessage `json:"items"`
+			Coverage json.RawMessage `json:"coverage"`
+		}
+		err = json.Unmarshal(b, &envelope)
+		if err == nil {
+			if len(envelope.Items) == 0 {
+				err = fmt.Errorf("resource list missing items")
+			} else {
+				err = json.Unmarshal(envelope.Items, &items)
+				row.Coverage = envelope.Coverage
 			}
 		}
 		if err != nil {

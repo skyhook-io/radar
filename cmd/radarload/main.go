@@ -15,12 +15,9 @@ import (
 )
 
 type config struct {
-	URL      string        `json:"url"`
-	PID      int           `json:"pid"`
-	Duration time.Duration `json:"duration_ns"`
-	// RuntimeEvery spaces the Go heap and goroutine reads: producing a heap
-	// profile costs the target real CPU, so sampling it often skews CPU.
-	RuntimeEvery time.Duration `json:"runtime_every_ns"`
+	URL          string        `json:"url"`
+	PID          int           `json:"pid"`
+	Duration     time.Duration `json:"duration_ns"`
 	SSE          int           `json:"sse"`
 	Askers       int           `json:"askers"`
 	QPS          float64       `json:"qps"`
@@ -28,13 +25,24 @@ type config struct {
 	Seed         int64         `json:"seed"`
 	User         string        `json:"user,omitempty"`
 	Groups       string        `json:"groups,omitempty"`
-	UserHeader   string        `json:"user_header"`
-	GroupsHeader string        `json:"groups_header"`
-	Timeout      time.Duration `json:"request_timeout_ns"`
 	ReadyTimeout time.Duration `json:"ready_timeout_ns"`
 	Out          string        `json:"out"`
 	SubjectsFrom string        `json:"subjects_from,omitempty"`
 	Label        string        `json:"label,omitempty"`
+}
+
+const (
+	requestTimeout = 15 * time.Second
+	sampleEvery    = 2 * time.Second
+	// Producing a heap profile costs the target real CPU, so Go heap and
+	// goroutine reads are spaced further apart than RSS and CPU.
+	runtimeEvery = 30 * time.Second
+)
+
+// runtimeDue also forces a read on the window's last tick, so GC counts and
+// pause totals cover the whole run rather than stopping at the previous read.
+func runtimeDue(now, last, deadline time.Time) bool {
+	return now.Sub(last) >= runtimeEvery || deadline.Sub(now) < sampleEvery+time.Second
 }
 
 type result struct {
@@ -86,7 +94,6 @@ func command(args []string) error {
 	f.StringVar(&c.URL, "url", "http://localhost:9280", "Radar HTTP base URL (may include a base path)")
 	f.IntVar(&c.PID, "pid", 0, "local Radar process PID (not the go run wrapper)")
 	f.DurationVar(&c.Duration, "duration", 10*time.Minute, "measurement duration; minimum 35s for CPU profiling")
-	f.DurationVar(&c.RuntimeEvery, "runtime-every", 30*time.Second, "how often to read Go heap and goroutine counts from pprof (RSS and CPU are read every 2s)")
 	f.IntVar(&c.SSE, "sse", 3, "concurrent SSE connections")
 	f.IntVar(&c.Askers, "askers", 4, "concurrent request workers")
 	f.Float64Var(&c.QPS, "qps", 20, "combined offered requests/second; saturated slots are counted as dropped")
@@ -94,9 +101,6 @@ func command(args []string) error {
 	f.Int64Var(&c.Seed, "seed", 1, "deterministic inventory and request seed")
 	f.StringVar(&c.User, "user", "", "optional proxy identity")
 	f.StringVar(&c.Groups, "groups", "", "optional comma-separated proxy groups")
-	f.StringVar(&c.UserHeader, "user-header", "X-Forwarded-User", "proxy username header")
-	f.StringVar(&c.GroupsHeader, "groups-header", "X-Forwarded-Groups", "proxy groups header")
-	f.DurationVar(&c.Timeout, "request-timeout", 15*time.Second, "request timeout (stream/profile use separate limits)")
 	f.DurationVar(&c.ReadyTimeout, "ready-timeout", 2*time.Minute, "wait for connected and synced caches")
 	f.StringVar(&c.Out, "out", "result.json", "JSON output; profiles use the same filename stem")
 	f.StringVar(&c.SubjectsFrom, "subjects-from", "", "reuse subjects from a prior result for exact replay")
@@ -110,8 +114,8 @@ func command(args []string) error {
 	if f.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if c.PID <= 0 || c.Duration < 35*time.Second || c.SSE < 0 || c.Askers < 1 || c.QPS <= 0 || c.QPS > 1e6 || math.IsNaN(c.QPS) || math.IsInf(c.QPS, 0) || c.PerKind < 1 || c.Timeout <= 0 || c.ReadyTimeout <= 0 || c.RuntimeEvery < 2*time.Second {
-		return errors.New("require -pid > 0, -duration >= 35s, -sse >= 0, -askers >= 1, 0 < -qps <= 1000000, positive limits/timeouts")
+	if c.PID <= 0 || c.Duration < 35*time.Second || c.SSE < 0 || c.Askers < 1 || c.QPS <= 0 || c.QPS > 1e6 || math.IsNaN(c.QPS) || math.IsInf(c.QPS, 0) || c.PerKind < 1 || c.ReadyTimeout <= 0 {
+		return errors.New("require -pid > 0, -duration >= 35s, -sse >= 0, -askers >= 1, 0 < -qps <= 1000000, -per-kind >= 1, -ready-timeout > 0")
 	}
 	if err := os.MkdirAll(filepath.Dir(c.Out), 0755); err != nil {
 		return err
@@ -201,7 +205,7 @@ func run(ctx context.Context, c config, client *radarClient) error {
 		return fmt.Errorf("sampling preflight failed: %v; pprofEnabled in internal/server/server.go requires a local listener, auth, or RADAR_PPROF=true (never Cloud)", initial.Errors)
 	}
 	r := result{SubjectProbeErrors: subjectProbeErrors, Schema: 1, Config: c, Build: build, Subjects: subjects, NeighborhoodSubjects: neighborhoods, NeighborhoodProbeErrors: probeErrors, Inventory: inv, Notes: append(notes,
-		"PauseTotalNs is absent from standard Go heap text; GC pause deltas use the PauseNs ring (unavailable if more than 256 GCs occur between samples).",
+		"GC pause deltas use the PauseNs ring (unavailable if more than 256 GCs occur between heap samples).",
 		"REST and AI neighborhoods share /api/ai/neighborhood; REST uses profile=all&hops=2, AI uses profile=auto&hops=1.",
 		"Read-only load does not generate cluster changes; SSE broadcasts depend on the target's activity.",
 	), Profiles: map[string]profileResult{}}
@@ -223,12 +227,14 @@ func run(ctx context.Context, c config, client *radarClient) error {
 		}
 		profileDone <- client.profile(loadCtx, c.Out, "cpu", "/debug/pprof/profile?seconds=30")
 	}()
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(sampleEvery)
+	deadline, _ := loadCtx.Deadline()
 	var lastRuntime time.Time
 	r.Samples = append(r.Samples, sampleWindow(loadCtx, ticker.C, func(ctx context.Context) sample {
-		runtime := time.Since(lastRuntime) >= c.RuntimeEvery
+		now := time.Now()
+		runtime := runtimeDue(now, lastRuntime, deadline)
 		if runtime {
-			lastRuntime = time.Now()
+			lastRuntime = now
 		}
 		return client.sample(ctx, r.Started, c.PID, runtime)
 	})...)
@@ -237,7 +243,7 @@ func run(ctx context.Context, c config, client *radarClient) error {
 	cancel()
 	<-done
 	r.Profiles["cpu"] = <-profileDone
-	finalCtx, finalCancel := context.WithTimeout(ctx, c.Timeout)
+	finalCtx, finalCancel := context.WithTimeout(ctx, requestTimeout)
 	defer finalCancel()
 	r.Profiles["heap"] = client.profile(finalCtx, c.Out, "heap", "/debug/pprof/heap")
 	r.Summary = summarize(r.Samples, counters, r.Ended.Sub(r.Started).Seconds())

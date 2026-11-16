@@ -13,12 +13,11 @@ import (
 )
 
 type heapStats struct {
-	Alloc      uint64  `json:"heap_alloc_bytes"`
-	Inuse      uint64  `json:"heap_inuse_bytes"`
-	Sys        uint64  `json:"heap_sys_bytes"`
-	GC         uint64  `json:"num_gc"`
-	PauseTotal *uint64 `json:"pause_total_ns"`
-	pauses     []uint64
+	Alloc  uint64 `json:"heap_alloc_bytes"`
+	Inuse  uint64 `json:"heap_inuse_bytes"`
+	Sys    uint64 `json:"heap_sys_bytes"`
+	GC     uint64 `json:"num_gc"`
+	pauses []uint64
 }
 type sample struct {
 	At         time.Time  `json:"at"`
@@ -69,9 +68,6 @@ func parseHeap(text string) (*heapStats, error) {
 			target = &h.Sys
 		case "NumGC":
 			target = &h.GC
-		case "PauseTotalNs":
-			h.PauseTotal = new(uint64)
-			target = h.PauseTotal
 		default:
 			continue
 		}
@@ -185,12 +181,6 @@ func (c *radarClient) sample(ctx context.Context, start time.Time, pid int, runt
 func pauseDelta(a, b *heapStats) (uint64, error) {
 	if b.GC < a.GC {
 		return 0, errors.New("GC counter decreased")
-	}
-	if a.PauseTotal != nil && b.PauseTotal != nil {
-		if *b.PauseTotal < *a.PauseTotal {
-			return 0, errors.New("GC pause counter decreased")
-		}
-		return *b.PauseTotal - *a.PauseTotal, nil
 	}
 	n := b.GC - a.GC
 	if n == 0 {

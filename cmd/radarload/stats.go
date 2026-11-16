@@ -79,7 +79,7 @@ func summarize(samples []sample, c *workloadCounters, seconds float64) summary {
 			rate := delta * 60 / b.At.Sub(a.At).Seconds()
 			s.CPUPerMinute = &rate
 		}
-		// Heap reads are spaced out (-runtime-every), so GC and pause totals
+		// Heap reads are spaced out (runtimeEvery), so GC and pause totals
 		// come from the samples that carry one.
 		var withHeap []int
 		for i := range samples {
@@ -147,7 +147,7 @@ func delta(a, b float64) (float64, *float64) {
 }
 
 func compare(out io.Writer, a, b result) error {
-	if a.Config.Timeout != b.Config.Timeout || a.Config.UserHeader != b.Config.UserHeader || a.Config.GroupsHeader != b.Config.GroupsHeader || a.Config.Duration != b.Config.Duration || a.Config.SSE != b.Config.SSE || a.Config.Askers != b.Config.Askers || a.Config.QPS != b.Config.QPS || a.Config.Seed != b.Config.Seed || a.Config.User != b.Config.User || a.Config.Groups != b.Config.Groups || !reflect.DeepEqual(a.Subjects, b.Subjects) || !reflect.DeepEqual(a.NeighborhoodSubjects, b.NeighborhoodSubjects) {
+	if a.Config.Duration != b.Config.Duration || a.Config.SSE != b.Config.SSE || a.Config.Askers != b.Config.Askers || a.Config.QPS != b.Config.QPS || a.Config.Seed != b.Config.Seed || a.Config.User != b.Config.User || a.Config.Groups != b.Config.Groups || !reflect.DeepEqual(a.Subjects, b.Subjects) || !reflect.DeepEqual(a.NeighborhoodSubjects, b.NeighborhoodSubjects) {
 		fmt.Fprintln(out, "WARNING: workload configuration or sampled subjects differ")
 	}
 	fmt.Fprintf(out, "A: %s (%s)\nB: %s (%s)\n", a.Config.Label, a.Build["version"], b.Config.Label, b.Build["version"])
