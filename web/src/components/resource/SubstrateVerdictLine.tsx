@@ -55,15 +55,15 @@ export function SubstrateVerdictLine({ target, onOpenMetrics }: { target: Substr
 
 function VerdictState({ verdict }: { verdict: SubstrateVerdict }) {
   switch (verdict.state) {
-    case 'short':
+    case 'workerShortfall':
       return <Badge severity="warning" size="sm" title="Fewer schedulable workers than desired for five minutes: Substrate's own capacity alert condition">Short of workers</Badge>
-    case 'behind':
-      return <Badge severity="warning" size="sm" title="Some actors' snapshot uploads to object storage are overdue">Uploads behind</Badge>
-    case 'full':
+    case 'uploadsOverdue':
+      return <Badge severity="warning" size="sm" title="Some actors' snapshot uploads to object storage are overdue">Uploads overdue</Badge>
+    case 'noFreeActorSlots':
       return <Badge severity="neutral" size="sm" title="No API replica sees a free actor slot">Full</Badge>
-    case 'noWorkers':
-      return <Badge severity="neutral" size="sm">No workers</Badge>
-    case 'serving':
+    case 'noSchedulableWorkers':
+      return <Badge severity="neutral" size="sm">No schedulable workers</Badge>
+    case 'freeActorSlots':
       // Slots are counted by actors alone, so a free slot is not proof that
       // the next actor fits.
       return (
@@ -71,7 +71,7 @@ function VerdictState({ verdict }: { verdict: SubstrateVerdict }) {
           <span className="text-theme-text-primary">Free slots</span>
         </Tooltip>
       )
-    case 'current':
+    case 'noUploadsOverdue':
       // Only what the count proves: snapshots with no storage destination are
       // not counted as overdue, so zero overdue is not "everything is saved".
       return <span className="text-theme-text-primary">No overdue uploads</span>
@@ -112,7 +112,7 @@ function FactValue({ fact }: { fact: SubstrateFact }) {
   }
   const value = fact.value!
   switch (fact.id) {
-    case 'freeWorkers':
+    case 'workersWithFreeActorSlots':
       return <span>{count(value)}{fact.of !== undefined ? ` of ${count(fact.of)}` : ''}</span>
     case 'crashes':
       return <span>{count(value)}</span>

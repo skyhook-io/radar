@@ -44,12 +44,12 @@ func TestSubstratePoolVerdictStates(t *testing.T) {
 		rules []fakeRule
 		want  string
 	}{
-		{"short", []fakeRule{{verdictShort, result(series(nil, 1))}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 2))}}, SubstrateVerdictShort},
-		{"full", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 0))}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictFull},
+		{"worker shortfall", []fakeRule{{verdictShort, result(series(nil, 1))}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 2))}}, SubstrateVerdictWorkerShortfall},
+		{"no free actor slots", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 0))}, {verdictFree, result(series(nil, 0))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictNoFreeActorSlots},
 		// No idle or partial series at all while workers exist: nothing free.
-		{"full without free series", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictFull},
-		{"serving", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictServing},
-		{"no workers", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictTotal, result(series(nil, 0))}}, SubstrateVerdictNoWorkers},
+		{"no free actor slots without free series", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictNoFreeActorSlots},
+		{"free actor slots", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, SubstrateVerdictFreeActorSlots},
+		{"no schedulable workers", []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictTotal, result(series(nil, 0))}}, SubstrateVerdictNoSchedulableWorkers},
 		{"no counts", nil, SubstrateVerdictUnknown},
 	}
 	for _, tc := range cases {
@@ -78,13 +78,13 @@ func TestSubstrateShortRequiresAFullHold(t *testing.T) {
 
 func TestSubstratePoolVerdictFreeWorkers(t *testing.T) {
 	v, _ := poolVerdict(t, []fakeRule{{verdictShort, result(series(nil, 0))}, {verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 1.5))}, {verdictTotal, result(series(nil, 4))}}, okCharts())
-	free := fact(v, "freeWorkers")
+	free := fact(v, "workersWithFreeActorSlots")
 	if free.State != SubstrateFactOK || *free.Value != 1.5 || *free.Of != 4 {
 		t.Fatalf("free = %+v", free)
 	}
 
 	v, _ = poolVerdict(t, nil, okCharts())
-	if free := fact(v, "freeWorkers"); free.State != SubstrateFactUnavailable || free.Value != nil || free.Reason == "" {
+	if free := fact(v, "workersWithFreeActorSlots"); free.State != SubstrateFactUnavailable || free.Value != nil || free.Reason == "" {
 		t.Fatalf("free with no counts = %+v, want unavailable with a reason, never 0", free)
 	}
 }
@@ -148,7 +148,7 @@ func TestSubstrateNodeVerdict(t *testing.T) {
 	}}
 	v := nodeRun(f).nodeVerdict(charts)
 	overdue := fact(v, "overdueUploads")
-	if v.State != SubstrateVerdictBehind || *overdue.Value != 3 || len(overdue.Parts) != 2 || overdue.Parts[0].Label != "over_15m" {
+	if v.State != SubstrateVerdictUploadsOverdue || *overdue.Value != 3 || len(overdue.Parts) != 2 || overdue.Parts[0].Label != "over_15m" {
 		t.Fatalf("verdict = %+v, overdue = %+v", v, overdue)
 	}
 	if oldest := fact(v, "oldestUnsaved"); *oldest.Value != 420 {
@@ -157,7 +157,7 @@ func TestSubstrateNodeVerdict(t *testing.T) {
 
 	f = &fakeSubstrateProm{rules: []fakeRule{{"max by (ate_snapshot_upload_overdue_band)", result(series(band("under_1m"), 0))}}}
 	v = nodeRun(f).nodeVerdict(charts)
-	if v.State != SubstrateVerdictCurrent {
+	if v.State != SubstrateVerdictNoUploadsOverdue {
 		t.Fatalf("all bands zero = %+v", v)
 	}
 	// The age gauge has data in the range and none now: unknown, not "None".
@@ -171,7 +171,7 @@ func TestSubstrateNodeVerdict(t *testing.T) {
 	}
 
 	// No overdue series for this node while the family exists in the cluster.
-	if v := nodeRun(&fakeSubstrateProm{}).nodeVerdict([]SubstrateChart{{ID: "unsavedSnapshotAge", State: SubstrateChartOK}, {ID: "overdueUploads", State: SubstrateChartEmpty}}); v.State != SubstrateVerdictCurrent || fact(v, "overdueUploads").State != SubstrateFactEmpty {
+	if v := nodeRun(&fakeSubstrateProm{}).nodeVerdict([]SubstrateChart{{ID: "unsavedSnapshotAge", State: SubstrateChartOK}, {ID: "overdueUploads", State: SubstrateChartEmpty}}); v.State != SubstrateVerdictNoUploadsOverdue || fact(v, "overdueUploads").State != SubstrateFactEmpty {
 		t.Fatalf("empty = %+v", v)
 	}
 
@@ -194,10 +194,10 @@ func TestSubstrateRangeFactRequiresCurrentSeries(t *testing.T) {
 // API server's counts, and says the shortfall was not.
 func TestSubstratePoolVerdictWithoutDesiredWorkers(t *testing.T) {
 	v, _ := poolVerdict(t, []fakeRule{{verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 2))}, {verdictTotal, result(series(nil, 2))}}, okCharts())
-	if v.State != SubstrateVerdictServing || !strings.Contains(v.Reason, "desired worker count") {
+	if v.State != SubstrateVerdictFreeActorSlots || !strings.Contains(v.Reason, "desired worker count") {
 		t.Fatalf("verdict = %s %q, want serving qualified by the missing desired count", v.State, v.Reason)
 	}
-	if free := fact(v, "freeWorkers"); free.State != SubstrateFactOK || *free.Value != 2 || *free.Of != 2 {
+	if free := fact(v, "workersWithFreeActorSlots"); free.State != SubstrateFactOK || *free.Value != 2 || *free.Of != 2 {
 		t.Fatalf("free = %+v", free)
 	}
 }

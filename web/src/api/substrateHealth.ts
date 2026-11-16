@@ -34,24 +34,24 @@ export interface SubstrateChart {
 
 export type SubstrateVerdictState =
   /** Substrate's own capacity alert condition has held for five minutes. */
-  | 'short'
+  | 'workerShortfall'
   /** No API replica sees a free actor slot. */
-  | 'full'
+  | 'noFreeActorSlots'
   /** Some worker has a free actor slot. Slots are counted by actors alone: an
    *  actor can still fail to place for lack of CPU or memory. */
-  | 'serving'
+  | 'freeActorSlots'
   /** No schedulable worker of a known class. */
-  | 'noWorkers'
+  | 'noSchedulableWorkers'
   /** A node: some actor's snapshot upload is overdue. */
-  | 'behind'
+  | 'uploadsOverdue'
   /** A node: no overdue upload is counted. Snapshots with no storage
    *  destination are not counted, so this does not prove all are saved. */
-  | 'current'
+  | 'noUploadsOverdue'
   | 'unknown'
 
 /**
  * One number behind a verdict. resumeP95, resumeFailures and crashes summarize
- * the requested range; freeWorkers, overdueUploads and oldestUnsaved read now.
+ * the requested range; workersWithFreeActorSlots, overdueUploads and oldestUnsaved read now.
  */
 export interface SubstrateFact {
   id: string
@@ -61,7 +61,7 @@ export interface SubstrateFact {
   /** ok has a value; empty means the series exist and recorded nothing here; unavailable says why. */
   state: 'ok' | 'empty' | 'unavailable'
   value?: number
-  /** Only on an ok freeWorkers: the schedulable workers of known classes it is out of. */
+  /** Only on an ok workersWithFreeActorSlots: the schedulable workers of known classes it is out of. */
   of?: number
   reason?: string
   /** Only on an ok overdueUploads: Substrate's band keys with actors in them, worst first. */

@@ -2248,18 +2248,18 @@ A claim forwards its Sandbox's reason; an in-progress or settled forwarded reaso
 
 The verdict and the capacity and snapshot facts read now; resume p95, failed resumes and crashes summarize the charts' hour:
 
-| Resource | Verdict | Means | Facts |
+| Resource | Verdict (wire `state`) | Means | Facts |
 |---|---|---|---|
-| WorkerPool | **Short of workers** (amber) | Substrate's own `SubstrateWorkerPoolCapacityNotDelivered` condition has held at every minute for the last five (six one-minute points), and holds now: the most schedulable workers any API replica reports is below the fewest desired | Free workers of schedulable workers in the states Substrate defines (averaged across replicas, shown as approximate when fractional); resume p95 and failed resumes of actors placed on this pool, and crashes, over the hour |
-| WorkerPool | **Full** (neutral) | No API replica sees a free actor slot (an idle or partial worker) | |
-| WorkerPool | Free slots | Some worker has a free actor slot. Substrate counts slots by actors alone, so an actor that needs more CPU or memory than a worker has left can still fail to place, and that failure names no pool: it is in neither the pool's charts nor its failed resumes | |
-| WorkerPool | No workers | No schedulable worker of a known class, and none short | |
-| Node | **Uploads behind** (amber) | Some actor's snapshot upload to object storage is overdue | Overdue uploads by band, worst first; oldest snapshot not yet in storage |
-| Node | No overdue uploads | atelet counts no overdue upload. Snapshots with no storage destination are not counted, so this is not proof that every snapshot is saved; the oldest unsaved snapshot fact shows that | |
+| WorkerPool | **Short of workers** (amber), `workerShortfall` | Substrate's own `SubstrateWorkerPoolCapacityNotDelivered` condition has held at every minute for the last five (six one-minute points), and holds now: the most schedulable workers any API replica reports is below the fewest desired | Workers with free slots, of schedulable workers in the states Substrate defines (averaged across replicas, shown as approximate when fractional); resume p95 and failed resumes of actors placed on this pool, and crashes, over the hour |
+| WorkerPool | **Full** (neutral), `noFreeActorSlots` | No API replica sees a free actor slot (an idle or partial worker) | |
+| WorkerPool | Free slots, `freeActorSlots` | Some worker has a free actor slot. Substrate counts slots by actors alone, so an actor that needs more CPU or memory than a worker has left can still fail to place, and that failure names no pool: it is in neither the pool's charts nor its failed resumes | |
+| WorkerPool | No schedulable workers, `noSchedulableWorkers` | No schedulable worker of a known class, and none short | |
+| Node | **Uploads overdue** (amber), `uploadsOverdue` | Some actor's snapshot upload to object storage is overdue | Overdue uploads by band, worst first; oldest snapshot not yet in storage |
+| Node | No overdue uploads, `noUploadsOverdue` | atelet counts no overdue upload. Snapshots with no storage destination are not counted, so this is not proof that every snapshot is saved; the oldest unsaved snapshot fact shows that | |
 
 Facts are uncolored. One Radar could not read says **Unavailable** with the reason (the same reason its chart gives), never 0, and so does an hourly fact whose own population (successful resumes, all resumes, crashes) stopped reporting: the hour's number would count only the time before. One whose series exist but recorded nothing for this pool or node says **None**. When the verdict cannot be read it says **Unknown** with the reason, as it does when workers report a state Substrate's registry does not define.
 
-Only Short of workers needs the controller's `ate.workerpool.desired_workers`. Substrate's bundled Prometheus does not collect the controller's metrics, so without it the pool is still judged Full, Free slots or No workers from the API server's counts, and an info mark on the line says the shortfall was not judged. The same mark carries the note when Radar could not confirm the series belong to this cluster.
+Only Short of workers needs the controller's `ate.workerpool.desired_workers`. Substrate's bundled Prometheus does not collect the controller's metrics, so without it the pool is still judged Full, Free slots or No schedulable workers from the API server's counts, and an info mark on the line says the shortfall was not judged. The same mark carries the note when Radar could not confirm the series belong to this cluster.
 
 | Resource | Chart | Series (each counts only what Substrate attributes) |
 |---|---|---|

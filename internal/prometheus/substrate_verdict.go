@@ -17,24 +17,24 @@ import (
 // p95, failed resumes and crashes summarize the request's range.
 
 const (
-	// SubstrateVerdictShort: Substrate's own SubstrateWorkerPoolCapacityNotDelivered
-	// alert condition has held for five minutes: fewer schedulable workers than
+	// SubstrateVerdictWorkerShortfall: Substrate's own
+	// SubstrateWorkerPoolCapacityNotDelivered alert condition has held for five minutes: fewer schedulable workers than
 	// the fewest desired. It needs the controller's desired worker count.
-	SubstrateVerdictShort = "short"
-	// SubstrateVerdictFull: no API replica sees a free actor slot.
-	SubstrateVerdictFull = "full"
-	// SubstrateVerdictServing: some worker has a free actor slot. Slots are
+	SubstrateVerdictWorkerShortfall = "workerShortfall"
+	// SubstrateVerdictNoFreeActorSlots: no API replica sees a free actor slot.
+	SubstrateVerdictNoFreeActorSlots = "noFreeActorSlots"
+	// SubstrateVerdictFreeActorSlots: some worker has a free actor slot. Slots are
 	// counted by actors alone; an actor can still fail to place for lack of
 	// CPU or memory, and such a placement names no pool.
-	SubstrateVerdictServing = "serving"
-	// SubstrateVerdictNoWorkers: no schedulable worker of a known class.
-	SubstrateVerdictNoWorkers = "noWorkers"
-	// SubstrateVerdictBehind: some actor's snapshot upload is overdue.
-	SubstrateVerdictBehind = "behind"
-	// SubstrateVerdictCurrent: no overdue upload is counted. Snapshots with no
+	SubstrateVerdictFreeActorSlots = "freeActorSlots"
+	// SubstrateVerdictNoSchedulableWorkers: no schedulable worker of a known class.
+	SubstrateVerdictNoSchedulableWorkers = "noSchedulableWorkers"
+	// SubstrateVerdictUploadsOverdue: some actor's snapshot upload is overdue.
+	SubstrateVerdictUploadsOverdue = "uploadsOverdue"
+	// SubstrateVerdictNoUploadsOverdue: no overdue upload is counted. Snapshots with no
 	// storage destination are not counted, so it does not prove all are saved.
-	SubstrateVerdictCurrent = "current"
-	SubstrateVerdictUnknown = "unknown"
+	SubstrateVerdictNoUploadsOverdue = "noUploadsOverdue"
+	SubstrateVerdictUnknown          = "unknown"
 
 	SubstrateFactOK          = "ok"
 	SubstrateFactEmpty       = "empty"
@@ -61,7 +61,7 @@ type SubstrateFact struct {
 	Unit  string   `json:"unit"`
 	State string   `json:"state"`
 	Value *float64 `json:"value,omitempty"`
-	// Of is the total Value is out of, set only on an ok freeWorkers: the
+	// Of is the total Value is out of, set only on an ok workersWithFreeActorSlots: the
 	// schedulable workers of known classes, averaged across API replicas.
 	Of     *float64 `json:"of,omitempty"`
 	Reason string   `json:"reason,omitempty"`
@@ -166,7 +166,7 @@ func chartDef(defs []substrateChartDef, id string) substrateChartDef {
 func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	defs := r.req.charts
 	v := &SubstrateVerdict{State: SubstrateVerdictUnknown}
-	freeFact := unavailableFact("freeWorkers", "Free workers", "workers", "")
+	freeFact := unavailableFact("workersWithFreeActorSlots", "Workers with free slots", "workers", "")
 	defer func() {
 		v.Facts = append([]SubstrateFact{freeFact},
 			r.chartFact(findSubstrateChart(charts, "resumeTime"), chartDef(defs, "resumeTime"), "resumeP95", "Resume p95", "seconds", succeededResumes, func(x substrateExpr) string {
@@ -232,18 +232,18 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 		zero := 0.0
 		freeNow = &zero
 	}
-	freeFact = SubstrateFact{ID: "freeWorkers", Label: "Free workers", Unit: "workers", State: SubstrateFactOK, Value: freeNow, Of: total}
+	freeFact = SubstrateFact{ID: "workersWithFreeActorSlots", Label: "Workers with free slots", Unit: "workers", State: SubstrateFactOK, Value: freeNow, Of: total}
 
 	short, err := r.poolShort()
 	switch {
 	case err != nil:
 		v.Reason = err.Error()
 	case short:
-		v.State = SubstrateVerdictShort
+		v.State = SubstrateVerdictWorkerShortfall
 		return v
 	}
 	if *total == 0 {
-		v.State = SubstrateVerdictNoWorkers
+		v.State = SubstrateVerdictNoSchedulableWorkers
 		return v
 	}
 	// Full only when no replica sees a free slot: one that lags cannot
@@ -253,9 +253,9 @@ func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
 	case err != nil:
 		return unknown(queryFailed(err))
 	case anyFree == nil || *anyFree == 0:
-		v.State = SubstrateVerdictFull
+		v.State = SubstrateVerdictNoFreeActorSlots
 	default:
-		v.State = SubstrateVerdictServing
+		v.State = SubstrateVerdictFreeActorSlots
 	}
 	return v
 }
@@ -346,9 +346,9 @@ func (r *substrateRun) nodeVerdict(charts []SubstrateChart) *SubstrateVerdict {
 		overdue = SubstrateFact{ID: "overdueUploads", Label: "Overdue uploads", Unit: "count", State: SubstrateFactOK, Value: &total, Parts: parts}
 	}
 	if total > 0 {
-		v.State = SubstrateVerdictBehind
+		v.State = SubstrateVerdictUploadsOverdue
 	} else {
-		v.State = SubstrateVerdictCurrent
+		v.State = SubstrateVerdictNoUploadsOverdue
 	}
 	return v
 }

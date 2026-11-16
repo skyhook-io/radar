@@ -28,7 +28,7 @@ const ok = (id: string, label: string, unit: SubstrateFact['unit'], value: numbe
 
 describe('SubstrateVerdictLine', () => {
   it('flags a pool short of workers in amber and keeps its facts uncolored', () => {
-    withVerdict({ state: 'short', facts: [ok('freeWorkers', 'Free workers', 'workers', 0, { of: 3 })] })
+    withVerdict({ state: 'workerShortfall', facts: [ok('workersWithFreeActorSlots', 'Workers with free slots', 'workers', 0, { of: 3 })] })
     const html = render(pool)
     expect(html).toContain('Capacity')
     expect(html).toContain('Short of workers')
@@ -38,9 +38,9 @@ describe('SubstrateVerdictLine', () => {
   })
 
   it('reads full as neutral and free slots as plain text, never as serving', () => {
-    withVerdict({ state: 'full', facts: [] })
+    withVerdict({ state: 'noFreeActorSlots', facts: [] })
     expect(render(pool)).toContain('bg-theme-hover/50')
-    withVerdict({ state: 'serving', facts: [] })
+    withVerdict({ state: 'freeActorSlots', facts: [] })
     const html = render(pool)
     expect(html).toContain('Free slots')
     expect(html).not.toContain('Serving')
@@ -49,15 +49,15 @@ describe('SubstrateVerdictLine', () => {
   })
 
   it('marks a verdict qualified by an unjudged shortfall or an unconfirmed cluster', () => {
-    withVerdict({ state: 'serving', reason: "Radar cannot tell whether the pool is short of workers: Substrate's controller reported no desired worker count", facts: [] })
+    withVerdict({ state: 'freeActorSlots', reason: "Radar cannot tell whether the pool is short of workers: Substrate's controller reported no desired worker count", facts: [] })
     expect(render(pool)).toContain('aria-label="Qualified"')
     const unverified = { isolation: { mode: 'unverified' as const, note: "Radar couldn't confirm these Substrate series belong to this exact cluster" } }
-    health = { data: { ...base, status: 'available', verdict: { state: 'full', facts: [] }, charts: [{ id: 'workers', title: '', unit: 'workers', population: '', source: '', state: 'ok', series: [], steps: 0, covered: 0, ...unverified }] } }
+    health = { data: { ...base, status: 'available', verdict: { state: 'noFreeActorSlots', facts: [] }, charts: [{ id: 'workers', title: '', unit: 'workers', population: '', source: '', state: 'ok', series: [], steps: 0, covered: 0, ...unverified }] } }
     expect(render(pool)).toContain('aria-label="Qualified"')
   })
 
   it('shows fractional replica averages as approximate, never rounded', () => {
-    withVerdict({ state: 'serving', facts: [ok('freeWorkers', 'Free workers', 'workers', 1.5, { of: 4 }), ok('crashes', 'Crashes', 'count', 2.4)] })
+    withVerdict({ state: 'freeActorSlots', facts: [ok('workersWithFreeActorSlots', 'Workers with free slots', 'workers', 1.5, { of: 4 }), ok('crashes', 'Crashes', 'count', 2.4)] })
     const html = render(pool)
     expect(html).toContain('≈1.5 of 4')
     expect(html).toContain('Crashes (1h)')
@@ -66,26 +66,26 @@ describe('SubstrateVerdictLine', () => {
 
   it('says Unavailable, never 0, for a fact Radar could not read, and None for one with nothing recorded', () => {
     withVerdict({ state: 'unknown', reason: 'reported through more than one scrape job', facts: [
-      { id: 'freeWorkers', label: 'Free workers', unit: 'workers', state: 'unavailable', reason: 'reported through more than one scrape job' },
+      { id: 'workersWithFreeActorSlots', label: 'Workers with free slots', unit: 'workers', state: 'unavailable', reason: 'reported through more than one scrape job' },
       { id: 'resumeP95', label: 'Resume p95', unit: 'seconds', state: 'empty', reason: 'no actor resumed on this pool in this range' },
     ] })
     const html = render(pool)
     expect(html).toContain('Unknown')
     expect(html).toContain('Unavailable')
     expect(html).toContain('None')
-    expect(html).not.toMatch(/Free workers <\/span><span[^>]*>0/)
+    expect(html).not.toMatch(/Workers with free slots <\/span><span[^>]*>0/)
   })
 
   it('names overdue bands on a node, worst first', () => {
-    withVerdict({ state: 'behind', facts: [ok('overdueUploads', 'Overdue uploads', 'count', 3, { parts: [{ label: 'over_15m', value: 1 }, { label: '1m_to_5m', value: 2 }] })] })
+    withVerdict({ state: 'uploadsOverdue', facts: [ok('overdueUploads', 'Overdue uploads', 'count', 3, { parts: [{ label: 'over_15m', value: 1 }, { label: '1m_to_5m', value: 2 }] })] })
     const html = render(node)
     expect(html).toContain('Snapshots')
-    expect(html).toContain('Uploads behind')
+    expect(html).toContain('Uploads overdue')
     expect(html).toContain('3 (over 15m: 1, 1–5m: 2)')
   })
 
   it('does not keep asserting a cached verdict after a failed refresh or a disconnect', () => {
-    withVerdict({ state: 'serving', facts: [] })
+    withVerdict({ state: 'freeActorSlots', facts: [] })
     health = { ...health, error: new Error('timeout') }
     const html = render(pool)
     expect(html).toContain('Unknown')
@@ -97,7 +97,7 @@ describe('SubstrateVerdictLine', () => {
   })
 
   it('claims no more than the overdue count proves on a node', () => {
-    withVerdict({ state: 'current', facts: [] })
+    withVerdict({ state: 'noUploadsOverdue', facts: [] })
     const html = render(node)
     expect(html).toContain('No overdue uploads')
     expect(html).not.toContain('Up to date')
