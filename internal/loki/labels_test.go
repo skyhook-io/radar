@@ -1,6 +1,9 @@
 package loki
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDetectLabels(t *testing.T) {
 	if got := DetectLabels([]string{"namespace", "pod", "container", "job"}); got != (StreamLabels{Namespace: "namespace", Pod: "pod", Container: "container"}) {
@@ -24,5 +27,41 @@ func TestDetectLabels(t *testing.T) {
 	}
 	if r := DetectLabels([]string{"namespace", "pod"}).HistoryReason(); r != "" {
 		t.Errorf("reason = %q", r)
+	}
+}
+
+func TestClusterLabel(t *testing.T) {
+	if got := DetectLabels([]string{"namespace", "pod", "k8s_cluster_name"}); got.Cluster != "k8s_cluster_name" {
+		t.Errorf("cluster label: %+v", got)
+	}
+	shared := StreamLabels{Namespace: "namespace", Pod: "pod", Cluster: "cluster"}
+	if r := shared.HistoryReason(); r != "" {
+		t.Errorf("without auth a cluster label alone doesn't refuse: %q", r)
+	}
+	shared.ClusterRequired = true
+	if r := shared.HistoryReason(); r == "" || !strings.Contains(r, "--loki-cluster") {
+		t.Errorf("with auth, a cluster label and no value must refuse: %q", r)
+	}
+	shared.ClusterValue = "prod"
+	if r := shared.HistoryReason(); r != "" {
+		t.Errorf("a configured value reads: %q", r)
+	}
+	// A value with no label to match it on can't keep other clusters out.
+	unmatched := StreamLabels{Namespace: "namespace", Pod: "pod", ClusterValue: "prod"}
+	if r := unmatched.HistoryReason(); r == "" {
+		t.Error("a cluster value with no cluster label must refuse")
+	}
+}
+
+func TestParseCluster(t *testing.T) {
+	for in, want := range map[string][2]string{"prod": {"", "prod"}, "region_cluster=prod": {"region_cluster", "prod"}, " prod ": {"", "prod"}} {
+		if l, v, err := ParseCluster(in); err != nil || l != want[0] || v != want[1] {
+			t.Errorf("ParseCluster(%q) = %q, %q, %v", in, l, v, err)
+		}
+	}
+	for _, bad := range []string{`a"} or {x=`, "=prod", "region="} {
+		if _, _, err := ParseCluster(bad); err == nil {
+			t.Errorf("ParseCluster(%q) accepted", bad)
+		}
 	}
 }

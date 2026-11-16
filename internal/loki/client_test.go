@@ -518,3 +518,24 @@ func TestHungForwardDoesNotStallDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The configured cluster reaches the labels History reads, and a label the
+// operator named replaces the detected one.
+func TestClusterSettingOverlaysLabels(t *testing.T) {
+	reset(t)
+	t.Cleanup(func() { SetCluster("", "", false) })
+	srv := fakeLoki(t, 200, `{"status":"success","data":["namespace","pod","cluster","region_cluster"]}`, nil)
+	SetCluster("region_cluster", "prod", true)
+	Configure(srv.URL, nil)
+	if err := EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	l, _ := Labels()
+	if l.Cluster != "region_cluster" || l.ClusterValue != "prod" || !l.ClusterRequired {
+		t.Fatalf("labels = %+v", l)
+	}
+	SetCluster("", "", true)
+	if st := CurrentStatus(); st.HistoryReason == "" {
+		t.Fatalf("status = %+v", st)
+	}
+}

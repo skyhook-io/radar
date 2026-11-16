@@ -97,6 +97,26 @@ var client struct {
 	failedAt    time.Time          // when the last attempt failed
 	attemptGen  int                // the generation the running attempt connects for
 	generation  int                // bumped by Configure, Retire and each new connection
+	// cluster* come from --loki-cluster and outlive Configure and Retire.
+	clusterLabel, clusterValue string
+	clusterRequired            bool
+}
+
+// SetCluster sets this cluster's value for Loki's cluster label (label ""
+// uses the detected one); required refuses History when Loki has a cluster
+// label and no value is set.
+func SetCluster(label, value string, required bool) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.clusterLabel, client.clusterValue, client.clusterRequired = label, value, required
+}
+
+func withClusterLocked(l StreamLabels) StreamLabels {
+	if client.clusterLabel != "" {
+		l.Cluster = client.clusterLabel
+	}
+	l.ClusterValue, l.ClusterRequired = client.clusterValue, client.clusterRequired
+	return l
 }
 
 // Configure replaces the connection: rawURL set means that Loki, empty means
@@ -143,9 +163,9 @@ func CurrentStatus() Status {
 	address := client.manualURL
 	if connectedLocked() {
 		st.Connected, st.Source, address = true, client.source, client.baseURL
-		st.Labels = client.labels
 		if client.labels != nil {
-			st.HistoryReason = client.labels.HistoryReason()
+			l := withClusterLocked(*client.labels)
+			st.Labels, st.HistoryReason = &l, l.HistoryReason()
 		}
 	}
 	if address != "" {
@@ -359,7 +379,7 @@ func Labels() (StreamLabels, bool) {
 	if !connectedLocked() || client.labels == nil {
 		return StreamLabels{}, false
 	}
-	return *client.labels, true
+	return withClusterLocked(*client.labels), true
 }
 
 // minScrubbedLength: shorter header values (a numeric tenant ID) aren't

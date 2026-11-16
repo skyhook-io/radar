@@ -698,8 +698,20 @@ OpenTelemetry). Settings shows what it found. Loki without a namespace or pod
 label can be connected, but pod log history needs both. Only
 `/loki/api/v1/labels` is read in this release.
 
-Launch flags: `--loki-url` (skips discovery) and `--loki-header Key=Value`
-(repeatable). Locally they apply to the launch context only, as
+**A Loki shared by several clusters.** Its streams usually carry a label naming
+the cluster (`cluster`, `k8s_cluster_name` or `cluster_name` are detected). In
+shared installations, `--loki-cluster=<value>` (or `<label>=<value>` for another
+label name) makes every History read match this cluster's value. With
+authentication, Radar refuses History while Loki has a cluster label and no
+value is set, since a pod name in one cluster would otherwise read the same
+name in another; without authentication the status says the label is there.
+When `--loki-cluster` names a value but Radar finds no label to match it on,
+History is refused. A cluster label Radar doesn't detect and nobody named is
+not matched. A local Radar reads with the connection you saved and takes no
+`--loki-cluster`.
+
+Launch flags: `--loki-url` (skips discovery), `--loki-header Key=Value`
+(repeatable) and, in shared installations, `--loki-cluster`. Locally they apply to the launch context only, as
 `--prometheus-url` does, and `--loki-header` needs `--loki-url` in the same
 launch. In shared installations the flags configure Loki for the process; with
 none, Radar discovers it. `GET /api/loki/status` reports the state with a

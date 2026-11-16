@@ -2,7 +2,15 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
-export interface LokiStreamLabels { namespace: string; pod: string; container: string; job?: string }
+export interface LokiStreamLabels {
+  namespace: string
+  pod: string
+  container: string
+  job?: string
+  /** The label naming a cluster in a Loki shared by several, and this cluster's value for it (--loki-cluster). */
+  cluster?: string
+  clusterValue?: string
+}
 
 // GET /api/loki/status. Never carries a header value or a full URL.
 export interface LokiStatus {
@@ -38,7 +46,8 @@ export function useLokiStatus(enabled = true) {
   return { ...query, support }
 }
 
-/** "namespace, pod, container, job job_name": the stream labels Radar reads. */
+/** "namespace, pod, container, job job_name, cluster=\"prod\"": the stream labels Radar reads. */
 export function describeLokiLabels(l: LokiStreamLabels): string {
-  return [l.namespace, l.pod, l.container, l.job && `job ${l.job}`].filter(Boolean).join(', ')
+  const cluster = l.cluster && (l.clusterValue ? `${l.cluster}="${l.clusterValue}"` : l.cluster)
+  return [l.namespace, l.pod, l.container, l.job && `job ${l.job}`, cluster].filter(Boolean).join(', ')
 }

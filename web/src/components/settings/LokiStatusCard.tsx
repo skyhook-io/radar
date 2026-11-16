@@ -14,7 +14,7 @@ export function LokiStatusCard({ active }: { active: boolean }) {
   const status = !data.configured ? 'Off' : data.connected ? 'Connected' : data.discovering ? 'Discovering…' : 'Not connected'
   return (
     <div className="space-y-1.5 text-sm text-theme-text-secondary">
-      <p>Set by this installation’s operator with <code>--loki-url</code> and <code>--loki-header</code>; without a URL Radar finds Loki in the cluster.</p>
+      <p>Set by this installation’s operator with <code>--loki-url</code>, <code>--loki-header</code> and <code>--loki-cluster</code>; without a URL Radar finds Loki in the cluster.</p>
       <div className="flex flex-wrap items-center gap-2">
         <Badge severity={data.connected ? 'success' : data.configured && !data.discovering ? 'warning' : 'neutral'}>{status}</Badge>
         {data.address && <span className="text-theme-text-tertiary">{data.address}</span>}

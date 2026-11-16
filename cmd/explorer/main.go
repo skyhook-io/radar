@@ -149,6 +149,7 @@ func main() {
 	lokiURL := flag.String("loki-url", "", "Loki URL for pod log history (skips auto-discovery)")
 	lokiHeaders := newHeaderFlag(nil)
 	flag.Var(lokiHeaders, "loki-header", "HTTP header to send with Loki requests, e.g. 'X-Scope-OrgID=tenant' (repeatable)")
+	lokiCluster := flag.String("loki-cluster", "", "This cluster's value for the cluster label of a Loki shared by several clusters, or label=value (shared installations)")
 	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL matcher fragment for Beyla Live Traffic, e.g. 'job=~"my-beyla.*"' (empty = *beyla* or *alloy* jobs). Workload charts use this override only with an explicit Prometheus scope flag and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it.`)
 	// MCP server
 	mcpFlags := config.RegisterMCPFlags(flag.CommandLine, fileCfg)
@@ -480,6 +481,7 @@ func main() {
 		LokiHeaders:                 lokiHeaders.value(),
 		LokiURLFlag:                 lokiURLFlagSet,
 		LokiHeaderFlag:              lokiHeaders.overrides,
+		LokiCluster:                 *lokiCluster,
 		BeylaJobSelector:            *beylaJobSelector,
 		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:                  mcpEnabled,
