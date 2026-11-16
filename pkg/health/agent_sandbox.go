@@ -167,7 +167,7 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 		// Sandbox does not own, and waits. Nothing is being torn down, so this
 		// is not a suspension in progress.
 		if suspended.status == "False" && suspended.reason == "PodNotOwned" {
-			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(u.GetName(), suspended.message)}, SuspensionRefused: true}
+			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(sandboxPodName(u), suspended.message)}, SuspensionRefused: true}
 		}
 		// Both conditions can stay False through a suspension, keeping
 		// transition times from before it began, so none marks its start. A Pod
@@ -204,6 +204,16 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 		reason = "Not Ready"
 	}
 	return AgentSandboxReadiness{Verdict: Verdict{Level: LevelUnhealthy, Reason: reason}, Mirrored: isClaim && !sandboxClaimOwnReasons[ready.reason]}
+}
+
+// sandboxPodName is the Pod the controller looks for: the name a pod-name
+// annotation records (Sandboxes adopted from older warm pools carry one),
+// otherwise the Sandbox's own name.
+func sandboxPodName(u *unstructured.Unstructured) string {
+	if name := u.GetAnnotations()["agents.x-k8s.io/pod-name"]; name != "" {
+		return name
+	}
+	return u.GetName()
 }
 
 // suspensionRefusedMessage explains a refused suspension: the controller's own

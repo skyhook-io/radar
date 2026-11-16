@@ -69,6 +69,24 @@ describe('Agent Sandbox refused suspension', () => {
       message: 'Refused to delete pod because it is not owned by this sandbox. A Pod named "a" exists that this Sandbox does not own. Remove that Pod, or recreate the Sandbox under another name, so it can suspend.',
     })
   })
+
+  const refused = (extra: Record<string, unknown>) => ({
+    apiVersion: 'agents.x-k8s.io/v1beta1', kind: 'Sandbox', metadata: { name: 'a', generation: 1, ...extra },
+    status: { conditions: [
+      { ...ready('False', 'SandboxSuspended', 'Sandbox is suspending'), observedGeneration: 1 },
+      { type: 'Suspended', status: 'False', reason: 'PodNotOwned', message: 'Refused to delete pod because it is not owned by this sandbox' },
+    ] },
+  })
+
+  it('names the Pod the controller looks for, which an annotation can record', () => {
+    expect(getAgentRuntimeStatus(refused({ annotations: { 'agents.x-k8s.io/pod-name': 'a-pod-7f2' } }))?.message).toContain('A Pod named "a-pod-7f2"')
+  })
+
+  it('gives no unblocking advice once an edit outranks the refusal', () => {
+    const status = getAgentRuntimeStatus(refused({ generation: 2 }))
+    expect(status?.text).not.toBe('Suspension blocked')
+    expect(status?.message).not.toContain('Remove that Pod')
+  })
 })
 
 describe('Agent Sandbox warm pools and expiry', () => {

@@ -3,6 +3,7 @@ package health
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,5 +70,33 @@ func TestAgentSandboxSuspensionStartUnknown(t *testing.T) {
 	r := ReadAgentSandbox(u)
 	if r.Verdict.Reason != "Suspending" || !r.InProgress || r.SinceKnown {
 		t.Fatalf("got %+v, want Suspending with an unknown start", r)
+	}
+}
+
+func TestAgentSandboxRefusedSuspensionNamesTheTrackedPod(t *testing.T) {
+	sandbox := func(annotations map[string]any) *unstructured.Unstructured {
+		meta := map[string]any{"name": "a", "namespace": "agents", "generation": int64(1)}
+		if annotations != nil {
+			meta["annotations"] = annotations
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "agents.x-k8s.io/v1beta1", "kind": "Sandbox", "metadata": meta,
+			"status": map[string]any{"conditions": []any{
+				map[string]any{"type": "Ready", "status": "False", "reason": "SandboxSuspended", "message": "Sandbox is suspending", "observedGeneration": int64(1)},
+				map[string]any{"type": "Suspended", "status": "False", "reason": "PodNotOwned", "message": "Refused to delete pod because it is not owned by this sandbox"},
+			}},
+		}}
+	}
+	for name, tc := range map[string]struct {
+		annotations map[string]any
+		want        string
+	}{
+		"own name":       {nil, `A Pod named "a" exists`},
+		"annotated name": {map[string]any{"agents.x-k8s.io/pod-name": "a-pod-7f2"}, `A Pod named "a-pod-7f2" exists`},
+	} {
+		r := ReadAgentSandbox(sandbox(tc.annotations))
+		if !r.SuspensionRefused || !strings.Contains(r.Verdict.Message, tc.want) {
+			t.Errorf("%s: got %+v, want a refusal naming %s", name, r, tc.want)
+		}
 	}
 }

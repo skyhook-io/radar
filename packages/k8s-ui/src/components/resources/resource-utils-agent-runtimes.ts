@@ -43,6 +43,14 @@ function isSuspensionRefused(conditions: unknown): boolean {
     && suspended?.status === 'False' && suspended?.reason === 'PodNotOwned'
 }
 
+const SUSPENSION_BLOCKED = 'Suspension blocked'
+
+// The Pod the controller looks for; mirrors pkg/health sandboxPodName.
+function sandboxPodName(resource: any): string {
+  const annotated = resource?.metadata?.annotations?.['agents.x-k8s.io/pod-name']
+  return typeof annotated === 'string' && annotated ? annotated : resource?.metadata?.name ?? ''
+}
+
 // Mirrors pkg/health suspensionRefusedMessage.
 function suspensionRefusedMessage(name: string, controllerMessage: unknown): string {
   const next = `A Pod named "${name}" exists that this Sandbox does not own. Remove that Pod, or recreate the Sandbox under another name, so it can suspend.`
@@ -198,7 +206,7 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
     // does not own.
     const suspended = findCondition(conditions, 'Suspended')
     if (isClaim || suspended?.status === 'True') return badge('Suspended', 'neutral')
-    if (isSuspensionRefused(conditions)) return badge('Suspension blocked', 'alert')
+    if (isSuspensionRefused(conditions)) return badge(SUSPENSION_BLOCKED, 'alert')
     return badge('Suspending', 'degraded')
   }
   if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
@@ -303,8 +311,9 @@ export function getAgentRuntimeStatus(resource: any): (StatusBadge & { message?:
   } else if (kind === 'Sandbox' && isAgentSandboxResource(resource)) {
     status = getSandboxStatus(resource)
     // Ready keeps its ordinary suspension message when the suspension is refused.
-    message = isSuspensionRefused(resource?.status?.conditions)
-      ? suspensionRefusedMessage(resource?.metadata?.name ?? '', findCondition(resource?.status?.conditions, 'Suspended')?.message)
+    // The badge decides: an edit or a deletion outranks a refused suspension.
+    message = status.text === SUSPENSION_BLOCKED
+      ? suspensionRefusedMessage(sandboxPodName(resource), findCondition(resource?.status?.conditions, 'Suspended')?.message)
       : findCondition(resource?.status?.conditions, 'Ready')?.message
   } else if (kind === 'SandboxClaim' && isAgentSandboxExtensionResource(resource)) {
     status = getSandboxClaimStatus(resource)
