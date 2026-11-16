@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/ownership/ownershiptest"
 	"github.com/skyhook-io/radar/pkg/readreason"
@@ -38,6 +39,34 @@ func projectionObject(obj runtime.Object, group, kind string) runtime.Object {
 	obj.GetObjectKind().SetGroupVersionKind(schema.GroupVersionKind{Group: group, Version: "v1", Kind: kind})
 	return obj
 }
+
+// recordMembers gives a GitOps manager the member list its status records,
+// read as production reads it.
+func recordMembers(o *ownershiptest.Object, u *unstructured.Unstructured) {
+	var list gitops.MemberList
+	var ok bool
+	switch o.Ref.GroupKind() {
+	case ownership.ArgoApplication:
+		list, ok = gitops.ArgoMembers(u)
+	case ownership.FluxHelmRelease, ownership.FluxKustomization:
+		list, ok = gitops.FluxMembers(u)
+	default:
+		return
+	}
+	if !ok {
+		return
+	}
+	o.Membership = ownership.MembersRecorded
+	o.DestinationNamespace = list.DestinationNamespace
+	for _, m := range list.Entries {
+		ns := m.Namespace
+		if ns == "" {
+			ns = list.DestinationNamespace
+		}
+		o.Members = append(o.Members, resourceid.NewRef(m.Group, m.Kind, ns, m.Name))
+	}
+}
+
 func newProjectionSession(t *testing.T, objects ...runtime.Object) *projectionSession {
 	t.Helper()
 	w := ownershiptest.World{}
@@ -47,9 +76,17 @@ func newProjectionSession(t *testing.T, objects ...runtime.Object) *projectionSe
 		ref := projectionRef(obj)
 		m, _ := apimeta.Accessor(obj)
 		s.objects[ref] = obj
-		w.Objects = append(w.Objects, ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()})
+		o := ownershiptest.Object{Ref: ref, UID: m.GetUID(), APIVersion: obj.GetObjectKind().GroupVersionKind().GroupVersion().String(), ResourceVersion: m.GetResourceVersion(), OwnerReferences: m.GetOwnerReferences(), Labels: m.GetLabels(), Annotations: m.GetAnnotations()}
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			recordMembers(&o, u)
+		}
+		w.Objects = append(w.Objects, o)
 		if !seen[ref.GroupKind()] {
-			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: "v1", Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
+			version := obj.GetObjectKind().GroupVersionKind().Version
+			if version == "" {
+				version = "v1"
+			}
+			w.Resources = append(w.Resources, ownership.ServedResource{Group: ref.Group, Version: version, Kind: ref.Kind, Resource: ref.Kind + "s", Namespaced: ref.Namespace != "", Verbs: []string{"get", "list", "watch", "delete"}})
 			seen[ref.GroupKind()] = true
 		}
 	}
