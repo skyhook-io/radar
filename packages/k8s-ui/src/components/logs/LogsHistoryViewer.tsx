@@ -20,7 +20,8 @@ export interface LogsHistoryResult {
   window: { start: string; end: string }
 }
 
-export type FetchHistory = (p: { container?: string; since: LogsHistoryWindow }) => Promise<LogsHistoryResult>
+/** `signal` aborts when the viewer starts another read or closes. */
+export type FetchHistory = (p: { container?: string; since: LogsHistoryWindow; signal?: AbortSignal }) => Promise<LogsHistoryResult>
 
 type ToolbarLead = (ctx: { isDark: boolean; palette: LogPalette }) => ReactNode
 
@@ -56,13 +57,18 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, initC
   const { entries, isFollowing, pendingLineCount, retainedLineCount, missingLineCount, getRetainedEntries, setFollowing, set, clear } = useLogBuffer()
   const { showError, showSuccess } = useToast()
   const seq = useRef(0)
+  const inflight = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
     const n = ++seq.current
+    // The server allows one History read per user: end the one being replaced.
+    inflight.current?.abort()
+    const controller = new AbortController()
+    inflight.current = controller
     setIsLoading(true)
     setError(null)
     try {
-      const r = await fetchHistory({ container: container || undefined, since })
+      const r = await fetchHistory({ container: container || undefined, since, signal: controller.signal })
       if (n !== seq.current) return
       // Without a container label Loki answers for the whole pod, under one key.
       const wholePod = !!container && r.logs[container] === undefined && r.logs[ALL_CONTAINERS] !== undefined
@@ -84,6 +90,7 @@ export function LogsHistoryViewer({ podName, containers, initialContainer, initC
   }, [fetchHistory, container, since, set])
 
   useEffect(() => { load() }, [load])
+  useEffect(() => () => inflight.current?.abort(), [])
 
   const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
     const filename = `${podName}-${container || 'all'}-history.${extension}`

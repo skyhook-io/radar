@@ -70,10 +70,10 @@ export function useLokiHistoryReady(): boolean {
 export function usePodHistory(namespace: string, podName: string): FetchHistory | undefined {
   const { guard } = useRadarFeature('lokiPodHistory')
   const ready = useLokiHistoryReady()
-  const fetchHistory = useCallback<FetchHistory>(async ({ container, since }) => {
+  const fetchHistory = useCallback<FetchHistory>(async ({ container, since, signal }) => {
     const query = new URLSearchParams({ since })
     if (container) query.set('container', container)
-    const data = await guard(() => fetchJSON<LokiPodLogs>(`/loki/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/logs?${query}`))
+    const data = await guard(() => fetchJSON<LokiPodLogs>(`/loki/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/logs?${query}`, signal))
     return { containers: data.containers, logs: data.logs, truncated: data.truncated, limit: data.limit, window: data.window } satisfies LogsHistoryResult
   }, [guard, namespace, podName])
   // Once History was offered it stays: a status poll that catches Loki
