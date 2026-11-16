@@ -499,6 +499,7 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	scoped.URL.RawQuery = sq.Encode()
 	namespaces := s.parseNamespacesForUser(scoped)
 	budget := newSyncBudget(r.Context())
+	budget.readOnly = true
 	routeAccess, routes := s.readTraefikKind(scoped, cache, traefikIngressRouteKind, groups, namespaces, budget)
 	mwAccess, _ := s.readTraefikKind(scoped, cache, traefikMiddlewareKind, groups, namespaces, budget)
 	svcAccess, _ := s.typedKindScope(scoped, cache, namespaces, "", "services")

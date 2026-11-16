@@ -366,7 +366,7 @@ func (inv *traefikInventory) load(kind string) *traefikKindInventory {
 		if !ok || !inv.dynamicCache.IsClusterWideSynced(gvr) {
 			return (*traefikKindInventory)(nil)
 		}
-		items, err := inv.dynamicCache.ListWatched(gvr)
+		items, err := inv.dynamicCache.ListWatchedReadOnly(gvr)
 		if err != nil {
 			return (*traefikKindInventory)(nil)
 		}
@@ -735,7 +735,7 @@ func addTraefikIngressRouteTLSReferences(idx *tlsServingIndex) {
 		idx.uncertain[traefikIngressController] = true
 		return
 	}
-	routes, err := dynamicCache.ListWatched(gvr)
+	routes, err := dynamicCache.ListWatchedReadOnly(gvr)
 	if err != nil {
 		idx.uncertain[traefikIngressController] = true
 		return
