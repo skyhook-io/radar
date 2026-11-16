@@ -45,7 +45,7 @@ afterEach(async () => {
 
 const render = (props: Partial<TimelineListProps> = {}) => act(async () => root.render(
   <VirtuosoMockContext.Provider value={{ viewportHeight: 250, itemHeight: 100 }}>
-    <TimelineList compact events={events} isLoading={false} {...props} />
+    <TimelineList events={events} isLoading={false} {...props} />
   </VirtuosoMockContext.Provider>,
 ))
 const scroller = () => container.querySelector<HTMLElement>('[data-virtuoso-scroller]')!
@@ -155,7 +155,7 @@ it('keeps the full aggregate span in row attributes and the visible lens', async
 it('does not feed back indefinitely when the host stores the reported lens in state', async () => {
   function Host() {
     const [window, setWindow] = useState<{ fromMs: number; toMs: number } | null>(null)
-    return <><output>{window?.fromMs}</output><TimelineList compact events={events} isLoading={false} onVisibleWindowChange={setWindow} /></>
+    return <><output>{window?.fromMs}</output><TimelineList events={events} isLoading={false} onVisibleWindowChange={setWindow} /></>
   }
   await act(async () => root.render(
     <VirtuosoMockContext.Provider value={{ viewportHeight: 250, itemHeight: 100 }}><Host /></VirtuosoMockContext.Provider>,
@@ -211,6 +211,7 @@ it('jumps to a timestamp inside an open fold and mounts only nearby fold rows', 
   const fold = events.slice(0, 600).map(event => ({ ...event, name: 'crash-looping-pod' }))
   await render({ events: fold, foldPerResource: () => true })
   await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('599 more'))!.click())
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
   expect(container.querySelectorAll('[data-event-id]').length).toBeLessThan(20)
   await render({ events: fold, foldPerResource: () => true, scrollToMs: now - 300 })
   // Rows: the date header, the fold head, then its children from event-1.
@@ -270,4 +271,40 @@ it('leaves focus alone once the user has moved it out of the list', async () => 
   await scroll(100_000)
   await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
   expect(document.activeElement).toBe(document.body)
+})
+
+it('mounts every row in compact mode, whose hosts have no search box, however long the list', async () => {
+  await render({ compact: true, events: events.slice(0, 400) })
+  expect(container.querySelectorAll('[data-event-id]').length).toBe(400)
+  await scroll(20_000)
+  expect(container.querySelectorAll('[data-event-id]').length).toBe(400)
+})
+
+it('lists only the first rows of a fold while it opens, so later cards never show ahead of the reveal', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const fold = events.slice(0, 600).map(event => ({ ...event, name: 'crash-looping-pod' }))
+    await render({ events: fold, foldPerResource: () => true })
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('599 more'))!.click())
+    // The header, the fold head and its first twenty children.
+    expect(container.querySelector('[data-event-id="event-20"]')).not.toBeNull()
+    expect(container.querySelector('[data-event-id="event-21"]')).toBeNull()
+    await act(async () => { vi.advanceTimersByTime(300) })
+    await scroll(2100)
+    expect(container.querySelector('[data-event-id="event-21"]')).not.toBeNull()
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it('reports no lens until a jump requested at mount has landed', async () => {
+  const onVisibleWindowChange = vi.fn()
+  await render({ onVisibleWindowChange, scrollToMs: now - 4000 })
+  expect(onVisibleWindowChange).toHaveBeenCalled()
+  expect(onVisibleWindowChange).not.toHaveBeenCalledWith(null)
+  for (const [window] of onVisibleWindowChange.mock.calls) expect(window.fromMs).toBeLessThanOrEqual(now - 3999)
+  // New data arriving together with a new target waits for that jump too.
+  onVisibleWindowChange.mockClear()
+  await render({ onVisibleWindowChange, events: [...newer(5), ...events], scrollToMs: now - 6000 })
+  for (const [window] of onVisibleWindowChange.mock.calls) expect(window.fromMs).toBeLessThanOrEqual(now - 5999)
 })

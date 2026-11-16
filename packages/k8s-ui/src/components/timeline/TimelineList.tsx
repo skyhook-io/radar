@@ -107,14 +107,18 @@ export interface TimelineListProps {
   foldPerResource?: (event: TimelineEvent) => boolean
 }
 
-// At or below this many rows every row stays mounted, so browser find, select
-// and copy, screen readers and focus see the whole list. The compact embeds
-// (workload, CNPG) have no search box of their own and depend on that.
+// Every row stays mounted in compact mode and at or below this many rows, so
+// browser find, select and copy, screen readers and focus see the whole list.
+// The compact embeds (workload, CNPG) have no search box of their own, so
+// browser find is their only text search; the full timeline has one.
 const FULL_MOUNT_MAX_ROWS = 300
 const FULL_MOUNT_VIEWPORT_PX = 10_000_000
 const WINDOWED_VIEWPORT_PX = 200
-// Only the first rows of an opening or closing fold animate. Virtuoso mounts
-// as many rows as fit, and rows collapsed to nothing would all fit at once.
+// Only the first rows of an opening or closing fold are listed while it
+// animates; the rest join once it has opened and leave as it starts to close.
+// Virtuoso mounts as many rows as fit, rows collapsed to nothing would all fit
+// at once, and later rows shown at full height would sit in view ahead of the
+// reveal.
 const FOLD_REVEAL_ROWS = 20
 
 type AggregatedItem = {
@@ -159,7 +163,6 @@ type ListRow = {
   eventId: string
   fromMs: number
   toMs: number
-  indexInFold: number
   lastInFold: boolean
   lastInGroup: boolean
 }
@@ -402,7 +405,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
           const key = `${group.label}:${item.key}`
           const latestMs = new Date(item.latest.timestamp).getTime()
           const children = !openFolds.has(key) ? []
-            : foldMotion.get(key) === 'closing' ? item.others.slice(0, FOLD_REVEAL_ROWS) : item.others
+            : foldMotion.has(key) ? item.others.slice(0, FOLD_REVEAL_ROWS) : item.others
           rows.push({
             type: 'activity', key, item, eventId: item.latest.id,
             // Open, the children report their own times; closed, the head
@@ -414,7 +417,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
             const ms = new Date(event.timestamp).getTime()
             rows.push({
               type: 'foldChild', key: `${key}:${event.id}`, foldKey: key, event, eventId: event.id,
-              fromMs: ms, toMs: ms, indexInFold, lastInFold: indexInFold === children.length - 1, lastInGroup,
+              fromMs: ms, toMs: ms, lastInFold: indexInFold === children.length - 1, lastInGroup,
             })
           })
           return
@@ -508,10 +511,11 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const [scroller, setScroller] = useState<HTMLElement | null>(null)
   const renderedItems = useRef<ListItem<ListRow>[]>([])
   const [listReady, setListReady] = useState(false)
-  // The reader's place: a row (by identity, not index) and its offset from the
-  // top of the scrollport, re-applied when rows are inserted above it.
-  // Virtuoso turns off the browser's own scroll anchoring.
-  const anchor = useRef<{ id: string; delta: number } | null>(null)
+  // The reader's place: a row (by identity, not index), its offset from the
+  // top of the scrollport, and the scroll position it was taken at. Re-applied
+  // when rows are inserted above it or rows above it change height; Virtuoso
+  // turns off the browser's own scroll anchoring.
+  const anchor = useRef<{ id: string; delta: number; scrollTop: number } | null>(null)
   const committedRows = useRef<ListRow[] | null>(null)
   const handleScrollerRef = useCallback((element: HTMLElement | Window | null) => {
     const next = element instanceof HTMLElement ? element : null
@@ -522,9 +526,13 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     anchor.current = null
   }, [])
   const visibleWindowRaf = useRef<number | null>(null)
+  const scrolledToRef = useRef<number | null>(null)
   const reportedWindow = useRef<{ callback: typeof onVisibleWindowChange; fromMs: number; toMs: number } | null>(null)
   const reportVisibleWindow = useCallback(() => {
     if (!onVisibleWindowChange) return
+    // Until a requested jump has landed, the rows on screen are not the ones
+    // the host asked to see.
+    if (scrollToMs != null && scrolledToRef.current !== scrollToMs && (isLoading || listRows.length > 0)) return
     let fromMs = Infinity
     let toMs = -Infinity
     if (scroller && !isLoading && listRows.length > 0) {
@@ -544,7 +552,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (previous?.callback === onVisibleWindowChange && previous.fromMs === fromMs && previous.toMs === toMs) return
     reportedWindow.current = { callback: onVisibleWindowChange, fromMs, toMs }
     onVisibleWindowChange(fromMs <= toMs ? { fromMs, toMs } : null)
-  }, [onVisibleWindowChange, scroller, isLoading, listRows])
+  }, [onVisibleWindowChange, scroller, isLoading, listRows, scrollToMs])
   const captureAnchor = useCallback(() => {
     const rows = committedRows.current
     if (!scroller || !rows) return
@@ -554,10 +562,27 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       // offsets still describe the old layout.
       if (rows[item.index] !== item.data || !item.data) return
       if (item.size > 0 && item.offset + item.size > top) {
-        anchor.current = { id: anchorId(item.data), delta: item.offset - top }
+        anchor.current = { id: anchorId(item.data), delta: item.offset - top, scrollTop: top }
         return
       }
     }
+  }, [scroller])
+  // A re-measured row above the reader (a fold whose newest card got longer)
+  // moves the anchor without any scroll. Only while the scroll position is the
+  // one the anchor was taken at: any scroll, the user's or a jump, re-captures.
+  const holdAnchor = useCallback(() => {
+    const place = anchor.current
+    const rows = committedRows.current
+    if (!place || !rows || !scroller) return false
+    const top = scroller.scrollTop
+    if (top <= 0 || top !== place.scrollTop) return false
+    const item = renderedItems.current.find((rendered) => rendered.data && rows[rendered.index] === rendered.data && anchorId(rendered.data) === place.id)
+    if (!item) return false
+    if (Math.abs(item.offset - top - place.delta) >= 1) {
+      virtuosoRef.current?.scrollToIndex({ index: item.index, align: 'start', offset: -place.delta })
+      anchor.current = { ...place, scrollTop: scroller.scrollTop }
+    }
+    return true
   }, [scroller])
   // A focused card that scrolls out of the mounted range is removed from the
   // DOM and focus falls to the body; keep it in the list instead. Checked a
@@ -581,10 +606,10 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const handleItemsRendered = useCallback((items: ListItem<ListRow>[]) => {
     renderedItems.current = items
     setListReady(items.some((row) => row.size > 0))
-    captureAnchor()
+    if (!holdAnchor()) captureAnchor()
     reportVisibleWindow()
     restoreFocusLater()
-  }, [captureAnchor, reportVisibleWindow, restoreFocusLater])
+  }, [holdAnchor, captureAnchor, reportVisibleWindow, restoreFocusLater])
   useEffect(() => {
     if (!scroller) return
     const onFocusIn = (event: FocusEvent) => {
@@ -630,12 +655,12 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     const index = listRows.findIndex((row) => anchorId(row) === place.id)
     if (index < 0 || index === previous.findIndex((row) => anchorId(row) === place.id)) return
     virtuosoRef.current?.scrollToIndex({ index, align: 'start', offset: -place.delta })
+    anchor.current = { ...place, scrollTop: scroller.scrollTop }
   }, [listRows, scroller])
 
   // Carry the swimlane's view window into the list: once rows exist, scroll so
   // the row nearest `scrollToMs` sits at the top. Applied once per `scrollToMs`
   // (a fresh view switch), so it never fights the user's own scrolling after.
-  const scrolledToRef = useRef<number | null>(null)
   useEffect(() => {
     if (isLoading || !scroller || !listReady || scrollToMs == null || scrolledToRef.current === scrollToMs) return
     let bestIndex = -1
@@ -647,8 +672,8 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     })
     if (bestIndex >= 0) {
       const before = scroller.scrollTop
-      virtuosoRef.current?.scrollToIndex({ index: bestIndex, align: 'start' })
       scrolledToRef.current = scrollToMs
+      virtuosoRef.current?.scrollToIndex({ index: bestIndex, align: 'start' })
       // A jump that lands where the list already sits emits no scroll event or
       // range change, so report here. After a real jump the rendered items are
       // still the old ones until Virtuoso re-renders, which reports by itself.
@@ -670,7 +695,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     virtuosoRef.current?.scrollToIndex({ index, align: 'center', behavior: nearby && !prefersReducedMotion() ? 'smooth' : 'auto' })
   }, [selectedEventId, listRows, listReady, scroller, isLoading])
 
-  const mountAllRows = listRows.length <= FULL_MOUNT_MAX_ROWS
+  const mountAllRows = compact || listRows.length <= FULL_MOUNT_MAX_ROWS
 
   const listComponents = useMemo(() => ({
     Footer: () => (
@@ -850,7 +875,7 @@ const TimelineRow = memo(function TimelineRow({ row, first, context }: { row: Li
     <div className="px-4">
       {/* min-h-px: Virtuoso rejects zero-height rows, which a row collapsed mid-animation would be. */}
       <div className={clsx('ml-6 min-h-px border-l-2 border-theme-border pl-4', row.lastInFold && !row.lastInGroup && 'pb-2')}>
-        <FoldReveal phase={row.indexInFold < FOLD_REVEAL_ROWS ? context.foldMotion.get(row.foldKey) : undefined}>
+        <FoldReveal phase={context.foldMotion.get(row.foldKey)}>
           <div className="pl-3">
             <div className={clsx('border-l-2 border-theme-border pl-3', !row.lastInFold && 'pb-2')}>
               <div data-event-id={row.eventId} data-ts-from={row.fromMs} data-ts-to={row.toMs}>
