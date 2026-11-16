@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -63,24 +64,50 @@ func TestIstioTCPByteActivity(t *testing.T) {
 	}
 }
 
-func TestIstioAmbientHTTPByteReconciliation(t *testing.T) {
+func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 	for _, tc := range []struct {
 		name, dstNs, tcpService, tcpSource, tcpSourceNs, tcpDestination string
 		httpReporter, tcpReporter                                       string
-		zeroHTTPBytes                                                   bool
+		zeroHTTPBytes, wantOverlap, missingErrors, failTCP              bool
 	}{
-		{"ambient same Service", "amb", "httpbin", "curl", "side", "httpbin", "source", "destination", true},
-		{"waypoint same Service", "amb", "httpbin", "curl", "side", "httpbin", "waypoint", "waypoint", false},
-		{"sidecar same Service", "side", "httpbin", "curl", "side", "httpbin", "destination", "destination", false},
-		// A namespace labelled ambient whose pods still run sidecars: the sidecar
-		// reports HTTP and an opaque TCP port separately, so neither covers the other.
-		{"sidecar in an ambient namespace, same Service", "amb", "httpbin", "curl", "side", "httpbin", "destination", "destination", false},
-		{"ambient other Service", "amb", "db", "curl", "side", "httpbin", "source", "destination", false},
-		{"ambient other source", "amb", "httpbin", "other", "side", "httpbin", "source", "destination", false},
-		{"ambient other source namespace", "amb", "httpbin", "curl", "other", "httpbin", "source", "destination", false},
-		{"ambient other destination", "amb", "httpbin", "curl", "side", "other", "source", "destination", false},
+		{name: "ambient same Service", wantOverlap: true},
+		{name: "waypoint same Service", httpReporter: "waypoint", tcpReporter: "waypoint"},
+		{name: "sidecar same Service", dstNs: "side", httpReporter: "destination"},
+		{name: "sidecar in an ambient namespace, same Service", httpReporter: "destination", wantOverlap: true},
+		{name: "ambient other Service", tcpService: "db"},
+		{name: "ambient other source", tcpSource: "other"},
+		{name: "ambient other source namespace", tcpSourceNs: "other"},
+		{name: "ambient other destination", tcpDestination: "other"},
+		{name: "ambient zero HTTP bytes", zeroHTTPBytes: true},
+		{name: "ambient missing errors", missingErrors: true, wantOverlap: true},
+		{name: "ambient failed TCP read", failTCP: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.dstNs == "" {
+				tc.dstNs = "amb"
+			}
+			if tc.tcpService == "" {
+				tc.tcpService = "httpbin"
+			}
+			if tc.tcpSource == "" {
+				tc.tcpSource = "curl"
+			}
+			if tc.tcpSourceNs == "" {
+				tc.tcpSourceNs = "side"
+			}
+			if tc.tcpDestination == "" {
+				tc.tcpDestination = "httpbin"
+			}
+			if tc.httpReporter == "" {
+				tc.httpReporter = "source"
+			}
+			if tc.tcpReporter == "" {
+				tc.tcpReporter = "destination"
+			}
+			httpSent, httpRecv := float64(5), float64(9)
+			if tc.zeroHTTPBytes {
+				httpSent, httpRecv = 0, 0
+			}
 			tcp := istioSeries(istioTCPMetric, tc.tcpReporter, tc.tcpSourceNs, tc.tcpSource, tc.dstNs, tc.tcpDestination, "", 100)
 			tcp.labels["destination_service_name"] = tc.tcpService
 			sent := istioSeries("istio_tcp_sent_bytes_total", tc.tcpReporter, tc.tcpSourceNs, tc.tcpSource, tc.dstNs, tc.tcpDestination, "", 200)
@@ -88,29 +115,42 @@ func TestIstioAmbientHTTPByteReconciliation(t *testing.T) {
 			raw := []istioRawSeries{
 				istioSeries("istio_requests_total", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", 2),
 				istioSeries("istio_requests_total", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "503", 1),
-				istioSeries("istio_request_bytes_sum", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", 5),
-				istioSeries("istio_response_bytes_sum", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", 9),
+				istioSeries("istio_request_bytes_sum", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", httpSent),
+				istioSeries("istio_response_bytes_sum", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", httpRecv),
 				tcp, sent,
 			}
-			s := newTestIstio(fakeIstioProm(raw, nil))
+			fail := map[string]error{}
+			if tc.missingErrors {
+				fail[istio5xxSelector] = errors.New("unavailable")
+			}
+			if tc.failTCP {
+				fail["istio_tcp_sent_bytes_total"] = errors.New("unavailable")
+			}
+			s := newTestIstio(fakeIstioProm(raw, fail))
 			s.ambientNamespaceFn = func() []string { return []string{"amb"} }
 			resp, err := s.GetFlows(t.Context(), DefaultFlowOptions())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(resp.Flows) != 2 {
-				t.Fatalf("want HTTP and TCP flows, got %+v", resp.Flows)
+			wantFlows := 2
+			wantTCPSent, wantTCPRecv := int64(100*300), int64(200*300)
+			if tc.failTCP {
+				wantFlows, wantTCPSent, wantTCPRecv = 1, 0, 0
 			}
-			wantHTTPSent, wantHTTPRecv := int64(5*300), int64(9*300)
-			if tc.zeroHTTPBytes {
-				wantHTTPSent, wantHTTPRecv = 0, 0
+			if len(resp.Flows) != wantFlows {
+				t.Fatalf("want %d flows, got %+v", wantFlows, resp.Flows)
+			}
+			wantHTTPSent, wantHTTPRecv := int64(httpSent*300), int64(httpRecv*300)
+			wantErrors := float64(1)
+			if tc.missingErrors {
+				wantErrors = 0
 			}
 			for _, f := range resp.Flows {
 				if f.Protocol == "tcp" {
 					if f.BytesSent != 100*300 || f.BytesRecv != 200*300 {
 						t.Errorf("TCP wire bytes changed: %+v", f)
 					}
-				} else if f.BytesSent != wantHTTPSent || f.BytesRecv != wantHTTPRecv || f.RequestRate != 3 || f.ErrorRate != 1 {
+				} else if f.BytesSent != wantHTTPSent || f.BytesRecv != wantHTTPRecv || f.RequestRate != 3 || f.ErrorRate != wantErrors {
 					t.Errorf("wrong HTTP bytes or rates: %+v", f)
 				}
 			}
@@ -130,11 +170,46 @@ func TestIstioAmbientHTTPByteReconciliation(t *testing.T) {
 					}
 				}
 			}
-			if aggregateSent != 100*300+wantHTTPSent || aggregateRecv != 200*300+wantHTTPRecv || recordsSent != aggregateSent || recordsRecv != aggregateRecv {
-				t.Errorf("aggregate bytes %d/%d, records %d/%d; want %d/%d", aggregateSent, aggregateRecv, recordsSent, recordsRecv, 100*300+wantHTTPSent, 200*300+wantHTTPRecv)
+			if aggregateSent != wantTCPSent+wantHTTPSent || aggregateRecv != wantTCPRecv+wantHTTPRecv || recordsSent != aggregateSent || recordsRecv != aggregateRecv {
+				t.Errorf("aggregate bytes %d/%d, records %d/%d; want %d/%d", aggregateSent, aggregateRecv, recordsSent, recordsRecv, wantTCPSent+wantHTTPSent, wantTCPRecv+wantHTTPRecv)
 			}
-			if tc.zeroHTTPBytes && strings.Contains(resp.Warning, istioZtunnelUnscrapedNote) {
-				t.Error("reconciliation lost ztunnel scrape evidence")
+			if got := strings.Contains(resp.Warning, istioByteOverlapNote); got != tc.wantOverlap {
+				t.Errorf("overlap note present = %v, want %v: %q", got, tc.wantOverlap, resp.Warning)
+			}
+			wantKind := ""
+			if tc.wantOverlap {
+				wantKind = WarningPartial
+			}
+			if tc.failTCP {
+				wantKind = WarningTransient
+			}
+			if tc.dstNs != "amb" {
+				wantKind = WarningIncomplete
+			}
+			if resp.WarningKind != wantKind {
+				t.Errorf("warning kind = %q, want %q: %q", resp.WarningKind, wantKind, resp.Warning)
+			}
+			if tc.missingErrors && !strings.Contains(resp.Warning, "5xx error rates") {
+				t.Errorf("missing figures warning lost: %q", resp.Warning)
+			}
+			if !tc.failTCP && tc.dstNs == "amb" && strings.Contains(resp.Warning, istioZtunnelUnscrapedNote) {
+				t.Error("lost ztunnel scrape evidence")
+			}
+		})
+	}
+}
+
+func TestIstioByteOverlapWarningPrecedence(t *testing.T) {
+	for _, kind := range []string{"", WarningPartial, WarningTransient, WarningIncomplete, WarningCluster} {
+		t.Run(kind, func(t *testing.T) {
+			response := &FlowsResponse{Warning: "Existing warning.", WarningKind: kind}
+			noteIstioByteOverlap(response)
+			wantKind := kind
+			if wantKind == "" {
+				wantKind = WarningPartial
+			}
+			if response.Warning != "Existing warning. "+istioByteOverlapNote || response.WarningKind != wantKind {
+				t.Errorf("warning = %q (%s), want appended overlap note (%s)", response.Warning, response.WarningKind, wantKind)
 			}
 		})
 	}

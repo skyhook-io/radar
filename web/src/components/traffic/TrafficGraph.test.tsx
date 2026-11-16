@@ -64,7 +64,7 @@ const outgoing: AggregatedFlow = {
 describe('TrafficGraph addon group edges', () => {
   for (const source of ['istio', 'beyla']) {
     for (const [flow, edgeId, port] of [
-      [incoming, 'addon-internet->addon-group', 0],
+      [incoming, 'addon-internet->addon-group', 443],
       [outgoing, 'addon-group->default/kubernetes', 443],
     ] as const) {
       it(`shows Data without a rate when selecting ${edgeId} from ${source}`, async () => {
@@ -83,6 +83,37 @@ describe('TrafficGraph addon group edges', () => {
         expect(container.textContent).toContain('Data300 B')
       })
     }
+  }
+
+  for (const [flow, edgeId, nodeId] of [
+    [incoming, 'addon-internet->addon-group', 'addon-internet'],
+    [outgoing, 'addon-group->default/kubernetes', 'default/kubernetes'],
+  ] as const) {
+    it(`shows HTTP metadata without an invented port in ${edgeId} details`, async () => {
+      const http = { ...flow, protocol: 'http', l7Protocol: 'HTTP', port: 0, connections: 2, requestRate: 1.7 }
+      const grouped = groupAddonFlows([{ ...http, rawPairs: [endpointPair(http)] }], (_name, ns) => ns === 'monitoring')
+      const onSelectionChange = vi.fn()
+      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onSelectionChange={onSelectionChange} />))
+      act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
+      expect(container.textContent).toContain('ProtocolHTTP')
+      expect(container.textContent).not.toContain('Port')
+      expect(container.textContent).not.toContain('tcp')
+      expect(onSelectionChange.mock.calls[0][0]).toMatchObject({ type: 'edge', port: 0 })
+      act(() => container.querySelector<HTMLButtonElement>(`[data-node="${nodeId}"]`)!.click())
+      const protocols = Array.from(container.querySelectorAll('div')).find(el => el.textContent === 'Protocols')!.parentElement!
+      expect(protocols.textContent).toBe('ProtocolsHTTPHTTP1.7/s')
+      expect(container.textContent).toContain('Data transferred300 B')
+    })
+
+    it(`shows mixed metadata in ${edgeId} details`, async () => {
+      const http = { ...flow, protocol: 'http', l7Protocol: 'HTTP', port: 8080 }
+      const grouped = groupAddonFlows([http, flow].map(f => ({ ...f, rawPairs: [endpointPair(f)] })), (_name, ns) => ns === 'monitoring')
+      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" />))
+      act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
+      expect(container.textContent).toContain('Port443')
+      expect(container.textContent).toContain('Protocolmixed')
+      expect(container.textContent).toContain('Data600 B')
+    })
   }
 })
 

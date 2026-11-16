@@ -393,10 +393,13 @@ export function groupAddonFlows(flows: GraphFlow[], isAddon: (name: string, name
           connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
           source: { name: 'addon-internet', namespace: '', kind: 'AddonInternet' },
           destination: { name: 'addon-group-target', namespace: '', kind: 'AddonGroupTarget' },
-          protocol: 'tcp', port: 0,
+          protocol: flow.protocol, port: flow.port, l7Protocol: flow.l7Protocol,
           rawPairs: [],
         }
       }
+      internet.port = mergedEdgePort(internet.port, flow.port)
+      if (internet.protocol !== flow.protocol) internet.protocol = 'mixed'
+      if (internet.l7Protocol !== flow.l7Protocol) internet.l7Protocol = 'mixed'
       mergeFlowVolume(internet, flow)
       mergeRawPairs(internet, flow)
       grouped.push({ ...flow, source: { name: 'addon-internet', namespace: '', kind: 'SkipEdge' } })
@@ -407,10 +410,13 @@ export function groupAddonFlows(flows: GraphFlow[], isAddon: (name: string, name
           connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
           source: { name: 'addon-group-source', namespace: '', kind: 'AddonGroupSource' },
           destination: { name: 'kubernetes', namespace: 'default', kind: 'Service' },
-          protocol: 'tcp', port: 443,
+          protocol: flow.protocol, port: flow.port, l7Protocol: flow.l7Protocol,
           rawPairs: [],
         }
       }
+      kubernetes.port = mergedEdgePort(kubernetes.port, flow.port)
+      if (kubernetes.protocol !== flow.protocol) kubernetes.protocol = 'mixed'
+      if (kubernetes.l7Protocol !== flow.l7Protocol) kubernetes.l7Protocol = 'mixed'
       mergeFlowVolume(kubernetes, flow)
       mergeRawPairs(kubernetes, flow)
       grouped.push({ ...flow, destination: { ...flow.destination, kind: 'SkipEdge' } })
