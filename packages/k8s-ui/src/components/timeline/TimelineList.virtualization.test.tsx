@@ -15,10 +15,11 @@ const events: TimelineEvent[] = Array.from({ length: 50_000 }, (_, index) => ({
 let container: HTMLDivElement
 let root: Root
 let originalScrollTo: PropertyDescriptor | undefined
-const scrollTo = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+const scrollToImpl = function (this: HTMLElement, options: ScrollToOptions) {
   this.scrollTop = options.top ?? this.scrollTop
   this.dispatchEvent(new Event('scroll'))
-})
+}
+const scrollTo = vi.fn(scrollToImpl)
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -38,6 +39,7 @@ afterEach(async () => {
   if (originalScrollTo) Object.defineProperty(HTMLElement.prototype, 'scrollTo', originalScrollTo)
   else Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
   scrollTo.mockClear()
+  scrollTo.mockImplementation(scrollToImpl)
   vi.restoreAllMocks()
 })
 
@@ -74,7 +76,11 @@ it('reports only viewport timestamps, excluding overscan, and clears the lens wh
 })
 
 it('jumps to an unmounted timestamp once and waits for loading to finish', async () => {
+  await render()
+  scrollTo.mockClear()
+  // A refetch with a jump pending: the list is mounted and measured, then loads.
   await render({ isLoading: true, scrollToMs: now - 4000 })
+  expect(container.textContent).toContain('Loading timeline')
   expect(scrollTo).not.toHaveBeenCalled()
   await render({ scrollToMs: now - 4000 })
   expect(scrollTo).toHaveBeenCalled()
@@ -87,19 +93,33 @@ it('jumps to an unmounted timestamp once and waits for loading to finish', async
   expect(container.querySelector('[data-event-id="event-6000"]')).not.toBeNull()
 })
 
-it('scrolls an externally selected offscreen event into view and highlights it', async () => {
+it('jumps instantly to an externally selected offscreen event and highlights it', async () => {
   await render()
   expect(container.querySelector('[data-event-id="event-4000"]')).toBeNull()
   await render({ selectedEventId: 'event-4000' })
   const selected = container.querySelector('[data-event-id="event-4000"]')
   expect(selected).not.toBeNull()
   expect(selected?.querySelector('.ring-2')).not.toBeNull()
+  expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }))
+  expect(scrollTo).not.toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }))
+})
+
+it('scrolls smoothly to a selected card that is already rendered, unless motion is reduced', async () => {
+  await render()
+  await scroll(300)
+  scrollTo.mockClear()
+  await render({ selectedEventId: 'event-0' })
   expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }))
+  scrollTo.mockClear()
+  vi.stubGlobal('matchMedia', (query: string) => ({ matches: query.includes('reduce'), addEventListener() {}, removeEventListener() {} }))
+  await render({ selectedEventId: 'event-1' })
+  expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'auto' }))
+  vi.unstubAllGlobals()
 })
 
 it('keeps a fold expanded after its virtual row unmounts', async () => {
   const foldedEvents = [{ ...events[0], id: 'fold-newest', name: 'folded-pod' },
-    { ...events[1], id: 'fold-older', name: 'folded-pod' }, ...events.slice(2, 100)]
+    { ...events[1], id: 'fold-older', name: 'folded-pod' }, ...events.slice(2, 400)]
   const foldPerResource = (event: TimelineEvent) => event.name === 'folded-pod'
   await render({ events: foldedEvents, foldPerResource })
   const button = () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('more on this Pod'))!
@@ -141,4 +161,113 @@ it('does not feed back indefinitely when the host stores the reported lens in st
     <VirtuosoMockContext.Provider value={{ viewportHeight: 250, itemHeight: 100 }}><Host /></VirtuosoMockContext.Provider>,
   ))
   expect(container.querySelector('output')?.textContent).toBe(String(now - 1))
+})
+
+it('mounts every row of a short list and keeps them mounted while scrolling', async () => {
+  const short = events.slice(0, 250)
+  await render({ events: short })
+  expect(container.querySelectorAll('[data-event-id]').length).toBe(250)
+  await scroll(20_000)
+  expect(container.querySelectorAll('[data-event-id]').length).toBe(250)
+  // One header row plus 300 cards is past the threshold, so it windows.
+  await act(async () => root.unmount())
+  root = createRoot(container)
+  await render({ events: events.slice(0, 300) })
+  expect(container.querySelectorAll('[data-event-id]').length).toBeLessThan(20)
+})
+
+const newer = (count: number, from = 0) => Array.from({ length: count }, (_, index): TimelineEvent => ({
+  ...events[0], id: `new-${from + index}`, name: `new-pod-${from + index}`, timestamp: new Date(now + 1000 * (from + count - index)).toISOString(),
+}))
+
+it('keeps the reader in place when events arrive above, and shows them at the very top', async () => {
+  const list = events.slice(0, 400)
+  await render({ events: list })
+  await scroll(5000)
+  expect(container.querySelector('[data-event-id="event-49"]')).not.toBeNull()
+  await render({ events: [...newer(5), ...list] })
+  // Five rows of 100px were inserted above, so the reader moves down with them.
+  expect(scroller().scrollTop).toBe(5500)
+  expect(container.querySelector('[data-event-id="event-49"]')).not.toBeNull()
+  await scroll(0)
+  scrollTo.mockClear()
+  await render({ events: [...newer(3, 5), ...newer(5), ...list] })
+  expect(scroller().scrollTop).toBe(0)
+  expect(scrollTo).not.toHaveBeenCalled()
+  expect(container.querySelector('[data-event-id="new-5"]')).not.toBeNull()
+})
+
+it('keeps the reader in place when arrivals open a new time group above', async () => {
+  const older = events.slice(0, 400).map(event => ({ ...event, timestamp: new Date(Date.parse(event.timestamp) - 10 * 60_000).toISOString() }))
+  await render({ compact: false, events: older })
+  await scroll(5000)
+  await render({ compact: false, events: [...newer(5), ...older] })
+  // A "Last 5 minutes" header and five cards: six rows.
+  expect(scroller().scrollTop).toBe(5600)
+  expect(container.textContent).not.toContain('Last 5 minutes')
+})
+
+it('jumps to a timestamp inside an open fold and mounts only nearby fold rows', async () => {
+  const fold = events.slice(0, 600).map(event => ({ ...event, name: 'crash-looping-pod' }))
+  await render({ events: fold, foldPerResource: () => true })
+  await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('599 more'))!.click())
+  expect(container.querySelectorAll('[data-event-id]').length).toBeLessThan(20)
+  await render({ events: fold, foldPerResource: () => true, scrollToMs: now - 300 })
+  // Rows: the date header, the fold head, then its children from event-1.
+  expect(scroller().scrollTop).toBe(301 * 100)
+  const target = container.querySelector('[data-event-id="event-300"]')
+  expect(target).not.toBeNull()
+  expect(target?.getAttribute('data-ts-from')).toBe(String(now - 300))
+})
+
+it('closes a fold after its rows animate shut', async () => {
+  const fold = events.slice(0, 3).map(event => ({ ...event, name: 'crash-looping-pod' }))
+  await render({ events: fold, foldPerResource: () => true })
+  const button = () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('2 more'))!
+  await act(async () => button().click())
+  expect(container.querySelector('[data-event-id="event-2"]')).not.toBeNull()
+  await act(async () => button().click())
+  expect(button().getAttribute('aria-expanded')).toBe('false')
+  expect(container.querySelector('[data-event-id="event-2"]')).not.toBeNull()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
+  expect(container.querySelector('[data-event-id="event-2"]')).toBeNull()
+})
+
+it('reports the lens only once the jumped-to rows render, never a stale or empty window', async () => {
+  const onVisibleWindowChange = vi.fn()
+  await render({ onVisibleWindowChange })
+  onVisibleWindowChange.mockClear()
+  // As in a browser, the scroll event follows the position change a frame later.
+  scrollTo.mockImplementation(function (this: HTMLElement, options: ScrollToOptions) {
+    this.scrollTop = options.top ?? this.scrollTop
+    requestAnimationFrame(() => this.dispatchEvent(new Event('scroll')))
+  })
+  await render({ onVisibleWindowChange, scrollToMs: now - 4000 })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+  expect(onVisibleWindowChange).toHaveBeenCalled()
+  expect(onVisibleWindowChange).not.toHaveBeenCalledWith(null)
+  for (const [window] of onVisibleWindowChange.mock.calls) expect(window.fromMs).toBeLessThanOrEqual(now - 3999)
+  expect(onVisibleWindowChange).toHaveBeenLastCalledWith(expect.objectContaining({ toMs: now - 3999 }))
+})
+
+it('keeps focus in the list when the focused card scrolls out of the mounted range', async () => {
+  await render()
+  const button = container.querySelector<HTMLButtonElement>('[data-event-id="event-0"] button')!
+  button.focus()
+  expect(document.activeElement).toBe(button)
+  await scroll(100_000)
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+  expect(button.isConnected).toBe(false)
+  expect(document.activeElement).toBe(scroller())
+})
+
+it('leaves focus alone once the user has moved it out of the list', async () => {
+  await render()
+  const button = container.querySelector<HTMLButtonElement>('[data-event-id="event-0"] button')!
+  button.focus()
+  button.blur()
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+  await scroll(100_000)
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+  expect(document.activeElement).toBe(document.body)
 })
