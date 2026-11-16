@@ -401,7 +401,7 @@ export function ConditionsSection({
 // The message line is 12px body text, so it uses the neutral secondary tone:
 // the variants' tinted tones fall below 4.5:1 on their light backgrounds.
 const ALERT_COLORS = {
-  alert:   { bg: 'status-alert', border: '', title: '', message: '', list: '', bullet: '' },
+  alert:   { bg: 'status-alert', border: '', title: '', message: 'text-theme-text-secondary', list: '', bullet: '' },
   unknown: { bg: 'status-unknown', border: '', title: '', message: '', list: '', bullet: '' },
   error:   { bg: 'bg-red-50 dark:bg-red-950/30', border: 'border-red-200 dark:border-red-800/30', title: 'text-red-700 dark:text-red-300', message: 'text-theme-text-secondary', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-400/60 dark:text-red-400/50' },
   warning: { bg: 'bg-amber-50 dark:bg-amber-950/30', border: 'border-amber-200 dark:border-amber-800/30', title: 'text-amber-700 dark:text-amber-300', message: 'text-theme-text-secondary', list: 'text-amber-600 dark:text-amber-400', bullet: 'text-amber-400/60 dark:text-amber-400/50' },

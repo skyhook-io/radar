@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { GenericRenderer } from './GenericRenderer'
+import { AlertBanner } from '../../ui/drawer-components'
 
 const widget = (status: Record<string, unknown>) => ({
   apiVersion: 'example.com/v1', kind: 'Widget', metadata: { name: 'w' }, status,
@@ -24,6 +25,13 @@ describe('GenericRenderer status banner', () => {
     const html = renderToString(<GenericRenderer data={widget({ conditions: [{ type: 'Ready', status: 'False', reason: 'BackendDown', message: 'the backend is down' }] })} />)
     expect(html).toMatch(/<div class="[^"]*text-theme-text-secondary[^"]*">the backend is down</)
     expect(html).not.toMatch(/text-red-600\/80/)
+  })
+
+  it('keeps every variant\'s message line neutral, alert included', () => {
+    for (const variant of ['error', 'warning', 'info', 'success', 'alert'] as const) {
+      const html = renderToString(<AlertBanner variant={variant} title="t" message="why" />)
+      expect(html).toMatch(/<div class="[^"]*text-theme-text-secondary[^"]*">why</)
+    }
   })
 
   it('renders no detail line when the status has no message', () => {
