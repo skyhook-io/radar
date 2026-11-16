@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -40,15 +39,13 @@ func TestFrontendHandlerCacheHeaders(t *testing.T) {
 	t.Run("only a complete answer is cached", func(t *testing.T) {
 		for _, h := range []struct{ name, value string }{
 			{"If-Match", `"another-version"`},
-			{"Range", "bytes=999-"},
-			{"Range", "bytes=0-3"},
 		} {
 			req := httptest.NewRequest(http.MethodGet, "/assets/index-BcIBzLE5.js", nil)
 			req.Header.Set(h.name, h.value)
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 			if rec.Code == http.StatusOK {
-				t.Fatalf("%s %s: status = 200, want a partial or failed answer", h.name, h.value)
+				t.Fatalf("%s %s: status = 200, want a failed answer", h.name, h.value)
 			}
 			if got := rec.Header().Get("Cache-Control"); got != "" {
 				t.Errorf("%s: %d response Cache-Control = %q, want none", h.name, rec.Code, got)
@@ -138,22 +135,33 @@ func TestFrontendThroughCompression(t *testing.T) {
 		}
 	})
 
-	t.Run("a range is the requested bytes of the file", func(t *testing.T) {
+	t.Run("a range request gets the whole file, compressed", func(t *testing.T) {
 		rec := get("/assets/index-BcIBzLE5.js", "Accept-Encoding", "gzip", "Range", "bytes=0-6")
-		if rec.Code != http.StatusPartialContent {
-			t.Fatalf("status = %d, want 206", rec.Code)
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Range") != "" {
+			t.Fatalf("status %d, Content-Range %q, want the whole file", rec.Code, rec.Header().Get("Content-Range"))
 		}
-		if got := rec.Header().Get("Content-Encoding"); got != "" {
-			t.Fatalf("Content-Encoding = %q, want none", got)
+		zr, err := gzip.NewReader(rec.Body)
+		if err != nil {
+			t.Fatalf("not gzip: %v", err)
 		}
-		if got, want := rec.Header().Get("Content-Range"), "bytes 0-6/"+strconv.Itoa(len(script)); got != want {
-			t.Fatalf("Content-Range = %q, want %q", got, want)
+		if body, _ := io.ReadAll(zr); string(body) != script {
+			t.Fatalf("body does not decode to the asset")
 		}
-		if rec.Body.String() != script[:7] {
-			t.Fatalf("body = %q, want %q", rec.Body.String(), script[:7])
-		}
-		if varyCount(rec) == 0 {
-			t.Errorf("Vary = %q, want Accept-Encoding", rec.Header().Values("Vary"))
+	})
+
+	t.Run("an API response sent with a Range header is still compressed", func(t *testing.T) {
+		big := strings.Repeat(`{"k":"v"},`, 500)
+		api := compressMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, "["+big+"{}]")
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/api/topology", nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		req.Header.Set("Range", "bytes=0-6")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		if rec.Header().Get("Content-Encoding") != "gzip" {
+			t.Fatalf("Content-Encoding = %q, want gzip", rec.Header().Get("Content-Encoding"))
 		}
 	})
 

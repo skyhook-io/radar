@@ -82,13 +82,6 @@ func compressMiddleware() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			// The compressor gzips whatever the handler writes, so a range the file
-			// server selected would go out compressed under a Content-Range that
-			// counts uncompressed bytes. Ranges are served uncompressed instead.
-			if r.Header.Get("Range") != "" {
-				next.ServeHTTP(w, r)
-				return
-			}
 			compressed.ServeHTTP(w, r)
 		})
 	}

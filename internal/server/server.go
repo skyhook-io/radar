@@ -1175,6 +1175,10 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 		if fingerprintedAsset.MatchString(path) {
 			w = &immutableWhenOK{ResponseWriter: w}
 		}
+		// Frontend files go out whole. The compression middleware gzips whatever
+		// is written, so a range the file server selected would carry a
+		// Content-Range counting uncompressed bytes the body doesn't contain.
+		r.Header.Del("Range")
 		fileServer.ServeHTTP(w, r)
 	})
 }
