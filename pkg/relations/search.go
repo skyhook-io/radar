@@ -75,10 +75,13 @@ func (v *View) newSearchIn(namespaces []string, c *Coverage) search {
 
 // each hands fn every object of gk in the search the caller may read.
 func (s search) each(gk resourceid.GroupKind, c *Coverage, fn func(IndexedObject)) {
-	if !s.across && !s.v.mayRead(gk, s.namespace, c) {
+	if !s.across && !s.v.decideFound && !s.v.mayRead(gk, s.namespace, c) {
 		return
 	}
 	read := s.v.session.Indexed(gk, s.index, s.keys, s.scope)
+	if !s.across && s.v.decideFound && (len(read.Objects) == 0 && len(read.Gaps) == 0 || !s.v.mayRead(gk, s.namespace, c)) {
+		return
+	}
 	for _, g := range read.Gaps {
 		if g.Namespace != "" && !s.scope.AllNamespaces && !slices.Contains(s.scope.Namespaces, g.Namespace) {
 			continue
