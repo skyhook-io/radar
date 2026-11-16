@@ -21,15 +21,6 @@ var relationshipFixtures = []struct {
 	{"XL", 10, 3},
 }
 
-// serverRelationshipOptions are the options the SSE broadcaster builds the
-// shared relationship graph with (buildFullTopology in internal/server).
-func serverRelationshipOptions() BuildOptions {
-	opts := RelationshipBuildOptions()
-	opts.ViewMode = ViewModeResources
-	opts.IncludeSecrets = true
-	return opts
-}
-
 func heapInUse() uint64 {
 	runtime.GC()
 	runtime.GC()
@@ -45,7 +36,7 @@ func BenchmarkRelationshipGraphRetained(b *testing.B) {
 	for _, f := range relationshipFixtures {
 		b.Run(f.name, func(b *testing.B) {
 			provider := newSyntheticProvider(fieldShape().fraction(f.num, f.den))
-			opts := serverRelationshipOptions()
+			opts := charSSEOptions()
 			var graphBytes, indexBytes float64
 			var nodes, edges int
 			for b.Loop() {
@@ -83,7 +74,7 @@ func BenchmarkSharedRelationshipBuild(b *testing.B) {
 	for _, f := range relationshipFixtures {
 		b.Run(f.name, func(b *testing.B) {
 			builder := NewBuilder(newSyntheticProvider(fieldShape().fraction(f.num, f.den)))
-			opts := serverRelationshipOptions()
+			opts := charSSEOptions()
 			held, err := builder.Build(opts)
 			if err != nil {
 				b.Fatalf("build: %v", err)
@@ -133,7 +124,7 @@ func drawerSubjects(p *mockProvider) []struct {
 func BenchmarkDrawerRelationships(b *testing.B) {
 	shape := fieldShape()
 	provider := newSyntheticProvider(shape)
-	topo, err := NewBuilder(provider).Build(serverRelationshipOptions())
+	topo, err := NewBuilder(provider).Build(charSSEOptions())
 	if err != nil {
 		b.Fatalf("build: %v", err)
 	}
@@ -168,6 +159,8 @@ func BenchmarkDrawerRelationships(b *testing.B) {
 			_ = GetRelationshipsWithObject(s.kind, s.namespace, s.object, s.obj, &copied, provider, nil, nil)
 		}
 	})
+	// The server holds the shared index while it copies the graph per request.
+	runtime.KeepAlive(index)
 }
 
 // BenchmarkSummaryRelationshipsPage reads relationships from an already built
@@ -177,7 +170,7 @@ func BenchmarkDrawerRelationships(b *testing.B) {
 // stale also waits for the rebuild and the index (see the benchmarks above).
 func BenchmarkSummaryRelationshipsPage(b *testing.B) {
 	provider := newSyntheticProvider(fieldShape())
-	topo, err := NewBuilder(provider).Build(serverRelationshipOptions())
+	topo, err := NewBuilder(provider).Build(charSSEOptions())
 	if err != nil {
 		b.Fatalf("build: %v", err)
 	}
