@@ -748,8 +748,11 @@ func stringValue(value any) string {
 // sync on an ArgoCD Application.
 //
 // Suspend saves the whole spec.syncPolicy.automated block in annotations and
-// removes the block. If auto-sync is already off it changes nothing, so a
-// second suspend can't replace the saved settings with empty ones.
+// switches `enabled: false` in place. Keeping the block means an ApplicationSet
+// that manages prune and selfHeal does not restore a block without `enabled`,
+// which Argo CD would treat as auto-sync on again. If auto-sync is already off
+// it changes nothing, so a second suspend can't replace the saved settings with
+// empty ones.
 //
 // Resume turns back on the newest settings it can find:
 //   - a block switched off in place with `enabled: false` (by Argo CD 3.x
@@ -807,7 +810,6 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 		return nil, true, nil
 	}
 	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
-	_, hasEnabled := automated["enabled"]
 	// An explicit `enabled: true` means the same as none, and resume drops it.
 	delete(automated, "enabled")
 	saved, err := json.Marshal(automated)
@@ -816,11 +818,6 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 	}
 	prune, _ := automated["prune"].(bool)
 	selfHeal, _ := automated["selfHeal"].(bool)
-
-	var specAutomated any
-	if hasEnabled {
-		specAutomated = map[string]any{"enabled": false}
-	}
 
 	return map[string]any{
 		"metadata": map[string]any{
@@ -831,7 +828,7 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 			},
 		},
 		"spec": map[string]any{
-			"syncPolicy": map[string]any{"automated": specAutomated},
+			"syncPolicy": map[string]any{"automated": map[string]any{"enabled": false}},
 		},
 	}, false, nil
 }

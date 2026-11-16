@@ -2134,12 +2134,19 @@ func appWithAutomated(automated map[string]any, annotations map[string]any) *uns
 func TestSetArgoAutoSyncLifecycle(t *testing.T) {
 	original := map[string]any{"prune": true, "selfHeal": false, "allowEmpty": true}
 
-	t.Run("resume restores every field suspend removed", func(t *testing.T) {
+	t.Run("suspend switches the block off and resume restores every field", func(t *testing.T) {
 		client := newFakeArgo(appWithAutomated(original, nil))
 		setAutoSync(t, client, false)
 		suspended := getTestApp(t, client)
-		if _, found := automatedOf(suspended); found {
-			t.Fatalf("suspend left automated in place: %#v", suspended.Object["spec"])
+		automated, found := automatedOf(suspended)
+		if !found {
+			t.Fatalf("suspend removed automated instead of switching it off: %#v", suspended.Object["spec"])
+		}
+		if automated["enabled"] != false {
+			t.Fatalf("suspended enabled = %#v, want false", automated["enabled"])
+		}
+		if automated["prune"] != true || automated["selfHeal"] != false {
+			t.Fatalf("suspend changed prune/selfHeal: %#v", automated)
 		}
 		annotations := suspended.GetAnnotations()
 		if annotations[ArgoSuspendedPruneAnnotation] != "true" || annotations[ArgoSuspendedSelfHealAnnotation] != "false" {
@@ -2231,46 +2238,52 @@ func TestSetArgoAutoSyncLifecycle(t *testing.T) {
 	})
 }
 
-// When spec.syncPolicy.automated has an explicit enabled flag (e.g. Argo CD 3.x
-// or an ApplicationSet managing automated.prune and selfHeal while ignoring
-// automated.enabled), suspend sets enabled: false in place so other fields
-// in the block are not wiped and do not trigger ApplicationSet reconciliation.
-func TestSetArgoAutoSyncSuspendPreservesBlockWhenEnabledPresent(t *testing.T) {
-	original := map[string]any{"enabled": true, "prune": true, "selfHeal": true}
-	client := newFakeArgo(appWithAutomated(original, nil))
+// Suspend switches enabled: false in place instead of deleting the automated
+// block. Removing it would let an ApplicationSet that manages automated.prune
+// and automated.selfHeal restore a block without `enabled`, which Argo CD
+// treats as auto-sync on again. This must also hold for legacy blocks that
+// never had an `enabled` key.
+func TestSetArgoAutoSyncSuspendPreservesBlock(t *testing.T) {
+	for name, original := range map[string]map[string]any{
+		"enabled present":              {"enabled": true, "prune": true, "selfHeal": true},
+		"legacy block without enabled": {"prune": true, "selfHeal": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := newFakeArgo(appWithAutomated(original, nil))
 
-	// Suspend should switch `enabled: false` in place instead of deleting the automated block.
-	setAutoSync(t, client, false)
-	suspended := getTestApp(t, client)
-	automated, found := automatedOf(suspended)
-	if !found {
-		t.Fatalf("suspend removed automated block instead of setting enabled: false: %#v", suspended.Object["spec"])
-	}
-	if automated["enabled"] != false {
-		t.Fatalf("expected enabled: false, got %#v", automated["enabled"])
-	}
-	if automated["prune"] != true || automated["selfHeal"] != true {
-		t.Fatalf("suspend changed prune/selfHeal: %#v", automated)
-	}
-	if ArgoAutoSyncEnabled(suspended) {
-		t.Fatalf("ArgoAutoSyncEnabled reported true for suspended app with enabled: false")
-	}
+			setAutoSync(t, client, false)
+			suspended := getTestApp(t, client)
+			automated, found := automatedOf(suspended)
+			if !found {
+				t.Fatalf("suspend removed automated block instead of setting enabled: false: %#v", suspended.Object["spec"])
+			}
+			if automated["enabled"] != false {
+				t.Fatalf("expected enabled: false, got %#v", automated["enabled"])
+			}
+			if automated["prune"] != true || automated["selfHeal"] != true {
+				t.Fatalf("suspend changed prune/selfHeal: %#v", automated)
+			}
+			if ArgoAutoSyncEnabled(suspended) {
+				t.Fatalf("ArgoAutoSyncEnabled reported true for suspended app with enabled: false")
+			}
 
-	// Resume clears enabled: false and re-enables auto-sync while keeping prune and selfHeal.
-	setAutoSync(t, client, true)
-	resumed := getTestApp(t, client)
-	resumedAutomated, found := automatedOf(resumed)
-	if !found {
-		t.Fatalf("resume removed automated block: %#v", resumed.Object["spec"])
-	}
-	if val, hasEnabled := resumedAutomated["enabled"]; hasEnabled && val != nil {
-		t.Fatalf("resume left enabled flag: %#v", val)
-	}
-	if resumedAutomated["prune"] != true || resumedAutomated["selfHeal"] != true {
-		t.Fatalf("resumed automated changed: %#v", resumedAutomated)
-	}
-	if !ArgoAutoSyncEnabled(resumed) {
-		t.Fatalf("ArgoAutoSyncEnabled reported false after resume")
+			// Resume clears enabled: false and re-enables auto-sync while keeping prune and selfHeal.
+			setAutoSync(t, client, true)
+			resumed := getTestApp(t, client)
+			resumedAutomated, found := automatedOf(resumed)
+			if !found {
+				t.Fatalf("resume removed automated block: %#v", resumed.Object["spec"])
+			}
+			if val, hasEnabled := resumedAutomated["enabled"]; hasEnabled && val != nil {
+				t.Fatalf("resume left enabled flag: %#v", val)
+			}
+			if resumedAutomated["prune"] != true || resumedAutomated["selfHeal"] != true {
+				t.Fatalf("resumed automated changed: %#v", resumedAutomated)
+			}
+			if !ArgoAutoSyncEnabled(resumed) {
+				t.Fatalf("ArgoAutoSyncEnabled reported false after resume")
+			}
+		})
 	}
 }
 
