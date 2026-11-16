@@ -29,14 +29,23 @@ export const TONE_FILL_CLASS: Record<SeverityTone, string> = {
   slate: 'bg-slate-400',
 }
 
-// Left accent rail on a collapsed queue row — the scan-down severity cue + a
-// faint hover tint. The expanded row swaps this for the header band below.
+// The card's left severity rail — the scan-down cue in a queue. It belongs to
+// the whole card, so an open card's rail runs past the header down its body.
 export const TONE_RAIL_CLASS: Record<SeverityTone, string> = {
-  red: 'border-l-red-500 hover:bg-red-50/40 dark:hover:bg-red-950/20',
-  orange: 'border-l-orange-500 hover:bg-orange-50/40 dark:hover:bg-orange-950/20',
-  amber: 'border-l-amber-500 hover:bg-amber-50/30 dark:hover:bg-amber-950/15',
-  yellow: 'border-l-yellow-500 hover:bg-yellow-50/30 dark:hover:bg-yellow-950/15',
-  slate: 'border-l-slate-300 dark:border-l-slate-600 hover:bg-theme-hover/40',
+  red: 'bg-red-500',
+  orange: 'bg-orange-500',
+  amber: 'bg-amber-500',
+  yellow: 'bg-yellow-500',
+  slate: 'bg-slate-300 dark:bg-slate-600',
+}
+
+// A collapsed card's header: a faint hover tint in the card's tone.
+export const TONE_ROW_HOVER_CLASS: Record<SeverityTone, string> = {
+  red: 'hover:bg-red-50/40 dark:hover:bg-red-950/20',
+  orange: 'hover:bg-orange-50/40 dark:hover:bg-orange-950/20',
+  amber: 'hover:bg-amber-50/30 dark:hover:bg-amber-950/15',
+  yellow: 'hover:bg-yellow-50/30 dark:hover:bg-yellow-950/15',
+  slate: 'hover:bg-theme-hover/40',
 }
 
 // Solid severity pill — the loud focus signal on an expanded card's header band
@@ -51,13 +60,12 @@ export const TONE_SOLID_CLASS: Record<SeverityTone, string> = {
   slate: 'bg-slate-500 text-white dark:bg-slate-600',
 }
 
-// Severity-tinted header band, shown only when a card is expanded. The left
-// rail keeps its color so the queue's scan-down severity rhythm doesn't break
-// at the focused row; no hover variant, so it doesn't lighten on hover.
+// Severity-tinted header band, shown only when a card is expanded: the
+// open-state signal. No hover variant, so it doesn't lighten on hover.
 export const TONE_HEADER_BAND_CLASS: Record<SeverityTone, string> = {
-  red: 'border-l-red-500 bg-red-50 dark:bg-red-950/40',
-  orange: 'border-l-orange-500 bg-orange-50 dark:bg-orange-950/30',
-  amber: 'border-l-amber-500 bg-amber-50 dark:bg-amber-950/30',
-  yellow: 'border-l-yellow-500 bg-yellow-50 dark:bg-yellow-950/30',
-  slate: 'border-l-slate-300 dark:border-l-slate-600 bg-slate-50 dark:bg-slate-900/40',
+  red: 'bg-red-50 dark:bg-red-950/40',
+  orange: 'bg-orange-50 dark:bg-orange-950/30',
+  amber: 'bg-amber-50 dark:bg-amber-950/30',
+  yellow: 'bg-yellow-50 dark:bg-yellow-950/30',
+  slate: 'bg-slate-50 dark:bg-slate-900/40',
 }

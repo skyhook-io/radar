@@ -13,6 +13,7 @@ import {
   ISSUE_SEVERITY_HEADER_BAND_CLASS,
   ISSUE_SEVERITY_LABEL,
   ISSUE_SEVERITY_RAIL_CLASS,
+  ISSUE_SEVERITY_ROW_HOVER_CLASS,
   ISSUE_SEVERITY_SOLID_CLASS,
   ISSUE_SEVERITY_TEXT_CLASS,
   issueTitle,
@@ -30,6 +31,7 @@ import {
   type IssueResourceRef,
   type IssueSeverity,
 } from './types';
+import { SeverityRail } from '../ui/SeverityRail';
 
 // Leading severity glyph — the at-a-glance severity cue on every row: critical =
 // octagon (stop), warning = triangle.
@@ -300,10 +302,10 @@ export function IssueRow({
   return (
     <Container
       className={[
-        'overflow-hidden rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
+        'relative isolate overflow-hidden rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
         // The open card lifts via elevation — heavier shadow + a bright
         // emphasis edge that clearly separates it from sibling cards. Severity
-        // stays rationed to the band + pill; separation is depth, not more color.
+        // stays rationed to the rail, band + pill; separation is depth, not more color.
         // ring-1 widens the edge to 2px without the layout shift a border-2
         // swap would cause on expand.
         open ? 'border-[var(--border-emphasis)] ring-1 ring-[var(--border-emphasis)] shadow-theme-md' : 'border-theme-border shadow-theme-sm',
@@ -312,6 +314,7 @@ export function IssueRow({
       ].filter(Boolean).join(' ')}
       style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 72px' }}
     >
+      <SeverityRail className={ISSUE_SEVERITY_RAIL_CLASS[severity]} />
       {/* The whole header is the single toggle target. The leading severity
           icon is the at-a-glance cue; a trailing chevron shows open/closed.
           Deep-links live in the expanded body (a link nested in a button would
@@ -329,7 +332,7 @@ export function IssueRow({
             onToggle();
           }
         }}
-        className={`group @container/issue flex cursor-pointer items-center gap-3 phone:flex-wrap phone:gap-y-2 border-l-[3px] py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_RAIL_CLASS[severity]}`}
+        className={`group @container/issue flex cursor-pointer items-center gap-3 phone:flex-wrap phone:gap-y-2 py-3 pl-[15px] pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_ROW_HOVER_CLASS[severity]}`}
       >
         <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${ISSUE_SEVERITY_TEXT_CLASS[severity]}`} aria-hidden />
 

@@ -12,6 +12,7 @@ import {
   SEVERITY_HEADER_BAND_CLASS,
   SEVERITY_LABEL,
   SEVERITY_RAIL_CLASS,
+  SEVERITY_ROW_HOVER_CLASS,
   SEVERITY_SOLID_CLASS,
   SEVERITY_TEXT_CLASS,
 } from './severity'
@@ -19,6 +20,7 @@ import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { CopyableCommand } from '../trace/TracePanel'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { CORE_RESOURCES } from '../../utils/api-resources'
+import { SeverityRail } from '../ui/SeverityRail'
 
 const CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Efficiency']
 
@@ -574,10 +576,10 @@ export function CheckCardShell({
   return (
     <Container
       className={[
-        'overflow-hidden rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
+        'relative isolate overflow-hidden rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
         // The open card lifts via elevation — heavier shadow + a bright
         // emphasis edge that clearly separates it from sibling cards. Severity
-        // stays rationed to the band + pill; separation is depth, not more color.
+        // stays rationed to the rail, band + pill; separation is depth, not more color.
         // ring-1 widens the edge to 2px without the layout shift a border-2
         // swap would cause on expand.
         open ? 'border-[var(--border-emphasis)] ring-1 ring-[var(--border-emphasis)] shadow-theme-md' : 'border-theme-border shadow-theme-sm',
@@ -587,6 +589,7 @@ export function CheckCardShell({
         .filter(Boolean)
         .join(' ')}
     >
+      <SeverityRail className={SEVERITY_RAIL_CLASS[sev]} />
       {/* Leading severity icon is the at-a-glance cue; a trailing chevron shows
           open/closed. Collapsed: neutral row + rail. Expanded: severity-tinted
           band + solid pill — the tint is a focus signal, not per-row alarm. */}
@@ -602,7 +605,7 @@ export function CheckCardShell({
             onToggle()
           }
         }}
-        className={`group flex cursor-pointer items-center gap-3 border-l-[3px] py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? SEVERITY_HEADER_BAND_CLASS[sev] : SEVERITY_RAIL_CLASS[sev]}`}
+        className={`group flex cursor-pointer items-center gap-3 py-3 pl-[15px] pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? SEVERITY_HEADER_BAND_CLASS[sev] : SEVERITY_ROW_HOVER_CLASS[sev]}`}
       >
         <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${SEVERITY_TEXT_CLASS[sev]}`} aria-hidden />
 
