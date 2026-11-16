@@ -136,18 +136,19 @@ func TestCatalogCoversOnlyGroupsDiscoveryAnswered(t *testing.T) {
 		name     string
 		complete bool
 		failed   []string
+		covered  []string
 	}{
-		{name: "complete", complete: true},
-		{name: "metrics failed", failed: []string{"metrics.k8s.io", "external.metrics.k8s.io"}},
-		{name: "Argo failed", failed: []string{"argoproj.io"}},
-		{name: "core failed", failed: []string{""}},
-		{name: "built-in group failed", failed: []string{"apps"}},
+		{name: "complete", complete: true, covered: groups},
+		{name: "metrics failed", failed: []string{"metrics.k8s.io", "external.metrics.k8s.io"}, covered: []string{"", "apps", "argoproj.io"}},
+		{name: "Argo failed", failed: []string{"argoproj.io"}, covered: []string{"", "apps", "metrics.k8s.io", "external.metrics.k8s.io"}},
+		{name: "core failed", failed: []string{""}, covered: []string{"apps", "argoproj.io", "metrics.k8s.io", "external.metrics.k8s.io"}},
+		{name: "built-in group failed", failed: []string{"apps"}, covered: []string{"", "argoproj.io", "metrics.k8s.io", "external.metrics.k8s.io"}},
 		{name: "whole discovery failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := NewCatalog(nil, tc.complete, tc.failed...)
 			for _, group := range groups {
-				want := tc.complete || len(tc.failed) > 0 && !slices.Contains(tc.failed, group)
+				want := slices.Contains(tc.covered, group)
 				if got := c.CoversGroup(group); got != want {
 					t.Errorf("CoversGroup(%q) = %v, want %v", group, got, want)
 				}
