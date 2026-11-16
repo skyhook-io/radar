@@ -15,8 +15,7 @@ const workerPoolProvisionGrace = 10 * time.Minute
 // condition, the pool's only condition.
 type WorkerPoolClass struct {
 	Name string
-	// Resolved is false when the class has no Resolved condition yet.
-	Resolved                bool
+	// Status is empty when the class has no Resolved condition yet.
 	Status, Reason, Message string
 	ObservedGeneration      int64
 	// Stale: recorded for an older generation, so the controller has not
@@ -41,7 +40,6 @@ func WorkerPoolClasses(u *unstructured.Unstructured) []WorkerPoolClass {
 			if cond["type"] != "Resolved" {
 				continue
 			}
-			c.Resolved = true
 			c.Status, _ = cond["status"].(string)
 			c.Reason, _ = cond["reason"].(string)
 			c.Message, _ = cond["message"].(string)
