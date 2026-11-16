@@ -216,7 +216,7 @@ function PostureSummary({ posture, lowerBound, active, onToggle }: {
     { id: 'intree', value: posture.inTree, tone: 'degraded' },
   ]
   return (
-    <div className="flex flex-wrap items-center gap-2 text-xs" aria-label="Backup and availability configuration">
+    <div role="group" className="flex flex-wrap items-center gap-2 text-xs" aria-label="Backup and availability configuration">
       {items.map(({ id, value, tone }) => {
         const on = active === id
         return (
@@ -224,15 +224,17 @@ function PostureSummary({ posture, lowerBound, active, onToggle }: {
             key={id}
             type="button"
             aria-pressed={on}
+            aria-label={`${POSTURE_LABELS[id]}: ${n(value)}`}
+            disabled={value === 0 && !on}
             onClick={() => onToggle(id)}
             className={clsx(
               'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 transition-colors',
-              on ? 'border-accent bg-accent-muted text-accent-text' : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover',
+              on ? 'border-accent bg-accent-muted text-accent-text' : 'border-theme-border text-theme-text-secondary enabled:hover:bg-theme-hover disabled:opacity-60',
             )}
           ><span>{POSTURE_LABELS[id]}</span><span className={clsx('font-mono', value > 0 && !on && toneTextClass(tone))}>{n(value)}</span></button>
         )
       })}
-      <span className="inline-flex items-center gap-1.5 px-1 text-theme-text-tertiary"><span>Have a destination</span><span className={clsx('font-mono', posture.withDestination > 0 && toneTextClass('healthy'))}>{n(posture.withDestination)}</span></span>
+      <span className="inline-flex items-center gap-1.5 px-1 text-theme-text-tertiary"><span>With a destination</span><span className="font-mono">{n(posture.withDestination)}</span></span>
     </div>
   )
 }
@@ -276,7 +278,7 @@ export function CNPGOverview({
   const total = fleet.rows.length
   const context = connection.context || data.context
   // Some namespaces were not read: the count is a floor, not the cluster's total.
-  const totalText = `${clustersCov?.state === 'partial' ? '≥' : ''}${total}`
+  const totalText = `${fleet.incompleteKinds.includes('clusters') ? '≥' : ''}${total}`
   // No cluster authoring on a phone (a YAML editor follows the dialog).
   const isPhone = usePhoneLayout()
   const createAction = onCreate && !isPhone ? (
@@ -523,10 +525,10 @@ export function CNPGOverview({
             </div>
             {rows.length === 0 && (
               <div className="px-4 py-6 text-sm text-theme-text-tertiary">
-                {filter === 'attention' && !cat && !q
+                {filter === 'attention' && !cat && !q && !protect
                   ? lowerBound ? 'No attention findings in the readable data; other data was not read.' : 'No clusters need attention.'
                   : 'No clusters match these filters.'}{' '}
-                <button type="button" onClick={() => onSetParams({ filter: 'all', cat: null, q: null })} className="font-medium text-accent-text hover:underline">
+                <button type="button" onClick={() => onSetParams({ filter: 'all', cat: null, q: null, protect: null })} className="font-medium text-accent-text hover:underline">
                   Show all clusters
                 </button>
               </div>

@@ -240,7 +240,8 @@ export interface CNPGFleetPosture {
 }
 
 /**
- * One Cluster's posture, as checkCNPGClusterPosture in pkg/audit decides it:
+ * One Cluster's posture, by the same rule as checkCNPGClusterPosture in pkg/audit
+ * (settings that turn a Check off live on the server and don't apply here):
  * WAL is judged only with a destination and a known archiver, an unset
  * spec.instances is CNPG's default of 1, and an in-tree destinationPath counts
  * even beside the barman-cloud plugin.
@@ -248,12 +249,16 @@ export interface CNPGFleetPosture {
 export function cnpgPostureFlags(cluster: any): { noDestination: boolean; noWalArchiving: boolean; singleInstance: boolean; inTree: boolean } {
   const d = cnpgBackupDeclaration(cluster)
   const hasDestination = cnpgHasBackupDestination(d)
-  const instances = Number(cluster?.spec?.instances ?? 1)
+  // Like cnpgDesiredInstances: a number is truncated, anything else is CNPG's default of 1.
+  const raw = cluster?.spec?.instances
+  const instances = typeof raw === 'number' && Number.isFinite(raw) ? Math.trunc(raw) : 1
+  // radarhq.io/ignore-checks withdraws the Cluster from that Check, so from its count too.
+  const ignored = new Set(String(cluster?.metadata?.annotations?.['radarhq.io/ignore-checks'] ?? '').split(',').map((id) => id.trim()).filter(Boolean))
   return {
-    noDestination: !hasDestination,
-    noWalArchiving: hasDestination && !cnpgWALArchiverUnknown(d) && !cnpgArchivesWAL(d),
-    singleInstance: Number.isFinite(instances) ? instances <= 1 : true,
-    inTree: !!d.inTreeDestination,
+    noDestination: !hasDestination && !ignored.has('cnpgNoBackupDestination'),
+    noWalArchiving: hasDestination && !cnpgWALArchiverUnknown(d) && !cnpgArchivesWAL(d) && !ignored.has('cnpgNoWALArchiving'),
+    singleInstance: instances <= 1 && !ignored.has('cnpgSingleInstance'),
+    inTree: !!d.inTreeDestination && !ignored.has('cnpgInTreeBackupDeprecated'),
   }
 }
 
@@ -1230,8 +1235,8 @@ function finishFleet(rows: CNPGFleetRow[], incompleteKinds: CNPGWorkspaceKey[]):
     if (f.noWalArchiving) posture.noWalArchiving++
     if (f.singleInstance) posture.singleInstance++
     if (f.inTree) posture.inTree++
+    if (cnpgHasBackupDestination(cnpgBackupDeclaration(r.cluster))) posture.withDestination++
   }
-  posture.withDestination = posture.total - posture.noDestination
   return {
     rows,
     attentionCount: rows.filter((r) => r.attention).length,

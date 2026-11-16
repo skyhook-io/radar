@@ -721,4 +721,19 @@ describe('fleet posture', () => {
   it('keeps the counts after applyCNPGDisk rebuilds the fleet', () => {
     expect(applyCNPGDisk(fleet, []).posture).toEqual(fleet.posture)
   })
+
+  it('mirrors the Go rule on edge shapes and honours radarhq.io/ignore-checks', () => {
+    const flags = (spec: any, annotations?: Record<string, string>) => cnpgPostureFlags({ metadata: { annotations }, spec })
+    expect(flags({ instances: 3, plugins: [{ ...barman, enabled: false }] }).noDestination).toBe(true)
+    expect(flags({ instances: 3, plugins: [{ name: barman.name }] }).noDestination).toBe(true)
+    expect(flags({ instances: 3, plugins: [{ name: barman.name }], backup: { volumeSnapshot: {} } })).toMatchObject({ noDestination: false, noWalArchiving: true })
+    expect(flags({ instances: 0 }).singleInstance).toBe(true)
+    // Go truncates a float and reads anything else as CNPG's default of 1
+    expect(flags({ instances: 2.7 }).singleInstance).toBe(false)
+    expect(flags({ instances: '3' }).singleInstance).toBe(true)
+    expect(flags({ instances: 1 }, { 'radarhq.io/ignore-checks': 'hostNetwork, cnpgSingleInstance' })).toMatchObject({ singleInstance: false, noDestination: true })
+    expect(flags({ instances: 1 }, { 'radarhq.io/ignore-checks': 'cnpgNoBackupDestination' })).toMatchObject({ singleInstance: true, noDestination: false })
+    const ignoredBare = buildCNPGFleet(resp({ clusters: [cluster('quiet', 'db', { metadata: { annotations: { 'radarhq.io/ignore-checks': 'cnpgNoBackupDestination' } } })] }))
+    expect(ignoredBare.posture).toMatchObject({ noDestination: 0, withDestination: 0 })
+  })
 })

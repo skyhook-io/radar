@@ -178,7 +178,9 @@ describe('CNPGOverview posture summary', () => {
     const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })]))
     expect(count(html, 'No backup destination')).toBe('2')
     expect(count(html, 'Single instance')).toBe('2')
-    expect(count(html, 'Have a destination')).toBe('0')
+    expect(count(html, 'With a destination')).toBe('0')
+    expect(html).toMatch(/<div role="group"[^>]*aria-label="Backup and availability configuration"/)
+    expect(html).toContain('aria-label="Single instance: 2"')
     expect(count(html, 'No WAL archiving')).toBe('0')
   })
 
@@ -200,5 +202,11 @@ describe('CNPGOverview posture summary', () => {
     expect(html).toContain('bare')
     expect(html).toContain('intree')
     expect(html).not.toContain('Posture:')
+  })
+
+  it('says the filters, not attention, emptied the table when posture narrows it to nothing', () => {
+    const html = render(response([withSpec('a', { instances: 3 })]), 'filter=attention&protect=intree', { attention: ['a'] })
+    expect(html).toContain('No clusters match these filters')
+    expect(html).not.toContain('No clusters need attention')
   })
 })
