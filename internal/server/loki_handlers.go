@@ -280,7 +280,7 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		log.Printf("[loki] Failed to get job %s/%s: %v", namespace, name, err)
+		log.Printf("[loki] Failed to get job %q/%q: %v", namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

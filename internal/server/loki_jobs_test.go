@@ -186,3 +186,26 @@ func TestLokiJobLogsContainerAndMultiLine(t *testing.T) {
 		t.Fatalf("query = %s", q)
 	}
 }
+
+// A Job run read shares the per-user limit with pod History.
+func TestLokiJobLogsShareTheReadLimit(t *testing.T) {
+	seedJob(t)
+	rec := newLokiRecorder(t, twoPods)
+	rec.mu.Lock()
+	rec.hold = make(chan struct{})
+	rec.mu.Unlock()
+	first := make(chan int)
+	go func() {
+		resp, _ := lokiPodLogs(t, "")
+		first <- resp.StatusCode
+	}()
+	for rec.count() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	resp, _, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs")
+	close(rec.hold)
+	<-first
+	if resp.StatusCode != http.StatusTooManyRequests || rec.count() != 1 {
+		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
+	}
+}
