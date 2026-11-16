@@ -120,5 +120,5 @@ export function useSubstrateHealth(target: SubstrateTarget, range: PrometheusTim
     // A changed connection answers 409 and is safe to retry once; a denial is final.
     retry: (failureCount, error) => failureCount < 1 && error instanceof ApiError && error.status === 409,
   })
-  return { ...query, upgrade: feature.upgrade, support: feature.support }
+  return { ...query, upgrade: feature.upgrade, blockedReason: feature.blockedReason, support: feature.support }
 }

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateHealth } from '../../api/substrateHealth'
 
-let health: { data?: SubstrateHealth; error?: unknown; upgrade?: unknown } = {}
+let health: { data?: SubstrateHealth; error?: unknown; upgrade?: unknown; blockedReason?: string } = {}
 let promStatus: { connected: boolean; discovering?: boolean; error?: string } = { connected: true }
 
 vi.mock('../../api/client', async (orig) => ({
@@ -43,6 +43,12 @@ describe('SubstrateHealthCharts', () => {
     expect(render(pool)).toBe('')
     expect(renderToStaticMarkup(<SubstrateHealthCharts target={pool} standalone />)).toContain('Discover Prometheus')
     promStatus = { connected: true }
+  })
+
+  it('says why there are no charts when Radar support could not be checked', () => {
+    health = { blockedReason: "Couldn't check this cluster's Radar support. Refresh to try again." }
+    expect(render(pool)).toContain('Refresh to try again')
+    expect(render(node)).toBe('')
   })
 
   it('says what it looked for when a pool has no Substrate series', () => {

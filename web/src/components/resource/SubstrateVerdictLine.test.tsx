@@ -37,13 +37,12 @@ describe('SubstrateVerdictLine', () => {
     expect(html).toContain('View metrics')
   })
 
-  it('reads full as neutral and free slots as plain text, never as serving', () => {
+  it('reads full as neutral and free slots as plain text', () => {
     withVerdict({ state: 'noFreeActorSlots', facts: [] })
     expect(render(pool)).toContain('bg-theme-hover/50')
     withVerdict({ state: 'freeActorSlots', facts: [] })
     const html = render(pool)
     expect(html).toContain('Free slots')
-    expect(html).not.toContain('Serving')
     expect(html).not.toMatch(/bg-amber|bg-red|bg-emerald/)
     expect(html).not.toContain('aria-label="Qualified"')
   })

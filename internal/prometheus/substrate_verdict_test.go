@@ -195,7 +195,7 @@ func TestSubstrateRangeFactRequiresCurrentSeries(t *testing.T) {
 func TestSubstratePoolVerdictWithoutDesiredWorkers(t *testing.T) {
 	v, _ := poolVerdict(t, []fakeRule{{verdictAnyFree, result(series(nil, 1))}, {verdictFree, result(series(nil, 2))}, {verdictTotal, result(series(nil, 2))}}, okCharts())
 	if v.State != SubstrateVerdictFreeActorSlots || !strings.Contains(v.Reason, "desired worker count") {
-		t.Fatalf("verdict = %s %q, want serving qualified by the missing desired count", v.State, v.Reason)
+		t.Fatalf("verdict = %s %q, want freeActorSlots qualified by the missing desired count", v.State, v.Reason)
 	}
 	if free := fact(v, "workersWithFreeActorSlots"); free.State != SubstrateFactOK || *free.Value != 2 || *free.Of != 2 {
 		t.Fatalf("free = %+v", free)

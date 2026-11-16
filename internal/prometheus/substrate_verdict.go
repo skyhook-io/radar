@@ -160,7 +160,7 @@ func chartDef(defs []substrateChartDef, id string) substrateChartDef {
 }
 
 // poolVerdict judges the pool's capacity now, in the order an operator acts
-// on it: short of workers, then no workers or full, then serving. Everything
+// on it: short of workers, then no schedulable workers or full, then free slots. Everything
 // but the shortfall reads the API server's worker counts alone; the shortfall
 // also needs the controller's desired count, which a setup may not collect.
 func (r *substrateRun) poolVerdict(charts []SubstrateChart) *SubstrateVerdict {
