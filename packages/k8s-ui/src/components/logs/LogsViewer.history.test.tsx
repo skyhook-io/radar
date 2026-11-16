@@ -46,7 +46,7 @@ it('reads History from Loki with the selected container and turns off streaming'
   await render({ fetchHistory })
   await act(async () => { button('History')!.click() })
   await act(async () => { await new Promise(r => setTimeout(r, 150)) })
-  expect(fetchHistory).toHaveBeenCalledWith({ container: 'web', since: '6h' })
+  expect(fetchHistory).toHaveBeenCalledWith(expect.objectContaining({ container: 'web', since: '6h' }))
   // jsdom has no layout, so the virtual list renders no rows; the level counter shows the line arrived.
   expect(element.textContent).toContain('OTHER 1')
   expect(element.textContent).toContain('From Loki')
@@ -68,7 +68,7 @@ it('says why History may be empty', async () => {
 it('takes the containers of a gone pod from the History result', async () => {
   const fetchHistory = vi.fn(async () => result({ containers: ['sidecar', 'web'], logs: { sidecar: '2026-11-13T09:00:00Z side\n', web: '2026-11-13T09:00:01Z main\n' } }))
   await render({ containers: [], fetchHistory, initialMode: 'history' })
-  expect(fetchHistory).toHaveBeenCalledWith({ container: undefined, since: '6h' })
+  expect(fetchHistory).toHaveBeenCalledWith(expect.objectContaining({ container: undefined, since: '6h' }))
   const options = [...element.querySelectorAll('option')].map(o => o.textContent)
   expect(options).toContain('sidecar')
   expect(options).toContain('web')
@@ -92,7 +92,7 @@ it('opens History once the host can read it, when asked to start there', async (
 it('starts History on the window the host asks for', async () => {
   const fetchHistory = vi.fn(async () => result())
   await render({ containers: [], fetchHistory, initialMode: 'history', initialHistoryWindow: '7d' })
-  expect(fetchHistory).toHaveBeenCalledWith({ container: undefined, since: '7d' })
+  expect(fetchHistory).toHaveBeenCalledWith(expect.objectContaining({ container: undefined, since: '7d' }))
 })
 
 it('keeps learning a gone pod\'s containers as the window widens', async () => {
@@ -113,7 +113,7 @@ it('keeps learning a gone pod\'s containers as the window widens', async () => {
 it('shows whole-pod lines when Loki has no container label, even with a container selected', async () => {
   const fetchHistory = vi.fn(async () => result({ containers: ['(all containers)'], logs: { '(all containers)': '2026-11-13T09:00:00Z whole pod\n' } }))
   await render({ fetchHistory, initialMode: 'history' })
-  expect(fetchHistory).toHaveBeenCalledWith({ container: 'web', since: '6h' })
+  expect(fetchHistory).toHaveBeenCalledWith(expect.objectContaining({ container: 'web', since: '6h' }))
   expect(element.textContent).toContain('OTHER 1')
   expect(element.textContent).toContain('all containers (Loki has no container label)')
 })
@@ -143,4 +143,24 @@ it('labels init containers like Live and keeps the given order, appending contai
 it('says History matches by pod name, so an earlier pod with the same name is included', async () => {
   await render({ fetchHistory: async () => result(), initialMode: 'history' })
   expect(element.textContent).toContain('matched by pod name')
+})
+
+it('cancels a running History read when the window changes, and on close', async () => {
+  const signals: AbortSignal[] = []
+  const fetchHistory = vi.fn(({ signal }: { signal?: AbortSignal }) => {
+    signals.push(signal!)
+    return new Promise<LogsHistoryResult>(() => {})
+  })
+  await render({ containers: [], fetchHistory, initialMode: 'history', initialHistoryWindow: '1h' })
+  const windowSelect = [...element.querySelectorAll('select')].find(s => [...s.options].some(o => o.value === '7d'))!
+  await act(async () => {
+    windowSelect.value = '7d'
+    windowSelect.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+  expect(signals).toHaveLength(2)
+  expect(signals[0].aborted).toBe(true)
+  expect(signals[1].aborted).toBe(false)
+  act(() => root?.unmount())
+  root = undefined
+  expect(signals[1].aborted).toBe(true)
 })

@@ -141,7 +141,7 @@ type lokiRecorder struct {
 	mu      sync.Mutex
 	status  int
 	body    string
-	hold    chan struct{} // when set, query_range waits for it to close
+	hold    chan struct{} // when set, the next query_range waits for it to close
 }
 
 func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
@@ -160,6 +160,7 @@ func newLokiRecorderWithLabels(t *testing.T, labelNames, streams string) *lokiRe
 			rec.mu.Lock()
 			rec.queries = append(rec.queries, r.URL.Query())
 			status, body, hold := rec.status, rec.body, rec.hold
+			rec.hold = nil
 			rec.mu.Unlock()
 			if hold != nil {
 				<-hold
@@ -403,8 +404,9 @@ func TestLokiPodLogsMatchesThisCluster(t *testing.T) {
 // read against Loki.
 func TestLokiPodLogsOneReadPerUser(t *testing.T) {
 	rec := newLokiRecorder(t, twoContainers)
+	hold := make(chan struct{})
 	rec.mu.Lock()
-	rec.hold = make(chan struct{})
+	rec.hold = hold
 	rec.mu.Unlock()
 	first := make(chan int)
 	go func() {
@@ -415,7 +417,7 @@ func TestLokiPodLogsOneReadPerUser(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	resp, raw := lokiPodLogs(t, "")
-	close(rec.hold)
+	close(hold)
 	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(raw, "still running") || rec.count() != 1 {
 		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
 	}
@@ -455,5 +457,41 @@ func TestRadarPodLogAccessIsMemoized(t *testing.T) {
 	failing(context.Background(), "x")
 	if calls != 4 {
 		t.Fatal("a failed review was remembered")
+	}
+}
+
+// A read the viewer abandons frees its slot as soon as the request ends,
+// while Loki is still working on it.
+func TestLokiPodLogsCancelledReadFreesItsSlot(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	hold := make(chan struct{})
+	defer close(hold)
+	rec.mu.Lock()
+	rec.hold = hold
+	rec.mu.Unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, testServer.URL+"/api/loki/pods/team/app-1/logs", nil)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	for rec.count() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		resp, raw := lokiPodLogs(t, "")
+		if resp.StatusCode == 200 {
+			return
+		}
+		if resp.StatusCode != http.StatusTooManyRequests || time.Now().After(deadline) {
+			t.Fatalf("after cancelling the first read: %d %s", resp.StatusCode, raw)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
