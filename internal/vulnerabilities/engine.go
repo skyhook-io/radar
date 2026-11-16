@@ -140,6 +140,13 @@ func artifactImage(body map[string]any) (image, digest string) {
 	return image, digest
 }
 
+// newer is whether a is the report to use over b for one image: the later
+// scan, then the lower namespace/name, so the pick doesn't depend on list
+// order.
+func newer(a, b *report) bool {
+	return a.scannedAt.After(b.scannedAt) || (a.scannedAt.Equal(b.scannedAt) && a.ref.Namespace+"/"+a.ref.Name < b.ref.Namespace+"/"+b.ref.Name)
+}
+
 // sameImage reports whether a report scanned what a container runs: by
 // digest when both know one, so a tag pushed again doesn't carry an older
 // build's scan; else by reference, with Docker Hub's implicit registry,
@@ -264,7 +271,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if len(matched) == 0 {
 			// Its object no longer runs, but its build may: after a restart,
 			// the new ReplicaSet runs the build the old one's report scanned.
-			if prev := idle[r.digest]; r.digest != "" && (prev == nil || r.scannedAt.After(prev.scannedAt)) {
+			if prev := idle[r.digest]; r.digest != "" && (prev == nil || newer(r, prev)) {
 				idle[r.digest] = r
 			}
 			inactive++
@@ -274,7 +281,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if agg == nil {
 			agg = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
 			j.images[r.imageID] = agg
-		} else if r.scannedAt.After(agg.report.scannedAt) || (r.scannedAt.Equal(agg.report.scannedAt) && r.ref.Namespace+"/"+r.ref.Name < agg.report.ref.Namespace+"/"+agg.report.ref.Name) {
+		} else if newer(r, agg.report) {
 			agg.report = r
 		}
 		for _, t := range matched {
@@ -285,21 +292,34 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			j.targetImage[t.key] = r.imageID
 		}
 	}
+	// A report whose object no longer runs still describes its build where
+	// a container runs it (a restarted ReplicaSet), and competes for the
+	// image like any other: the newest wins.
+	runs := map[string]bool{}
+	for i := range targets {
+		runs[targets[i].digest] = targets[i].digest != ""
+	}
+	for d, r := range idle {
+		if !runs[d] {
+			continue
+		}
+		if agg := j.images[d]; agg == nil {
+			j.images[d] = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
+		} else if newer(r, agg.report) {
+			agg.report = r
+		} else {
+			continue
+		}
+		inactive--
+	}
 	// A scanned build counts for every container that runs it: another
-	// workload, a namespace Trivy doesn't scan, or a restarted ReplicaSet
-	// whose older one's report scanned it.
+	// workload, a namespace Trivy doesn't scan, or a restarted ReplicaSet.
 	for i := range targets {
 		t := &targets[i]
 		if _, ok := j.targetImage[t.key]; ok || t.digest == "" {
 			continue
 		}
 		agg := j.images[t.digest]
-		if agg == nil && idle[t.digest] != nil {
-			agg = &imageAgg{report: idle[t.digest], workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
-			j.images[t.digest] = agg
-			delete(idle, t.digest)
-			inactive--
-		}
 		if agg == nil {
 			continue
 		}

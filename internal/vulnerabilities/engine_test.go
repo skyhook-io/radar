@@ -737,3 +737,38 @@ func TestRunningBuildWinsAndPendingSpellingSearches(t *testing.T) {
 		t.Fatalf("the pending Pod's spelling finds the image: %+v", got.Images)
 	}
 }
+
+// A report whose object no longer runs competes for its build like any other:
+// the newest wins, ties by name, whatever order the reports list in.
+func TestIdleReportCompetesForItsBuild(t *testing.T) {
+	spec := func(name, owner, scanned string, vulns ...vuln) *unstructured.Unstructured {
+		return vulnReport(reportSpec{name: name, ns: "shop", ownerKind: "ReplicaSet", ownerName: owner, container: "app", repo: "acme/web", tag: "1", digest: "sha256:d", scanned: scanned, vulns: vulns})
+	}
+	active := running(liveTarget("shop", "ReplicaSet", "web-1", "app", "acme/web:1", "", checkout), "sha256:d")
+	fresh := running(liveTarget("shop", "ReplicaSet", "web-3", "app", "acme/web:1", "", checkout), "sha256:d")
+	critical := func(items ...*unstructured.Unstructured) int {
+		got := mustBuild(t, items, []target{active, fresh}, ViewImage, Filter{})
+		if len(got.Images)+len(got.Clean) != 1 {
+			t.Fatalf("one image: %+v %+v", got.Images, got.Clean)
+		}
+		return got.Summary.Counts.Critical
+	}
+	olderActive := spec("a", "web-1", "2026-11-10T10:00:00Z")
+	newerIdle := spec("b", "web-2", "2026-11-16T10:00:00Z", vuln{"CVE-X", "CRITICAL", "zlib", "1", "2"})
+	if critical(olderActive, newerIdle) != 1 || critical(newerIdle, olderActive) != 1 {
+		t.Fatal("the newer idle report wins")
+	}
+	newerActive := spec("a", "web-1", "2026-11-17T10:00:00Z")
+	if critical(newerActive, newerIdle) != 0 {
+		t.Fatal("an older idle report loses")
+	}
+	tieA := spec("a", "web-2", "2026-11-16T10:00:00Z")
+	tieB := spec("b", "web-4", "2026-11-16T10:00:00Z", vuln{"CVE-X", "CRITICAL", "zlib", "1", "2"})
+	only := running(liveTarget("shop", "ReplicaSet", "web-3", "app", "acme/web:1", "", checkout), "sha256:d")
+	for _, items := range [][]*unstructured.Unstructured{{tieA, tieB}, {tieB, tieA}} {
+		got := mustBuild(t, items, []target{only}, ViewImage, Filter{})
+		if got.Summary.Counts.Critical != 0 {
+			t.Fatalf("a tie goes to the lower name, in either order: %+v", got.Summary)
+		}
+	}
+}
