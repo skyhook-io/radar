@@ -1,0 +1,100 @@
+import { useState } from 'react'
+import { Badge, RadarUpgradeAction, getRadarUpgradeRequirement, radarUpgradeDetail, radarUpgradeHeadline } from '@skyhook-io/k8s-ui'
+import { useVeleroRunContents, useVeleroRunLog, type VeleroLogLevel } from '../../api/velero'
+import { Notice, SectionTable, Segments } from '../workspace/layout'
+
+type RunProps = { kind: 'backups' | 'restores'; namespace: string; name: string }
+const actions = ['failed', 'created', 'updated', 'skipped'] as const
+const levels: VeleroLogLevel[] = ['error', 'warning', 'info', 'debug', 'other']
+const inputClass = 'rounded-lg border border-theme-border bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-primary'
+
+function ArtifactError({ error, retry, hasData }: { error: Error; retry: () => void; hasData: boolean }) {
+  const upgrade = getRadarUpgradeRequirement(error)
+  return <Notice>{hasData && <div>The last refresh failed; the previous result is shown below.</div>}{upgrade ? <>{radarUpgradeHeadline('Velero run contents and log')}<div>{radarUpgradeDetail(upgrade)}</div><RadarUpgradeAction requirement={upgrade} /></> : <>{error.message} <button type="button" className="btn-secondary px-2 py-1" onClick={retry}>Retry</button></>}</Notice>
+}
+
+export function VeleroRunContents({ kind, namespace, name }: RunProps) {
+  const [text, setText] = useState('')
+  const [q, setQuery] = useState('')
+  const [action, setAction] = useState('')
+  const [selectedNamespace, setNamespace] = useState('')
+  const query = useVeleroRunContents(kind, namespace, name, { q, action, namespace: selectedNamespace })
+  const data = query.data
+  return <div className="space-y-3 p-4">
+    <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); setQuery(text) }}>
+      <input aria-label="Filter contents" placeholder="Kind, namespace or name" className={inputClass} value={text} onChange={(e) => setText(e.target.value)} />
+      <button type="submit" className="btn-secondary px-3 py-1.5 text-sm">Search</button>
+      <select aria-label="Contents namespace" className={inputClass} value={selectedNamespace} onChange={(e) => setNamespace(e.target.value)}>
+        <option value="">All namespaces</option>
+        {(data?.namespaces ?? (selectedNamespace ? [selectedNamespace] : [])).map((ns) => <option key={ns} value={ns}>{ns}</option>)}
+      </select>
+    </form>
+    {kind === 'restores' && <Segments label="Restore action" value={action} onChange={setAction} options={[
+      { id: '', label: 'All actions', count: data?.total },
+      ...actions.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1), count: data ? data.actions[id] ?? 0 : undefined })),
+    ]} />}
+    {query.error && <ArtifactError error={query.error} hasData={!!data} retry={() => void query.refetch()} />}
+    {query.isPending && <p className="text-sm text-theme-text-secondary">Loading contents…</p>}
+    {data && <>
+      <p className="text-sm text-theme-text-secondary">{data.total} items · {data.namespaces.length} namespaces · {data.matched} matching items</p>
+      {data.truncated && <Notice>Showing the first 5,000 matching items. Counts and filters cover the whole file.</Notice>}
+      {data.matched === 0 && <Notice>{data.total === 0 ? 'Velero recorded no items in this run.' : 'No contents match these filters.'}</Notice>}
+      {data.groups.filter((g) => g.matched > 0).map((group) => <SectionTable
+        key={group.kind}
+        title={group.kind}
+        subtitle={`${group.count} total · ${group.matched} matching`}
+        minWidth={480}
+        columns={[
+          { header: 'Namespace', width: '180px', cell: (item) => item.namespace || 'Cluster-scoped' },
+          { header: 'Name', cell: (item) => <span className="font-mono text-xs break-all">{item.name}</span> },
+          ...(kind === 'restores' ? [{ header: 'Action', width: '120px', cell: (item: (typeof group.items)[number]) => item.action ? <Badge severity={item.action === 'failed' ? 'error' : 'neutral'}>{item.action}</Badge> : 'Not recorded' }] : []),
+        ]}
+        rows={group.items}
+        rowKey={(item) => `${item.namespace}/${item.name}/${item.action ?? ''}`}
+        empty="Matching items omitted by the row limit. Narrow the filters to see them."
+      />)}
+    </>}
+  </div>
+}
+
+export function VeleroRunLog({ kind, namespace, name }: RunProps) {
+  const [text, setText] = useState('')
+  const [q, setQuery] = useState('')
+  const [selected, setSelected] = useState('problems')
+  const [wrap, setWrap] = useState(true)
+  const requested = selected === 'all' ? levels.join(',') : selected === 'problems' ? 'error,warning' : selected
+  const query = useVeleroRunLog(kind, namespace, name, requested, q)
+  const data = query.data
+  const count = (level: VeleroLogLevel) => data ? `${data.partial ? '≥' : ''}${data.counts[level]}` : undefined
+  return <div className="space-y-3 p-4">
+    <div className="flex flex-wrap items-center gap-2">
+      <Segments label="Log levels" value={selected} onChange={setSelected} options={[
+        { id: 'problems', label: 'Errors + warnings' },
+        ...levels.map((id) => ({ id, label: id[0].toUpperCase() + id.slice(1), count: count(id) })),
+      ]} />
+      <button type="button" aria-pressed={selected === 'all'} className="btn-secondary px-3 py-1.5 text-sm" onClick={() => setSelected('all')}>Show all levels</button>
+    </div>
+    <form className="flex flex-wrap items-center gap-3" onSubmit={(e) => { e.preventDefault(); setQuery(text) }}>
+      <input aria-label="Search log" placeholder="Search log text" className={inputClass} value={text} onChange={(e) => setText(e.target.value)} />
+      <button type="submit" className="btn-secondary px-3 py-1.5 text-sm">Search</button>
+      <label className="flex items-center gap-2 text-sm text-theme-text-secondary"><input type="checkbox" checked={wrap} onChange={(e) => setWrap(e.target.checked)} />Wrap lines</label>
+    </form>
+    {query.error && <ArtifactError error={query.error} hasData={!!data} retry={() => void query.refetch()} />}
+    {query.isPending && <p className="text-sm text-theme-text-secondary">Loading log…</p>}
+    {data?.partial && <Notice>Counts and search cover the first {(data.decodedBytes / (1 << 20)).toFixed(2)} MiB of decoded log ({data.limit}). Later lines were not read.</Notice>}
+    {data?.truncated && <Notice>Showing the first 5,000 matching lines. Counts and search cover {data.partial ? 'the decoded prefix' : 'the whole log'}.</Notice>}
+    {data && <SectionTable
+      title="Run log"
+      subtitle={`${data.matched} matching lines`}
+      minWidth={480}
+      columns={[
+        { header: 'Line', width: '70px', cell: (line) => line.number },
+        { header: 'Level', width: '100px', cell: (line) => <Badge severity={line.level === 'error' ? 'error' : line.level === 'warning' ? 'warning' : 'neutral'}>{line.level}</Badge> },
+        { header: 'Text', cell: (line) => <div className={wrap ? 'font-mono text-xs whitespace-pre-wrap [overflow-wrap:anywhere]' : 'overflow-x-auto font-mono text-xs whitespace-pre'}>{line.text}</div> },
+      ]}
+      rows={data.lines}
+      rowKey={(line) => String(line.number)}
+      empty={data.partial ? 'No matching log lines in the decoded prefix.' : 'No matching log lines. Try another level or search.'}
+    />}
+  </div>
+}

@@ -193,6 +193,7 @@ export interface FeatureCapabilities {
   veleroRuns?: boolean
   /** POST /api/velero/backups/{namespace}/{name}/delete and GET .../deletion */
   veleroDeleteBackup?: boolean
+  veleroRunArtifacts?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

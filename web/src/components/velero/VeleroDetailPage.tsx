@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useSearchParams } from 'react-router-dom'
-import { Archive, CalendarClock, History, Unplug } from 'lucide-react'
+import { Archive, CalendarClock, FileText, History, List, Unplug } from 'lucide-react'
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -13,6 +13,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { currentPageLabel } from '../../utils/page-links'
 import { kindToPluralWithGroup } from '../../utils/navigation'
 import { VELERO_DETAIL_KINDS, veleroDetailKindFor, veleroDetailPath, type VeleroDetailTarget, VELERO_GROUP } from './routes'
+import { VeleroRunContents, VeleroRunLog } from './VeleroRunArtifacts'
 import { VeleroBackupRestores, VeleroBackupRestoresMark, VeleroLocationBackups, VeleroLocationBackupsMark, VeleroScheduleRuns, VeleroScheduleRunsMark } from './VeleroPages'
 
 interface ReturnState {
@@ -67,11 +68,18 @@ export function VeleroDetailPage({ target, onOpenResource }: { target: VeleroDet
 
   const extraTabs = useMemo<WorkloadExtraTab[] | undefined>(() => {
     const { namespace, name } = target
+    // Extra tabs anchor to built-in tabs; later inserts at that anchor come first.
+    const runTabs = (kind: 'backups' | 'restores'): WorkloadExtraTab[] => [
+      { id: 'log', label: 'Log', after: 'overview', icon: <FileText className="h-4 w-4" />, render: () => <VeleroRunLog kind={kind} namespace={namespace} name={name} /> },
+      { id: 'contents', label: 'Contents', after: 'overview', icon: <List className="h-4 w-4" />, render: () => <VeleroRunContents kind={kind} namespace={namespace} name={name} /> },
+    ]
     switch (target.plural) {
       case 'schedules':
         return [{ id: 'runs', label: 'Runs', after: 'overview', icon: <History className="h-4 w-4" />, badge: <VeleroScheduleRunsMark namespace={namespace} name={name} />, render: () => <VeleroScheduleRuns namespace={namespace} name={name} onNavigate={openRelated} /> }]
       case 'backups':
-        return [{ id: 'restores', label: 'Restores', after: 'overview', icon: <History className="h-4 w-4" />, badge: <VeleroBackupRestoresMark namespace={namespace} name={name} />, render: () => <VeleroBackupRestores namespace={namespace} name={name} onNavigate={openRelated} /> }]
+        return [...runTabs('backups'), { id: 'restores', label: 'Restores', after: 'overview', icon: <History className="h-4 w-4" />, badge: <VeleroBackupRestoresMark namespace={namespace} name={name} />, render: () => <VeleroBackupRestores namespace={namespace} name={name} onNavigate={openRelated} /> }]
+      case 'restores':
+        return runTabs('restores')
       case 'backupstoragelocations':
         return [{ id: 'backups', label: 'Backups', after: 'overview', icon: <Archive className="h-4 w-4" />, badge: <VeleroLocationBackupsMark namespace={namespace} name={name} />, render: () => <VeleroLocationBackups namespace={namespace} name={name} onNavigate={openRelated} /> }]
       default:
