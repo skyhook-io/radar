@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { Archive } from 'lucide-react'
 import {
@@ -182,4 +182,16 @@ export function VeleroScreenGate({
   }
   if (!data.installed) return notInstalled
   return <><RefreshFailedNotice queries={[query]} className="px-5 pt-3 xl:px-7" />{children(data)}</>
+}
+
+/**
+ * The installation chips' selection. They narrow what was read; a namespace
+ * that is no longer read drops the narrowing rather than showing an empty screen.
+ */
+export function useVeleroInstallation(installations: VeleroWorkspaceResponse['installations'] | undefined) {
+  const [installation, setInstallation] = useState<string | null>(null)
+  useEffect(() => {
+    if (installation !== null && installations && !installations.some((i) => i.namespace === installation)) setInstallation(null)
+  }, [installation, installations])
+  return [installation, setInstallation] as const
 }

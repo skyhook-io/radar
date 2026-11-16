@@ -14,31 +14,26 @@ import {
   VeleroScheduleStateBadge,
   VeleroZoneValue,
   formatRelativeAgeTime,
-  veleroLocationReasonText,
   veleroNewestSuccessfulText,
   veleroNextRunText,
   veleroNextRunTitle,
   veleroScheduleReasonText,
-  veleroScheduleStateLabel,
   veleroScheduleTone,
   veleroLocalTime,
-  veleroServerDownText,
   type ResourceRef,
   type StatusTone,
-  type VeleroKindCoverage,
   type VeleroLocationReading,
   type VeleroScheduleReading,
   type WorkspaceProblem,
 } from '@skyhook-io/k8s-ui'
 import { refToSelectedResource } from '../../utils/navigation'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
-import { INCOMPLETE_COVERAGE_STATES, coverageEmpty } from '../workspace/coverage'
-import { VELERO_GROUP } from './routes'
+import { coverageEmpty } from '../workspace/coverage'
+import { readInPart, veleroAttention } from './attention'
 import {
   VeleroCoverageNotice,
   VeleroWorkspaceHeader,
   inInstallation,
-  veleroIssueProblem,
   veleroResource,
   type VeleroScreenProps,
 } from './shared'
@@ -67,46 +62,6 @@ function attentionGroup(p: WorkspaceProblem): AttentionGroupId {
   if (p.category === 'schedule' || p.subject.kind === 'Schedule') return 'schedules'
   if (p.category === 'location' || STORAGE_KINDS.has(p.subject.kind)) return 'storage'
   return 'runs'
-}
-
-function scheduleProblem(s: VeleroScheduleReading): WorkspaceProblem {
-  const tone = veleroScheduleTone(s)
-  return {
-    id: `schedule:${s.namespace}/${s.name}`,
-    category: 'schedule',
-    title: veleroScheduleStateLabel(s.state),
-    detail: veleroScheduleReasonText(s),
-    subject: { kind: 'Schedule', group: VELERO_GROUP, namespace: s.namespace, name: s.name },
-    source: 'reading',
-    origin: { label: 'Radar’s reading of the schedule', detail: 'The Schedule and its Backups, read against the Velero controller’s own rules.' },
-    tone: tone === 'healthy' ? 'neutral' : tone,
-  }
-}
-
-function serverProblem(namespace: string, deployment?: string): WorkspaceProblem {
-  return {
-    id: `server:${namespace}`,
-    category: 'server',
-    title: 'Velero server not running',
-    detail: veleroServerDownText(namespace, deployment),
-    subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
-    source: 'reading',
-    origin: { label: 'Radar’s reading of the Velero server', detail: 'The server Deployment’s running replicas; a pod still terminating is not counted.' },
-    tone: 'unhealthy',
-  }
-}
-
-function locationProblem(l: VeleroLocationReading): WorkspaceProblem {
-  return {
-    id: `location:${l.namespace}/${l.name}`,
-    category: 'location',
-    title: l.neverValidated ? 'Never validated' : 'Validation overdue',
-    detail: veleroLocationReasonText(l) || undefined,
-    subject: { kind: 'BackupStorageLocation', group: VELERO_GROUP, namespace: l.namespace, name: l.name },
-    source: 'reading',
-    origin: { label: 'Radar’s reading of the location', detail: 'The location’s last validation time against its validation frequency.' },
-    tone: 'degraded',
-  }
 }
 
 /** "Showing 50 of 120 issues in velero", per installation the server capped. */
@@ -178,10 +133,6 @@ function serverFact(installations: VeleroScreenProps['data']['installations']): 
 }
 
 /** Whether a kind was read only in part, so a count of it is a lower bound and an empty list proves nothing. */
-function readInPart(cov: VeleroKindCoverage | undefined): boolean {
-  return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
-}
-
 function schedulesFact(schedules: VeleroScheduleReading[], partial: boolean): SummaryFact {
   if (schedules.length === 0) {
     return partial ? { label: 'Schedules', value: 'unknown — not read', tone: 'unknown' } : { label: 'Schedules', value: 'none', tone: 'neutral' }
@@ -296,17 +247,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
     () => (installation === null ? data.issues : data.issues.filter((i) => (i.namespace ?? '') === installation)),
     [data.issues, installation],
   )
-  const attention = useMemo<WorkspaceProblem[]>(
-    () => [
-      ...data.installations
-        .filter((i) => (installation === null || i.namespace === installation) && i.server.replicas === 0)
-        .map((i) => serverProblem(i.namespace, i.server.deployment)),
-      ...schedules.filter((s) => s.attention).map(scheduleProblem),
-      ...locations.filter((l) => l.attention).map(locationProblem),
-      ...issues.map(veleroIssueProblem),
-    ],
-    [issues, schedules, locations, data.installations, installation],
-  )
+  const attention = useMemo(() => veleroAttention(data, installation), [data, installation])
   const capped = cappedIssueNotes(data, issues, installation)
   const groups = useMemo(() => {
     let budget = ATTENTION_BUDGET

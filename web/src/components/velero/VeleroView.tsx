@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import type { WorkspaceScreenProps } from '../../integrations/workspaceRoute'
 import { useAPIResources } from '../../api/apiResources'
@@ -9,7 +8,7 @@ import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
 import { useMergedSidebarWorkspaces } from '../workspace/sidebar'
 import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { parseVeleroRoute } from './routes'
-import { VeleroScreenGate } from './shared'
+import { VeleroScreenGate, useVeleroInstallation } from './shared'
 import { VeleroOverview } from './VeleroOverview'
 import { VeleroLocations } from './VeleroLocations'
 import { useVeleroSidebarWorkspace, veleroDiscovered } from './useVeleroSidebarWorkspace'
@@ -32,13 +31,7 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
   const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar)
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 
-  // The installation chips narrow what was read; a namespace that is no longer
-  // read drops the narrowing rather than showing an empty screen.
-  const [installation, setInstallation] = useState<string | null>(null)
-  const installations = query.data?.installations
-  useEffect(() => {
-    if (installation !== null && installations && !installations.some((i) => i.namespace === installation)) setInstallation(null)
-  }, [installation, installations])
+  const [installation, setInstallation] = useVeleroInstallation(query.data?.installations)
 
   return (
     <WorkspaceFrame namespaces={namespaces} categoryWorkspaces={sidebarWorkspace} compactNavigation={compactNavigation}>
