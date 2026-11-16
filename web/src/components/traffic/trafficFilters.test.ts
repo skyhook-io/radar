@@ -879,7 +879,9 @@ describe('throughputLabel', () => {
   it('divides the bytes of each protocol by the window and skips protocols that moved nothing', () => {
     const base = { protocol: 'tcp', bytesSent: 0, bytesRecv: 0 }
     expect(throughputLabel({ ...base, bytesByProtocol: { tcp: { bytesSent: 29999, bytesRecv: 119999 }, udp: { bytesSent: 0, bytesRecv: 0 } } }, 60)).toBe('TCP · 2.4 KB/s')
-    expect(throughputLabel({ ...base, bytesSent: 600, bytesRecv: 0 }, 300)).toBe('TCP · 2 B/s')
+    expect(throughputLabel({ ...base, bytesByProtocol: { tcp: { bytesSent: 600, bytesRecv: 0 } } }, 300)).toBe('TCP · 2 B/s')
+    // An older Radar sends only the sum, which can mix TCP and UDP: no protocol, no throughput.
+    expect(throughputLabel({ ...base, bytesSent: 4200, bytesRecv: 7500 }, 300)).toBe('')
     expect(throughputLabel({ ...base, bytesByProtocol: { tcp: { bytesSent: 0, bytesRecv: 0 } } }, 60)).toBe('')
   })
 })

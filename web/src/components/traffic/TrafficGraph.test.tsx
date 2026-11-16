@@ -172,7 +172,9 @@ describe('TrafficGraph protocol data', () => {
     it(`keeps both protocols at the virtual edge and both ends of ${edgeId}`, async () => {
       const grouped = groupAddonFlows([{ ...flow, ...sample, rawPairs: [endpointPair(flow)] }], (_name, ns) => ns === 'monitoring')
       await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
-      act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
+      const groupEdge = container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!
+      expect(groupEdge.textContent).toBe('HTTP · 889.8 B/s · TCP · 1.4 KB/s')
+      act(() => groupEdge.click())
       expect(container.textContent).toContain('ProtocolHTTP + TCP')
       expect(container.textContent).toContain('Data by protocolHTTP 5.8 KB sent · 254.8 KB receivedTCP 31.9 KB sent · 382.3 KB received')
       expect(container.textContent).toContain('HTTP body bytes and TCP connection bytes')
@@ -239,6 +241,15 @@ describe('TrafficGraph edge labels for traffic measured only in bytes', () => {
     expect(container.querySelector('[data-edge="demo/httpbin->demo/curl:0"]')!.textContent).toBe('TCP · 2.4 KB/s')
     const httpLabel = container.querySelector('[data-edge="demo/curl->demo/httpbin:0"]')!.textContent!
     expect(httpLabel).toBe('HTTP · 1.9/s')
+  })
+
+  it('claims no throughput for an older Radar whose byte sum can mix TCP and UDP', async () => {
+    const legacyTcp = { ...incoming, bytesByProtocol: undefined, bytesSent: 300, bytesRecv: 0 }
+    const legacyUdp = { ...incoming, protocol: 'udp', bytesByProtocol: undefined, bytesSent: 600, bytesRecv: 0 }
+    const grouped = groupAddonFlows([legacyTcp, legacyUdp].map(f => ({ ...f, rawPairs: [endpointPair(f)] })), (_name, ns) => ns === 'monitoring')
+    await act(async () => root.render(<TrafficGraph flows={[...grouped, { ...tcpOnly, bytesByProtocol: undefined }]} trafficSource="beyla" addonMode="group" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
+    expect(container.querySelector('[data-edge="addon-internet->addon-group"]')!.textContent).toBe('')
+    expect(container.querySelector('[data-edge="demo/httpbin->demo/curl:0"]')!.textContent).toBe('')
   })
 
   it('gives each transport its own throughput rather than their sum', async () => {

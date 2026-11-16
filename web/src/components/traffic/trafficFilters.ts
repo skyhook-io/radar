@@ -121,13 +121,16 @@ export function rateWindowSeconds(timeRange: string): number {
 }
 
 /** Label for an edge a rate-based source measured only in bytes: its
- *  throughput per protocol over the window, never added across protocols. */
-export function throughputLabel(flow: ByteFigures & Pick<AggregatedFlow, 'protocol'>, windowSeconds: number): string {
+ *  throughput per protocol over the window, never added across protocols.
+ *  Empty without a per-protocol breakdown: an older Radar's byte sum can mix
+ *  TCP and UDP under one protocol name, so no protocol can be claimed for it. */
+export function throughputLabel(flow: ByteFigures, windowSeconds: number): string {
+  if (!flow.bytesByProtocol) return ''
   return dataByProtocol(flow)
     .filter(e => e.sent + e.recv > 0)
     .map(e => {
       const perSecond = (e.sent + e.recv) / windowSeconds
-      return `${protocolName(e.protocol ?? flow.protocol)} · ${perSecond < 1 ? '<1 B' : formatBytes(perSecond)}/s`
+      return `${protocolName(e.protocol!)} · ${perSecond < 1 ? '<1 B' : formatBytes(perSecond)}/s`
     })
     .join(' · ')
 }
