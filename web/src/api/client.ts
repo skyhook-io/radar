@@ -743,9 +743,17 @@ export function useAudit(namespaces: string[] = []) {
   // Without the connection check a mounted view keeps polling a cluster that
   // is down.
   const connected = useClusterConnected();
+  const queryClient = useQueryClient();
   return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
-    queryFn: () => fetchJSON(`/audit${params}`),
+    queryFn: async () => {
+      const audit = await fetchJSON<AuditResponse>(`/audit${params}`);
+      // Resource badges read the same scan through their own smaller query;
+      // a fresher full scan updates them too, so the Checks page and the
+      // badges never show different answers.
+      queryClient.setQueryData<AuditBadges>(["audit", namespaces, "badges"], projectAuditBadges(audit));
+      return audit;
+    },
     enabled: connected,
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,

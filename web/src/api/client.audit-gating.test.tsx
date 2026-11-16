@@ -93,3 +93,40 @@ describe('projectAuditBadges', () => {
     expect(projectAuditBadges({ findings: null as never, checks: {} })).toEqual({ findings: [], checks: {} })
   })
 })
+
+describe('useAudit', () => {
+  it('updates the badges query with every full scan, so Checks and badges agree', async () => {
+    const full = {
+      findings: [
+        { kind: 'Service', group: '', namespace: 'shop', name: 'web', checkID: 'noEndpoints', category: 'Reliability', severity: 'warning', message: 'no endpoints' },
+        { kind: 'Deployment', group: 'apps', namespace: 'shop', name: 'web', checkID: 'runAsRoot', category: 'Security', severity: 'warning', message: 'root' },
+      ],
+      checks: {
+        noEndpoints: { id: 'noEndpoints', title: 'x', description: '', remediation: '', category: 'Reliability', severity: 'warning', badgeWorthy: true },
+        runAsRoot: { id: 'runAsRoot', title: 'y', description: '', remediation: '', category: 'Security', severity: 'warning' },
+      },
+      groups: [],
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(full), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    function FullAudit() {
+      useAudit(['shop'])
+      return null
+    }
+    const root = createRoot(document.createElement('div'))
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <ClusterConnectedContext.Provider value={true}>
+            <FullAudit />
+          </ClusterConnectedContext.Provider>
+        </QueryClientProvider>,
+      )
+    })
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+    act(() => root.unmount())
+    const badges = client.getQueryData<{ findings: { name: string; checkID: string }[]; checks: Record<string, unknown> }>(['audit', ['shop'], 'badges'])
+    expect(badges?.findings.map((f) => f.checkID)).toEqual(['noEndpoints'])
+    expect(Object.keys(badges?.checks ?? {})).toEqual(['noEndpoints'])
+  })
+})

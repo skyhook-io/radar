@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react'
 import { useLocation } from 'react-router-dom'
-import { useQueryClient } from '@tanstack/react-query'
 import { useAudit, useAuditSettings, useUpdateAuditSettings, useCloudRole } from '../../api/client'
 import type { SelectedResource } from '../../types'
 import { ChecksView, PaneLoader, PageHeader, FreshnessControl, type CheckResourceRef } from '@skyhook-io/k8s-ui'
@@ -32,13 +31,6 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
 
 function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps) {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useAudit(namespaces)
-  const queryClient = useQueryClient()
-  // Resource badges read the same scan through their own smaller query; a
-  // manual refresh here must not leave them showing the older one.
-  const refresh = useCallback(
-    () => Promise.all([refetch(), queryClient.invalidateQueries({ queryKey: ['audit', namespaces, 'badges'] })]),
-    [refetch, queryClient, namespaces],
-  )
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
   // Audit policy is owner-gated (enforced server-side). Withhold the inline
@@ -113,7 +105,7 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
             <FreshnessControl
               mode="auto"
               dataUpdatedAt={dataUpdatedAt}
-              onRefresh={refresh}
+              onRefresh={() => refetch()}
               connectionState={connection.state}
             />
             {ignoredCount > 0 && (

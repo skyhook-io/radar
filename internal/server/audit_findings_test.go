@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
 // Badge views ask for ?include=badges. They must get exactly the badge-worthy
@@ -90,5 +92,24 @@ func TestAuditBadgesResponseKeepsOnlyBadgeWorthyChecks(t *testing.T) {
 	b, _ := json.Marshal(empty)
 	if string(b) != `{"findings":[],"checks":{}}` {
 		t.Fatalf("empty scan marshals as %s, want empty array and object", b)
+	}
+}
+
+// A caller with no readable namespace gets an empty answer in the shape they
+// asked for, so a badge view never receives the full response.
+func TestHandleAuditIncludeBadgesWithoutNamespaceAccess(t *testing.T) {
+	s := newTestServer(t)
+	s.permCache = pkgauth.NewPermissionCache()
+	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{}})
+	req := httptest.NewRequest(http.MethodGet, "/api/audit?include=badges", nil)
+	req = req.WithContext(pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: "alice"}))
+	rec := httptest.NewRecorder()
+
+	s.handleAudit(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d; body=%s", rec.Code, rec.Body.String())
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"findings":[],"checks":{}}` {
+		t.Fatalf("body = %s, want the empty badges shape", got)
 	}
 }

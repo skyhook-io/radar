@@ -146,7 +146,12 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	namespaces := s.parseNamespacesForUser(r)
 	if readscope.NoNamespaceAccess(namespaces) {
-		s.writeJSON(w, &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}})
+		empty := &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
+		if r.URL.Query().Get("include") == "badges" {
+			s.writeJSON(w, auditBadgesResponse(empty))
+			return
+		}
+		s.writeJSON(w, empty)
 		return
 	}
 	results := getCachedResults(cache, namespaces, s.auditOptions(r))
