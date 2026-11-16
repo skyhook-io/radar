@@ -79,7 +79,7 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown }: Props) {
 
       <Section title="Backups" icon={Archive}>
         <PropertyList>
-          <Property label="Last backup" value={status.lastBackupAt || undefined} />
+          <Property label="Last backup" value={status.lastBackupAt || '-'} />
         </PropertyList>
       </Section>
 

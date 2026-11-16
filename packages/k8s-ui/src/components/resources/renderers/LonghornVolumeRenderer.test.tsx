@@ -26,6 +26,11 @@ describe('LonghornVolumeRenderer', () => {
     expect(html).toContain('? of 3')
   })
 
+  it('keeps the Backups section readable when Longhorn records no backup', () => {
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'healthy', lastBackupAt: '' })} />)
+    expect(html).toContain('Last backup')
+  })
+
   it('makes faulted the loud one', () => {
     const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'detached', robustness: 'faulted' })} />)
     expect(html).toContain('Faulted')

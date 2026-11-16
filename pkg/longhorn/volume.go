@@ -5,13 +5,14 @@ package longhorn
 
 import (
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 const Group = "longhorn.io"
 
-// Health is how a Volume reads: healthy, degraded (replicas rebuilding),
+// Health is how a Volume reads: healthy, degraded (fewer healthy replicas than requested),
 // faulted (no usable replica), detached (not attached, not a problem) or
 // unknown.
 type Health string
@@ -66,7 +67,7 @@ func HealthyReplicas(engine *unstructured.Unstructured) (int, bool) {
 }
 
 // RebuildProgress is one replica rebuild from the Engine's
-// status.rebuildStatus, keyed there by replica address.
+// status.rebuildStatus.
 type RebuildProgress struct {
 	Replica  string
 	Progress int
@@ -74,14 +75,24 @@ type RebuildProgress struct {
 	Error    string
 }
 
-// Rebuild lists the rebuilds in progress or failed, by replica address.
+// Rebuild lists the rebuilds in progress or failed, by replica name where
+// currentReplicaAddressMap (addresses without tcp://) knows it, else by address.
 func Rebuild(engine *unstructured.Unstructured) []RebuildProgress {
 	if engine == nil {
 		return nil
 	}
 	statuses, _, _ := unstructured.NestedMap(engine.Object, "status", "rebuildStatus")
+	addrs, _, _ := unstructured.NestedStringMap(engine.Object, "status", "currentReplicaAddressMap")
+	names := make(map[string]string, len(addrs))
+	for name, addr := range addrs {
+		names[addr] = name
+	}
 	var out []RebuildProgress
-	for replica, raw := range statuses {
+	for addr, raw := range statuses {
+		replica := addr
+		if name, ok := names[strings.TrimPrefix(addr, "tcp://")]; ok {
+			replica = name
+		}
 		s, ok := raw.(map[string]any)
 		if !ok {
 			continue

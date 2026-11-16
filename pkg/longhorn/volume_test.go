@@ -69,6 +69,15 @@ func TestRebuild(t *testing.T) {
 			t.Errorf("Rebuild[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
+	named := Rebuild(engine(map[string]any{
+		"currentReplicaAddressMap": map[string]any{"vol-r-1": "10.0.0.2:10352"},
+		"rebuildStatus": map[string]any{
+			"tcp://10.0.0.2:10352": map[string]any{"isRebuilding": true, "progress": int64(40), "state": "in_progress"},
+		},
+	}))
+	if len(named) != 1 || named[0].Replica != "vol-r-1" {
+		t.Errorf("Rebuild with currentReplicaAddressMap = %+v, want replica named vol-r-1 (the map records addresses without tcp://)", named)
+	}
 	if Rebuild(nil) != nil {
 		t.Error("nil engine: want no rebuilds")
 	}

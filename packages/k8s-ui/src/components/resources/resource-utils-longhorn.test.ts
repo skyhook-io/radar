@@ -37,4 +37,17 @@ describe('longhornRebuilds', () => {
       { replica: 'tcp://c', progress: 0, state: 'error', error: 'disk full' },
     ])
   })
+
+  it('names the replica from currentReplicaAddressMap, which records addresses without tcp://', () => {
+    expect(longhornRebuilds({ status: {
+      currentReplicaAddressMap: { 'vol-r-1': '10.0.0.2:10352' },
+      rebuildStatus: {
+        'tcp://10.0.0.2:10352': { isRebuilding: true, progress: 40, state: 'in_progress' },
+        'tcp://10.0.0.9:10352': { isRebuilding: true, progress: 5, state: 'in_progress' },
+      },
+    } })).toEqual([
+      { replica: 'tcp://10.0.0.9:10352', progress: 5, state: 'in_progress', error: '' },
+      { replica: 'vol-r-1', progress: 40, state: 'in_progress', error: '' },
+    ])
+  })
 })
