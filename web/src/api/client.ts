@@ -744,23 +744,27 @@ export function useAudit(namespaces: string[] = []) {
   // is down.
   const connected = useClusterConnected();
   const queryClient = useQueryClient();
-  const query = useQuery<AuditResponse>({
+  return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
-    queryFn: () => fetchJSON(`/audit${params}`),
+    queryFn: async () => {
+      const audit = await fetchJSON<AuditResponse>(`/audit${params}`);
+      // Resource badges read the same scan through their own smaller query.
+      // A fresher full scan has them refetch rather than show a different
+      // answer: invalidating, unlike writing the projection, can't install an
+      // older scan or one from before a context switch. An in-flight badges
+      // request may predate this scan, and a first request isn't restarted by
+      // invalidation, so it is cancelled first. This runs with the fetch, not
+      // the view, so leaving the page mid-fetch doesn't skip it.
+      const badges = ["audit", namespaces, "badges"];
+      await queryClient.cancelQueries({ queryKey: badges, exact: true });
+      void queryClient.invalidateQueries({ queryKey: badges, exact: true });
+      return audit;
+    },
     enabled: connected,
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
     placeholderData: (prev) => prev,
   });
-  // Resource badges read the same scan through their own smaller query. A
-  // fresher full scan marks them stale so they refetch rather than show a
-  // different answer; invalidating, unlike writing the projection, can't
-  // install an older scan or one from before a context switch.
-  const { dataUpdatedAt } = query;
-  useEffect(() => {
-    if (dataUpdatedAt) void queryClient.invalidateQueries({ queryKey: ["audit", namespaces, "badges"] });
-  }, [dataUpdatedAt, queryClient, namespaces]);
-  return query;
 }
 
 export type AuditBadges = Pick<AuditResponse, "findings" | "checks">;

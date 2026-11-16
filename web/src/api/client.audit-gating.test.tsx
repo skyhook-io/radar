@@ -118,4 +118,31 @@ describe('useAudit', () => {
     act(() => root.unmount())
     expect(client.getQueryState(['audit', ['shop'], 'badges'])?.isInvalidated).toBe(true)
   })
+
+  it('still marks badges stale when the page is left before the full scan arrives', async () => {
+    let respond: (r: Response) => void = () => {}
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { respond = resolve })))
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(['audit', ['shop'], 'badges'], { findings: [], checks: {} })
+    function FullAudit() {
+      useAudit(['shop'])
+      return null
+    }
+    const root = createRoot(document.createElement('div'))
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <ClusterConnectedContext.Provider value={true}>
+            <FullAudit />
+          </ClusterConnectedContext.Provider>
+        </QueryClientProvider>,
+      )
+    })
+    act(() => root.unmount())
+    await act(async () => {
+      respond(new Response(JSON.stringify({ findings: [], checks: {}, groups: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(client.getQueryState(['audit', ['shop'], 'badges'])?.isInvalidated).toBe(true)
+  })
 })
