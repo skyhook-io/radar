@@ -192,6 +192,7 @@ type Server struct {
 	yamlSchemaBundleCache map[string]yamlSchemaBundleCacheEntry
 	yamlSchemaCacheBytes  int
 	yamlSchemaFetchGroup  singleflight.Group
+	outsideChangesFlight  singleflight.Group
 
 	// aiMu guards aiDiagnoser and aiRuns: refreshAIEngine turns the engine on
 	// when an agent CLI is installed while Radar runs. Read them through

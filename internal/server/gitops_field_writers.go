@@ -71,7 +71,7 @@ func fieldWritersFor(ctx context.Context, dyn dynamic.Interface, target *unstruc
 	if lead == nil {
 		return []outsideChange{}
 	}
-	out, _, _ := classifyOutsideObject(target, lead, ownerObj)
+	out, _, _ := classifyOutsideObject(target, lead, ownerObj, nil)
 	if out.Changes == nil {
 		return []outsideChange{}
 	}

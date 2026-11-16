@@ -42,7 +42,7 @@ func TestClassifyOutsideObjectSortsWriters(t *testing.T) {
 		fieldsEntry(t, "kube-controller-manager", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{"f:deployment.kubernetes.io/revision": map[string]any{}}}}),
 		status,
 	})
-	out, harmless, other := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(map[string]any{"mode": "warn"}))
+	out, harmless, other := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(map[string]any{"mode": "warn"}), nil)
 	want := []outsideChange{{Manager: "kubectl-patch", Tool: "kubectl patch", Operation: "Update", Time: "2026-11-09T10:00:00Z", Paths: []string{"spec.replicas"}, Values: map[string]string{"spec.replicas": "3"}, Outcome: "reported"}}
 	if !reflect.DeepEqual(out.Changes, want) {
 		t.Fatalf("changes = %+v", out.Changes)
@@ -62,11 +62,11 @@ func TestClassifyOutsideObjectCountsAScaleWrite(t *testing.T) {
 	scale.Subresource = "scale"
 	hpa := fieldsEntry(t, "kube-controller-manager", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}})
 	hpa.Subresource = "scale"
-	out, _, _ := classifyOutsideObject(evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{scale}), helmOwner, fluxHelmOwner(nil))
+	out, _, _ := classifyOutsideObject(evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{scale}), helmOwner, fluxHelmOwner(nil), nil)
 	if len(out.Changes) != 1 || !reflect.DeepEqual(out.Changes[0].Paths, []string{"spec.replicas"}) || out.Changes[0].Manager != "kubectl" {
 		t.Fatalf("changes = %+v", out.Changes)
 	}
-	out, _, other := classifyOutsideObject(evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{hpa}), helmOwner, fluxHelmOwner(nil))
+	out, _, other := classifyOutsideObject(evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{hpa}), helmOwner, fluxHelmOwner(nil), nil)
 	if len(out.Changes) != 0 || !reflect.DeepEqual(other, []string{"kube-controller-manager"}) {
 		t.Fatalf("changes = %+v, other = %q", out.Changes, other)
 	}
@@ -78,7 +78,7 @@ func TestClassifyOutsideObjectCapsPaths(t *testing.T) {
 		labels["f:"+k] = map[string]any{}
 	}
 	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{fieldsEntry(t, "kubectl-label", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:metadata": map[string]any{"f:labels": labels}})})
-	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil))
+	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil), nil)
 	if len(out.Changes) != 1 || len(out.Changes[0].Paths) != 12 || out.Changes[0].MorePaths != 2 || out.Changes[0].Outcome != "stays" {
 		t.Fatalf("changes = %+v", out.Changes)
 	}
@@ -87,7 +87,7 @@ func TestClassifyOutsideObjectCapsPaths(t *testing.T) {
 func TestClassifyOutsideObjectIgnoredByDriftRule(t *testing.T) {
 	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{fieldsEntry(t, "kubectl-scale", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:replicas": map[string]any{}}})})
 	owner := fluxHelmOwner(map[string]any{"mode": "enabled", "ignore": []any{map[string]any{"paths": []any{"/spec/replicas"}}}})
-	out, _, _ := classifyOutsideObject(obj, helmOwner, owner)
+	out, _, _ := classifyOutsideObject(obj, helmOwner, owner, nil)
 	if len(out.Changes) != 1 || out.Changes[0].Outcome != "ignored" {
 		t.Fatalf("changes = %+v", out.Changes)
 	}
@@ -234,7 +234,7 @@ func TestClassifyOutsideObjectSkipsContainersOthersFill(t *testing.T) {
 		fieldsEntry(t, "node-fetch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:metadata": map[string]any{"f:annotations": map[string]any{}}}),
 		fieldsEntry(t, "kubectl-patch", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": map[string]any{`k:{"name":"app"}`: map[string]any{".": map[string]any{}}}}}}}),
 	})
-	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil))
+	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil), nil)
 	if len(out.Changes) != 1 || out.Changes[0].Tool != "kubectl patch" || out.Changes[0].Paths[0] != "spec.template.spec.containers[name=app]" {
 		t.Fatalf("changes = %+v", out.Changes)
 	}
@@ -251,7 +251,7 @@ func TestClassifyOutsideObjectKeepsAtomicValues(t *testing.T) {
 	obj.Object["metadata"].(map[string]any)["finalizers"] = []any{"example.io/keep"}
 	containers := obj.Object["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
 	containers[1].(map[string]any)["args"] = []any{"--debug"}
-	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil))
+	out, _, _ := classifyOutsideObject(obj, helmOwner, fluxHelmOwner(nil), nil)
 	want := []string{"metadata.finalizers", "metadata.labels", "spec.template.spec.containers[name=app].args"}
 	if len(out.Changes) != 1 || !reflect.DeepEqual(out.Changes[0].Paths, want) {
 		t.Fatalf("changes = %+v", out.Changes)
@@ -266,7 +266,7 @@ func TestClassifyOutsideObjectSplitsIgnoredPaths(t *testing.T) {
 	}
 	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{fieldsEntry(t, "kubectl-edit", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": spec, "f:metadata": map[string]any{"f:labels": labels}})})
 	owner := fluxHelmOwner(map[string]any{"mode": "enabled", "ignore": []any{map[string]any{"paths": []any{"/spec/replicas"}}}})
-	out, _, _ := classifyOutsideObject(obj, helmOwner, owner)
+	out, _, _ := classifyOutsideObject(obj, helmOwner, owner, nil)
 	byOutcome := map[string]outsideChange{}
 	for _, c := range out.Changes {
 		byOutcome[c.Outcome] = c
@@ -331,7 +331,7 @@ func TestClassifyOutsideObjectIgnoresAMultiKeyElementByPointer(t *testing.T) {
 	containers := obj.Object["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)
 	containers[1].(map[string]any)["ports"] = []any{map[string]any{"containerPort": int64(80), "protocol": "TCP", "name": "http"}}
 	owner := fluxHelmOwner(map[string]any{"mode": "enabled", "ignore": []any{map[string]any{"paths": []any{"/spec/template/spec/containers/1/ports/0"}}}})
-	out, _, _ := classifyOutsideObject(obj, helmOwner, owner)
+	out, _, _ := classifyOutsideObject(obj, helmOwner, owner, nil)
 	if len(out.Changes) != 1 || out.Changes[0].Outcome != "ignored" {
 		t.Fatalf("changes = %+v", out.Changes)
 	}

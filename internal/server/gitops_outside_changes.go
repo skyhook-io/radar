@@ -23,7 +23,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/metadata"
 
 	"github.com/skyhook-io/radar/pkg/gitops/fieldwriters"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -123,16 +125,46 @@ type outsideChangesResponse struct {
 // classifyOutsideObject reads one member's managedFields. Status writes are
 // controllers'; a scale write records spec.replicas on the object and is
 // classified by its manager, so kubectl scale counts and an HPA doesn't.
-func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.ResourceRef, ownerObj *unstructured.Unstructured) (out outsideObject, harmless []string, otherManagers []string) {
+// obj may carry metadata only: full, when set, fetches the whole object the
+// first time a drift-ignore rule or an allowlisted value needs its content,
+// and returns nil when it can't be read.
+func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.ResourceRef, ownerObj *unstructured.Unstructured, full func() *unstructured.Unstructured) (out outsideObject, harmless []string, otherManagers []string) {
 	group := resourceid.GroupFromAPIVersion(obj.GetAPIVersion())
 	out.Ref = outsideRef{Group: group, Kind: obj.GetKind(), Namespace: obj.GetNamespace(), Name: obj.GetName()}
 	ref := writeEvidenceRef{Kind: obj.GetKind(), Group: group, Namespace: obj.GetNamespace(), Name: obj.GetName()}
 	owners := ownerManagers(owner)
+	entries := obj.GetManagedFields()
+	classes := make([]fieldwriters.Class, len(entries))
+	anyHand := false
+	for i, mf := range entries {
+		if mf.Subresource == "status" {
+			continue
+		}
+		classes[i] = fieldwriters.Classify(mf.Manager, owners, radarWriteManagers)
+		switch classes[i] {
+		case fieldwriters.ClassOther:
+			otherManagers = append(otherManagers, mf.Manager)
+		case fieldwriters.ClassHand:
+			anyHand = true
+		}
+	}
+	if !anyHand {
+		return out, nil, otherManagers
+	}
 	var policy *gitOpsWritePolicy
 	if ownerObj != nil {
 		policy = readGitOpsWritePolicy(owner, ownerObj, obj)
 	}
-	entries := obj.GetManagedFields()
+	content := obj
+	loaded := full == nil
+	contentFor := func() *unstructured.Unstructured {
+		if !loaded {
+			loaded = true
+			content = full()
+		}
+		return content
+	}
+	rules := fluxIgnoreRulesFor(owner, ownerObj, ref, obj.GroupVersionKind().Version)
 	entryPaths := make([][]string, len(entries))
 	for i, mf := range entries {
 		if mf.FieldsV1 != nil {
@@ -140,14 +172,7 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 		}
 	}
 	for i, mf := range entries {
-		if mf.Subresource == "status" {
-			continue
-		}
-		switch fieldwriters.Classify(mf.Manager, owners, radarWriteManagers) {
-		case fieldwriters.ClassOwner:
-			continue
-		case fieldwriters.ClassOther:
-			otherManagers = append(otherManagers, mf.Manager)
+		if classes[i] != fieldwriters.ClassHand {
 			continue
 		}
 		kept, labels := fieldwriters.SplitHarmless(ownedValuePaths(entryPaths, i))
@@ -159,12 +184,9 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 		// cap, and covered paths get their own row: one entry can mix both.
 		var covered, uncovered []string
 		for _, p := range kept {
-			segs, err := parseWriteFieldPath(p)
-			if err == nil && policy != nil {
-				if c, _ := ignoreRuleFor(owner, ownerObj, policy, obj, ref, segs); c == "effective" {
-					covered = append(covered, p)
-					continue
-				}
+			if policy != nil && pathIgnored(policy, rules, contentFor, p) {
+				covered = append(covered, p)
+				continue
 			}
 			uncovered = append(uncovered, p)
 		}
@@ -186,17 +208,48 @@ func classifyOutsideObject(obj *unstructured.Unstructured, owner *topology.Resou
 			}
 			change.Paths = shown
 			for _, p := range shown {
-				if v, ok := outsideValue(obj.Object, p); ok {
-					if change.Values == nil {
-						change.Values = map[string]string{}
+				if !outsideValuePath(p) {
+					continue
+				}
+				if c := contentFor(); c != nil {
+					if v, ok := outsideValue(c.Object, p); ok {
+						if change.Values == nil {
+							change.Values = map[string]string{}
+						}
+						change.Values[p] = v
 					}
-					change.Values[p] = v
 				}
 			}
 			out.Changes = append(out.Changes, change)
 		}
 	}
 	return out, harmless, otherManagers
+}
+
+// pathIgnored is ignoreRuleFor's Flux answer for one path, with the rules
+// already matched to the object. Rules name JSON pointers, which resolve
+// against the object's content; when it can't be read the path stays
+// uncovered.
+func pathIgnored(policy *gitOpsWritePolicy, rules fluxIgnoreRules, content func() *unstructured.Unstructured, path string) bool {
+	segs, err := parseWriteFieldPath(path)
+	if err != nil {
+		return false
+	}
+	switch policy.ObjectReconcile {
+	case "ignore", "if-not-present":
+		return true
+	}
+	if !rules.helm || len(rules.paths) == 0 {
+		return false
+	}
+	c := content()
+	if c == nil {
+		return false
+	}
+	sets := pointerTokenSets(c.Object, segs)
+	covered := make([]bool, len(sets))
+	markCovered(rules.paths, sets, covered)
+	return allCovered(covered)
 }
 
 // outsideOutcome is what the root's policy says Flux does about a hand edit.
@@ -230,10 +283,10 @@ func outsideOutcome(policy *gitOpsWritePolicy, ignore string) string {
 // on the allowlist: replicas, container images and resource requests and
 // limits. Env values, labels, annotations and data never leave the server.
 func outsideValue(obj map[string]any, path string) (string, bool) {
-	segs, err := parseWriteFieldPath(path)
-	if err != nil || !outsideValueAllowed(segs) {
+	if !outsideValuePath(path) {
 		return "", false
 	}
+	segs, _ := parseWriteFieldPath(path)
 	node, ok := liveNode(obj, segs)
 	if !ok {
 		return "", false
@@ -245,6 +298,11 @@ func outsideValue(obj map[string]any, path string) (string, bool) {
 		return fmt.Sprint(v), true
 	}
 	return "", false
+}
+
+func outsideValuePath(path string) bool {
+	segs, err := parseWriteFieldPath(path)
+	return err == nil && outsideValueAllowed(segs)
 }
 
 // outsideValueAllowed matches parsed segments, so a quoted map key such as
@@ -373,8 +431,8 @@ func outsideListGroups(tree *gitopstree.ResourceTree, root *unstructured.Unstruc
 		cov.Remote = true
 		return nil, cov
 	}
-	_, inventoryReadable, inventoryErr := unstructured.NestedSlice(root.Object, "status", "inventory", "entries")
-	inventoryReadable = inventoryReadable && inventoryErr == nil
+	entries, _, _ := unstructured.NestedFieldNoCopy(root.Object, "status", "inventory", "entries")
+	_, inventoryReadable := entries.([]any)
 	index := map[string]int{}
 	skipped := map[string]bool{}
 	notChecked := map[string]bool{}
@@ -477,39 +535,50 @@ type outsideLimits struct {
 
 var defaultOutsideLimits = outsideLimits{Lists: maxOutsideListGroups, Objects: 2000, Timeout: 8 * time.Second}
 
+// outsideLister lists one resource in one namespace as metadata only: the
+// evidence is in managedFields, and a page of full objects can be tens of
+// megabytes.
+type outsideLister func(ctx context.Context, gvr schema.GroupVersionResource, namespace string, opts metav1.ListOptions) (*metav1.PartialObjectMetadataList, error)
+
+func metadataOutsideLister(client metadata.Interface) outsideLister {
+	return func(ctx context.Context, gvr schema.GroupVersionResource, namespace string, opts metav1.ListOptions) (*metav1.PartialObjectMetadataList, error) {
+		return client.Resource(gvr).Namespace(namespace).List(ctx, opts)
+	}
+}
+
 // listOutsideObjects runs one LIST per group, as the caller, by the root's
-// Flux labels. A denied group is recorded and skipped; hitting a bound stops
-// the scan and marks the answer truncated.
-func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []outsideListGroup, selector string, limits outsideLimits, cov *outsideCoverage) []*unstructured.Unstructured {
+// Flux labels, and hands each member to visit a page at a time. A denied
+// group is recorded and skipped; hitting a bound stops the scan and marks the
+// answer truncated.
+func listOutsideObjects(ctx context.Context, list outsideLister, groups []outsideListGroup, selector string, limits outsideLimits, cov *outsideCoverage, visit func(context.Context, outsideListGroup, *unstructured.Unstructured)) {
 	ctx, cancel := context.WithTimeout(ctx, limits.Timeout)
 	defer cancel()
-	var out []*unstructured.Unstructured
-	lists := 0
+	visited, lists := 0, 0
 	for _, g := range groups {
 		cont := ""
 		seen := map[string]bool{}
 		complete := false
 		for {
-			if lists >= limits.Lists || len(out) >= limits.Objects {
+			if lists >= limits.Lists || visited >= limits.Objects {
 				cov.Truncated = true
-				return out
+				return
 			}
 			if ctx.Err() != nil {
 				cov.Truncated = true
-				return out
+				return
 			}
 			lists++
 			// Ask for no more than the object budget left, so one crowded
 			// namespace can't make the server send everything at once.
-			list, err := dyn.Resource(g.GVR).Namespace(g.Namespace).List(ctx, metav1.ListOptions{
-				LabelSelector: selector, Limit: int64(limits.Objects - len(out)), Continue: cont,
+			page, err := list(ctx, g.GVR, g.Namespace, metav1.ListOptions{
+				LabelSelector: selector, Limit: int64(limits.Objects - visited), Continue: cont,
 			})
 			switch {
 			case apierrors.IsForbidden(err):
 				cov.Denied = append(cov.Denied, outsideDenied{Resource: g.GVR.Resource, Namespace: g.Namespace})
 			case ctx.Err() != nil:
 				cov.Truncated = true
-				return out
+				return
 			case err != nil:
 				log.Printf("[gitops] Failed to list %s in %s for outside changes: %v", g.GVR.Resource, sanitizeForLog(g.Namespace), err)
 				cov.Failed = append(cov.Failed, outsideDenied{Resource: g.GVR.Resource, Namespace: g.Namespace})
@@ -517,20 +586,26 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 			if err != nil {
 				break
 			}
-			for j := range list.Items {
-				item := &list.Items[j]
-				if g.Members != nil && !g.Members[item.GetName()] {
+			for j := range page.Items {
+				item := &page.Items[j]
+				if g.Members != nil && !g.Members[item.Name] {
 					continue
 				}
-				seen[item.GetName()] = true
-				if len(out) >= limits.Objects {
+				seen[item.Name] = true
+				if visited >= limits.Objects {
 					cov.Truncated = true
-					return out
+					return
 				}
-				out = append(out, item)
+				obj, err := outsideMetadataObject(g, item)
+				if err != nil {
+					log.Printf("[gitops] Failed to read the metadata of %s %s/%s for outside changes: %v", g.Kind, sanitizeForLog(item.Namespace), sanitizeForLog(item.Name), err)
+					continue
+				}
+				visited++
 				cov.Listed++
+				visit(ctx, g, obj)
 			}
-			if cont = list.GetContinue(); cont == "" {
+			if cont = page.Continue; cont == "" {
 				complete = true
 				break
 			}
@@ -539,7 +614,20 @@ func listOutsideObjects(ctx context.Context, dyn dynamic.Interface, groups []out
 			addUnlisted(cov, g, seen)
 		}
 	}
-	return out
+}
+
+// outsideMetadataObject carries a listed member's metadata in the shape the
+// classifier reads. Items of a metadata list are typed PartialObjectMetadata,
+// so the group's own apiVersion and kind are set.
+func outsideMetadataObject(g outsideListGroup, item *metav1.PartialObjectMetadata) (*unstructured.Unstructured, error) {
+	meta, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&item.ObjectMeta)
+	if err != nil {
+		return nil, err
+	}
+	obj := &unstructured.Unstructured{Object: map[string]any{"metadata": meta}}
+	obj.SetAPIVersion(g.GVR.GroupVersion().String())
+	obj.SetKind(g.Kind)
+	return obj, nil
 }
 
 func addUnlisted(cov *outsideCoverage, g outsideListGroup, seen map[string]bool) {
@@ -590,18 +678,31 @@ func (s *Server) handleGitOpsOutsideChanges(w http.ResponseWriter, r *http.Reque
 	}
 	owner := &topology.ResourceRef{Group: entry.GVR.Group, Kind: entry.Kind, Namespace: root.GetNamespace(), Name: root.GetName()}
 	dyn := s.getDynamicClientForRequest(r)
-	if dyn == nil {
+	cfg, contextName := s.getConfigSnapshotForRequest(r)
+	if dyn == nil || cfg == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes client not available for this request")
 		return
 	}
-	// No server-side cache: the header count and the tab share one browser
-	// query, and a cached answer would outlive a change to the caller's access.
-	resp, _ := buildOutsideChanges(r.Context(), dyn, tree, root, owner, resolver)
-	s.writeJSON(w, resp)
+	meta, err := metadata.NewForConfig(cfg)
+	if err != nil {
+		log.Printf("[gitops] Failed to build metadata client for outside changes: %v", err)
+		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes client not available for this request")
+		return
+	}
+	// No server-side cache, so a change to the caller's access applies on the
+	// next request. Concurrent requests from the same identity for the same
+	// root (the page open in several tabs) share one scan.
+	key := contextName + "\x00" + requestCachePrincipal(r) + "\x00" + owner.Kind + "\x00" + owner.Namespace + "\x00" + owner.Name + "\x00" + r.URL.RawQuery
+	ctx := context.WithoutCancel(r.Context())
+	v, _, _ := s.outsideChangesFlight.Do(key, func() (any, error) {
+		resp, err := buildOutsideChanges(ctx, metadataOutsideLister(meta), dyn, tree, root, owner, resolver)
+		return resp, err
+	})
+	s.writeJSON(w, v.(outsideChangesResponse))
 }
 
-func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, owner *topology.ResourceRef, resolver *insightsResolver) (resp outsideChangesResponse, err error) {
-	if dyn == nil {
+func buildOutsideChanges(ctx context.Context, list outsideLister, dyn dynamic.Interface, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, owner *topology.ResourceRef, resolver *insightsResolver) (resp outsideChangesResponse, err error) {
+	if list == nil || dyn == nil {
 		return outsideChangesResponse{}, errOutsideNoClient
 	}
 	resp = outsideChangesResponse{
@@ -618,8 +719,18 @@ func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitop
 	resp.Coverage = cov
 	harmless := map[string]int{}
 	others := map[string]int{}
-	for _, obj := range listOutsideObjects(ctx, dyn, groups, fluxMemberSelector(root), defaultOutsideLimits, &resp.Coverage) {
-		out, labels, otherManagers := classifyOutsideObject(obj, owner, root)
+	listOutsideObjects(ctx, list, groups, fluxMemberSelector(root), defaultOutsideLimits, &resp.Coverage, func(ctx context.Context, g outsideListGroup, obj *unstructured.Unstructured) {
+		full := func() *unstructured.Unstructured {
+			got, err := dyn.Resource(g.GVR).Namespace(obj.GetNamespace()).Get(ctx, obj.GetName(), metav1.GetOptions{})
+			if err != nil {
+				if !apierrors.IsForbidden(err) && !apierrors.IsNotFound(err) && ctx.Err() == nil {
+					log.Printf("[gitops] Failed to read %s %s/%s for outside changes: %v", g.Kind, sanitizeForLog(obj.GetNamespace()), sanitizeForLog(obj.GetName()), err)
+				}
+				return nil
+			}
+			return got
+		}
+		out, labels, otherManagers := classifyOutsideObject(obj, owner, root, full)
 		counted := map[string]bool{}
 		for _, l := range labels {
 			if !counted[l] {
@@ -637,7 +748,7 @@ func buildOutsideChanges(ctx context.Context, dyn dynamic.Interface, tree *gitop
 		if len(out.Changes) > 0 {
 			resp.Objects = append(resp.Objects, out)
 		}
-	}
+	})
 	for tool, n := range harmless {
 		resp.Harmless = append(resp.Harmless, outsideToolCount{Tool: tool, Count: n})
 	}
