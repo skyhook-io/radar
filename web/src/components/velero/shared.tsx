@@ -40,6 +40,15 @@ const KIND_LABEL: Record<VeleroWorkspaceKey, string> = {
 
 export const VELERO_SCOPE_LINE = 'All Velero installations you can read. The namespace filter does not apply here.'
 
+/** Names where Velero was read, so the scope is visible without knowing Velero's layout. */
+export function veleroScopeLine(namespaces: string[]): string {
+  const list = namespaces.length < 2 ? namespaces.join('') : `${namespaces.slice(0, -1).join(', ')} and ${namespaces.at(-1)}`
+  if (namespaces.length === 0) return VELERO_SCOPE_LINE
+  return namespaces.length === 1
+    ? `Reading Velero in namespace ${list}. The namespace filter does not apply here.`
+    : `Reading the Velero installations in namespaces ${list}. The namespace filter does not apply here.`
+}
+
 /** Opens a Velero object in the drawer. */
 export function veleroResource(kind: string, namespace: string, name: string): SelectedResource {
   return refToSelectedResource({ kind, group: VELERO_GROUP, namespace, name })
@@ -70,7 +79,7 @@ export function VeleroWorkspaceHeader({ title, data, installation, onInstallatio
       <div className="mt-0.5 text-sm text-theme-text-secondary">
         {data.forcedNamespace
           ? `Radar is limited to namespace ${data.forcedNamespace}, so only a Velero installation there is shown. The namespace filter does not apply here.`
-          : VELERO_SCOPE_LINE}
+          : veleroScopeLine(namespaces)}
       </div>
       {namespaces.length > 1 && (
         <div className="mt-2.5">
