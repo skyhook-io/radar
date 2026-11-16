@@ -91,11 +91,15 @@ type DeploymentRuntime struct {
 	CloudTokenSecretKey   string
 	// Enrollment mode: Radar joins with a shared key instead of a configured
 	// token.
-	EnrollmentConfigured bool
-	HubURL               string
-	HubURLConfigured     bool
-	HubURLUnresolved     bool
-	AlreadyCloud         bool
+	EnrollmentConfigured             bool
+	EnrollmentPrivateKeyConfigured   bool
+	EnrollmentOrganization           string
+	EnrollmentOrganizationConfigured bool
+	EnrollmentOrganizationUnresolved bool
+	HubURL                           string
+	HubURLConfigured                 bool
+	HubURLUnresolved                 bool
+	AlreadyCloud                     bool
 }
 
 type DiscoveryOptions struct {
@@ -251,6 +255,11 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 	if keyFile, ok := argumentValue(container.Args, "--cloud-enrollment-key-file"); ok && keyFile != "" {
 		runtime.EnrollmentConfigured = true
 	}
+	if keyFile, ok := argumentValue(container.Args, "--cloud-enrollment-private-key-file"); ok && keyFile != "" {
+		runtime.EnrollmentConfigured = true
+		runtime.EnrollmentPrivateKeyConfigured = true
+	}
+	runtime.EnrollmentOrganization, runtime.EnrollmentOrganizationConfigured = argumentValue(container.Args, "--cloud-enrollment-organization")
 
 	for _, env := range container.Env {
 		switch env.Name {
@@ -282,6 +291,17 @@ func inspectDeploymentRuntime(deployment *appsv1.Deployment) DeploymentRuntime {
 		case "RADAR_CLOUD_ENROLLMENT_KEY_FILE":
 			if env.Value != "" || env.ValueFrom != nil {
 				runtime.EnrollmentConfigured = true
+			}
+		case "RADAR_CLOUD_ENROLLMENT_PRIVATE_KEY_FILE":
+			if env.Value != "" || env.ValueFrom != nil {
+				runtime.EnrollmentConfigured = true
+				runtime.EnrollmentPrivateKeyConfigured = true
+			}
+		case "RADAR_CLOUD_ENROLLMENT_ORGANIZATION":
+			if !runtime.EnrollmentOrganizationConfigured {
+				runtime.EnrollmentOrganization = env.Value
+				runtime.EnrollmentOrganizationConfigured = env.Value != "" || env.ValueFrom != nil
+				runtime.EnrollmentOrganizationUnresolved = env.ValueFrom != nil
 			}
 		case "RADAR_CLOUD_TOKEN":
 			runtime.CloudTokenConfigured = env.Value != "" || env.ValueFrom != nil

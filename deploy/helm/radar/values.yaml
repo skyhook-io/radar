@@ -521,6 +521,15 @@ cloud:
     key: ""
     existingSecret: ""
     existingSecretKey: key
+    # Public-key enrollment: the intended organization ID from Hub setup.
+    # For a self-hosted install public key before first sign-in, use self-hosted.
+    organization: ""
+    publicKey:
+      # A Secret containing an unencrypted PKCS#8 Ed25519 private key.
+      # Register only the corresponding public key with Hub. Never put the
+      # private key in Helm values. Requires a signing-capable Radar release.
+      existingSecret: ""
+      existingSecretKey: private-key
   # Wrap the cluster name Radar picks when clusterName is empty: the API
   # server host from kube-public/cluster-info, else cluster-<first 8
   # characters of the kube-system namespace UID>. With clusterName set, that

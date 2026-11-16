@@ -187,6 +187,8 @@ func main() {
 	cloudClusterName := flag.String("cluster-name", os.Getenv("RADAR_CLOUD_CLUSTER_NAME"), "Human-readable cluster name shown in Radar (required with --cloud-url). With an enrollment key it is the exact name, and Radar picks one when it is empty. Env: RADAR_CLOUD_CLUSTER_NAME")
 	cloudHubURL := flag.String("cloud-hub-url", os.Getenv("RADAR_CLOUD_HUB_URL"), "Radar Hub https:// address to join with an enrollment key. Replaces --cloud-url when --cloud-enrollment-key-file is set. Env: RADAR_CLOUD_HUB_URL")
 	cloudEnrollmentKeyFile := flag.String("cloud-enrollment-key-file", os.Getenv("RADAR_CLOUD_ENROLLMENT_KEY_FILE"), "File holding a Radar Hub enrollment key (rhe_...). Radar joins the Hub with it on every start. Ignored when --cloud-token is set. Env: RADAR_CLOUD_ENROLLMENT_KEY_FILE")
+	cloudEnrollmentPrivateKeyFile := flag.String("cloud-enrollment-private-key-file", os.Getenv("RADAR_CLOUD_ENROLLMENT_PRIVATE_KEY_FILE"), "PKCS#8 Ed25519 private-key file for public-key enrollment. Requires --cloud-enrollment-organization. Env: RADAR_CLOUD_ENROLLMENT_PRIVATE_KEY_FILE")
+	cloudEnrollmentOrganization := flag.String("cloud-enrollment-organization", os.Getenv("RADAR_CLOUD_ENROLLMENT_ORGANIZATION"), "Target organization ID from Hub setup, or self-hosted for a configured install public key. Env: RADAR_CLOUD_ENROLLMENT_ORGANIZATION")
 	cloudCAFile := flag.String("cloud-ca-file", os.Getenv("RADAR_CLOUD_CA_FILE"), "With an enrollment key: PEM file of extra CA certificates to trust for the Radar Hub, read once at startup. Env: RADAR_CLOUD_CA_FILE")
 	clusterNamePrefix := flag.String("cluster-name-prefix", os.Getenv("RADAR_CLUSTER_NAME_PREFIX"), "With an enrollment key: text put before the cluster name Radar picks. Ignored when --cluster-name is set. Env: RADAR_CLUSTER_NAME_PREFIX")
 	clusterNameSuffix := flag.String("cluster-name-suffix", os.Getenv("RADAR_CLUSTER_NAME_SUFFIX"), "With an enrollment key: text put after the cluster name Radar picks. Ignored when --cluster-name is set. Env: RADAR_CLUSTER_NAME_SUFFIX")
@@ -234,17 +236,19 @@ func main() {
 	// in both the preflight line (so early failures retain it) and the startup
 	// summary after the HTTP listener binds.
 	cloudStart, err := resolveCloudStartup(cloudStartupFlags{
-		CloudURL:           *cloudURL,
-		Token:              *cloudToken,
-		ClusterName:        *cloudClusterName,
-		InsecureSkipVerify: *cloudInsecureSkipVerify,
-		HubURL:             *cloudHubURL,
-		EnrollmentKeyFile:  *cloudEnrollmentKeyFile,
-		CAFile:             *cloudCAFile,
-		NamePrefix:         *clusterNamePrefix,
-		NameSuffix:         *clusterNameSuffix,
-		PodNamespace:       os.Getenv("MY_POD_NAMESPACE"),
-		HelmRelease:        os.Getenv("RADAR_HELM_RELEASE"),
+		CloudURL:                 *cloudURL,
+		Token:                    *cloudToken,
+		ClusterName:              *cloudClusterName,
+		InsecureSkipVerify:       *cloudInsecureSkipVerify,
+		HubURL:                   *cloudHubURL,
+		EnrollmentKeyFile:        *cloudEnrollmentKeyFile,
+		EnrollmentPrivateKeyFile: *cloudEnrollmentPrivateKeyFile,
+		EnrollmentOrganization:   *cloudEnrollmentOrganization,
+		CAFile:                   *cloudCAFile,
+		NamePrefix:               *clusterNamePrefix,
+		NameSuffix:               *clusterNameSuffix,
+		PodNamespace:             os.Getenv("MY_POD_NAMESPACE"),
+		HelmRelease:              os.Getenv("RADAR_HELM_RELEASE"),
 	})
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -653,15 +657,17 @@ func main() {
 					return
 				}
 				runErr = cloud.RunEnrollment(rootCtx, cloud.EnrollmentConfig{
-					HubOrigin: cloudStart.hubOrigin,
-					KeyFile:   *cloudEnrollmentKeyFile,
-					CA:        cloudStart.ca,
-					Client:    kc,
-					Namespace: namespace,
-					Release:   helmRelease,
-					Names:     cloudStart.names,
-					Facts:     enrollmentFacts,
-					Tunnel:    tunnel,
+					HubOrigin:      cloudStart.hubOrigin,
+					KeyFile:        *cloudEnrollmentKeyFile,
+					PrivateKeyFile: *cloudEnrollmentPrivateKeyFile,
+					Organization:   *cloudEnrollmentOrganization,
+					CA:             cloudStart.ca,
+					Client:         kc,
+					Namespace:      namespace,
+					Release:        helmRelease,
+					Names:          cloudStart.names,
+					Facts:          enrollmentFacts,
+					Tunnel:         tunnel,
 				})
 			} else {
 				tunnel.URL = *cloudURL
