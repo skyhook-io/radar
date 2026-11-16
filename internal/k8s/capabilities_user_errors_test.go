@@ -75,3 +75,51 @@ func TestCheckCapabilitiesForUserDoesNotCacheFailedChecks(t *testing.T) {
 		t.Errorf("after the apiserver answers, got exec=%v logs=%v incomplete=%v; want the real grant", caps.Exec, caps.Logs, caps.ChecksIncomplete)
 	}
 }
+
+// A namespace fallback that grants access does not complete a cluster-wide
+// check that errored, so the answer stays incomplete and short-lived.
+func TestCheckCapabilitiesForUserFallbackGrantKeepsClusterErrorIncomplete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var review authv1.SubjectAccessReview
+		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+			http.Error(w, "bad review", http.StatusBadRequest)
+			return
+		}
+		attrs := review.Spec.ResourceAttributes
+		if attrs != nil && attrs.Subresource == "exec" && attrs.Namespace == "" {
+			http.Error(w, "timeout", http.StatusGatewayTimeout)
+			return
+		}
+		review.Status.Allowed = true
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(review)
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientMu.Lock()
+	oldClient, oldNs := k8sClient, contextNamespace
+	k8sClient, contextNamespace = client, "team-a"
+	clientMu.Unlock()
+	InvalidateUserCapabilitiesCache()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		k8sClient, contextNamespace = oldClient, oldNs
+		clientMu.Unlock()
+		InvalidateUserCapabilitiesCache()
+	})
+
+	caps, err := CheckCapabilitiesForUser(t.Context(), "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !caps.Exec {
+		t.Fatal("namespace fallback grant must still be reported")
+	}
+	if !caps.ChecksIncomplete {
+		t.Error("a cluster-wide check that errored must leave the answer incomplete even when the fallback grants")
+	}
+}

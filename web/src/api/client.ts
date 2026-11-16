@@ -2636,18 +2636,21 @@ export function useCanHelmAct(namespace?: string): { allowed: boolean; reason?: 
 
 // Namespaces
 export function useNamespaces() {
+  const connected = useClusterConnected();
   return useQuery<Namespace[]>({
     queryKey: ["namespaces"],
     queryFn: () => fetchJSON("/namespaces"),
     staleTime: 30000, // 30 seconds
-    refetchInterval: namespacesRefetchInterval,
+    refetchInterval: (query) => namespacesRefetchInterval(query, connected),
   });
 }
 
 // A 5xx is a list Radar couldn't read (a timed-out LIST or access check), not
 // an empty one; ask again (backing off) until it answers. A denial won't
-// change by polling.
-export function namespacesRefetchInterval(query: { state: { status: string; error: unknown; dataUpdatedAt: number; errorUpdatedAt: number } }): number | false {
+// change by polling, and while the cluster is disconnected reconnecting
+// refreshes every query anyway.
+export function namespacesRefetchInterval(query: { state: { status: string; error: unknown; dataUpdatedAt: number; errorUpdatedAt: number } }, connected = true): number | false {
+  if (!connected) return false;
   const { status, error, dataUpdatedAt, errorUpdatedAt } = query.state;
   const failing = status === "error" && error instanceof ApiError && error.status >= 500;
   return backoffRefetchInterval(query, Math.max(dataUpdatedAt, errorUpdatedAt), failing, false);

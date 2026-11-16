@@ -54,4 +54,8 @@ describe("namespacesRefetchInterval", () => {
     expect(namespacesRefetchInterval(ns("error", new ApiError("insufficient permissions", 403), 1))).toBe(false);
     expect(namespacesRefetchInterval(ns("success", null, 0, 1))).toBe(false);
   });
+
+  it("doesn't poll the 503 Radar answers while the cluster is disconnected", () => {
+    expect(namespacesRefetchInterval(ns("error", new ApiError("Not connected to cluster", 503), 1), false)).toBe(false);
+  });
 });

@@ -34,8 +34,9 @@ var (
 const serverVersionRetryAfter = 5 * time.Second
 
 type serverVersionRead struct {
-	done    chan struct{}
-	version string
+	done        chan struct{}
+	version     string
+	invalidated bool // guarded by serverVersionMu
 }
 
 // GetServerVersion returns the Kubernetes server version, read once per
@@ -55,7 +56,7 @@ func GetServerVersion() string {
 	if read := serverVersionInFlight; read != nil {
 		serverVersionMu.Unlock()
 		<-read.done
-		return read.version
+		return serverVersionOrRetry(read)
 	}
 	read := &serverVersionRead{done: make(chan struct{})}
 	serverVersionInFlight = read
@@ -79,6 +80,18 @@ func GetServerVersion() string {
 	}
 	serverVersionMu.Unlock()
 	close(read.done)
+	return serverVersionOrRetry(read)
+}
+
+// serverVersionOrRetry asks again when a context switch invalidated the read,
+// so no caller gets the previous cluster's version.
+func serverVersionOrRetry(read *serverVersionRead) string {
+	serverVersionMu.Lock()
+	invalidated := read.invalidated
+	serverVersionMu.Unlock()
+	if invalidated {
+		return GetServerVersion()
+	}
 	return read.version
 }
 
@@ -88,6 +101,9 @@ func InvalidateServerVersionCache() {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
+	if serverVersionInFlight != nil {
+		serverVersionInFlight.invalidated = true
+	}
 	serverVersionInFlight = nil
 	serverVersionFailedAt = time.Time{}
 }
