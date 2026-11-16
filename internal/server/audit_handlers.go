@@ -134,7 +134,7 @@ func getAuditConfig() settings.AuditConfig {
 }
 
 // handleAudit returns full audit scan results.
-// GET /api/audit?namespace=X&namespaces=X,Y
+// GET /api/audit?namespace=X&namespaces=X,Y[&raw=true][&include=findings]
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -165,6 +165,15 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	results = applyAuditSettings(results, getAuditConfig())
+	// `?include=findings` is for views that only badge resources (topology,
+	// resource lists). The full response repeats every finding three times
+	// (flat, per resource in groups, per check in groupedChecks), so this
+	// answers with the flat list and the check catalog alone, about a quarter
+	// of the bytes, and skips building the remediation queue.
+	if r.URL.Query().Get("include") == "findings" {
+		s.writeJSON(w, auditFindingsResponse{Findings: results.Findings, Checks: results.Checks})
+		return
+	}
 	// Attach the remediation-queue rollup for standalone + embedded per-cluster
 	// views. Build on a shallow copy: applyAuditSettings returns the shared
 	// cache object verbatim when no settings filter, so mutating it would race
@@ -173,6 +182,13 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	resp := *results
 	resp.GroupedChecks = chk.BuildChecks(bp.EffectiveFindings(results.Findings, ""), results.Checks, "", "")
 	s.writeJSON(w, &resp)
+}
+
+// auditFindingsResponse is /api/audit?include=findings: the effective
+// findings and the catalog that describes their checks.
+type auditFindingsResponse struct {
+	Findings []bp.Finding            `json:"findings"`
+	Checks   map[string]bp.CheckMeta `json:"checks"`
 }
 
 // queryTrue reports whether a query param parses as a truthy boolean. Tolerant

@@ -4,12 +4,14 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ClusterConnectedContext } from '../context/clusterConnected'
-import { useAudit } from './client'
+import { useAudit, useAuditFindings } from './client'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
+let probe: () => void = () => useAudit([])
+
 function AuditProbe() {
-  useAudit([])
+  probe()
   return null
 }
 
@@ -32,17 +34,40 @@ async function renderWith(connected: boolean) {
     )
   })
   await act(async () => { await Promise.resolve() })
-  const auditCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes('/audit')).length
+  const auditCalls = fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes('/audit'))
   act(() => root.unmount())
   return auditCalls
 }
 
 describe('useAudit', () => {
   it('does not ask a disconnected cluster for checks', async () => {
-    expect(await renderWith(false)).toBe(0)
+    probe = () => useAudit([])
+    expect(await renderWith(false)).toHaveLength(0)
   })
 
   it('fetches checks while connected', async () => {
-    expect(await renderWith(true)).toBe(1)
+    probe = () => useAudit([])
+    expect(await renderWith(true)).toHaveLength(1)
+  })
+})
+
+describe('useAuditFindings', () => {
+  it('asks only for findings and the check catalog, in the picked namespaces', async () => {
+    probe = () => useAuditFindings(['shop', 'web'])
+    const [url, ...rest] = await renderWith(true)
+    expect(rest).toHaveLength(0)
+    const params = new URL(url, 'http://radar').searchParams
+    expect(params.get('include')).toBe('findings')
+    expect(params.get('namespaces')).toBe('shop,web')
+  })
+
+  it('does not ask a disconnected cluster', async () => {
+    probe = () => useAuditFindings([])
+    expect(await renderWith(false)).toHaveLength(0)
+  })
+
+  it('stays idle while disabled', async () => {
+    probe = () => useAuditFindings([], { enabled: false })
+    expect(await renderWith(true)).toHaveLength(0)
   })
 })

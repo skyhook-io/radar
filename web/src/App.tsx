@@ -64,7 +64,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAuditFindings, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -1785,7 +1785,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // backend stamps on each node (data.auditKey). Only badge-worthy findings
   // reach the graph; the raw auditDanger/auditWarning property names remain at
   // this compatibility boundary while the node presents them as High/Medium.
-  const audit = useAudit(namespaces)
+  const audit = useAuditFindings(namespaces)
   const auditSeverityMap = useMemo(
     () => buildAuditSeverityMap(audit.data?.findings, audit.data?.checks),
     [audit.data?.findings, audit.data?.checks],

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError } from '../../api/client'
+import { fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAuditFindings, useIssues, fetchResourceList, isListTooLargeError, isUnretryableReadError } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import { ISSUE_SEVERITY_RANK } from '@skyhook-io/k8s-ui'
 import type { Issue, AuditBadgeMessage } from '@skyhook-io/k8s-ui'
@@ -161,7 +161,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // kind shared across groups doesn't bleed findings across the two lists. Only
   // "badge-worthy" findings count (reference-integrity / lifecycle) — posture
   // and best-practice nags fire near-universally and would just be noise.
-  const audit = useAudit(namespaces)
+  const audit = useAuditFindings(namespaces)
   const auditBadges = useMemo(() => {
     if (!selectedKind || !audit.data?.findings) return undefined
     const wantGroup = selectedKind.group

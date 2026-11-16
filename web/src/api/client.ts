@@ -751,6 +751,29 @@ export function useAudit(namespaces: string[] = []) {
   });
 }
 
+export type AuditFindings = Pick<AuditResponse, "findings" | "checks">;
+
+// The findings and check catalog alone, for views that only badge resources.
+// The full response is about four times the size: it repeats every finding
+// per resource and per check for the Checks page. A Radar that predates
+// include=findings answers with the full response, which carries both fields.
+export function useAuditFindings(
+  namespaces: string[] = [],
+  options: { enabled?: boolean } = {},
+) {
+  const params = new URLSearchParams({ include: "findings" });
+  if (namespaces.length > 0) params.set("namespaces", namespaces.join(","));
+  const connected = useClusterConnected();
+  return useQuery<AuditFindings>({
+    queryKey: ["audit", namespaces, "findings"],
+    queryFn: () => fetchJSON(`/audit?${params}`),
+    enabled: connected && (options.enabled ?? true),
+    staleTime: 30000,
+    refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
+    placeholderData: (prev) => prev,
+  });
+}
+
 export function useUpgradeReadiness(target?: string) {
   // The server memoizes scans per caller (~60s). Ordinary and background
   // refetches read that memo; only the explicit manual refresh passes
