@@ -128,7 +128,8 @@ func TestLoggingPodShipping(t *testing.T) {
 	if pg := flowByName(got, "pg"); pg.Selected || len(pg.Unmet) != 1 || pg.Unmet[0] != "container in [postgres]" {
 		t.Errorf("pg = %+v", pg)
 	}
-	if stray := flowByName(got, "stray"); !stray.Ignored || stray.Selected {
+	// A ClusterFlow the operator ignores decides nothing, so it isn't sent.
+	if stray := flowByName(got, "stray"); stray.Name != "" {
 		t.Errorf("stray = %+v", stray)
 	}
 	if second := flowByName(got, "second-flow"); !second.Selected || second.Ignored {
@@ -150,7 +151,7 @@ func TestLoggingPodShipping(t *testing.T) {
 			t.Errorf("body still has %s", field)
 		}
 	}
-	if got.Routes[0].Selected != true || got.Routes[len(got.Routes)-1].Name != "stray" {
+	if got.Routes[0].Selected != true || got.Routes[len(got.Routes)-1].Name != "pg" {
 		t.Errorf("order = %+v", got.Routes)
 	}
 	for _, leak := range []string{"s3cret", "user:pw", "https://"} {
@@ -291,8 +292,9 @@ func TestLoggingPodShippingWatchNamespaces(t *testing.T) {
 			)
 			resp, _ := http.Get(testServer.URL + "/api/logging/pods/team/app-1")
 			got, _ := getLoggingPod(t, resp)
+			// An ignored Flow decides nothing, so it isn't sent.
 			f := flowByName(got, "everything")
-			if got.Shipped || f.Ignored != c.ignored || f.Uncertain != c.uncertain || f.Selected {
+			if got.Shipped || (f.Name == "") != c.ignored || f.Uncertain != c.uncertain || f.Selected {
 				t.Fatalf("response = %+v", got)
 			}
 		})
@@ -465,8 +467,9 @@ func TestLoggingPodShippingClusterResourcesFromAllNamespaces(t *testing.T) {
 
 // The operator rejects a Flow with both match and selectors, or select and
 // exclude in one entry, and deprecated outputRefs are never rendered.
+// skipInvalidResources keeps the invalid Flow from blocking the valid one.
 func TestLoggingPodShippingInvalidFlowAndDeprecatedOutputRefs(t *testing.T) {
-	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil)
+	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system", "skipInvalidResources": true}, nil)
 	seedLoggingWith(t, l,
 		lgObj("Flow", "team", "both", map[string]any{"match": []any{map[string]any{"select": map[string]any{}, "exclude": map[string]any{"labels": map[string]any{"a": "b"}}}}, "localOutputRefs": []any{"out"}}, nil),
 		lgObj("Flow", "team", "legacy", map[string]any{"outputRefs": []any{"out"}}, nil),
@@ -527,5 +530,159 @@ func TestLoggingPodShippingEmptyMatchSelectsNothing(t *testing.T) {
 	got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
 	if f := flowByName(got, "empty"); f.Selected || f.Uncertain {
 		t.Fatalf("empty = %+v", f)
+	}
+}
+
+func seedLoggingPod(t *testing.T, pod *corev1.Pod, objs ...runtime.Object) {
+	t.Helper()
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	seedCNPGWorkspace(t, loggingKinds(), objs...)
+}
+
+// A caller who can get the pod learns which routes decide it, not every
+// ClusterFlow in the cluster: only routes that select, may select or exclude
+// it, invalid ones that would select it, and the single closest miss, whose
+// namespace and node conditions are withheld unless the caller may list that
+// route's kind.
+func TestLoggingPodShippingWithholdsUnrelatedRoutes(t *testing.T) {
+	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil)
+	seedLoggingWith(t, l,
+		lgObj("ClusterFlow", "logging-system", "near", map[string]any{"match": []any{map[string]any{"select": map[string]any{"namespaces": []any{"secret-a"}, "hosts": []any{"node-9"}}}}, "globalOutputRefs": []any{"loki"}}, nil),
+		lgObj("ClusterFlow", "logging-system", "far", map[string]any{"match": []any{map[string]any{"select": map[string]any{"labels": map[string]any{"a": "b", "c": "d"}, "namespaces": []any{"secret-b"}}}}, "globalOutputRefs": []any{"loki"}}, nil),
+		lgObj("ClusterFlow", "elsewhere", "stray", map[string]any{"globalOutputRefs": []any{"loki"}}, nil),
+		lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true}),
+	)
+	env := newAuthTestServer(t)
+	for _, c := range []struct {
+		user     string
+		canList  bool
+		unmetHas string
+	}{
+		{"bob", false, "a namespace or node condition"},
+		{"carol", true, "namespace in [secret-a]"},
+	} {
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+		perms.SetCanI("get", "", "pods", "team", true)
+		perms.SetCanI("list", logging.Group, "clusterflows", "logging-system", c.canList)
+		env.srv.permCache.Set(c.user, nil, perms)
+		got, raw := getLoggingPod(t, env.authGet(t, "/api/logging/pods/team/app-1", c.user, ""))
+		if len(got.Routes) != 1 || got.Routes[0].Name != "near" || !slices.Contains(got.Routes[0].Unmet, c.unmetHas) {
+			t.Fatalf("%s: routes = %+v", c.user, got.Routes)
+		}
+		for _, leak := range []string{"far", "stray", "secret-b"} {
+			if strings.Contains(raw, leak) {
+				t.Errorf("%s: body names %q: %s", c.user, leak, raw)
+			}
+		}
+		if !c.canList && (strings.Contains(raw, "secret-a") || strings.Contains(raw, "node-9")) {
+			t.Errorf("%s: body leaks namespace or node conditions: %s", c.user, raw)
+		}
+	}
+}
+
+// Only a ClusterFlow may use a protected ClusterOutput; the operator refuses a
+// Flow naming one.
+func TestLoggingPodShippingProtectedClusterOutput(t *testing.T) {
+	l := lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system", "skipInvalidResources": true}, nil)
+	audit := lgObj("ClusterOutput", "logging-system", "audit", map[string]any{"protected": true, "loki": map[string]any{}}, map[string]any{"active": true})
+	t.Run("Flow", func(t *testing.T) {
+		seedLoggingWith(t, l, audit, lgObj("Flow", "team", "app", map[string]any{"globalOutputRefs": []any{"audit"}}, map[string]any{"active": true}))
+		got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+		if f := flowByName(got, "app"); !f.Ignored || !strings.Contains(f.Invalid, "protected") || got.Shipped {
+			t.Fatalf("shipped=%v app=%+v", got.Shipped, f)
+		}
+	})
+	t.Run("ClusterFlow", func(t *testing.T) {
+		seedLoggingWith(t, l, audit, lgObj("ClusterFlow", "logging-system", "all", map[string]any{"globalOutputRefs": []any{"audit"}}, map[string]any{"active": true}))
+		got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+		if f := flowByName(got, "all"); f.Ignored || !got.Shipped {
+			t.Fatalf("shipped=%v all=%+v", got.Shipped, f)
+		}
+	})
+}
+
+// With skipInvalidResources off (the default), one invalid Flow anywhere the
+// Logging watches stops the operator rendering that Logging's configuration,
+// so whether its other routes ship the pod can't be told.
+func TestLoggingPodShippingInvalidFlowBlocksItsLogging(t *testing.T) {
+	all := lgObj("ClusterFlow", "logging-system", "all", map[string]any{"globalOutputRefs": []any{"loki"}}, map[string]any{"active": true})
+	loki := lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true})
+	broken := lgObj("Flow", "other", "broken", map[string]any{"localOutputRefs": []any{"gone"}}, nil)
+	for _, c := range []struct {
+		name     string
+		spec     map[string]any
+		objs     []runtime.Object
+		blocked  bool
+		selected bool
+	}{
+		{"invalid Flow in another namespace", map[string]any{"controlNamespace": "logging-system"}, []runtime.Object{all, loki, broken}, true, false},
+		{"skipInvalidResources", map[string]any{"controlNamespace": "logging-system", "skipInvalidResources": true}, []runtime.Object{all, loki, broken}, false, true},
+		{"defaultFlow names a missing output", map[string]any{"controlNamespace": "logging-system", "skipInvalidResources": true, "defaultFlow": map[string]any{"globalOutputRefs": []any{"gone"}}}, []runtime.Object{all, loki}, true, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			seedLoggingWith(t, lgObj("Logging", "", "default", c.spec, nil), c.objs...)
+			got, raw := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+			f := flowByName(got, "all")
+			if f.RenderBlocked != c.blocked || f.Selected != c.selected || f.Uncertain != c.blocked || got.Shipped == c.blocked || got.Uncertain != c.blocked {
+				t.Fatalf("shipped=%v uncertain=%v all=%+v", got.Shipped, got.Uncertain, f)
+			}
+			if strings.Contains(raw, "broken") {
+				t.Errorf("body names a Flow in another namespace: %s", raw)
+			}
+		})
+	}
+}
+
+// fluent-bit drops the logs of a pod annotated fluentbit.io/exclude: "true"
+// (K8S-Logging.Exclude, on by default), whatever the Flows select.
+func TestLoggingPodShippingExcludeAnnotation(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "app-1", Annotations: map[string]string{"fluentbit.io/exclude": "true"}},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+	}
+	seedLoggingPod(t, pod,
+		lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil),
+		lgObj("ClusterFlow", "logging-system", "all", map[string]any{"globalOutputRefs": []any{"loki"}}, map[string]any{"active": true}),
+		lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true}),
+	)
+	got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+	if got.Shipped || !got.Uncertain || got.ExcludeAnnotation != "fluentbit.io/exclude" {
+		t.Fatalf("response = %+v", got)
+	}
+}
+
+// Without a cluster-wide read of Outputs, a Flow elsewhere naming an Output
+// can't be called invalid, so it never blocks its Logging.
+func TestLoggingPodShippingOutputsReadOnlyInPodNamespace(t *testing.T) {
+	seedLoggingFixture(t, loggingKinds(), nil)
+	kinds := loggingKinds()
+	listKinds := map[schema.GroupVersionResource]string{}
+	for _, k := range kinds {
+		listKinds[schema.GroupVersionResource{Group: k.Group, Version: k.Version, Resource: k.Name}] = k.Kind + "List"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds,
+		lgObj("Logging", "", "default", map[string]any{"controlNamespace": "logging-system"}, nil),
+		lgObj("ClusterFlow", "logging-system", "all", map[string]any{"globalOutputRefs": []any{"loki"}}, map[string]any{"active": true}),
+		lgObj("ClusterOutput", "logging-system", "loki", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true}),
+		lgObj("Flow", "other", "ok", map[string]any{"localOutputRefs": []any{"out"}}, nil),
+		lgObj("Output", "other", "out", map[string]any{"loki": map[string]any{}}, map[string]any{"active": true}),
+	)
+	dyn.PrependReactor("list", "outputs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: logging.Group, Resource: "outputs"}, "", nil)
+		}
+		return false, nil, nil
+	})
+	k8s.ResetTestDynamicState()
+	if err := k8s.InitTestDynamicResourceCache(dyn, kinds); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := getLoggingPod(t, mustGet(t, testServer.URL+"/api/logging/pods/team/app-1"))
+	if f := flowByName(got, "all"); f.RenderBlocked || !got.Shipped || len(got.ReadErrors) != 0 {
+		t.Fatalf("shipped=%v readErrors=%v all=%+v", got.Shipped, got.ReadErrors, f)
 	}
 }

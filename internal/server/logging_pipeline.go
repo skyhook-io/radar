@@ -242,7 +242,7 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 			}
 			invalid := f.Invalid
 			if invalid == "" {
-				invalid = missingOutput(dests, unread)
+				invalid = missingOutput(dests, unread, f.Cluster)
 			}
 			c.Ignored = c.Ignored || invalid != ""
 			cands = append(cands, c)

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +29,7 @@ type logDestination struct {
 	Type      string `json:"type,omitempty"`
 	Found     bool   `json:"found"`
 	Active    *bool  `json:"active,omitempty"` // nil: not found, or no state reported
+	protected bool
 }
 
 type logRoute struct {
@@ -39,8 +41,12 @@ type logRoute struct {
 	Selected  bool   `json:"selected"`
 	Uncertain bool   `json:"uncertain"`
 	Ignored   bool   `json:"ignored"`
-	// Invalid: why the operator rejects the route and never renders it.
+	// Invalid: why the operator can't render the route; empty when valid.
 	Invalid string `json:"invalid,omitempty"`
+	// RenderBlocked: the route's shipper has an invalid route (or default flow)
+	// and doesn't skip invalid ones, so it renders none of its configuration
+	// and Radar can't tell what the configuration still running ships.
+	RenderBlocked bool `json:"renderBlocked,omitempty"`
 	// Fallback: the route receives what no other route of its shipper selects
 	// (the Logging's defaultFlow).
 	Fallback bool `json:"fallback,omitempty"`
@@ -72,17 +78,27 @@ type logShippingResponse struct {
 	// ReadErrors names the kinds Radar could not read; the UI never says
 	// "not shipped" while it is non-empty.
 	ReadErrors []logReadError `json:"readErrors"`
+	// ExcludeAnnotation names the pod's annotation asking the collector to
+	// drop its logs; while set, Radar never says the pod is shipped.
+	ExcludeAnnotation string `json:"excludeAnnotation,omitempty"`
 }
+
+// fluent-bit drops the logs of a pod with this annotation set to "true" while
+// its K8S-Logging.Exclude is on, the Logging operator's default.
+const fluentbitExcludeAnnotation = "fluentbit.io/exclude"
 
 // handleLoggingPod answers which Logging operator Flows forward one pod's
 // logs, and where to. Gate: the caller must be able to get the pod (namespace
 // access plus get pods). The Flows, Loggings and outputs are read with Radar's
 // identity and projected to names, the selection decision and each output's
-// kind/name/type/active state: the answer is about the caller's own pod, so the
-// names that decide it are shown even to a caller who can't list Flows, and no
-// output configuration ever leaves the server. On a shared listener without
-// auth it reads as Radar's identity; a cross-site request is refused by
-// requireSameOrigin.
+// kind/name/type/active state. Only the routes that decide the caller's pod
+// leave the server (those that select, may select or exclude it, invalid ones
+// that would select it, and the closest miss), so a caller who can't list
+// Flows learns their names but not the rest of the cluster's routing; the
+// closest miss's namespace and node conditions are withheld unless the caller
+// may list its kind. No output configuration ever leaves the server. On a
+// shared listener without auth it reads as Radar's identity; a cross-site
+// request is refused by requireSameOrigin.
 func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 	ns, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if !s.requireConnected(w) {
@@ -119,6 +135,9 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	facts := loggingPodFacts(pod)
+	if pod.Annotations[fluentbitExcludeAnnotation] == "true" {
+		resp.ExcludeAnnotation = fluentbitExcludeAnnotation
+	}
 
 	budget := newSyncBudget(r.Context())
 	// listDynamicSyncedWithin turns an informer that hasn't synced (a slow
@@ -132,13 +151,24 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		}
 		return items
 	}
+	// An invalid Flow in any watched namespace stops its Logging rendering, so
+	// Flows and Outputs are read everywhere when Radar can; otherwise the pod's
+	// namespace is all Radar judges by.
+	readWide := func(plural string) ([]*unstructured.Unstructured, bool) {
+		if items, err := listDynamicSyncedWithin(r.Context(), cache, plural, logging.Group, "", budget); err == nil {
+			return items, true
+		}
+		return read(plural, ns), false
+	}
 	var loggings []logging.Logging
 	for _, u := range read("loggings", "") {
 		loggings = append(loggings, logging.LoggingFrom(u))
 	}
-	flows := append(read("clusterflows", ""), read("flows", ns)...)
+	namespacedFlows, _ := readWide("flows")
+	flows := append(read("clusterflows", ""), namespacedFlows...)
+	namespacedOutputs, outputsEverywhere := readWide("outputs")
 	outputs := map[[3]string]logging.OutputSummary{} // kind, namespace, name
-	for _, u := range append(read("clusteroutputs", ""), read("outputs", ns)...) {
+	for _, u := range append(read("clusteroutputs", ""), namespacedOutputs...) {
 		o := logging.OutputFrom(u)
 		outputs[[3]string{u.GetKind(), o.Namespace, o.Name}] = o
 	}
@@ -156,20 +186,38 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			clusterOutputNamespace[l.LoggingRef] = ""
 		}
 	}
-	// Per loggingRef: whether a counted Flow selects the pod for certain, or may.
+	// Per loggingRef: whether a counted Flow selects the pod for certain, or
+	// may, and whether an invalid route stops the Logging rendering.
 	selectedBy, maybeBy := map[string]bool{}, map[string]bool{}
+	blocked := defaultFlowsBlocking(loggings, outputs, clusterOutputNamespace, outputsUnread["ClusterOutput"])
 
+	type candidate struct {
+		row        logRoute
+		loggingRef string
+		relevant   bool // selects, may select or excludes the pod, or would if valid
+	}
+	var candidates []candidate
 	for _, u := range flows {
 		f := logging.FlowFrom(u)
-		if !logging.InScope(f, ns) {
-			continue
-		}
 		d := logging.Selects(f, facts)
 		c := pipelineCandidate(f, loggings, loggingsUnread)
 		row := logRoute{
 			Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
 			Ignored: c.Ignored, Invalid: f.Invalid, Unmet: d.Unmet, HasFilters: f.HasFilters,
 			Active: flowActive(u), Destinations: flowDestinations(f, outputs, clusterOutputNamespace),
+		}
+		unread := outputsUnread
+		if !outputsEverywhere && f.Namespace != ns {
+			unread = map[string]bool{"ClusterOutput": outputsUnread["ClusterOutput"], "Output": true}
+		}
+		if reason := missingOutput(row.Destinations, unread, f.Cluster); row.Invalid == "" && reason != "" {
+			row.Invalid, row.Ignored = reason, true
+		}
+		if row.Invalid != "" && invalidBlocks(f, loggings, loggingsUnread) {
+			blocked[f.LoggingRef] = true
+		}
+		if !logging.InScope(f, ns) {
+			continue
 		}
 		if row.Unmet == nil {
 			row.Unmet = []string{}
@@ -180,18 +228,24 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		if c.OnlyMaybe && row.Selected {
 			row.Selected, row.Uncertain = false, true
 		}
-		if reason := missingOutput(row.Destinations, outputsUnread); row.Invalid == "" && reason != "" {
-			row.Invalid, row.Ignored, row.Selected, row.Uncertain = reason, true, false, false
-		}
 		row.Excluded = !row.Ignored && d.Rule >= 0 && !d.Selected && !d.Uncertain
+		candidates = append(candidates, candidate{row, f.LoggingRef, d.Selected || d.Uncertain || row.Excluded})
+	}
+	for i := range candidates {
+		row, ref := &candidates[i].row, candidates[i].loggingRef
+		if !row.Ignored || row.Invalid != "" {
+			row.RenderBlocked = blocked[ref]
+		}
+		if row.RenderBlocked && row.Selected {
+			row.Selected, row.Uncertain = false, true
+		}
 		if row.Selected {
-			row.Delivers = loggingDelivers(row, outputsUnread)
+			row.Delivers = loggingDelivers(*row, outputsUnread)
 		}
 		if !row.Ignored {
-			selectedBy[f.LoggingRef] = selectedBy[f.LoggingRef] || row.Selected
-			maybeBy[f.LoggingRef] = maybeBy[f.LoggingRef] || row.Uncertain
+			selectedBy[ref] = selectedBy[ref] || row.Selected
+			maybeBy[ref] = maybeBy[ref] || row.Uncertain
 		}
-		resp.Routes = append(resp.Routes, row)
 	}
 	// The defaultFlow receives what no Flow of its Logging selects. Unread Flows
 	// leave open whether one does.
@@ -204,7 +258,8 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 			Provider: providerLoggingOperator, Kind: "Logging", Group: logging.Group, Name: l.Name, Fallback: true,
 			Unmet: []string{}, HasFilters: l.DefaultFlow.HasFilters, Destinations: []logDestination{},
 		}
-		row.Uncertain = maybeBy[l.LoggingRef] || flowsUnread
+		row.RenderBlocked = blocked[l.LoggingRef]
+		row.Uncertain = maybeBy[l.LoggingRef] || flowsUnread || row.RenderBlocked
 		row.Selected = !row.Uncertain
 		for _, ref := range l.DefaultFlow.GlobalOutputs {
 			row.Destinations = append(row.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], l.LoggingRef, ref))
@@ -212,16 +267,44 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		if row.Selected {
 			row.Delivers = loggingDelivers(row, outputsUnread)
 		}
-		resp.Routes = append(resp.Routes, row)
+		candidates = append(candidates, candidate{row, l.LoggingRef, true})
 	}
-	for _, row := range resp.Routes {
-		if !row.Ignored {
+	for _, c := range candidates {
+		if row := c.row; !row.Ignored {
 			resp.Shipped = resp.Shipped || (row.Delivers != nil && *row.Delivers)
 			resp.Uncertain = resp.Uncertain || row.Uncertain || (row.Selected && row.Delivers == nil)
 		}
 	}
 	if resp.Shipped {
 		resp.Uncertain = false
+	}
+	if resp.ExcludeAnnotation != "" && resp.Shipped {
+		resp.Shipped, resp.Uncertain = false, true
+	}
+	// The closest miss: what the UI explains when nothing selects the pod.
+	closest := -1
+	for i, c := range candidates {
+		row := c.row
+		if row.Ignored || row.Selected || row.Uncertain || row.Excluded || row.Fallback {
+			continue
+		}
+		if closest < 0 || len(row.Unmet) < len(candidates[closest].row.Unmet) ||
+			(len(row.Unmet) == len(candidates[closest].row.Unmet) && row.Name < candidates[closest].row.Name) {
+			closest = i
+		}
+	}
+	for i, c := range candidates {
+		row := c.row
+		switch {
+		case i == closest:
+			if !s.canRead(r, logging.Group, strings.ToLower(row.Kind)+"s", row.Namespace, "list") {
+				row.Unmet = withholdPlacement(row.Unmet)
+			}
+		case row.Invalid != "" && (row.Kind == "Flow" || c.relevant):
+		case row.Ignored || !c.relevant && !row.Fallback:
+			continue
+		}
+		resp.Routes = append(resp.Routes, row)
 	}
 	sort.SliceStable(resp.Routes, func(i, j int) bool {
 		a, b := loggingFlowRank(resp.Routes[i]), loggingFlowRank(resp.Routes[j])
@@ -231,6 +314,24 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		return resp.Routes[i].Name < resp.Routes[j].Name
 	})
 	s.writeJSON(w, resp)
+}
+
+// withholdPlacement replaces the namespace and node conditions a route lacks,
+// which name other namespaces and nodes, with one neutral term.
+func withholdPlacement(unmet []string) []string {
+	out := []string{}
+	withheld := false
+	for _, u := range unmet {
+		if strings.HasPrefix(u, "namespace in ") || strings.HasPrefix(u, "namespace matching ") || strings.HasPrefix(u, "node in ") {
+			withheld = true
+			continue
+		}
+		out = append(out, u)
+	}
+	if withheld {
+		out = append(out, "a namespace or node condition")
+	}
+	return out
 }
 
 func loggingPodFacts(pod *corev1.Pod) logging.PodFacts {
@@ -251,6 +352,44 @@ func loggingPodFacts(pod *corev1.Pod) logging.PodFacts {
 func loggingCandidate(f logging.Flow, loggings []logging.Logging) logging.Candidate {
 	watched, known := logging.Watched(f, loggings)
 	return logging.Candidate{Flow: f, Ignored: f.Invalid != "" || !logging.Counted(f, loggings) || (!watched && known), OnlyMaybe: !watched && !known}
+}
+
+// invalidBlocks reports whether an invalid Flow stops its Logging rendering:
+// the operator renders a Logging's Flows in one pass and, unless the Logging
+// sets skipInvalidResources, fails the whole render on one it can't build. A
+// Flow it doesn't count or watch, or one whose Logging Radar didn't read,
+// blocks nothing Radar can name.
+func invalidBlocks(f logging.Flow, loggings []logging.Logging, loggingsUnread bool) bool {
+	if loggingsUnread || !logging.Counted(f, loggings) {
+		return false
+	}
+	if watched, known := logging.Watched(f, loggings); !watched && known {
+		return false
+	}
+	for _, l := range loggings {
+		if l.LoggingRef == f.LoggingRef && l.SkipInvalidResources {
+			return false
+		}
+	}
+	return true
+}
+
+// defaultFlowsBlocking marks, per loggingRef, a Logging whose defaultFlow names
+// a ClusterOutput Radar didn't find: the operator fails the whole render on it,
+// whatever skipInvalidResources says.
+func defaultFlowsBlocking(loggings []logging.Logging, outputs map[[3]string]logging.OutputSummary, clusterOutputNamespace map[string]string, clusterOutputsUnread bool) map[string]bool {
+	blocked := map[string]bool{}
+	for _, l := range loggings {
+		if l.DefaultFlow == nil || clusterOutputsUnread {
+			continue
+		}
+		for _, ref := range l.DefaultFlow.GlobalOutputs {
+			if !outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], l.LoggingRef, ref).Found {
+				blocked[l.LoggingRef] = true
+			}
+		}
+	}
+	return blocked
 }
 
 func flowActive(u *unstructured.Unstructured) *bool {
@@ -282,22 +421,26 @@ func outputRef(outputs map[[3]string]logging.OutputSummary, kind, namespace, log
 	if kind == "ClusterOutput" && namespace == "" {
 		for key, o := range outputs {
 			if key[0] == kind && key[2] == name && o.LoggingRef == loggingRef && (!ref.Found || o.Namespace < ref.Namespace) {
-				ref.Namespace, ref.Type, ref.Found, ref.Active = o.Namespace, o.Type, true, o.Active
+				ref.Namespace, ref.Type, ref.Found, ref.Active, ref.protected = o.Namespace, o.Type, true, o.Active, o.Protected
 			}
 		}
 		return ref
 	}
 	if o, ok := outputs[[3]string{kind, namespace, name}]; ok && o.LoggingRef == loggingRef {
-		ref.Type, ref.Found, ref.Active = o.Type, true, o.Active
+		ref.Type, ref.Found, ref.Active, ref.protected = o.Type, true, o.Active, o.Protected
 	}
 	return ref
 }
 
-// missingOutput is why the operator rejects a Flow naming an output it can't
-// resolve; empty when every named output was found, or one wasn't and Radar
-// didn't read its kind.
-func missingOutput(dests []logDestination, unread map[string]bool) string {
+// missingOutput is why the operator can't render a Flow naming an output it
+// can't resolve, or (for a namespaced Flow) a protected ClusterOutput; empty
+// when every named output was found and usable, or one wasn't and Radar didn't
+// read its kind.
+func missingOutput(dests []logDestination, unread map[string]bool, cluster bool) string {
 	for _, d := range dests {
+		if d.Found && d.protected && !cluster {
+			return "it names ClusterOutput " + d.Name + ", which is protected: only ClusterFlows may use it"
+		}
 		if !d.Found && !unread[d.Kind] {
 			return "it names " + d.Kind + " " + d.Name + ", which Radar didn't find for its Logging"
 		}

@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -54,7 +55,16 @@ func FlowFrom(u *unstructured.Unstructured) Flow {
 type Logging struct {
 	Name, LoggingRef, ControlNamespace string
 	WatchNamespaces                    []string // spec.watchNamespaces; empty: all
-	WatchSelector                      bool     // spec.watchNamespaceSelector is set (not evaluated)
+	// WatchSelector: spec.watchNamespaceSelector is set and not empty (not
+	// evaluated). An empty selector matches every namespace.
+	WatchSelector bool
+	// ResolvedWatchNamespaces is status.watchNamespaces, the namespaces the
+	// operator resolved ("*" for all); nil when it reported none.
+	ResolvedWatchNamespaces []string
+	// SkipInvalidResources: spec.skipInvalidResources. Off (the default), one
+	// invalid Flow or ClusterFlow stops the operator rendering the Logging's
+	// configuration at all.
+	SkipInvalidResources bool
 	// ClusterResourcesFromAllNamespaces: spec.allowClusterResourcesFromAllNamespaces,
 	// ClusterFlows and ClusterOutputs count from any namespace.
 	ClusterResourcesFromAllNamespaces bool
@@ -79,8 +89,13 @@ func LoggingFrom(u *unstructured.Unstructured) Logging {
 	l.LoggingRef, _, _ = unstructured.NestedString(u.Object, "spec", "loggingRef")
 	l.ControlNamespace, _, _ = unstructured.NestedString(u.Object, "spec", "controlNamespace")
 	l.WatchNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "spec", "watchNamespaces")
-	selector, _, _ := unstructured.NestedMap(u.Object, "spec", "watchNamespaceSelector")
+	selector, found, _ := unstructured.NestedMap(u.Object, "spec", "watchNamespaceSelector")
+	if found && len(selector) == 0 {
+		l.WatchNamespaces = nil
+	}
 	l.WatchSelector = len(selector) > 0
+	l.ResolvedWatchNamespaces, _, _ = unstructured.NestedStringSlice(u.Object, "status", "watchNamespaces")
+	l.SkipInvalidResources, _, _ = unstructured.NestedBool(u.Object, "spec", "skipInvalidResources")
 	l.ClusterResourcesFromAllNamespaces, _, _ = unstructured.NestedBool(u.Object, "spec", "allowClusterResourcesFromAllNamespaces")
 	l.CollectorNamespace, _, _ = unstructured.NestedString(u.Object, "spec", "fluentBitAgentNamespace")
 	if l.CollectorNamespace == "" {
@@ -113,8 +128,9 @@ func Counted(flow Flow, loggings []Logging) bool {
 }
 
 // Watched reports whether the flow's Logging watches the flow's namespace
-// (spec.watchNamespaces, spec.watchNamespaceSelector); a ClusterFlow is always
-// watched. certain is false when only the namespace selector, which Radar
+// (status.watchNamespaces when the operator reported it, otherwise
+// spec.watchNamespaces and spec.watchNamespaceSelector); a ClusterFlow is
+// always watched. certain is false when only the namespace selector, which Radar
 // doesn't evaluate, could admit it.
 func Watched(flow Flow, loggings []Logging) (watched, certain bool) {
 	if flow.Cluster {
@@ -123,6 +139,9 @@ func Watched(flow Flow, loggings []Logging) (watched, certain bool) {
 	for _, l := range loggings {
 		if l.LoggingRef != flow.LoggingRef {
 			continue
+		}
+		if len(l.ResolvedWatchNamespaces) > 0 {
+			return slices.Contains(l.ResolvedWatchNamespaces, "*") || slices.Contains(l.ResolvedWatchNamespaces, flow.Namespace), true
 		}
 		if len(l.WatchNamespaces) == 0 && !l.WatchSelector {
 			return true, true
@@ -143,9 +162,11 @@ type OutputSummary struct {
 	Name, Namespace, Type, Address string
 	LoggingRef                     string // the operator only resolves a ref to an output with the Flow's loggingRef
 	Cluster                        bool
-	Active                         *bool // nil: the operator reported no state
-	ProblemsCount                  int
-	Problems                       []string
+	// Protected: a ClusterOutput only ClusterFlows may use; a Flow naming it is invalid.
+	Protected     bool
+	Active        *bool // nil: the operator reported no state
+	ProblemsCount int
+	Problems      []string
 }
 
 var outputCommonKeys = map[string]bool{"loggingRef": true, "protected": true, "enabledNamespaces": true}
@@ -154,6 +175,7 @@ func OutputFrom(u *unstructured.Unstructured) OutputSummary {
 	out := OutputSummary{Name: u.GetName(), Namespace: u.GetNamespace(), Cluster: u.GetKind() == "ClusterOutput"}
 	spec, _, _ := unstructured.NestedMap(u.Object, "spec")
 	out.LoggingRef, _ = spec["loggingRef"].(string)
+	out.Protected, _ = spec["protected"].(bool)
 	var types []string
 	for k := range spec {
 		if !outputCommonKeys[k] {
