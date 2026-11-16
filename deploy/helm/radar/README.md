@@ -720,6 +720,8 @@ retain their finite grants.
 
 | Option | API Groups |
 |--------|------------|
+| `agentSandbox` | `agents.x-k8s.io`, `extensions.agents.x-k8s.io`. Sandboxes and SandboxTemplates carry Pod templates, whose environment values can be inline |
+| `agentSubstrate` | `ate.dev` |
 | `antrea` | `crd.antrea.io` (`networkpolicies`, `clusternetworkpolicies`) |
 | `apiRegistration` | `apiregistration.k8s.io` |
 | `argo` | `argoproj.io` |
