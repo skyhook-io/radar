@@ -88,14 +88,24 @@ const maxIndexDigits = 6
 // "<job>-<random>" with "<job>-" cut to 58 characters; an Indexed Job's
 // controller keeps "-<index>-" whole and cuts the Job name instead. notice is
 // set when a long name may be cut, so another Job with the same prefix may be
-// included.
-func JobSelector(l StreamLabels, namespace, job string, indexed bool) (selector, notice string, err error) {
+// included, and for an Indexed Job, whose "<job>-<index>-<random>" pods share
+// their names with those of a Job named "<job>-<index>". The container (when
+// given and Loki labels containers) and this cluster go into the selector, so
+// Loki's line limit counts only the lines shown.
+func JobSelector(l StreamLabels, namespace, job string, indexed bool, container string) (selector, notice string, err error) {
 	if reason := l.HistoryReason(); reason != "" {
 		return "", "", errors.New(reason)
 	}
-	ns := l.Namespace + "=" + quoteLogQL(namespace)
+	var scope []string
+	if container != "" && l.Container != "" {
+		scope = append(scope, l.Container+"="+quoteLogQL(container))
+	}
+	scope = append(scope, clusterMatcher(l)...)
+	build := func(match string) string {
+		return "{" + strings.Join(append([]string{l.Namespace + "=" + quoteLogQL(namespace), match}, scope...), ", ") + "}"
+	}
 	if l.Job != "" {
-		return fmt.Sprintf("{%s, %s=%s}", ns, l.Job, quoteLogQL(job)), "", nil
+		return build(l.Job + "=" + quoteLogQL(job)), "", nil
 	}
 	var alternatives []string
 	cut := false
@@ -119,13 +129,18 @@ func JobSelector(l StreamLabels, namespace, job string, indexed bool) (selector,
 			}
 		}
 	}
-	if cut {
-		notice = "Job names this long are shortened in pod names; lines from another Job with the same prefix may be included."
+	var notices []string
+	if indexed {
+		notices = append(notices, fmt.Sprintf("Pods are matched by name; a Job named %s-<index> has pods with the same names, and its lines would be included.", job))
 	}
+	if cut {
+		notices = append(notices, "Job names this long are shortened in pod names; lines from another Job with the same prefix may be included.")
+	}
+	notice = strings.Join(notices, " ")
 	body := alternatives[0]
 	if len(alternatives) > 1 {
 		body = "(?:" + strings.Join(alternatives, "|") + ")"
 	}
 	re := "^" + body + "[a-z0-9]{5}$"
-	return fmt.Sprintf("{%s, %s=~%s}", ns, l.Pod, quoteLogQL(re)), notice, nil
+	return build(l.Pod + "=~" + quoteLogQL(re)), notice, nil
 }

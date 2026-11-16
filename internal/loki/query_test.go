@@ -58,10 +58,10 @@ func selectorRegex(t *testing.T, sel string) *regexp.Regexp {
 func TestJobSelector(t *testing.T) {
 	withJob := plain
 	withJob.Job = "job_name"
-	if got, notice, _ := JobSelector(withJob, "team", "nightly.sync", false); got != `{namespace="team", job_name="nightly.sync"}` || notice != "" {
+	if got, notice, _ := JobSelector(withJob, "team", "nightly.sync", false, ""); got != `{namespace="team", job_name="nightly.sync"}` || notice != "" {
 		t.Errorf("job label: %s / %q", got, notice)
 	}
-	if got, notice, _ := JobSelector(plain, "team", "nightly.sync", false); got != `{namespace="team", pod=~"^nightly\\.sync-[a-z0-9]{5}$"}` || notice != "" {
+	if got, notice, _ := JobSelector(plain, "team", "nightly.sync", false, ""); got != `{namespace="team", pod=~"^nightly\\.sync-[a-z0-9]{5}$"}` || notice != "" {
 		t.Errorf("pod regex: %s / %q", got, notice)
 	}
 	for _, c := range []struct {
@@ -71,7 +71,7 @@ func TestJobSelector(t *testing.T) {
 		{"nightly.sync", false}, {"backup", false}, {strings.Repeat("b", 56), false}, {strings.Repeat("a", 60), false},
 		{"train", true}, {strings.Repeat("c", 54), true}, {strings.Repeat("d", 56), true}, {strings.Repeat("e", 70), true},
 	} {
-		sel, notice, err := JobSelector(plain, "team", c.job, c.indexed)
+		sel, notice, err := JobSelector(plain, "team", c.job, c.indexed, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,15 +85,36 @@ func TestJobSelector(t *testing.T) {
 				t.Errorf("%s (indexed %v): %s does not match %s", c.job, c.indexed, pod, re)
 			}
 		}
-		if cut := len(podName(c.job, c.indexed, 345)) < len(c.job)+len("-345-x7k2p") && c.indexed || !c.indexed && len(c.job) > 57; cut != (notice != "") {
+		if cut := len(podName(c.job, c.indexed, 345)) < len(c.job)+len("-345-x7k2p") && c.indexed || !c.indexed && len(c.job) > 57; cut != strings.Contains(notice, "shortened") {
 			t.Errorf("%s: notice %q, cut %v", c.job, notice, cut)
 		}
 	}
 	// A CronJob's Jobs are "<cronjob>-<schedule>": a Job named after the
 	// CronJob must not read their pods.
-	sel, _, _ := JobSelector(plain, "team", "backup", false)
+	sel, _, _ := JobSelector(plain, "team", "backup", false, "")
 	if re := selectorRegex(t, sel); re.MatchString("backup-29123456-x7k2p") {
 		t.Error("Job backup matched a pod of Job backup-29123456")
+	}
+	// "train-3-x7k2p" is index 3 of Indexed Job train, or a pod of Job
+	// train-3: the name can't tell them apart, so the answer says so.
+	sel, notice, _ := JobSelector(plain, "team", "train", true, "")
+	if re := selectorRegex(t, sel); !re.MatchString("train-3-x7k2p") || !strings.Contains(notice, "train-<index>") {
+		t.Errorf("indexed train: %s / %q", sel, notice)
+	}
+	// The container and this cluster go into the selector, so Loki's line
+	// limit counts only what is shown.
+	scoped := plain
+	scoped.Cluster, scoped.ClusterValue = "cluster", "prod"
+	if got, _, _ := JobSelector(scoped, "team", "backup", false, "web"); got != `{namespace="team", pod=~"^backup-[a-z0-9]{5}$", container="web", cluster="prod"}` {
+		t.Errorf("container and cluster: %s", got)
+	}
+	scoped.Job = "job_name"
+	if got, _, _ := JobSelector(scoped, "team", "backup", false, "web"); got != `{namespace="team", job_name="backup", container="web", cluster="prod"}` {
+		t.Errorf("job label, container and cluster: %s", got)
+	}
+	scoped.ClusterValue, scoped.ClusterRequired = "", true
+	if _, _, err := JobSelector(scoped, "team", "backup", false, ""); err == nil {
+		t.Error("a shared Loki with no cluster value read a Job run")
 	}
 }
 

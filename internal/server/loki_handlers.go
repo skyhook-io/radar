@@ -131,10 +131,8 @@ func (s *Server) handleLokiPodLogs(w http.ResponseWriter, r *http.Request) {
 			b[c] = &strings.Builder{}
 			resp.Containers = append(resp.Containers, c)
 		}
-		// A multi-line entry (a stack trace) is one Loki entry: each of its
-		// lines carries the entry's time, so the viewer keeps them in place.
 		ts := l.Time.Format(lokiTimeLayout) + " "
-		for _, text := range strings.Split(strings.TrimRight(l.Text, "\n"), "\n") {
+		for _, text := range entryLines(l.Text) {
 			b[c].WriteString(ts + text + "\n")
 		}
 	}
@@ -219,8 +217,10 @@ func jobRunWindow(job *batchv1.Job, now time.Time) (loki.Window, bool) {
 // (start/end override it, within 7 days). Gate: the workload logs gate
 // (namespace, get jobs, list pods, get pods/log) plus lokiWithinRadar, all
 // before Loki is contacted. The query selects the Job's pods by a Job stream
-// label when Loki has one, else by the Job controller's pod names; only the
-// namespace, Job name and window reach it.
+// label when Loki has one, else by the Job controller's pod names, which other
+// pods can share (a DaemonSet's "<job>-<random>", a Job "<job>-<index>" for an
+// Indexed Job); only the namespace, Job name, container, window and the
+// --loki-cluster value reach it.
 func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if !s.authorizeWorkloadLogRead(w, r, "jobs", namespace) || !s.lokiWithinRadar(w, r, namespace) {
@@ -265,7 +265,7 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	indexed := job.Spec.CompletionMode != nil && *job.Spec.CompletionMode == batchv1.IndexedCompletion
-	selector, notice, err := loki.JobSelector(labels, namespace, name, indexed)
+	selector, notice, err := loki.JobSelector(labels, namespace, name, indexed, q.Get("container"))
 	if err != nil {
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -286,7 +286,9 @@ func (s *Server) handleLokiJobLogs(w http.ResponseWriter, r *http.Request) {
 			containers[l.Pod] = map[string]bool{}
 		}
 		containers[l.Pod][c] = true
-		resp.Logs = append(resp.Logs, lokiJobLine{Pod: l.Pod, Container: c, Timestamp: l.Time.Format(lokiTimeLayout), Content: l.Text})
+		for _, text := range entryLines(l.Text) {
+			resp.Logs = append(resp.Logs, lokiJobLine{Pod: l.Pod, Container: c, Timestamp: l.Time.Format(lokiTimeLayout), Content: text})
+		}
 	}
 	template := templateContainers(job.Spec.Template.Spec)
 	for pod, cs := range containers {
@@ -361,4 +363,10 @@ func (s *Server) writeLokiError(w http.ResponseWriter, err error) {
 	default:
 		s.writeError(w, http.StatusServiceUnavailable, err.Error())
 	}
+}
+
+// entryLines splits a multi-line Loki entry (a stack trace); each line then
+// carries the entry's time, so the viewer keeps them in place.
+func entryLines(text string) []string {
+	return strings.Split(strings.TrimRight(text, "\n"), "\n")
 }

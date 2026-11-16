@@ -171,3 +171,18 @@ func TestLokiJobLogsMarksInitAndSidecarsInTemplateOrder(t *testing.T) {
 		t.Fatalf("roles = %v (%s)", roles, raw)
 	}
 }
+
+// The chosen container is read from Loki, not filtered after Loki's line
+// limit; a multi-line entry becomes its lines at the entry's time.
+func TestLokiJobLogsContainerAndMultiLine(t *testing.T) {
+	seedJob(t)
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"nightly-29905990-aaaaa","container":"job"},"values":[["1763002800000000001","boom\n\tat x"]]}]}}`)
+	resp, got, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs?container=job")
+	if resp.StatusCode != 200 || len(got.Logs) != 2 || got.Logs[0].Content != "boom" || got.Logs[1].Content != "\tat x" || got.Logs[0].Timestamp != got.Logs[1].Timestamp {
+		t.Fatalf("%d %s", resp.StatusCode, raw)
+	}
+	if q := rec.queries[0].Get("query"); q != `{namespace="team", pod=~"^nightly-29905990-[a-z0-9]{5}$", container="job"}` {
+		t.Fatalf("query = %s", q)
+	}
+}
