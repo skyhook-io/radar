@@ -906,7 +906,7 @@ Service links accept short names in the rule's namespace or full `name.namespace
 
 ### What Radar Shows
 
-**Velero views** (`/velero`, `/velero/locations`, listed under the Velero category in the Resources sidebar): what needs attention, every schedule read against Velero's controller (next run, late or held, newest and newest successful run), and each storage location with the backups targeting it and the schedules writing to it. The Schedule drawer adds a Schedule activity section with recent runs. Sources, certainty and states: [velero.md](velero.md).
+**Velero views** (the Overview at `/velero`, under the Velero category in the Resources sidebar, and Radar's own lists for the Schedule and BackupStorageLocation kinds): what needs attention, every schedule read against Velero's controller (next run, late or held, newest and newest successful run), and each storage location with the backups targeting it and the schedules writing to it. The Schedule drawer adds a Schedule activity section with recent runs. Sources, certainty and states: [velero.md](velero.md).
 
 **Backup Detail View:**
 - Phase with color-coded badge, start/completion timestamps, duration
@@ -971,7 +971,7 @@ They roll up under three categories, split by what you'd go and look at: `backup
 
 **Namespace attribution.** Issues attribute to the Velero object's own namespace (`velero`, or `kommander` on NKP). They are therefore admin-visible, but *not* visible to a user whose namespace view-filter excludes the Velero namespace — including one scoped only to the namespace whose data was lost. Surfacing a failure against the *protected* namespaces needs the protection-coverage model and is not part of this.
 
-**What is not an Issue yet.** Every detection above is driven by something Velero wrote — a phase, or in the stalled case a `startTimestamp` measured against the run's own budget. The *absence* of a run (a schedule that stopped firing because the controller is down, its name is too long to label its backups, or a run never started) is read on the [Velero views](velero.md), modelled on the controller's own rules, but it does not raise an Issue, so it does not reach the Problems surface, MCP or Diagnose. **Treat "no Velero issues" as "nothing Velero recorded looks wrong", not as "backups are healthy."**
+**What is not an Issue.** A run's *absence* is raised only when Radar is certain of it: a stopped server, a late schedule with its zone known and its Backups read, a schedule that cannot run, a held run, a schedule never validated (the readings above). Estimates — "probably late" under an unconfirmed zone, "late or held" when Backups were not read — stay readings on the [Velero views](velero.md). Whether a namespace or workload is covered by any schedule at all is not modelled. **Treat "no Velero issues" as "nothing Radar can be sure of looks wrong", not as "every workload is backed up."**
 
 ### Supported CRDs
 

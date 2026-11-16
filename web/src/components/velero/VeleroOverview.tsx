@@ -2,22 +2,10 @@ import { useMemo, useState, type ReactNode } from 'react'
 import {
   Collapse,
   CollapseChevron,
-  CronValue,
   ProblemList,
   StatusDot,
   Tooltip,
-  VELERO_COMPLETED_NOTE,
-  VELERO_NONE_KEPT,
-  VELERO_NONE_KEPT_SHORT,
-  VELERO_RUNS_UNKNOWN,
-  VeleroRunPhase,
-  VeleroScheduleStateBadge,
-  VeleroZoneValue,
   formatRelativeAgeTime,
-  veleroNewestSuccessfulText,
-  veleroNextRunText,
-  veleroNextRunTitle,
-  veleroScheduleReasonText,
   veleroScheduleTone,
   veleroLocalTime,
   type ResourceRef,
@@ -27,9 +15,10 @@ import {
   type WorkspaceProblem,
 } from '@skyhook-io/k8s-ui'
 import { refToSelectedResource } from '../../utils/navigation'
-import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
-import { coverageEmpty } from '../workspace/coverage'
+import { ScreenBody } from '../workspace/layout'
+import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { readInPart, veleroAttention } from './attention'
+import { VELERO_LOCATIONS_PATH, VELERO_SCHEDULES_PATH } from './routes'
 import {
   VeleroCoverageNotice,
   VeleroWorkspaceHeader,
@@ -40,9 +29,9 @@ import {
 
 export const VELERO_NOTHING_NEEDS_ATTENTION = 'Nothing in what Radar can read needs attention.'
 
-// Rows shown across all groups before folding, so a burst of problems cannot
-// push the schedules this view exists for off the screen. Every group shows at
-// least its first row.
+// Rows shown across all groups before folding, so a burst of failed runs cannot
+// push the server, schedule and storage groups off the screen. Every group
+// shows at least its first row.
 const ATTENTION_BUDGET = 8
 
 type AttentionGroupId = 'server' | 'schedules' | 'storage' | 'runs'
@@ -75,50 +64,12 @@ function cappedIssueNotes(data: VeleroScreenProps['data'], shown: VeleroScreenPr
   return notes
 }
 
-function NewestRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: VeleroScreenProps['onInspect'] }) {
-  if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
-  const run = s.runs.newest
-  if (!run) return <NoneKept />
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation()
-        onInspect(veleroResource('Backup', s.namespace, run.name))
-      }}
-      aria-label={`Open backup ${run.name}`}
-      className="flex flex-col items-start gap-0.5 text-left"
-    >
-      <VeleroRunPhase phase={run.phase} />
-      <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
-    </button>
-  )
-}
-
-function NoneKept() {
-  return (
-    <Tooltip content={`${VELERO_NONE_KEPT}. Velero deletes backups past their TTL, so this is not “never”.`}>
-      <span className="text-theme-text-tertiary">{VELERO_NONE_KEPT_SHORT}</span>
-    </Tooltip>
-  )
-}
-
-function LocationCell({ s }: { s: VeleroScheduleReading }) {
-  if (!s.location.viaDefault) return <span className="break-all">{s.location.name}</span>
-  return (
-    <Tooltip content="The schedule names no location, so its backups go to the installation’s default.">
-      <span>
-        <span className="break-all">{s.location.name || 'Unresolved'}</span>
-        <Sub>via default</Sub>
-      </span>
-    </Tooltip>
-  )
-}
-
 interface SummaryFact {
   label: string
   value: ReactNode
   tone: StatusTone
+  /** The kind list this fact summarises, opened from its label. */
+  list?: { path: string; title: string }
 }
 
 function serverFact(installations: VeleroScreenProps['data']['installations']): SummaryFact {
@@ -191,13 +142,24 @@ function storageFact(locations: VeleroLocationReading[], partial: boolean): Summ
 }
 
 /** One line answering "is Velero working?" before the detail below it. */
-function VeleroSummary({ facts }: { facts: SummaryFact[] }) {
+function VeleroSummary({ facts, onOpenList }: { facts: SummaryFact[]; onOpenList: (path: string) => void }) {
   return (
     <dl className="flex flex-wrap gap-x-7 gap-y-2 text-sm" aria-label="Velero at a glance">
       {facts.map((f) => (
         <div key={f.label} className="flex items-center gap-1.5">
           <StatusDot tone={f.tone} />
-          <dt className="text-theme-text-tertiary">{f.label}:</dt>
+          <dt className="text-theme-text-tertiary">
+            {f.list ? (
+              <Tooltip content={f.list.title}>
+                <button type="button" onClick={() => onOpenList(f.list!.path)} className="text-accent-text hover:underline">
+                  {f.label}
+                </button>
+              </Tooltip>
+            ) : (
+              f.label
+            )}
+            :
+          </dt>
           <dd className="font-medium text-theme-text-primary">{f.value}</dd>
         </div>
       ))}
@@ -239,8 +201,8 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
   )
 }
 
-export function VeleroOverview({ data, installation, onInstallation, onInspect, inspected }: VeleroScreenProps) {
-  const multi = data.installations.length > 1
+export function VeleroOverview({ data, installation, onInstallation, onInspect }: VeleroScreenProps) {
+  const navigateTo = useWorkspaceNavigate()
   const schedules = useMemo(() => inInstallation(data.schedules, installation), [data.schedules, installation])
   const locations = useMemo(() => inInstallation(data.locations, installation), [data.locations, installation])
   const issues = useMemo(
@@ -259,96 +221,20 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
         return { ...g, visible }
       })
   }, [attention])
-  const facts = [
+  const facts: SummaryFact[] = [
     serverFact(inInstallation(data.installations, installation)),
-    schedulesFact(schedules, readInPart(data.coverage.schedules)),
+    { ...schedulesFact(schedules, readInPart(data.coverage.schedules)), list: { path: VELERO_SCHEDULES_PATH, title: 'Every schedule, its next run and its newest runs' } },
     newestBackupFact(schedules, readInPart(data.coverage.schedules), onInspect),
-    storageFact(locations, readInPart(data.coverage.backupStorageLocations)),
+    { ...storageFact(locations, readInPart(data.coverage.backupStorageLocations)), list: { path: VELERO_LOCATIONS_PATH, title: 'Every storage location, the backups in it and the schedules writing to it' } },
   ]
   const navigate = (ref: ResourceRef) => onInspect(refToSelectedResource(ref))
-
-  const columns: TableColumn<VeleroScheduleReading>[] = [
-    {
-      header: 'Schedule',
-      width: '15%',
-      cell: (s) => (
-        <>
-          <span className="break-all font-medium">{s.name}</span>
-          {multi && <Sub>{s.namespace}</Sub>}
-        </>
-      ),
-    },
-    {
-      header: 'Cron',
-      width: '15%',
-      cell: (s) => (
-        <>
-          <CronValue cron={s.cron} />
-          <Sub><VeleroZoneValue zone={s.zone} /></Sub>
-        </>
-      ),
-    },
-    {
-      header: 'State',
-      width: '12%',
-      cell: (s) => (
-        <Tooltip content={veleroScheduleReasonText(s)}>
-          <VeleroScheduleStateBadge reading={s} />
-        </Tooltip>
-      ),
-    },
-    {
-      header: 'Next run',
-      width: '12%',
-      cell: (s) =>
-        s.nextRun ? (
-          <>
-            <Tooltip content={veleroNextRunTitle(s)}>
-              <span>{veleroNextRunText(s)}</span>
-            </Tooltip>
-            <Sub>{veleroLocalTime(s.nextRun)}</Sub>
-          </>
-        ) : (
-          <span className="text-theme-text-tertiary">—</span>
-        ),
-    },
-    {
-      header: 'Last submission',
-      width: '11%',
-      cell: (s) =>
-        s.lastSubmitted ? (
-          <Tooltip content={veleroLocalTime(s.lastSubmitted)}>
-            <span>{formatRelativeAgeTime(s.lastSubmitted)}</span>
-          </Tooltip>
-        ) : (
-          <span className="text-theme-text-tertiary">Never</span>
-        ),
-    },
-    { header: 'Newest run', width: '12%', cell: (s) => <NewestRunCell s={s} onInspect={onInspect} /> },
-    {
-      header: 'Newest successful',
-      width: '12%',
-      cell: (s) => {
-        const newest = veleroNewestSuccessfulText(s.runs)
-        if (newest.run) {
-          return (
-            <Tooltip content={veleroLocalTime(newest.run.completed ?? newest.run.ranAt)}>
-              <span>{newest.text}</span>
-            </Tooltip>
-          )
-        }
-        return s.runs.read === 'unknown' ? <span className="text-theme-text-tertiary">{newest.text}</span> : <NoneKept />
-      },
-    },
-    { header: 'Location', width: '11%', cell: (s) => <LocationCell s={s} /> },
-  ]
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <VeleroWorkspaceHeader title="Overview" data={data} installation={installation} onInstallation={onInstallation} />
       <ScreenBody>
         <VeleroCoverageNotice data={data} kinds={['schedules', 'backups', 'backupStorageLocations', 'restores', 'backupRepositories']} />
-        <VeleroSummary facts={facts} />
+        <VeleroSummary facts={facts} onOpenList={(path) => navigateTo(path)} />
         <section aria-labelledby="velero-attention">
           <h2 id="velero-attention" className="mb-2 text-sm font-semibold text-theme-text-primary">Needs attention</h2>
           <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
@@ -366,19 +252,6 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
             ))}
           </div>
         </section>
-        <SectionTable
-          title="Schedules"
-          subtitle={`${schedules.length} ${schedules.length === 1 ? 'schedule' : 'schedules'}`}
-          columns={columns}
-          rows={schedules}
-          rowKey={(s) => `${s.namespace}/${s.name}`}
-          rowResource={(s) => veleroResource('Schedule', s.namespace, s.name)}
-          onInspect={onInspect}
-          inspected={inspected}
-          empty={coverageEmpty(data.coverage.schedules, 'Velero schedules')}
-          minWidth={1040}
-          footer={VELERO_COMPLETED_NOTE}
-        />
       </ScreenBody>
     </div>
   )

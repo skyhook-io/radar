@@ -1,12 +1,29 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import type { VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import { VELERO_NOTHING_NEEDS_ATTENTION, VeleroOverview } from './VeleroOverview'
+import { VeleroSchedules } from './VeleroSchedules'
 import { hoursAgo, location, schedule, workspace } from './velero.fixtures'
 
+// The Overview and the Schedule kind's list read the same workspace data; a
+// reader moves between them, so these checks cover what the two say together,
+// the Overview first.
 function render(data: VeleroWorkspaceResponse, installation: string | null = null) {
+  const props = { data, installation, onInstallation: () => {}, onInspect: () => {}, inspected: null }
   return renderToStaticMarkup(
-    <VeleroOverview data={data} installation={installation} onInstallation={() => {}} onInspect={() => {}} inspected={null} />,
+    <MemoryRouter>
+      <VeleroOverview {...props} />
+      <VeleroSchedules {...props} />
+    </MemoryRouter>,
+  )
+}
+
+function renderOverview(data: VeleroWorkspaceResponse) {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <VeleroOverview data={data} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} />
+    </MemoryRouter>,
   )
 }
 
@@ -14,6 +31,14 @@ function render(data: VeleroWorkspaceResponse, installation: string | null = nul
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
 
 describe('Velero overview', () => {
+  it('leaves the schedule table to the Schedule list, and links the lists it summarises', () => {
+    const html = text(renderOverview(workspace()))
+    expect(html).toContain('Needs attention')
+    expect(html).not.toContain('Last submission')
+    expect(html).toContain('>Schedules</button>')
+    expect(html).toContain('>Storage</button>')
+  })
+
   it('lists late, probably-late and cannot-run schedules under Needs attention, each with its reason', () => {
     const html = text(render(workspace({
       schedules: [
@@ -87,8 +112,8 @@ describe('Velero overview', () => {
       schedules: [],
       locations: [],
     })))
-    expect(html).toContain('Schedules:</dt><dd class="font-medium text-theme-text-primary">unknown — not read')
-    expect(html).toContain('Storage:</dt><dd class="font-medium text-theme-text-primary">unknown — not read')
+    expect(html).toMatch(/>Schedules<\/button><\/span>:<\/dt><dd[^>]*>unknown — not read/)
+    expect(html).toMatch(/>Storage<\/button><\/span>:<\/dt><dd[^>]*>unknown — not read/)
     expect(html).not.toContain('no locations')
     expect(html).not.toContain('no schedules')
   })

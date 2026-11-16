@@ -72,7 +72,7 @@ export function veleroAttention(data: VeleroWorkspaceResponse, installation: str
   ]
 }
 
-export interface VeleroDestinationCount {
+export interface VeleroAttentionCount {
   /** `null` when nothing was found but the read was partial, so zero would claim too much. */
   count: number | null
   lowerBound: boolean
@@ -82,33 +82,20 @@ export interface VeleroDestinationCount {
 const OVERVIEW_KINDS: readonly VeleroWorkspaceKey[] = ['schedules', 'backups', 'restores', 'backupStorageLocations', 'backupRepositories']
 
 /**
- * The sidebar badges: what the Overview's Needs attention lists, and the
- * storage locations among it. Issues the server capped still count: it sends
- * their total. A count over data read only in part is a lower bound, and its
- * zero is unknown; so is the locations count once issues were capped, since
- * the capped ones are not known to be about locations or not.
+ * The Overview's sidebar badge: how many rows Needs attention lists. Issues
+ * the server capped still count: it sends their total. A count over data read
+ * only in part is a lower bound, and its zero is unknown.
  */
-export function veleroDestinationCounts(data: VeleroWorkspaceResponse): { overview: VeleroDestinationCount; locations: VeleroDestinationCount } {
-  const attention = veleroAttention(data, null)
+export function veleroAttentionCount(data: VeleroWorkspaceResponse): VeleroAttentionCount {
   const capped = Object.entries(data.issueTotals ?? {}).reduce(
     (n, [ns, total]) => n + Math.max(0, total - data.issues.filter((i) => (i.namespace ?? '') === ns).length),
     0,
   )
-  const overviewPartial = OVERVIEW_KINDS.some((k) => readInPart(data.coverage[k]))
-  const locationsPartial = readInPart(data.coverage.backupStorageLocations)
-  const at = (count: number, partial: boolean, what: string, unknown: string): VeleroDestinationCount => {
-    if (partial && count === 0) return { count: null, lowerBound: true, title: `Unknown: ${unknown}` }
-    const note = partial ? ' Some Velero data could not be read, so there may be more.' : ''
-    return { count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} ${what}.${note}` }
+  const count = veleroAttention(data, null).length + capped
+  const partial = OVERVIEW_KINDS.some((k) => readInPart(data.coverage[k]))
+  if (partial && count === 0) {
+    return { count: null, lowerBound: true, title: 'Unknown: some Velero data could not be read, so nothing found does not mean nothing needs attention.' }
   }
-  const locations = new Set(
-    attention.filter((p) => p.subject.kind === 'BackupStorageLocation').map((p) => `${p.subject.namespace}/${p.subject.name}`),
-  )
-  return {
-    overview: at(attention.length + capped, overviewPartial, 'in Needs attention',
-      'some Velero data could not be read, so nothing found does not mean nothing needs attention.'),
-    locations: at(locations.size, locationsPartial || capped > 0,
-      locations.size === 1 ? 'storage location needs attention' : 'storage locations need attention',
-      'some storage locations or their issues could not be read.'),
-  }
+  const note = partial ? ' Some Velero data could not be read, so there may be more.' : ''
+  return { count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} in Needs attention.${note}` }
 }

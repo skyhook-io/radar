@@ -5,8 +5,8 @@ import { VeleroBSLRenderer } from '../resources/renderers/VeleroBSLRenderer'
 import { VeleroBackupRenderer } from '../resources/renderers/VeleroBackupRenderer'
 import { VeleroRestoreRenderer } from '../resources/renderers/VeleroRestoreRenderer'
 import { VeleroScheduleRenderer } from '../resources/renderers/VeleroScheduleRenderer'
-import { VELERO_SCHEDULE_KIND, veleroScheduleKindListMode } from './routes'
-import { VeleroSchedulesKindView } from './VeleroSchedulesKindView'
+import { VELERO_LOCATION_KIND, VELERO_SCHEDULE_KIND, veleroKindListMode } from './routes'
+import { VeleroLocationsKindList, VeleroSchedulesKindList } from './VeleroKindLists'
 
 const KIND_BY_PLURAL: Record<string, string> = {
   backups: 'Backup',
@@ -29,10 +29,9 @@ export const veleroResourceHost: ResourceHost = {
     ownsPath: (pathname) => pathname === '/velero' || pathname.startsWith('/velero/'),
     Component: VeleroDrawerTrailBack,
   },
-  kindLists: [{
-    kind: VELERO_SCHEDULE_KIND,
-    title: 'Velero schedules',
-    mode: veleroScheduleKindListMode,
-    Component: VeleroSchedulesKindView,
-  }],
+  // Radar's own tables are these kinds' lists, so neither has a second entry in the sidebar.
+  kindLists: [
+    { kind: VELERO_SCHEDULE_KIND, title: 'Velero schedules', mode: veleroKindListMode, Component: VeleroSchedulesKindList },
+    { kind: VELERO_LOCATION_KIND, title: 'Velero storage locations', mode: veleroKindListMode, Component: VeleroLocationsKindList },
+  ],
 }

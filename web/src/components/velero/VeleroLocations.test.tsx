@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import type { VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import { VeleroLocations } from './VeleroLocations'
@@ -40,7 +41,9 @@ describe('Velero storage locations', () => {
     expect(html).toContain('every 1m · server flag')
 
     const overview = text(renderToStaticMarkup(
-      <VeleroOverview data={data} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} />,
+      <MemoryRouter>
+        <VeleroOverview data={data} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} />
+      </MemoryRouter>,
     ))
     expect(overview).toContain('Velero last validated this location 2h ago; it validates every 1m.')
   })

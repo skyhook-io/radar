@@ -1,5 +1,5 @@
 import type { WorkspaceRoute } from '../../integrations/workspaceRoute'
-import { VELERO_SCREENS, parseVeleroRoute } from './routes'
+import { VELERO_OVERVIEW } from './routes'
 
 export const veleroWorkspaceRoute: WorkspaceRoute = {
   id: 'velero',
@@ -8,8 +8,7 @@ export const veleroWorkspaceRoute: WorkspaceRoute = {
   navView: 'resources',
   namespaceScope: 'cluster',
   namespaceFilterTooltip: 'Velero is shown for every installation you can read — the namespace filter doesn’t apply here.',
-  pageTitle(pathname) {
-    const { screen } = parseVeleroRoute(pathname)
-    return VELERO_SCREENS.find((s) => s.id === screen)?.title ?? 'Velero overview'
+  pageTitle() {
+    return VELERO_OVERVIEW.title
   },
 }
