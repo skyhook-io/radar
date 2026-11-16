@@ -4,7 +4,7 @@ import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/rende
 import { useRadarFeature } from '../../../api/client'
 import { useVeleroScheduleActivity } from '../../../api/velero'
 import { RefreshFailedNotice } from '../../workspace/layout'
-import { VeleroBackupNow } from '../../velero/VeleroBackupNow'
+import { useWorkspaceNavigate } from '../../workspace/useWorkspaceNavigate'
 
 /**
  * Host wrapper leading a Velero Schedule with "Schedule activity": the server's
@@ -17,17 +17,18 @@ export function VeleroScheduleRenderer({ data, onNavigate }: { data: any; onNavi
   const { support } = useRadarFeature('veleroWorkspace')
   const activity = useVeleroScheduleActivity(namespace, name, { enabled: support === 'supported' })
   const reading = activity.data?.reading
+  const navigate = useWorkspaceNavigate()
+  // Every run carries the schedule's name in this label, so the Backups list filtered by it is the schedule's history.
+  const showAllRuns = () =>
+    navigate(`/resources/backups?apiGroup=velero.io&namespaces=${encodeURIComponent(namespace)}&labels=${encodeURIComponent(`velero.io/schedule-name=${name}`)}`)
   const activitySection = support === 'supported' && reading ? (
     <>
       {/* A failed refresh keeps the last reading; say how old it is rather than present it as current. */}
       <RefreshFailedNotice queries={[activity]} className="px-4 pb-2" />
-      <VeleroScheduleActivity reading={reading} created={data?.metadata?.creationTimestamp} onNavigate={onNavigate} />
+      <VeleroScheduleActivity reading={reading} created={data?.metadata?.creationTimestamp} onNavigate={onNavigate} onShowAllRuns={showAllRuns} />
     </>
   ) : support === 'supported' && activity.error ? (
     <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />
   ) : undefined
-  // Backing up needs only the schedule and `create backups`, not the activity
-  // read, so it does not wait on or depend on that.
-  const actions = <VeleroBackupNow schedule={data} reading={reading} onNavigate={onNavigate} />
-  return <BaseVeleroScheduleRenderer data={data} onNavigate={onNavigate} activity={<>{activitySection}{actions}</>} />
+  return <BaseVeleroScheduleRenderer data={data} onNavigate={onNavigate} activity={activitySection} />
 }

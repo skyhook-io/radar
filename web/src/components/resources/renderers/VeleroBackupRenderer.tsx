@@ -1,9 +1,8 @@
-import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
 import { VeleroBackupRenderer as BaseVeleroBackupRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/VeleroBackupRenderer'
 import { getBackupStorageLocation } from '@skyhook-io/k8s-ui/components/resources/resource-utils-velero'
-import type { ResourceRef } from '@skyhook-io/k8s-ui'
+import { useOperationalIssuesShown, type ResourceRef } from '@skyhook-io/k8s-ui'
+import { useVeleroRunMessagesFetch, veleroMessagesInIssue } from '../../velero/VeleroRunMessagesHost'
 import { useResources } from '../../../api/client'
-import { useVeleroRunMessages } from '../../../api/policy'
 
 /**
  * Host wrapper adding the two things a Backup cannot answer from its own status:
@@ -21,7 +20,9 @@ import { useVeleroRunMessages } from '../../../api/policy'
  * this question.
  */
 export function VeleroBackupRenderer({ data, onNavigate }: { data: any; onNavigate?: (ref: ResourceRef) => void }) {
-  const messages = useRunMessages('backups', data)
+  const messages = useVeleroRunMessagesFetch('backups', data)
+  // A failed run's messages sit with its issue, which says what is wrong.
+  const inIssue = veleroMessagesInIssue(data, useOperationalIssuesShown())
   const namespace = data?.metadata?.namespace ?? ''
 
   // An unset spec.storageLocation means Velero has not processed the backup
@@ -47,23 +48,8 @@ export function VeleroBackupRenderer({ data, onNavigate }: { data: any; onNaviga
       data={data}
       storageLocationPhase={phase}
       storageLocationMissing={missing}
-      messages={messages}
+      messages={inIssue ? undefined : messages}
       onNavigate={onNavigate}
     />
   )
-}
-
-// The messages behind the counts. Nothing is fetched until the operator asks:
-// reading them makes Velero create a DownloadRequest and pulls an object out of
-// storage, which is not work to do on every drawer open.
-function useRunMessages(kind: 'backups' | 'restores', data: any) {
-  const namespace = data?.metadata?.namespace ?? ''
-  const name = data?.metadata?.name ?? ''
-  const fetcher = useVeleroRunMessages(kind, namespace, name)
-  return {
-    messages: fetcher.data,
-    loading: fetcher.isPending,
-    lookupNote: fetcher.error ? <LookupFailureNote errors={[fetcher.error]} what="the messages behind these counts" /> : undefined,
-    onFetch: namespace && name ? () => fetcher.mutate() : undefined,
-  }
 }

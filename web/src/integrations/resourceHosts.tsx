@@ -81,6 +81,14 @@ export function resourceDetailRedirect(resource: HostResource, search: URLSearch
   return resourceHostForSlot(resourceHosts, resource, 'destination')?.detailRedirect?.(resource, search) ?? null
 }
 
+export function resourceIssueDetail(resource: HostResource, props: { issue: { kind?: string; reason?: string }; resource: any }) {
+  for (const host of hostsForResource(resourceHosts, resource)) {
+    const detail = host.issueDetail?.(props)
+    if (detail) return detail
+  }
+  return null
+}
+
 export function resourceDetailSlots(resource: HostResource, inheritedTabs?: WorkloadExtraTab[]): DetailSlots {
   const slots = hostsForResource(resourceHosts, resource)
     .map(host => ({ id: host.id, slots: host.detailSlots?.(resource) }))

@@ -12,7 +12,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { VELERO_GROUP } from './routes'
-import { inInstallation, veleroIssueProblem } from './shared'
+import { inInstallation, namesAndMore, veleroIssueProblem } from './shared'
 
 export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
   return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
@@ -31,13 +31,17 @@ function scheduleProblem(s: VeleroScheduleReading, serverShown: boolean): Worksp
   }
 }
 
-function serverProblem(namespace: string, deployment?: string): WorkspaceProblem {
+function serverProblem(namespace: string, deployment: string | undefined, late: VeleroScheduleReading[]): WorkspaceProblem {
+  const missed =
+    late.length === 0
+      ? ''
+      : ` ${late.length === 1 ? '1 schedule has' : `${late.length} schedules have`} missed runs: ${namesAndMore(late.map((s) => s.name))}.`
   return {
     id: `server:${namespace}`,
     category: 'server',
     title: 'Velero server not running',
     // The subject link below names the Deployment.
-    detail: 'No running replicas, so no new scheduled backups are submitted and no storage location is validated.',
+    detail: `No running replicas, so no new scheduled backups are submitted and no storage location is validated.${missed}`,
     subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
     source: 'reading',
     tone: 'unhealthy',
@@ -58,17 +62,20 @@ function locationProblem(l: VeleroLocationReading): WorkspaceProblem {
 
 /**
  * The Overview's Needs attention list: a stopped server, schedule and location
- * readings, then Velero's Issues. A stopped server is listed once: schedules
- * it leaves late stay (each is a missing backup) without repeating the cause,
- * and storage it leaves unchecked is not listed, as the Issues page does.
+ * readings, then Velero's Issues. One fault is one row, as on the Issues page:
+ * a stopped server's row names the schedules it leaves late, which get no row
+ * of their own, and storage it leaves unchecked is not listed. An unavailable
+ * location's issue names the runs Velero rejected because of it.
  */
 export function veleroAttention(data: VeleroWorkspaceResponse, installation: string | null): WorkspaceProblem[] {
   const issues = installation === null ? data.issues : data.issues.filter((i) => (i.namespace ?? '') === installation)
   const down = data.installations.filter((i) => (installation === null || i.namespace === installation) && i.server.replicas === 0)
   const downIn = new Set(down.map((i) => i.namespace))
+  const lateWhileDown = (s: VeleroScheduleReading) => downIn.has(s.namespace) && s.state === 'late'
+  const schedules = inInstallation(data.schedules, installation).filter((s) => s.attention)
   return [
-    ...down.map((i) => serverProblem(i.namespace, i.server.deployment)),
-    ...inInstallation(data.schedules, installation).filter((s) => s.attention).map((s) => scheduleProblem(s, downIn.has(s.namespace))),
+    ...down.map((i) => serverProblem(i.namespace, i.server.deployment, schedules.filter((s) => s.namespace === i.namespace && lateWhileDown(s)))),
+    ...schedules.filter((s) => !lateWhileDown(s)).map((s) => scheduleProblem(s, downIn.has(s.namespace))),
     ...inInstallation(data.locations, installation)
       .filter((l) => l.attention && !(l.reason === 'serverDown' && downIn.has(l.namespace)))
       .map(locationProblem),

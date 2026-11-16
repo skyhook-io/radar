@@ -5,6 +5,7 @@ import { schedule } from '../../velero/velero.fixtures'
 const activity = vi.hoisted(() => ({ current: {} as Record<string, unknown> }))
 
 vi.mock('../../../api/client', () => ({ useRadarFeature: () => ({ support: 'supported' }) }))
+vi.mock('../../workspace/useWorkspaceNavigate', () => ({ useWorkspaceNavigate: () => vi.fn() }))
 vi.mock('../../../api/velero', () => ({ useVeleroScheduleActivity: () => activity.current, useVeleroBackupNow: () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false }) }))
 vi.mock('@skyhook-io/k8s-ui/components/resources/renderers/VeleroScheduleRenderer', () => ({
   VeleroScheduleRenderer: ({ activity }: { activity?: unknown }) => <>{activity as never}<p>schedule spec</p></>,
@@ -40,10 +41,10 @@ describe('Velero Schedule drawer', () => {
     expect(renderToStaticMarkup(<VeleroScheduleRenderer data={data} />)).not.toContain('Last refresh failed')
   })
 
-  it('offers Back up now even when the activity cannot be read', () => {
-    activity.current = { data: undefined, error: new Error('Forbidden'), isRefetchError: false, dataUpdatedAt: 0 }
+  // Back up now is a header action now, like every resource's actions.
+  it('leaves Back up now to the header', () => {
+    activity.current = { data: { observedAt: new Date().toISOString(), reading: schedule(), coverage: {} }, error: null, isRefetchError: false, dataUpdatedAt: Date.now() }
     const withVersion = { ...data, metadata: { ...data.metadata, resourceVersion: '7' }, spec: { template: {} } }
-    const html = renderToStaticMarkup(<VeleroScheduleRenderer data={withVersion} />)
-    expect(html).toContain('Back up now')
+    expect(renderToStaticMarkup(<VeleroScheduleRenderer data={withVersion} />)).not.toContain('Back up now')
   })
 })

@@ -122,13 +122,71 @@ func TestVeleroServerNotRunningLeadsAndExplainsItsConsequences(t *testing.T) {
 	if !hasRead(server, "apps", "deployments") {
 		t.Errorf("the server issue must need the Deployments read it rests on: %+v", server.RequiredReads)
 	}
-	late, ok := got[ReasonVeleroScheduleLate]
-	if !ok || !strings.Contains(late.Message, "Velero server is not running") {
-		t.Fatalf("late schedule %+v, want it raised with the stopped server as its cause", late)
+	// One fault, one issue: the late schedule is named on the server's issue
+	// and raises none of its own.
+	if late, ok := got[ReasonVeleroScheduleLate]; ok {
+		t.Fatalf("late schedule raised on its own while the server is down: %+v", late)
+	}
+	if fact := veleroFact(server, factVeleroLateSchedules); fact == nil || len(fact.Refs) != 1 || fact.Refs[0].Name != "hourly" {
+		t.Fatalf("server issue facts %+v, want the late schedule named", server.DiagnosticContext)
+	}
+	if len(server.AffectedRefs) != 1 || server.AffectedRefs[0].Kind != "Schedule" {
+		t.Errorf("affected %+v, want the schedule, so its drawer shows the server's issue", server.AffectedRefs)
 	}
 	// Overdue validation is the stopped server's consequence; it is said once.
 	if _, ok := got[ReasonVeleroLocationValidationOverdue]; ok {
 		t.Error("validation overdue was raised again while the server is down")
+	}
+}
+
+func veleroFact(i Issue, factType string) *issuesapi.DiagnosticFact {
+	if i.DiagnosticContext == nil {
+		return nil
+	}
+	for _, f := range i.DiagnosticContext.Facts {
+		if f.Type == factType {
+			return &f
+		}
+	}
+	return nil
+}
+
+// A hundred schedules stopped by one server are one issue, not a hundred and one.
+func TestVeleroStoppedServerIsOneIssueForEveryScheduleItStops(t *testing.T) {
+	var objs []*unstructured.Unstructured
+	for i := range 100 {
+		for _, o := range hourlyLastRan(3 * time.Hour) {
+			name := fmt.Sprintf("hourly-%03d", i)
+			if o.GetKind() == "Schedule" {
+				o.SetName(name)
+			} else {
+				o.SetName(name + "-run")
+				o.SetLabels(map[string]string{veleropkg.ScheduleNameLabel: name})
+			}
+			objs = append(objs, o)
+		}
+	}
+	issues := veleroReadings(t, objs, veleroLocation(time.Hour), []*appsv1.Deployment{veleroServerDeployment(0)}, true, true)
+	if len(issues) != 1 || issues[0].Reason != ReasonVeleroServerNotRunning {
+		t.Fatalf("got %d issues (%v), want only the server's", len(issues), reasonsOf(issues))
+	}
+	if n := len(issues[0].AffectedRefs); n != 100 {
+		t.Errorf("affected %d schedules, want all 100 so each one's drawer finds the issue", n)
+	}
+	if fact := veleroFact(issues[0], factVeleroLateSchedules); fact == nil || len(fact.Refs) != maxAffectedRefLinks {
+		t.Errorf("fact %+v, want the links capped", fact)
+	}
+}
+
+// While the server runs, a late schedule is its own issue: nothing else explains it.
+func TestVeleroLateScheduleIsItsOwnIssueWhileTheServerRuns(t *testing.T) {
+	got := byReason(veleroReadings(t, hourlyLastRan(3*time.Hour), veleroLocation(time.Minute),
+		[]*appsv1.Deployment{veleroServerDeployment(1)}, true, true))
+	if _, ok := got[ReasonVeleroScheduleLate]; !ok {
+		t.Fatalf("got %v, want the late schedule", got)
+	}
+	if _, ok := got[ReasonVeleroServerNotRunning]; ok {
+		t.Error("a running server raised an issue")
 	}
 }
 
@@ -233,7 +291,8 @@ func TestVeleroReadingCategories(t *testing.T) {
 }
 
 // The readings are raised while visiting the storage locations, so a request
-// for Schedules or Deployments alone must still visit them.
+// for Schedules or Deployments alone must still visit them. A request for
+// Schedules finds the stopped server's issue through the schedules it covers.
 func TestVeleroReadingsSurviveAKindFilter(t *testing.T) {
 	objs := hourlyLastRan(4 * time.Hour)
 	location := veleroLocation(time.Second)
@@ -245,14 +304,8 @@ func TestVeleroReadingsSurviveAKindFilter(t *testing.T) {
 	for _, kind := range []string{"Schedule", "Deployment"} {
 		f := Filters{Kinds: []string{kind}}
 		got := applyFilters(detectGenericCRDIssues(p, f, nil, &uncheckedSet{}), f)
-		want := map[string]string{"Schedule": ReasonVeleroScheduleLate, "Deployment": ReasonVeleroServerNotRunning}[kind]
-		if _, ok := byReason(got)[want]; !ok {
-			t.Errorf("kind=%s returned %v, want %s", kind, byReason(got), want)
-		}
-		for _, i := range got {
-			if !strings.EqualFold(i.Kind, kind) {
-				t.Errorf("kind=%s returned a %s row", kind, i.Kind)
-			}
+		if len(got) != 1 || got[0].Reason != ReasonVeleroServerNotRunning {
+			t.Errorf("kind=%s returned %v, want the server's issue", kind, reasonsOf(got))
 		}
 	}
 }

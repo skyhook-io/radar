@@ -6,11 +6,13 @@ import { schedule as reading } from './velero.fixtures'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const state = vi.hoisted(() => ({ support: 'supported', mutate: vi.fn(), data: undefined as unknown }))
+const state = vi.hoisted(() => ({ support: 'supported', mutate: vi.fn(), reading: undefined as unknown, toast: vi.fn() }))
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
 vi.mock('../../api/velero', () => ({
-  useVeleroBackupNow: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false, data: state.data }),
+  useVeleroBackupNow: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false }),
+  useVeleroScheduleActivity: () => ({ data: state.reading ? { reading: state.reading } : undefined }),
 }))
+vi.mock('../ui/Toast', () => ({ showApiSuccess: state.toast }))
 
 const { VeleroBackupNow } = await import('./VeleroBackupNow')
 
@@ -34,7 +36,8 @@ afterEach(() => {
   act(() => roots.splice(0).forEach((r) => r.unmount()))
   document.body.innerHTML = ''
   state.support = 'supported'
-  state.data = undefined
+  state.reading = undefined
+  state.toast.mockReset()
   state.mutate.mockReset()
 })
 
@@ -42,7 +45,7 @@ const buttonNamed = (label: string) => [...document.querySelectorAll('button')].
 
 describe('Back up now', () => {
   it('shows what will be backed up, and binds the backup to the schedule reviewed', () => {
-    render(<VeleroBackupNow schedule={nightly} reading={reading({ name: 'nightly' })} />)
+    render(<VeleroBackupNow schedule={nightly} />)
     act(() => buttonNamed('Back up now')!.click())
     const dialog = document.body.textContent ?? ''
     expect(dialog).toContain('payments')
@@ -58,10 +61,10 @@ describe('Back up now', () => {
   })
 
   it('keeps the schedule it showed, and refuses one that changed while it was open', () => {
-    const root = render(<VeleroBackupNow schedule={nightly} reading={reading({ name: 'nightly' })} />)
+    const root = render(<VeleroBackupNow schedule={nightly} />)
     act(() => buttonNamed('Back up now')!.click())
     const edited = { ...nightly, metadata: { ...nightly.metadata, resourceVersion: '43' }, spec: { ...nightly.spec, template: { ...nightly.spec.template, storageLocation: 'elsewhere' } } }
-    act(() => root.render(<VeleroBackupNow schedule={edited} reading={reading({ name: 'nightly' })} />))
+    act(() => root.render(<VeleroBackupNow schedule={edited} />))
     const text = document.body.textContent ?? ''
     expect(text).toContain('primary')
     expect(text).not.toContain('elsewhere')
@@ -71,21 +74,33 @@ describe('Back up now', () => {
   })
 
   it('cannot start a backup that would fail', () => {
-    render(<VeleroBackupNow schedule={nightly} reading={reading({ name: 'nightly', state: 'cannotRun', attention: true })} />)
+    state.reading = reading({ name: 'nightly', state: 'cannotRun', attention: true })
+    render(<VeleroBackupNow schedule={nightly} />)
     expect(buttonNamed('Back up now')!.disabled).toBe(true)
   })
 
-  it('links the backup it created', () => {
-    state.data = { namespace: 'velero', name: 'nightly-20261115210509' }
+  it('says the backup was created, with a way to open it', () => {
+    state.mutate.mockImplementation((_vars: unknown, opts: { onSuccess: (b: unknown) => void }) => opts.onSuccess({ namespace: 'velero', name: 'nightly-20261115210509' }))
     const onNavigate = vi.fn()
-    render(<VeleroBackupNow schedule={nightly} reading={reading({ name: 'nightly' })} onNavigate={onNavigate} />)
-    act(() => buttonNamed('nightly-20261115210509')!.click())
+    render(<VeleroBackupNow schedule={nightly} onNavigate={onNavigate} />)
+    act(() => buttonNamed('Back up now')!.click())
+    const confirm = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Back up now').at(-1)!
+    act(() => confirm.click())
+    expect(state.toast).toHaveBeenCalledWith('Backup nightly-20261115210509 created', undefined, expect.objectContaining({ label: 'Open' }))
+    state.toast.mock.calls[0][2].onClick()
     expect(onNavigate).toHaveBeenCalledWith({ kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'nightly-20261115210509' })
+  })
+
+  // A stopped server would only queue it, so "now" would not be true.
+  it('is unavailable while the Velero server is stopped', () => {
+    state.reading = reading({ name: 'nightly', state: 'late', attention: true, reason: 'serverDown' })
+    render(<VeleroBackupNow schedule={nightly} />)
+    expect(buttonNamed('Back up now')!.disabled).toBe(true)
   })
 
   it('is absent on a Radar without the action', () => {
     state.support = 'unsupported'
-    render(<VeleroBackupNow schedule={nightly} reading={reading({ name: 'nightly' })} />)
+    render(<VeleroBackupNow schedule={nightly} />)
     expect(buttonNamed('Back up now')).toBeUndefined()
   })
 })

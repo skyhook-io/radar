@@ -111,6 +111,20 @@ export function VeleroCoverageNotice({ data, kinds }: { data: VeleroWorkspaceRes
 }
 
 /** An Issues row as a workspace problem, with the canonical tone for its severity. */
+/** "Name, name and 3 more": a few names, then a count. */
+export function namesAndMore(names: string[], shown = 3): string {
+  const head = names.slice(0, shown)
+  const rest = names.length - head.length
+  if (rest > 0) return `${head.join(', ')} and ${rest} more`
+  return head.length > 1 ? `${head.slice(0, -1).join(', ')} and ${head.at(-1)}` : (head[0] ?? '')
+}
+
+function rejectedRuns(issue: VeleroIssue): string | undefined {
+  const runs = issue.affected ?? []
+  if (runs.length === 0) return undefined
+  return `Velero rejected ${runs.length === 1 ? '1 run' : `${runs.length} runs`} because of it: ${namesAndMore(runs.map((r) => r.name))}.`
+}
+
 export function veleroIssueProblem(issue: VeleroIssue): WorkspaceProblem {
   const message = issue.message?.trim()
   // The title the Issues page gives the same row.
@@ -119,7 +133,7 @@ export function veleroIssueProblem(issue: VeleroIssue): WorkspaceProblem {
     id: issue.id,
     category: issue.category,
     title,
-    detail: [message, issue.cause?.trim()].filter(Boolean).join(' ') || undefined,
+    detail: [message, issue.cause?.trim(), rejectedRuns(issue)].filter(Boolean).join(' ') || undefined,
     subject: { kind: issue.kind, group: issue.group ?? VELERO_GROUP, namespace: issue.namespace ?? '', name: issue.name },
     source: 'issue',
     tone: issue.severity === 'critical' ? 'unhealthy' : 'degraded',

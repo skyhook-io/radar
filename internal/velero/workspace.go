@@ -98,6 +98,9 @@ type Issue struct {
 	Cause     string             `json:"cause,omitempty"`
 	Action    string             `json:"action,omitempty"`
 	FirstSeen time.Time          `json:"first_seen,omitzero"`
+	// Affected are the runs this row covers, which raise no row of their own:
+	// for an unavailable location, the runs Velero rejected because of it.
+	Affected []issuesapi.Ref `json:"affected,omitempty"`
 }
 
 // WorkspaceResponse is GET /api/velero/workspace.
@@ -270,7 +273,7 @@ func issuesOf(inv inventory) ([]Issue, map[string]int) {
 		out = append(out, Issue{
 			ID: iss.ID, Severity: iss.Severity, Category: iss.Category, Kind: iss.Kind, Group: iss.Group,
 			Namespace: iss.Namespace, Name: iss.Name, Reason: iss.Reason, Message: iss.Message,
-			Cause: iss.Cause, Action: iss.Action, FirstSeen: iss.FirstSeen,
+			Cause: iss.Cause, Action: iss.Action, FirstSeen: iss.FirstSeen, Affected: iss.AffectedRefs,
 		})
 	}
 	return out, totals

@@ -92,3 +92,23 @@ it('says retention the way people do', () => {
   expect(veleroRetentionText('36h0m0s')).toBe('36 hours')
   expect(veleroRetentionText('1h30m0s')).toBe('1h30m0s')
 })
+
+describe('Recent runs', () => {
+  // Five runs is enough to see a pattern; the rest are the Backups list.
+  it('shows five recent runs, one line each, then links to all of them', () => {
+    const run = (i: number) => ({ name: `nightly-2026111${i}020000`, phase: 'Completed', created: ago(1440 * i), ranAt: ago(1440 * i) })
+    const recent = Array.from({ length: 10 }, (_, i) => run(i))
+    const html = renderToStaticMarkup(
+      <VeleroScheduleActivity
+        reading={reading({ runs: { read: 'full', kept: 23, newest: recent[0], newestCompleted: recent[0], recent } })}
+        onNavigate={() => {}}
+        onShowAllRuns={() => {}}
+      />,
+    )
+    expect(html.match(/aria-label="Open backup /g)).toHaveLength(5)
+    expect(html).toContain('All 23 runs →')
+    // Without somewhere to go, there is no link.
+    expect(renderToStaticMarkup(<VeleroScheduleActivity reading={reading({ runs: { read: 'full', kept: 23, newest: recent[0], newestCompleted: recent[0], recent } })} />)).not.toContain('All 23 runs')
+  })
+})
+

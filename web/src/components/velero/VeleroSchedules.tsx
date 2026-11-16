@@ -74,7 +74,7 @@ function LocationCell({ s }: { s: VeleroScheduleReading }) {
     <Tooltip content="The schedule names no location, so its backups go to the installation’s default.">
       <span>
         <span className="break-all">{s.location.name || 'Unresolved'}</span>
-        <Sub>via default</Sub>
+        <Sub>not set on the schedule</Sub>
       </span>
     </Tooltip>
   )

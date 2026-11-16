@@ -262,7 +262,7 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			out = append(out, iss)
 		}
 	}
-	return out
+	return foldVeleroLocationRejections(out)
 }
 
 func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {

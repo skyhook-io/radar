@@ -199,6 +199,8 @@ export interface VeleroIssue {
   cause?: string
   action?: string
   first_seen?: string
+  /** The runs this row covers, which raise no row of their own: for an unavailable location, the runs Velero rejected because of it. */
+  affected?: { kind: string; namespace?: string; name: string }[]
 }
 
 /** GET /api/velero/workspace */

@@ -1,7 +1,7 @@
 import { Activity } from 'lucide-react'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
-import { RefLink, type NavigateToRef } from '../ui/RefLink'
+import { type NavigateToRef } from '../ui/RefLink'
 import { Property, PropertyList, Section } from '../ui/drawer-components'
 import { healthToSeverity } from '../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../utils/format'
@@ -57,17 +57,32 @@ export function veleroBackupRef(namespace: string, name: string) {
   return { kind: 'Backup', group: VELERO_GROUP, namespace, name }
 }
 
+/**
+ * One run on one line: its outcome and age. The backup's name is the
+ * schedule's plus a timestamp, so it goes in the tooltip, and the line opens it.
+ */
 function RunLine({ run, namespace, onNavigate }: { run: VeleroRun; namespace: string; onNavigate?: NavigateToRef }) {
-  return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
-      <RefLink refTo={veleroBackupRef(namespace, run.name)} onNavigate={onNavigate} mono />
+  const content = (
+    <span className="inline-flex items-center gap-2">
       <VeleroRunPhase phase={run.phase} />
-      <Tooltip content={veleroLocalTime(run.ranAt)}>
-        <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
-      </Tooltip>
+      <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
     </span>
   )
+  return (
+    <Tooltip content={`${run.name} · ${veleroLocalTime(run.ranAt)}`}>
+      {onNavigate ? (
+        <button type="button" onClick={() => onNavigate(veleroBackupRef(namespace, run.name))} aria-label={`Open backup ${run.name}`} className="rounded hover:bg-theme-hover">
+          {content}
+        </button>
+      ) : (
+        content
+      )}
+    </Tooltip>
+  )
 }
+
+/** Recent runs shown in the drawer; the rest are a click away in the Backups list. */
+const RECENT_SHOWN = 5
 
 /**
  * The drawer section "Schedule activity": the server's reading of a Velero
@@ -78,11 +93,14 @@ export function VeleroScheduleActivity({
   reading,
   created,
   onNavigate,
+  onShowAllRuns,
 }: {
   reading: VeleroScheduleReading
   /** The Schedule's creationTimestamp, for the not-validated sentence. */
   created?: string
   onNavigate?: NavigateToRef
+  /** Opens every run Velero keeps for this schedule. Without it there is no link. */
+  onShowAllRuns?: () => void
 }) {
   const ns = reading.namespace
   const newest = veleroNewestSuccessfulText(reading.runs)
@@ -94,7 +112,8 @@ export function VeleroScheduleActivity({
   // already the newest run listed.
   const noneKept = !runsUnknown && recent.length === 0 && !newest.run
   // The run holding the schedule has its own row.
-  const others = recent.filter((run) => run.name !== reading.blocker?.name)
+  const others = recent.filter((run) => run.name !== reading.blocker?.name).slice(0, RECENT_SHOWN)
+  const kept = reading.runs.kept ?? 0
   // No success at all is always said; a success already listed first isn't.
   const showNewest = !runsUnknown && !noneKept && (!newest.run || newest.run.name !== others[0]?.name)
   return (
@@ -150,13 +169,20 @@ export function VeleroScheduleActivity({
                 runsUnknown ? (
                   <span className="text-theme-text-secondary">{VELERO_RUNS_UNKNOWN}</span>
                 ) : (
-                  <ul className="space-y-1">
-                    {others.map((run) => (
-                      <li key={run.name}>
-                        <RunLine run={run} namespace={ns} onNavigate={onNavigate} />
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="space-y-1">
+                    <ul className="space-y-0.5">
+                      {others.map((run) => (
+                        <li key={run.name}>
+                          <RunLine run={run} namespace={ns} onNavigate={onNavigate} />
+                        </li>
+                      ))}
+                    </ul>
+                    {onShowAllRuns && kept > others.length && (
+                      <button type="button" onClick={onShowAllRuns} className="text-xs text-accent-text hover:underline">
+                        All {kept} runs →
+                      </button>
+                    )}
+                  </div>
                 )
               }
             />}

@@ -1,6 +1,5 @@
-import { VeleroScheduleStatusBadge } from '../velero/VeleroScheduleStatusBadge'
 import { RelatedFindingsSection } from './RelatedFindingsSection'
-import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
+import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceIssueDetail, resourceLogs, resourceRendererOverrides } from '../../integrations/resourceHosts'
 import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -256,8 +255,6 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     />
   )
 }
-
-const renderVeleroScheduleStatus = (resource: any) => <VeleroScheduleStatusBadge resource={resource} />
 
 // The kinds the traffic map draws as a node of their own: those that own
 // pods, which it groups under them.
@@ -1217,7 +1214,6 @@ export function WorkloadView({
         name={name}
         expanded={expanded}
         {...rest}
-        renderStatusBadge={rest.renderStatusBadge ?? (apiKind === 'schedules' && effectiveGroup === 'velero.io' ? renderVeleroScheduleStatus : undefined)}
         group={effectiveGroup}
         // Data
         resource={resource}
@@ -1400,7 +1396,7 @@ export function WorkloadView({
             renderDetailSection={({ issue }) => {
               if (schedulingEvidence?.state === 'reported' && issue.kind === 'CronJob' && issue.reason === schedulingEvidence.reason) return <CronJobSchedulingDetails evidence={schedulingEvidence} onViewTimeline={viewSchedulingReport} />
               if (certificateEvidence && issue.kind === 'Node' && issue.reason === 'NodeCertificateExpiry') return <NodeCertificateDetails evidence={certificateEvidence} onViewTimeline={viewCertificateReport} includeOriginalReport={false} />
-              return null
+              return resourceIssueDetail({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, { issue, resource })
             }}
             compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}

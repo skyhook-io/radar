@@ -90,15 +90,9 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 		if serverRead {
 			serverReads = append(serverReads, EvidenceRead{Group: "apps", Resource: "deployments", Namespace: ns, Verb: "list"})
 		}
-		if server.Down() {
-			iss := newConditionIssue(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "Deployment", ns, server.Deployment,
-				SeverityCritical, ReasonVeleroServerNotRunning,
-				fmt.Sprintf("The Velero server Deployment %s has no running replicas, so no scheduled backup is submitted and no storage location is validated.", server.Deployment),
-				time.Time{}, false, "", time.Time{})
-			iss.FirstSeen, iss.LastSeen = time.Time{}, now
-			iss.RequiredReads = serverReads
-			out = append(out, iss)
-		}
+		// The schedules a stopped server leaves late are listed on its issue
+		// instead of raising one each: one fault, one issue.
+		var lateWhileDown []Ref
 
 		defaultLocation, defaultSource := veleropkg.DefaultLocation(byNS[ns], server)
 		for _, l := range byNS[ns] {
@@ -119,11 +113,15 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 		schedules, schedulesKnown := read("Schedule", ns)
 		backups, backupsKnown := read("Backup", ns)
 		if !schedulesKnown || !backupsKnown {
-			continue
+			schedules = nil
 		}
 		scheduleGVR := gvrs["Schedule"]
 		for _, s := range schedules {
 			reading := veleropkg.ReadSchedule(veleropkg.ScheduleInput{Schedule: s, Backups: backups, BackupsRead: true, Server: server, DefaultLocation: defaultLocation, Now: now})
+			if server.Down() && reading.Attention && reading.State == veleropkg.StateLate {
+				lateWhileDown = append(lateWhileDown, Ref{Group: VeleroGroup, Kind: "Schedule", Namespace: ns, Name: s.GetName()})
+				continue
+			}
 			reason, severity, message, ok := veleroScheduleIssueFor(reading, server, now)
 			if !ok {
 				continue
@@ -133,6 +131,18 @@ func detectVeleroReadingIssues(p Provider, bslGVR schema.GroupVersionResource, l
 				{Group: VeleroGroup, Resource: "schedules", Namespace: ns, Verb: "list"},
 				{Group: VeleroGroup, Resource: "backups", Namespace: ns, Verb: "list"},
 			}, serverReads...)
+			out = append(out, iss)
+		}
+		if server.Down() {
+			iss := newConditionIssue(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, "Deployment", ns, server.Deployment,
+				SeverityCritical, ReasonVeleroServerNotRunning,
+				fmt.Sprintf("The Velero server Deployment %s has no running replicas, so no scheduled backup is submitted and no storage location is validated.", server.Deployment),
+				time.Time{}, false, "", time.Time{})
+			iss.FirstSeen, iss.LastSeen = time.Time{}, now
+			iss.RequiredReads = serverReads
+			if len(lateWhileDown) > 0 {
+				iss = withAffectedRuns(iss, factVeleroLateSchedules, veleroLateSchedulesMessage, lateWhileDown)
+			}
 			out = append(out, iss)
 		}
 	}
@@ -172,9 +182,6 @@ func veleroScheduleIssueFor(r veleropkg.ScheduleReading, server veleropkg.Server
 			missed = fmt.Sprintf("%d scheduled times passed", r.MissedRuns)
 		}
 		cause := " Velero does not catch up on missed runs."
-		if server.Down() {
-			cause = " The Velero server is not running, so nothing submits backups."
-		}
 		severity := SeverityWarning
 		if r.MissedRuns >= lateCriticalAfter {
 			severity = SeverityCritical

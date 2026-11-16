@@ -33,6 +33,8 @@ export interface ResourceHost {
   expandedPath?: (resource: HostResource, context?: string, tab?: 'yaml') => string | null
   detailRedirect?: (resource: HostResource, search: URLSearchParams) => string | null
   detailSlots?: (resource: HostResource) => DetailSlots
+  /** More for one of the resource's issues, inside that issue's "What's wrong" in the drawer. */
+  issueDetail?: (props: { issue: { kind?: string; reason?: string }; resource: any }) => ReactNode
   detailOwnership?: readonly ExclusiveDetailSlot[]
   logs?: (resource: HostResource, data: { apiVersion?: string } | null | undefined) => ReactNode
   drawerNavigation?: {

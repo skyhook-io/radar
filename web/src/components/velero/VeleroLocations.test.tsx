@@ -36,7 +36,7 @@ describe('Velero storage locations', () => {
     })
     const html = render(data)
     expect(html).toContain('overdue')
-    expect(html).toContain('(via default)')
+    expect(html).toContain('(as the default)')
     // The usual frequency lives in the overdue badge's tooltip, not on every row.
     expect(html).not.toContain('server flag')
 

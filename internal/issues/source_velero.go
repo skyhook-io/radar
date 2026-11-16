@@ -203,6 +203,7 @@ func DetectVelero(byKind map[string][]*unstructured.Unstructured) []Issue {
 	for kind, items := range byKind {
 		out = append(out, detectVeleroIssues(schema.GroupVersionResource{Group: VeleroGroup}, kind, items, nil)...)
 	}
+	out = foldVeleroLocationRejections(out)
 	out, _ = finalizeShapedIssues(out, Filters{}, true, true)
 	return out
 }

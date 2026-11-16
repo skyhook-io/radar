@@ -93,7 +93,11 @@ function SchedulesCell({ l, onInspect }: { l: VeleroLocationReading; onInspect: 
           >
             {s.name}
           </button>
-          {s.viaDefault && <span className="whitespace-nowrap text-xs text-theme-text-tertiary"> (via default)</span>}
+          {s.viaDefault && (
+            <Tooltip content="The schedule names no location, so its backups go to the installation’s default.">
+              <span className="whitespace-nowrap text-xs text-theme-text-tertiary"> (as the default)</span>
+            </Tooltip>
+          )}
         </li>
       ))}
       {l.schedules.length > SCHEDULES_SHOWN && (

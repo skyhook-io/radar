@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { VeleroRunMessages } from './VeleroRunMessages'
+import { VeleroRunMessages, veleroMessageRows, veleroMessagesLabel } from './VeleroRunMessages'
 
 /**
  * "Warnings: 2" was a dead end. The number is on the Backup; the text is in a
@@ -16,11 +16,8 @@ import { VeleroRunMessages } from './VeleroRunMessages'
 describe('the messages behind a run’s counts', () => {
   it('offers to fetch them when a run reported any', () => {
     const html = renderToString(<VeleroRunMessages errors={0} warnings={2} onFetch={() => {}} />)
-    expect(html).toContain('Show the messages')
-    // Never "all N": the server caps the list, so the label must not promise a
-    // number the fetch may not deliver.
-    expect(html).not.toContain('all 2')
-    expect(html).toContain('Velero has to be asked')
+    // The button says what it shows.
+    expect(html).toContain('Show 2 warnings')
   })
 
   it('says nothing at all for a clean run', () => {
@@ -47,7 +44,7 @@ describe('the messages behind a run’s counts', () => {
     // restore" — correct on screen, wrong to anyone listening to it.
     expect(html).not.toMatch(/demo-app<\/span><span[^>]*>could not restore/)
     // The offer is gone once they are on screen.
-    expect(html).not.toContain('Velero has to be asked')
+    expect(html).not.toContain('Show 1 warning')
   })
 
   // The note itself is the host's to build — a denial and a fault read
@@ -64,7 +61,7 @@ describe('the messages behind a run’s counts', () => {
     )
     expect(html).toContain('check that it is running')
     // And the offer stays, so a failed fetch is retryable.
-    expect(html).toContain('Show the messages')
+    expect(html).toContain('Show 2 warnings')
   })
 
   // The counts come from the CR and the messages from a file written separately.
@@ -149,4 +146,36 @@ describe('telling an error from a warning without seeing it', () => {
     )
     expect(html).toContain('aria-live')
   })
+
+  it('says on the button what it will show', () => {
+    expect(veleroMessagesLabel(9, 3)).toBe('Show 9 errors and 3 warnings')
+    expect(veleroMessagesLabel(1, 0)).toBe('Show 1 error')
+    expect(veleroMessagesLabel(0, 1)).toBe('Show 1 warning')
+    // The server returns at most 500, so the label promises no more.
+    expect(veleroMessagesLabel(1200, 0)).toBe('Show the first 500 of 1200 messages')
+  })
+
+  // A partial failure records one error per failed item: forty PVCs is forty
+  // lines saying the same thing.
+  it('folds messages that differ only in one object’s name, per scope', () => {
+    const pvc = (n: number) => ({ scope: 'payments', message: `error executing custom action (groupResource=persistentvolumeclaims, namespace=payments, name=data-${n}): snapshot quota exceeded` })
+    const rows = veleroMessageRows({
+      errors: [...Array.from({ length: 40 }, (_, i) => pvc(i)), { scope: 'cluster', message: 'failed to list CSIDrivers' }],
+      warnings: [{ scope: 'payments', message: 'volume data skipped: hostPath' }],
+    })
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toMatchObject({ scope: 'payments', severity: 'error', text: 'error executing custom action (groupResource=persistentvolumeclaims, namespace=payments, name=data-…): snapshot quota exceeded' })
+    expect(rows[0].variants).toHaveLength(40)
+    expect(rows[0].variants[7]).toBe('7')
+    expect(rows.map((r) => r.severity)).toEqual(['error', 'warning', 'error'])
+  })
+
+  it('shows the first rows, then offers the rest', () => {
+    const errors = Array.from({ length: 150 }, (_, i) => ({ scope: `ns-${i % 15}`, message: `unique failure number ${i} in item ${i * 7}` }))
+    const html = renderToString(<VeleroRunMessages errors={150} warnings={0} messages={{ errors, warnings: [] }} />).replace(/<!-- -->/g, '')
+    expect(html).toContain('Show all 150')
+    expect(html.match(/unique failure number/g)).toHaveLength(10)
+    expect(html).toContain('Namespace ns-0 · 10 errors')
+  })
 })
+
