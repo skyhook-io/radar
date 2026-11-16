@@ -143,11 +143,16 @@ type lokiRecorder struct {
 
 func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
 	t.Helper()
+	return newLokiRecorderWithLabels(t, `"namespace","pod","container"`, streams)
+}
+
+func newLokiRecorderWithLabels(t *testing.T, labelNames, streams string) *lokiRecorder {
+	t.Helper()
 	rec := &lokiRecorder{status: 200, body: streams}
 	rec.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/loki/api/v1/labels":
-			_, _ = w.Write([]byte(`{"status":"success","data":["namespace","pod","container"]}`))
+			_, _ = w.Write([]byte(`{"status":"success","data":[` + labelNames + `]}`))
 		case "/loki/api/v1/query_range":
 			rec.mu.Lock()
 			rec.queries = append(rec.queries, r.URL.Query())
@@ -282,7 +287,9 @@ func TestLokiPodLogsGonePod(t *testing.T) {
 	}
 }
 
-func TestLokiPodLogsSharedListener(t *testing.T) {
+// A cross-site page is refused, and a caller's own query or direction never
+// reaches Loki.
+func TestLokiPodLogsCrossSiteAndFixedQuery(t *testing.T) {
 	rec := newLokiRecorder(t, twoContainers)
 	req, _ := http.NewRequest(http.MethodGet, testServer.URL+"/api/loki/pods/team/app-1/logs?since=1h&query=%7Bx%3D%22y%22%7D", nil)
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -351,4 +358,37 @@ func allowRadarPodLogs(t *testing.T) {
 	saved := radarCanReadPodLogs
 	radarCanReadPodLogs = func(context.Context, string) bool { return true }
 	t.Cleanup(func() { radarCanReadPodLogs = saved })
+}
+
+// Loki keeps a multi-line entry (a stack trace) as one entry; each of its
+// lines gets the entry's time so the viewer keeps them together and in order.
+func TestLokiPodLogsMultiLineEntry(t *testing.T) {
+	newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[
+ {"stream":{"namespace":"team","pod":"app-1","container":"web"},"values":[["1763035201000000000","after"],["1763035200000000000","boom\n\tat x\n"]]}]}}`)
+	resp, raw := lokiPodLogs(t, "")
+	var got lokiPodLogsResponse
+	_ = json.Unmarshal([]byte(raw), &got)
+	lines := strings.Split(strings.TrimSuffix(got.Logs["web"], "\n"), "\n")
+	if resp.StatusCode != 200 || len(lines) != 3 {
+		t.Fatalf("%d %q", resp.StatusCode, got.Logs["web"])
+	}
+	ts := "2025-11-13T12:00:00.000000000Z "
+	if lines[0] != ts+"boom" || lines[1] != ts+"\tat x" || !strings.HasSuffix(lines[2], " after") {
+		t.Fatalf("lines = %q", lines)
+	}
+}
+
+// A Loki shared by several clusters: History matches this cluster's value,
+// and with authentication refuses to read while no value is set.
+func TestLokiPodLogsMatchesThisCluster(t *testing.T) {
+	rec := newLokiRecorderWithLabels(t, `"namespace","pod","container","cluster"`, twoContainers)
+	t.Cleanup(func() { loki.SetCluster("", "", false) })
+	loki.SetCluster("", "prod", true)
+	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != 200 || rec.queries[0].Get("query") != `{namespace="team", pod="app-1", cluster="prod"}` {
+		t.Fatalf("%d %s %v", resp.StatusCode, raw, rec.queries)
+	}
+	loki.SetCluster("", "", true)
+	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(raw, "--loki-cluster") || rec.count() != 1 {
+		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
+	}
 }

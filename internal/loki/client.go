@@ -456,8 +456,8 @@ type Lines struct {
 }
 
 // QueryRange reads the newest lines of selector in w, up to limit, and
-// returns them oldest first. selector must come from PodSelector or
-// JobSelector: nothing else reaches the query. labels map the streams back to
+// returns them oldest first. selector must come from PodSelector: nothing
+// else reaches the query. labels map the streams back to
 // pods and containers.
 func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Window, limit int) (Lines, error) {
 	params := url.Values{
