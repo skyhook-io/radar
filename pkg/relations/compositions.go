@@ -62,7 +62,7 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 	if !held {
 		return a
 	}
-	declarations := func(family *Family, o IndexedObject) []resourceid.Ref {
+	declarations := func(family *Family, o IndexedObject, c *Coverage) []resourceid.Ref {
 		var refs []resourceid.Ref
 		err := family.Declared(o.Object, func(d Declaration) {
 			if d.Target.GroupKind() == kindSecret && !slices.Contains(refs, d.Target) {
@@ -70,7 +70,7 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 			}
 		})
 		if err != nil {
-			a.Coverage.addGap(ownership.Gap{Kind: o.Ref.GroupKind(), Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
+			c.addGap(ownership.Gap{Kind: o.Ref.GroupKind(), Namespace: o.Ref.Namespace, Reason: readreason.ReadError})
 		}
 		return refs
 	}
@@ -82,7 +82,7 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 	}
 	self := IndexedObject{Ref: subject, Object: obj}
 	if producer {
-		keys := declarations(f.Producer, self)
+		keys := declarations(f.Producer, self, &a.Coverage)
 		for _, c := range f.Consumers {
 			if len(keys) == 0 {
 				continue
@@ -92,8 +92,8 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 				if !f.consumer(source.Kind) {
 					continue
 				}
-				search.each(source.Kind, &a.Coverage, func(o IndexedObject, _ *Coverage) func() {
-					for _, key := range declarations(c, o) {
+				search.each(source.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
+					for _, key := range declarations(c, o, own) {
 						if slices.Contains(keys, key) {
 							return func() { add(subject, o.Ref) }
 						}
@@ -108,7 +108,7 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 			if c.source(subject.GroupKind()) < 0 {
 				continue
 			}
-			keys := declarations(c, self)
+			keys := declarations(c, self, &a.Coverage)
 			var namespaces []string
 			for _, key := range keys {
 				namespaces = append(namespaces, key.Namespace)
@@ -118,8 +118,8 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 			}
 			search := v.newSearchIn(namespaces)
 			for _, source := range f.Producer.Sources {
-				search.each(source.Kind, &a.Coverage, func(o IndexedObject, _ *Coverage) func() {
-					for _, key := range declarations(f.Producer, o) {
+				search.each(source.Kind, &a.Coverage, func(o IndexedObject, own *Coverage) func() {
+					for _, key := range declarations(f.Producer, o, own) {
 						if slices.Contains(keys, key) {
 							return func() { add(o.Ref, subject) }
 						}

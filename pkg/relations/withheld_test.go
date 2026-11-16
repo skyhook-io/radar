@@ -96,3 +96,41 @@ func TestAnswersAcrossNamespacesNarrowOnUnreadableGaps(t *testing.T) {
 		t.Errorf("an unread kind where the caller may not read: %+v", got.Coverage)
 	}
 }
+
+// A hidden object that fails to decode says nothing about itself: only an
+// object the caller may read records a read error.
+func TestHiddenObjectsDecodeErrorsStayHidden(t *testing.T) {
+	sealed := object("bitnami.com/v1alpha1", "SealedSecret", "creds", nil)
+	hidden := object("argoproj.io/v1alpha1", "Rollout", "private", map[string]any{"template": map[string]any{"spec": "not-an-object"}})
+	session := allNamespaces{cluster: cluster{objects: []runtime.Object{sealed, hidden}}}
+	if got := NewView(session, denies{"Rollout"}).Composed(SealedSecretConsumers, refOf(sealed), nil); len(got.Coverage.NotChecked) != 0 {
+		t.Fatalf("a hidden Rollout's decode error reached the answer: %+v", got)
+	}
+	if got := NewView(session, ownership.Unrestricted()).Composed(SealedSecretConsumers, refOf(sealed), nil); len(got.Coverage.NotChecked) == 0 {
+		t.Fatalf("a readable Rollout's decode error was lost: %+v", got)
+	}
+}
+
+// primaryMiddlewareDenied may not read traefik.io Middlewares, the group a
+// reference resolves to first.
+type primaryMiddlewareDenied struct{}
+
+func (primaryMiddlewareDenied) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if gk.Group == "traefik.io" && gk.Kind == "Middleware" {
+		return ownership.Denied
+	}
+	return ownership.Allowed
+}
+func (primaryMiddlewareDenied) Namespaces() ([]string, bool) { return nil, true }
+
+// A reference whose resolution stopped at a candidate the caller may not read
+// leaves the answer withheld, not complete and empty.
+func TestResolutionStoppedByAWithheldCandidateNarrows(t *testing.T) {
+	route := object("traefik.io/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"middlewares": []any{map[string]any{"name": "config"}}}}})
+	legacy := object("traefik.containo.us/v1alpha1", "Middleware", "config", nil)
+	session := allNamespaces{cluster: cluster{objects: []runtime.Object{route, legacy}}}
+	got := NewView(session, primaryMiddlewareDenied{}).Referrers(TraefikRouteConfig, refOf(legacy), nil)
+	if len(got.Referrers) != 0 || !got.Coverage.Narrowed {
+		t.Fatalf("resolution stopped by a withheld candidate: %+v", got)
+	}
+}
