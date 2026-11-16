@@ -333,19 +333,11 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	httpCount := len(httpFlows)
 	tcpFlows, tcpErr := []Flow(nil), errIstioTCPUnchecked
 	ztunnelReported := false
-	byteOverlap := false
 	if !scopes.tcpUnchecked {
 		var reportedInto []string
-		var destinationTCP map[flowKey]bool
-		tcpFlows, reportedInto, destinationTCP, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
+		tcpFlows, reportedInto, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
 		ztunnelReported = slices.ContainsFunc(reportedInto, func(ns string) bool { return slices.Contains(ambientKnown, ns) })
 		tcpFlows = withoutWaypointHops(tcpFlows, waypoints)
-		if tcpErr == nil {
-			byteOverlap = slices.ContainsFunc(httpFlows, func(f Flow) bool {
-				return f.BytesSent+f.BytesRecv > 0 && slices.Contains(ambientNamespaces, f.Destination.Namespace) &&
-					destinationTCP[workloadPairOf(f)] && !opts.Excludes(f) && opts.Match.Matches(f)
-			})
-		}
 	}
 	if tcpErr != nil {
 		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", tcpErr)
@@ -377,9 +369,6 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		if tcpErr != nil {
 			response.WarningKind = WarningTransient
 		}
-	}
-	if byteOverlap {
-		noteIstioByteOverlap(response)
 	}
 	mismatch := ""
 	switch {
@@ -611,12 +600,6 @@ func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (m
 	return rates, nil
 }
 
-const istioByteOverlapNote = "Data on some edges may count the same calls twice: when no waypoint receives a call into an ambient workload, Radar can show both the calling proxy's HTTP bytes and ztunnel's TCP bytes."
-
-func noteIstioByteOverlap(response *FlowsResponse) {
-	response.DataNote = istioByteOverlapNote
-}
-
 // queryHTTPFlows queries istio_requests_total for HTTP/gRPC traffic.
 // Response codes are aggregated (not split per-code) and a separate error query
 // provides 5xx error rates per series. Optional figures that cannot be read are
@@ -726,8 +709,7 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc c
 // queryTCPFlows reads TCP traffic from istio_tcp_received_bytes_total and
 // istio_tcp_sent_bytes_total. reportedInto includes idle series: their presence
 // still shows the reporting proxy is scraped even when no bytes moved.
-// destinationTCP holds the workload pairs whose wire bytes may also cover HTTP.
-func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) (flows []Flow, reportedInto []string, destinationTCP map[flowKey]bool, err error) {
+func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) (flows []Flow, reportedInto []string, err error) {
 	w := rateWindowFor(opts.Since)
 	const groupBy = "source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter"
 	type tcpSeriesKey struct {
@@ -741,7 +723,7 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc cl
 	for direction, metric := range []string{istioTCPMetric, "istio_tcp_sent_bytes_total"} {
 		result, err := s.queryFn(ctx, istioRateQuery(groupBy, metric, istioReporterSelector, opts.Namespace, sc, w))
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		for _, series := range result.Series {
 			reportedInto = append(reportedInto, series.Labels["destination_workload_namespace"])
@@ -758,13 +740,9 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc cl
 		}
 	}
 
-	destinationTCP = make(map[flowKey]bool)
 	flows = make([]Flow, 0, len(keys))
 	for _, key := range keys {
 		volume := volumes[key]
-		if key.reporter == "destination" {
-			destinationTCP[key.flowKey] = true
-		}
 		flow := Flow{
 			Source: Endpoint{
 				Name: key.srcWorkload, Namespace: key.srcNs,
@@ -795,7 +773,7 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc cl
 		}
 		flows = append(flows, flow)
 	}
-	return flows, reportedInto, destinationTCP, nil
+	return flows, reportedInto, nil
 }
 
 // StreamFlows returns a channel of flows for real-time updates

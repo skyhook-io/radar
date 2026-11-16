@@ -190,3 +190,22 @@ describe('TrafficView when the layout engine cannot load', () => {
     expect(panel.textContent!.indexOf('Some nodes could not be reached.')).toBeLessThan(panel.textContent!.indexOf('The traffic map could not load its layout engine'))
   })
 })
+
+
+describe('TrafficView protocol byte merges', () => {
+  for (const external of [false, true]) {
+    it(`keeps protocol buckets through ${external ? 'external service and Internet' : 'internal service'} collapse`, async () => {
+      const source = endpoint(external ? '' : 'demo', external ? '1.2.3.4' : 'client', external ? 'External' : 'Pod')
+      const destination = endpoint('demo', 'api', 'Pod')
+      const http = { ...flow(source, destination, 0, 1), protocol: 'http', bytesSent: 5969, bytesRecv: 260965, bytesByProtocol: { http: { bytesSent: 5969, bytesRecv: 260965 } } }
+      const tcp = { ...flow({ ...source, name: external ? '5.6.7.8' : source.name }, destination, 0, 1), bytesSent: 32699, bytesRecv: 391439, bytesByProtocol: { tcp: { bytesSent: 32699, bytesRecv: 391439 } } }
+      state.flows = { ...flowsResponse(), aggregated: [http, tcp] }
+      const snapshot = structuredClone(state.flows)
+      await render()
+      expect(rows()).toHaveLength(1)
+      expect(Array.from(rows()[0].querySelectorAll('div.whitespace-nowrap')).map(line => line.textContent)).toEqual(['HTTP 260.7 KB', 'TCP 414.2 KB'])
+      expect(rows()[0].textContent).not.toMatch(/674\.9 KB|691,?072/)
+      expect(state.flows).toEqual(snapshot)
+    })
+  }
+})

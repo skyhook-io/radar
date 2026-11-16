@@ -1693,6 +1693,8 @@ export interface AggregatedFlow {
   protocol: string
   port: number
   flowCount: number
+  bytesByProtocol?: Record<string, { bytesSent: number; bytesRecv: number }>
+  /** Cross-protocol sums kept for compatibility; display the breakdown when present. */
   bytesSent: number
   bytesRecv: number
   connections: number
@@ -1806,10 +1808,6 @@ export interface TrafficFlowsResponse {
   /** Set when the warning includes a reason tied to keeping the map to this
    *  cluster in a shared metrics store, so the view links to how that works. */
   warningClusterScope?: boolean
-  /** How the Data (byte) figures were measured, when that needs saying: for
-   *  example two reports that may cover the same calls. Not a warning: show it
-   *  quietly and never refetch for it. */
-  dataNote?: string
 }
 
 export type TrafficWarningKind = 'transient' | 'partial' | 'incomplete' | 'cluster'
@@ -1829,7 +1827,6 @@ export interface TrafficRecordsResponse {
   flowLimit?: number
   warning?: string
   warningKind?: TrafficWarningKind
-  dataNote?: string
 }
 
 // Wizard state for traffic setup

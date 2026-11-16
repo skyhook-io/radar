@@ -1,3 +1,4 @@
+import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
 import type { AggregatedFlow, TrafficFlow, TrafficWarningKind } from '../../types'
 import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
 import type { TrafficGraphSelection } from './TrafficGraph'
@@ -81,6 +82,86 @@ export function protocolLabel(l7Protocol: string | undefined, protocol: string):
   return `${l7Protocol} / ${protocol}`
 }
 
+export function protocolName(protocol: string): string {
+  return protocol.toLowerCase() === 'grpc' ? 'gRPC' : protocol.toUpperCase() || 'Unknown'
+}
+
+export interface ProtocolData {
+  protocol: string | null
+  sent: number
+  recv: number
+}
+
+type ByteFigures = Pick<AggregatedFlow, 'bytesByProtocol' | 'bytesSent' | 'bytesRecv'>
+
+const transportProtocols = new Set(['tcp', 'udp', 'icmp', 'icmpv6', 'sctp'])
+
+export function isPayloadProtocol(protocol: string): boolean {
+  return !transportProtocols.has(protocol.toLowerCase())
+}
+
+/** The protocols an edge's traffic was observed on, payload protocols first,
+ *  whether or not they carried byte figures. */
+export function protocolsOf(flow: Pick<AggregatedFlow, 'bytesByProtocol'>): string[] {
+  return Object.keys(flow.bytesByProtocol ?? {})
+    .sort((a, b) => Number(isPayloadProtocol(b)) - Number(isPayloadProtocol(a)) || a.localeCompare(b))
+}
+
+/** An edge's Data per protocol, payload protocols first. Only protocols that
+ *  carried bytes: a zero there usually means not measured (a failed byte query,
+ *  a source that reports none), and "0 B" would read as a measurement. A Radar
+ *  that predates the breakdown sends only the cross-protocol sum, which can
+ *  already mix HTTP and gRPC under one protocol name, so it comes back as one
+ *  figure with no protocol claimed. */
+export function dataByProtocol(flow: ByteFigures): ProtocolData[] {
+  const buckets = flow.bytesByProtocol
+  if (!buckets) return [{ protocol: null, sent: flow.bytesSent, recv: flow.bytesRecv }]
+  return protocolsOf(flow)
+    .map(protocol => ({ protocol, sent: buckets[protocol].bytesSent, recv: buckets[protocol].bytesRecv }))
+    .filter(e => e.sent + e.recv > 0)
+}
+
+/** The span a rate-based source's byte totals cover, in seconds: the view's
+ *  range, five minutes when it is under a minute, at most an hour — the same
+ *  rule the server's rate window follows. */
+export function rateWindowSeconds(timeRange: string): number {
+  const m = /^(\d+)([smh])$/.exec(timeRange)
+  const seconds = m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 } as const)[m[2] as 's' | 'm' | 'h'] : 0
+  return seconds < 60 ? 300 : Math.min(seconds, 3600)
+}
+
+/** Label for an edge a rate-based source measured only in bytes: its
+ *  throughput per protocol over the window, never added across protocols.
+ *  Empty without a per-protocol breakdown: an older Radar's byte sum can mix
+ *  TCP and UDP under one protocol name, so no protocol can be claimed for it. */
+export function throughputLabel(flow: ByteFigures, windowSeconds: number): string {
+  if (!flow.bytesByProtocol) return ''
+  return dataByProtocol(flow)
+    .map(e => {
+      const perSecond = (e.sent + e.recv) / windowSeconds
+      return `${protocolName(e.protocol!)} · ${perSecond < 1 ? '<1 B' : formatBytes(perSecond)}/s`
+    })
+    .join(' · ')
+}
+
+/** Data across several edges, added only within each protocol. */
+export function totalDataByProtocol(flows: ByteFigures[]): ProtocolData[] {
+  if (!flows.some(f => f.bytesByProtocol)) {
+    return [{ protocol: null, sent: flows.reduce((n, f) => n + f.bytesSent, 0), recv: flows.reduce((n, f) => n + f.bytesRecv, 0) }]
+  }
+  return dataByProtocol({ bytesSent: 0, bytesRecv: 0, bytesByProtocol: flows.reduce<AggregatedFlow['bytesByProtocol']>((acc, f) => mergeProtocolBytes(acc, f.bytesByProtocol), undefined) })
+}
+
+function mergeProtocolBytes(a: AggregatedFlow['bytesByProtocol'], b: AggregatedFlow['bytesByProtocol']): AggregatedFlow['bytesByProtocol'] {
+  if (!b) return a
+  const merged = { ...a }
+  for (const [protocol, bytes] of Object.entries(b)) {
+    const prev = merged[protocol]
+    merged[protocol] = { bytesSent: (prev?.bytesSent ?? 0) + bytes.bytesSent, bytesRecv: (prev?.bytesRecv ?? 0) + bytes.bytesRecv }
+  }
+  return merged
+}
+
 /**
  * The volume shown for an edge. For a rate-based source `connections` is its
  * request rate rounded with a floor of one — the graph sizes, sorts and filters
@@ -140,6 +221,7 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
   }
   const weighted: LatencyWeighted = into
   weighted.latencyWeight = wInto + wFlow
+  into.bytesByProtocol = mergeProtocolBytes(into.bytesByProtocol, flow.bytesByProtocol)
   into.connections += flow.connections
   into.bytesSent += flow.bytesSent
   into.bytesRecv += flow.bytesRecv

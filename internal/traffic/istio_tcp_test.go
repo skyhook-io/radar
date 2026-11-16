@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/traffic"
 )
 
 func TestIstioTCPByteActivity(t *testing.T) {
@@ -68,22 +69,22 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 	for _, tc := range []struct {
 		name, dstNs, tcpService, tcpSource, tcpSourceNs, tcpDestination string
 		httpReporter, tcpReporter                                       string
-		zeroHTTPBytes, wantOverlap, missingErrors, failTCP              bool
+		zeroHTTPBytes, missingErrors, failTCP                           bool
 		excludeClient, selectOther                                      bool
 	}{
-		{name: "ambient same Service", wantOverlap: true},
+		{name: "ambient same Service"},
 		{name: "waypoint same Service", httpReporter: "waypoint", tcpReporter: "waypoint"},
 		{name: "sidecar same Service", dstNs: "side", httpReporter: "destination"},
-		{name: "sidecar in an ambient namespace, same Service", httpReporter: "destination", wantOverlap: true},
-		{name: "ambient other Service", tcpService: "db", wantOverlap: true},
-		{name: "ambient unknown Service", tcpService: "unknown", wantOverlap: true},
+		{name: "sidecar in an ambient namespace, same Service", httpReporter: "destination"},
+		{name: "ambient other Service", tcpService: "db"},
+		{name: "ambient unknown Service", tcpService: "unknown"},
 		{name: "ambient pair excluded from the view", excludeClient: true},
 		{name: "ambient pair not in the selection", selectOther: true},
 		{name: "ambient other source", tcpSource: "other"},
 		{name: "ambient other source namespace", tcpSourceNs: "other"},
 		{name: "ambient other destination", tcpDestination: "other"},
 		{name: "ambient zero HTTP bytes", zeroHTTPBytes: true},
-		{name: "ambient missing errors", missingErrors: true, wantOverlap: true},
+		{name: "ambient missing errors", missingErrors: true},
 		{name: "ambient failed TCP read", failTCP: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -170,6 +171,14 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 			}
 			var aggregateSent, aggregateRecv, recordsSent, recordsRecv int64
 			for _, a := range AggregateFlows(resp.Flows) {
+				for _, f := range resp.Flows {
+					if f.Source.Name == a.Source.Name && f.Source.Namespace == a.Source.Namespace && f.Destination.Name == a.Destination.Name && f.Destination.Namespace == a.Destination.Namespace {
+						want := traffic.ProtocolBytes{BytesSent: f.BytesSent, BytesRecv: f.BytesRecv}
+						if got := a.BytesByProtocol[f.Protocol]; got != want {
+							t.Errorf("%s bucket = %+v, want %+v", f.Protocol, got, want)
+						}
+					}
+				}
 				aggregateSent += a.BytesSent
 				aggregateRecv += a.BytesRecv
 				match := FlowMatch{Pairs: []EndpointPair{{
@@ -186,13 +195,6 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 			}
 			if aggregateSent != wantTCPSent+wantHTTPSent || aggregateRecv != wantTCPRecv+wantHTTPRecv || recordsSent != aggregateSent || recordsRecv != aggregateRecv {
 				t.Errorf("aggregate bytes %d/%d, records %d/%d; want %d/%d", aggregateSent, aggregateRecv, recordsSent, recordsRecv, wantTCPSent+wantHTTPSent, wantTCPRecv+wantHTTPRecv)
-			}
-			wantNote := ""
-			if tc.wantOverlap {
-				wantNote = istioByteOverlapNote
-			}
-			if resp.DataNote != wantNote {
-				t.Errorf("data note = %q, want %q", resp.DataNote, wantNote)
 			}
 			wantKind := ""
 			if tc.missingErrors {
@@ -220,22 +222,6 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 	}
 }
 
-func TestIstioByteOverlapPreservesWarning(t *testing.T) {
-	for _, kind := range []string{"", WarningPartial, WarningTransient, WarningIncomplete, WarningCluster} {
-		t.Run(kind, func(t *testing.T) {
-			const warning = "Istio metrics are incomplete: 5xx error rates could not be read."
-			response := &FlowsResponse{Warning: warning, WarningKind: kind}
-			noteIstioByteOverlap(response)
-			if response.DataNote != istioByteOverlapNote {
-				t.Errorf("data note = %q, want %q", response.DataNote, istioByteOverlapNote)
-			}
-			if response.Warning != warning || response.WarningKind != kind {
-				t.Errorf("warning = %q (%s), want unchanged %q (%s)", response.Warning, response.WarningKind, warning, kind)
-			}
-		})
-	}
-}
-
 func TestIstioTCPJoinsDirectionalSeriesByReporter(t *testing.T) {
 	raw := []istioRawSeries{
 		istioSeries(istioTCPMetric, "destination", "side", "curl", "amb", "httpbin", "", 13),
@@ -244,12 +230,12 @@ func TestIstioTCPJoinsDirectionalSeriesByReporter(t *testing.T) {
 		istioSeries("istio_tcp_sent_bytes_total", "waypoint", "side", "curl", "amb", "httpbin", "", 3),
 	}
 	s := newTestIstio(fakeIstioProm(raw, nil))
-	flows, _, destinationTCP, err := s.queryTCPFlows(t.Context(), DefaultFlowOptions(), clusterScope{})
+	flows, _, err := s.queryTCPFlows(t.Context(), DefaultFlowOptions(), clusterScope{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(flows) != 2 || len(destinationTCP) != 1 {
-		t.Fatalf("want two reporter flows and one destination conversation, got %+v, %+v", flows, destinationTCP)
+	if len(flows) != 2 {
+		t.Fatalf("want two reporter flows, got %+v", flows)
 	}
 	volumes := map[[2]int64]bool{}
 	for _, f := range flows {
