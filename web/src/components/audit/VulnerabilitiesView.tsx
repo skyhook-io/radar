@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { WithTooltip } from '../ui/Tooltip'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { AlertTriangle, CircleDashed, ExternalLink, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { AlertTriangle, CircleDashed, ExternalLink, Info, Search, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import {
   Collapse,
   CollapseChevron,
@@ -357,11 +357,16 @@ function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filt
     : null
   return (
     <div className="flex flex-col gap-1.5 text-xs">
-      {filtered && <p className="text-theme-text-secondary">The totals above cover everything in this scope; the filters narrow only the list below.</p>}
-      <p className="text-theme-text-tertiary">
-        From Trivy Operator's VulnerabilityReports{scan ? ` · ${scan}` : ''}. A report lists what was known when the image was scanned, after the scanner's own filters.
-        {" A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy's own reports."}
-        {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about workloads or builds that don't run now (older revisions or image builds, scaled to zero or removed) and ${data.coverage.inactiveReports === 1 ? "isn't" : "aren't"} counted.`}
+      <p className="flex items-center gap-1.5 text-theme-text-tertiary">
+        {[scan, filtered ? 'Totals ignore the filters' : null].filter(Boolean).join(' · ')}
+        {/* For someone comparing these numbers with Trivy's own: why they can differ. */}
+        <WithTooltip tip={[
+          "Reports list what was known when each image was scanned, after Trivy's own filters.",
+          'A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy\'s reports.',
+          data.coverage.inactiveReports > 0 ? `${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about older revisions or builds that don't run now, and ${data.coverage.inactiveReports === 1 ? "isn't" : "aren't"} counted.` : '',
+        ].filter(Boolean).join(' ')}>
+          <Info className="h-3.5 w-3.5" aria-label="How these numbers relate to Trivy's" />
+        </WithTooltip>
       </p>
       {gaps && <p className="text-warning-text">{gaps}</p>}
       {data.coverage.truncated && <p className="text-warning-text">This request reached its findings limit, so some images' findings weren't read and are marked unread. Narrow with the namespace picker.</p>}
@@ -426,7 +431,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                 <div className={clsx('grid flex-1 items-center gap-4 text-sm', IMAGE_COLS)}>
                   <span className="flex min-w-0 flex-col">
                     <ImageName image={img.image} className="text-theme-text-primary" />
-                    <span className="truncate font-mono text-xs text-theme-text-tertiary">{[imageParts(img.image).path, img.os, img.digest ? img.digest.replace('sha256:', '').slice(0, 12) : null].filter(Boolean).join(' · ')}</span>
+                    <span className="truncate font-mono text-xs text-theme-text-tertiary">{[imageParts(img.image).path, img.os].filter(Boolean).join(' · ')}</span>
                   </span>
                   {img.findingsUnread ? <span className="text-xs text-warning-text">Findings not read</span> : <SeverityBar counts={img.counts} className="max-w-[280px]" />}
                   <WithTooltip tip={img.findingsUnread ? undefined : `${fixable} of ${total} findings have a fixed release`}>
@@ -500,7 +505,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
   return (
     <div className="flex shrink-0 flex-col gap-2">
       <p className="text-xs text-theme-text-tertiary">
-        One row per package update, with every CVE it clears: the lowest release that fixes them all, compared with the package's own versioning. Updating a package means rebuilding the image that holds it; for an image you don't build, look for a newer release of the image.
+        Upgrading a package means rebuilding the image that holds it.
       </p>
       <div className="overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
         <div className="min-w-[960px]">
@@ -567,7 +572,6 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
 function CVETable({ cves, onOpen }: { cves: VulnerabilityCVE[]; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
   return (
     <div className="flex shrink-0 flex-col gap-2">
-      <p className="text-xs text-theme-text-tertiary">Worst first, then CVEs with a fix, then the ones the most running workloads carry: one base-image bump can clear a CVE everywhere it runs.</p>
       <div className="shrink-0 overflow-x-auto overflow-y-hidden rounded-lg border border-theme-border bg-theme-surface">
         <div className="min-w-[960px]">
           <div className={clsx(HEAD, CVE_COLS)}>

@@ -1,4 +1,7 @@
+import { Fragment } from 'react'
+import { clsx } from 'clsx'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { VULN_SEVERITY_TEXT } from '@skyhook-io/k8s-ui'
 import { WithTooltip } from '../ui/Tooltip'
 import { ChevronRight, Shield } from 'lucide-react'
 import { Section } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
@@ -126,21 +129,24 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
             </p>
           )}
           {upgrades.length > 0 && (
-            <div className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-theme-text-secondary">Upgrade first</span>
+            // One grid so packages, targets and counts line up; Critical and
+            // High are what decide which upgrade comes first.
+            <div className="grid grid-cols-[minmax(0,max-content)_minmax(0,1fr)_2rem_2.5rem] items-baseline gap-x-3 gap-y-1 text-xs">
+              <span className="col-span-2 font-medium text-theme-text-secondary">Upgrade first</span>
+              <span className="text-right text-theme-text-tertiary">C</span>
+              <span className="text-right text-theme-text-tertiary">H</span>
               {upgrades.slice(0, UPGRADES_SHOWN).map((f) => (
-                <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-3 text-xs">
-                  <span className="flex min-w-0 items-baseline gap-1.5">
-                    <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
-                    {f.to
-                      ? <FixVersion installed={f.from.join(', ')} target={f.to} showInstalled={false} />
-                      : <span className="truncate font-mono text-theme-text-tertiary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
-                  </span>
-                  <span className="flex items-baseline gap-1.5 text-theme-text-tertiary">clears <SeverityCounts counts={f.counts} /></span>
-                </div>
+                <Fragment key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`}>
+                  <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
+                  {f.to
+                    ? <span className="flex min-w-0 items-baseline gap-1 font-mono"><span className="text-theme-text-tertiary">→</span><FixVersion installed={f.from.join(', ')} target={f.to} showInstalled={false} /></span>
+                    : <span className="truncate font-mono text-theme-text-tertiary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
+                  <Cleared count={f.counts.critical} tone={VULN_SEVERITY_TEXT.CRITICAL} />
+                  <Cleared count={f.counts.high} tone={VULN_SEVERITY_TEXT.HIGH} />
+                </Fragment>
               ))}
               {upgrades.length > UPGRADES_SHOWN && (
-                <button type="button" onClick={() => open({ by: 'fix' })} className="self-start text-xs text-accent-text hover:underline">
+                <button type="button" onClick={() => open({ by: 'fix' })} className="col-span-4 justify-self-start text-accent-text hover:underline">
                   {upgrades.length - UPGRADES_SHOWN} more {upgrades.length - UPGRADES_SHOWN === 1 ? 'upgrade' : 'upgrades'} →
                 </button>
               )}
@@ -154,6 +160,11 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
 
 // Upgrades shown in the drawer; the rest are one click away in By fix.
 const UPGRADES_SHOWN = 3
+
+// A count of CVEs an upgrade clears at one severity, right-aligned in its column.
+function Cleared({ count, tone }: { count: number; tone: string }) {
+  return <span className={clsx('text-right font-mono tabular-nums', count > 0 ? tone : 'text-theme-text-tertiary')}>{count > 0 ? count : '–'}</span>
+}
 
 // The same image in other workloads: one rebuild fixes them all.
 // partial: the response lists only some of the image's workloads.
