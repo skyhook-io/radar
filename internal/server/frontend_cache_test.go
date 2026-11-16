@@ -157,6 +157,13 @@ func TestFrontendThroughCompression(t *testing.T) {
 				t.Errorf("%s: body = %q, want %q", path, body, want)
 			}
 		}
+		plain := get("/assets/index-BcIBzLE5.js", "Range", "bytes=0-6")
+		if plain.Code != http.StatusOK || plain.Header().Get("Content-Range") != "" || plain.Body.String() != script {
+			t.Errorf("uncompressed range request: status %d, Content-Range %q, body length %d", plain.Code, plain.Header().Get("Content-Range"), plain.Body.Len())
+		}
+		if missing := get("/assets/monaco-OldHash1.js", "Accept-Encoding", "gzip", "Range", "bytes=0-6"); missing.Code != http.StatusNotFound {
+			t.Errorf("missing asset with Range: status %d, want 404", missing.Code)
+		}
 	})
 
 	t.Run("an API response sent with a Range header is still compressed", func(t *testing.T) {
@@ -170,8 +177,15 @@ func TestFrontendThroughCompression(t *testing.T) {
 		req.Header.Set("Range", "bytes=0-6")
 		rec := httptest.NewRecorder()
 		api.ServeHTTP(rec, req)
-		if rec.Header().Get("Content-Encoding") != "gzip" {
-			t.Fatalf("Content-Encoding = %q, want gzip", rec.Header().Get("Content-Encoding"))
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Range") != "" || rec.Header().Get("Content-Encoding") != "gzip" {
+			t.Fatalf("status %d, Content-Range %q, Content-Encoding %q", rec.Code, rec.Header().Get("Content-Range"), rec.Header().Get("Content-Encoding"))
+		}
+		zr, err := gzip.NewReader(rec.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body, err := io.ReadAll(zr); err != nil || string(body) != "["+big+"{}]" {
+			t.Fatalf("body does not decode to the response (%v)", err)
 		}
 	})
 
