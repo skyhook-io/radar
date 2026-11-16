@@ -254,3 +254,25 @@ export function veleroDefaultText(loc: Pick<VeleroLocationReading, 'default' | '
   if (loc.defaultSource === 'unknown') return { text: 'Unknown', detail: DEFAULT_SOURCE_DETAIL.unknown }
   return { text: 'No', detail: DEFAULT_SOURCE_DETAIL[loc.defaultSource] }
 }
+
+// Velero passes the object store's and the network's errors through verbatim
+// (an AWS SDK error inside a gRPC error inside a sentence), so the common ones
+// get one plain line. Credentials first: a wrong key is also a 403.
+const PLAIN_REASONS: [RegExp, string][] = [
+  [/NoSuchBucket|bucket does not exist/i, 'The bucket doesn’t exist'],
+  [/InvalidAccessKeyId|SignatureDoesNotMatch/i, 'Velero’s credentials are wrong'],
+  [/AccessDenied|Forbidden|status code:? 403/i, 'Velero’s credentials can’t access the bucket'],
+  [/no such host|i\/o timeout|TLS handshake timeout|connection refused|network is unreachable/i, 'Velero can’t reach the object store'],
+]
+
+/**
+ * One plain line for a raw Velero or object-store message, or undefined when
+ * the message is not one Radar recognises. The raw text stays the evidence;
+ * this only says what it means.
+ */
+export function veleroPlainReason(message: string | undefined): string | undefined {
+  if (!message) return undefined
+  const restarted = /found an? (backup|restore) with status "?InProgress"? during the server starting/i.exec(message)
+  if (restarted) return `Velero restarted while this ${restarted[1].toLowerCase()} ran, so it was marked Failed — run it again`
+  return PLAIN_REASONS.find(([pattern]) => pattern.test(message))?.[1]
+}

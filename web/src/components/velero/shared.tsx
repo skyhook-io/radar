@@ -8,6 +8,7 @@ import {
   issueTitle,
   radarUpgradeDetail,
   radarUpgradeHeadline,
+  veleroPlainReason,
   type VeleroIssue,
   type VeleroWorkspaceKey,
   type VeleroWorkspaceResponse,
@@ -112,7 +113,6 @@ export function VeleroCoverageNotice({ data, kinds }: { data: VeleroWorkspaceRes
   )
 }
 
-/** An Issues row as a workspace problem, with the canonical tone for its severity. */
 /** "Name, name and 3 more": a few names, then a count. */
 export function namesAndMore(names: string[], shown = 3): string {
   const head = names.slice(0, shown)
@@ -133,20 +133,30 @@ function rejectedRuns(issue: VeleroIssue): string | undefined {
   return `Velero rejected ${runs.length === 1 ? '1 run' : `${runs.length} runs`} because of it: ${namesAndMore(runs.map((r) => r.name))}.`
 }
 
-export function veleroIssueProblem(issue: VeleroIssue): WorkspaceProblem {
+/**
+ * An Issues row as a workspace problem. A message Radar recognises reads as
+ * one plain line, with Velero's own text folded under it. `withAction` adds
+ * the next step, for a banner with room for it.
+ */
+export function veleroIssueProblem(issue: VeleroIssue, opts?: { withAction?: boolean }): WorkspaceProblem {
   const message = issue.message?.trim()
-  // The title the Issues page gives the same row.
-  const title = issueTitle(issue)
+  const plain = veleroPlainReason(message)
   return {
     id: issue.id,
     category: issue.category,
-    title,
-    detail: [message, issue.cause?.trim(), rejectedRuns(issue)].filter(Boolean).map(sentence).join(' ') || undefined,
+    // The title the Issues page gives the same row.
+    title: issueTitle(issue),
+    detail: [plain ?? message, issue.cause?.trim(), rejectedRuns(issue), opts?.withAction ? issue.action?.trim() : undefined].filter(Boolean).map(sentence).join(' ') || undefined,
+    rawDetail: plain ? message : undefined,
+    rawDetailLabel: plain ? VELERO_MESSAGE_LABEL : undefined,
     subject: { kind: issue.kind, group: issue.group ?? VELERO_GROUP, namespace: issue.namespace ?? '', name: issue.name },
     source: 'issue',
     tone: issue.severity === 'critical' ? 'unhealthy' : 'degraded',
   }
 }
+
+/** The label of a raw Velero message folded under its plain reading. */
+export const VELERO_MESSAGE_LABEL = 'Velero’s message'
 
 /**
  * Loading, error, needs-newer-Radar and not-installed states both Velero
