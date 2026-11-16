@@ -181,6 +181,24 @@ func TestWalkNeighborhoodPodGroupContainsOnlyAdmittedPods(t *testing.T) {
 	}
 }
 
+// A batch scheduler's PodGroup custom resource shares its kind name with
+// Radar's synthetic Pod groups but carries no member Pods.
+func TestWalkNeighborhoodCustomPodGroupIsNotASyntheticGroup(t *testing.T) {
+	controller := true
+	job := projectionCR("batch.volcano.sh", "Job", "ml", "train", map[string]any{})
+	job.SetUID("job")
+	group := projectionCR("scheduling.volcano.sh", "PodGroup", "ml", "train-pg", map[string]any{})
+	group.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "batch.volcano.sh/v1", Kind: "Job", Name: "train", UID: "job", Controller: &controller}})
+	sub := walkTestNeighborhood(t, newProjectionSession(t, job, group), job, NeighborhoodOptions{})
+	found := false
+	for _, n := range sub.Nodes {
+		found = found || n.Name == "train-pg"
+	}
+	if !found {
+		t.Fatalf("custom PodGroup missing from the neighborhood: %+v", sub.Nodes)
+	}
+}
+
 func TestWalkNeighborhoodOwnerChainStopsBeforeForbiddenReplicaSet(t *testing.T) {
 	controller := true
 	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "dep", Namespace: "shop", UID: "dep"}}, "apps", "Deployment")

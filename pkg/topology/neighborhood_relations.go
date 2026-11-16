@@ -309,14 +309,18 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		}
 	}
 	for _, node := range sub.Nodes {
-		if node.Kind != KindPodGroup {
+		// A custom resource of kind PodGroup (a batch scheduler's) has no
+		// member Pods; only Radar's own groups do.
+		pods, ok := node.Data["pods"].([]map[string]any)
+		if node.Kind != KindPodGroup || !ok {
 			continue
 		}
-		pods := node.Data["pods"].([]map[string]any)
 		sources := make([][]string, len(pods))
 		mixed := false
 		for i, pod := range pods {
-			r := resourceid.NewRef("", "Pod", pod["namespace"].(string), pod["name"].(string))
+			ns, _ := pod["namespace"].(string)
+			name, _ := pod["name"].(string)
+			r := resourceid.NewRef("", "Pod", ns, name)
 			ids := podSources[r]
 			slices.Sort(ids)
 			sources[i] = slices.Compact(ids)
