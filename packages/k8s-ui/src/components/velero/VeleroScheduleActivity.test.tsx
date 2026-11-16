@@ -41,8 +41,8 @@ describe('VeleroScheduleActivity', () => {
     expect(html).toContain('Its backup hasn’t started for 30m; Velero submits nothing new until it does.')
     expect(html).toContain('Held by')
     expect(html).toContain('nightly-20261114020000')
-    // The backup it waits on is named once, in its own row.
-    expect(html.split('nightly-20261115020000').length - 1).toBe(2)
+    // The backup it waits on is named once, in its own row, and not again among the recent runs.
+    expect(html.split('nightly-20261115020000').length - 1).toBe(1)
   })
 
   it('reads unread runs as unknown and marks an uncertain next run', () => {
@@ -67,6 +67,23 @@ describe('VeleroScheduleActivity', () => {
     expect(veleroMomentText(ahead(125))).toBe('in 2h')
     expect(veleroMomentText(ago(5))).toBe('5m ago')
   })
+})
+
+it('says when a held schedule has no successful backup, even with nothing else to list', async () => {
+  const { renderToString } = await import('react-dom/server')
+  const html = renderToString(
+    <VeleroScheduleActivity
+      reading={reading({
+        state: 'held',
+        reason: 'unstartedBlocker',
+        attention: true,
+        blocker: { name: 'b-new', phase: 'New', created: ago(10), ranAt: ago(10) },
+        runs: { read: 'full', kept: 1, newest: { name: 'b-new', phase: 'New', created: ago(10), ranAt: ago(10) }, recent: [{ name: 'b-new', phase: 'New', created: ago(10), ranAt: ago(10) }] },
+      })}
+    />,
+  )
+  expect(html).toContain('Newest successful')
+  expect(html).not.toContain('Recent runs')
 })
 
 it('says retention the way people do', () => {

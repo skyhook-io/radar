@@ -93,7 +93,10 @@ export function VeleroScheduleActivity({
   // nothing kept is one line, and the newest success shows only when it isn't
   // already the newest run listed.
   const noneKept = !runsUnknown && recent.length === 0 && !newest.run
-  const showNewest = !runsUnknown && !noneKept && newest.run?.name !== recent[0]?.name
+  // The run holding the schedule has its own row.
+  const others = recent.filter((run) => run.name !== reading.blocker?.name)
+  // No success at all is always said; a success already listed first isn't.
+  const showNewest = !runsUnknown && !noneKept && (!newest.run || newest.run.name !== others[0]?.name)
   return (
     <Section title="Schedule activity" icon={Activity} defaultExpanded>
       <PropertyList>
@@ -141,14 +144,14 @@ export function VeleroScheduleActivity({
                 }
               />
             )}
-            <Property
+            {(runsUnknown || others.length > 0) && <Property
               label="Recent runs"
               value={
                 runsUnknown ? (
                   <span className="text-theme-text-secondary">{VELERO_RUNS_UNKNOWN}</span>
                 ) : (
                   <ul className="space-y-1">
-                    {recent.map((run) => (
+                    {others.map((run) => (
                       <li key={run.name}>
                         <RunLine run={run} namespace={ns} onNavigate={onNavigate} />
                       </li>
@@ -156,7 +159,7 @@ export function VeleroScheduleActivity({
                   </ul>
                 )
               }
-            />
+            />}
           </>
         )}
       </PropertyList>
