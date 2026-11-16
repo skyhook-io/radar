@@ -78,3 +78,46 @@ export function useVeleroBackupNow() {
     },
   })
 }
+
+export interface VeleroDeletion {
+  state: 'waiting' | 'inProgress' | 'refused' | 'failed' | 'deleted' | 'unknown'
+  errors?: string[]
+  serverStopped?: boolean
+}
+
+// POST /api/velero/backups/{namespace}/{name}/delete
+//
+// Asks Velero to delete a backup through a DeleteBackupRequest, bound to the
+// backup the user reviewed (its UID). The submission ID is chosen when the
+// confirmation opens, so sending it again returns the request it already made.
+export function useVeleroDeleteBackup() {
+  return useMutation({
+    // fetchJSON throws ApiError, so the dialog can tell a refusal (4xx) from a
+    // write whose outcome is unknown.
+    mutationFn: ({ namespace, name, uid, submission }: { namespace: string; name: string; uid: string; submission: string }) =>
+      fetchJSON<{ request: string; uid: string }>(
+        `/velero/backups/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/delete`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uid, submission }) },
+      ),
+  })
+}
+
+const SETTLED: VeleroDeletion['state'][] = ['refused', 'failed', 'deleted', 'unknown']
+
+// GET /api/velero/backups/{namespace}/{name}/deletion
+//
+// Where one deletion stands, polled until it settles.
+export function useVeleroBackupDeletion(namespace: string, name: string, started: { request: string; uid: string } | null) {
+  const base = getApiBase()
+  return useQuery<VeleroDeletion>({
+    queryKey: ['velero', 'deletion', base, namespace, name, started?.request, started?.uid],
+    queryFn: ({ signal }) =>
+      fetchJSON<VeleroDeletion>(
+        `/velero/backups/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/deletion?request=${encodeURIComponent(started!.request)}&uid=${encodeURIComponent(started!.uid)}`,
+        signal,
+      ),
+    enabled: !!started && !!namespace && !!name,
+    refetchInterval: (query) => (query.state.data && SETTLED.includes(query.state.data.state) ? false : 2_000),
+    retry: shouldRetryRadarQuery,
+  })
+}

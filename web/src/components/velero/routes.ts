@@ -12,6 +12,14 @@ export const VELERO_SCHEDULE_KIND = { name: 'schedules', kind: 'Schedule', group
 export const VELERO_LOCATION_KIND = { name: 'backupstoragelocations', kind: 'BackupStorageLocation', group: VELERO_GROUP }
 
 /**
+ * A Velero Backup's kind. Its generic Delete removes only the object: the
+ * backup stays in storage and Velero recreates the object from it.
+ */
+export function isVeleroBackupKind(plural: string | undefined, group: string | undefined): boolean {
+  return plural === 'backups' && group === VELERO_GROUP
+}
+
+/**
  * What a Velero kind's Resources route shows when Radar has a richer list for
  * it (Schedule, BackupStorageLocation): that list when this Radar serves the
  * Velero views; a loader while capabilities load for the first time, so the

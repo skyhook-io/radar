@@ -8,6 +8,7 @@ import { VeleroScheduleRenderer } from '../resources/renderers/VeleroScheduleRen
 import { VELERO_GROUP as VELERO_GROUP_NAME, VELERO_LOCATION_KIND, VELERO_SCHEDULE_KIND, veleroKindListMode } from './routes'
 import { VeleroLocationsKindList, VeleroSchedulesKindList } from './VeleroKindLists'
 import { VeleroBackupNow } from './VeleroBackupNow'
+import { VeleroDeleteBackup } from './VeleroDeleteBackup'
 import { VeleroScheduleStatusBadge } from './VeleroScheduleStatusBadge'
 import { VeleroRunIssueMessages } from './VeleroRunMessagesHost'
 import { kindToPluralWithGroup } from '../../utils/navigation'
@@ -37,14 +38,24 @@ export const veleroResourceHost: ResourceHost = {
   resources: ['schedules', 'backups', 'restores'].map((name) => ({ name, group: VELERO_GROUP_NAME })),
   // A schedule's header: its reading as the status chip, and Back up now in
   // the action row with every resource's actions.
-  detailSlots: (resource) =>
-    kindToPluralWithGroup(resource.kind, resource.group ?? VELERO_GROUP_NAME) === VELERO_SCHEDULE_KIND.name
-      ? {
-          renderStatusBadge: (data: any) => <VeleroScheduleStatusBadge resource={data} />,
-          renderHeaderActions: ({ resource: data, onNavigate }) =>
-            isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroBackupNow schedule={data} onNavigate={onNavigate} /> : null,
-        }
-      : {},
+  // A backup's header: Delete backup, Velero's own deletion, in place of the
+  // generic Delete (WorkloadView drops that one for Velero backups).
+  detailSlots: (resource) => {
+    const plural = kindToPluralWithGroup(resource.kind, resource.group ?? VELERO_GROUP_NAME)
+    if (plural === VELERO_SCHEDULE_KIND.name) {
+      return {
+        renderStatusBadge: (data: any) => <VeleroScheduleStatusBadge resource={data} />,
+        renderHeaderActions: ({ resource: data, onNavigate }) =>
+          isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroBackupNow schedule={data} onNavigate={onNavigate} /> : null,
+      }
+    }
+    if (plural === 'backups') {
+      return {
+        renderHeaderActions: ({ resource: data }) => (isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroDeleteBackup backup={data} /> : null),
+      }
+    }
+    return {}
+  },
   // A failed run's messages are what is wrong with it.
   issueDetail: (props) => <VeleroRunIssueMessages {...props} />,
   // Radar's own tables are these kinds' lists, so neither has a second entry in the sidebar.

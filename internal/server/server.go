@@ -686,6 +686,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/velero/{kind}/{namespace}/{name}/messages", s.handleVeleroRunMessages)
 			// POST: creates a Backup from the schedule's template, as the caller.
 			r.Post("/velero/schedules/{namespace}/{name}/backup", s.handleVeleroBackupNow)
+			// POST: creates a DeleteBackupRequest, the way Velero deletes a backup.
+			r.Post("/velero/backups/{namespace}/{name}/delete", s.handleVeleroDeleteBackup)
+			r.Get("/velero/backups/{namespace}/{name}/deletion", s.handleVeleroBackupDeletion)
 
 			r.Get("/namespaces", s.handleNamespaces)
 			r.Get("/api-resources", s.handleAPIResources)
@@ -1510,6 +1513,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		CNPGProtectionSetup:      true,
 		VeleroWorkspace:          true,
 		VeleroBackupNow:          true,
+		VeleroDeleteBackup:       true,
 		ServiceEndpointSlices:    true,
 		TrafficRecords:           true,
 		GitOpsWriteEvidence:      true,
