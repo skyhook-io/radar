@@ -44,6 +44,12 @@ func TestVectorSelectorQuotesUTF8Names(t *testing.T) {
 	if got := vectorSelector("ate.actor.crashes", ""); got != `{"ate.actor.crashes"}` {
 		t.Fatalf("utf8 bare = %s", got)
 	}
+	// A colon is legal in a metric name but not in an unquoted label name.
+	for _, sp := range []substrateSpelling{{}, {dotted: true}} {
+		if got := sp.match("a:b", "=", "x"); got != `"a:b"="x"` {
+			t.Fatalf("dotted=%v colon label = %s", sp.dotted, got)
+		}
+	}
 }
 
 // GMP's names: dotted, histograms without the unit suffix.
