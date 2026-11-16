@@ -14,7 +14,9 @@ import (
 func applyFluxChain(s *Summary, root *unstructured.Unstructured, tree *gitopstree.ResourceTree) {
 	s.Interval, _, _ = unstructured.NestedString(root.Object, "spec", "interval")
 	s.RetryInterval, _, _ = unstructured.NestedString(root.Object, "spec", "retryInterval")
-	if entries, present, _ := unstructured.NestedSlice(root.Object, "status", "inventory", "entries"); present {
+	// No copy: an inventory can list thousands of entries and only its length is read.
+	raw, _, _ := unstructured.NestedFieldNoCopy(root.Object, "status", "inventory", "entries")
+	if entries, ok := raw.([]any); ok {
 		s.Objects = len(entries)
 	} else if tree != nil {
 		s.Objects = tree.Summary.Declared
