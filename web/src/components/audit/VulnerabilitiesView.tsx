@@ -639,12 +639,11 @@ function CVEFix({ cve: c }: { cve: VulnerabilityCVE }) {
   const all = c.fixableImages >= c.images
   const text = c.fixableImages === 0 ? 'No' : all ? 'Yes' : `${c.fixableImages} of ${c.images}`
   return (
-    <span
-      title={c.fixableImages > 0 && !all ? `A fixed release is reported in ${c.fixableImages} of the ${c.images} images` : undefined}
-      className={clsx('text-xs', c.fixableImages === 0 ? 'text-theme-text-tertiary' : all ? 'text-emerald-700 dark:text-emerald-400' : 'text-theme-text-secondary')}
-    >
-      {text}
-    </span>
+    <WithTooltip tip={c.fixableImages > 0 && !all ? `A fixed release is reported in ${c.fixableImages} of the ${c.images} images` : undefined}>
+      <span className={clsx('text-xs', c.fixableImages === 0 ? 'text-theme-text-tertiary' : all ? 'text-emerald-700 dark:text-emerald-400' : 'text-theme-text-secondary')}>
+        {text}
+      </span>
+    </WithTooltip>
   )
 }
 
