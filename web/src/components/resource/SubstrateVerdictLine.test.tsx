@@ -64,6 +64,13 @@ describe('SubstrateVerdictLine', () => {
     expect(html).toContain('≈2.4')
   })
 
+  it('says an hourly fact covers only the data Prometheus collected', () => {
+    withVerdict({ state: 'freeActorSlots', facts: [ok('crashes', 'Crashes', 'count', 0), ok('workersWithFreeActorSlots', 'Workers with free slots', 'workers', 2, { of: 4 })] })
+    const html = render(pool)
+    expect(html).toMatch(/title="Computed from the data Prometheus holds for the last hour[^"]*"[^>]*>Crashes \(1h\)/)
+    expect(html).not.toMatch(/title="[^"]*last hour[^"]*"[^>]*>Workers with free slots/)
+  })
+
   it('says Unavailable, never 0, for a fact Radar could not read, and None for one with nothing recorded', () => {
     withVerdict({ state: 'unknown', reason: 'reported through more than one scrape job', facts: [
       { id: 'workersWithFreeActorSlots', label: 'Workers with free slots', unit: 'workers', state: 'unavailable', reason: 'reported through more than one scrape job' },

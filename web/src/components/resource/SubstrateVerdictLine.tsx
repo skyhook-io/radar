@@ -89,11 +89,17 @@ const HOURLY_FACTS = new Set(['resumeP95', 'resumeFailures', 'crashes'])
 // Resumes carry a pool only once a worker is assigned.
 const POOL_PLACED = 'Resumes of actors placed on this pool. A resume that failed before it got a worker names no pool and is not counted.'
 
+// A range summary covers only the time Prometheus collected: a rate stays
+// representative, but a count misses whatever happened during a gap.
+const HOURLY = 'Computed from the data Prometheus holds for the last hour. If collection had a gap, the crash count covers less than the hour.'
+
 function Fact({ fact }: { fact: SubstrateFact }) {
   const placed = fact.id === 'resumeP95' || fact.id === 'resumeFailures'
+  const hourly = HOURLY_FACTS.has(fact.id)
+  const title = [placed && POOL_PLACED, hourly && HOURLY].filter(Boolean).join(' ') || undefined
   return (
     <span className="tabular-nums">
-      <span className="text-theme-text-tertiary" title={placed ? POOL_PLACED : undefined}>{fact.label}{HOURLY_FACTS.has(fact.id) ? ' (1h)' : ''} </span>
+      <span className="text-theme-text-tertiary" title={title}>{fact.label}{hourly ? ' (1h)' : ''} </span>
       <FactValue fact={fact} />
     </span>
   )
