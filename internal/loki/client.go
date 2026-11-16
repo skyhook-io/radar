@@ -80,7 +80,7 @@ const (
 	discoveryTimeout   = 30 * time.Second
 	requestTimeout     = 30 * time.Second
 	retryAfter         = 30 * time.Second
-	maxResponseBytes   = 32 << 20
+	maxResponseBytes   = 8 << 20
 )
 
 // client is the process-wide Loki connection for the current context.
@@ -492,6 +492,11 @@ func QueryRange(ctx context.Context, labels StreamLabels, selector string, w Win
 		"limit":     {strconv.Itoa(limit)},
 		"direction": {"backward"},
 	}
+	release, err := acquireRead(readerKey(ctx))
+	if err != nil {
+		return Lines{}, err
+	}
+	defer release()
 	body, err := Get(ctx, "/loki/api/v1/query_range", params)
 	if err != nil {
 		return Lines{}, err

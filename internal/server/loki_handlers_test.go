@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
@@ -139,6 +141,7 @@ type lokiRecorder struct {
 	mu      sync.Mutex
 	status  int
 	body    string
+	hold    chan struct{} // when set, query_range waits for it to close
 }
 
 func newLokiRecorder(t *testing.T, streams string) *lokiRecorder {
@@ -156,8 +159,11 @@ func newLokiRecorderWithLabels(t *testing.T, labelNames, streams string) *lokiRe
 		case "/loki/api/v1/query_range":
 			rec.mu.Lock()
 			rec.queries = append(rec.queries, r.URL.Query())
-			status, body := rec.status, rec.body
+			status, body, hold := rec.status, rec.body, rec.hold
 			rec.mu.Unlock()
+			if hold != nil {
+				<-hold
+			}
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(body))
 		default:
@@ -340,7 +346,7 @@ func TestLokiPodLogsHonourNamespaceScope(t *testing.T) {
 // An answer over the size cap is Loki answering, not Loki gone: the
 // connection stays.
 func TestLokiPodLogsTooLargeKeepsTheConnection(t *testing.T) {
-	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[{"stream":{"pod":"app-1"},"values":[["1","`+strings.Repeat("x", 33<<20)+`"]]}]}}`)
+	rec := newLokiRecorder(t, `{"status":"success","data":{"resultType":"streams","result":[{"stream":{"pod":"app-1"},"values":[["1","`+strings.Repeat("x", 9<<20)+`"]]}]}}`)
 	resp, raw := lokiPodLogs(t, "")
 	if resp.StatusCode != http.StatusBadGateway || !strings.Contains(raw, "shorter window") {
 		t.Fatalf("%d %.200s", resp.StatusCode, raw)
@@ -390,5 +396,64 @@ func TestLokiPodLogsMatchesThisCluster(t *testing.T) {
 	loki.SetCluster("", "", true)
 	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(raw, "--loki-cluster") || rec.count() != 1 {
 		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
+	}
+}
+
+// A user whose History read is still running gets 429 rather than a second
+// read against Loki.
+func TestLokiPodLogsOneReadPerUser(t *testing.T) {
+	rec := newLokiRecorder(t, twoContainers)
+	rec.mu.Lock()
+	rec.hold = make(chan struct{})
+	rec.mu.Unlock()
+	first := make(chan int)
+	go func() {
+		resp, _ := lokiPodLogs(t, "")
+		first <- resp.StatusCode
+	}()
+	for rec.count() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	resp, raw := lokiPodLogs(t, "")
+	close(rec.hold)
+	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(raw, "still running") || rec.count() != 1 {
+		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
+	}
+	if code := <-first; code != 200 {
+		t.Fatalf("first read: %d", code)
+	}
+	if resp, raw := lokiPodLogs(t, ""); resp.StatusCode != 200 {
+		t.Fatalf("after the first read ended: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestRadarPodLogAccessIsMemoized(t *testing.T) {
+	calls := 0
+	now := time.Unix(0, 0)
+	check := memoizeAccess(30*time.Second, func() time.Time { return now }, func(_ context.Context, key string) (bool, error) {
+		calls++
+		return key == "ctx\x00team", nil
+	})
+	for range 3 {
+		if !check(context.Background(), "ctx\x00team") {
+			t.Fatal("denied")
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("%d reviews, want 1", calls)
+	}
+	now = now.Add(31 * time.Second)
+	check(context.Background(), "ctx\x00team")
+	if calls != 2 {
+		t.Fatalf("%d reviews after expiry, want 2", calls)
+	}
+	failing := memoizeAccess(30*time.Second, time.Now, func(context.Context, string) (bool, error) {
+		calls++
+		return false, errors.New("apiserver down")
+	})
+	failing(context.Background(), "x")
+	failing(context.Background(), "x")
+	if calls != 4 {
+		t.Fatal("a failed review was remembered")
 	}
 }
