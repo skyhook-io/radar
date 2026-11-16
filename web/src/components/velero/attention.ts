@@ -3,7 +3,6 @@ import {
   veleroScheduleReasonText,
   veleroScheduleStateLabel,
   veleroScheduleTone,
-  veleroServerDownText,
   type VeleroKindCoverage,
   type VeleroLocationReading,
   type VeleroScheduleReading,
@@ -19,16 +18,15 @@ export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
   return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
 }
 
-function scheduleProblem(s: VeleroScheduleReading): WorkspaceProblem {
+function scheduleProblem(s: VeleroScheduleReading, serverShown: boolean): WorkspaceProblem {
   const tone = veleroScheduleTone(s)
   return {
     id: `schedule:${s.namespace}/${s.name}`,
     category: 'schedule',
     title: veleroScheduleStateLabel(s.state),
-    detail: veleroScheduleReasonText(s),
+    detail: veleroScheduleReasonText(s, { serverShown }),
     subject: { kind: 'Schedule', group: VELERO_GROUP, namespace: s.namespace, name: s.name },
     source: 'reading',
-    origin: { label: 'Radar’s reading of the schedule', detail: 'The Schedule and its Backups, read against the Velero controller’s own rules.' },
     tone: tone === 'healthy' ? 'neutral' : tone,
   }
 }
@@ -38,10 +36,10 @@ function serverProblem(namespace: string, deployment?: string): WorkspaceProblem
     id: `server:${namespace}`,
     category: 'server',
     title: 'Velero server not running',
-    detail: veleroServerDownText(namespace, deployment),
+    // The subject link below names the Deployment.
+    detail: 'No running replicas, so no new scheduled backups are submitted and no storage location is validated.',
     subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
     source: 'reading',
-    origin: { label: 'Radar’s reading of the Velero server', detail: 'The server Deployment’s running replicas; a pod still terminating is not counted.' },
     tone: 'unhealthy',
   }
 }
@@ -54,20 +52,26 @@ function locationProblem(l: VeleroLocationReading): WorkspaceProblem {
     detail: veleroLocationReasonText(l) || undefined,
     subject: { kind: 'BackupStorageLocation', group: VELERO_GROUP, namespace: l.namespace, name: l.name },
     source: 'reading',
-    origin: { label: 'Radar’s reading of the location', detail: 'The location’s last validation time against its validation frequency.' },
     tone: 'degraded',
   }
 }
 
-/** The Overview's Needs attention list: a stopped server, schedule and location readings, then Velero's Issues. */
+/**
+ * The Overview's Needs attention list: a stopped server, schedule and location
+ * readings, then Velero's Issues. A stopped server is listed once: schedules
+ * it leaves late stay (each is a missing backup) without repeating the cause,
+ * and storage it leaves unchecked is not listed, as the Issues page does.
+ */
 export function veleroAttention(data: VeleroWorkspaceResponse, installation: string | null): WorkspaceProblem[] {
   const issues = installation === null ? data.issues : data.issues.filter((i) => (i.namespace ?? '') === installation)
+  const down = data.installations.filter((i) => (installation === null || i.namespace === installation) && i.server.replicas === 0)
+  const downIn = new Set(down.map((i) => i.namespace))
   return [
-    ...data.installations
-      .filter((i) => (installation === null || i.namespace === installation) && i.server.replicas === 0)
-      .map((i) => serverProblem(i.namespace, i.server.deployment)),
-    ...inInstallation(data.schedules, installation).filter((s) => s.attention).map(scheduleProblem),
-    ...inInstallation(data.locations, installation).filter((l) => l.attention).map(locationProblem),
+    ...down.map((i) => serverProblem(i.namespace, i.server.deployment)),
+    ...inInstallation(data.schedules, installation).filter((s) => s.attention).map((s) => scheduleProblem(s, downIn.has(s.namespace))),
+    ...inInstallation(data.locations, installation)
+      .filter((l) => l.attention && !(l.reason === 'serverDown' && downIn.has(l.namespace)))
+      .map(locationProblem),
     ...issues.map(veleroIssueProblem),
   ]
 }

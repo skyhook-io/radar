@@ -48,7 +48,7 @@ describe('Velero overview', () => {
         schedule({ name: 'quiet', state: 'possiblyLate', reason: 'zoneUnconfirmed', attention: false }),
       ],
     })))
-    const attention = html.slice(html.indexOf('Needs attention'), html.indexOf('Schedules</h2>'))
+    const attention = html.slice(html.indexOf('Needs attention'), html.indexOf('>Schedules</h1>'))
     expect(attention).toContain('3 scheduled times passed. Velero does not catch up on missed runs.')
     expect(attention).toContain('No backup submitted since')
     expect(attention).toContain('Looks late, but Radar couldn’t confirm the Velero server’s time zone.')
@@ -58,7 +58,11 @@ describe('Velero overview', () => {
     expect(attention).not.toContain(VELERO_NOTHING_NEEDS_ATTENTION)
     // The table marks an estimated next run.
     expect(html).toContain('~in ')
-    expect(html).toContain('Completed is what Velero reports. It is not a test of a restore.')
+    // Radar never calls a backup restorable, so no disclaimer repeats under every table.
+    expect(html).not.toContain('It is not a test of a restore.')
+    // The rows say what's wrong, not where Radar found it.
+    expect(html).not.toContain('Radar’s reading of')
+    expect(html).not.toContain('Detected by Radar')
   })
 
   it('reads runs Radar could not read as unknown, never as none', () => {
@@ -68,7 +72,7 @@ describe('Velero overview', () => {
     })))
     expect(html).toContain('Unknown — no access to backups')
     expect(html).not.toContain('None among the backups Velero still keeps')
-    expect(html).toContain('Some Velero data used on this screen was not read.')
+    expect(html).toContain('Radar couldn’t read some of the Velero data on this screen')
   })
 
   it('says what was read when nothing needs attention, and never calls it healthy', () => {
@@ -150,7 +154,9 @@ describe('Velero overview', () => {
     })))
     expect(html).toContain('Velero server not running')
     expect(html.indexOf('Velero server not running')).toBeLessThan(html.indexOf('late-one'))
-    expect(html).toContain('The Velero server has no running replicas, so nothing submits backups.')
+    // Named once, in its own row: the late schedule below it doesn't repeat the cause.
+    expect(html).not.toContain('The Velero server has no running replicas, so nothing submits backups.')
+    expect(html).not.toContain('Deployment velero in velero')
   })
 
   it('says a next run in the past was due, not that it ran', () => {
@@ -185,10 +191,10 @@ describe('Velero overview', () => {
   })
 
   it('states the scope, and the forced namespace when Radar is limited to one', () => {
-    expect(text(render(workspace()))).toContain('Reading Velero in namespace velero. The namespace filter does not apply here.')
+    expect(text(render(workspace()))).toContain('Velero in namespace velero. The namespace filter doesn’t apply here.')
     expect(text(render(workspace({ forcedNamespace: 'velero' })))).toContain('Radar is limited to namespace velero')
     const two = workspace()
     two.installations = [two.installations[0], { ...two.installations[0], namespace: 'kommander' }]
-    expect(text(render(two))).toContain('Reading the Velero installations in namespaces velero and kommander.')
+    expect(text(render(two))).toContain('Velero installations in namespaces velero and kommander.')
   })
 })

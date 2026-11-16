@@ -13,6 +13,15 @@ function backupNameAt(schedule: string, at: Date): string {
   return `${schedule}-${at.toISOString().replace(/[-:T]/g, '').slice(0, 14)}`
 }
 
+/** A Go duration as people say it: "720h0m0s" is "30 days". Anything else is shown as written. */
+function retentionText(ttl: string): string {
+  const m = /^(\d+)h(\d+)m(\d+)s$/.exec(ttl)
+  if (!m || m[2] !== '0' || m[3] !== '0') return ttl
+  const hours = Number(m[1])
+  if (hours % 24 === 0) return `${hours / 24} ${hours === 24 ? 'day' : 'days'}`
+  return `${hours} ${hours === 1 ? 'hour' : 'hours'}`
+}
+
 function list(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
 }
@@ -110,10 +119,10 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
             <dt className="text-theme-text-tertiary">Stored in</dt>
             <dd className="break-words">{location ? location : 'The default storage location'}</dd>
             <dt className="text-theme-text-tertiary">Kept for</dt>
-            <dd>{template.ttl || "The Velero server's default (30 days unless it was changed)"}</dd>
+            <dd>{template.ttl ? retentionText(template.ttl) : "The Velero server's default (30 days unless it was changed)"}</dd>
           </dl>
           <p className="text-theme-text-secondary">
-            It counts as one of this schedule's runs: while it is new or in progress, Velero does not submit the schedule's next run.
+            The schedule's next run waits while this backup is queued or running.
           </p>
           {changed && (
             <p className="text-warning-text">This schedule changed while this was open. Close it and review the schedule again.</p>

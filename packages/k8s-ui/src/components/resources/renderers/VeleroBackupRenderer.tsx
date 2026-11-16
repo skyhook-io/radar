@@ -240,7 +240,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
               if (!name) {
                 return (
                   <span className="text-sm text-theme-text-tertiary">
-                    Not assigned yet: Velero records it when it starts processing the backup
+                    Not assigned yet
                   </span>
                 )
               }

@@ -40,8 +40,8 @@ export type ProblemProvenance =
   | { source: 'issue'; origin?: ProblemOrigin; measuredBy?: never; sourceDetail?: never }
   | { source: 'audit'; sourceDetail?: string; origin?: never; measuredBy?: never }
   | { source: 'measurement'; measuredBy?: string; sourceDetail?: string; origin?: never }
-  /** A workspace's own reading of cached objects that the Issues engine does not raise. */
-  | { source: 'reading'; origin: ProblemOrigin; measuredBy?: never; sourceDetail?: never }
+  /** A workspace's own reading of cached objects. */
+  | { source: 'reading'; origin?: ProblemOrigin; measuredBy?: never; sourceDetail?: never }
 
 export type WorkspaceProblem<C extends string = string> = ProblemDetails<C> & ProblemProvenance & { tone: Exclude<HealthLevel, 'healthy'> }
 
@@ -53,7 +53,7 @@ export function problemOriginLabel(problem: WorkspaceProblem): ProblemOrigin {
     case 'measurement':
       return { label: problem.measuredBy ? `Measured by ${problem.measuredBy}` : 'Measured', detail: problem.sourceDetail }
     case 'reading':
-      return problem.origin
+      return problem.origin ?? { label: 'Detected by Radar' }
   }
   return problem.origin ?? { label: 'Detected by Radar' }
 }
@@ -69,6 +69,7 @@ export function ProblemMeta({
   rootKind,
   onNavigate,
   subjectIsSelf,
+  hideOrigin,
   children,
 }: {
   problem: WorkspaceProblem
@@ -76,6 +77,8 @@ export function ProblemMeta({
   rootKind: string
   onNavigate?: NavigateToRef
   subjectIsSelf?: boolean
+  /** Leave out where the problem came from: when every row on a screen comes from the same place, the label says nothing. */
+  hideOrigin?: boolean
   children?: ReactNode
 }) {
   const openIssue = useContext(OpenIssueContext)
@@ -105,9 +108,11 @@ export function ProblemMeta({
           )}
         </span>
       )}
-      <Tooltip content={origin.detail} disabled={!origin.detail}>
-        <span>{origin.label}</span>
-      </Tooltip>
+      {!hideOrigin && (
+        <Tooltip content={origin.detail} disabled={!origin.detail}>
+          <span>{origin.label}</span>
+        </Tooltip>
+      )}
       {openIssue && problem.source === 'issue' && (
         <button type="button" onClick={() => openIssue(problem)} className="whitespace-nowrap text-accent-text hover:underline">
           See in Issues →
@@ -148,7 +153,7 @@ export function WorkspaceProblemCallout({
 }
 
 /** The problems a callout does not show, as a compact list with the callout's tone, title and source. */
-export function ProblemList({ problems, rootKind, onNavigate }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef }) {
+export function ProblemList({ problems, rootKind, onNavigate, hideOrigin }: { problems: WorkspaceProblem[]; rootKind: string; onNavigate?: NavigateToRef; hideOrigin?: boolean }) {
   return (
     <ul className="space-y-2">
       {problems.map((p) => (
@@ -156,7 +161,7 @@ export function ProblemList({ problems, rootKind, onNavigate }: { problems: Work
           <div className={clsx('font-medium break-words', toneTextClass(p.tone))}>{p.title}</div>
           {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
           {p.rawDetail && <FoldSection title={p.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
-          <ProblemMeta problem={p} rootKind={rootKind} onNavigate={onNavigate} />
+          <ProblemMeta problem={p} rootKind={rootKind} onNavigate={onNavigate} hideOrigin={hideOrigin} />
         </li>
       ))}
     </ul>

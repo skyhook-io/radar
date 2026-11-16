@@ -1,7 +1,6 @@
 import {
   CronValue,
   Tooltip,
-  VELERO_COMPLETED_NOTE,
   VELERO_NONE_KEPT,
   VELERO_NONE_KEPT_SHORT,
   VELERO_RUNS_UNKNOWN,
@@ -9,7 +8,6 @@ import {
   VeleroScheduleStateBadge,
   VeleroZoneValue,
   formatRelativeAgeTime,
-  veleroNewestSuccessfulText,
   veleroNextRunText,
   veleroNextRunTitle,
   veleroScheduleReasonText,
@@ -21,32 +19,53 @@ import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/la
 import { coverageEmpty } from '../workspace/coverage'
 import { VeleroCoverageNotice, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
 
+/** The newest run, and the newest success only when the newest run isn't one. */
 function NewestRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: VeleroScreenProps['onInspect'] }) {
   if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
   const run = s.runs.newest
   if (!run) return <NoneKept />
+  const success = s.runs.newestCompleted
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation()
-        onInspect(veleroResource('Backup', s.namespace, run.name))
-      }}
-      aria-label={`Open backup ${run.name}`}
-      className="flex flex-col items-start gap-0.5 text-left"
-    >
-      <VeleroRunPhase phase={run.phase} />
-      <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onInspect(veleroResource('Backup', s.namespace, run.name))
+        }}
+        aria-label={`Open backup ${run.name}`}
+        className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-left"
+      >
+        <VeleroRunPhase phase={run.phase} />
+        <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
+      </button>
+      {success?.name !== run.name && (
+        <Sub>
+          {success ? (
+            <Tooltip content={veleroLocalTime(success.completed ?? success.ranAt)}>
+              <span>last success {formatRelativeAgeTime(success.completed ?? success.ranAt)}</span>
+            </Tooltip>
+          ) : (
+            'no success kept'
+          )}
+        </Sub>
+      )}
+    </>
   )
 }
 
 function NoneKept() {
   return (
-    <Tooltip content={`${VELERO_NONE_KEPT}. Velero deletes backups past their TTL, so this is not “never”.`}>
+    <Tooltip content={VELERO_NONE_KEPT}>
       <span className="text-theme-text-tertiary">{VELERO_NONE_KEPT_SHORT}</span>
     </Tooltip>
   )
+}
+
+/** The zone every schedule's cron is read in, when they share one Radar is sure of. */
+function sharedZone(schedules: VeleroScheduleReading[]): string | null {
+  const names = new Set(schedules.map((s) => (s.zone.source === 'inferred' || s.zone.source === 'unknown' ? '\u0000' : s.zone.name)))
+  return names.size === 1 && !names.has('\u0000') ? [...names][0] : null
 }
 
 function LocationCell({ s }: { s: VeleroScheduleReading }) {
@@ -63,12 +82,12 @@ function LocationCell({ s }: { s: VeleroScheduleReading }) {
 
 /**
  * Every schedule read against Velero's controller rules: its state, next run,
- * last submission, newest run and newest successful run. The Velero Schedule
- * kind's list.
+ * last submission and newest run. The Velero Schedule kind's list.
  */
 export function VeleroSchedules({ data, installation, onInstallation, onInspect, inspected }: VeleroScreenProps) {
   const multi = data.installations.length > 1
   const schedules = useMemo(() => inInstallation(data.schedules, installation), [data.schedules, installation])
+  const zone = sharedZone(schedules)
 
   const columns: TableColumn<VeleroScheduleReading>[] = [
     {
@@ -82,12 +101,12 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
       ),
     },
     {
-      header: 'Cron',
-      width: '15%',
+      header: zone ? `Cron (${zone})` : 'Cron',
+      width: '16%',
       cell: (s) => (
         <>
           <CronValue cron={s.cron} />
-          <Sub><VeleroZoneValue zone={s.zone} /></Sub>
+          {!zone && <Sub><VeleroZoneValue zone={s.zone} /></Sub>}
         </>
       ),
     },
@@ -127,23 +146,8 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
           <span className="text-theme-text-tertiary">Never</span>
         ),
     },
-    { header: 'Newest run', width: '12%', cell: (s) => <NewestRunCell s={s} onInspect={onInspect} /> },
-    {
-      header: 'Newest successful',
-      width: '12%',
-      cell: (s) => {
-        const newest = veleroNewestSuccessfulText(s.runs)
-        if (newest.run) {
-          return (
-            <Tooltip content={veleroLocalTime(newest.run.completed ?? newest.run.ranAt)}>
-              <span>{newest.text}</span>
-            </Tooltip>
-          )
-        }
-        return s.runs.read === 'unknown' ? <span className="text-theme-text-tertiary">{newest.text}</span> : <NoneKept />
-      },
-    },
-    { header: 'Location', width: '11%', cell: (s) => <LocationCell s={s} /> },
+    { header: 'Newest run', width: '18%', cell: (s) => <NewestRunCell s={s} onInspect={onInspect} /> },
+    { header: 'Location', width: '13%', cell: (s) => <LocationCell s={s} /> },
   ]
 
   return (
@@ -152,7 +156,6 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
       <ScreenBody>
         <VeleroCoverageNotice data={data} kinds={['schedules', 'backups']} />
         <SectionTable
-          title="Schedules"
           subtitle={`${schedules.length} ${schedules.length === 1 ? 'schedule' : 'schedules'}`}
           columns={columns}
           rows={schedules}
@@ -161,8 +164,7 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
           onInspect={onInspect}
           inspected={inspected}
           empty={coverageEmpty(data.coverage.schedules, 'Velero schedules')}
-          minWidth={1040}
-          footer={VELERO_COMPLETED_NOTE}
+          minWidth={980}
         />
       </ScreenBody>
     </div>

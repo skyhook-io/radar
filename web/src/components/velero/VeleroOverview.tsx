@@ -27,7 +27,11 @@ import {
   type VeleroScreenProps,
 } from './shared'
 
-export const VELERO_NOTHING_NEEDS_ATTENTION = 'Nothing in what Radar can read needs attention.'
+export const VELERO_NOTHING_NEEDS_ATTENTION = 'Nothing needs attention.'
+/** The same, when part of Velero could not be read: an empty list there proves less. */
+export const VELERO_NOTHING_IN_WHAT_WAS_READ = 'Nothing in what Radar can read needs attention.'
+
+const ATTENTION_KINDS = ['schedules', 'backups', 'restores', 'backupStorageLocations', 'backupRepositories'] as const
 
 // Rows shown across all groups before folding, so a burst of failed runs cannot
 // push the server, schedule and storage groups off the screen. Every group
@@ -177,12 +181,12 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
         {title} <span className="font-normal">· {problems.length}</span>
       </h3>
-      <ProblemList problems={shown} rootKind="" onNavigate={onNavigate} />
+      <ProblemList problems={shown} rootKind="" onNavigate={onNavigate} hideOrigin />
       {folded.length > 0 && (
         <>
           <Collapse open={showAll} id={foldId}>
             <div className="pt-2">
-              <ProblemList problems={folded} rootKind="" onNavigate={onNavigate} />
+              <ProblemList problems={folded} rootKind="" onNavigate={onNavigate} hideOrigin />
             </div>
           </Collapse>
           <button
@@ -239,7 +243,9 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect }
           <h2 id="velero-attention" className="mb-2 text-sm font-semibold text-theme-text-primary">Needs attention</h2>
           <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
             {attention.length === 0 ? (
-              <p className="text-sm text-theme-text-tertiary">{VELERO_NOTHING_NEEDS_ATTENTION}</p>
+              <p className="text-sm text-theme-text-tertiary">
+                {ATTENTION_KINDS.some((k) => readInPart(data.coverage[k])) ? VELERO_NOTHING_IN_WHAT_WAS_READ : VELERO_NOTHING_NEEDS_ATTENTION}
+              </p>
             ) : (
               <div className="space-y-4">
                 {groups.map((g) => (

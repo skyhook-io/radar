@@ -94,8 +94,10 @@ function missedText(n: number | undefined): string {
  * the Schedule's creationTimestamp when the caller holds the object (the
  * drawer); the workspace reading does not carry it.
  */
-export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: { created?: string }): string {
+export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: { created?: string; serverShown?: boolean }): string {
   const blocker = reading.blocker
+  // Where the stopped server is already named above (the Overview), its consequences don't repeat it.
+  const serverDown = reading.reason === 'serverDown' ? (opts?.serverShown ? '' : ` ${SERVER_DOWN}`) : null
   switch (reading.state) {
     case 'paused':
       return 'Paused. Velero submits no backups for it until it is resumed.'
@@ -109,7 +111,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
       return 'This schedule’s name is longer than 63 characters, so Velero cannot label its backups and every run fails.'
     case 'notValidated': {
       if (!reading.attention) return 'Waiting for Velero to validate this schedule.'
-      if (reading.reason === 'serverDown') return `Velero hasn’t validated this schedule. ${SERVER_DOWN}`
+      if (serverDown !== null) return `Velero hasn’t validated this schedule.${serverDown}`
       const created = opts?.created ?? reading.created
       return created
         ? `Velero hasn’t validated this schedule since it was created ${formatAge(created)} ago, so its controller may not be processing schedules.`
@@ -123,26 +125,24 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
       return 'Set to skip its next run (skipImmediately). Velero moves the schedule past it on its next pass.'
     case 'held':
       if (reading.reason === 'unstartedBlocker' && blocker) {
-        return `Held by backup ${blocker.name}, which Velero hasn’t started for ${formatAge(blocker.created)}.`
+        return `Its backup hasn’t started for ${formatAge(blocker.created)}; Velero submits nothing new until it does.`
       }
       if (blocker && (blocker.phase === '' || blocker.phase === 'New' || !blocker.phase)) {
-        return `Held by backup ${blocker.name}, submitted ${formatRelativeAgeTime(blocker.created)} and not started yet; Velero submits nothing new until it does.`
+        return `Its backup was submitted ${formatRelativeAgeTime(blocker.created)} and hasn’t started; Velero submits nothing new until it does.`
       }
-      return blocker
-        ? `Backup ${blocker.name} from this schedule is still running; Velero submits the next one after it finishes.`
-        : 'A backup from this schedule is still running; Velero submits the next one after it finishes.'
+      return 'A backup from this schedule is still running; Velero submits the next one after it finishes.'
     case 'late': {
       const since = reading.lastSubmitted
         ? `since ${veleroLocalTime(reading.lastSubmitted)} (${formatRelativeAgeTime(reading.lastSubmitted)})`
         : 'since the schedule was created'
-      const cause = reading.reason === 'serverDown' ? ` ${SERVER_DOWN}` : ' Velero does not catch up on missed runs.'
+      const cause = serverDown ?? ' Velero does not catch up on missed runs.'
       return `No backup submitted ${since}; ${missedText(reading.missedRuns)}.${cause}`
     }
     case 'probablyLate':
-      if (reading.reason === 'serverDown') return `Past its scheduled time. ${SERVER_DOWN}`
+      if (serverDown !== null) return `Past its scheduled time.${serverDown}`
       return 'Looks late, but Radar couldn’t confirm the Velero server’s time zone.'
     case 'lateOrHeld':
-      if (reading.reason === 'serverDown') return `Past its scheduled time. ${SERVER_DOWN}`
+      if (serverDown !== null) return `Past its scheduled time.${serverDown}`
       return 'Past its scheduled time. Radar can’t read this namespace’s backups, so a running backup may be holding it.'
     case 'possiblyLate':
       return 'Past its estimated time, but Radar couldn’t confirm the Velero server’s time zone, so it may not be due yet.'
@@ -197,7 +197,7 @@ export function veleroNextRunTitle(reading: Pick<VeleroScheduleReading, 'nextRun
 
 export const VELERO_RUNS_UNKNOWN = 'Unknown — no access to backups'
 /** No run among the backups Velero still keeps; TTL deletes older ones, so this is not "never". */
-export const VELERO_NONE_KEPT = 'None among the backups Velero still keeps'
+export const VELERO_NONE_KEPT = 'None kept: Velero deletes backups once their retention ends'
 /** VELERO_NONE_KEPT for a table cell; the full sentence goes in its tooltip. */
 export const VELERO_NONE_KEPT_SHORT = 'None kept'
 
@@ -207,8 +207,6 @@ export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: st
   if (!runs.newestCompleted) return { text: VELERO_NONE_KEPT }
   return { text: formatRelativeAgeTime(runs.newestCompleted.completed ?? runs.newestCompleted.ranAt), run: runs.newestCompleted }
 }
-
-export const VELERO_COMPLETED_NOTE = 'Completed is what Velero reports. It is not a test of a restore.'
 
 /** A validation frequency in the shared duration tiers ("1m", "12h"). */
 export function veleroFrequencyText(seconds: number): string {

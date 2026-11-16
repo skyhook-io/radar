@@ -58,7 +58,7 @@ export function VeleroPhaseValue({
   return (
     <span className="flex flex-col items-start gap-1 min-w-0">
       <span className={clsx('badge whitespace-nowrap', status.color)}>{status.text}</span>
-      {phase && phase !== status.text && (
+      {phase && phase.toLowerCase() !== status.text.replace(/\s+/g, '').toLowerCase() && (
         <span className="text-xs font-mono text-theme-text-tertiary break-all">{phase}</span>
       )}
     </span>

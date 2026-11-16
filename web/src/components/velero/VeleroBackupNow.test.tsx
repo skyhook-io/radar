@@ -47,8 +47,8 @@ describe('Back up now', () => {
     const dialog = document.body.textContent ?? ''
     expect(dialog).toContain('payments')
     expect(dialog).toContain('primary')
-    expect(dialog).toContain('168h0m0s')
-    expect(dialog).toContain("while it is new or in progress, Velero does not submit the schedule's next run")
+    expect(dialog).toContain('7 days')
+    expect(dialog).toContain("The schedule's next run waits while this backup is queued or running.")
     const confirm = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Back up now').at(-1)!
     act(() => confirm.click())
     expect(state.mutate).toHaveBeenCalledWith(

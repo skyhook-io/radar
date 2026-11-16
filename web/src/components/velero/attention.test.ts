@@ -34,6 +34,23 @@ describe('the Velero Overview badge', () => {
   })
 })
 
+// A stopped server is the cause; the Overview says it once. Late schedules stay
+// (each is a missing backup) without repeating it, and storage it left
+// unchecked is not listed, as on the Issues page.
+describe('a stopped Velero server on the Overview', () => {
+  const down = workspace({
+    installations: [{ ...workspace().installations[0], server: { ...workspace().installations[0].server, replicas: 0, deployment: 'velero' } }],
+    schedules: [schedule({ name: 'late', state: 'late', attention: true, reason: 'serverDown' })],
+    locations: [location({ attention: true, validationOverdue: true, reason: 'serverDown' })],
+  })
+
+  it('lists the server once and the schedules it left late, without the storage it left unchecked', () => {
+    const rows = veleroAttention(down, null)
+    expect(rows.map((r) => r.category)).toEqual(['server', 'schedule'])
+    expect(rows[1].detail).not.toContain('no running replicas')
+  })
+})
+
 describe('the Velero Schedule and BackupStorageLocation kind lists', () => {
   it("are Radar's own tables when this Radar serves them, and the generic table otherwise", () => {
     expect(veleroKindListMode('supported', false)).toBe('view')

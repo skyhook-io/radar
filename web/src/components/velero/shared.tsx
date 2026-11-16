@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { Archive } from 'lucide-react'
 import {
-  FoldSection,
   PaneLoader,
   RadarUpgradeAction,
   getRadarUpgradeRequirement,
@@ -45,8 +44,8 @@ export function veleroScopeLine(namespaces: string[]): string {
   const list = namespaces.length < 2 ? namespaces.join('') : `${namespaces.slice(0, -1).join(', ')} and ${namespaces.at(-1)}`
   if (namespaces.length === 0) return VELERO_SCOPE_LINE
   return namespaces.length === 1
-    ? `Reading Velero in namespace ${list}. The namespace filter does not apply here.`
-    : `Reading the Velero installations in namespaces ${list}. The namespace filter does not apply here.`
+    ? `Velero in namespace ${list}. The namespace filter doesn’t apply here.`
+    : `Velero installations in namespaces ${list}. The namespace filter doesn’t apply here.`
 }
 
 /** Opens a Velero object in the drawer. */
@@ -107,12 +106,7 @@ export function VeleroCoverageNotice({ data, kinds }: { data: VeleroWorkspaceRes
   if (byLabel.size === 0) return null
   const text = [...byLabel].map(([label, names]) => `${names.join(', ')} (${label})`).join('; ')
   return (
-    <Notice>
-      Some Velero data used on this screen was not read. Readings in namespaces that were read in full stay exact; elsewhere a value Radar could not read is shown as unknown.
-      <FoldSection title="Coverage details" summary="Kinds and reasons" attention={false}>
-        {text}.
-      </FoldSection>
-    </Notice>
+    <Notice>Radar couldn’t read some of the Velero data on this screen: {text}. What it couldn’t read shows as unknown.</Notice>
   )
 }
 

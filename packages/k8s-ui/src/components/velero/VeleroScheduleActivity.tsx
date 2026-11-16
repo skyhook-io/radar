@@ -8,7 +8,6 @@ import { formatRelativeAgeTime } from '../../utils/format'
 import { getBackupStatus } from '../resources/resource-utils-velero'
 import type { VeleroRun, VeleroScheduleReading, VeleroZone } from './types'
 import {
-  VELERO_COMPLETED_NOTE,
   VELERO_NONE_KEPT,
   VELERO_RUNS_UNKNOWN,
   veleroNewestSuccessfulText,
@@ -89,17 +88,18 @@ export function VeleroScheduleActivity({
   const newest = veleroNewestSuccessfulText(reading.runs)
   const recent = reading.runs.recent ?? []
   const nextTitle = veleroNextRunTitle(reading)
+  const runsUnknown = reading.runs.read === 'unknown'
+  // The header chip already shows the state; this says why. Runs are said once:
+  // nothing kept is one line, and the newest success shows only when it isn't
+  // already the newest run listed.
+  const noneKept = !runsUnknown && recent.length === 0 && !newest.run
+  const showNewest = !runsUnknown && !noneKept && newest.run?.name !== recent[0]?.name
   return (
     <Section title="Schedule activity" icon={Activity} defaultExpanded>
       <PropertyList>
         <Property
-          label="State"
-          value={
-            <div className="space-y-1">
-              <VeleroScheduleStateBadge reading={reading} />
-              <div className="text-sm text-theme-text-secondary">{veleroScheduleReasonText(reading, { created })}</div>
-            </div>
-          }
+          label="Status"
+          value={<div className="text-sm text-theme-text-secondary">{veleroScheduleReasonText(reading, { created })}</div>}
         />
         <Property
           label="Next run"
@@ -110,7 +110,8 @@ export function VeleroScheduleActivity({
                   <span>{veleroNextRunText(reading)}</span>
                 </Tooltip>
                 <div className="text-xs text-theme-text-tertiary">
-                  {veleroLocalTime(reading.nextRun)} · <VeleroZoneValue zone={reading.zone} />
+                  {veleroLocalTime(reading.nextRun)}
+                  {(reading.zone.source === 'inferred' || reading.zone.source === 'unknown') && ' · Velero’s time zone not confirmed'}
                 </div>
               </div>
             ) : (
@@ -124,38 +125,41 @@ export function VeleroScheduleActivity({
             value={<RunLine run={reading.blocker} namespace={ns} onNavigate={onNavigate} />}
           />
         )}
-        <Property
-          label="Newest successful"
-          value={
-            newest.run ? (
-              <RunLine run={newest.run} namespace={ns} onNavigate={onNavigate} />
-            ) : (
-              <span className="text-theme-text-secondary">{newest.text}</span>
-            )
-          }
-        />
-        <Property
-          label="Recent runs"
-          value={
-            reading.runs.read === 'unknown' ? (
-              <span className="text-theme-text-secondary">{VELERO_RUNS_UNKNOWN}</span>
-            ) : recent.length === 0 ? (
-              <span className="text-theme-text-secondary">{VELERO_NONE_KEPT}</span>
-            ) : (
-              <ul className="space-y-1">
-                {recent.map((run) => (
-                  <li key={run.name}>
-                    <RunLine run={run} namespace={ns} onNavigate={onNavigate} />
-                  </li>
-                ))}
-              </ul>
-            )
-          }
-        />
+        {noneKept ? (
+          <Property label="Runs" value={<span className="text-theme-text-secondary">{VELERO_NONE_KEPT}</span>} />
+        ) : (
+          <>
+            {showNewest && (
+              <Property
+                label="Newest successful"
+                value={
+                  newest.run ? (
+                    <RunLine run={newest.run} namespace={ns} onNavigate={onNavigate} />
+                  ) : (
+                    <span className="text-theme-text-secondary">{newest.text}</span>
+                  )
+                }
+              />
+            )}
+            <Property
+              label="Recent runs"
+              value={
+                runsUnknown ? (
+                  <span className="text-theme-text-secondary">{VELERO_RUNS_UNKNOWN}</span>
+                ) : (
+                  <ul className="space-y-1">
+                    {recent.map((run) => (
+                      <li key={run.name}>
+                        <RunLine run={run} namespace={ns} onNavigate={onNavigate} />
+                      </li>
+                    ))}
+                  </ul>
+                )
+              }
+            />
+          </>
+        )}
       </PropertyList>
-      <p className="mt-2 text-xs text-theme-text-tertiary">
-        Runs are this namespace’s backups labelled with this schedule’s name, among those Velero still keeps; a run’s settings may predate edits to the schedule. {VELERO_COMPLETED_NOTE}
-      </p>
     </Section>
   )
 }

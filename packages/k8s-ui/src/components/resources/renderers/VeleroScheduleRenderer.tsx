@@ -68,15 +68,18 @@ export function VeleroScheduleRenderer({ data, onNavigate, activity }: VeleroSch
       {/* Schedule section */}
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
-          <Property label="Phase" value={
-            <VeleroPhaseValue status={scheduleStatus} phase={status.phase || ''} />
-          } />
+          {/* Enabled only means Velero accepted the schedule; the header already says whether it runs on time. */}
+          {status.phase !== 'Enabled' && (
+            <Property label="Phase" value={
+              <VeleroPhaseValue status={scheduleStatus} phase={status.phase || ''} />
+            } />
+          )}
           <Property label="Cron Schedule" value={
             <span className="font-mono text-sm">{getScheduleCron(data)}</span>
           } />
           <Property label="Last Backup" value={<TimeValue timestamp={data.status?.lastBackup} fallback="Never" />} />
-          <Property label="Paused" value={isPaused ? 'Yes' : 'No'} />
-          <Property label="Use Owner References" value={getScheduleUseOwnerReferences(data) ? 'Yes' : 'No'} />
+          {isPaused && <Property label="Paused" value="Yes" />}
+          {getScheduleUseOwnerReferences(data) && <Property label="Use Owner References" value="Yes" />}
         </PropertyList>
       </Section>
 

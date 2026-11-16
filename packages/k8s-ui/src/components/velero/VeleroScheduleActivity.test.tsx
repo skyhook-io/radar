@@ -38,10 +38,11 @@ describe('VeleroScheduleActivity', () => {
         onNavigate={() => {}}
       />,
     ))
-    expect(html).toContain('Held by backup nightly-20261115020000, which Velero hasn’t started for 30m.')
+    expect(html).toContain('Its backup hasn’t started for 30m; Velero submits nothing new until it does.')
     expect(html).toContain('Held by')
     expect(html).toContain('nightly-20261114020000')
-    expect(html).toContain('Completed is what Velero reports. It is not a test of a restore.')
+    // The backup it waits on is named once, in its own row.
+    expect(html.split('nightly-20261115020000').length - 1).toBe(2)
   })
 
   it('reads unread runs as unknown and marks an uncertain next run', () => {
@@ -49,9 +50,9 @@ describe('VeleroScheduleActivity', () => {
       <VeleroScheduleActivity reading={reading({ runs: { read: 'unknown', kept: 0 }, nextRunCertain: false, zone: { name: 'UTC', source: 'unknown' } })} />,
     ))
     expect(html).toContain('Unknown — no access to backups')
-    expect(html).not.toContain('None among the backups')
+    expect(html).not.toContain('None kept')
     expect(html).toContain('~in ')
-    expect(html).toContain('zone unknown')
+    expect(html).toContain('time zone not confirmed')
   })
 
   it('uses the Schedule’s age when the drawer holds it', () => {

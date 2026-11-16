@@ -26,10 +26,10 @@ describe('Velero storage locations', () => {
     expect(html).toContain('frequency unknown')
     expect(html).toContain('default unknown')
     expect(html).not.toMatch(/font-mono">0</)
-    expect(html).toContain('Some Velero data used on this screen was not read.')
+    expect(html).toContain('Radar couldn’t read some of the Velero data on this screen')
   })
 
-  it('counts the backups each location is named by, flags overdue validation and states unassigned backups', () => {
+  it('counts the backups each location is named by and flags overdue validation', () => {
     const data = workspace({
       installations: [{ namespace: 'velero', server: { source: 'deployment' }, defaultLocation: 'default', defaultSource: 'spec', unassignedBackups: 2 }],
       locations: [location({ validationOverdue: true, attention: true, lastValidation: hoursAgo(2), schedules: [{ name: 'nightly' }, { name: 'weekly', viaDefault: true }] })],
@@ -37,8 +37,8 @@ describe('Velero storage locations', () => {
     const html = render(data)
     expect(html).toContain('overdue')
     expect(html).toContain('(via default)')
-    expect(html).toContain('2 backups not yet assigned a location.')
-    expect(html).toContain('every 1m · server flag')
+    // The usual frequency lives in the overdue badge's tooltip, not on every row.
+    expect(html).not.toContain('server flag')
 
     const overview = text(renderToStaticMarkup(
       <MemoryRouter>

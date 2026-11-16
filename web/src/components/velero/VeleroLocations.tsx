@@ -6,7 +6,6 @@ import {
   formatRelativeAgeTime,
   getBSLStatus,
   veleroDefaultText,
-  veleroFrequencyText,
   veleroLocationReasonText,
   type VeleroLocationReading,
   veleroLocalTime,
@@ -45,13 +44,8 @@ function ValidationCell({ l }: { l: VeleroLocationReading }) {
           </Tooltip>
         )}
       </span>
-      <Sub>
-        {!f
-          ? 'frequency unknown'
-          : f.disabled
-            ? 'validation disabled'
-            : `every ${veleroFrequencyText(f.seconds)} · ${f.source === 'spec' ? 'set on the location' : 'server flag'}`}
-      </Sub>
+      {/* The usual frequency is in the overdue badge's tooltip; only an unusual one is worth a line. */}
+      {(!f || f.disabled) && <Sub>{!f ? 'frequency unknown' : 'validation disabled'}</Sub>}
     </>
   )
 }
@@ -124,7 +118,6 @@ function SchedulesCell({ l, onInspect }: { l: VeleroLocationReading; onInspect: 
 export function VeleroLocations({ data, installation, onInstallation, onInspect, inspected }: VeleroScreenProps) {
   const multi = data.installations.length > 1
   const locations = useMemo(() => inInstallation(data.locations, installation), [data.locations, installation])
-  const unassigned = inInstallation(data.installations, installation).filter((i) => (i.unassignedBackups ?? 0) > 0)
 
   const columns: TableColumn<VeleroLocationReading>[] = [
     {
@@ -150,8 +143,16 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
     },
     { header: 'Availability', width: '11%', cell: (l) => <AvailabilityCell l={l} /> },
     { header: 'Last validation', width: '15%', cell: (l) => <ValidationCell l={l} /> },
-    { header: 'Targeting it', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.targeting} /> },
-    { header: 'Completed', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.completedNotExpired} /> },
+    { header: 'Backups', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.targeting} /> },
+    {
+      header: (
+        <Tooltip content="Completed and not yet expired.">
+          <span>Completed</span>
+        </Tooltip>
+      ),
+      width: '10%',
+      cell: (l) => <BackupCount l={l} count={(b) => b.completedNotExpired} />,
+    },
     { header: 'Expired', width: '9%', cell: (l) => <BackupCount l={l} count={(b) => b.expired} /> },
     { header: 'Schedules writing here', width: '27%', cell: (l) => <SchedulesCell l={l} onInspect={onInspect} /> },
   ]
@@ -162,7 +163,6 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
       <ScreenBody>
         <VeleroCoverageNotice data={data} kinds={['backupStorageLocations', 'backups', 'schedules']} />
         <SectionTable
-          title="Storage locations"
           subtitle={`${locations.length} ${locations.length === 1 ? 'location' : 'locations'}`}
           columns={columns}
           rows={locations}
@@ -172,17 +172,6 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
           inspected={inspected}
           empty={coverageEmpty(data.coverage.backupStorageLocations, 'Velero storage locations')}
           minWidth={960}
-          footer={
-            <>
-              Backups are counted by the location each one names; Velero writes it when it first processes the backup. Completed counts the ones Velero reported Completed whose expiration has not passed; neither says a restore would succeed.
-              {unassigned.map((i) => (
-                <div key={i.namespace}>
-                  {multi ? `${i.namespace}: ` : ''}
-                  {i.unassignedBackups} {i.unassignedBackups === 1 ? 'backup' : 'backups'} not yet assigned a location.
-                </div>
-              ))}
-            </>
-          }
         />
       </ScreenBody>
     </div>

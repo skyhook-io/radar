@@ -128,7 +128,8 @@ export function SectionTable<T>({
   minWidth = 760,
   footer,
 }: {
-  title: ReactNode
+  /** Left out where the page heading already names the table. */
+  title?: ReactNode
   subtitle?: ReactNode
   columns: TableColumn<T>[]
   rows: T[]
@@ -143,7 +144,7 @@ export function SectionTable<T>({
   return (
     <section>
       <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-        <h2 className="text-sm font-semibold text-theme-text-primary">{title}</h2>
+        {title && <h2 className="text-sm font-semibold text-theme-text-primary">{title}</h2>}
         {subtitle && <span className="text-xs text-theme-text-tertiary">{subtitle}</span>}
       </div>
       <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
