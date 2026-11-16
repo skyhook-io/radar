@@ -397,7 +397,8 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		w.Container = t.container
 		// A new ReplicaSet of the same build, not yet scanned, is covered by
 		// the older one's report.
-		if id, ok := scannedSlot[slot(t)]; ok {
+		// Never for a started container whose build is unknown.
+		if id, ok := scannedSlot[slot(t)]; ok && !t.unresolved {
 			j.targetImage[t.key] = id
 			j.images[id].refs[t.image] = true
 			continue

@@ -9,6 +9,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -162,5 +163,41 @@ func TestTrivysOwnJobsAreLeftOut(t *testing.T) {
 	}
 	if !slices.Equal(images, []string{"acme/web:2"}) {
 		t.Fatalf("got %v, want only acme/web:2", images)
+	}
+}
+
+// A started container whose image has no registry digest (a local image ID)
+// runs a build no scan can be shown to describe: it reads as not scanned,
+// whatever a sibling replica runs or its spec now pins.
+func TestUnresolvedRunningBuildStaysUnscanned(t *testing.T) {
+	started := func(p *corev1.Pod, imageID string) *corev1.Pod {
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", Image: p.Spec.Containers[0].Image, ImageID: imageID, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+		return p
+	}
+
+	// Alone, against a scan of the tag's registry build.
+	local := started(pod("web", corev1.PodRunning, nil, "acme/web:latest"), "sha256:local-id")
+	live, _ := liveTargets(syncedCache(t, local), []string{"shop"}, nil, nil)
+	tagScan := vulnReport(reportSpec{name: "tag", ns: "shop", ownerKind: "Pod", ownerName: "web", container: "app", repo: "acme/web", tag: "latest", digest: "sha256:registry"})
+	if got := mustBuild(t, []*unstructured.Unstructured{tagScan}, live.targets, ViewImage, Filter{}); got.Summary.ImagesScanned != 0 || got.Summary.ImagesUnscanned != 1 {
+		t.Errorf("alone: %+v", got.Summary)
+	}
+
+	// Beside a replica of the same ReplicaSet that runs a scanned build.
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "shop", UID: "uid-web-1", OwnerReferences: owned("apps/v1", "Deployment", "checkout")}}
+	known := started(pod("web-1-a", corev1.PodRunning, owned("apps/v1", "ReplicaSet", "web-1"), "acme/web:latest"), "acme/web@sha256:d")
+	unknown := started(pod("web-1-b", corev1.PodRunning, owned("apps/v1", "ReplicaSet", "web-1"), "acme/web:latest"), "sha256:local-id")
+	live, _ = liveTargets(syncedCache(t, rs, known, unknown), []string{"shop"}, nil, nil)
+	scan := vulnReport(reportSpec{name: "known", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-1", container: "app", repo: "acme/web", tag: "latest", digest: "sha256:d"})
+	if got := mustBuild(t, []*unstructured.Unstructured{scan}, live.targets, ViewWorkload, Filter{}); got.Summary.ImagesUnscanned != 1 || len(got.CleanWorkloads) != 0 {
+		t.Errorf("beside a scanned sibling: %+v clean=%+v", got.Summary, got.CleanWorkloads)
+	}
+
+	// Its spec edited in place to pin another build before it restarts.
+	edited := started(pod("web", corev1.PodRunning, nil, "acme/web@sha256:new"), "sha256:local-id")
+	live, _ = liveTargets(syncedCache(t, edited), []string{"shop"}, nil, nil)
+	newScan := vulnReport(reportSpec{name: "new", ns: "shop", ownerKind: "Pod", ownerName: "web", container: "app", repo: "acme/web", digest: "sha256:new"})
+	if got := mustBuild(t, []*unstructured.Unstructured{newScan}, live.targets, ViewImage, Filter{}); got.Summary.ImagesScanned != 0 {
+		t.Errorf("a pinned spec doesn't say what runs: %+v", got.Summary)
 	}
 }

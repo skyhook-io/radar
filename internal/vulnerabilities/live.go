@@ -1,7 +1,6 @@
 package vulnerabilities
 
 import (
-	"cmp"
 	"maps"
 	"slices"
 	"strings"
@@ -44,6 +43,9 @@ type target struct {
 // side, and Pods of one controller that pulled different builds of a tag.
 type targetKey struct {
 	namespace, kind, name, container, image, digest string
+	// unresolved keeps a started replica whose build is unknown apart from
+	// a sibling that hasn't started, which may match by reference.
+	unresolved bool
 }
 
 func (k targetKey) owner() ownerKey {
@@ -126,13 +128,18 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			for _, c := range podContainers(pod.Spec) {
 				// What the kubelet reports runs wins over the spec: a Pod's
 				// image can change in place before its container restarts.
-				digest := cmp.Or(running[c.Name], pinnedDigest(c.Image))
+				// A started container with no registry digest stays unknown: its
+				// spec may already name another build.
+				digest := running[c.Name]
+				if digest == "" && !unresolved[c.Name] {
+					digest = pinnedDigest(c.Image)
+				}
 				add(target{
-					key:          targetKey{namespace: pod.Namespace, kind: kind, name: name, container: c.Name, image: c.Image, digest: digest},
+					key:          targetKey{namespace: pod.Namespace, kind: kind, name: name, container: c.Name, image: c.Image, digest: digest, unresolved: unresolved[c.Name]},
 					uid:          uid,
 					image:        c.Image,
 					digest:       digest,
-					unresolved:   digest == "" && unresolved[c.Name],
+					unresolved:   unresolved[c.Name],
 					scannedGroup: group,
 					workload:     workload,
 					container:    c.Name,
