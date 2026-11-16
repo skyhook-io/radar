@@ -33,6 +33,8 @@ export interface TraefikRouteFacts {
   match: string
   hosts: string[] | null
   entryPoints: string[] | null
+  /** IngressRoutes in spec.parentRefs: the rule is matched only after theirs, not on an entry point. Absent from older Radar. */
+  parents?: { group: string; namespace: string; name: string }[]
   priority?: number
   middlewares: TraefikRefFact[]
   services: TraefikBackendFact[]

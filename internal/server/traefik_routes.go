@@ -41,11 +41,15 @@ type traefikRouteRef struct {
 
 // traefikRouteRow is one spec.routes[i] of an IngressRoute.
 type traefikRouteRow struct {
-	Ref         traefikRouteRef      `json:"ref"`
-	Rule        int                  `json:"rule"`
-	Match       string               `json:"match"`
-	Hosts       []string             `json:"hosts"`
-	EntryPoints []string             `json:"entryPoints"`
+	Ref         traefikRouteRef `json:"ref"`
+	Rule        int             `json:"rule"`
+	Match       string          `json:"match"`
+	Hosts       []string        `json:"hosts"`
+	EntryPoints []string        `json:"entryPoints"`
+	// Parents: the IngressRoutes named in spec.parentRefs (Traefik 3.6
+	// multi-layer routing); the rule is matched only after theirs, never
+	// directly on an entry point.
+	Parents     []traefikRouteRef    `json:"parents,omitempty"`
 	Priority    *int64               `json:"priority,omitempty"`
 	Middlewares []traefikRefFact     `json:"middlewares"`
 	Services    []traefikBackendFact `json:"services"`
@@ -155,13 +159,14 @@ func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []t
 		}
 		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "routes")
 		entryPoints, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "entryPoints")
+		parents := traefikParentRefs(route)
 		for i, raw := range rules {
 			r, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
 			match, _ := r["match"].(string)
-			row := traefikRouteRow{Ref: ref, Rule: i, Match: match, Hosts: traefik.RuleHosts(match), EntryPoints: entryPoints}
+			row := traefikRouteRow{Ref: ref, Rule: i, Match: match, Hosts: traefik.RuleHosts(match), EntryPoints: entryPoints, Parents: parents}
 			if selected && in.Limit > 0 && len(full) >= in.Limit {
 				truncated, selected = true, false
 			}
@@ -220,6 +225,24 @@ func traefikAppliedMiddlewares(route *unstructured.Unstructured, refuses func(*u
 			}
 			out = append(out, [2]string{m.Namespace, m.Name})
 		}
+	}
+	return out
+}
+
+func traefikParentRefs(route *unstructured.Unstructured) []traefikRouteRef {
+	refs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+	var out []traefikRouteRef
+	for _, raw := range refs {
+		m, _ := raw.(map[string]any)
+		name, _ := m["name"].(string)
+		if name == "" {
+			continue
+		}
+		ns, _ := m["namespace"].(string)
+		if ns == "" {
+			ns = route.GetNamespace()
+		}
+		out = append(out, traefikRouteRef{Group: resourceid.GroupFromAPIVersion(route.GetAPIVersion()), Namespace: ns, Name: name})
 	}
 	return out
 }
@@ -341,7 +364,8 @@ func traefikRowProblems(row traefikRouteRow, now time.Time) []string {
 // markDuplicateHosts flags rows of different IngressRoutes whose normalized
 // match is equal and whose entry points overlap (none listed means Traefik's
 // default, which overlaps everything). It's a hint: "matched by more than
-// one route".
+// one route". A child route is matched only after its parent's rule, so it
+// isn't compared.
 func markDuplicateHosts(rows []traefikRouteRow) {
 	// Per normalized match, which routes listed each entry point (and which
 	// listed none), keeping only whether more than one route did: enough to
@@ -362,7 +386,7 @@ func markDuplicateHosts(rows []traefikRouteRow) {
 	const noEntryPoints = "\x00none"
 	groups := map[string]map[string]*owners{}
 	for _, r := range rows {
-		if len(r.Hosts) == 0 {
+		if len(r.Hosts) == 0 || len(r.Parents) > 0 {
 			continue
 		}
 		key := traefik.NormalizeMatch(r.Match)
@@ -381,7 +405,7 @@ func markDuplicateHosts(rows []traefikRouteRow) {
 	}
 	for i := range rows {
 		r := &rows[i]
-		if len(r.Hosts) == 0 {
+		if len(r.Hosts) == 0 || len(r.Parents) > 0 {
 			continue
 		}
 		g := groups[traefik.NormalizeMatch(r.Match)]

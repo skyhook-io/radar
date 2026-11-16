@@ -67,7 +67,12 @@ export function TraefikRequestPath({ facts, middlewareUse, onNavigate }: { facts
       <div className="space-y-3">
         {facts.map((row) => (
           <div key={row.rule} className="flex flex-wrap items-center gap-1.5 text-xs">
-            {(row.entryPoints?.length ? row.entryPoints : ['default entry points']).map((ep) => (
+            {row.parents?.length ? row.parents.map((p) => (
+              <span key={`${p.namespace}/${p.name}`} className="inline-flex items-center gap-1 text-theme-text-tertiary">
+                after
+                <RefLink refTo={{ kind: 'ingressroutes', group: p.group || group, namespace: p.namespace, name: p.name }} onNavigate={onNavigate}>{p.name}</RefLink>
+              </span>
+            )) : (row.entryPoints?.length ? row.entryPoints : ['default entry points']).map((ep) => (
               <Badge key={ep} severity="neutral" size="sm">{ep}</Badge>
             ))}
             <Arrow />

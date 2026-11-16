@@ -1,6 +1,7 @@
 package server
 
 import (
+	"slices"
 	"fmt"
 	"testing"
 	"time"
@@ -225,6 +226,30 @@ func TestBuildTraefikRoutesDuplicateHost(t *testing.T) {
 		if hasProblem(r, "duplicate_host") {
 			t.Errorf("two rules of one route are not duplicates: %+v", r)
 		}
+	}
+}
+
+// A child IngressRoute (spec.parentRefs, Traefik 3.6 multi-layer routing)
+// is matched only after its parent's rule, so it neither duplicates its
+// parent's host nor listens on entry points of its own.
+func TestBuildTraefikRoutesChildRoute(t *testing.T) {
+	child := tRoute("shop", "child", nil, nil, tRule("Host(`a`)", nil))
+	child.Object["spec"].(map[string]any)["parentRefs"] = []any{map[string]any{"name": "parent"}, map[string]any{"name": "edge", "namespace": "gw"}}
+	rows, _, _ := buildTraefikRoutes(tFixture{}.input(tRoute("shop", "parent", []any{"websecure"}, nil, tRule("Host(`a`)", nil)), child))
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	for _, r := range rows {
+		if hasProblem(r, "duplicate_host") {
+			t.Errorf("a child route doesn't duplicate its parent: %+v", r)
+		}
+	}
+	want := []traefikRouteRef{{Group: "traefik.io", Namespace: "shop", Name: "parent"}, {Group: "traefik.io", Namespace: "gw", Name: "edge"}}
+	if got := rows[0].Parents; !slices.Equal(got, want) {
+		t.Errorf("child parents = %+v, want %+v", got, want)
+	}
+	if rows[1].Parents != nil {
+		t.Errorf("parent route has no parents: %+v", rows[1].Parents)
 	}
 }
 

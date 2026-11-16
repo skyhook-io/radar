@@ -36,6 +36,13 @@ describe('TraefikIngressRouteRenderer request path', () => {
     expect(html.match(/lucide-arrow-right/g)).toHaveLength(2)
     expect(html).toContain('load-balances')
   })
+  it('starts a child route at its parent, not at entry points', () => {
+    const html = render([facts({ parents: [{ group: 'traefik.io', namespace: 'gw', name: 'edge' }] })])
+    expect(html).toMatch(/after<[^]*?>edge</)
+    // The spec section still lists entryPoints; only the request path drops its badge.
+    const count = (h: string) => h.split('websecure').length
+    expect(count(html)).toBe(count(render([facts()])) - 1)
+  })
   it('never shows 0 of 0 for unknown pod counts', () => {
     const html = render([facts({ services: [{ namespace: 'shop', name: 'ui', port: '80', kind: 'Service', exists: null, readyPods: null, totalPods: null }] })])
     expect(html).not.toContain('0 of 0')
