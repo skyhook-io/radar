@@ -82,4 +82,17 @@ func TestReplayTypedAndDynamic(t *testing.T) {
 	if _, ok := discovery.GetGVRWithGroup("Widget", "example.io"); !ok {
 		t.Fatal("catalog lost on refresh")
 	}
+	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependents := map[string]bool{}
+	for _, kind := range session.Catalog().DependentKinds() {
+		dependents[kind.GroupKind.Group+"/"+kind.GroupKind.Kind] = true
+	}
+	for _, want := range []string{"apps/ReplicaSet", "/Pod", "example.io/Widget"} {
+		if !dependents[want] {
+			t.Fatalf("ownership can't search %s for dependents: %v", want, dependents)
+		}
+	}
 }
