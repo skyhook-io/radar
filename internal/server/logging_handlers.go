@@ -95,8 +95,8 @@ const fluentbitExcludeAnnotation = "fluentbit.io/exclude"
 // leave the server (those that select, may select or exclude it, invalid ones
 // that would select it, and the closest miss), so a caller who can't list
 // Flows learns their names but not the rest of the cluster's routing; the
-// closest miss's namespace and node conditions are withheld unless the caller
-// may list its kind. No output configuration ever leaves the server. On a
+// closest miss's namespace and node conditions, its own namespace and its
+// destinations' namespaces are withheld unless the caller may list its kind. No output configuration ever leaves the server. On a
 // shared listener without auth it reads as Radar's identity; a cross-site
 // request is refused by requireSameOrigin.
 func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
@@ -322,6 +322,11 @@ func (s *Server) handleLoggingPod(w http.ResponseWriter, r *http.Request) {
 		case i == closest:
 			if !s.canRead(r, logging.Group, strings.ToLower(row.Kind)+"s", row.Namespace, "list") {
 				row.Unmet = withholdPlacement(row.Unmet)
+				row.Namespace = ""
+				row.Destinations = slices.Clone(row.Destinations)
+				for d := range row.Destinations {
+					row.Destinations[d].Namespace = ""
+				}
 			}
 		case row.Invalid != "" && (row.Kind == "Flow" || c.relevant):
 		case row.Ignored || !c.relevant && !row.Fallback:
