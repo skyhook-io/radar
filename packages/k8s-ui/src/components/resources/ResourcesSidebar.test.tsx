@@ -140,6 +140,7 @@ describe('ResourcesSidebar category workspaces', () => {
           CloudNativePG: {
             destinations: [
               { id: 'overview', label: 'Overview', count: 3, countTitle: '3 clusters need attention', active: true, child: { label: 'pg-orders' }, onSelect: () => {} },
+              { id: 'protection', label: 'Backups', onSelect: () => {} },
             ],
             defaultKindsCollapsed: true,
             scopeNote: 'Counts for namespace payments',
@@ -154,6 +155,29 @@ describe('ResourcesSidebar category workspaces', () => {
     expect(html).toContain('Resource kinds')
     expect(html).toMatch(/aria-expanded="false"[^>]*>(?:(?!<\/button>).)*Resource kinds/)
     expect(html).not.toContain('selection-strong selection-text">Pod')
+  })
+
+  // One view needs no headings: it sits above the kinds, which stay listed.
+  it('lists a single view above the kinds without headings or a collapsed kind list', () => {
+    const html = renderToString(
+      <ResourcesSidebar
+        selectedKind={null}
+        onSelectedKindChange={() => {}}
+        apiResources={[cnpgCluster, objectStore]}
+        resourceCounts={{ 'postgresql.cnpg.io/Cluster': 2, 'barmancloud.cnpg.io/ObjectStore': 1 }}
+        categoryWorkspaces={{
+          CloudNativePG: {
+            destinations: [{ id: 'overview', label: 'Overview', count: 3, active: true, onSelect: () => {} }],
+            defaultKindsCollapsed: true,
+          },
+        }}
+      />
+    )
+    expect(html).toContain('Overview')
+    expect(html).not.toContain('>Views<')
+    expect(html).not.toContain('Resource kinds')
+    expect(html).toContain('Cluster')
+    expect(html).toContain('ObjectStore')
   })
 
   it('marks a count taken over partly readable data as a lower bound, and never shows its zero as none', () => {

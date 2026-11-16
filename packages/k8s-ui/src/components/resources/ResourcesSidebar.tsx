@@ -95,6 +95,13 @@ export interface SidebarDisplayState {
 
 // Persisted across remounts so collapsed categories survive tab switches
 let persistedExpandedCategories: Set<string> | null = null
+// A category with one view lists it above its kinds with no "Views" or
+// "Resource kinds" headings and nothing to collapse: the headings only earn
+// their space when several views compete with the kinds.
+function singleView(ws: SidebarCategoryWorkspace): boolean {
+  return ws.destinations.length === 1
+}
+
 // Per-category "Resource kinds" disclosure, once the user has toggled it.
 const persistedKindsOpen = new Map<string, boolean>()
 const COUNT_UNAVAILABLE_MESSAGE = 'Count unavailable. Open to view resources.'
@@ -323,7 +330,7 @@ export function ResourcesSidebar({
   const [kindsOpenOverrides, setKindsOpenOverrides] = useState<Map<string, boolean>>(() => new Map(persistedKindsOpen))
   const kindsOpen = (categoryName: string) => {
     const ws = categoryWorkspaces?.[categoryName]
-    if (!ws) return true
+    if (!ws || singleView(ws)) return true
     const override = kindsOpenOverrides.get(categoryName)
     if (override !== undefined) return override
     const selectedHere = !activeDestinationCategory && categories?.find(c => c.name === categoryName)?.resources.some(
@@ -867,7 +874,9 @@ function WorkspaceDestinations({
 }) {
   return (
     <div className="space-y-0.5">
-      <div className="pl-5 pr-2 pt-0.5 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Views</div>
+      {destinations.length > 1 && (
+        <div className="pl-5 pr-2 pt-0.5 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Views</div>
+      )}
       {destinations.map((d) => {
         const Icon = d.icon
         return (
@@ -917,7 +926,7 @@ function WorkspaceDestinations({
       {workspace.scopeNote && (
         <div className="pl-6 pr-2 pt-0.5 text-[11px] text-theme-text-tertiary">{workspace.scopeNote}</div>
       )}
-      {filtering ? (
+      {destinations.length === 1 ? null : filtering ? (
         hasKinds && <div className="pl-5 pr-2 pt-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Resource kinds</div>
       ) : (
         <button
