@@ -51,9 +51,13 @@ describe('SubstrateVerdictLine', () => {
   it('marks a verdict qualified by an unjudged shortfall or an unconfirmed cluster', () => {
     withVerdict({ state: 'freeActorSlots', reason: "Radar cannot tell whether the pool is short of workers: Substrate's controller reported no desired worker count", facts: [] })
     expect(render(pool)).toContain('aria-label="Qualified"')
+    // Every pool on Substrate's default install: said in plain view, not only on hover.
+    expect(render(pool)).toContain('· worker shortfall unknown')
     const unverified = { isolation: { mode: 'unverified' as const, note: "Radar couldn't confirm these Substrate series belong to this exact cluster" } }
     health = { data: { ...base, status: 'available', verdict: { state: 'noFreeActorSlots', facts: [] }, charts: [{ id: 'workers', title: '', unit: 'workers', population: '', source: '', state: 'ok', series: [], ...unverified }] } }
     expect(render(pool)).toContain('aria-label="Qualified"')
+    // An unconfirmed cluster alone says nothing about the shortfall.
+    expect(render(pool)).not.toContain('worker shortfall unknown')
   })
 
   it('shows fractional replica averages as approximate, never rounded', () => {

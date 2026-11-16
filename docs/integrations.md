@@ -2259,7 +2259,7 @@ The verdict and the capacity and snapshot facts read now; resume p95, failed res
 
 Facts are uncolored. An hourly fact is computed from the data Prometheus holds for the hour, so a gap in collection makes the crash count cover less than the hour; the fact's tooltip says so. One Radar could not read says **Unavailable** with the reason (the same reason its chart gives), never 0, and so does an hourly fact whose own population (successful resumes, all resumes, crashes) stopped reporting: the hour's number would count only the time before. One whose series exist but recorded nothing for this pool or node says **None**. When the verdict cannot be read it says **Unknown** with the reason, as it does when workers report a state Substrate's registry does not define.
 
-Only Short of workers needs the controller's `ate.workerpool.desired_workers`. Substrate's bundled Prometheus does not collect the controller's metrics, so without it the pool is still judged Full, Free slots or No schedulable workers from the API server's counts, and an info mark on the line says the shortfall was not judged. The same mark carries the note when Radar could not confirm the series belong to this cluster.
+Only Short of workers needs the controller's `ate.workerpool.desired_workers`. Substrate's bundled Prometheus does not collect the controller's metrics, so without it the pool is still judged Full, Free slots or No schedulable workers from the API server's counts, and the line says "worker shortfall unknown" beside the state, with the reason on its info mark. The same mark carries the note when Radar could not confirm the series belong to this cluster.
 
 | Resource | Chart | Series (each counts only what Substrate attributes) |
 |---|---|---|

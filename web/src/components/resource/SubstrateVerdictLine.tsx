@@ -34,11 +34,15 @@ export function SubstrateVerdictLine({ target, onOpenMetrics }: { target: Substr
   // and series Radar could not tie to this cluster.
   const unverified = data?.charts.find(c => c.state === 'ok' && c.isolation.mode === 'unverified')?.isolation.note
   const notes = [verdict.state !== 'unknown' ? verdict.reason : undefined, error ? undefined : unverified].filter((n): n is string => Boolean(n))
+  // A pool's only qualifier is a shortfall that could not be judged. On
+  // Substrate's default install that is every pool, so it can't hide in a tooltip.
+  const shortfallUnknown = target.kind === 'workerpool' && verdict.state !== 'unknown' && Boolean(verdict.reason)
   return (
     <section aria-label={title} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-secondary">
       <span className="font-medium text-theme-text-tertiary">{title}</span>
       <span className="inline-flex items-center gap-1">
         <VerdictState verdict={verdict} />
+        {shortfallUnknown && <span className="text-theme-text-tertiary">· worker shortfall unknown</span>}
         {notes.length > 0 && (
           <Tooltip content={notes.map(n => n.endsWith('.') ? n : `${n}.`).join(' ')}>
             <Info aria-label="Qualified" className="h-3 w-3 text-theme-text-tertiary" />
