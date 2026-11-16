@@ -91,8 +91,8 @@ func TestAgentSandboxRefusedSuspensionNamesTheTrackedPod(t *testing.T) {
 		annotations map[string]any
 		want        string
 	}{
-		"own name":       {nil, `A Pod named "a" exists`},
-		"annotated name": {map[string]any{"agents.x-k8s.io/pod-name": "a-pod-7f2"}, `A Pod named "a-pod-7f2" exists`},
+		"own name":       {nil, `The conflicting Pod is "a".`},
+		"annotated name": {map[string]any{"agents.x-k8s.io/pod-name": "a-pod-7f2"}, `The conflicting Pod is "a-pod-7f2".`},
 	} {
 		r := ReadAgentSandbox(sandbox(tc.annotations))
 		if !r.SuspensionRefused || !strings.Contains(r.Verdict.Message, tc.want) {

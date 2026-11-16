@@ -219,7 +219,7 @@ func sandboxPodName(u *unstructured.Unstructured) string {
 // suspensionRefusedMessage explains a refused suspension: the controller's own
 // words, then what unblocks it. Mirrored in k8s-ui's resource-utils-agent-runtimes.ts.
 func suspensionRefusedMessage(name, controllerMessage string) string {
-	next := fmt.Sprintf("A Pod named %q exists that this Sandbox does not own. Remove that Pod, or recreate the Sandbox under another name, so it can suspend.", name)
+	next := fmt.Sprintf("The conflicting Pod is %q. Remove it, or recreate the Sandbox under another name, to allow suspension.", name)
 	if controllerMessage == "" {
 		return next
 	}

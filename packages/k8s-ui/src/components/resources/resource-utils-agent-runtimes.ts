@@ -53,7 +53,7 @@ function sandboxPodName(resource: any): string {
 
 // Mirrors pkg/health suspensionRefusedMessage.
 function suspensionRefusedMessage(name: string, controllerMessage: unknown): string {
-  const next = `A Pod named "${name}" exists that this Sandbox does not own. Remove that Pod, or recreate the Sandbox under another name, so it can suspend.`
+  const next = `The conflicting Pod is "${name}". Remove it, or recreate the Sandbox under another name, to allow suspension.`
   return typeof controllerMessage === 'string' && controllerMessage
     ? `${controllerMessage.replace(/\.$/, '')}. ${next}`
     : next
