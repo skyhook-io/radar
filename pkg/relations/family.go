@@ -37,9 +37,11 @@ type Family struct {
 	CrossNamespace bool
 	// ReferrersIndex, when set, finds the sources that may name a target
 	// through a store index keyed by the target, in every namespace, instead
-	// of reading every source in scope: for a family whose sources are many
-	// and cross namespaces, as Pods naming their Node are. What each source
-	// found declares is still evaluated.
+	// of reading every source in scope: for a family whose references cross
+	// namespaces and are sparse, as Reflector mirrors are. An index costs work
+	// on every update and relist of its source kind, so a busy kind such as
+	// Pods (whose Node lookups are rare) scans instead. What each source found
+	// declares is still evaluated.
 	ReferrersIndex *ReferrersIndex
 	// Declared visits what obj declares, each with the path declaring it.
 	// It returns an error when part of obj couldn't be read, after visiting
