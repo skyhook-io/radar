@@ -22,6 +22,9 @@ type RelationshipExtras struct {
 	Consumers      []relations.Referrer              `json:"-"`
 	Declarations   []relations.Declared              `json:"-"`
 	ScalerManagers map[resourceid.Ref]resourceid.Ref `json:"-"`
+	// WithheldKinds names, per field, the kinds of the declared targets
+	// the caller may not read, so a host can say which part was withheld.
+	WithheldKinds map[string][]resourceid.GroupKind `json:"-"`
 }
 
 func (e *RelationshipExtras) cover(field string, c relations.Coverage) {
@@ -41,6 +44,43 @@ func (e *RelationshipExtras) cover(field string, c relations.Coverage) {
 	prior.Truncated = prior.Truncated || c.Truncated
 	prior.Total = max(prior.Total, c.Total)
 	e.Fields[field] = prior
+}
+
+// projectReferences projects what a subject declares onto the fields it
+// fills. A withheld target narrows only the field its kind fills, not every
+// field the family fills.
+func (e *RelationshipExtras) projectReferences(d relations.Disposition, subject resourceid.GroupKind, a relations.ReferencesAnswer) {
+	var withheld []resourceid.GroupKind
+	for _, t := range a.Declared {
+		if t.State == relations.TargetWithheld && !slices.Contains(withheld, t.Ref.GroupKind()) {
+			withheld = append(withheld, t.Ref.GroupKind())
+		}
+	}
+	c := a.Coverage
+	if len(withheld) == 0 {
+		e.projectCoverage(d, subject, true, c)
+		return
+	}
+	c.Narrowed = false
+	e.projectCoverage(d, subject, true, c)
+	for _, kind := range withheld {
+		i := slices.IndexFunc(d.Rules, func(r relations.ProjectionRule) bool { return r.Matches(subject, kind) })
+		if i < 0 {
+			continue
+		}
+		for _, field := range d.Rules[i].References {
+			if field == "" {
+				continue
+			}
+			e.cover(field, relations.Coverage{Narrowed: true})
+			if e.WithheldKinds == nil {
+				e.WithheldKinds = map[string][]resourceid.GroupKind{}
+			}
+			if !slices.Contains(e.WithheldKinds[field], kind) {
+				e.WithheldKinds[field] = append(e.WithheldKinds[field], kind)
+			}
+		}
+	}
 }
 
 func (e *RelationshipExtras) projectCoverage(d relations.Disposition, subject resourceid.GroupKind, forward bool, c relations.Coverage) {

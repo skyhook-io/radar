@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -146,10 +147,12 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		}
 		refs := v.References(f, subject, obj)
 		n.cover(f.Name, refs.Coverage)
-		n.extras.projectCoverage(disposition, gk, true, refs.Coverage)
+		n.extras.projectReferences(disposition, gk, refs)
 		if f == relations.ConfigReferences && subject == n.extras.Subject {
 			for _, d := range refs.Declared {
-				if d.State != relations.TargetWithheld {
+				// A target whose permission check failed is no more readable
+				// than a withheld one; its field says it couldn't be checked.
+				if d.State != relations.TargetWithheld && (d.State != relations.TargetUnread || d.Gap.Reason != readreason.UserPermissionCheckFailed) {
 					n.extras.Declarations = append(n.extras.Declarations, d)
 				}
 			}

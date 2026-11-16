@@ -3,6 +3,7 @@ package topology
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -86,3 +87,78 @@ func TestRelationsExtrasEmptyInventoriesKeepReadinessAndNarrowing(t *testing.T) 
 		}
 	}
 }
+
+// countingProjectionAccess counts what the caller's access is asked, by kind
+// and namespace.
+type countingProjectionAccess struct {
+	projectionAccess
+	asked map[resourceid.Ref]int
+}
+
+func (a countingProjectionAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.Decision {
+	a.asked[resourceid.Ref{Group: gk.Group, Kind: gk.Kind, Namespace: ns}]++
+	return a.projectionAccess.CanRead(gk, ns)
+}
+
+// The context checks a kind only for objects that relate, so it says a field
+// was withheld only where a related object is hidden.
+func TestRelationsContextWithholdsOnlyWhatIsThere(t *testing.T) {
+	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "Service")
+	inShop := resourceid.Ref{Kind: "Service", Namespace: "shop"}
+
+	s := newProjectionSession(t, dep)
+	empty := countingProjectionAccess{projectionAccess{denied: []string{"Service"}}, map[resourceid.Ref]int{}}
+	RelationsContextAnswer(s, empty, ownership.Unrestricted(), ownership.NewView(s, empty), projectionRef(dep), dep, "", nil, nil)
+	if empty.asked[inShop] != 0 {
+		t.Fatalf("no Service in shop should cost no check: %v", empty.asked)
+	}
+
+	s = newProjectionSession(t, dep, svc)
+	there := countingProjectionAccess{projectionAccess{denied: []string{"Service"}}, map[resourceid.Ref]int{}}
+	rel, extras := RelationsContextAnswer(s, there, ownership.Unrestricted(), ownership.NewView(s, there), projectionRef(dep), dep, "", nil, nil)
+	if there.asked[inShop] == 0 || len(rel.Services) != 0 {
+		t.Fatalf("a Service the caller may not read must be checked and withheld: asked=%v services=%v", there.asked, rel.Services)
+	}
+	narrowed := false
+	for _, c := range extras.Fields {
+		narrowed = narrowed || c.Narrowed
+	}
+	if !narrowed {
+		t.Fatalf("the withheld Service must be reported: %+v", extras.Fields)
+	}
+}
+
+// One withheld Secret narrows the field that lists it, not the family's other
+// fields, and a target whose permission check failed is not passed on.
+func TestRelationsContextWithheldTargetNarrowsItsOwnField(t *testing.T) {
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "shop"}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "credential"}}}}}}, "", "Pod")
+	s := newProjectionSession(t, pod)
+	denied := projectionAccess{denied: []string{"Secret"}}
+	_, extras := RelationsContextAnswer(s, denied, ownership.Unrestricted(), ownership.NewView(s, denied), projectionRef(pod), pod, "", nil, nil)
+	if !extras.Fields["ConfigRefs"].Narrowed || extras.Fields["StorageRefs"].Narrowed || extras.Fields["ServiceAccount"].Narrowed {
+		t.Fatalf("fields = %+v, want only ConfigRefs narrowed", extras.Fields)
+	}
+	if got := extras.WithheldKinds["ConfigRefs"]; len(got) != 1 || got[0].Kind != "Secret" {
+		t.Fatalf("withheld kinds = %v", extras.WithheldKinds)
+	}
+
+	undecided := undecidedKinds{"Secret"}
+	_, extras = RelationsContextAnswer(s, undecided, ownership.Unrestricted(), ownership.NewView(s, undecided), projectionRef(pod), pod, "", nil, nil)
+	for _, d := range extras.Declarations {
+		if d.Ref.Kind == "Secret" {
+			t.Fatalf("a Secret whose check failed was passed on: %+v", d)
+		}
+	}
+}
+
+// undecidedKinds can't decide the kinds it names.
+type undecidedKinds []string
+
+func (u undecidedKinds) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if slices.Contains(u, gk.Kind) {
+		return ownership.Undecided
+	}
+	return ownership.Allowed
+}
+func (undecidedKinds) Namespaces() ([]string, bool) { return nil, true }

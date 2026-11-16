@@ -5,8 +5,16 @@ import (
 	"slices"
 
 	"github.com/skyhook-io/radar/pkg/readreason"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
+
+// fieldKinds names the one kind a context field lists, where a relationship
+// field fills several context fields, so a withheld target marks only its own.
+var fieldKinds = map[string]resourceid.GroupKind{
+	"uses.configMaps": {Kind: "ConfigMap"}, "uses.secrets": {Kind: "Secret"},
+	"uses.pvcs": {Kind: "PersistentVolumeClaim"}, "uses.serviceAccount": {Kind: "ServiceAccount"},
+}
 
 func addRelationshipOmissions(extras *topology.RelationshipExtras, omitted *omittedTracker) {
 	if extras == nil {
@@ -37,8 +45,11 @@ func addRelationshipOmissions(extras *topology.RelationshipExtras, omitted *omit
 				reason = OmittedUnavailable
 			}
 		}
+		withheld := extras.WithheldKinds[field]
 		for _, name := range fields[field] {
-			if coverage.Narrowed {
+			if coverage.Narrowed && (len(withheld) == 0 || slices.ContainsFunc(withheld, func(k resourceid.GroupKind) bool {
+				return fieldKinds[name] == (resourceid.GroupKind{}) || fieldKinds[name] == k
+			})) {
 				omitted.add(name, OmittedRBACDenied)
 			}
 			if reason != "" {
