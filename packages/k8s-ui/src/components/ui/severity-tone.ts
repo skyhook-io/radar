@@ -32,11 +32,11 @@ export const TONE_FILL_CLASS: Record<SeverityTone, string> = {
 // The card's left severity rail — the scan-down cue in a queue. It belongs to
 // the whole card, so an open card's rail runs past the header down its body.
 export const TONE_RAIL_CLASS: Record<SeverityTone, string> = {
-  red: 'bg-red-500',
-  orange: 'bg-orange-500',
-  amber: 'bg-amber-500',
-  yellow: 'bg-yellow-500',
-  slate: 'bg-slate-300 dark:bg-slate-600',
+  red: '[--rail:var(--color-red-500)]',
+  orange: '[--rail:var(--color-orange-500)]',
+  amber: '[--rail:var(--color-amber-500)]',
+  yellow: '[--rail:var(--color-yellow-500)]',
+  slate: '[--rail:var(--color-slate-300)] dark:[--rail:var(--color-slate-600)]',
 }
 
 // A collapsed card's header: a faint hover tint in the card's tone.

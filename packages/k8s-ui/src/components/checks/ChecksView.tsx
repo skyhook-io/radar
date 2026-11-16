@@ -576,7 +576,7 @@ export function CheckCardShell({
   return (
     <Container
       className={[
-        'relative isolate overflow-hidden rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
+        'relative isolate rounded-xl border bg-theme-surface transition-[border-color,box-shadow] duration-200',
         // The open card lifts via elevation — heavier shadow + a bright
         // emphasis edge that clearly separates it from sibling cards. Severity
         // stays rationed to the rail, band + pill; separation is depth, not more color.
@@ -589,48 +589,51 @@ export function CheckCardShell({
         .filter(Boolean)
         .join(' ')}
     >
-      <SeverityRail className={SEVERITY_RAIL_CLASS[sev]} />
-      {/* Leading severity icon is the at-a-glance cue; a trailing chevron shows
-          open/closed. Collapsed: neutral row + rail. Expanded: severity-tinted
-          band + solid pill — the tint is a focus signal, not per-row alarm. */}
-      <div
-        {...buttonProps}
-        role="button"
-        tabIndex={0}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onToggle()
-          }
-        }}
-        className={`group flex cursor-pointer items-center gap-3 py-3 ${SEVERITY_RAIL_HEADER_INSET_CLASS} pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? SEVERITY_HEADER_BAND_CLASS[sev] : SEVERITY_ROW_HOVER_CLASS[sev]}`}
-      >
-        <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${SEVERITY_TEXT_CLASS[sev]}`} aria-hidden />
+      <SeverityRail open={open} className={SEVERITY_RAIL_CLASS[sev]} />
+      {/* Clips the header band and body to the rounded corners, inside the border the rail paints over. */}
+      <div className="overflow-hidden rounded-[11px]">
+        {/* Leading severity icon is the at-a-glance cue; a trailing chevron shows
+            open/closed. Collapsed: neutral row + rail. Expanded: severity-tinted
+            band + solid pill — the tint is a focus signal, not per-row alarm. */}
+        <div
+          {...buttonProps}
+          role="button"
+          tabIndex={0}
+          onClick={onToggle}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              onToggle()
+            }
+          }}
+          className={`group flex cursor-pointer items-center gap-3 py-3 ${SEVERITY_RAIL_HEADER_INSET_CLASS} pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? SEVERITY_HEADER_BAND_CLASS[sev] : SEVERITY_ROW_HOVER_CLASS[sev]}`}
+        >
+          <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${SEVERITY_TEXT_CLASS[sev]}`} aria-hidden />
 
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-semibold text-theme-text-primary">{title}</span>
-            <span className={`shrink-0 ${NEUTRAL_CHIP_CLASS}`}>{category}</span>
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-sm font-semibold text-theme-text-primary">{title}</span>
+              <span className={`shrink-0 ${NEUTRAL_CHIP_CLASS}`}>{category}</span>
+            </div>
+            {description}
+            {summary}
           </div>
-          {description}
-          {summary}
+
+          <span className={`badge-sm shrink-0 px-2.5 py-0.5 text-xs font-semibold ${open ? SEVERITY_SOLID_CLASS[sev] : SEVERITY_BADGE_CLASS[sev]}`}>
+            {SEVERITY_LABEL[sev]}
+          </span>
+          {renderActions?.()}
+          <CollapseChevron open={open} className="h-4 w-4" />
         </div>
 
-        <span className={`badge-sm shrink-0 px-2.5 py-0.5 text-xs font-semibold ${open ? SEVERITY_SOLID_CLASS[sev] : SEVERITY_BADGE_CLASS[sev]}`}>
-          {SEVERITY_LABEL[sev]}
-        </span>
-        {renderActions?.()}
-        <CollapseChevron open={open} className="h-4 w-4" />
+        {/* Kept mounted (Collapse's default, not `open &&`) so the collapse
+            animates too. Body sits on the card surface (not a recessed grey
+            panel) so its text keeps enough contrast. */}
+        <Collapse open={open} id={panelId}>
+          <div className="flex flex-col divide-y divide-theme-border/70 border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">{children}</div>
+        </Collapse>
       </div>
-
-      {/* Kept mounted (Collapse's default, not `open &&`) so the collapse
-          animates too. Body sits on the card surface (not a recessed grey
-          panel) so its text keeps enough contrast. */}
-      <Collapse open={open} id={panelId}>
-        <div className="flex flex-col divide-y divide-theme-border/70 border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">{children}</div>
-      </Collapse>
     </Container>
   )
 }
