@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/integration"
@@ -177,5 +178,21 @@ func TestRuns(t *testing.T) {
 
 	if RunsKey("schedules") != "" {
 		t.Error("only backups and restores are runs")
+	}
+}
+
+func TestScheduleActivityBackupControllerFact(t *testing.T) {
+	s := obj("Schedule", "velero", "nightly", nil, map[string]any{"schedule": "0 * * * *"}, map[string]any{"phase": "Enabled"})
+	reader := fakeRead{objects: map[string][]*unstructured.Unstructured{"schedules": {s}}}.reader()
+	one := int32(1)
+	reader.Observations.Deployments = func(context.Context, string) ([]*appsv1.Deployment, bool) {
+		return []*appsv1.Deployment{{
+			Spec:   appsv1.DeploymentSpec{Replicas: &one, Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Command: []string{"/velero", "server"}, Args: []string{"--disable-controllers=backup"}}}}}},
+			Status: appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1},
+		}}, true
+	}
+	response, readable, found := reader.ScheduleActivity(t.Context(), "velero", "nightly")
+	if !readable || !found || !response.BackupsDisabled || response.ServerStopped || response.Reading.State == domain.StateSchedulingDisabled {
+		t.Fatalf("%+v read=%v found=%v", response, readable, found)
 	}
 }

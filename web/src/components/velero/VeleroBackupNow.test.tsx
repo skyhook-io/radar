@@ -56,7 +56,7 @@ describe('Back up now', () => {
     const confirm = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Back up now').at(-1)!
     act(() => confirm.click())
     expect(state.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ namespace: 'velero', name: 'nightly', resourceVersion: '42', backupName: expect.stringMatching(/^nightly-\d{14}$/) }),
+      expect.objectContaining({ namespace: 'velero', name: 'nightly', resourceVersion: '42', backupName: expect.stringMatching(/^nightly-\d{14}$/), submission: expect.stringMatching(/^[A-Za-z0-9-]{8,64}$/) }),
       expect.anything(),
     )
   })

@@ -13,12 +13,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	veleropkg "github.com/skyhook-io/radar/pkg/velero"
 )
 
+const veleroSubmissionAnnotation = "radar.skyhook.io/submission"
+
 var (
-	veleroScheduleGVR = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "schedules"}
-	veleroBackupGVR   = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "backups"}
+	veleroSubmissionID = regexp.MustCompile(`^[A-Za-z0-9-]{8,64}$`)
+	veleroScheduleGVR  = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "schedules"}
+	veleroBackupGVR    = schema.GroupVersionResource{Group: veleroGroup, Version: "v1", Resource: "backups"}
 )
 
 // VeleroBackupNowRequest binds the schedule the caller reviewed.
@@ -26,6 +30,7 @@ type VeleroBackupNowRequest struct {
 	// ResourceVersion of the Schedule shown in the confirmation. A schedule
 	// edited since is refused, so the backup is the one that was reviewed.
 	ResourceVersion string `json:"resourceVersion"`
+	Submission      string `json:"submission"`
 	// Name the confirmation chose for the backup, <schedule>-<14 digits>.
 	// Repeating a request whose answer was lost returns the backup it already
 	// created instead of starting another. Optional; the server names it
@@ -67,6 +72,10 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
+	if !veleroSubmissionID.MatchString(req.Submission) {
+		s.writeError(w, http.StatusBadRequest, "submission must be 8–64 letters, digits or hyphens")
+		return
+	}
 	if req.ResourceVersion == "" {
 		s.writeError(w, http.StatusBadRequest, "resourceVersion of the reviewed schedule is required")
 		return
@@ -95,9 +104,23 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 	// The same confirmation sent again after its answer was lost: the backup
 	// it asked for exists, so say so, even if the schedule has changed since.
 	if req.Name != "" && backupNowName(name).MatchString(req.Name) {
-		if existing, getErr := client.Resource(veleroBackupGVR).Namespace(namespace).Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil &&
-			existing.GetLabels()[veleropkg.ScheduleNameLabel] == name {
+		if existing, getErr := client.Resource(veleroBackupGVR).Namespace(namespace).Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil {
+			if existing.GetAnnotations()[veleroSubmissionAnnotation] != req.Submission {
+				s.writeError(w, http.StatusConflict, "another backup was created with this name; review again")
+				return
+			}
 			s.writeJSON(w, VeleroBackupNowResponse{Namespace: existing.GetNamespace(), Name: existing.GetName()})
+			return
+		}
+	}
+	if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {
+		server := veleropkg.ServerConfigFromDeployments(deployments, true)
+		if server.Down() {
+			s.writeError(w, http.StatusConflict, "The Velero server is stopped; start it before backing up.")
+			return
+		}
+		if server.FlagsKnown() && server.BackupsDisabled {
+			s.writeError(w, http.StatusConflict, "The Velero backup controller is disabled (--restore-only or --disable-controllers=backup); enable it before backing up.")
 			return
 		}
 	}
@@ -124,20 +147,27 @@ func (s *Server) handleVeleroBackupNow(w http.ResponseWriter, r *http.Request) {
 		backup.SetName(req.Name)
 	}
 
+	annotations := backup.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[veleroSubmissionAnnotation] = req.Submission
+	backup.SetAnnotations(annotations)
+
 	created, err := client.Resource(veleroBackupGVR).Namespace(namespace).Create(r.Context(), backup, metav1.CreateOptions{})
 	switch {
 	case err == nil:
 	case apierrors.IsAlreadyExists(err):
 		// The same confirmation sent again (its answer was lost): the backup
 		// it asked for exists, so say so rather than start a second one.
-		if req.Name != "" {
-			if existing, getErr := client.Resource(veleroBackupGVR).Namespace(namespace).Get(r.Context(), req.Name, metav1.GetOptions{}); getErr == nil &&
-				existing.GetLabels()[veleropkg.ScheduleNameLabel] == name {
+		if backup.GetName() != "" {
+			if existing, getErr := client.Resource(veleroBackupGVR).Namespace(namespace).Get(r.Context(), backup.GetName(), metav1.GetOptions{}); getErr == nil &&
+				existing.GetAnnotations()[veleroSubmissionAnnotation] == req.Submission {
 				s.writeJSON(w, VeleroBackupNowResponse{Namespace: existing.GetNamespace(), Name: existing.GetName()})
 				return
 			}
 		}
-		s.writeError(w, http.StatusConflict, "a backup named "+backup.GetName()+" already exists; wait a moment and try again")
+		s.writeError(w, http.StatusConflict, "another backup was created with this name; review again")
 		return
 	case apierrors.IsForbidden(err):
 		s.writeError(w, http.StatusForbidden, "no access to create Velero backups in namespace "+namespace)

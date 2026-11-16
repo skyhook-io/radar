@@ -1,6 +1,7 @@
 package velero
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -51,13 +52,13 @@ type ServerConfig struct {
 	// SchedulingDisabled: --restore-only or --disable-controllers removes the
 	// schedule controller, so no Schedule runs.
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
-	// Replicas is the server Deployment's running replica count
-	// (status.replicas: pods not terminating), set whenever the Deployment was
-	// found. Availability is not used: a running pod can be unavailable while
-	// its readiness probe fails or during minReadySeconds, and still process
-	// schedules. A terminating pod is not counted; its controllers stop on
-	// SIGTERM, so it submits nothing new.
-	Replicas *int32 `json:"replicas,omitempty"`
+	// BackupsDisabled is independent of scheduling: manual Backups need the backup controller too.
+	BackupsDisabled bool `json:"-"`
+	// Replicas counts non-terminating pods, including Pending and CrashLoop.
+	// Readiness is separate: a pod can fail its readiness probe while still
+	// processing schedules. Terminating pods stop their controllers on SIGTERM.
+	Replicas      *int32 `json:"replicas,omitempty"`
+	ReadyReplicas *int32 `json:"readyReplicas,omitempty"`
 
 	zone     *time.Location
 	flagsSet bool
@@ -96,8 +97,8 @@ func ServerConfigFromDeployments(deployments []*appsv1.Deployment, read bool) Se
 	}
 	if server != nil {
 		d, c := server, container
-		replicas := d.Status.Replicas
-		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, Replicas: &replicas}
+		replicas, ready := d.Status.Replicas, d.Status.ReadyReplicas
+		cfg := ServerConfig{Source: ServerFromDeployment, Deployment: d.Name, Replicas: &replicas, ReadyReplicas: &ready}
 		if !rolloutComplete(d) {
 			cfg.Source = ServerRolling
 			return cfg
@@ -217,10 +218,14 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 		case "restore-only":
 			if !hasValue || value == "true" {
 				cfg.SchedulingDisabled = true
+				cfg.BackupsDisabled = true
 			}
 		case "disable-controllers":
 			if v, ok := takeValue(); ok {
 				for ctl := range strings.SplitSeq(v, ",") {
+					if strings.TrimSpace(ctl) == "backup" {
+						cfg.BackupsDisabled = true
+					}
 					if strings.TrimSpace(ctl) == "schedule" {
 						cfg.SchedulingDisabled = true
 					}
@@ -231,4 +236,17 @@ func (cfg *ServerConfig) readFlags(c corev1.Container) {
 	secs := int64(freq / time.Second)
 	cfg.ValidationFrequencySeconds = &secs
 	cfg.flagsSet = true
+}
+
+// BackupsDisabled is absent when the effective flags could not be established.
+func (c ServerConfig) MarshalJSON() ([]byte, error) {
+	type config ServerConfig
+	var disabled *bool
+	if c.FlagsKnown() {
+		disabled = &c.BackupsDisabled
+	}
+	return json.Marshal(struct {
+		config
+		BackupsDisabled *bool `json:"backupsDisabled,omitempty"`
+	}{config: config(c), BackupsDisabled: disabled})
 }

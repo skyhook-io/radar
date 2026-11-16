@@ -1,6 +1,7 @@
 package velero
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -495,5 +496,38 @@ func TestZoneInferenceIgnoresNewerOnDemandRun(t *testing.T) {
 	without := read(s, []*unstructured.Unstructured{manual}, ServerConfig{Source: ServerUnread}, at("12:00"))
 	if without.Zone.Source != ZoneUnknown {
 		t.Fatalf("manual run established zone: %+v", without.Zone)
+	}
+}
+
+func TestServerReadyReplicasAndBackupControllerFlags(t *testing.T) {
+	for _, tc := range []struct {
+		args                 []string
+		disabled, scheduling bool
+	}{
+		{[]string{"--restore-only"}, true, true},
+		{[]string{"--restore-only=false"}, false, false},
+		{[]string{"--disable-controllers=backup,gc"}, true, false},
+		{[]string{"--disable-controllers", "schedule"}, false, true},
+		{nil, false, false},
+	} {
+		d := veleroDeployment(nil, tc.args)
+		d.Status.Replicas, d.Status.ReadyReplicas = 1, 0
+		cfg := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true)
+		if cfg.BackupsDisabled != tc.disabled || cfg.SchedulingDisabled != tc.scheduling || !cfg.FlagsKnown() {
+			t.Fatalf("%v: %+v", tc.args, cfg)
+		}
+		if cfg.Down() || cfg.ReadyReplicas == nil || *cfg.ReadyReplicas != 0 {
+			t.Fatalf("unready is not down: %+v", cfg)
+		}
+		encoded, err := json.Marshal(cfg)
+		if err != nil || !strings.Contains(string(encoded), `"backupsDisabled":`) || !strings.Contains(string(encoded), `"readyReplicas":0`) {
+			t.Fatalf("wire %s: %v", encoded, err)
+		}
+	}
+	d := veleroDeployment(nil, []string{"--restore-only", "--default-backup-storage-location=$(LOC)"})
+	cfg := ServerConfigFromDeployments([]*appsv1.Deployment{d}, true)
+	encoded, _ := json.Marshal(cfg)
+	if cfg.FlagsKnown() || strings.Contains(string(encoded), "backupsDisabled") {
+		t.Fatalf("unknown flags serialized a fact: %s", encoded)
 	}
 }

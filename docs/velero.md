@@ -34,12 +34,12 @@ Runs and stored backups are what Velero still keeps: each is deleted once its re
 
 **Back up now**, in the Schedule drawer's header with the other actions, creates a Backup from the schedule's template, exactly as `velero backup create --from-schedule` does (`pkg/velero.BackupFromSchedule`): the template as its spec, the template's labels (else the schedule's) plus `velero.io/schedule-name`, the schedule's annotations except kubectl's last-applied, an owner reference when the schedule sets `useOwnerReferencesInBackup`, and the name `<schedule>-<UTC timestamp>`. The confirmation shows what it backs up, where it is stored and how long it is kept; a toast names the new backup, which also appears among the schedule's runs.
 
-- **Unavailable when it would not back up now.** Disabled, with the reason as its tooltip, for a schedule that cannot run and while the Velero server is stopped (a Backup created then waits in `New` until the server starts). When the server's Deployment can't be read it stays enabled.
+- **Unavailable when it would not back up now.** Disabled, with the reason as its tooltip, for a schedule that cannot run and while the Velero server is stopped (a Backup created then waits in `New` until the server starts). When the server's Deployment can't be read it stays enabled. The server also refuses (409) when it is known stopped or its backup controller is disabled by `--restore-only` or `--disable-controllers` containing `backup`; disabling only `schedule` does not disable an on-demand Backup. The activity response exposes `backupsDisabled` beside `serverStopped`.
 
 - **It is one of the schedule's runs.** Radar lists it among the runs, and while it is new or in progress Velero does not submit the schedule's next run (the controller's hold covers only those phases, not queued or finalizing ones); the confirmation says so.
 - **As the caller.** The schedule is read and the Backup created with the caller's identity, so the apiserver enforces `get schedules` and `create backups`.
 - **Bound to what was reviewed.** The confirmation freezes the schedule it shows. The request carries that `resourceVersion`, and a schedule edited since is refused (409); the dialog disables itself if the schedule changes while open.
-- **Once per confirmation.** The confirmation names the backup when it opens (`<schedule>-<UTC timestamp>`); sending it again after a lost answer returns that backup instead of starting another.
+- **Once per confirmation.** The confirmation chooses the name (`<schedule>-<UTC timestamp>`) and a `submission` ID when it opens. Requests carry `{resourceVersion, name, submission}`; `submission` must match `^[A-Za-z0-9-]{8,64}$` and is stored as the Backup annotation `radar.skyhook.io/submission`. A retry returns an existing Backup only with that annotation, even if the schedule was edited since. Another confirmation in the same second, or a controller-created Backup with the same name, gets 409: "another backup was created with this name; review again".
 - **Refused when it would fail:** a schedule whose name does not fit a label (409; the button is disabled).
 - `POST /api/velero/schedules/{namespace}/{name}/backup`, behind capability `veleroBackupNow`.
 
@@ -77,6 +77,8 @@ A Backup object is not the backup. Deleting it leaves the backup's files in the 
 
 An `@every` schedule adds a fixed duration to its anchor, so its times are exact whatever the zone.
 
+`server.replicas` counts non-terminating pods, including Pending and CrashLoop; `server.readyReplicas` is a separate count whenever the Deployment was read, including during rollout. Zero ready replicas with replicas present means not ready, not proof that controllers have stopped. `Down()` and stopped-server Issues still use replicas==0. `server.backupsDisabled` is present (true or false) only when flags are known; it is separate from `schedulingDisabled`.
+
 Server configuration counts only when its effective value is known: a `TZ` from `envFrom`/`valueFrom` or an argument built from `$(VAR)` leaves it unknown, and during a rollout the previous template may still be running, so nothing is taken from it.
 
 ## Schedule states
@@ -101,7 +103,7 @@ First match wins.
 | Due | Within the 5-minute grace | No |
 | On schedule | Otherwise | No |
 
-**A stopped server is named first, once.** When the Velero server Deployment can be read and has no running replicas (scaled to zero, or its pods cannot be created), it leads Needs attention, and its row names the schedules it leaves late ("3 schedules have missed runs: a, b and c"), which get no row of their own; overdue locations are not listed. A schedule wrong for another reason (cannot run, rejected) keeps its own row. An unavailable but running pod does not count: it still processes schedules. A pod still terminating is not counted either; its controllers stop on SIGTERM, so it submits nothing new.
+**A stopped server is named first, once.** When the Velero server Deployment can be read and has no running replicas (scaled to zero, or its pods cannot be created), it leads Needs attention, and its row names the schedules it leaves late ("3 schedules have missed runs: a, b and c"), which get no row of their own; overdue locations are not listed. A schedule wrong for another reason (cannot run, rejected) keeps its own row. An unready pod with replicas present does not count as stopped: readiness alone cannot say whether it processes schedules. A pod still terminating is not counted either; its controllers stop on SIGTERM, so it submits nothing new.
 
 Storage locations need attention when **validation is overdue**: the interval is known and more than three intervals plus 5 minutes have passed since the last validation (Radar's threshold). An Unavailable location is already an Issue (`BackupStorageLocationUnavailable`).
 

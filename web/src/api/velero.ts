@@ -61,10 +61,10 @@ export function useVeleroBackupNow() {
   return useMutation({
     // backupName is chosen when the confirmation opens, so sending the same
     // confirmation again returns the backup it already created.
-    mutationFn: async ({ namespace, name, resourceVersion, backupName }: { namespace: string; name: string; resourceVersion: string; backupName?: string }) => {
+    mutationFn: async ({ namespace, name, resourceVersion, backupName, submission }: { namespace: string; name: string; resourceVersion: string; backupName?: string; submission: string }) => {
       const response = await apiFetch(
         `${getApiBase()}/velero/schedules/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/backup`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resourceVersion, name: backupName }) },
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ resourceVersion, name: backupName, submission }) },
       )
       if (!response.ok) {
         const error = await readErrorBody(response)

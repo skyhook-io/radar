@@ -286,7 +286,8 @@ type ScheduleActivityResponse struct {
 	Coverage   map[string]integration.KindCoverage `json:"coverage"`
 	// ServerStopped: the installation's server Deployment was read and has no
 	// running replicas, so a backup created now waits until it starts.
-	ServerStopped bool `json:"serverStopped,omitempty"`
+	ServerStopped   bool `json:"serverStopped,omitempty"`
+	BackupsDisabled bool `json:"backupsDisabled,omitempty"`
 }
 
 // ScheduleActivity reads one Schedule with its recent runs. found=false when
@@ -318,6 +319,7 @@ func (r *Reader) ScheduleActivity(ctx context.Context, namespace, name string) (
 		Server: inst.Server, DefaultLocation: inst.DefaultLocation, Now: now, WithRecent: true,
 	})
 	resp.ServerStopped = inst.Server.Down()
+	resp.BackupsDisabled = inst.Server.FlagsKnown() && inst.Server.BackupsDisabled
 	return resp, true, true
 }
 

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -72,7 +73,7 @@ func createdBackups(dyn *dynamicfake.FakeDynamicClient) int {
 func TestVeleroBackupNow(t *testing.T) {
 	t.Run("creates the backup Velero's CLI would, from the reviewed schedule", func(t *testing.T) {
 		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
-		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7"}`, nil)
+		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"submission":"confirmation-0001","resourceVersion":"7"}`, nil)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 		}
@@ -87,6 +88,9 @@ func TestVeleroBackupNow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("the backup was not created: %v", err)
 		}
+		if b.GetAnnotations()[veleroSubmissionAnnotation] != "confirmation-0001" {
+			t.Fatalf("missing submission: %v", b.GetAnnotations())
+		}
 		if b.GetLabels()[veleropkg.ScheduleNameLabel] != "nightly" {
 			t.Errorf("labels %v: without the schedule-name label it is not one of the schedule's runs", b.GetLabels())
 		}
@@ -99,7 +103,7 @@ func TestVeleroBackupNow(t *testing.T) {
 	// sent again: it gets the backup it already made, and no second one.
 	t.Run("returns the backup a repeated confirmation already created", func(t *testing.T) {
 		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
-		body := `{"resourceVersion":"7","name":"nightly-20261115210509"}`
+		body := `{"submission":"confirmation-0001","resourceVersion":"7","name":"nightly-20261115210509"}`
 		first := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", body, nil)
 		again := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", body, nil)
 		if first.Code != http.StatusOK || again.Code != http.StatusOK || !strings.Contains(again.Body.String(), "nightly-20261115210509") {
@@ -122,7 +126,7 @@ func TestVeleroBackupNow(t *testing.T) {
 
 	t.Run("refuses a name that is not this schedule's", func(t *testing.T) {
 		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
-		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7","name":"other-20261115210509"}`, nil)
+		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"submission":"confirmation-0001","resourceVersion":"7","name":"other-20261115210509"}`, nil)
 		if rec.Code != http.StatusBadRequest || createdBackups(dyn) != 0 {
 			t.Fatalf("status = %d creates = %d, want 400 and nothing created", rec.Code, createdBackups(dyn))
 		}
@@ -130,7 +134,7 @@ func TestVeleroBackupNow(t *testing.T) {
 
 	t.Run("refuses a schedule edited since it was reviewed", func(t *testing.T) {
 		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "8"))
-		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7"}`, nil)
+		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"submission":"confirmation-0001","resourceVersion":"7"}`, nil)
 		if rec.Code != http.StatusConflict || createdBackups(dyn) != 0 {
 			t.Fatalf("status = %d, creates = %d; want 409 and nothing created", rec.Code, createdBackups(dyn))
 		}
@@ -139,7 +143,7 @@ func TestVeleroBackupNow(t *testing.T) {
 	t.Run("refuses a schedule whose backups would fail", func(t *testing.T) {
 		long := strings.Repeat("x", 64)
 		srv, dyn := backupNowServer(t, backupNowSchedule(long, "7"))
-		rec := postBackupNow(srv, "/api/velero/schedules/velero/"+long+"/backup", `{"resourceVersion":"7"}`, nil)
+		rec := postBackupNow(srv, "/api/velero/schedules/velero/"+long+"/backup", `{"submission":"confirmation-0001","resourceVersion":"7"}`, nil)
 		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "63 characters") || createdBackups(dyn) != 0 {
 			t.Fatalf("status = %d body = %s creates = %d", rec.Code, rec.Body.String(), createdBackups(dyn))
 		}
@@ -154,7 +158,7 @@ func TestVeleroBackupNow(t *testing.T) {
 
 	t.Run("says when the schedule is gone", func(t *testing.T) {
 		srv, _ := backupNowServer(t)
-		if rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7"}`, nil); rec.Code != http.StatusNotFound {
+		if rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"submission":"confirmation-0001","resourceVersion":"7"}`, nil); rec.Code != http.StatusNotFound {
 			t.Errorf("status = %d, want 404", rec.Code)
 		}
 	})
@@ -163,9 +167,66 @@ func TestVeleroBackupNow(t *testing.T) {
 	// every other write; a page in their browser on another site may not.
 	t.Run("refuses a request another site's page started", func(t *testing.T) {
 		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
-		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7"}`, map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"})
+		rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"submission":"confirmation-0001","resourceVersion":"7"}`, map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"})
 		if rec.Code != http.StatusForbidden || createdBackups(dyn) != 0 {
 			t.Fatalf("status = %d creates = %d, want 403 and nothing created", rec.Code, createdBackups(dyn))
 		}
 	})
+}
+
+func TestVeleroBackupNowSubmissionIdentity(t *testing.T) {
+	path := "/api/velero/schedules/velero/nightly/backup"
+	body := `{"resourceVersion":"7","name":"nightly-20261115210509","submission":"confirmation-first"}`
+	t.Run("two confirmations in the same second", func(t *testing.T) {
+		srv, _ := backupNowServer(t, backupNowSchedule("nightly", "7"))
+		if first := postBackupNow(srv, path, body, nil); first.Code != 200 {
+			t.Fatal(first.Body)
+		}
+		other := postBackupNow(srv, path, strings.ReplaceAll(body, "confirmation-first", "confirmation-second"), nil)
+		if other.Code != 409 || !strings.Contains(other.Body.String(), "another backup was created") {
+			t.Fatalf("%d %s", other.Code, other.Body)
+		}
+	})
+	t.Run("a controller backup is not a replay", func(t *testing.T) {
+		backup, _ := veleropkg.BackupFromSchedule(backupNowSchedule("nightly", "7"), time.Now())
+		backup.SetName("nightly-20261115210509")
+		srv, _ := backupNowServer(t, backupNowSchedule("nightly", "7"), backup)
+		rec := postBackupNow(srv, path, body, nil)
+		if rec.Code != 409 {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+	})
+	t.Run("own replay survives a schedule edit", func(t *testing.T) {
+		srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
+		first := postBackupNow(srv, path, body, nil)
+		if _, err := dyn.Resource(veleroScheduleGVR).Namespace("velero").Update(t.Context(), backupNowSchedule("nightly", "8"), metav1.UpdateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		again := postBackupNow(srv, path, body, nil)
+		if first.Code != 200 || again.Code != 200 || first.Body.String() != again.Body.String() || createdBackups(dyn) != 1 {
+			t.Fatalf("first %d %s, again %d %s", first.Code, first.Body, again.Code, again.Body)
+		}
+	})
+	for _, id := range []string{"", "short", "bad/slash-identity", strings.Repeat("a", 65)} {
+		t.Run("invalid ID "+id, func(t *testing.T) {
+			srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
+			rec := postBackupNow(srv, path, strings.ReplaceAll(body, "confirmation-first", id), nil)
+			if rec.Code != 400 || createdBackups(dyn) != 0 {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+func TestVeleroBackupNowRefusesDisabledController(t *testing.T) {
+	for _, flags := range [][]string{{"--restore-only"}, {"--disable-controllers=backup"}} {
+		t.Run(strings.Join(flags, " "), func(t *testing.T) {
+			srv, dyn := backupNowServer(t, backupNowSchedule("nightly", "7"))
+			seedVeleroActionServer(t, 1, flags...)
+			rec := postBackupNow(srv, "/api/velero/schedules/velero/nightly/backup", `{"resourceVersion":"7","submission":"confirmation-one"}`, nil)
+			if rec.Code != 409 || !strings.Contains(rec.Body.String(), "backup controller is disabled") || createdBackups(dyn) != 0 {
+				t.Fatalf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
 }

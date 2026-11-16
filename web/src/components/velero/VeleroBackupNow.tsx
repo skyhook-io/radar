@@ -43,7 +43,7 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
   const reading = activity.data?.reading
   // What the confirmation shows, frozen when it opens: a refresh while it is
   // open must not swap in a schedule the user did not review.
-  const [reviewed, setReviewed] = useState<{ resourceVersion: string; template: any; backupName: string } | null>(null)
+  const [reviewed, setReviewed] = useState<{ resourceVersion: string; template: any; backupName: string; submission: string } | null>(null)
   const backupNow = useVeleroBackupNow()
   if (support !== 'supported' || !namespace || !name) return null
 
@@ -70,7 +70,7 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
       type="button"
       onClick={() => {
         backupNow.reset()
-        setReviewed({ resourceVersion, template: schedule?.spec?.template ?? {}, backupName: backupNameAt(name, new Date()) })
+        setReviewed({ resourceVersion, template: schedule?.spec?.template ?? {}, backupName: backupNameAt(name, new Date()), submission: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `s-${Date.now()}-${Math.random().toString(36).slice(2, 10)}` })
       }}
       disabled={unavailable !== null}
       className={BUTTON}
@@ -95,7 +95,7 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
         onConfirm={() =>
           reviewed &&
           backupNow.mutate(
-            { namespace, name, resourceVersion: reviewed.resourceVersion, backupName: reviewed.backupName },
+            { namespace, name, resourceVersion: reviewed.resourceVersion, backupName: reviewed.backupName, submission: reviewed.submission },
             {
               onSuccess: (created) => {
                 setReviewed(null)
