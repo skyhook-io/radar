@@ -289,7 +289,7 @@ func TestBuildOutsideChangesReadsFullObjectsOnlyForShownValues(t *testing.T) {
 
 // A drift-ignore rule resolves against the object's content; when the full
 // read fails the path isn't counted as ignored.
-func TestClassifyOutsideObjectWithoutContentKeepsIgnoredPathsUncovered(t *testing.T) {
+func TestClassifyOutsideObjectUnreadableObjectLeavesIgnoredPathsUncovered(t *testing.T) {
 	obj := evidenceTarget(t, nil, []metav1.ManagedFieldsEntry{fieldsEntry(t, "kubectl-edit", metav1.ManagedFieldsOperationUpdate, map[string]any{"f:spec": map[string]any{"f:paused": map[string]any{}}})})
 	owner := fluxHelmOwner(map[string]any{"mode": "enabled", "ignore": []any{map[string]any{"paths": []any{"/spec/paused"}}}})
 	reads := 0
