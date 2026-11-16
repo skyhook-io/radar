@@ -196,6 +196,36 @@ func TestApplicationsSharedManagerWinnerIsDeterministic(t *testing.T) {
 	}
 }
 
+// When two Applications record a workload, the one its own tracking metadata
+// names wins over the sorted-first one; a copied tracking ID names nothing.
+func TestApplicationsSharedManagerPrefersTheClaimedOne(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		labels      map[string]string
+		annotations map[string]string
+		want        string
+	}{
+		{"tracking ID", nil, map[string]string{"argocd.argoproj.io/tracking-id": "shop:apps/Deployment:prod/api"}, "argocd/Application/shop"},
+		{"instance label", map[string]string{"argocd.argoproj.io/instance": "shop"}, nil, "argocd/Application/shop"},
+		{"copied tracking ID", nil, map[string]string{"argocd.argoproj.io/tracking-id": "shop:apps/Deployment:prod/other-api"}, "argocd/Application/other"},
+		{"no claim", nil, nil, "argocd/Application/other"},
+	} {
+		workload := appTestObject("apps", "Deployment", "prod", "api")
+		workload.Labels, workload.Annotations = tc.labels, tc.annotations
+		shop := appTestObject("argoproj.io", "Application", "argocd", "shop")
+		other := appTestObject("argoproj.io", "Application", "argocd", "other")
+		for _, manager := range []*ownershiptest.Object{&shop, &other} {
+			manager.Membership = ownership.MembersRecorded
+			manager.Members = []resourceid.Ref{workload.Ref}
+		}
+		session := appManagerSession(t, workload, shop, other)
+		candidate := &applicationInventory{session: session.(relations.Session), owners: ownership.NewView(session, ownership.Unrestricted())}
+		if root, key := applicationRootRow(candidate, workload.Ref); root != tc.want || key != tc.want {
+			t.Errorf("%s: root=%q key=%q, want %q", tc.name, root, key, tc.want)
+		}
+	}
+}
+
 func TestApplicationsRecordingManagerKindPrecedence(t *testing.T) {
 	workload := appTestObject("apps", "Deployment", "prod", "api")
 	argo := appTestObject("argoproj.io", "Application", "argocd", "z")
