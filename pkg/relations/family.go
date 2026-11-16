@@ -195,18 +195,20 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 // first of candidates that exists. A candidate Radar couldn't read, or the
 // caller may not, ends the search there, since a later one may be shadowed
 // by it: d is then unread or withheld rather than resolved to a fallback.
-// d is absent, named by its first candidate, when none exists.
+// d names the candidate the search stopped at, or, absent when none
+// exists, the first candidate the cluster serves.
 func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage) {
-	d.State = TargetAbsent
-	for _, r := range v.served(candidates) {
+	served := v.served(candidates)
+	d.Ref, d.State = served[0], TargetAbsent
+	for _, r := range served {
 		switch v.decide(r.GroupKind(), r.Namespace) {
 		case ownership.Allowed:
 		case ownership.Undecided:
-			d.State, d.Gap = TargetUnread, ownership.Gap{Kind: r.GroupKind(), Namespace: r.Namespace, Reason: readreason.UserPermissionCheckFailed}
+			d.Ref, d.State, d.Gap = r, TargetUnread, ownership.Gap{Kind: r.GroupKind(), Namespace: r.Namespace, Reason: readreason.UserPermissionCheckFailed}
 			c.addGap(d.Gap)
 			return
 		default:
-			d.State = TargetWithheld
+			d.Ref, d.State = r, TargetWithheld
 			c.Narrowed = true
 			return
 		}
@@ -216,7 +218,7 @@ func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage)
 			return
 		case ownership.Absent:
 		default:
-			d.State, d.Gap = TargetUnread, read.Gap
+			d.Ref, d.State, d.Gap = r, TargetUnread, read.Gap
 			c.addGap(read.Gap)
 			return
 		}

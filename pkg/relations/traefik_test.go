@@ -29,7 +29,6 @@ func TestTraefikFamilies(t *testing.T) {
 		{TraefikBackends, "TraefikService", `{"mirroring":{"mirrors":[{"name":"target","namespace":"shared"}]}}`, "Service", "shared", "spec.mirroring.mirrors[]"},
 		{TraefikRouteConfig, "IngressRoute", `{"routes":[{"middlewares":[{"name":"target","namespace":"shared"}]}]}`, "Middleware", "shared", "spec.routes[].middlewares[]"},
 		{TraefikRouteConfig, "IngressRouteTCP", `{"routes":[{"middlewares":[{"name":"target"}]}]}`, "MiddlewareTCP", "shop", "spec.routes[].middlewares[]"},
-		{TraefikRouteConfig, "IngressRouteUDP", `{"routes":[{"middlewares":[{"name":"target"}]}]}`, "Middleware", "shop", "spec.routes[].middlewares[]"},
 		{TraefikRouteConfig, "Middleware", `{"chain":{"middlewares":[{"name":"target","namespace":"shared"}]}}`, "Middleware", "shared", "spec.chain.middlewares[]"},
 		{TraefikRouteConfig, "IngressRoute", `{"routes":[{"services":[{"name":"backend","namespace":"shared","serversTransport":"target"}]}]}`, "ServersTransport", "shared", "spec.routes[].services[].serversTransport"},
 		{TraefikRouteConfig, "IngressRouteTCP", `{"routes":[{"services":[{"name":"backend","namespace":"shared","serversTransport":"target"}]}]}`, "ServersTransportTCP", "shop", "spec.routes[].services[].serversTransport"},
@@ -288,5 +287,70 @@ func TestAnAmbiguousPreferredGroupStillStopsTheResolution(t *testing.T) {
 	}
 	if got := v.Referrers(TraefikBackends, refOf(split), nil); len(got.Referrers) != 0 || got.Coverage.Complete() {
 		t.Errorf("the legacy TraefikService's referrers are %+v; want none, incomplete", got)
+	}
+}
+
+// legacyDenied may read everything but traefik.containo.us Middlewares,
+// whose check it can't make when undecided is set.
+type legacyDenied struct{ undecided bool }
+
+func (a legacyDenied) CanRead(gk resourceid.GroupKind, _ string) ownership.Decision {
+	if gk != (resourceid.GroupKind{Group: configrefs.TraefikLegacyGroup, Kind: "Middleware"}) {
+		return ownership.Allowed
+	}
+	if a.undecided {
+		return ownership.Undecided
+	}
+	return ownership.Denied
+}
+func (legacyDenied) Namespaces() ([]string, bool) { return nil, true }
+
+func TestAResolutionStoppedAtALaterCandidateNamesIt(t *testing.T) {
+	route := object("traefik.io/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"middlewares": []any{map[string]any{"name": "auth"}}}}})
+	legacy := ref(configrefs.TraefikLegacyGroup, "Middleware", "auth")
+	c := allNamespaces{cluster: cluster{objects: []runtime.Object{route}}}
+	views := map[string]*View{
+		"withheld":  NewView(c, legacyDenied{}),
+		"undecided": NewView(c, legacyDenied{undecided: true}),
+		"unread":    NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{route}, unread: map[resourceid.GroupKind]readreason.Code{legacy.GroupKind(): readreason.KindSyncPending}}}, ownership.Unrestricted()),
+	}
+	want := map[string]TargetState{"withheld": TargetWithheld, "undecided": TargetUnread, "unread": TargetUnread}
+	for name, v := range views {
+		got := v.References(TraefikRouteConfig, refOf(route), route)
+		if len(got.Declared) != 1 || got.Declared[0].Ref != legacy || got.Declared[0].State != want[name] {
+			t.Errorf("%s: with traefik.io's Middleware absent the route's Middleware reads as %+v; want %v, named in the legacy group", name, got.Declared, want[name])
+		}
+		if gap := got.Declared[0].Gap; want[name] == TargetUnread && gap.Kind != legacy.GroupKind() {
+			t.Errorf("%s: gap %+v names a kind other than the Middleware it couldn't read", name, gap)
+		}
+	}
+}
+
+func TestAnAbsentTargetIsNamedInAServedGroup(t *testing.T) {
+	route := object("traefik.containo.us/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"kind": "TraefikService", "name": "split"}}}}})
+	v := NewView(legacyTraefik{allNamespaces{cluster: cluster{objects: []runtime.Object{route}}}}, ownership.Unrestricted())
+	got := v.References(TraefikBackends, refOf(route), route)
+	if len(got.Declared) != 1 || got.Declared[0].State != TargetAbsent || got.Declared[0].Ref != ref(configrefs.TraefikLegacyGroup, "TraefikService", "split") {
+		t.Errorf("on a legacy-only cluster a missing TraefikService reads as %+v; want absent, named in the served legacy group", got.Declared)
+	}
+}
+
+func TestTraefikReferrersReadOnlyRoutesThatCanDeclareTheTarget(t *testing.T) {
+	loading := map[resourceid.GroupKind]readreason.Code{}
+	for _, group := range []string{configrefs.TraefikGroup, configrefs.TraefikLegacyGroup} {
+		loading[resourceid.GroupKind{Group: group, Kind: "IngressRouteUDP"}] = readreason.KindSyncPending
+	}
+	middleware := object("traefik.io/v1alpha1", "Middleware", "auth", nil)
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{middleware}, unread: loading}}, namespaceAccess{"shop", nil})
+	if got := v.Referrers(TraefikRouteConfig, refOf(middleware), nil); !got.Coverage.Complete() {
+		t.Errorf("a Middleware's referrers read UDP routes, which have none: %+v", got.Coverage)
+	}
+	for _, group := range []string{configrefs.TraefikGroup, configrefs.TraefikLegacyGroup} {
+		loading[resourceid.GroupKind{Group: group, Kind: "IngressRouteTCP"}] = readreason.KindSyncPending
+	}
+	split := object("traefik.io/v1alpha1", "TraefikService", "split", nil)
+	v = NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{split}, unread: loading}}, namespaceAccess{"shop", nil})
+	if got := v.Referrers(TraefikBackends, refOf(split), nil); !got.Coverage.Complete() {
+		t.Errorf("a TraefikService's referrers read TCP and UDP routes, which send only to Services: %+v", got.Coverage)
 	}
 }
