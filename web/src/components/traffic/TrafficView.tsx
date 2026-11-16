@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
-import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useSetTrafficSource, type TrafficEndpointPair } from '../../api/traffic'
+import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useSetTrafficSource } from '../../api/traffic'
 import { useClusterInfo, useNamespaceScope } from '../../api/client'
 import { useSearchParams } from 'react-router-dom'
 import type { TrafficWizardState, AggregatedFlow, TrafficFlow } from '../../types'
@@ -18,7 +18,7 @@ import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus, warningRetries, warningBannerTitle, emptyWarningHeadline } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, groupAddonFlows, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, mergedEdgePort, selectedEdgeMatcher, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, verdictChoices, type TrafficFocus, warningRetries, warningBannerTitle, emptyWarningHeadline } from './trafficFilters'
 
 // Where a warning about which cluster the traffic belongs to points: how the map
 // keeps to this cluster in a shared metrics store, and how to set its label.
@@ -934,113 +934,9 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // A focused view draws its endpoints as they are: grouping the addons would
   // fold the focus or its neighbors into the group.
   const groupAddons = addonMode === 'group' && !focus
-  const finalFlows = useMemo<GraphFlow[]>(() => {
-    if (!groupAddons) return focusedFlows
-
-    // Track totals for aggregated edges
-    let addonInternetTotal = 0
-    let addonToK8sTotal = 0
-    let addonInternetRate = 0
-    let addonToK8sRate = 0
-    const addonInternetPairs: TrafficEndpointPair[] = []
-    const addonToK8sPairs: TrafficEndpointPair[] = []
-    const processedFlows: GraphFlow[] = []
-
-    // Check if destination is the kubernetes API server
-    const isKubernetesAPI = (name: string, namespace: string | undefined) => {
-      return name === 'kubernetes' && (!namespace || namespace === 'default')
-    }
-
-    focusedFlows.forEach(flow => {
-      const sourceIsAddon = isClusterAddon(flow.source.name, flow.source.namespace)
-      const destIsAddon = isClusterAddon(flow.destination.name, flow.destination.namespace)
-      const sourceIsInternet = flow.source.kind === 'Internet'
-      const destIsK8sAPI = isKubernetesAPI(flow.destination.name, flow.destination.namespace)
-
-      // Internet → Addon: aggregate into single edge to group
-      if (sourceIsInternet && destIsAddon) {
-        addonInternetTotal += flow.connections
-        addonInternetRate += flow.requestRate ?? 0
-        for (const pair of flow.rawPairs ?? []) addonInternetPairs.push(pair)
-        processedFlows.push({
-          ...flow,
-          source: {
-            name: 'addon-internet',
-            namespace: '',
-            kind: 'SkipEdge', // Create addon node but skip individual edge
-          },
-        })
-      }
-      // Addon → Kubernetes API: aggregate into single edge from group
-      else if (sourceIsAddon && destIsK8sAPI) {
-        addonToK8sTotal += flow.connections
-        addonToK8sRate += flow.requestRate ?? 0
-        for (const pair of flow.rawPairs ?? []) addonToK8sPairs.push(pair)
-        processedFlows.push({
-          ...flow,
-          destination: {
-            ...flow.destination,
-            kind: 'SkipEdge', // Create kubernetes node but skip individual edge
-          },
-        })
-      }
-      else {
-        processedFlows.push(flow)
-      }
-    })
-
-    // Add virtual flow for Internet → Addon Group edge
-    if (addonInternetTotal > 0) {
-      processedFlows.push({
-        source: {
-          name: 'addon-internet',
-          namespace: '',
-          kind: 'AddonInternet',
-        },
-        destination: {
-          name: 'addon-group-target',
-          namespace: '',
-          kind: 'AddonGroupTarget',
-        },
-        protocol: 'tcp',
-        port: 0,
-        connections: addonInternetTotal,
-        ...(addonInternetRate > 0 && { requestRate: addonInternetRate }),
-        rawPairs: addonInternetPairs,
-        bytesSent: 0,
-        bytesRecv: 0,
-        flowCount: 1,
-        lastSeen: new Date().toISOString(),
-      })
-    }
-
-    // Add virtual flow for Addon Group → Kubernetes edge
-    if (addonToK8sTotal > 0) {
-      processedFlows.push({
-        source: {
-          name: 'addon-group-source',
-          namespace: '',
-          kind: 'AddonGroupSource',
-        },
-        destination: {
-          name: 'kubernetes',
-          namespace: 'default',
-          kind: 'Service',
-        },
-        protocol: 'tcp',
-        port: 443,
-        connections: addonToK8sTotal,
-        ...(addonToK8sRate > 0 && { requestRate: addonToK8sRate }),
-        rawPairs: addonToK8sPairs,
-        bytesSent: 0,
-        bytesRecv: 0,
-        flowCount: 1,
-        lastSeen: new Date().toISOString(),
-      })
-    }
-
-    return processedFlows
-  }, [focusedFlows, groupAddons])
+  const finalFlows = useMemo<GraphFlow[]>(() =>
+    groupAddons ? groupAddonFlows(focusedFlows, isClusterAddon) : focusedFlows,
+  [focusedFlows, groupAddons])
 
   // The map is laid out on the main thread, so a view too large to draw is
   // listed as a table instead of freezing the tab.

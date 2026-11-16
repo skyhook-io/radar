@@ -3,6 +3,7 @@ import { Virtuoso } from 'react-virtuoso'
 import { clsx } from 'clsx'
 import { ArrowRight, Crosshair, Minus } from 'lucide-react'
 import type { AggregatedFlow } from '../../types'
+import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import type { TrafficGraphSelection } from './TrafficGraph'
@@ -21,10 +22,13 @@ interface TrafficConnectionsTableProps {
   focusedId?: string
 }
 
-const GRID = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem_4.5rem] items-center gap-x-3'
+const GRID = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_5rem_4.5rem_4.5rem] items-center gap-x-3'
 // Without HTTP status anywhere in view (plain TCP) a 5xx column would read as
 // "no errors" rather than "not measured".
-const GRID_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem] items-center gap-x-3'
+const GRID_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_5rem_4.5rem] items-center gap-x-3'
+
+const GRID_NO_DATA = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem_4.5rem] items-center gap-x-3'
+const GRID_NO_DATA_OR_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem] items-center gap-x-3'
 
 function rowSelection(flow: AggregatedFlow): TrafficGraphSelection {
   return {
@@ -53,7 +57,8 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
   const rows = useMemo(() => connectionRows(flows), [flows])
   const selected = useMemo(() => selectedRows(rows, selection), [rows, selection])
   const showStatus = useMemo(() => flows.some(hasStatusData), [flows])
-  const grid = showStatus ? GRID : GRID_NO_STATUS
+  const showData = useMemo(() => flows.some(f => f.bytesSent > 0 || f.bytesRecv > 0), [flows])
+  const grid = showData ? (showStatus ? GRID : GRID_NO_STATUS) : (showStatus ? GRID_NO_DATA : GRID_NO_DATA_OR_STATUS)
 
   const endpoint = (e: AggregatedFlow['source']) => {
     const id = graphEndpointId(e)
@@ -89,6 +94,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
         <span>Destination</span>
         <span>Port</span>
         <span className="text-right">{isRateBased ? 'Req/s' : 'Conns'}</span>
+        {showData && <span className="text-right">Data</span>}
         {showStatus && <span className="text-right">5xx</span>}
         <span className="text-right">Dropped</span>
       </div>
@@ -125,8 +131,13 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
                 {isExternalKind(flow.destination.kind) && <span className="ml-1 text-theme-text-tertiary">ext</span>}
               </span>
               <span className="text-right tabular-nums text-theme-text-secondary">
-                {isRateBased ? formatRate(displayVolume(flow, true)) : flow.connections.toLocaleString()}
+                {isRateBased && !flow.connections ? '—' : isRateBased ? formatRate(displayVolume(flow, true)) : flow.connections.toLocaleString()}
               </span>
+              {showData && (
+                <span className="text-right tabular-nums text-theme-text-secondary">
+                  {flow.bytesSent + flow.bytesRecv > 0 ? formatBytes(flow.bytesSent + flow.bytesRecv) : '—'}
+                </span>
+              )}
               {showStatus && (
                 <span className={clsx('text-right tabular-nums', errors > 0 ? clsx(SEVERITY_TEXT.error, 'font-medium') : 'text-theme-text-tertiary')}>
                   {errors > 0 ? (isRateBased ? formatRate(errors) : errors.toLocaleString()) : hasStatusData(flow) ? '0' : '—'}

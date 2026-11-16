@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -726,5 +726,60 @@ describe('protocolLabel', () => {
   it('falls back to the transport protocol', () => {
     expect(protocolLabel(undefined, 'tcp')).toBe('tcp')
     expect(protocolLabel('', 'udp')).toBe('udp')
+  })
+})
+
+
+describe('groupAddonFlows', () => {
+  const addon = (_name: string, namespace: string | undefined) => namespace === 'monitoring'
+  const flow = (source: AggregatedFlow['source'], destination: AggregatedFlow['destination'], bytesSent: number): GraphFlow => {
+    const f = { source, destination, bytesSent, bytesRecv: bytesSent * 2, connections: 0, flowCount: 1, port: 443, protocol: 'tcp', lastSeen: '' }
+    return { ...f, rawPairs: [endpointPair(f)] }
+  }
+  const internet = { name: 'Internet', namespace: '', kind: 'Internet' }
+  const prometheus = { name: 'prometheus', namespace: 'monitoring', kind: 'Pod' }
+  const grafana = { name: 'grafana', namespace: 'monitoring', kind: 'Pod' }
+  const kubernetes = { name: 'kubernetes', namespace: 'default', kind: 'Service' }
+
+  it('keeps both group edges with bytes and selection records when no connections are measured', () => {
+    const incoming = [flow(internet, prometheus, 100), flow(internet, grafana, 200)]
+    const outgoing = [flow(prometheus, kubernetes, 300), flow(grafana, kubernetes, 400)]
+    const original = [...incoming, ...outgoing]
+    const snapshot = structuredClone(original)
+    const grouped = groupAddonFlows(original, addon)
+    const edges = grouped.filter(f => f.source.kind !== 'SkipEdge' && f.destination.kind !== 'SkipEdge')
+    expect(edges).toHaveLength(2)
+    expect(edges[0]).toMatchObject({ connections: 0, bytesSent: 300, bytesRecv: 600, flowCount: 2 })
+    expect(edges[1]).toMatchObject({ connections: 0, bytesSent: 700, bytesRecv: 1400, flowCount: 2 })
+    expect(selectionRawPairs(grouped, { type: 'edge', sourceId: 'addon-internet', destId: 'addon-group', port: 0 }))
+      .toEqual(selectionRawPairs(incoming, { type: 'node', nodeId: 'Internet' }))
+    expect(selectionRawPairs(grouped, { type: 'edge', sourceId: 'addon-group', destId: 'default/kubernetes', port: 443 }))
+      .toHaveLength(2)
+    expect(original).toEqual(snapshot)
+  })
+
+  it('sums HTTP rates together with bytes-only contributions', () => {
+    const tcp = flow(internet, prometheus, 100)
+    const http = { ...flow(internet, grafana, 200), connections: 2, requestRate: 1.7 }
+    const grouped = groupAddonFlows([tcp, http], addon)
+    expect(grouped.find(f => f.source.kind === 'AddonInternet'))
+      .toMatchObject({ connections: 2, requestRate: 1.7, bytesSent: 300, bytesRecv: 600 })
+  })
+
+  it('keeps group selection when the first contributor has unknown direction', () => {
+    const incoming = { ...flow(internet, prometheus, 100), directionUnknown: true, l7Protocol: 'HTTP' }
+    incoming.rawPairs = [endpointPair(incoming)]
+    const grouped = groupAddonFlows([incoming], addon)
+    const virtual = grouped.find(f => f.source.kind === 'AddonInternet')!
+    expect(virtual.directionUnknown).toBeUndefined()
+    expect(virtual.l7Protocol).toBeUndefined()
+    expect(selectionRawPairs(grouped, { type: 'edge', sourceId: 'addon-internet', destId: 'addon-group', port: 0 }))
+      .toEqual(incoming.rawPairs)
+  })
+
+  it('adds no virtual edges without contributing flows', () => {
+    const plain = flow({ name: 'client', namespace: 'shop', kind: 'Pod' }, kubernetes, 100)
+    expect(groupAddonFlows([plain], addon)).toEqual([plain])
+    expect(groupAddonFlows([], addon)).toEqual([])
   })
 })

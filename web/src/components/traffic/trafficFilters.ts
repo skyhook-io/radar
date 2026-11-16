@@ -382,6 +382,47 @@ export function mergeRawPairs(into: GraphFlow, from: GraphFlow): void {
   for (const pair of from.rawPairs ?? []) target.push(pair)
 }
 
+export function groupAddonFlows(flows: GraphFlow[], isAddon: (name: string, namespace: string | undefined) => boolean): GraphFlow[] {
+  let internet: GraphFlow | undefined
+  let kubernetes: GraphFlow | undefined
+  const grouped: GraphFlow[] = []
+  for (const flow of flows) {
+    if (flow.source.kind === 'Internet' && isAddon(flow.destination.name, flow.destination.namespace)) {
+      if (!internet) {
+        internet = {
+          connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
+          source: { name: 'addon-internet', namespace: '', kind: 'AddonInternet' },
+          destination: { name: 'addon-group-target', namespace: '', kind: 'AddonGroupTarget' },
+          protocol: 'tcp', port: 0,
+          rawPairs: [],
+        }
+      }
+      mergeFlowVolume(internet, flow)
+      mergeRawPairs(internet, flow)
+      grouped.push({ ...flow, source: { name: 'addon-internet', namespace: '', kind: 'SkipEdge' } })
+    } else if (isAddon(flow.source.name, flow.source.namespace) && flow.destination.name === 'kubernetes' &&
+      (!flow.destination.namespace || flow.destination.namespace === 'default')) {
+      if (!kubernetes) {
+        kubernetes = {
+          connections: 0, bytesSent: 0, bytesRecv: 0, flowCount: 0, lastSeen: flow.lastSeen,
+          source: { name: 'addon-group-source', namespace: '', kind: 'AddonGroupSource' },
+          destination: { name: 'kubernetes', namespace: 'default', kind: 'Service' },
+          protocol: 'tcp', port: 443,
+          rawPairs: [],
+        }
+      }
+      mergeFlowVolume(kubernetes, flow)
+      mergeRawPairs(kubernetes, flow)
+      grouped.push({ ...flow, destination: { ...flow.destination, kind: 'SkipEdge' } })
+    } else {
+      grouped.push(flow)
+    }
+  }
+  if (internet) grouped.push(internet)
+  if (kubernetes) grouped.push(kubernetes)
+  return grouped
+}
+
 // The renderer draws the addon group's virtual endpoints as one group node.
 function selectableId(e: { namespace?: string; name: string; kind?: string }): string {
   if (e.kind === 'AddonGroupTarget' || e.kind === 'AddonGroupSource') return 'addon-group'

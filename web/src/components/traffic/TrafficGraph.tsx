@@ -23,6 +23,7 @@ import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
+import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { Tooltip } from '../ui/Tooltip'
 import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
 
@@ -441,14 +442,6 @@ interface EdgeData {
   flow?: AggregatedFlow
 }
 
-// Format bytes for display
-function formatBytes(bytes: number): string {
-  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`
-  if (bytes >= 1_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`
-  if (bytes >= 1_000) return `${(bytes / 1_000).toFixed(1)} KB`
-  return `${bytes} B`
-}
-
 // Details panel component
 function DetailsPanel({
   selection,
@@ -681,7 +674,7 @@ function DetailsPanel({
                         .map(([proto, count]) => (
                           <span key={proto} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-theme-bg text-theme-text-secondary">
                             <span className="font-medium">{proto}</span>
-                            <span className="text-theme-text-tertiary">{formatVolume(count, isRateBased)}{isRateBased ? '/s' : ''}</span>
+                            {!(isRateBased && !count) && <span className="text-theme-text-tertiary">{formatVolume(count, isRateBased)}{isRateBased ? '/s' : ''}</span>}
                           </span>
                         ))}
                     </div>
@@ -1176,7 +1169,11 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       const destId = flow.destination.namespace
         ? `${flow.destination.namespace}/${flow.destination.name}`
         : flow.destination.name
-      const edgeId = trafficEdgeId(sourceId, destId, flow)
+      const edgeId = flow.destination.kind === 'AddonGroupTarget'
+        ? `${sourceId}->addon-group`
+        : flow.source.kind === 'AddonGroupSource'
+          ? `addon-group->${destId}`
+          : trafficEdgeId(sourceId, destId, flow)
       map.set(edgeId, flow)
     })
     return map
@@ -1592,7 +1589,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: 'addon-group',
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
+          label: isRateBased && !connections ? '' : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1626,7 +1623,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: targetId,
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
+          label: isRateBased && !connections ? '' : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
