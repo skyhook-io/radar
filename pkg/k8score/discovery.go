@@ -224,7 +224,6 @@ func (d *ResourceDiscovery) refresh() error {
 		d.mu.Lock()
 		d.lastRefresh = time.Now()
 		d.refreshFailed = true
-		d.generation++
 		d.mu.Unlock()
 		return err
 	}

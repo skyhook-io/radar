@@ -68,7 +68,10 @@ func TestCatalogGenerationTracksAllMutations(t *testing.T) {
 	if err := d.Refresh(); err == nil {
 		t.Fatal("expected failed refresh")
 	}
-	check()
+	// A failed refresh keeps the last catalog, so its generation doesn't move.
+	if _, changed := d.CatalogIfChanged(previous.Generation); changed {
+		t.Fatal("a failed refresh advanced the generation of an unchanged catalog")
+	}
 	if !previous.Complete || len(previous.Resources) != 2 {
 		t.Fatal("generation tracking changed the failed-refresh catalog contract")
 	}

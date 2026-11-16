@@ -114,7 +114,11 @@ func TestCatalogMemoTracksDiscoveryMutations(t *testing.T) {
 	if err := d.Refresh(); err == nil {
 		t.Fatal("expected failed refresh")
 	}
-	failed := check(complete)
+	// A failed refresh keeps the last catalog, so it's reused, not rebuilt.
+	failed := begin(t, source).Catalog()
+	if failed != complete {
+		t.Fatal("a failed refresh rebuilt an unchanged catalog")
+	}
 	if !failed.Complete() || !failed.Serves(resourceid.GroupKind{Group: "example.io", Kind: "Widget"}, "v1") {
 		t.Fatal("failed refresh lost the last usable discovery catalog")
 	}
