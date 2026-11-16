@@ -652,24 +652,10 @@ func ignoreRuleFor(
 		// drift ignore. Flux documents that it keeps a kubectl-edit-style
 		// change, but that isn't verified against a live controller, so a
 		// covered field stays unevaluated rather than waived.
-		helm := owner.Group == "helm.toolkit.fluxcd.io"
-		field := []string{"spec", "ignore"}
-		if helm {
-			field = []string{"spec", "driftDetection", "ignore"}
-		}
-		by := strings.Join(field, ".")
-		rules, _, _ := unstructured.NestedSlice(ownerObj.Object, field...)
+		rules := fluxIgnoreRulesFor(owner, ownerObj, ref, target.GroupVersionKind().Version)
+		helm, by := rules.helm, rules.by
 		covered := make([]bool, len(sets))
-		for _, raw := range rules {
-			rule, ok := raw.(map[string]any)
-			if !ok {
-				continue
-			}
-			if t, ok := rule["target"].(map[string]any); ok && !fluxIgnoreTargetMatches(t, ref, target.GroupVersionKind().Version) {
-				continue
-			}
-			markCovered(stringSlice(rule["paths"]), sets, covered)
-		}
+		markCovered(rules.paths, sets, covered)
 		switch {
 		case allCovered(covered) && helm:
 			return "effective", by
@@ -678,6 +664,40 @@ func ignoreRuleFor(
 		}
 	}
 	return "", ""
+}
+
+// fluxIgnoreRules are the paths of a Flux root's ignore rules whose target
+// matches one object. Targets don't depend on the path, so they are matched
+// once per object.
+type fluxIgnoreRules struct {
+	paths []string
+	by    string
+	helm  bool
+}
+
+func fluxIgnoreRulesFor(owner *topology.ResourceRef, ownerObj *unstructured.Unstructured, ref writeEvidenceRef, version string) fluxIgnoreRules {
+	if ownerObj == nil || ownerTool(owner) != "fluxcd" {
+		return fluxIgnoreRules{}
+	}
+	helm := owner.Group == "helm.toolkit.fluxcd.io"
+	field := []string{"spec", "ignore"}
+	if helm {
+		field = []string{"spec", "driftDetection", "ignore"}
+	}
+	out := fluxIgnoreRules{by: strings.Join(field, "."), helm: helm}
+	rules, _, _ := unstructured.NestedFieldNoCopy(ownerObj.Object, field...)
+	list, _ := rules.([]any)
+	for _, raw := range list {
+		rule, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, ok := rule["target"].(map[string]any); ok && !fluxIgnoreTargetMatches(t, ref, version) {
+			continue
+		}
+		out.paths = append(out.paths, stringSlice(rule["paths"])...)
+	}
+	return out
 }
 
 // argoIgnoreEntryMatches: kind is required, an omitted group is the core
