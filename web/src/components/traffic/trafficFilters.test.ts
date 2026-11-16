@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { dataByProtocol, totalDataByProtocol, rateWindowSeconds, throughputLabel, protocolName, matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
+import { dataByProtocol, protocolsOf, totalDataByProtocol, rateWindowSeconds, throughputLabel, protocolName, matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -852,7 +852,7 @@ describe('protocol byte figures', () => {
   })
 
   it('sorts payloads first and retains zero-byte protocols', () => {
-    expect(dataByProtocol({ ...base, bytesByProtocol: { udp: { bytesSent: 0, bytesRecv: 0 }, tcp: { bytesSent: 1, bytesRecv: 2 }, http: { bytesSent: 3, bytesRecv: 4 }, grpc: { bytesSent: 5, bytesRecv: 6 } } }).map(e => e.protocol))
+    expect(protocolsOf({ bytesByProtocol: { udp: { bytesSent: 0, bytesRecv: 0 }, tcp: { bytesSent: 1, bytesRecv: 2 }, http: { bytesSent: 3, bytesRecv: 4 }, grpc: { bytesSent: 5, bytesRecv: 6 } } }))
       .toEqual(['grpc', 'http', 'tcp', 'udp'])
     expect(protocolName('grpc')).toBe('gRPC')
     expect(protocolName('http')).toBe('HTTP')

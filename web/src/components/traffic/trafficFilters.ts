@@ -100,15 +100,25 @@ export function isPayloadProtocol(protocol: string): boolean {
   return !transportProtocols.has(protocol.toLowerCase())
 }
 
-/** An edge's Data per protocol, payload protocols first. A Radar that predates
- *  the breakdown sends only the cross-protocol sum, which can already mix
- *  HTTP and gRPC under one protocol name, so it comes back as one figure with
- *  no protocol claimed. */
+/** The protocols an edge's traffic was observed on, payload protocols first,
+ *  whether or not they carried byte figures. */
+export function protocolsOf(flow: Pick<AggregatedFlow, 'bytesByProtocol'>): string[] {
+  return Object.keys(flow.bytesByProtocol ?? {})
+    .sort((a, b) => Number(isPayloadProtocol(b)) - Number(isPayloadProtocol(a)) || a.localeCompare(b))
+}
+
+/** An edge's Data per protocol, payload protocols first. Only protocols that
+ *  carried bytes: a zero there usually means not measured (a failed byte query,
+ *  a source that reports none), and "0 B" would read as a measurement. A Radar
+ *  that predates the breakdown sends only the cross-protocol sum, which can
+ *  already mix HTTP and gRPC under one protocol name, so it comes back as one
+ *  figure with no protocol claimed. */
 export function dataByProtocol(flow: ByteFigures): ProtocolData[] {
-  if (!flow.bytesByProtocol) return [{ protocol: null, sent: flow.bytesSent, recv: flow.bytesRecv }]
-  return Object.entries(flow.bytesByProtocol)
-    .map(([protocol, bytes]) => ({ protocol, sent: bytes.bytesSent, recv: bytes.bytesRecv }))
-    .sort((a, b) => Number(isPayloadProtocol(b.protocol)) - Number(isPayloadProtocol(a.protocol)) || a.protocol.localeCompare(b.protocol))
+  const buckets = flow.bytesByProtocol
+  if (!buckets) return [{ protocol: null, sent: flow.bytesSent, recv: flow.bytesRecv }]
+  return protocolsOf(flow)
+    .map(protocol => ({ protocol, sent: buckets[protocol].bytesSent, recv: buckets[protocol].bytesRecv }))
+    .filter(e => e.sent + e.recv > 0)
 }
 
 /** The span a rate-based source's byte totals cover, in seconds: the view's
@@ -127,7 +137,6 @@ export function rateWindowSeconds(timeRange: string): number {
 export function throughputLabel(flow: ByteFigures, windowSeconds: number): string {
   if (!flow.bytesByProtocol) return ''
   return dataByProtocol(flow)
-    .filter(e => e.sent + e.recv > 0)
     .map(e => {
       const perSecond = (e.sent + e.recv) / windowSeconds
       return `${protocolName(e.protocol!)} · ${perSecond < 1 ? '<1 B' : formatBytes(perSecond)}/s`

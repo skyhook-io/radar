@@ -252,6 +252,15 @@ describe('TrafficGraph edge labels for traffic measured only in bytes', () => {
     expect(container.querySelector('[data-edge="demo/httpbin->demo/curl:0"]')!.textContent).toBe('')
   })
 
+  it('lists a protocol whose bytes were not measured without printing 0 B for it', async () => {
+    const unmeasured = { ...http, bytesSent: 300, bytesRecv: 0, bytesByProtocol: { http: { bytesSent: 0, bytesRecv: 0 }, tcp: { bytesSent: 300, bytesRecv: 0 } } }
+    await act(async () => root.render(<TrafficGraph flows={[unmeasured]} trafficSource="istio" onLayoutUnavailable={vi.fn()} windowSeconds={60} />))
+    act(() => container.querySelector<HTMLButtonElement>('[data-edge]')!.click())
+    expect(container.textContent).toContain('ProtocolHTTP + TCP')
+    expect(container.textContent).toContain('Data300 B')
+    expect(container.textContent).not.toMatch(/0 B sent|HTTP 0 B|body bytes/)
+  })
+
   it('gives each transport its own throughput rather than their sum', async () => {
     const both = { ...tcpOnly, bytesByProtocol: { tcp: { bytesSent: 29999, bytesRecv: 119999 }, udp: { bytesSent: 30, bytesRecv: 0 } } }
     await act(async () => root.render(<TrafficGraph flows={[both]} trafficSource="beyla" onLayoutUnavailable={vi.fn()} windowSeconds={60} />))

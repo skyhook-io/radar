@@ -29,7 +29,9 @@ describe('TrafficData', () => {
 })
 
 
-it('keeps an observed zero-byte protocol beside a measured bucket', () => {
-  const html = renderToStaticMarkup(<TrafficData entries={[{ protocol: 'http', sent: 0, recv: 0 }, { protocol: 'tcp', sent: 100, recv: 200 }]} compact />)
-  expect(html).toBe('HTTP 0 B · TCP 300 B')
+it('shows no unmeasured protocol as 0 B beside a measured one', () => {
+  // e.g. Istio's HTTP byte queries failed while ztunnel's TCP bytes came through
+  const bytesByProtocol = { http: { bytesSent: 0, bytesRecv: 0 }, tcp: { bytesSent: 100, bytesRecv: 200 } }
+  const html = renderToStaticMarkup(<TrafficData entries={dataByProtocol({ bytesSent: 100, bytesRecv: 200, bytesByProtocol })} directional explainOverlap />)
+  expect(html).toBe('300 B')
 })

@@ -25,7 +25,7 @@ import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { TrafficData } from './TrafficData'
-import { dataByProtocol, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
+import { dataByProtocol, protocolsOf, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
 
 // ELK is 1.5 MB; load it with the first traffic layout, not with the app.
 let elkPromise: Promise<ELK> | null = null
@@ -467,9 +467,10 @@ function DetailsPanel({
   const nodeData = isNode ? (selection.data as TrafficNodeData) : null
   const edgeData = !isNode ? (selection.data as EdgeData) : null
   const edgeDataFigures = edgeData?.flow ? dataByProtocol(edgeData.flow) : []
-  const edgeProtocols = edgeDataFigures.map(e => protocolName(e.protocol ?? '')).join(' + ')
+  const edgeProtocolKeys = edgeData?.flow ? protocolsOf(edgeData.flow) : []
+  const edgeProtocols = edgeProtocolKeys.map(protocolName).join(' + ')
   const edgeL7 = edgeData?.flow?.l7Protocol
-  const distinctL7 = edgeL7 && edgeL7.toLowerCase() !== 'mixed' && !edgeDataFigures.some(e => e.protocol?.toLowerCase() === edgeL7.toLowerCase())
+  const distinctL7 = edgeL7 && edgeL7.toLowerCase() !== 'mixed' && !edgeProtocolKeys.some(p => p.toLowerCase() === edgeL7.toLowerCase())
 
   // Find related flows for node
   const relatedFlows = isNode
@@ -872,7 +873,7 @@ function DetailsPanel({
                 <div className="p-2 rounded bg-theme-elevated">
                   <div className="text-theme-text-tertiary">Protocol</div>
                   <div className="text-theme-text-primary font-medium">
-                    {edgeDataFigures.length > 1
+                    {edgeProtocolKeys.length > 1
                       ? distinctL7 ? protocolLabel(protocolName(edgeL7), edgeProtocols) : edgeProtocols
                       : protocolLabel(edgeData.flow?.l7Protocol && protocolName(edgeData.flow.l7Protocol), protocolName(edgeData.protocol))}
                   </div>
