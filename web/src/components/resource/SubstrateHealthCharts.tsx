@@ -24,7 +24,7 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
   const { data: status } = usePrometheusStatus()
   const connect = usePrometheusConnect()
   const connected = status?.connected === true
-  const { data, error, upgrade, blockedReason } = useSubstrateHealth(target, RANGE, connected && Boolean(target.name))
+  const { data, error, upgrade, blockedReason, support } = useSubstrateHealth(target, RANGE, connected && Boolean(target.name))
 
   if (!connected) {
     if (!standalone || !status) return null
@@ -44,7 +44,7 @@ export function SubstrateHealthCharts({ target, standalone = false, collapsible 
     return <Frame collapsible={collapsible}><RadarUpgradeNote requirement={upgrade} /></Frame>
   }
   // Until this Radar is known to serve the charts, the query never runs.
-  if (!data && blockedReason && target.kind === 'workerpool') {
+  if (!data && support !== 'supported' && blockedReason && target.kind === 'workerpool') {
     return <Frame collapsible={collapsible}><Muted>{blockedReason}</Muted></Frame>
   }
   if (isForbiddenError(error)) {

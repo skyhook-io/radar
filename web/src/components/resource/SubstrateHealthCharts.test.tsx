@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { SubstrateHealth } from '../../api/substrateHealth'
 
-let health: { data?: SubstrateHealth; error?: unknown; upgrade?: unknown; blockedReason?: string } = {}
+let health: { data?: SubstrateHealth; error?: unknown; upgrade?: unknown; blockedReason?: string; support?: string } = {}
 let promStatus: { connected: boolean; discovering?: boolean; error?: string } = { connected: true }
 
 vi.mock('../../api/client', async (orig) => ({
@@ -49,6 +49,12 @@ describe('SubstrateHealthCharts', () => {
     health = { blockedReason: "Couldn't check this cluster's Radar support. Refresh to try again." }
     expect(render(pool)).toContain('Refresh to try again')
     expect(render(node)).toBe('')
+  })
+
+  it('shows a metrics error even when a capabilities refresh failed after support was known', () => {
+    health = { support: 'supported', blockedReason: "Couldn't check this cluster's Radar support. Refresh to try again.", error: new Error('Prometheus timed out') }
+    expect(render(pool)).toContain('Prometheus timed out')
+    expect(render(pool)).not.toContain('Refresh to try again')
   })
 
   it('says what it looked for when a pool has no Substrate series', () => {
