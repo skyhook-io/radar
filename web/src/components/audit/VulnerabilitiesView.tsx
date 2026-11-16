@@ -149,6 +149,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
 
   // With nothing scanned or readable there are no counts to show or filter.
   const known = findingsCertainty(data) !== 'unknown'
+  // A new view or filter starts again from the first page of rows.
+  const pageKey = JSON.stringify([view, namespaces, severities, fixableOnly, query, workload])
   return (
     <div aria-busy={isFetching} className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
       <ChecksViewTabs />
@@ -247,24 +249,24 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
             body={filtered && !workloadFolds ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
           />
         ) : view === 'fix' ? (
-          <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) }, true)} />
+          <Paged key={pageKey} rows={data.fixes ?? []}>{(rows) => <FixTable fixes={rows} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) }, true)} />}</Paged>
         ) : view === 'cve' ? (
-          <CVETable cves={data.cves ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
+          <Paged key={pageKey} rows={data.cves ?? []}>{(rows) => <CVETable cves={rows} onOpen={(w) => onNavigateToResource(toResource(w))} />}</Paged>
         ) : view === 'workload' ? (
-          <WorkloadTable
-            workloads={data.workloads ?? []}
+          <Paged key={pageKey} rows={data.workloads ?? []}>{(rows) => <WorkloadTable
+            workloads={rows}
             severities={severities}
             query={query}
             namespaces={namespaces}
             onOpen={(w) => onNavigateToResource(toResource(w))}
             onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') }, true)}
-          />
+          />}</Paged>
         ) : (
-          <ImageTable
-            images={data.images ?? []}
+          <Paged key={pageKey} rows={data.images ?? []}>{(rows) => <ImageTable
+            images={rows}
             onOpen={(w) => onNavigateToResource(toResource(w))}
             onOpenReport={(img) => onNavigateToResource({ kind: img.report.kind, group: img.report.group, namespace: img.report.namespace ?? '', name: img.report.name })}
-          />
+          />}</Paged>
         )}
 
         {(data.coverage.rowsOmitted ?? 0) > 0 && (
@@ -378,6 +380,25 @@ function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filt
       {gaps && <p className="text-warning-text">{gaps}</p>}
       {data.coverage.truncated && <p className="text-warning-text">This request reached its findings limit, so some images' findings weren't read and are marked unread. Narrow with the namespace picker.</p>}
     </div>
+  )
+}
+
+// Rows drawn at a time: a pivot can return 2,000, and drawing them all makes
+// switching views slow. The worst rows come first.
+const PAGE_ROWS = 100
+
+function Paged<T>({ rows, children }: { rows: T[]; children: (rows: T[]) => React.ReactNode }) {
+  const [shown, setShown] = useState(PAGE_ROWS)
+  const rest = rows.length - shown
+  return (
+    <>
+      {children(rows.slice(0, shown))}
+      {rest > 0 && (
+        <button type="button" onClick={() => setShown(shown + PAGE_ROWS)} className="self-start text-xs text-accent-text hover:underline">
+          Show {Math.min(PAGE_ROWS, rest)} more ({rest} not shown)
+        </button>
+      )}
+    </>
   )
 }
 
