@@ -94,6 +94,14 @@ describe('sameResource', () => {
     expect(sameResource(subject, { kind: 'persistentvolumeclaims', namespace: 'demo', name: 'other' })).toBe(false)
   })
 
+  it('does not match the same kind name in another API group', () => {
+    const velero = { kind: 'Backup', group: 'velero.io', namespace: 'velero', name: 'nightly' }
+    expect(sameResource(velero, { kind: 'backups', group: 'postgresql.cnpg.io', namespace: 'velero', name: 'nightly' })).toBe(false)
+    expect(sameResource(velero, { kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly' })).toBe(true)
+    // An issue from a Radar that sends no group still matches by the rest.
+    expect(sameResource({ ...velero, group: '' }, { kind: 'backups', group: 'velero.io', namespace: 'velero', name: 'nightly' })).toBe(true)
+  })
+
   it('does not match a different kind', () => {
     expect(sameResource(subject, { kind: 'configmaps', namespace: 'demo', name: 'data' })).toBe(false)
   })
