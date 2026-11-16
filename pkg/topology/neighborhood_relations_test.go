@@ -199,17 +199,20 @@ func TestWalkNeighborhoodCustomPodGroupIsNotASyntheticGroup(t *testing.T) {
 	}
 }
 
-// A Node reached from something it owns carries its instance type, as the
-// root Node does.
-func TestWalkNeighborhoodNeighborNodeCarriesItsInstanceType(t *testing.T) {
-	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: "node-a", Labels: map[string]string{"node.kubernetes.io/instance-type": "m6a.large"}}}, "", "Node")
+// A Node reached from something it owns carries its instance type and
+// health, as the root Node does.
+func TestWalkNeighborhoodNeighborNodeCarriesItsInstanceTypeAndHealth(t *testing.T) {
+	node := projectionObject(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: "node-a", Labels: map[string]string{"node.kubernetes.io/instance-type": "m6a.large"}},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}},
+	}, "", "Node")
 	cni := projectionCR("vpcresources.k8s.aws", "CNINode", "", "node-a", map[string]any{})
 	cni.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: "node-a", UID: "node-a"}})
 	sub := walkTestNeighborhood(t, newProjectionSession(t, node, cni), cni, NeighborhoodOptions{})
 	for _, n := range sub.Nodes {
 		if n.Kind == KindNode && n.Name == "node-a" {
-			if n.Data["instanceType"] != "m6a.large" {
-				t.Fatalf("node data = %+v", n.Data)
+			if n.Data["instanceType"] != "m6a.large" || n.Status != StatusHealthy {
+				t.Fatalf("node = %+v", n)
 			}
 			return
 		}
