@@ -24,5 +24,7 @@ describe('Logging operator utils', () => {
     expect(getLoggingStatus({ status: { active: false } }).level).toBe('unhealthy')
     expect(getLoggingStatus({ status: { active: true, problemsCount: 2 } }).text).toBe('2 problems')
     expect(getLoggingStatus({}).level).toBe('unknown')
+    expect(getLoggingStatus({ kind: 'ClusterOutput', status: { active: false } })).toMatchObject({ text: 'Not in use', level: 'neutral' })
+    expect(getLoggingStatus({ kind: 'Output', status: { active: false, problemsCount: 1 } }).level).toBe('degraded')
   })
 })

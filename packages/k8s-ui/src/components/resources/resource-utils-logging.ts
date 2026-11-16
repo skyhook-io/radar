@@ -61,8 +61,8 @@ export function getLoggingFlowRules(data: any): { exclude: boolean; conditions: 
   ])
 }
 
-// getLoggingFlowInvalid mirrors the operator's rejection of a Flow or
-// ClusterFlow, which it then never renders; null when valid.
+// getLoggingFlowInvalid mirrors the checks the operator fails a Flow or
+// ClusterFlow on; null when valid.
 export function getLoggingFlowInvalid(data: any): string | null {
   const spec = data?.spec ?? {}
   if (spec.match != null && spec.selectors != null) return 'match and selectors are both set'
@@ -77,6 +77,9 @@ export function getLoggingStatus(data: any): StatusBadge {
   let level: StatusBadge['level'] = 'unknown'
   if (problems > 0) { text = `${problems} problem${problems === 1 ? '' : 's'}`; level = 'degraded' }
   else if (active === true) { text = 'Active'; level = 'healthy' }
+  // The operator marks an output active only while a valid Flow, the default
+  // flow or the error output uses it: inactive without problems is unused.
+  else if (active === false && /Output$/.test(data?.kind ?? '')) { text = 'Not in use'; level = 'neutral' }
   else if (active === false) { text = 'Inactive'; level = 'unhealthy' }
   return { text, level, color: healthColors[level] }
 }

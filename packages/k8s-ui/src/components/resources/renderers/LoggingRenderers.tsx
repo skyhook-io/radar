@@ -50,7 +50,7 @@ export function FluentbitAgentRenderer({ data }: Props) {
 
 // controlNamespaces is where the host found Loggings; a ClusterFlow outside
 // all of them is ignored by the operator. Undefined: the host couldn't tell.
-export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggingsUnreadable, missingOutputs }: Props & { controlNamespaces?: string[]; loggingsUnreadable?: boolean; missingOutputs?: string[] }) {
+export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggingsUnreadable, missingOutputs, protectedOutputs }: Props & { controlNamespaces?: string[]; loggingsUnreadable?: boolean; missingOutputs?: string[]; protectedOutputs?: string[] }) {
   const cluster = data.kind === 'ClusterFlow'
   const ns = data.metadata?.namespace ?? ''
   const rules = getLoggingFlowRules(data)
@@ -58,7 +58,9 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
   const globalRefs: string[] = data.spec?.globalOutputRefs ?? []
   const localRefs: string[] = data.spec?.localOutputRefs ?? []
   const deprecatedRefs: string[] = data.spec?.outputRefs ?? []
-  const invalid = getLoggingFlowInvalid(data) ?? (missingOutputs?.length ? `it names ${missingOutputs.join(', ')}, which Radar didn't find for its Logging` : null)
+  const invalid = getLoggingFlowInvalid(data)
+    ?? (missingOutputs?.length ? `it names ${missingOutputs.join(', ')}, which Radar didn't find for its Logging` : null)
+    ?? (protectedOutputs?.length ? `it names protected ClusterOutput ${protectedOutputs.join(', ')}, which only ClusterFlows may use` : null)
   const notCounted = cluster && controlNamespaces !== undefined && !controlNamespaces.includes(ns)
   // ClusterOutputs live in the Logging's control namespace: a ClusterFlow's own,
   // or for a Flow the single known one (several Loggings: no link rather than a wrong one).
@@ -66,7 +68,7 @@ export function LoggingFlowRenderer({ data, onNavigate, controlNamespaces, loggi
   return <>
     {cluster && loggingsUnreadable && <AlertBanner variant="info" title="Could not read Loggings" message="Radar can't tell whether this ClusterFlow is in a Logging's control namespace, so whether the operator counts it is unknown." />}
     {notCounted && <AlertBanner variant="warning" title="Outside every Logging's control namespace" message="The Logging operator processes a ClusterFlow only in its Logging's control namespace, unless that Logging sets allowClusterResourcesFromAllNamespaces. No Logging Radar read does." />}
-    {invalid && <AlertBanner variant="warning" title="Rejected by the Logging operator" message={`${invalid}; the operator doesn't render this ${data.kind}.`} />}
+    {invalid && <AlertBanner variant="warning" title={`Invalid ${data.kind}`} message={`${invalid}. The operator doesn't render an invalid ${data.kind}, and unless its Logging sets skipInvalidResources, it renders none of that Logging's configuration until this is fixed.`} />}
     <Problems data={data} />
     <Section title={cluster ? 'Cluster flow' : 'Flow'} defaultExpanded>
       <PropertyList>

@@ -56,15 +56,21 @@ describe('Logging operator drawers', () => {
     expect(html).toContain('No outputs: selected logs go nowhere.')
     expect(html).not.toContain('Output old')
   })
-  it('says the operator rejects a Flow with match and selectors', () => {
+  it('says a Flow with match and selectors is invalid', () => {
     const html = text(renderToString(<LoggingFlowRenderer data={{ ...flow, spec: { ...flow.spec, selectors: { app: 'x' } } }} />))
-    expect(html).toContain('Rejected by the Logging operator')
+    expect(html).toContain('Invalid ClusterFlow')
     expect(html).toContain('match and selectors are both set')
   })
-  it('says the operator rejects a Flow naming an output Radar did not find', () => {
+  it('says a Flow naming an output Radar did not find is invalid', () => {
     const html = text(renderToString(<LoggingFlowRenderer data={flow} missingOutputs={['ClusterOutput gone']} />))
-    expect(html).toContain('Rejected by the Logging operator')
+    expect(html).toContain('Invalid ClusterFlow')
     expect(html).toContain('ClusterOutput gone')
+  })
+  it('says a Flow naming a protected ClusterOutput is invalid', () => {
+    const html = text(renderToString(<LoggingFlowRenderer data={{ ...flow, kind: 'Flow', metadata: { name: 'app', namespace: 'team' } }} protectedOutputs={['audit']} />))
+    expect(html).toContain('Invalid Flow')
+    expect(html).toContain('protected ClusterOutput audit')
+    expect(html).not.toContain('Rejected')
   })
   it('tells an empty match list from no match', () => {
     expect(text(renderToString(<LoggingFlowRenderer data={{ ...flow, spec: { match: [] } }} />))).toContain('Empty match: the operator selects no pod.')
