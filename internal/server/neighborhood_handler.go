@@ -217,12 +217,13 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 //   - Cluster-scoped node: namespace-list gate doesn't apply; dispatch
 //     directly.
 //
-// Secret nodes get an additional per-kind SAR inside the namespace: namespace
-// access (e.g. "user can list pods in team-a") is NOT a sufficient signal for
-// reading Secrets, because the SA the cache runs under may have cluster-wide
-// secrets RBAC (Helm release visibility) while the user does not. This mirrors
-// the same gate handleGetResource applies — without it, the neighborhood graph
-// would leak Secret existence + names to users who can't fetch them directly.
+// Secrets, Roles, RoleBindings, LimitRanges and Trivy reports get an
+// additional per-kind SAR inside the namespace (k8s.RequiresExactNamespaceAccess):
+// namespace access (e.g. "user can list pods in team-a") is NOT a sufficient
+// signal for reading them, because the SA the cache runs under may read them
+// cluster-wide while the user does not. This mirrors the gate handleGetResource
+// applies — without it, the neighborhood would leak their existence + names to
+// users who can't fetch them directly.
 func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool {
 	// Namespace-list gate is protocol-specific (per-user state); apply it
 	// here for namespaced nodes BEFORE consulting the shared helper.
@@ -230,6 +231,9 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
 			allowed := s.getUserNamespaces(r, []string{ns})
 			if readscope.NoNamespaceAccess(allowed) {
+				return false
+			}
+			if group, resource := k8s.ExactNamespaceAccessNode(n); resource != "" && !s.canRead(r, group, resource, ns, "get") {
 				return false
 			}
 		}

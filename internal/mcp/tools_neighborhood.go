@@ -180,15 +180,18 @@ func displayKindForMCP(kind string) string {
 // so both surfaces stay in lockstep when the pseudo-kind table or Secret-
 // tightening rules evolve.
 //
-// See REST canReadNeighborhoodNode for the Secret SAR rationale — namespace
-// access alone leaks Secrets when the cache SA has cluster-wide secrets RBAC
-// the calling user doesn't.
+// See REST canReadNeighborhoodNode for the per-kind SAR rationale — namespace
+// access alone leaks Secrets, Roles, RoleBindings, LimitRanges and Trivy
+// reports when the cache SA can read them and the calling user can't.
 func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 	// Namespace-list gate is protocol-specific; apply it here for namespaced
 	// nodes BEFORE consulting the shared helper.
 	if n != nil && n.Data != nil {
 		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
 			if !checkNamespaceAccess(ctx, ns) {
+				return false
+			}
+			if group, resource := k8s.ExactNamespaceAccessNode(n); resource != "" && !canReadInNamespace(ctx, group, resource, ns, "get") {
 				return false
 			}
 		}

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -99,6 +101,34 @@ func TestCanReadNeighborhoodNode_ConfigMapStaysOnNamespaceGate(t *testing.T) {
 
 	if !s.canReadNeighborhoodNode(r, cm) {
 		t.Error("ConfigMap node denied: namespace access should be sufficient (no per-kind tightening for ConfigMap)")
+	}
+}
+
+// Roles, RoleBindings, LimitRanges and Trivy reports need the user's own
+// permission on the kind, as a resource read does; namespace access alone
+// doesn't reveal them.
+func TestCanReadNeighborhoodNode_ExactKindsRequirePerKindRBAC(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	for _, tc := range []struct{ kind, apiVersion, resource string }{
+		{"Role", "rbac.authorization.k8s.io/v1", "roles"},
+		{"RoleBinding", "rbac.authorization.k8s.io/v1", "rolebindings"},
+		{"LimitRange", "v1", "limitranges"},
+		{"VulnerabilityReport", "aquasecurity.github.io/v1alpha1", "vulnerabilityreports"},
+	} {
+		node := &topology.Node{ID: tc.resource + "/shop/x", Kind: topology.NodeKind(tc.kind), Name: "x", Data: map[string]any{"namespace": "shop", "apiVersion": tc.apiVersion, "resource": tc.resource}}
+		group := ""
+		if i := strings.Index(tc.apiVersion, "/"); i > 0 {
+			group = tc.apiVersion[:i]
+		}
+		for _, grant := range []bool{false, true} {
+			user := fmt.Sprintf("%s-%v", tc.resource, grant)
+			s.permCache.Set(user, nil, &auth.UserPermissions{AllowedNamespaces: []string{"shop"}})
+			s.permCache.Get(user, nil).SetCanI("get", group, tc.resource, "shop", grant)
+			r := requestWithUser("GET", "/api/ai/neighborhood/replicaset/shop/web", &auth.User{Username: user})
+			if got := s.canReadNeighborhoodNode(r, node); got != grant {
+				t.Errorf("%s with get %s = %v: allowed = %v", tc.kind, tc.resource, grant, got)
+			}
+		}
 	}
 }
 
