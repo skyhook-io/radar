@@ -666,30 +666,30 @@ func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmRelea
 
 // GetReleaseAsUser is GetRelease with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity.
-func (c *Client) GetReleaseAsUser(namespace, name string, user *pkgauth.User, access StatusAccess) (*HelmReleaseDetail, error) {
+func (c *Client) GetReleaseAsUser(ctx context.Context, namespace, name string, user *pkgauth.User, access StatusAccess) (*HelmReleaseDetail, error) {
 	if user == nil {
-		return c.GetRelease(namespace, name, access)
+		return c.GetRelease(ctx, namespace, name, access)
 	}
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, user)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name, access)
+	return getReleaseWith(ctx, actionConfig, contextName, namespace, name, access)
 }
 
 // GetRelease returns details for a specific release. Its resources carry live
 // status only where access allows; see StatusAccess.
-func (c *Client) GetRelease(namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
+func (c *Client) GetRelease(ctx context.Context, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, contextName, namespace, name, access)
+	return getReleaseWith(ctx, actionConfig, contextName, namespace, name, access)
 }
 
-func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
+func getReleaseWith(ctx context.Context, actionConfig *action.Configuration, contextName, namespace, name string, access StatusAccess) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -740,8 +740,8 @@ func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, 
 	// Extract dependencies
 	dependencies := extractDependencies(rel)
 
-	managedByFlux, fluxReference := scopedFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()), access)
-	k3s := k3sHelmChartMap(context.Background())[effectiveStorage+"/"+rel.Name]
+	managedByFlux, fluxReference := scopedFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(ctx), access)
+	k3s := k3sHelmChartMap(ctx)[effectiveStorage+"/"+rel.Name]
 	controller, managedByK3s := scopedReleaseController(managedByFlux, fluxReference, k3s, access)
 
 	detail := &HelmReleaseDetail{
@@ -1723,16 +1723,25 @@ func k3sHelmChartKeys(configsKnown bool, charts, configs []*unstructured.Unstruc
 // k3sHelmChartMap is fluxHelmReleaseMap for k3s: best effort, read from
 // Radar's cache, nil when the cluster has no helm.cattle.io kinds or the read
 // fails. The observed path reads only what the caller can see (stampScan).
+// The objects are read without copying (HelmCharts can carry a whole chart in
+// spec.chartContent); k3sHelmChartKeys only reads them and keeps strings.
 func k3sHelmChartMap(ctx context.Context) map[string]k3sOwner {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
+	discovery, dc := k8s.GetResourceDiscovery(), k8s.GetDynamicResourceCache()
+	if discovery == nil || dc == nil {
 		return nil
 	}
-	charts, err := cache.ListDynamicWithGroup(ctx, k3sHelmChartKind, "", k3sHelmGroup)
+	list := func(kind string) ([]*unstructured.Unstructured, error) {
+		gvr, ok := discovery.GetGVRWithGroup(kind, k3sHelmGroup)
+		if !ok {
+			return nil, k8s.ErrUnknownDynamicKind
+		}
+		return dc.ListReadOnlyContext(ctx, gvr, "")
+	}
+	charts, err := list(k3sHelmChartKind)
 	if err != nil || len(charts) == 0 {
 		return nil
 	}
-	configs, err := cache.ListDynamicWithGroup(ctx, k3sHelmChartConfigKind, "", k3sHelmGroup)
+	configs, err := list(k3sHelmChartConfigKind)
 	return k3sHelmChartKeys(err == nil, charts, configs)
 }
 

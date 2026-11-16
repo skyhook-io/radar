@@ -168,9 +168,9 @@ func refuseFluxManagedRelease(detail *helm.HelmReleaseDetail) error {
 
 // storedSensitiveValues reads every stored revision's values as the caller,
 // through the client the call is pinned to, and returns their sensitive values.
-func storedSensitiveValues(client *helm.Client, in manageHelmInput, user *pkgauth.User) map[string]bool {
+func storedSensitiveValues(ctx context.Context, client *helm.Client, in manageHelmInput, user *pkgauth.User) map[string]bool {
 	secrets := map[string]bool{}
-	if detail, readErr := client.GetReleaseAsUser(in.Namespace, in.Name, user, nil); readErr == nil {
+	if detail, readErr := client.GetReleaseAsUser(ctx, in.Namespace, in.Name, user, nil); readErr == nil {
 		for _, revision := range detail.History {
 			if v, readErr := client.GetValuesRevisionAsUser(in.Namespace, in.Name, true, revision.Revision, user); readErr == nil {
 				collectSensitiveValues(v.UserSupplied, secrets)
@@ -241,7 +241,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 	client := helm.NewStandaloneClient(config)
 	user := userFromContext(ctx)
 	if in.Action != "install" {
-		detail, err := client.GetReleaseAsUser(in.Namespace, in.Name, user, mcpHelmObjectScope(ctx, ""))
+		detail, err := client.GetReleaseAsUser(ctx, in.Namespace, in.Name, user, mcpHelmObjectScope(ctx, ""))
 		if err != nil {
 			return nil, nil, fmt.Errorf("read release before %s: %w", in.Action, err)
 		}
@@ -310,7 +310,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 	// it fails, so its values are read first.
 	var uninstallSecrets map[string]bool
 	if in.Action == "uninstall" {
-		uninstallSecrets = storedSensitiveValues(client, in, user)
+		uninstallSecrets = storedSensitiveValues(ctx, client, in, user)
 	}
 	defer func() {
 		if err == nil {
@@ -318,7 +318,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		}
 		secrets := uninstallSecrets
 		if secrets == nil {
-			secrets = storedSensitiveValues(client, in, user)
+			secrets = storedSensitiveValues(ctx, client, in, user)
 		}
 		err = &knownValuesError{err: err, secrets: secrets}
 	}()
@@ -383,7 +383,7 @@ func manageHelm(ctx context.Context, _ *mcp.CallToolRequest, in manageHelmInput)
 		if refused {
 			return nil, nil, fmt.Errorf("Helm %s refused before applying changes: %w; inspect get_helm_release; for source errors ask the Radar configuration owner to configure and confirm the release source", in.Action, err)
 		}
-		if in.Action == "uninstall" && uninstallPurgedDespiteError(client, in, user) {
+		if in.Action == "uninstall" && uninstallPurgedDespiteError(ctx, client, in, user) {
 			return nil, nil, fmt.Errorf("Helm uninstall removed the release and purged its history, then reported errors from a later step such as a post-delete hook: %w; the release can't be rolled back; resource deletion may still be in progress (finalizers), so check for leftover release and hook resources and external cleanup", err)
 		}
 		return nil, nil, fmt.Errorf("Helm %s failed: %w; for source errors ask the Radar configuration owner to configure the source and confirm it for this release; inspect get_helm_release before retrying because the operation may have partially changed the release", in.Action, err)
@@ -456,8 +456,8 @@ func helmRollbackPreviewResult(in manageHelmInput, preview *helm.MCPRollbackResu
 // uninstallPurgedDespiteError reports whether a failed uninstall still removed
 // the release: Helm purges history after deleting resources even when a later
 // post-delete hook fails, and returns that hook's error.
-func uninstallPurgedDespiteError(client *helm.Client, in manageHelmInput, user *pkgauth.User) bool {
-	_, err := client.GetReleaseAsUser(in.Namespace, in.Name, user, nil)
+func uninstallPurgedDespiteError(ctx context.Context, client *helm.Client, in manageHelmInput, user *pkgauth.User) bool {
+	_, err := client.GetReleaseAsUser(ctx, in.Namespace, in.Name, user, nil)
 	return errors.Is(err, driver.ErrReleaseNotFound)
 }
 

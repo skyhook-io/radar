@@ -371,7 +371,7 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 
 	user := userCreds(r)
-	release, err := client.GetReleaseAsUser(namespace, name, user, h.objectScope(r))
+	release, err := client.GetReleaseAsUser(r.Context(), namespace, name, user, h.objectScope(r))
 	if err != nil {
 		writeGetReleaseError(w, err)
 		return
