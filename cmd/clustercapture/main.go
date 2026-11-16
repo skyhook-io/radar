@@ -32,16 +32,16 @@ func run() error {
 	}
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{CurrentContext: *name}).ClientConfig()
 	if err != nil {
-		return fmt.Errorf("load kubeconfig failed")
+		return fmt.Errorf("load kubeconfig: %w", err)
 	}
 	cfg.Timeout = 30 * time.Second
 	d, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
-		return fmt.Errorf("create discovery client failed")
+		return fmt.Errorf("create discovery client: %w", err)
 	}
 	c, err := dynamic.NewForConfig(cfg)
 	if err != nil {
-		return fmt.Errorf("create dynamic client failed")
+		return fmt.Errorf("create dynamic client: %w", err)
 	}
 	// A failed list must not leave a plausible-looking complete snapshot.
 	f, err := os.CreateTemp(filepath.Dir(*out), ".capture-*.partial")
@@ -55,7 +55,7 @@ func run() error {
 	count, skipped, captureErr := clusterreplay.Capture(ctx, d, c, *name, f)
 	closeErr := f.Close()
 	if captureErr != nil {
-		return fmt.Errorf("capture failed; no snapshot published (discovery failure or interrupted)")
+		return fmt.Errorf("capture failed; no snapshot published: %w", captureErr)
 	}
 	if closeErr != nil {
 		return closeErr
