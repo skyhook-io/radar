@@ -2135,8 +2135,7 @@ func TestSetArgoAutoSyncLifecycle(t *testing.T) {
 	original := map[string]any{"prune": true, "selfHeal": false, "allowEmpty": true}
 
 	t.Run("resume restores every field suspend removed", func(t *testing.T) {
-		// Removal is the path for an Argo CD that prunes automated.enabled.
-		client := newFakeArgoPre31(appWithAutomated(original, nil))
+		client := newFakeArgo(appWithAutomated(original, nil))
 		setAutoSync(t, client, false)
 		suspended := getTestApp(t, client)
 		if _, found := automatedOf(suspended); found {
@@ -2594,7 +2593,7 @@ func jsonMergePatch(target, patch map[string]any) map[string]any {
 // back, and Argo CD stops syncing automatically.
 func TestSetArgoAutoSyncSuspendsInPlaceWhereArgoKeepsEnabled(t *testing.T) {
 	original := map[string]any{"prune": true, "selfHeal": true}
-	client := newFakeArgo(appWithAutomated(original, nil))
+	client := newFakeArgo(appSetOwned(appWithAutomated(original, nil)))
 	setAutoSync(t, client, false)
 	suspended := getTestApp(t, client)
 	automated, found := automatedOf(suspended)
@@ -2617,7 +2616,7 @@ func TestSetArgoAutoSyncSuspendsInPlaceWhereArgoKeepsEnabled(t *testing.T) {
 // Before 3.1 the API server prunes enabled, so the in-place write changes
 // nothing; suspend then removes the block as it always has.
 func TestSetArgoAutoSyncFallsBackToRemovalWhereArgoPrunesEnabled(t *testing.T) {
-	client := newFakeArgoPre31(appWithAutomated(map[string]any{"prune": true, "selfHeal": false}, nil))
+	client := newFakeArgoPre31(appSetOwned(appWithAutomated(map[string]any{"prune": true, "selfHeal": false}, nil)))
 	setAutoSync(t, client, false)
 	suspended := getTestApp(t, client)
 	if _, found := automatedOf(suspended); found {
@@ -2625,5 +2624,21 @@ func TestSetArgoAutoSyncFallsBackToRemovalWhereArgoPrunesEnabled(t *testing.T) {
 	}
 	if suspended.GetAnnotations()[ArgoSuspendedPruneAnnotation] != "true" {
 		t.Fatalf("suspend didn't save the settings: %#v", suspended.GetAnnotations())
+	}
+}
+
+func appSetOwned(app *unstructured.Unstructured) *unstructured.Unstructured {
+	app.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "ApplicationSet", Name: "team", UID: "set-uid"}})
+	return app
+}
+
+// Without an ApplicationSet to put the block back, suspend keeps removing it:
+// a controller older than its CRD (an upgrade in progress) ignores
+// enabled: false, but no controller syncs an Application without a block.
+func TestSetArgoAutoSyncRemovesTheBlockWithoutAnApplicationSet(t *testing.T) {
+	client := newFakeArgo(appWithAutomated(map[string]any{"prune": true, "selfHeal": true}, nil))
+	setAutoSync(t, client, false)
+	if _, found := automatedOf(getTestApp(t, client)); found {
+		t.Fatalf("suspend kept the automated block on an Application no ApplicationSet owns: %#v", getTestApp(t, client).Object["spec"])
 	}
 }

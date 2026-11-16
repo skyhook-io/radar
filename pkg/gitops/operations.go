@@ -755,11 +755,12 @@ func stringValue(value any) string {
 // sync on an ArgoCD Application.
 //
 // Suspend saves the whole spec.syncPolicy.automated block in annotations and
-// switches it off in place with `enabled: false` (Argo CD 3.1+), keeping
-// prune and selfHeal, so an ApplicationSet that manages those fields doesn't
-// turn auto-sync back on. Where the API server prunes `enabled` (older Argo
-// CD), it removes the block instead. If auto-sync is already off it changes
-// nothing, so a second suspend can't replace the saved settings with empty ones.
+// removes the block, except on an Application an ApplicationSet owns, where it
+// switches the block off in place with `enabled: false` (Argo CD 3.1+) so the
+// ApplicationSet has no prune or selfHeal to put back; where the API server
+// prunes `enabled` it removes the block there too. If auto-sync is already off
+// it changes nothing, so a second suspend can't replace the saved settings
+// with empty ones.
 //
 // Resume turns back on the newest settings it can find:
 //   - a block switched off in place with `enabled: false` (by Argo CD 3.x
@@ -844,13 +845,25 @@ func argoSuspendPatch(app *unstructured.Unstructured) (map[string]any, bool, err
 				ArgoSuspendedSelfHealAnnotation:  strconv.FormatBool(selfHeal),
 			},
 		},
-		// enabled: false keeps prune and selfHeal, so an ApplicationSet that
-		// manages them has nothing to put back. SetArgoAutoSync falls back to
-		// removing the block where the API server prunes the field.
 		"spec": map[string]any{
-			"syncPolicy": map[string]any{"automated": map[string]any{"enabled": false}},
+			"syncPolicy": map[string]any{"automated": argoSuspendedAutomated(app)},
 		},
 	}, false, nil
+}
+
+// argoSuspendedAutomated is the automated value a suspend writes. Removing the
+// block works with every controller, but an ApplicationSet that manages prune
+// or selfHeal puts the block back, which Argo CD reads as auto-sync on. For an
+// Application an ApplicationSet owns it writes enabled: false instead (Argo CD
+// 3.1+), keeping the fields the ApplicationSet manages; SetArgoAutoSync removes
+// the block after all where the API server prunes enabled.
+func argoSuspendedAutomated(app *unstructured.Unstructured) any {
+	for _, owner := range app.GetOwnerReferences() {
+		if owner.Kind == "ApplicationSet" && schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind).Group == "argoproj.io" {
+			return map[string]any{"enabled": false}
+		}
+	}
+	return nil
 }
 
 func argoResumePatch(app *unstructured.Unstructured) (map[string]any, bool) {
