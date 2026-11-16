@@ -231,8 +231,10 @@ export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
-    // Keep showing the last answer, dimmed, while the tab's filters change,
-    // but never carry one workload's or namespace scope's answer to another.
-    placeholderData: (prev, prevQuery) => (prev?.view === p.view && subjectOfPath(prevQuery?.queryKey[1]) === subjectOfPath(path) ? prev : undefined),
+    // Keep showing the last answer, dimmed, while the tab's filters or view
+    // change (the summary is the same in every view; a caller shows rows
+    // only once data.view matches), but never carry one workload's or
+    // namespace scope's answer to another.
+    placeholderData: (prev, prevQuery) => (subjectOfPath(prevQuery?.queryKey[1]) === subjectOfPath(path) ? prev : undefined),
   })
 }

@@ -229,42 +229,50 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         {error && <p className="text-xs text-warning-text">Couldn't refresh: {error instanceof Error ? error.message : 'request failed'}. Showing the last answer.</p>}
       </div>
 
-      {rows.length === 0 ? (
-        <EmptyState
-          tone="neutral"
-          icon={ShieldAlert}
-          headline={emptyHeadline(view, filtered, data, workloadFolds ? workload : null)}
-          body={filtered && !workloadFolds ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
-        />
-      ) : view === 'fix' ? (
-        <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) }, true)} />
-      ) : view === 'cve' ? (
-        <CVETable cves={data.cves ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
-      ) : view === 'workload' ? (
-        <WorkloadTable
-          workloads={data.workloads ?? []}
-          severities={severities}
-          query={query}
-          namespaces={namespaces}
-          onOpen={(w) => onNavigateToResource(toResource(w))}
-          onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') }, true)}
-        />
+      {/* A view switched to for the first time shows the last answer's
+          header while its own rows load. */}
+      {data.view !== view ? (
+        <PaneLoader label="Reading vulnerability reports…" className="min-h-48" />
       ) : (
-        <ImageTable
-          images={data.images ?? []}
-          onOpen={(w) => onNavigateToResource(toResource(w))}
-          onOpenReport={(img) => onNavigateToResource({ kind: img.report.kind, group: img.report.group, namespace: img.report.namespace ?? '', name: img.report.name })}
-        />
-      )}
+        <>
+        {rows.length === 0 ? (
+          <EmptyState
+            tone="neutral"
+            icon={ShieldAlert}
+            headline={emptyHeadline(view, filtered, data, workloadFolds ? workload : null)}
+            body={filtered && !workloadFolds ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
+          />
+        ) : view === 'fix' ? (
+          <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) }, true)} />
+        ) : view === 'cve' ? (
+          <CVETable cves={data.cves ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
+        ) : view === 'workload' ? (
+          <WorkloadTable
+            workloads={data.workloads ?? []}
+            severities={severities}
+            query={query}
+            namespaces={namespaces}
+            onOpen={(w) => onNavigateToResource(toResource(w))}
+            onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') }, true)}
+          />
+        ) : (
+          <ImageTable
+            images={data.images ?? []}
+            onOpen={(w) => onNavigateToResource(toResource(w))}
+            onOpenReport={(img) => onNavigateToResource({ kind: img.report.kind, group: img.report.group, namespace: img.report.namespace ?? '', name: img.report.name })}
+          />
+        )}
 
-      {(data.coverage.rowsOmitted ?? 0) > 0 && (
-        <p className="text-xs text-theme-text-tertiary">{data.coverage.rowsOmitted} more rows not shown. Narrow with a filter or the namespace picker.</p>
-      )}
+        {(data.coverage.rowsOmitted ?? 0) > 0 && (
+          <p className="text-xs text-theme-text-tertiary">{data.coverage.rowsOmitted} more rows not shown. Narrow with a filter or the namespace picker.</p>
+        )}
 
-      {!severities.length && !fixableOnly && (view === 'image' || view === 'workload') && (
-        <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
+        {!severities.length && !fixableOnly && (view === 'image' || view === 'workload') && (
+          <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
+        )}
+        <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
+        </>
       )}
-      <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
     </div>
   )
 }
