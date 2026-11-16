@@ -69,12 +69,16 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 		name, dstNs, tcpService, tcpSource, tcpSourceNs, tcpDestination string
 		httpReporter, tcpReporter                                       string
 		zeroHTTPBytes, wantOverlap, missingErrors, failTCP              bool
+		excludeClient, selectOther                                      bool
 	}{
 		{name: "ambient same Service", wantOverlap: true},
 		{name: "waypoint same Service", httpReporter: "waypoint", tcpReporter: "waypoint"},
 		{name: "sidecar same Service", dstNs: "side", httpReporter: "destination"},
 		{name: "sidecar in an ambient namespace, same Service", httpReporter: "destination", wantOverlap: true},
-		{name: "ambient other Service", tcpService: "db"},
+		{name: "ambient other Service", tcpService: "db", wantOverlap: true},
+		{name: "ambient unknown Service", tcpService: "unknown", wantOverlap: true},
+		{name: "ambient pair excluded from the view", excludeClient: true},
+		{name: "ambient pair not in the selection", selectOther: true},
 		{name: "ambient other source", tcpSource: "other"},
 		{name: "ambient other source namespace", tcpSourceNs: "other"},
 		{name: "ambient other destination", tcpDestination: "other"},
@@ -128,7 +132,17 @@ func TestIstioAmbientHTTPByteOverlap(t *testing.T) {
 			}
 			s := newTestIstio(fakeIstioProm(raw, fail))
 			s.ambientNamespaceFn = func() []string { return []string{"amb"} }
-			resp, err := s.GetFlows(t.Context(), DefaultFlowOptions())
+			opts := DefaultFlowOptions()
+			if tc.excludeClient {
+				opts.ExcludeNamespaces = []string{"side"}
+			}
+			if tc.selectOther {
+				opts.Match = &FlowMatch{Pairs: []EndpointPair{{
+					Source:      EndpointRef{Namespace: "shop", Name: "frontend"},
+					Destination: EndpointRef{Namespace: "shop", Name: "db"},
+				}}}
+			}
+			resp, err := s.GetFlows(t.Context(), opts)
 			if err != nil {
 				t.Fatal(err)
 			}
