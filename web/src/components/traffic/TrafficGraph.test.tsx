@@ -70,7 +70,7 @@ describe('TrafficGraph addon group edges', () => {
       it(`shows Data without a rate when selecting ${edgeId} from ${source}`, async () => {
         const grouped = groupAddonFlows([{ ...flow, rawPairs: [endpointPair(flow)] }], (_name, ns) => ns === 'monitoring')
         const onSelectionChange = vi.fn()
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onSelectionChange={onSelectionChange} />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onSelectionChange={onSelectionChange} onLayoutUnavailable={vi.fn()} />))
         const edge = container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!
         expect(edge).not.toBeNull()
         expect(edge.textContent).toBe('')
@@ -79,7 +79,7 @@ describe('TrafficGraph addon group edges', () => {
         expect(container.textContent).not.toContain('Request Rate')
         expect(container.textContent).not.toContain('0/s')
         expect(onSelectionChange.mock.calls[0][0]).toMatchObject({ type: 'edge', port, directionUnknown: false })
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" selection={onSelectionChange.mock.calls[0][0]} />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" selection={onSelectionChange.mock.calls[0][0]} onLayoutUnavailable={vi.fn()} />))
         expect(container.textContent).toContain('Data300 B')
       })
     }
@@ -93,7 +93,7 @@ describe('TrafficGraph addon group edges', () => {
       const http = { ...flow, protocol: 'http', l7Protocol: 'HTTP', port: 0, connections: 2, requestRate: 1.7 }
       const grouped = groupAddonFlows([{ ...http, rawPairs: [endpointPair(http)] }], (_name, ns) => ns === 'monitoring')
       const onSelectionChange = vi.fn()
-      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onSelectionChange={onSelectionChange} />))
+      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onSelectionChange={onSelectionChange} onLayoutUnavailable={vi.fn()} />))
       act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
       expect(container.textContent).toContain('ProtocolHTTP')
       expect(container.textContent).not.toContain('Port')
@@ -108,7 +108,7 @@ describe('TrafficGraph addon group edges', () => {
     it(`shows mixed metadata in ${edgeId} details`, async () => {
       const http = { ...flow, protocol: 'http', l7Protocol: 'HTTP', port: 8080 }
       const grouped = groupAddonFlows([http, flow].map(f => ({ ...f, rawPairs: [endpointPair(f)] })), (_name, ns) => ns === 'monitoring')
-      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" />))
+      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onLayoutUnavailable={vi.fn()} />))
       act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
       expect(container.textContent).toContain('Port443')
       expect(container.textContent).toContain('Protocolmixed')
@@ -126,7 +126,7 @@ describe('TrafficGraph addon group node accounting', () => {
     ] as const) {
       it(`counts Data once when selecting ${nodeId} from ${source}`, async () => {
         const grouped = groupAddonFlows([{ ...flow, rawPairs: [endpointPair(flow)] }], (_name, ns) => ns === 'monitoring')
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onLayoutUnavailable={vi.fn()} />))
         const node = container.querySelector<HTMLButtonElement>(`[data-node="${nodeId}"]`)!
         expect(node).not.toBeNull()
         expect(node.dataset.connections).toBe('1')
@@ -144,7 +144,7 @@ describe('TrafficGraph addon group node accounting', () => {
       it(`counts node volume and ports once at ${nodeId} from ${source}`, async () => {
         const measured = { ...flow, connections: 2, requestRate: 1.7 }
         const grouped = groupAddonFlows([{ ...measured, rawPairs: [endpointPair(measured)] }], (_name, ns) => ns === 'monitoring')
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onLayoutUnavailable={vi.fn()} />))
         const volume = source === 'hubble' ? 2 : 1.7
         for (const id of [nodeId, 'monitoring/prometheus']) {
           const node = container.querySelector<HTMLButtonElement>(`[data-node="${id}"]`)!
