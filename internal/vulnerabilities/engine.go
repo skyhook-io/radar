@@ -154,14 +154,13 @@ func newer(a, b *report) bool {
 }
 
 // preferred is whether report a should describe an image over report b,
-// both scans of it: the newer, except that a report listing nothing never
-// replaces one listing findings. One build's scans differ only by what the
-// scanner was told to leave out (an ignore policy scoped to one workload,
-// unfixed or low findings), so an empty one doesn't show that another
-// workload's reported CVEs went away.
+// both scans of it: the one listing more findings, else the newer. One
+// build's scans list fewer only when the scanner was told to leave some
+// out (an ignore policy scoped to one workload, unfixed or low findings),
+// so a shorter list doesn't show that another workload's CVEs went away.
 func preferred(a, b *report) bool {
-	if ea, eb := findingCount(a.u) == 0, findingCount(b.u) == 0; ea != eb {
-		return eb
+	if na, nb := findingCount(a.u), findingCount(b.u); na != nb {
+		return na > nb
 	}
 	return newer(a, b)
 }
@@ -259,10 +258,13 @@ type rollup struct {
 // scanned. A report about another image of the same object (a StatefulSet
 // before Trivy rescanned its new image) describes nothing that runs; the
 // running image stays unscanned rather than borrowing its findings. Of
-// several reports about one image the preferred one wins, whole. Findings are read
+// several reports about one image the preferred one wins, whole (see preferred). Findings are read
 // only for the winners, at most MaxFindings in all; an image past that is
 // marked unread, never shown as clean.
-func join(ctx context.Context, items []*unstructured.Unstructured, targets []target) (*rollup, error) {
+// join matches reports to targets and reads the chosen reports' findings
+// within MaxFindings. Images run by a workload first() names are read
+// first, so a narrowed view isn't starved by images it doesn't show.
+func join(ctx context.Context, items []*unstructured.Unstructured, targets []target, first func(WorkloadRef) bool) (*rollup, error) {
 	byOwner := map[ownerKey][]*target{}
 	for i := range targets {
 		o := targets[i].key.owner()
@@ -359,7 +361,20 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 	}
 	j.inactiveReports = inactive
 	read := 0
-	for _, agg := range j.sortedImages() {
+	aggs := j.sortedImages()
+	if first != nil {
+		runs := map[*imageAgg]bool{}
+		for _, agg := range aggs {
+			for w := range agg.workloads {
+				if first(w) {
+					runs[agg] = true
+					break
+				}
+			}
+		}
+		slices.SortStableFunc(aggs, func(a, b *imageAgg) int { return compareBool(!runs[a], !runs[b]) })
+	}
+	for _, agg := range aggs {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -424,7 +439,11 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 // build is the response for the readable reports and the containers that
 // run, grouped by view and narrowed by f.
 func build(ctx context.Context, items []*unstructured.Unstructured, targets []target, view View, f Filter) (Response, error) {
-	j, err := join(ctx, items, targets)
+	var first func(WorkloadRef) bool
+	if f.Workload != nil {
+		first = newMatcher(f).wanted
+	}
+	j, err := join(ctx, items, targets, first)
 	if err != nil {
 		return Response{}, err
 	}

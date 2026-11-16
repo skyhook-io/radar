@@ -157,6 +157,10 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	}
 	for i := range resp.CVEs {
 		resp.CVEs[i].Affected = resp.CVEs[i].Affected[:min(len(resp.CVEs[i].Affected), vulnerabilityDetailsPerRow)]
+		for k := range resp.CVEs[i].Affected {
+			a := &resp.CVEs[i].Affected[k]
+			a.Workloads = a.Workloads[:min(len(a.Workloads), vulnerabilityDetailsPerRow)]
+		}
 	}
 	if len(resp.Fixes) > limit {
 		omitted, resp.Fixes = len(resp.Fixes)-limit, resp.Fixes[:limit]
@@ -164,6 +168,10 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 	for i := range resp.Fixes {
 		resp.Fixes[i].Affected = resp.Fixes[i].Affected[:min(len(resp.Fixes[i].Affected), vulnerabilityDetailsPerRow)]
 		resp.Fixes[i].CVEs = resp.Fixes[i].CVEs[:min(len(resp.Fixes[i].CVEs), vulnerabilityDetailsPerRow)]
+		for k := range resp.Fixes[i].Affected {
+			a := &resp.Fixes[i].Affected[k]
+			a.Workloads = a.Workloads[:min(len(a.Workloads), vulnerabilityDetailsPerRow)]
+		}
 	}
 	if len(resp.Workloads) > limit {
 		omitted, resp.Workloads = len(resp.Workloads)-limit, resp.Workloads[:limit]

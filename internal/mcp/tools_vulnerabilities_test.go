@@ -335,3 +335,16 @@ func TestToolListHidesVulnerabilitiesWithoutTrivy(t *testing.T) {
 		t.Fatalf("without Trivy: %v", got)
 	}
 }
+
+// An affected image's workloads are capped like every other per-row list,
+// beside their total.
+func TestTrimVulnerabilitiesCapsAffectedWorkloads(t *testing.T) {
+	resp := vulnerabilities.Response{
+		CVEs:  []vulnerabilities.CVE{{Affected: []vulnerabilities.CVEImage{{Workloads: make([]vulnerabilities.WorkloadRef, 7), WorkloadsTotal: 7}}}},
+		Fixes: []vulnerabilities.Fix{{Affected: []vulnerabilities.FixImage{{Workloads: make([]vulnerabilities.WorkloadRef, 7), WorkloadsTotal: 7}}}},
+	}
+	got := trimVulnerabilities(resp, 10)
+	if c, f := got.CVEs[0].Affected[0], got.Fixes[0].Affected[0]; len(c.Workloads) != vulnerabilityDetailsPerRow || c.WorkloadsTotal != 7 || len(f.Workloads) != vulnerabilityDetailsPerRow || f.WorkloadsTotal != 7 {
+		t.Fatalf("%+v / %+v", c, f)
+	}
+}

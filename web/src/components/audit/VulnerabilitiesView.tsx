@@ -371,7 +371,7 @@ function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filt
         {/* For someone comparing these numbers with Trivy's own: why they can differ. */}
         <WithTooltip tip={[
           "Reports list what was known when each image was scanned, after Trivy's own filters.",
-          'A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy\'s reports.',
+          'A CVE counts once per package version in an image, and findings Trivy left unrated are rated from their CVSS score, so totals can differ from the summaries in Trivy\'s reports.',
           data.coverage.inactiveReports > 0 ? `${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about older revisions or builds that don't run now, and ${data.coverage.inactiveReports === 1 ? "isn't" : "aren't"} counted.` : '',
         ].filter(Boolean).join(' ')}>
           <Info className="h-3.5 w-3.5" aria-label="How these numbers relate to Trivy's" />
@@ -554,11 +554,13 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                       {f.packageType && <span className="truncate text-xs text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
                     </span>
                     <WithTooltip tip={f.to ? `${f.from.join(', ')} → ${f.to}` : "Radar can't pick one release that fixes every CVE here: it can't order this package's versions, or no listed release is above the installed one. These are the fixed releases the scanner lists."}>
-                      <span className="min-w-0 truncate font-mono text-xs">
-                        <span className="text-theme-text-tertiary">{installedLabel(f.from)}{f.to ? ' → ' : ' · '}</span>
+                      {/* The installed side gives way first: the target is what to act on. */}
+                      <span className="flex min-w-0 items-baseline font-mono text-xs">
+                        <span className="min-w-0 shrink-[100] truncate text-theme-text-tertiary">{installedLabel(f.from)}</span>
+                        <span className="shrink-0 whitespace-pre text-theme-text-tertiary">{f.to ? ' → ' : ' · '}</span>
                         {f.to
-                          ? <span className={SEVERITY_TEXT.success}>{f.to}</span>
-                          : <span className="text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
+                          ? <span className={clsx('min-w-0 truncate', SEVERITY_TEXT.success)}>{f.to}</span>
+                          : <span className="min-w-0 truncate text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
                       </span>
                     </WithTooltip>
                     <SeverityCounts counts={f.counts} />
@@ -743,7 +745,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
   const actions = (
     <span className="flex flex-wrap gap-x-4">
       <button type="button" onClick={() => onOpen(ref)} className="text-accent-text hover:underline">Open {w.name}</button>
-      {total > 0 && <button type="button" onClick={() => onShow(ref, 'image')} className="text-accent-text hover:underline">{filtered ? 'Its findings' : `All ${total} findings`}</button>}
+      {total > 0 && <button type="button" onClick={() => onShow(ref, 'cve')} className="text-accent-text hover:underline">{filtered ? 'Its CVEs' : 'All its CVEs'}</button>}
       {fixes.length > MAX_WORKLOAD_UPGRADES && <button type="button" onClick={() => onShow(ref, 'fix')} className="text-accent-text hover:underline">All {fixes.length} upgrades</button>}
     </span>
   )

@@ -159,7 +159,7 @@ type Image struct {
 	// image, before the filters: the sum of Counts.
 	Findings      []Finding `json:"findings"`
 	FindingsTotal int       `json:"findingsTotal"`
-	// Report is the scan report the findings come from: the newest, unless a newer one lists nothing.
+	// Report is the scan report the findings come from: of the image's reports, the one listing the most findings, else the newest.
 	Report resourceapi.ObjectRef `json:"report"`
 }
 

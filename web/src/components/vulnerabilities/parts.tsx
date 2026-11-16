@@ -106,9 +106,11 @@ export function FixVersion({ installed, fixed, target, showInstalled = true, cla
   const tip = target ? `${installed} → ${target}${fixed && fixed !== target ? ` (fixed releases: ${fixed})` : ''}` : undefined
   return (
     <WithTooltip tip={tip}>
-      <span className={clsx('min-w-0 truncate font-mono', className)}>
-        {showInstalled && <span className="text-theme-text-tertiary">{installed} → </span>}
-        {target ? <span className={SEVERITY_TEXT.success}>{target}</span> : <span className="text-theme-text-tertiary">no fix yet</span>}
+      {/* The installed side gives way first: the target is what to act on. */}
+      <span className={clsx('flex min-w-0 items-baseline font-mono', className)}>
+        {showInstalled && <span className="min-w-0 shrink-[100] truncate text-theme-text-tertiary">{installed}</span>}
+        {showInstalled && <span className="shrink-0 whitespace-pre text-theme-text-tertiary"> → </span>}
+        {target ? <span className={clsx('min-w-0 truncate', SEVERITY_TEXT.success)}>{target}</span> : <span className="min-w-0 truncate text-theme-text-tertiary">no fix yet</span>}
       </span>
     </WithTooltip>
   )

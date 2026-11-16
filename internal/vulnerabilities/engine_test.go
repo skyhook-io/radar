@@ -831,3 +831,40 @@ func TestEmptyScanDoesNotClearAnotherWorkloadsFindings(t *testing.T) {
 		}
 	}
 }
+
+// Two non-empty scans of one build: the one listing more wins, so a policy
+// that drops a Critical for one workload doesn't drop it for another.
+func TestFullerScanOfABuildWins(t *testing.T) {
+	full := vulnReport(reportSpec{name: "full", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/shared", tag: "1", digest: "sha256:d", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{{"CVE-CRIT", "CRITICAL", "lib", "1", "2"}, {"CVE-HIGH", "HIGH", "lib", "1", "2"}}})
+	filtered := vulnReport(reportSpec{name: "filtered", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/shared", tag: "1", digest: "sha256:d", scanned: "2026-11-11T00:00:00Z", vulns: []vuln{{"CVE-HIGH", "HIGH", "lib", "1", "2"}}})
+	targets := []target{running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/shared:1", "", checkout), "sha256:d"), running(liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/shared:1", "", worker), "sha256:d")}
+	for _, order := range [][]*unstructured.Unstructured{{full, filtered}, {filtered, full}} {
+		if got := mustBuild(t, order, targets, ViewImage, Filter{}); got.Summary.Counts.Critical != 1 {
+			t.Fatalf("the fuller scan describes the build: %+v", got.Summary)
+		}
+	}
+}
+
+// Narrowed to one workload, its images are read before the findings budget
+// runs out on images the view doesn't show.
+func TestNarrowedViewReadsItsImagesFirst(t *testing.T) {
+	var items []*unstructured.Unstructured
+	var targets []target
+	for i := range MaxFindings/500 + 1 {
+		owner := fmt.Sprintf("a-%04d", i)
+		r := vulnReport(reportSpec{name: owner, ns: "shop", ownerKind: "ReplicaSet", ownerName: owner, container: "app", repo: "acme/a", tag: "1", digest: fmt.Sprintf("sha256:a%04d", i)})
+		many := make([]any, 500)
+		for k := range many {
+			many[k] = map[string]any{"vulnerabilityID": fmt.Sprintf("CVE-A-%03d", k), "severity": "LOW", "resource": "a", "installedVersion": "1"}
+		}
+		r.Object["report"].(map[string]any)["vulnerabilities"] = many
+		items = append(items, r)
+		targets = append(targets, liveTarget("shop", "ReplicaSet", owner, "app", "acme/a:1", "", checkout))
+	}
+	items = append(items, vulnReport(reportSpec{name: "small", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/z", tag: "1", digest: "sha256:z", vulns: []vuln{{"CVE-Z", "CRITICAL", "z", "1", "2"}}}))
+	targets = append(targets, liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/z:1", "", worker))
+	got := mustBuild(t, items, targets, ViewImage, Filter{Workload: &worker})
+	if len(got.Images) != 1 || got.Images[0].FindingsUnread || !got.Coverage.Truncated {
+		t.Fatalf("the workload's image is read, the budget still reported: %d images, coverage %+v", len(got.Images), got.Coverage)
+	}
+}
