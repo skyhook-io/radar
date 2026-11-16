@@ -27,6 +27,25 @@ type Rule struct {
 	// here): a rule using it that would otherwise decide makes the answer
 	// uncertain.
 	NamespaceLabels map[string]string
+	// nsRegex is NamespacesRegex compiled by FlowFrom, nil for a pattern Go
+	// can't evaluate; compiled marks it set, so matching never recompiles.
+	nsRegex  []*regexp.Regexp
+	compiled bool
+}
+
+var compileRegex = regexp.Compile
+
+// compileNamespaceRegex keeps nil for a pattern RE2 can't compile (Ruby-only
+// syntax) or one containing a comma, which fluentd's array parameter splits
+// into separate patterns.
+func compileNamespaceRegex(patterns []string) []*regexp.Regexp {
+	out := make([]*regexp.Regexp, len(patterns))
+	for i, p := range patterns {
+		if re, err := compileRegex(p); err == nil && !strings.Contains(p, ",") {
+			out[i] = re
+		}
+	}
+	return out
 }
 
 type Flow struct {
@@ -112,7 +131,7 @@ func Selects(flow Flow, pod PodFacts) Decision {
 }
 
 func ruleHolds(r Rule, pod PodFacts, container string) bool {
-	return len(missingLabels(r.Labels, pod.Labels)) == 0 &&
+	return labelsHold(r.Labels, pod.Labels) &&
 		(len(r.ContainerNames) == 0 || slices.Contains(r.ContainerNames, container)) &&
 		(len(r.Hosts) == 0 || slices.Contains(r.Hosts, pod.Node)) &&
 		(len(r.Namespaces) == 0 || slices.Contains(r.Namespaces, pod.Namespace)) &&
@@ -124,21 +143,21 @@ func regexHoldsOrUnknown(r Rule, namespace string) bool {
 	return holds || !known
 }
 
-// namespaceRegexHolds evaluates namespaces_regex with Go's regexp. known is
-// false for a pattern RE2 can't compile (Ruby-only syntax) or one containing a
-// comma, which fluentd's array parameter splits into separate patterns.
+// namespaceRegexHolds evaluates namespaces_regex with Go's regexp; known is
+// false when a pattern Go can't evaluate could decide.
 func namespaceRegexHolds(r Rule, namespace string) (holds, known bool) {
 	if len(r.NamespacesRegex) == 0 {
 		return true, true
 	}
+	compiled := r.nsRegex
+	if !r.compiled {
+		compiled = compileNamespaceRegex(r.NamespacesRegex)
+	}
 	known = true
-	for _, pattern := range r.NamespacesRegex {
-		re, err := regexp.Compile(pattern)
-		if err != nil || strings.Contains(pattern, ",") {
+	for _, re := range compiled {
+		if re == nil {
 			known = false
-			continue
-		}
-		if re.MatchString(namespace) {
+		} else if re.MatchString(namespace) {
 			holds = true
 		}
 	}
@@ -173,6 +192,15 @@ func nearestUnmet(rules []Rule, pod PodFacts) []string {
 		}
 	}
 	return best
+}
+
+func labelsHold(want, have map[string]string) bool {
+	for k, v := range want {
+		if got, ok := have[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
 }
 
 func missingLabels(want, have map[string]string) []string {

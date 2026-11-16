@@ -45,6 +45,9 @@ func FlowFrom(u *unstructured.Unstructured) Flow {
 			r.Hosts, _, _ = unstructured.NestedStringSlice(cond, "hosts")
 			r.Namespaces, _, _ = unstructured.NestedStringSlice(cond, "namespaces")
 			r.NamespacesRegex, _, _ = unstructured.NestedStringSlice(cond, "namespaces_regex")
+			if len(r.NamespacesRegex) > 0 {
+				r.nsRegex, r.compiled = compileNamespaceRegex(r.NamespacesRegex), true
+			}
 			r.NamespaceLabels, _, _ = unstructured.NestedStringMap(cond, "namespace_labels")
 			f.Match = append(f.Match, r)
 		}
