@@ -104,7 +104,7 @@ func TestWatchReconcilerRetriesDenialAfterGrant(t *testing.T) {
 	waitUntilTrue(t, "initial denial", func() bool { return d.Observation(deniedWidgets).State == DynamicObservationDenied })
 	granted.Store(true)
 	for range 100 {
-		d.RequestWatch(deniedWidgets)
+		d.requestWatch(deniedWidgets)
 	}
 	time.Sleep(40 * time.Millisecond)
 	if got := calls.Load(); got != 1 {
@@ -219,14 +219,14 @@ func TestRequestWatchIsNonBlockingAndSingleflight(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for range 100 {
-			d.RequestWatch(deniedWidgets)
+			d.requestWatch(deniedWidgets)
 		}
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("RequestWatch blocked on the probe")
+		t.Fatal("requestWatch blocked on the probe")
 	}
 	waitUntilTrue(t, "one outstanding probe", func() bool { return calls.Load() > 0 })
 	if got := calls.Load(); got != 1 {

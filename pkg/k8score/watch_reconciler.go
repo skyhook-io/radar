@@ -33,10 +33,10 @@ func (d *ResourceDiscovery) notifyRefresh() {
 	}
 }
 
-// RequestWatch schedules a cache-owned activation without waiting for discovery,
+// requestWatch schedules a cache-owned activation without waiting for discovery,
 // probes or sync. Concurrent requests share one task per GVR; recent denials are
 // answered by EnsureWatchingContext's denial memory rather than new API calls.
-func (d *DynamicResourceCache) RequestWatch(gvr schema.GroupVersionResource) {
+func (d *DynamicResourceCache) requestWatch(gvr schema.GroupVersionResource) {
 	if d == nil || d.hasCoveringInformer(gvr, "") || d.recentDenial(gvr, "") != nil {
 		return
 	}
@@ -107,11 +107,11 @@ func (d *DynamicResourceCache) reconcileWatches() {
 		return
 	}
 	if d.config.Discovery.SupportsWatchGVR(crdGVR) {
-		d.RequestWatch(crdGVR)
+		d.requestWatch(crdGVR)
 	}
 	for _, k := range d.config.RequiredWatchKinds {
 		if gvr, ok := d.config.Discovery.GetGVRWithGroup(k.Kind, k.Group); ok && d.config.Discovery.SupportsWatchGVR(gvr) {
-			d.RequestWatch(gvr)
+			d.requestWatch(gvr)
 		}
 	}
 }

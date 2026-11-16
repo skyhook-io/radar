@@ -2740,7 +2740,7 @@ func (d *DynamicResourceCache) watchSmallCRDs(gvrs []schema.GroupVersionResource
 	}
 	d.mu.RUnlock()
 	for _, gvr := range required {
-		d.RequestWatch(gvr)
+		d.requestWatch(gvr)
 	}
 	stats.eager = len(required)
 

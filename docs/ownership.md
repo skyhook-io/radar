@@ -69,7 +69,7 @@ served by typed informers using `k8score.AllKindListers()` and gives the rest to
 It starts before the deferred-informer warmup gate, reacts to discovery refreshes and CRD add/update events, and retries
 every 75 seconds (after the 60-second denial memory expires). A context switch, reconnect or namespace rescope creates
 and starts a new reconciler; stopping a cache cancels its requests and unregisters its discovery subscription.
-`DynamicResourceCache.RequestWatch(gvr)` is the non-blocking, singleflight entry point for readers recording collection gaps.
+Activation is non-blocking and singleflight per resource, so a burst of discovery and CRD events starts each watch once.
 
 Both Calico groups and both Traefik groups are activated because families read both. Open-ended Knative destinations
 use named Serving, Broker, Channel, flow and JobSink targets, and NodeClasses use the four supported providers; discovery
