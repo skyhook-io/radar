@@ -12,7 +12,7 @@ export function useLoggingPipeline(namespaces: string[], enabled = true) {
     queryFn: ({ signal }) => guard(() => fetchJSON<LogPipeline>(`/logging/pipeline${ns ? `?namespaces=${encodeURIComponent(ns)}` : ''}`, signal)),
     enabled,
     staleTime: 30_000,
-    // Pods turning Running are updates, which don't invalidate this query.
+    // Pod events don't invalidate this query; the poll picks pod changes up.
     refetchInterval: 60_000,
     retry: shouldRetryRadarQuery,
   })

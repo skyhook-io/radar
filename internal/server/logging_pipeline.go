@@ -309,12 +309,17 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 	// A view narrower than every namespace leaves pods out of every count.
 	podsPartial = podsPartial || namespaces != nil
 	resp.Coverage.Namespaces = podNamespaces
-	if podNamespaces == nil || len(podNamespaces) > 0 {
-		all, _ := cache.Pods().List(labels.Everything())
-		for _, p := range all {
-			if p.Status.Phase == corev1.PodRunning && in(podNamespaces, p.Namespace) {
-				pods = append(pods, loggingPodFacts(p))
-			}
+	var listed []*corev1.Pod
+	if podNamespaces == nil {
+		listed, _ = cache.Pods().List(labels.Everything())
+	}
+	for _, ns := range podNamespaces {
+		nsPods, _ := cache.Pods().Pods(ns).List(labels.Everything())
+		listed = append(listed, nsPods...)
+	}
+	for _, p := range listed {
+		if p.Status.Phase == corev1.PodRunning {
+			pods = append(pods, loggingPodFacts(p))
 		}
 	}
 	// What the running configuration of a Logging the operator can't render

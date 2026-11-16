@@ -16,15 +16,14 @@ describe('workspace invalidations', () => {
       { kind: 'Backup', group: 'postgresql.cnpg.io' },
     ]).map(d => d.id)).toEqual(['cnpg'])
   })
-  it('refreshes the logging pipeline on Logging operator and pod changes', () => {
-    expect(pendingInvalidations([{ kind: 'ClusterFlow', group: 'logging.banzaicloud.io' }]).map(d => d.id)).toEqual(['logging'])
-    // A new pod is Pending, which the counts leave out until it runs; the page polls for that.
-    expect(pendingInvalidations([{ kind: 'Pod', group: '', operation: 'add' }])).toEqual([])
-    expect(pendingInvalidations([{ kind: 'Pod', group: '', operation: 'delete' }])[0].queryKey).toEqual(['logging', 'pipeline'])
-    // Pod status churn alone doesn't rescan every pod; the page polls for it.
-    expect(pendingInvalidations([{ kind: 'Pod', group: '', operation: 'update' }])).toEqual([])
+  it('refreshes the logging pipeline on Logging operator changes, not pod events', () => {
+    expect(pendingInvalidations([{ kind: 'ClusterFlow', group: 'logging.banzaicloud.io' }])[0].queryKey).toEqual(['logging', 'pipeline'])
+    // Each refetch rescans every pod, and Job churn deletes pods every few seconds; the page polls instead.
+    for (const operation of ['add', 'update', 'delete'] as const) {
+      expect(pendingInvalidations([{ kind: 'Pod', group: '', operation }])).toEqual([])
+    }
   })
   it('lists two workspaces changed in one batch', () => {
-    expect(pendingInvalidations([{ kind: 'Pod', operation: 'delete' }, { kind: 'Cluster', group: 'postgresql.cnpg.io' }]).map(d => d.id)).toEqual(['cnpg', 'logging'])
+    expect(pendingInvalidations([{ kind: 'Flow', group: 'logging.banzaicloud.io' }, { kind: 'Cluster', group: 'postgresql.cnpg.io' }]).map(d => d.id)).toEqual(['cnpg', 'logging'])
   })
 })
