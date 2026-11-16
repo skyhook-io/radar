@@ -1177,31 +1177,33 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 		}
 
 		if fingerprintedAsset.MatchString(path) {
-			w = &immutableOnSuccess{ResponseWriter: w}
+			w = &immutableWhenOK{ResponseWriter: w}
 		}
 		fileServer.ServeHTTP(w, r)
 	})
 }
 
-// immutableOnSuccess marks only the asset itself as cacheable. FileServer can
+// immutableWhenOK marks only a complete answer as cacheable. FileServer can
 // still answer an asset URL with an error, such as 412 for a failed If-Match,
-// and that answer must not be kept for a year.
-type immutableOnSuccess struct {
+// and that must not be kept for a year. Partial answers are left out too: the
+// compression middleware gzips the selected range, so their Content-Range
+// describes bytes the response does not contain.
+type immutableWhenOK struct {
 	http.ResponseWriter
 	wroteHeader bool
 }
 
-func (w *immutableOnSuccess) WriteHeader(code int) {
+func (w *immutableWhenOK) WriteHeader(code int) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
-		if code == http.StatusOK || code == http.StatusPartialContent {
+		if code == http.StatusOK {
 			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
 		}
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
 
-func (w *immutableOnSuccess) Write(b []byte) (int, error) {
+func (w *immutableWhenOK) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
