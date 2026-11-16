@@ -11,6 +11,7 @@ import { Filter, Plug, List, Activity, AlertTriangle, Clock, Crosshair, X } from
 import { TrafficFocusSearch } from './TrafficFocusSearch'
 import { TrafficSourcePill } from './TrafficSourcePill'
 import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
+import { TrafficGraphUnavailable } from './TrafficGraphUnavailable'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
@@ -425,6 +426,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // The view the graph was last drawn for, and so keeps drawing (up to the
   // ceiling) as refreshes move its size: set by drawing it or by Draw anyway.
   const [drawnViewKey, setDrawnViewKey] = useState<string | null>(null)
+  const [layoutUnavailable, setLayoutUnavailable] = useState(false)
   const dock = useDock()
   const graphPaneRef = useRef<HTMLDivElement>(null)
 
@@ -1056,9 +1058,13 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     if (finalFlows.length > 0 && fitsBudget) setDrawnViewKey(viewKey)
   }, [finalFlows.length, fitsBudget, viewKey])
 
+  // Listed as a table instead of drawn: too large, or the map's layout engine
+  // could not load.
+  const listed = tooLargeToDraw || layoutUnavailable
+
   // The table lists the endpoints as they are, so a selection made from it is
   // traced through the same flows.
-  const selectableFlows = tooLargeToDraw ? focusedFlows : finalFlows
+  const selectableFlows = listed ? focusedFlows : finalFlows
   // The server edges behind the selection, as drawn: what its records are
   // narrowed to, whichever form the lookup is sent in.
   // The flow list follows the focus while nothing else is selected: closing
@@ -1067,8 +1073,8 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     () => graphSelection ?? (focusFound && focusKey ? { type: 'node', nodeId: focusKey } : null),
     [graphSelection, focusFound, focusKey])
   const selectionPairs = useMemo(
-    () => selectionRawPairs(selectableFlows, listSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
-    [listSelection, selectableFlows, groupAddons, tooLargeToDraw])
+    () => selectionRawPairs(selectableFlows, listSelection, groupAddons && !listed ? e => isClusterAddon(e.name, e.namespace) : undefined),
+    [listSelection, selectableFlows, groupAddons, listed])
   const selection = useMemo(() => selectionMatch(selectionPairs, listSelection), [selectionPairs, listSelection])
   // Ungrouped, a workload focus is drawn as its pods, so no node carries its
   // id; its records are still the workload's.
@@ -1087,12 +1093,12 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // A selection names something in the representation it was made in: the
   // table lists endpoints as they are, the graph may group addons. Switching
   // between them keeps only a focus's selection, which means the same in both.
-  const prevTooLargeRef = useRef(tooLargeToDraw)
+  const prevListedRef = useRef(listed)
   useEffect(() => {
-    if (prevTooLargeRef.current === tooLargeToDraw) return
-    prevTooLargeRef.current = tooLargeToDraw
+    if (prevListedRef.current === listed) return
+    prevListedRef.current = listed
     setGraphSelection(prev => (prev?.type === 'node' && prev.nodeId === focusKey ? prev : null))
-  }, [tooLargeToDraw, focusKey])
+  }, [listed, focusKey])
 
   // Namespaces hidden in the sidebar are dropped at the source too, when the
   // request has room, so their traffic can't fill the records limit. Only
@@ -1554,7 +1560,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
             />
           ) : finalFlows.length > 0 ? (
             <>
-              {flowsWarning && !tooLargeToDraw && (
+              {flowsWarning && !listed && (
                 // Sits below the two chip rows (both top-3) rather than beside
                 // them: centred at that height it would cover the flow count and
                 // the refresh control at common widths. role/aria-live because it
@@ -1586,18 +1592,32 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   notice={flowsWarning && <div role="status" aria-live="polite">{flowsWarning}</div>}
                 />
               ) : (
-                <TrafficGraph
-                  flows={finalFlows}
-                  hotPathThreshold={hotPathThreshold}
-                  showNamespaceGroups={showNamespaceGroups}
-                  serviceCategories={serviceCategories}
-                  addonMode={groupAddons ? 'group' : addonMode === 'group' ? 'show' : addonMode}
-                  trafficSource={sourcesData?.active || ''}
-                  selection={graphSelection}
-                  onSelectionChange={setGraphSelection}
-                  onFocus={setFocus}
-                  focusedId={focusKey}
-                />
+                <>
+                  {layoutUnavailable && (
+                    <TrafficGraphUnavailable
+                      flows={focusedFlows}
+                      isRateBased={isRateBased}
+                      selection={graphSelection}
+                      onSelect={setGraphSelection}
+                      onFocus={setFocus}
+                      focusedId={focusKey}
+                      notice={flowsWarning && <div role="status" aria-live="polite">{flowsWarning}</div>}
+                    />
+                  )}
+                  <TrafficGraph
+                    flows={finalFlows}
+                    hotPathThreshold={hotPathThreshold}
+                    showNamespaceGroups={showNamespaceGroups}
+                    serviceCategories={serviceCategories}
+                    addonMode={groupAddons ? 'group' : addonMode === 'group' ? 'show' : addonMode}
+                    trafficSource={sourcesData?.active || ''}
+                    selection={graphSelection}
+                    onSelectionChange={setGraphSelection}
+                    onFocus={setFocus}
+                    focusedId={focusKey}
+                    onLayoutUnavailable={setLayoutUnavailable}
+                  />
+                </>
               )}
             </>
           ) : focus && flowsData && !connectionError ? (

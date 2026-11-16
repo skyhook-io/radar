@@ -18,7 +18,7 @@ export function installStaleAssetPrompt(target: Window = window, reload: () => v
     shown = true
     showApiNotice(
       'Part of Radar failed to load',
-      'Radar was probably updated since this page was opened. Reload to get the current version; unsaved edits on this page will be lost.',
+      'Radar may have been updated since this page was opened. Reload to get the current version; unsaved edits on this page will be lost.',
       'warning',
       {
         id: STALE_ASSET_TOAST_ID,

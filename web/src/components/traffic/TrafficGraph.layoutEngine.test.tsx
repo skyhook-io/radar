@@ -54,12 +54,14 @@ const flow = (src: string, dst: string): AggregatedFlow => ({
 let container: HTMLDivElement
 let root: Root
 let TrafficGraph: typeof TrafficGraphType
+const onLayoutUnavailable = vi.fn()
 
 const props = (flows: AggregatedFlow[]): ComponentProps<typeof TrafficGraphType> => ({
   flows,
   selection: null,
   onSelectionChange: vi.fn(),
   onFocus: vi.fn(),
+  onLayoutUnavailable,
 })
 
 async function render(flows: AggregatedFlow[]) {
@@ -76,6 +78,7 @@ const canvas = () => container.querySelector<HTMLElement>('[data-testid="flow"]'
 
 async function load({ failElk = false } = {}) {
   pendingLayouts = []
+  onLayoutUnavailable.mockReset()
   vi.resetModules()
   mockElk(failElk)
   ;({ TrafficGraph } = await import('./TrafficGraph'))
@@ -139,19 +142,31 @@ describe('TrafficGraph layout engine', () => {
     expect(canvas()?.dataset.nodes).toBe('3')
   })
 
-  it('says the map is unavailable instead of drawing a partial grid when ELK cannot load', async () => {
+  it('draws nothing and reports the engine unavailable instead of drawing a partial grid when ELK cannot load', async () => {
     await load({ failElk: true })
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     await render([flow('web', 'api')])
     await settle()
 
     expect(canvas()).toBeNull()
-    expect(container.textContent).not.toContain('Laying out traffic…')
-    expect(container.textContent).toContain('The traffic map could not load its layout engine')
-    const reload = Array.from(container.querySelectorAll('button')).find(b => b.textContent?.includes('Reload'))
-    expect(reload).toBeDefined()
-    expect(container.textContent).toContain('Destination')
+    expect(container.textContent).toBe('')
+    expect(onLayoutUnavailable).toHaveBeenLastCalledWith(true)
     expect(errors).toHaveBeenCalledWith('ELK failed to load:', expect.any(Error))
     errors.mockRestore()
+
+    act(() => root.unmount())
+    expect(onLayoutUnavailable).toHaveBeenLastCalledWith(false)
+    root = createRoot(container)
+  })
+
+  it('reports the engine available once a layout lands', async () => {
+    await load()
+    await render([flow('web', 'api')])
+    await settle()
+    await act(async () => pendingLayouts[0].resolve())
+    await settle()
+
+    expect(onLayoutUnavailable).toHaveBeenLastCalledWith(false)
+    expect(onLayoutUnavailable).not.toHaveBeenCalledWith(true)
   })
 })
