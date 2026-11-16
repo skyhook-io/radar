@@ -266,6 +266,7 @@ type AgentOwnership struct {
 	source ownership.Source
 	access func(*ownership.Catalog) ownership.Access
 	view   *ownership.View
+	acc    ownership.Access
 	// session is nil until the first read; failed once it couldn't begin or
 	// its caches were replaced, after which nothing is answered.
 	session ownership.ReadSession
@@ -295,7 +296,8 @@ func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.Con
 			c.failed = true
 			return nil
 		}
-		c.session, c.view = session, ownership.NewView(session, c.access(session.Catalog()))
+		c.session, c.acc = session, c.access(session.Catalog())
+		c.view = ownership.NewView(session, c.acc)
 	}
 	c.view.Seed(fetched)
 	chain := c.view.ControllerChain(fetched.Ref)
@@ -317,18 +319,13 @@ func (c *AgentOwnership) Of(obj metav1.Object, ref resourceid.Ref) *topology.Con
 }
 
 // OtherManagers reads residual spec relations for the resource most recently
-// passed to Of. The bool reports unchecked sources, never denied ones.
+// passed to Of, in Of's session, so a page's rows share one catalog, access and
+// memoized reads. The bool reports unchecked sources, never denied ones.
 func (c *AgentOwnership) OtherManagers(obj runtime.Object, ref resourceid.Ref) ([]topology.ResourceRef, bool) {
-	if c.view == nil || c.failed || c.active != ref || c.session.ValidateCaches() != nil {
+	if c.view == nil || c.failed || c.active != ref {
 		return nil, true
 	}
-	// A summary may abandon enrichment at its deadline. Keep that read's
-	// memoized objects private so later rows cannot race its unfinished work.
-	session, err := c.source.Begin()
-	if err != nil {
-		return nil, true
-	}
-	rs, ok := session.(relations.Session)
+	rs, ok := c.session.(relations.Session)
 	if !ok {
 		return nil, true
 	}
@@ -336,9 +333,8 @@ func (c *AgentOwnership) OtherManagers(obj runtime.Object, ref resourceid.Ref) (
 	if !ok {
 		return nil, true
 	}
-	access := c.access(session.Catalog())
-	out, incomplete := topology.RelationSpecGenerators(captured, access, ownership.NewView(captured, access), ref, obj)
-	if session.ValidateCaches() != nil || c.session.ValidateCaches() != nil {
+	out, incomplete := topology.RelationSpecGenerators(captured, c.acc, ownership.NewView(captured, c.acc), ref, obj)
+	if c.session.ValidateCaches() != nil {
 		return nil, true
 	}
 	return out, incomplete

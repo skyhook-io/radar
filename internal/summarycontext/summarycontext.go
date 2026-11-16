@@ -198,6 +198,9 @@ func builderFromIndexes(ctx context.Context, namespacedIdx, clusterIdx *IssueInd
 			} else if chain == nil || chain.Stop != "" || len(chain.Refs) > 0 {
 				var other []topology.ResourceRef
 				if chain != nil && chain.Stop == "" && len(chain.Refs) > 0 {
+					// owners' session is shared by every row. A read abandoned
+					// at the deadline can't race a later row's: ctx stays done,
+					// so no later row reads owners.
 					answer := WithinContext(ctx, specGeneratorGate, func() *specGenerators {
 						refs, incomplete := owners.OtherManagers(source, ref)
 						return &specGenerators{refs: refs, incomplete: incomplete}
