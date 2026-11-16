@@ -23,7 +23,7 @@ import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, type TrafficFocus } from './trafficFilters'
+import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
 
 const elk = new ELK()
 
@@ -854,9 +854,7 @@ function DetailsPanel({
                 <div className="p-2 rounded bg-theme-elevated">
                   <div className="text-theme-text-tertiary">Protocol</div>
                   <div className="text-theme-text-primary font-medium uppercase">
-                    {edgeData.flow?.l7Protocol
-                      ? `${edgeData.flow.l7Protocol} / ${edgeData.protocol}`
-                      : edgeData.protocol}
+                    {protocolLabel(edgeData.flow?.l7Protocol, edgeData.protocol)}
                   </div>
                 </div>
                 {(!isRateBased || edgeData.connections > 0) && (
@@ -878,7 +876,8 @@ function DetailsPanel({
                     </div>
                   </div>
                 )}
-                {edgeData.flow && requestRateOf(edgeData.flow) > 0 && (
+                {/* Where the Request Rate above already is this figure, it isn't repeated. */}
+                {edgeData.flow && requestRateOf(edgeData.flow) > 0 && !(isRateBased && edgeData.flow.requestRate) && (
                   <div className="p-2 rounded bg-theme-elevated">
                     <div className="text-theme-text-tertiary">Requests</div>
                     <div className="text-theme-text-primary font-medium">

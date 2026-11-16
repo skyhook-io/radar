@@ -8,7 +8,7 @@ import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-co
 import { pluralize, StatusDot } from '@skyhook-io/k8s-ui'
 import type { StatusTone } from '@skyhook-io/k8s-ui'
 import { useFlowSearch } from './TrafficFlowListContext'
-import { isPolicyDropReason } from './trafficFilters'
+import { isPolicyDropReason, protocolLabel } from './trafficFilters'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
@@ -248,7 +248,7 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                       </div>
                       <div>
                         <span className="text-theme-text-tertiary">Protocol: </span>
-                        <span className="text-theme-text-primary">{flow.l7Protocol ? `${flow.l7Protocol} / ${flow.protocol}` : flow.protocol}</span>
+                        <span className="text-theme-text-primary">{protocolLabel(flow.l7Protocol, flow.protocol)}</span>
                         {flow.httpProtocol && <span className="text-theme-text-tertiary"> ({flow.httpProtocol})</span>}
                       </div>
                       <div>
