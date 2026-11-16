@@ -19,4 +19,16 @@ describe('GenericRenderer status banner', () => {
     expect(banner).toContain(titleClass)
     expect(banner).not.toMatch(/text-(yellow|green|red|slate)-400/)
   })
+
+  it('keeps the detail line in neutral text, readable on every tint', () => {
+    const html = renderToString(<GenericRenderer data={widget({ conditions: [{ type: 'Ready', status: 'False', reason: 'BackendDown', message: 'the backend is down' }] })} />)
+    const banner = html.slice(0, html.indexOf('</div></div></div>'))
+    expect(banner).toMatch(/<span class="text-theme-text-secondary">[^<]+<\/span>/)
+  })
+
+  it('renders no detail line when the status has no message', () => {
+    const html = renderToString(<GenericRenderer data={widget({ conditions: [{ type: 'Ready', status: 'True' }] })} />)
+    const banner = html.slice(0, html.indexOf('</div></div></div>'))
+    expect(banner).not.toContain('text-theme-text-secondary')
+  })
 })
