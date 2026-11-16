@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import type { ReadGap } from '@skyhook-io/k8s-ui/types/read-coverage'
 import type { APIResource } from '../types'
 import { ApiError, fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
@@ -83,7 +84,7 @@ export interface VulnerabilityCVE {
 export interface VulnerabilityFix {
   package: string
   packageType?: string
-  /** The version that clears every listed CVE; absent when Radar couldn't order this ecosystem's versions. */
+  /** The lowest listed release that fixes every listed CVE; absent when none can be chosen from the scanner's versions. */
   to?: string
   /** The scanner's fixed versions, when there is no target. */
   listed?: string[]
@@ -131,13 +132,8 @@ export interface VulnerabilitySummary {
   oldestScan?: string
 }
 
-export interface VulnerabilityGap {
-  code: string
-  action?: string
-  /** What wasn't read; absent means the reports themselves. */
-  kinds?: { count: number; names?: { kind: string; group?: string }[]; extent?: string }
-  namespaces?: { count: number; names?: string[]; extent?: string }
-}
+/** A shared read gap; `kinds` names what wasn't read, absent meaning the reports themselves. */
+export type VulnerabilityGap = ReadGap
 
 export interface VulnerabilitiesResponse {
   source: string

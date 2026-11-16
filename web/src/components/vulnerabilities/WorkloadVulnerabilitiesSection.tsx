@@ -67,7 +67,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
   // The read spans the caller's scope; a gap names this namespace, or might.
   const relevantGaps = (data?.coverage.gaps ?? []).filter((g) => {
     const ns = g.namespaces
-    return !ns || ns.extent === 'unknown' || (ns.names ?? []).length < ns.count || (ns.names ?? []).includes(namespace)
+    return !ns || ns.extent !== undefined || (ns.names ?? []).length < ns.count || (ns.names ?? []).includes(namespace)
   })
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
   const open = (more: Record<string, string> = {}) => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), namespaces: namespace, ...more }).toString() })

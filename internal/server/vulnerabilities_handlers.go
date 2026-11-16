@@ -13,11 +13,12 @@ import (
 )
 
 // handleVulnerabilities serves GET /api/vulnerabilities: scanner findings
-// rolled up to the images that run now, by image, CVE or workload.
+// rolled up to the images that run now, by image, CVE, workload or fix.
 //
-// Query: view=image|cve|workload, severity=critical,high, fixable=1, q=,
-// namespaces=, and workloadKind + workloadNamespace + workloadName to narrow
-// to one workload (the workload drawer).
+// Query: view=image|cve|workload|fix|summary, severity=critical,high,
+// fixable=1, q=, namespaces=, and workloadKind + workloadNamespace +
+// workloadName (+ optional workloadGroup) to narrow to one workload (the
+// workload drawer).
 //
 // Gate: the reports need the caller's own list permission on the report
 // kind, per namespace, as every other Trivy read surface does (search,

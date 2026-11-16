@@ -35,7 +35,7 @@ describe('vulnerabilities helpers', () => {
     expect(gapSentence([])).toBeNull()
     expect(gapSentence([{ code: 'user_forbidden', namespaces: { count: 2, names: ['a', 'b'] } }]))
       .toBe("Your access doesn't include the reports in 2 namespaces (a, b). Counts cover the rest.")
-    const unknown = { count: 0, extent: 'unknown' }
+    const unknown = { extent: 'unknown' }
     expect(gapSentence([{ code: 'radar_namespace_not_collected', kinds: { count: 1, names: [{ kind: 'VulnerabilityReport', group: 'aquasecurity.github.io' }] }, namespaces: unknown }]))
       .toBe("Radar doesn't collect reports in some namespaces. Counts cover the rest.")
     expect(gapSentence([{ code: 'user_forbidden', kinds: { count: 1, names: [{ kind: 'Pod' }] }, namespaces: { count: 1, names: ['kube-system'] } }]))

@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import type { AuditCardVulnerabilities } from '@skyhook-io/k8s-ui'
+import { readActionFor } from '@skyhook-io/k8s-ui/utils/read-actions'
 import { useAPIResources } from '../../api/apiResources'
 import { ApiError, useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
@@ -23,11 +24,9 @@ export function useVulnerabilitiesRow(namespaces: string[]): AuditCardVulnerabil
   }
   // The query keeps its last answer through a failed poll; a failure that
   // persists decides the row over it.
-  if (error && !transient(error)) {
-    return readFailed(error)
-      ? { imagesWithCritical: 0, fixableCriticalHigh: 0, certainty: 'unknown', readFailed: true, onNavigate }
-      : undefined
-  }
+  const failure = error ? rowOnError(error) : 'keep'
+  if (failure === 'failed') return { imagesWithCritical: 0, fixableCriticalHigh: 0, certainty: 'unknown', readFailed: true, onNavigate }
+  if (failure === 'hide') return undefined
   if (!data) return undefined
   const s = data.summary
   if (s.imagesScanned === 0 && s.imagesUnscanned === 0) return undefined
@@ -39,15 +38,16 @@ export function useVulnerabilitiesRow(namespaces: string[]): AuditCardVulnerabil
   }
 }
 
-// A failure that settles by itself: Radar still loading, or its connection
-// just changed. The last answer stands meanwhile.
-function transient(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === 409 || error.status === 503)
-}
-
-// A failure worth showing on Home. Not one that means the row has nothing
-// to say: an older Radar, Trivy removed, or no access to the reports.
-function readFailed(error: unknown): boolean {
-  if (isRadarFeatureUnsupported(error) || isKindUnknown(error)) return false
-  return !(error instanceof ApiError && error.status === 403)
+// What a failed read does to the row: keep the last answer through one that
+// settles by itself (Radar still loading, its connection just changed), hide
+// the row when it has nothing to say (an older Radar, Trivy removed, no
+// access to the reports), and otherwise say the read failed. A 503 naming
+// something to fix, such as Radar's own identity denied the reports, doesn't
+// settle by itself.
+export function rowOnError(error: unknown): 'keep' | 'hide' | 'failed' {
+  if (isRadarFeatureUnsupported(error) || isKindUnknown(error)) return 'hide'
+  if (!(error instanceof ApiError)) return 'failed'
+  const code = error.data?.error_code
+  if (error.status === 409 || (error.status === 503 && (code === undefined || readActionFor(code) === 'retry'))) return 'keep'
+  return error.status === 403 ? 'hide' : 'failed'
 }

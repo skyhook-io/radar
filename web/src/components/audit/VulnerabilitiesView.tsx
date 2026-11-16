@@ -247,14 +247,17 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       {!severities.length && !fixableOnly && (view === 'image' || view === 'workload') && (
         <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
       )}
-      <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
+      <UnscannedList data={data} narrowed={query !== '' || !!workload} onOpen={(w) => onNavigateToResource(toResource(w))} />
     </div>
   )
 }
 
 function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: VulnerabilitiesResponse, workload: { name: string } | null): string {
   // Narrowed to one workload, the folds below say what it runs.
-  if (workload && (data.unscanned ?? []).length > 0) return `No reported CVEs for ${workload.name}, and not every image it runs is scanned yet`
+  if (workload && (data.unscanned ?? []).length > 0) {
+    const scanned = (data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0
+    return scanned ? `No reported CVEs for ${workload.name}, and not every image it runs is scanned yet` : `No report yet for the images ${workload.name} runs`
+  }
   if (workload && ((data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0)) return `No CVEs reported for ${workload.name}`
   if (filtered) return 'Nothing matches these filters'
   const s = data.summary
@@ -485,7 +488,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                       <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
                       {f.packageType && <span className="truncate text-xs text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
                     </span>
-                    <WithTooltip tip={f.to ? `${f.from.join(', ')} → ${f.to}` : "Radar can't order this package's versions, so it can't pick one release that fixes every CVE here. These are the fixed releases the scanner lists."}>
+                    <WithTooltip tip={f.to ? `${f.from.join(', ')} → ${f.to}` : "Radar can't pick one release that fixes every CVE here: it can't order this package's versions, or no listed release is above the installed one. These are the fixed releases the scanner lists."}>
                       <span className="min-w-0 truncate font-mono text-xs">
                         <span className="text-theme-text-tertiary">{f.from.join(', ')} → </span>
                         {f.to
@@ -785,9 +788,12 @@ function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view
   )
 }
 
-function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+// narrowed: a search or workload filter picked these rows, so the summary's
+// count of every unscanned image doesn't describe them.
+function UnscannedList({ data, narrowed, onOpen }: { data: VulnerabilitiesResponse; narrowed: boolean; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
   const unscanned = data.unscanned ?? []
   if (unscanned.length === 0) return null
+  const count = narrowed ? unscanned.length : data.summary.imagesUnscanned
   return (
     <div className="shrink-0 rounded-lg border border-theme-border bg-theme-surface">
       <Disclosure
@@ -795,7 +801,7 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
         summary={
           <span className="flex items-center gap-2 text-sm text-theme-text-secondary">
             <CircleDashed className="h-4 w-4 text-theme-text-tertiary" aria-hidden />
-            {data.summary.imagesUnscanned} running {data.summary.imagesUnscanned === 1 ? 'image has' : 'images have'} no report yet: unknown, not clean
+            {count} running {count === 1 ? 'image has' : 'images have'} no report yet: unknown, not clean
           </span>
         }
       >
