@@ -545,3 +545,40 @@ func TestIstioGetFlows_ScopeChecksUseTheRequestedWindow(t *testing.T) {
 		}
 	}
 }
+
+// A range shorter than two scrape intervals leaves rate nothing to work with:
+// the map comes back empty although the metrics are there, and says why.
+func TestIstioGetFlows_SaysWhenTheRangeHasTooFewSamples(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		since   time.Duration
+		samples float64
+		want    bool
+	}{
+		{"one sample per series in a minute", time.Minute, 1, true},
+		{"two samples: genuinely idle", time.Minute, 2, false},
+		{"no metrics at all", time.Minute, 0, false},
+		{"default range is not checked", 5 * time.Minute, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := newTestIstio(func(_ context.Context, q string) (*prom.QueryResult, error) {
+				if strings.HasPrefix(q, "max(count_over_time(") && tc.samples > 0 {
+					return &prom.QueryResult{Series: []prom.Series{{DataPoints: []prom.DataPoint{{Value: tc.samples}}}}}, nil
+				}
+				return &prom.QueryResult{}, nil
+			})
+			opts := DefaultFlowOptions()
+			opts.Since = tc.since
+			resp, err := src.GetFlows(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resp.Warning == istioTooFewSamplesNote; got != tc.want {
+				t.Errorf("warning %q, want the too-few-samples note: %v", resp.Warning, tc.want)
+			}
+			if tc.want && resp.WarningKind != WarningIncomplete {
+				t.Errorf("kind %q, want incomplete", resp.WarningKind)
+			}
+		})
+	}
+}

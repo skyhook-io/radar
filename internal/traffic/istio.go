@@ -398,7 +398,51 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}
 	}
 	applyClusterScopeWarning(response, mismatch, scopes.http.mixed || scopes.tcp.mixed)
+	if len(response.Flows) == 0 && response.Warning == "" && s.tooFewSamples(ctx, opts, scopes) {
+		response.Warning = istioTooFewSamplesNote
+		response.WarningKind = WarningIncomplete
+	}
 	return response, nil
+}
+
+const istioTooFewSamplesNote = "Prometheus has Istio metrics in this time range but fewer than two samples per series, so no rate can be taken over it: its scrape interval is longer than this range allows. Choose a longer time range."
+
+// tooFewSamples reports whether a short window is why the map is empty: the
+// metrics are present in it, but rate needs two samples and none has them, as
+// with a one-minute range over a one-minute scrape interval. A check that
+// fails reports false, leaving the empty map as it was.
+func (s *IstioSource) tooFewSamples(ctx context.Context, opts FlowOptions, scopes istioScopes) bool {
+	w := rateWindowFor(opts.Since)
+	if w.seconds >= defaultRateWindowSeconds {
+		return false
+	}
+	present := false
+	for _, family := range []struct {
+		metric, reporters string
+		sc                clusterScope
+	}{
+		{"istio_requests_total", scopes.httpSelector, scopes.http},
+		{istioTCPMetric, istioReporterSelector, scopes.tcp},
+	} {
+		samples := func(more string) string {
+			return fmt.Sprintf(`count_over_time(%s{%s}[%s])`, family.metric, family.sc.with(family.reporters+more), w.promQL)
+		}
+		selector := samples("")
+		if opts.Namespace != "" {
+			safeNS := prom.SanitizeLabelValue(opts.Namespace)
+			selector = samples(fmt.Sprintf(`, source_workload_namespace="%s"`, safeNS)) + " or " +
+				samples(fmt.Sprintf(`, destination_workload_namespace="%s"`, safeNS))
+		}
+		result, err := s.queryFn(ctx, fmt.Sprintf(`max(%s)`, selector))
+		if err != nil || result == nil || len(result.Series) == 0 || len(result.Series[0].DataPoints) == 0 {
+			continue
+		}
+		if result.Series[0].DataPoints[0].Value >= 2 {
+			return false
+		}
+		present = true
+	}
+	return present
 }
 
 // istioZtunnelProbe finds ztunnel's build info, which it exports whether or
