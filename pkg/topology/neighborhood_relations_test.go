@@ -310,3 +310,31 @@ func TestWalkNeighborhoodCalicoCRDOnly(t *testing.T) {
 		t.Fatalf("CRD-only policy lost: %+v", sub)
 	}
 }
+
+// The walk says it withheld something only when a related object is hidden:
+// an unrelated object the caller may not read changes nothing.
+func TestWalkNeighborhoodWithholdsOnlyRelatedObjects(t *testing.T) {
+	web := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}, "apps", "Deployment")
+	related := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "Service")
+	unrelated := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: "shop"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "other"}}}, "", "Service")
+	opts := NeighborhoodOptions{Profile: ProfileAll, Allow: func(n *Node) bool { return n.Kind != KindService }}
+	for _, tc := range []struct {
+		name     string
+		objects  []runtime.Object
+		withheld bool
+	}{
+		{"no Service", []runtime.Object{web}, false},
+		{"an unrelated Service", []runtime.Object{web, unrelated}, false},
+		{"a related Service", []runtime.Object{web, unrelated, related}, true},
+	} {
+		sub := walkTestNeighborhood(t, newProjectionSession(t, tc.objects...), web, opts)
+		if (sub.RBACDenied > 0) != tc.withheld {
+			t.Errorf("%s: RBACDenied=%d, want withheld=%v", tc.name, sub.RBACDenied, tc.withheld)
+		}
+		for _, n := range sub.Nodes {
+			if n.Kind == KindService {
+				t.Errorf("%s: surfaced a Service the caller may not read: %s", tc.name, n.ID)
+			}
+		}
+	}
+}

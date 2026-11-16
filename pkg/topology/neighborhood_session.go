@@ -81,13 +81,13 @@ func (s *neighborhoodSession) Indexed(gk resourceid.GroupKind, index string, key
 		if s.ctx.Err() != nil {
 			return relations.IndexedRead{}
 		}
-		if !s.access.allowed(o.Ref) {
-			continue
-		}
+		// The relation search matches each object before checking the
+		// caller's access to it, and the walk admits every node it includes,
+		// so a hidden object here is read only to tell whether it relates.
 		if captured, ok := s.objects[o.Ref]; ok {
 			o.Object = captured.object
 		} else {
-			obj, got := s.Borrow(o.Ref)
+			obj, got := s.borrow(o.Ref, false)
 			if got.State != ownership.Present {
 				continue
 			}
