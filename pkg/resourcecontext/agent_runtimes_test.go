@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -36,5 +37,30 @@ func TestAgentRuntimeSummaryHealthContract(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Summaries judge at the current time, so a pool whose worker Deployment never
+// appeared reads unhealthy here as it does in Issues and the UI.
+func TestAgentRuntimeSummaryReadsStalledWorkerPool(t *testing.T) {
+	resolvedAt := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "ate.dev/v1",
+		"kind":       "WorkerPool",
+		"metadata":   map[string]any{"name": "p", "namespace": "agents", "generation": int64(1), "creationTimestamp": resolvedAt},
+		"spec":       map[string]any{"replicas": int64(2)},
+		"status": map[string]any{
+			"replicas": int64(0),
+			"sandboxClasses": []any{map[string]any{
+				"name": "gvisor",
+				"conditions": []any{map[string]any{
+					"type": "Resolved", "status": "True", "reason": "Resolved",
+					"observedGeneration": int64(1), "lastTransitionTime": resolvedAt,
+				}},
+			}},
+		},
+	}}
+	if got := unstructuredHealth(u); got != levelToString(health.LevelUnhealthy) {
+		t.Fatalf("got %q, want %q", got, levelToString(health.LevelUnhealthy))
 	}
 }
