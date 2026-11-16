@@ -81,6 +81,53 @@ export function protocolLabel(l7Protocol: string | undefined, protocol: string):
   return `${l7Protocol} / ${protocol}`
 }
 
+export function protocolName(protocol: string): string {
+  return protocol.toLowerCase() === 'grpc' ? 'gRPC' : protocol.toUpperCase() || 'Unknown'
+}
+
+export interface ProtocolData {
+  protocol: string | null
+  sent: number
+  recv: number
+}
+
+type ByteFigures = Pick<AggregatedFlow, 'bytesByProtocol' | 'bytesSent' | 'bytesRecv'>
+
+const transportProtocols = new Set(['tcp', 'udp', 'icmp', 'icmpv6', 'sctp'])
+
+export function isPayloadProtocol(protocol: string): boolean {
+  return !transportProtocols.has(protocol.toLowerCase())
+}
+
+/** An edge's Data per protocol, payload protocols first. A Radar that predates
+ *  the breakdown sends only the cross-protocol sum, which can already mix
+ *  HTTP and gRPC under one protocol name, so it comes back as one figure with
+ *  no protocol claimed. */
+export function dataByProtocol(flow: ByteFigures): ProtocolData[] {
+  if (!flow.bytesByProtocol) return [{ protocol: null, sent: flow.bytesSent, recv: flow.bytesRecv }]
+  return Object.entries(flow.bytesByProtocol)
+    .map(([protocol, bytes]) => ({ protocol, sent: bytes.bytesSent, recv: bytes.bytesRecv }))
+    .sort((a, b) => Number(isPayloadProtocol(b.protocol)) - Number(isPayloadProtocol(a.protocol)) || a.protocol.localeCompare(b.protocol))
+}
+
+/** Data across several edges, added only within each protocol. */
+export function totalDataByProtocol(flows: ByteFigures[]): ProtocolData[] {
+  if (!flows.some(f => f.bytesByProtocol)) {
+    return [{ protocol: null, sent: flows.reduce((n, f) => n + f.bytesSent, 0), recv: flows.reduce((n, f) => n + f.bytesRecv, 0) }]
+  }
+  return dataByProtocol({ bytesSent: 0, bytesRecv: 0, bytesByProtocol: flows.reduce<AggregatedFlow['bytesByProtocol']>((acc, f) => mergeProtocolBytes(acc, f.bytesByProtocol), undefined) })
+}
+
+function mergeProtocolBytes(a: AggregatedFlow['bytesByProtocol'], b: AggregatedFlow['bytesByProtocol']): AggregatedFlow['bytesByProtocol'] {
+  if (!b) return a
+  const merged = { ...a }
+  for (const [protocol, bytes] of Object.entries(b)) {
+    const prev = merged[protocol]
+    merged[protocol] = { bytesSent: (prev?.bytesSent ?? 0) + bytes.bytesSent, bytesRecv: (prev?.bytesRecv ?? 0) + bytes.bytesRecv }
+  }
+  return merged
+}
+
 /**
  * The volume shown for an edge. For a rate-based source `connections` is its
  * request rate rounded with a floor of one — the graph sizes, sorts and filters
@@ -140,6 +187,7 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
   }
   const weighted: LatencyWeighted = into
   weighted.latencyWeight = wInto + wFlow
+  into.bytesByProtocol = mergeProtocolBytes(into.bytesByProtocol, flow.bytesByProtocol)
   into.connections += flow.connections
   into.bytesSent += flow.bytesSent
   into.bytesRecv += flow.bytesRecv

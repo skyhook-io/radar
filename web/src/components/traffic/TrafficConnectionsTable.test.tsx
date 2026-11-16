@@ -75,3 +75,18 @@ describe('TrafficConnectionsTable', () => {
     expect(container.querySelector('[role="row"]')!.textContent).toContain('2.03 KB')
   })
 })
+
+describe('TrafficConnectionsTable protocol data', () => {
+  it('renders compact protocol figures without their mixed sum', () => {
+    const mixed = { ...tcp, bytesSent: 38668, bytesRecv: 652404, bytesByProtocol: {
+      http: { bytesSent: 5969, bytesRecv: 260965 }, tcp: { bytesSent: 32699, bytesRecv: 391439 },
+    } }
+    act(() => root.render(<TrafficConnectionsTable flows={[mixed, tcp]} isRateBased selection={null} onSelect={vi.fn()} onFocus={vi.fn()} />))
+    expect(container.textContent).toContain('HTTP 260.7 KB · TCP 414.2 KB')
+    const gridClasses = Array.from(container.querySelectorAll('[role="row"]')).map(row => row.className.split(' ').find(c => c.startsWith('grid-cols-')))
+    expect(new Set(gridClasses).size).toBe(1)
+    expect(gridClasses[0]).toContain('14rem')
+    expect(container.firstElementChild!.firstElementChild!.className).toContain(gridClasses[0]!)
+    expect(container.textContent).not.toMatch(/674\.9 KB|691,?072/)
+  })
+})

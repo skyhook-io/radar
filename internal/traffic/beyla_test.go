@@ -1851,3 +1851,33 @@ func TestBeylaSource_GetFlows_FailedEnrichmentIsReportedNotZeroed(t *testing.T) 
 		})
 	}
 }
+
+func TestBeylaSource_GetFlows_UnorientedProtocolBytes(t *testing.T) {
+	src := &BeylaSource{k8sClient: fake.NewSimpleClientset()}
+	src.queryFn = func(_ context.Context, query string) (*prom.QueryResult, error) {
+		if !strings.Contains(query, `direction="unknown"`) {
+			return emptyResult(), nil
+		}
+		return promResult("vector",
+			promSeries(map[string]string{"k8s_src_owner_name": "client", "k8s_src_namespace": "demo", "k8s_dst_owner_name": "dns", "k8s_dst_namespace": "demo", "transport": "UDP"}, 10),
+			promSeries(map[string]string{"k8s_src_owner_name": "dns", "k8s_src_namespace": "demo", "k8s_dst_owner_name": "client", "k8s_dst_namespace": "demo", "transport": "UDP"}, 25),
+			promSeries(map[string]string{"k8s_src_owner_name": "client", "k8s_src_namespace": "demo", "k8s_dst_owner_name": "dns", "k8s_dst_namespace": "demo", "transport": "TCP"}, 4),
+		), nil
+	}
+	resp, err := src.GetFlows(t.Context(), FlowOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregated := AggregateFlows(resp.Flows)
+	if len(resp.Flows) != 2 || len(aggregated) != 1 {
+		t.Fatalf("flows=%+v, aggregates=%+v", resp.Flows, aggregated)
+	}
+	a := aggregated[0]
+	if !a.DirectionUnknown || len(a.BytesByProtocol) != 2 {
+		t.Fatalf("wrong conversation: %+v", a)
+	}
+	udp, tcp := a.BytesByProtocol["udp"], a.BytesByProtocol["tcp"]
+	if udp.BytesSent != 10*defaultRateWindowSeconds || udp.BytesRecv != 25*defaultRateWindowSeconds || tcp.BytesSent != 4*defaultRateWindowSeconds || tcp.BytesRecv != 0 {
+		t.Errorf("protocol buckets: %+v", a.BytesByProtocol)
+	}
+}

@@ -12,7 +12,6 @@ import { TrafficFocusSearch } from './TrafficFocusSearch'
 import { TrafficSourcePill } from './TrafficSourcePill'
 import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
 import { TrafficGraphUnavailable } from './TrafficGraphUnavailable'
-import { TrafficDataNote } from './TrafficDataNote'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
@@ -1069,7 +1068,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       if (!data) return undefined
       const parts: string[] = []
       if (data.warning) parts.push(data.warning)
-      if (data.dataNote) parts.push(data.dataNote)
       if (data.matched > data.flows.length) {
         parts.push(`Newest ${data.flows.length.toLocaleString()} of ${data.matched.toLocaleString()} records for this selection`)
       }
@@ -1418,7 +1416,6 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                     </button>
                     </Tooltip>
                   )}
-                  <TrafficDataNote dataNote={finalFlows.length > 0 ? flowsData?.dataNote : undefined} />
                   {coverage && (
                     // Not a warning: a busy cluster reaches the limit on every
                     // fetch. It says which part of the window the map shows.

@@ -23,9 +23,9 @@ import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
-import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
+import { TrafficData } from './TrafficData'
+import { dataByProtocol, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
 
 // ELK is 1.5 MB; load it with the first traffic layout, not with the app.
 let elkPromise: Promise<ELK> | null = null
@@ -463,6 +463,10 @@ function DetailsPanel({
   const isNode = selection.type === 'node'
   const nodeData = isNode ? (selection.data as TrafficNodeData) : null
   const edgeData = !isNode ? (selection.data as EdgeData) : null
+  const edgeDataFigures = edgeData?.flow ? dataByProtocol(edgeData.flow) : []
+  const edgeProtocols = edgeDataFigures.map(e => protocolName(e.protocol ?? '')).join(' + ')
+  const edgeL7 = edgeData?.flow?.l7Protocol
+  const distinctL7 = edgeL7 && edgeL7.toLowerCase() !== 'mixed' && !edgeDataFigures.some(e => e.protocol?.toLowerCase() === edgeL7.toLowerCase())
 
   // Find related flows for node
   const relatedFlows = isNode
@@ -486,9 +490,9 @@ function DetailsPanel({
 
   // Compute aggregate stats for node
   const nodeStats = isNode ? {
-    totalBytes: relatedFlows.reduce((sum, f) => sum + f.bytesSent + f.bytesRecv, 0),
+    data: totalDataByProtocol(relatedFlows),
     protocols: relatedFlows.reduce((acc, f) => {
-      const proto = f.protocol?.toUpperCase() || 'TCP'
+      const proto = protocolName(f.protocol || 'tcp')
       acc[proto] = (acc[proto] || 0) + displayVolume(f, isRateBased)
       return acc
     }, {} as Record<string, number>),
@@ -628,12 +632,12 @@ function DetailsPanel({
             </div>
 
             {/* Stats grid */}
-            {nodeStats && (nodeStats.totalBytes > 0 || nodeStats.lastSeen || nodeStats.totalRequests > 0) && (
+            {nodeStats && (nodeStats.data.some(e => e.sent > 0 || e.recv > 0) || nodeStats.lastSeen || nodeStats.totalRequests > 0) && (
               <div className="grid grid-cols-2 gap-2">
-                {nodeStats.totalBytes > 0 && (
+                {nodeStats.data.some(e => e.sent > 0 || e.recv > 0) && (
                   <div className="p-2 rounded bg-theme-elevated text-xs">
                     <div className="text-theme-text-tertiary">Data transferred</div>
-                    <div className="text-theme-text-primary font-medium">{formatBytes(nodeStats.totalBytes)}</div>
+                    <div className="text-theme-text-primary font-medium"><TrafficData entries={nodeStats.data} /></div>
                   </div>
                 )}
                 {nodeStats.flowCount > 1 && (
@@ -757,8 +761,8 @@ function DetailsPanel({
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
-                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary uppercase">
-                          {flow.protocol || 'tcp'}
+                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary">
+                          {protocolName(flow.protocol || 'tcp')}
                         </span>
                         {flow.connections > 0 && (
                           <span className="text-theme-text-secondary">
@@ -767,7 +771,7 @@ function DetailsPanel({
                         )}
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
                           <span className="text-theme-text-tertiary">
-                            {formatBytes(flow.bytesSent + flow.bytesRecv)}
+                            <TrafficData entries={dataByProtocol(flow)} compact />
                           </span>
                         )}
                         {flow.errorCount != null && flow.errorCount > 0 && (
@@ -809,8 +813,8 @@ function DetailsPanel({
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
-                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary uppercase">
-                          {flow.protocol || 'tcp'}
+                        <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary">
+                          {protocolName(flow.protocol || 'tcp')}
                         </span>
                         {flow.connections > 0 && (
                           <span className="text-theme-text-secondary">
@@ -819,7 +823,7 @@ function DetailsPanel({
                         )}
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
                           <span className="text-theme-text-tertiary">
-                            {formatBytes(flow.bytesSent + flow.bytesRecv)}
+                            <TrafficData entries={dataByProtocol(flow)} compact />
                           </span>
                         )}
                         {flow.errorCount != null && flow.errorCount > 0 && (
@@ -864,8 +868,10 @@ function DetailsPanel({
                 )}
                 <div className="p-2 rounded bg-theme-elevated">
                   <div className="text-theme-text-tertiary">Protocol</div>
-                  <div className="text-theme-text-primary font-medium uppercase">
-                    {protocolLabel(edgeData.flow?.l7Protocol, edgeData.protocol)}
+                  <div className="text-theme-text-primary font-medium">
+                    {edgeDataFigures.length > 1
+                      ? distinctL7 ? protocolLabel(protocolName(edgeL7), edgeProtocols) : edgeProtocols
+                      : protocolLabel(edgeData.flow?.l7Protocol && protocolName(edgeData.flow.l7Protocol), protocolName(edgeData.protocol))}
                   </div>
                 </div>
                 {(!isRateBased || edgeData.connections > 0) && (
@@ -880,10 +886,10 @@ function DetailsPanel({
                   </div>
                 )}
                 {edgeData.flow && (edgeData.flow.bytesSent > 0 || edgeData.flow.bytesRecv > 0) && (
-                  <div className="p-2 rounded bg-theme-elevated">
-                    <div className="text-theme-text-tertiary">Data</div>
+                  <div className={clsx('p-2 rounded bg-theme-elevated', edgeDataFigures.length > 1 && 'col-span-2')}>
+                    <div className="text-theme-text-tertiary">{edgeDataFigures.length > 1 ? 'Data by protocol' : 'Data'}</div>
                     <div className="text-theme-text-primary font-medium">
-                      {formatBytes(edgeData.flow.bytesSent + edgeData.flow.bytesRecv)}
+                      <TrafficData entries={edgeDataFigures} directional explainOverlap />
                     </div>
                   </div>
                 )}

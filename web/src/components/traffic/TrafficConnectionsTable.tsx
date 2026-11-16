@@ -3,12 +3,12 @@ import { Virtuoso } from 'react-virtuoso'
 import { clsx } from 'clsx'
 import { ArrowRight, Crosshair, Minus } from 'lucide-react'
 import type { AggregatedFlow } from '../../types'
-import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
+import { TrafficData } from './TrafficData'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import type { TrafficGraphSelection } from './TrafficGraph'
 import {
-  connectionRows, displayVolume, edgesOnPort, flowDrops, flowErrors, formatRate, graphEndpointId, hasStatusData, isExternalKind,
+  dataByProtocol, connectionRows, displayVolume, edgesOnPort, flowDrops, flowErrors, formatRate, graphEndpointId, hasStatusData, isExternalKind,
   type GraphFlow, type TrafficFocus,
 } from './trafficFilters'
 
@@ -26,6 +26,9 @@ const GRID = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_5rem_
 // Without HTTP status anywhere in view (plain TCP) a 5xx column would read as
 // "no errors" rather than "not measured".
 const GRID_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_5rem_4.5rem] items-center gap-x-3'
+
+const GRID_PROTOCOL_DATA = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_14rem_4.5rem_4.5rem] items-center gap-x-3'
+const GRID_PROTOCOL_DATA_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_14rem_4.5rem] items-center gap-x-3'
 
 const GRID_NO_DATA = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem_4.5rem] items-center gap-x-3'
 const GRID_NO_DATA_OR_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem] items-center gap-x-3'
@@ -58,7 +61,9 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
   const selected = useMemo(() => selectedRows(rows, selection), [rows, selection])
   const showStatus = useMemo(() => flows.some(hasStatusData), [flows])
   const showData = useMemo(() => flows.some(f => f.bytesSent > 0 || f.bytesRecv > 0), [flows])
-  const grid = showData ? (showStatus ? GRID : GRID_NO_STATUS) : (showStatus ? GRID_NO_DATA : GRID_NO_DATA_OR_STATUS)
+  const splitData = useMemo(() => flows.some(f => dataByProtocol(f).length > 1), [flows])
+  const dataGrid = splitData ? (showStatus ? GRID_PROTOCOL_DATA : GRID_PROTOCOL_DATA_NO_STATUS) : (showStatus ? GRID : GRID_NO_STATUS)
+  const grid = showData ? dataGrid : (showStatus ? GRID_NO_DATA : GRID_NO_DATA_OR_STATUS)
 
   const endpoint = (e: AggregatedFlow['source']) => {
     const id = graphEndpointId(e)
@@ -135,7 +140,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
               </span>
               {showData && (
                 <span className="text-right tabular-nums text-theme-text-secondary">
-                  {flow.bytesSent + flow.bytesRecv > 0 ? formatBytes(flow.bytesSent + flow.bytesRecv) : '—'}
+                  <TrafficData entries={dataByProtocol(flow)} compact />
                 </span>
               )}
               {showStatus && (

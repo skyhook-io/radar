@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
+import { dataByProtocol, totalDataByProtocol, protocolName, matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -733,7 +733,7 @@ describe('protocolLabel', () => {
 describe('groupAddonFlows', () => {
   const addon = (_name: string, namespace: string | undefined) => namespace === 'monitoring'
   const flow = (source: AggregatedFlow['source'], destination: AggregatedFlow['destination'], bytesSent: number): GraphFlow => {
-    const f = { source, destination, bytesSent, bytesRecv: bytesSent * 2, connections: 0, flowCount: 1, port: 443, protocol: 'tcp', lastSeen: '' }
+    const f = { source, destination, bytesSent, bytesRecv: bytesSent * 2, bytesByProtocol: { tcp: { bytesSent, bytesRecv: bytesSent * 2 } }, connections: 0, flowCount: 1, port: 443, protocol: 'tcp', lastSeen: '' }
     return { ...f, rawPairs: [endpointPair(f)] }
   }
   const internet = { name: 'Internet', namespace: '', kind: 'Internet' }
@@ -785,16 +785,17 @@ describe('groupAddonFlows', () => {
       f.source.kind === 'AddonInternet' || f.source.kind === 'AddonGroupSource')!
 
     it(`keeps common HTTP metadata and unreported ports for ${direction} contributors`, () => {
-      const http = contributors().map(f => ({ ...f, port: 0, protocol: 'http', l7Protocol: 'HTTP' }))
+      const http = contributors().map(f => ({ ...f, port: 0, protocol: 'http', l7Protocol: 'HTTP', bytesByProtocol: { http: { bytesSent: f.bytesSent, bytesRecv: f.bytesRecv } } }))
       expect(virtualFlow(http)).toMatchObject({ port: 0, protocol: 'http', l7Protocol: 'HTTP' })
       expect(virtualFlow(http.map(f => ({ ...f, port: 8080 })))).toMatchObject({ port: 8080, protocol: 'http', l7Protocol: 'HTTP' })
     })
 
     it(`shows mixed protocols and the lowest reported port for ${direction} contributors in either order`, () => {
       const [a, b] = contributors()
-      const mixed = [{ ...a, port: 8080, protocol: 'http', l7Protocol: 'HTTP' }, { ...b, port: 443 }]
+      const mixed: GraphFlow[] = [{ ...a, port: 8080, protocol: 'http', l7Protocol: 'HTTP', bytesByProtocol: { http: { bytesSent: a.bytesSent, bytesRecv: a.bytesRecv } } }, { ...b, port: 443 }]
       for (const inputs of [mixed, [...mixed].reverse()]) {
         expect(virtualFlow(inputs)).toMatchObject({ port: 443, protocol: 'mixed', l7Protocol: 'mixed', bytesSent: 300, bytesRecv: 600 })
+        expect(dataByProtocol(virtualFlow(inputs))).toEqual([{ protocol: 'http', sent: 100, recv: 200 }, { protocol: 'tcp', sent: 200, recv: 400 }])
         expect(virtualFlow([{ ...inputs[0], port: 0 }, inputs[1]]).port).toBe(inputs[1].port)
       }
     })
@@ -823,5 +824,47 @@ describe('groupAddonFlows', () => {
     const plain = flow({ name: 'client', namespace: 'shop', kind: 'Pod' }, kubernetes, 100)
     expect(groupAddonFlows([plain], addon)).toEqual([plain])
     expect(groupAddonFlows([], addon)).toEqual([])
+  })
+})
+
+describe('protocol byte figures', () => {
+  const base: AggregatedFlow = {
+    source: { name: 'client', namespace: 'demo', kind: 'Pod' },
+    destination: { name: 'server', namespace: 'demo', kind: 'Pod' },
+    port: 0, protocol: 'http', connections: 1, flowCount: 1, lastSeen: '',
+    bytesSent: 5969, bytesRecv: 260965, bytesByProtocol: { http: { bytesSent: 5969, bytesRecv: 260965 } },
+  }
+  const tcp: AggregatedFlow = { ...base, protocol: 'tcp', bytesSent: 32699, bytesRecv: 391439, bytesByProtocol: { tcp: { bytesSent: 32699, bytesRecv: 391439 } } }
+
+  it('merges fresh buckets in either order across repeated shallow-copy collapses', () => {
+    for (const flows of [[base, tcp], [tcp, base]]) {
+      const snapshot = structuredClone(flows)
+      const external = { ...flows[0] }
+      mergeFlowVolume(external, flows[1])
+      const internet = { ...external }
+      mergeFlowVolume(internet, base)
+      expect(dataByProtocol(external)).toEqual([{ protocol: 'http', sent: 5969, recv: 260965 }, { protocol: 'tcp', sent: 32699, recv: 391439 }])
+      expect(dataByProtocol(internet)[0]).toEqual({ protocol: 'http', sent: 11938, recv: 521930 })
+      expect(flows).toEqual(snapshot)
+      expect(external.bytesByProtocol).not.toBe(internet.bytesByProtocol)
+      expect(external.bytesByProtocol!.http).not.toBe(internet.bytesByProtocol!.http)
+    }
+  })
+
+  it('sorts payloads first and retains zero-byte protocols', () => {
+    expect(dataByProtocol({ ...base, bytesByProtocol: { udp: { bytesSent: 0, bytesRecv: 0 }, tcp: { bytesSent: 1, bytesRecv: 2 }, http: { bytesSent: 3, bytesRecv: 4 }, grpc: { bytesSent: 5, bytesRecv: 6 } } }).map(e => e.protocol))
+      .toEqual(['grpc', 'http', 'tcp', 'udp'])
+    expect(protocolName('grpc')).toBe('gRPC')
+    expect(protocolName('http')).toBe('HTTP')
+  })
+
+  it('never attributes a released HTTP/gRPC scalar to the first protocol through merges or node totals', () => {
+    const legacy = { ...base, bytesByProtocol: undefined, bytesSent: 100, bytesRecv: 200 }
+    expect(dataByProtocol(legacy)).toEqual([{ protocol: null, sent: 100, recv: 200 }])
+    const merged = { ...legacy }
+    mergeFlowVolume(merged, legacy)
+    expect(merged.bytesByProtocol).toBeUndefined()
+    expect(dataByProtocol(merged)).toEqual([{ protocol: null, sent: 200, recv: 400 }])
+    expect(totalDataByProtocol([merged, legacy])).toEqual([{ protocol: null, sent: 300, recv: 600 }])
   })
 })

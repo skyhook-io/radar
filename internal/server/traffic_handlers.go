@@ -292,7 +292,6 @@ func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow, 
 	}
 	addFlowsCoverage(result, response)
 	addFlowsWarning(result, response, flows)
-	addFlowsDataNote(result, response, flows)
 	return result
 }
 
@@ -306,12 +305,6 @@ func addFlowsCoverage(result map[string]any, response *traffic.FlowsResponse) {
 	}
 	if response.FlowLimit > 0 {
 		result["flowLimit"] = response.FlowLimit
-	}
-}
-
-func addFlowsDataNote(result map[string]any, response *traffic.FlowsResponse, flows []traffic.Flow) {
-	if response.DataNote != "" && !(len(flows) == 0 && len(response.Flows) > 0) {
-		result["dataNote"] = response.DataNote
 	}
 }
 
@@ -413,7 +406,6 @@ func trafficRecordsPayload(response *traffic.FlowsResponse, flows []traffic.Flow
 	}
 	addFlowsCoverage(result, response)
 	addFlowsWarning(result, response, flows)
-	addFlowsDataNote(result, response, flows)
 	return result
 }
 
