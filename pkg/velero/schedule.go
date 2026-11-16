@@ -201,7 +201,7 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	r.Runs = summarizeRuns(runs, in.BackupsRead, in.WithRecent)
 
 	parsed, perr := parseCron(r.Cron)
-	r.Zone = scheduleZone(r.Cron, parsed, perr, in.Server, s.GetName(), runs)
+	r.Zone = scheduleZone(r.Cron, parsed, perr, in.Server, s.GetName(), r.LastSubmitted, runs)
 
 	switch {
 	case r.Paused:
@@ -322,7 +322,7 @@ func missedRuns(p parsedCron, first time.Time, loc *time.Location, now time.Time
 }
 
 // scheduleZone decides the zone a schedule's times are read in.
-func scheduleZone(expr string, p parsedCron, perr error, server ServerConfig, name string, runs []Run) Zone {
+func scheduleZone(expr string, p parsedCron, perr error, server ServerConfig, name string, lastBackup *time.Time, runs []Run) Zone {
 	if perr == nil && p.zoned {
 		return Zone{Name: cronZoneName(expr), Source: ZoneFromCron}
 	}
@@ -333,7 +333,7 @@ func scheduleZone(expr string, p parsedCron, perr error, server ServerConfig, na
 		}
 		return Zone{Name: server.TimeZone, Source: src}
 	}
-	if offset, ok := inferOffset(name, runs); ok {
+	if offset, ok := inferOffset(name, lastBackup, runs); ok {
 		return Zone{Name: fixedZoneName(offset), Source: ZoneInferred}
 	}
 	return Zone{Name: "UTC", Source: ZoneUnknown}
@@ -362,10 +362,12 @@ func zoneLocation(z Zone, p parsedCron) *time.Location {
 	return time.UTC
 }
 
-// inferOffset reads the server's UTC offset from the newest schedule-created
-// backup: Velero names it <schedule>-<YYYYMMDDhhmmss> in its local time, and
-// the API server stamps creationTimestamp in UTC moments later.
-func inferOffset(name string, runs []Run) (time.Duration, bool) {
+// Only the controller's submission matches lastBackup. CLI and on-demand runs
+// use UTC names even when the server uses a different local zone.
+func inferOffset(name string, lastBackup *time.Time, runs []Run) (time.Duration, bool) {
+	if lastBackup == nil {
+		return 0, false
+	}
 	prefix := name + "-"
 	for _, run := range runs {
 		suffix, ok := strings.CutPrefix(run.Name, prefix)
@@ -376,16 +378,18 @@ func inferOffset(name string, runs []Run) (time.Duration, bool) {
 		if err != nil {
 			continue
 		}
-		if run.Started != nil && run.Started.Before(run.Created) {
-			// Recreated by backup sync: its creationTimestamp is the sync.
+		// The API stamps creation just after the controller records its now.
+		// Rehydrated objects and later manual submissions cannot establish a zone.
+		delay := run.Created.Sub(*lastBackup)
+		if delay < 0 || delay > time.Minute {
 			continue
 		}
-		offset := local.Sub(run.Created.UTC().Truncate(time.Second))
-		offset = offset.Round(15 * time.Minute)
-		if offset < -12*time.Hour || offset > 14*time.Hour {
+		offset := local.Sub(lastBackup.UTC().Truncate(time.Second))
+		rounded := offset.Round(15 * time.Minute)
+		if offset != rounded || rounded < -12*time.Hour || rounded > 14*time.Hour {
 			continue
 		}
-		return offset, true
+		return rounded, true
 	}
 	return 0, false
 }

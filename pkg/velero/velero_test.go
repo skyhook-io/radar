@@ -483,3 +483,17 @@ func TestServerConfigPrefersTheRunningServer(t *testing.T) {
 		}
 	}
 }
+
+func TestZoneInferenceIgnoresNewerOnDemandRun(t *testing.T) {
+	controller := backup("nightly-20261115130000", "nightly", "Completed", at("11:00").Add(2*time.Second))
+	manual := backup("nightly-20261115113500", "nightly", "Completed", at("11:35"))
+	s := schedule("nightly", "0 13 * * *", lastBackup(at("11:00")))
+	r := read(s, []*unstructured.Unstructured{manual, controller}, ServerConfig{Source: ServerUnread}, at("12:00"))
+	if r.Zone.Name != "UTC+02:00" || r.Zone.Source != ZoneInferred {
+		t.Fatalf("manual run changed zone: %+v", r.Zone)
+	}
+	without := read(s, []*unstructured.Unstructured{manual}, ServerConfig{Source: ServerUnread}, at("12:00"))
+	if without.Zone.Source != ZoneUnknown {
+		t.Fatalf("manual run established zone: %+v", without.Zone)
+	}
+}
