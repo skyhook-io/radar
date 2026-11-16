@@ -187,6 +187,15 @@ type slotKey struct {
 type imageAgg struct {
 	report    *report
 	workloads map[WorkloadRef]bool
+	// refs are the spellings the running Pods give the image, which a
+	// search finds it by beside the report's own.
+	refs map[string]bool
+}
+
+// searchText is what a search matches an image row against: every spelling
+// of the image and its digest.
+func (a *imageAgg) searchText() string {
+	return strings.Join(append(slices.Sorted(maps.Keys(a.refs)), a.report.image, a.report.digest), "\n")
 }
 
 // unscannedAgg is a running image with no report: grouped by canonical
@@ -244,7 +253,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 		agg := j.images[r.imageID]
 		if agg == nil {
-			agg = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}}
+			agg = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
 			j.images[r.imageID] = agg
 		} else if r.scannedAt.After(agg.report.scannedAt) || (r.scannedAt.Equal(agg.report.scannedAt) && r.ref.Namespace+"/"+r.ref.Name < agg.report.ref.Namespace+"/"+agg.report.ref.Name) {
 			agg.report = r
@@ -253,6 +262,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			w := t.workload
 			w.Container = t.container
 			agg.workloads[w] = true
+			agg.refs[t.image] = true
 			j.targetImage[t.key] = r.imageID
 		}
 	}
@@ -306,6 +316,7 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 		return Response{}, err
 	}
 	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary()}
+	resp.WorkloadRuns = f.Workload != nil && slices.ContainsFunc(targets, func(t target) bool { return newMatcher(f).wanted(t.workload) })
 	if view != ViewSummary {
 		resp.Unscanned, resp.Coverage.UnscannedOmitted = capRows(j.unscannedRows(f))
 	}
@@ -441,7 +452,7 @@ func (m matcher) workloadKept(workloads []WorkloadRef) bool {
 
 func (m matcher) wanted(w WorkloadRef) bool {
 	want := m.f.Workload
-	return want != nil && w.Kind == want.Kind && w.Namespace == want.Namespace && w.Name == want.Name && (want.Group == "" || w.Group == want.Group)
+	return want != nil && strings.EqualFold(w.Kind, want.Kind) && w.Namespace == want.Namespace && w.Name == want.Name && (want.Group == "" || w.Group == want.Group)
 }
 
 // listed is the first n of a row's workloads. Narrowed to one workload, its
@@ -486,7 +497,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		if !m.workloadKept(workloads) {
 			continue
 		}
-		rowMatched := m.rowMatches(r.image, workloads)
+		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		if !r.unread && len(r.findings) == 0 && (m.query == "" || !rowMatched || m.narrowsFindings()) {
 			if rowMatched {
 				clean = append(clean, CleanImage{
@@ -566,6 +577,25 @@ func (c *cveAgg) keepAffected(a CVEImage) {
 	}
 }
 
+// distinctWorkloads counts the workloads across a set of images. Rows from
+// one base image share one image set, so memo counts each distinct set once
+// rather than copying a widely shared image's workloads for every row.
+func distinctWorkloads(ids []string, imageWorkloads map[string][]WorkloadRef, memo map[string]int) int {
+	key := strings.Join(ids, "\x00")
+	if n, ok := memo[key]; ok {
+		return n
+	}
+	distinct := map[WorkloadRef]bool{}
+	for _, id := range ids {
+		for _, w := range imageWorkloads[id] {
+			w.Container = ""
+			distinct[w] = true
+		}
+	}
+	memo[key] = len(distinct)
+	return len(distinct)
+}
+
 // cves groups findings by CVE ID. A CVE's workload count is the distinct
 // workloads across the images that carry it; CVEs from one base image share
 // one image set, so each distinct set is counted once.
@@ -584,7 +614,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 		}
 		imageWorkloads[r.imageID] = workloads
 		listed := m.listed(workloads, MaxWorkloadsPerAffected)
-		rowMatched := m.rowMatches(r.image, workloads)
+		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		// Whether an upgrade clears each CVE here: every package it's in has
 		// a fixed version, whichever findings the filters keep.
 		fixedHere := map[string]bool{}
@@ -631,20 +661,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 				c.row.FixableImages++
 			}
 		}
-		setKey := strings.Join(ids, "\x00")
-		n, ok := workloadsBySet[setKey]
-		if !ok {
-			distinct := map[WorkloadRef]bool{}
-			for _, id := range ids {
-				for _, w := range imageWorkloads[id] {
-					w.Container = ""
-					distinct[w] = true
-				}
-			}
-			n = len(distinct)
-			workloadsBySet[setKey] = n
-		}
-		c.row.Workloads = n
+		c.row.Workloads = distinctWorkloads(ids, imageWorkloads, workloadsBySet)
 		c.row.Images = len(ids)
 		c.row.Packages = sortedKeys(c.packages)
 		slices.SortStableFunc(c.row.Affected, func(a, b CVEImage) int {

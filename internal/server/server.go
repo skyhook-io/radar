@@ -64,6 +64,7 @@ import (
 	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/internal/vulnerabilities"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/conditions"
@@ -345,6 +346,7 @@ func New(cfg Config) *Server {
 		// traffic, helm): the Argo CD connection references the previous
 		// cluster's endpoint/port-forward.
 		argocd.Reset()
+		vulnerabilities.ResetParseCache()
 	})
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
 	// cluster, so an in-flight agent (especially an apply) can't write to it.

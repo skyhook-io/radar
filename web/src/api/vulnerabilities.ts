@@ -168,10 +168,12 @@ export interface VulnerabilitiesParams {
   workload?: { kind: string; group?: string; namespace: string; name: string }
 }
 
-function workloadOfPath(path: unknown): string {
+// What an answer is about, apart from its filters: the workload and the
+// namespaces. An answer about another one is never shown as a placeholder.
+function subjectOfPath(path: unknown): string {
   if (typeof path !== 'string') return ''
   const q = new URLSearchParams(path.split('?')[1] ?? '')
-  return [q.get('workloadKind'), q.get('workloadNamespace'), q.get('workloadName')].join('/')
+  return [q.get('workloadKind'), q.get('workloadNamespace'), q.get('workloadName'), q.get('namespaces')].join('/')
 }
 
 /** The cluster doesn't serve the report kind: no scanner, not a failure. */
@@ -226,8 +228,8 @@ export function useVulnerabilities(p: VulnerabilitiesParams, enabled = true) {
     staleTime: 30_000,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
-    // Keep showing the last answer while the tab's filters change, but never
-    // carry one workload's answer over to another's drawer or row.
-    placeholderData: (prev, prevQuery) => (prev?.view === p.view && workloadOfPath(prevQuery?.queryKey[1]) === workloadOfPath(path) ? prev : undefined),
+    // Keep showing the last answer, dimmed, while the tab's filters change,
+    // but never carry one workload's or namespace scope's answer to another.
+    placeholderData: (prev, prevQuery) => (prev?.view === p.view && subjectOfPath(prevQuery?.queryKey[1]) === subjectOfPath(path) ? prev : undefined),
   })
 }

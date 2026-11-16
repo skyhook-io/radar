@@ -16,7 +16,9 @@ import {
   radarUpgradeHeadline,
   useDebouncedValue,
   useDisclosure,
+  VULN_SEVERITY_TEXT,
 } from '@skyhook-io/k8s-ui'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
 import { ApiError } from '../../api/client'
 import {
@@ -49,6 +51,7 @@ import {
   ecosystemLabel,
   findingsCertainty,
   readsComplete,
+  workloadsByReplicaSet,
   imageParts,
   gapSentence,
   workloadSummary,
@@ -97,12 +100,14 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
   const query = useDebouncedValue(queryDraft.trim(), 300)
   const { connection } = useConnection()
 
-  const update = (mutate: (p: URLSearchParams) => void) => {
+  // Typing and chip toggles replace the entry; a new view or a drill-down
+  // pushes one, so Back returns to the list it came from.
+  const update = (mutate: (p: URLSearchParams) => void, push = false) => {
     const next = new URLSearchParams(params)
     mutate(next)
-    setParams(next, { replace: true })
+    setParams(next, { replace: !push })
   }
-  const { data, isLoading, isFetching, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query, workload })
+  const { data, isLoading, isFetching, isPlaceholderData, error, dataUpdatedAt, refetch } = useVulnerabilities({ view, namespaces, severities, fixableOnly, query, workload })
 
   const toggleSeverity = (s: VulnerabilitySeverity) => update((p) => {
     const next = severities.includes(s) ? severities.filter((x) => x !== s) : [...severities, s]
@@ -118,7 +123,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       </div>
     )
   }
-  if (error || !data) {
+  if (!data) {
     return (
       <div className="flex-1 flex flex-col min-h-0 p-4 gap-4">
         <ChecksViewTabs />
@@ -127,7 +132,8 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
     )
   }
 
-  const filtered = severities.length > 0 || fixableOnly || query !== '' || !!workload
+  // By fix lists only fixable findings, and hides the chip that says so.
+  const filtered = severities.length > 0 || (fixableOnly && view !== 'fix') || query !== '' || !!workload
   // Narrowed only to a workload whose images are all clean or unscanned:
   // the folds below list them, so "nothing matches" would mislead.
   const workloadFolds = !!workload && (view === 'image' || view === 'workload') && severities.length === 0 && !fixableOnly && query === '' &&
@@ -141,11 +147,14 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         icon={ShieldAlert}
         title="Vulnerabilities"
         description="Known CVEs in the images that run now, from Trivy Operator's reports."
-        actions={<FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} onRefresh={() => refetch()} connectionState={connection.state} />}
+        actions={<FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />}
       />
 
-      <SummaryTiles data={data} />
-      <CoverageNotes data={data} filtered={filtered} />
+      <div className={clsx('flex flex-col gap-4 transition-opacity', isPlaceholderData && 'opacity-60')}>
+        <SummaryTiles data={data} />
+        <CoverageNotes data={data} filtered={filtered} />
+        {error && <p className="text-xs text-warning-text">Couldn't refresh: {error instanceof Error ? error.message : 'request failed'}. Showing the last answer.</p>}
+      </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex min-h-9 max-w-sm flex-1 basis-64 items-center gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5">
@@ -203,7 +212,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
               key={v.key}
               type="button"
               aria-pressed={view === v.key}
-              onClick={() => update((p) => (v.key === 'image' ? p.delete('by') : p.set('by', v.key)))}
+              onClick={() => update((p) => (v.key === 'image' ? p.delete('by') : p.set('by', v.key)), true)}
               className={clsx('min-h-8 rounded px-3 text-xs font-medium transition-colors', view === v.key ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary')}
             >
               {v.label}
@@ -220,7 +229,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           body={filtered && !workloadFolds ? 'Clear a filter to see more.' : data.summary.imagesScanned === 0 && (data.unscanned ?? []).length > 0 ? 'No report covers a running image yet. Trivy Operator scans workloads as they appear; if this persists, check that it is running and that its target namespaces include these.' : undefined}
         />
       ) : view === 'fix' ? (
-        <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) })} />
+        <FixTable fixes={data.fixes ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} onShowCVE={(id) => update((p) => { p.set('by', 'cve'); p.set('q', id) }, true)} />
       ) : view === 'cve' ? (
         <CVETable cves={data.cves ?? []} onOpen={(w) => onNavigateToResource(toResource(w))} />
       ) : view === 'workload' ? (
@@ -230,7 +239,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
           query={query}
           namespaces={namespaces}
           onOpen={(w) => onNavigateToResource(toResource(w))}
-          onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') })}
+          onShow={(w, by) => update((p) => { p.set('by', by); p.set('workload', workloadParam(w)); p.delete('q') }, true)}
         />
       ) : (
         <ImageTable
@@ -261,9 +270,9 @@ function emptyHeadline(view: VulnerabilityView, filtered: boolean, data: Vulnera
   if (workload && ((data.clean ?? []).length > 0 || (data.cleanWorkloads ?? []).length > 0)) return `No CVEs reported for ${workload.name}`
   if (filtered) return 'Nothing matches these filters'
   const s = data.summary
+  if (!readsComplete(data.coverage) && totalFindings(s.counts) === 0 && s.imagesClean === 0) return 'No findings could be read in this scope'
   if (s.imagesScanned === 0) return 'No scanned images run in this scope'
   if (view === 'fix' && totalFindings(s.counts) > 0) return `None of the ${totalFindings(s.counts)} reported findings has a fixed release yet`
-  if (!readsComplete(data.coverage) && totalFindings(s.counts) === 0 && s.imagesClean === 0) return 'No findings could be read in this scope'
   return `No CVEs reported for the ${s.imagesScanned} scanned ${s.imagesScanned === 1 ? 'image' : 'images'} that run`
 }
 
@@ -300,9 +309,9 @@ function SummaryTiles({ data }: { data: VulnerabilitiesResponse }) {
   const nothing = certainty === 'unknown'
   const tiles = [
     { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : readsComplete(data.coverage) ? 'every running image has a report' : 'none unscanned where Radar could read', tone: '' },
-    { label: 'Images with Critical CVEs', value: s.imagesWithCritical, certainty, sub: nothing ? 'nothing scanned yet' : `of ${s.imagesScanned} scanned`, tone: s.imagesWithCritical > 0 ? 'text-red-700 dark:text-red-400' : '' },
-    { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'a fixed release is reported', tone: s.fixableCriticalHighCves > 0 ? 'text-orange-700 dark:text-orange-400' : '' },
-    { label: 'Workloads with Critical or High', value: s.workloadsWithCriticalOrHigh, certainty, sub: `of ${s.workloads} running or scheduled`, tone: '' },
+    { label: 'Images with Critical CVEs', value: s.imagesWithCritical, certainty, sub: nothing ? 'nothing scanned yet' : `of ${s.imagesScanned} scanned`, tone: s.imagesWithCritical > 0 ? VULN_SEVERITY_TEXT.CRITICAL : '' },
+    { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'a fixed release is reported', tone: s.fixableCriticalHighCves > 0 ? VULN_SEVERITY_TEXT.HIGH : '' },
+    { label: 'Workloads with Critical or High', value: s.workloadsWithCriticalOrHigh, certainty, sub: workloadsByReplicaSet(data.coverage) ? `of ${s.workloads}; a Deployment may count once per ReplicaSet` : `of ${s.workloads} running or scheduled`, tone: '' },
   ]
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -332,10 +341,10 @@ function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filt
       <p className="text-theme-text-tertiary">
         From Trivy Operator's VulnerabilityReports{scan ? ` · ${scan}` : ''}. A report lists what was known when the image was scanned, after the scanner's own filters.
         {" A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy's own reports."}
-        {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about workloads that don't run now (older revisions, scaled to zero or removed) and isn't counted.`}
+        {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about workloads that don't run now (older revisions, scaled to zero or removed) and ${data.coverage.inactiveReports === 1 ? "isn't" : "aren't"} counted.`}
       </p>
       {gaps && <p className="text-warning-text">{gaps}</p>}
-      {data.coverage.truncated && <p className="text-warning-text">Some images have too many findings to read in one request and are marked unread. Narrow with the namespace picker.</p>}
+      {data.coverage.truncated && <p className="text-warning-text">This request reached its findings limit, so some images' findings weren't read and are marked unread. Narrow with the namespace picker.</p>}
     </div>
   )
 }
@@ -399,7 +408,7 @@ function ImageTable({ images, onOpen, onOpenReport }: { images: VulnerableImage[
                     <ImageName image={img.image} className="text-theme-text-primary" />
                     <span className="truncate font-mono text-xs text-theme-text-tertiary">{[imageParts(img.image).path, img.os, img.digest ? img.digest.replace('sha256:', '').slice(0, 12) : null].filter(Boolean).join(' · ')}</span>
                   </span>
-                  {img.findingsUnread ? <span className="text-xs text-warning-text">Too many findings to read here</span> : <SeverityBar counts={img.counts} className="max-w-[280px]" />}
+                  {img.findingsUnread ? <span className="text-xs text-warning-text">Findings not read</span> : <SeverityBar counts={img.counts} className="max-w-[280px]" />}
                   <WithTooltip tip={img.findingsUnread ? undefined : `${fixable} of ${total} findings have a fixed release`}>
                     <Num>{img.findingsUnread ? '—' : <>{fixable}<span className="text-theme-text-tertiary"> of {total}</span></>}</Num>
                   </WithTooltip>
@@ -444,7 +453,7 @@ function namespaceCount(img: VulnerableImage): string {
 
 function FindingsList({ findings, total, unread }: { findings: VulnerableImage['findings']; total: number; unread?: boolean }) {
   if (unread) {
-    return <span className="text-xs text-warning-text">This image's report has too many findings to read in one request. Narrow with the namespace picker.</span>
+    return <span className="text-xs text-warning-text">Not read: this request reached its findings limit before this image. Narrow with the namespace picker.</span>
   }
   if (findings.length === 0) {
     return <span className="text-xs text-theme-text-tertiary">{total === 0 ? 'No CVEs reported for this image.' : 'No findings match the filters.'}</span>
@@ -495,7 +504,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                       <span className="min-w-0 truncate font-mono text-xs">
                         <span className="text-theme-text-tertiary">{f.from.join(', ')} → </span>
                         {f.to
-                          ? <span className="text-emerald-700 dark:text-emerald-400">{f.to}</span>
+                          ? <span className={SEVERITY_TEXT.success}>{f.to}</span>
                           : <span className="text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
                       </span>
                     </WithTooltip>
@@ -625,7 +634,7 @@ function WorkloadTable({ workloads, severities, query, namespaces, onOpen, onSho
                     <li key={`${c.name}/${c.image}`} className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-xs">
                       <span className="shrink-0 text-theme-text-secondary">{c.name}</span>
                       <ImageName image={c.image} className="text-theme-text-tertiary" />
-                      {c.scanned && c.counts ? <SeverityCounts counts={c.counts} /> : c.findingsUnread ? <span className="text-warning-text">too many findings to read here</span> : <span className="text-warning-text">not scanned yet</span>}
+                      {c.scanned && c.counts ? <SeverityCounts counts={c.counts} /> : c.findingsUnread ? <span className="text-warning-text">findings not read</span> : <span className="text-warning-text">not scanned yet</span>}
                     </li>
                   ))}
                 </ul>
@@ -646,7 +655,7 @@ function CVEFix({ cve: c }: { cve: VulnerabilityCVE }) {
   const text = c.fixableImages === 0 ? 'No' : all ? 'Yes' : `${c.fixableImages} of ${c.images}`
   return (
     <WithTooltip tip={c.fixableImages > 0 && !all ? `A fixed release is reported in ${c.fixableImages} of the ${c.images} images` : undefined}>
-      <span className={clsx('text-xs', c.fixableImages === 0 ? 'text-theme-text-tertiary' : all ? 'text-emerald-700 dark:text-emerald-400' : 'text-theme-text-secondary')}>
+      <span className={clsx('text-xs', c.fixableImages === 0 ? 'text-theme-text-tertiary' : all ? SEVERITY_TEXT.success : 'text-theme-text-secondary')}>
         {text}
       </span>
     </WithTooltip>
@@ -739,7 +748,7 @@ function WorkloadFindings({ workload }: { workload: VulnerabilityWorkload }) {
   const containers = (n: number) => `${n} ${n === 1 ? 'container' : 'containers'}`
   const notCounted = [
     unscanned > 0 && `${containers(unscanned)} not scanned yet`,
-    unread > 0 && `${containers(unread)} with too many findings to read`,
+    unread > 0 && `${containers(unread)} with findings not read`,
   ].filter(Boolean).join(', ')
   return (
     <div className="flex min-w-0 flex-col gap-1">
@@ -761,7 +770,7 @@ function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view
         flush
         summary={
           <span className="flex items-center gap-2 text-sm text-theme-text-secondary">
-            <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" aria-hidden />
+            <ShieldCheck className={clsx('h-4 w-4', SEVERITY_TEXT.success)} aria-hidden />
             {view === 'image'
               ? `${count} scanned ${count === 1 ? 'image has' : 'images have'} no reported CVEs`
               : `${count} ${count === 1 ? 'workload runs' : 'workloads run'} only images with no reported CVEs`}

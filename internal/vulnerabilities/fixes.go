@@ -3,6 +3,7 @@ package vulnerabilities
 import (
 	"cmp"
 	"context"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -15,12 +16,11 @@ type imagePackage struct {
 }
 
 type fixAgg struct {
-	row       Fix
-	from      map[string]bool
-	listed    map[string]bool
-	cves      map[string]Severity
-	images    map[string]bool
-	workloads map[WorkloadRef]bool
+	row    Fix
+	from   map[string]bool
+	listed map[string]bool
+	cves   map[string]Severity
+	images map[string]bool
 }
 
 // fixes groups fixable findings by the upgrade that clears them. Within one
@@ -38,6 +38,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		listed []string
 	}
 	upgrades := map[string]upgrade{}
+	imageWorkloads := map[string][]WorkloadRef{}
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -47,7 +48,8 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		if !m.workloadKept(workloads) {
 			continue
 		}
-		rowMatched := m.rowMatches(r.image, workloads)
+		imageWorkloads[r.imageID] = workloads
+		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		packages := map[string]*imagePackage{}
 		var order []string
 		for _, fd := range r.findings {
@@ -81,7 +83,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 				a = &fixAgg{
 					row:  Fix{Package: p.pkg, PackageType: p.pkgType, To: to},
 					from: map[string]bool{}, listed: map[string]bool{}, cves: map[string]Severity{},
-					images: map[string]bool{}, workloads: map[WorkloadRef]bool{},
+					images: map[string]bool{},
 				}
 				byKey[rowKey] = a
 			}
@@ -96,10 +98,6 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			}
 			if !a.images[r.imageID] {
 				a.images[r.imageID] = true
-				for _, w := range workloads {
-					w.Container = ""
-					a.workloads[w] = true
-				}
 				a.row.Affected = append(a.row.Affected, FixImage{
 					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), InstalledVersions: []string{p.installed},
 					Workloads: m.listed(workloads, MaxWorkloadsPerAffected), WorkloadsTotal: len(workloads),
@@ -118,8 +116,12 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		}
 	}
 
+	workloadsBySet := map[string]int{}
 	rows := make([]Fix, 0, len(byKey))
 	for _, a := range byKey {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		row := a.row
 		row.From = sortedKeys(a.from)
 		if row.To == "" {
@@ -139,7 +141,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		row.CVEsTotal = len(ids)
 		row.CVEs = ids[:min(len(ids), MaxCVEsPerFix)]
 		row.Images = len(a.images)
-		row.Workloads = len(a.workloads)
+		row.Workloads = distinctWorkloads(slices.Sorted(maps.Keys(a.images)), imageWorkloads, workloadsBySet)
 		slices.SortStableFunc(row.Affected, func(x, y FixImage) int {
 			return cmp.Or(cmp.Compare(y.WorkloadsTotal, x.WorkloadsTotal), cmp.Compare(x.Image, y.Image))
 		})

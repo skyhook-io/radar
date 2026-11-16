@@ -209,6 +209,17 @@ func TestTrimVulnerabilitiesMarksIncomplete(t *testing.T) {
 	}
 }
 
+func TestListVulnerabilitiesWorkloadFilter(t *testing.T) {
+	setupRunningVulnerableWeb(t)
+	got := listVulns(t, context.Background(), listVulnerabilitiesInput{View: "cve", Workload: "deployment/team-a/web"})
+	if len(got.CVEs) != 1 {
+		t.Fatalf("a lower-case kind still names the workload: %+v", got.CVEs)
+	}
+	if _, _, err := handleListVulnerabilities(context.Background(), nil, listVulnerabilitiesInput{Workload: "Deployment/team-a/nope"}); err == nil {
+		t.Fatal("a workload that runs nothing must be an error, not an empty answer")
+	}
+}
+
 func TestTrimVulnerabilitiesCountsCleanAndUnscanned(t *testing.T) {
 	resp := vulnerabilities.Response{
 		CleanWorkloads: make([]vulnerabilities.WorkloadRef, 3),

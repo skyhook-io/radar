@@ -18,7 +18,7 @@ describe('AuditCard vulnerabilities row', () => {
     expect(html.startsWith('<div')).toBe(true)
     expect(html.match(/<button/g)?.length).toBe(2)
     expect(html).not.toMatch(/<button[^>]*>(?:(?!<\/button>).)*<button/s)
-    expect(html).toContain('≥ 3 images with Critical · ≥ 8 fixable')
+    expect(html).toContain('≥ 3 images with Critical · ≥ 8 fixable Critical/High')
   })
 
   it('says nothing is scanned rather than zero', () => {

@@ -535,6 +535,21 @@ func TestUnscannedAliasesAreOneImage(t *testing.T) {
 
 // A digest-pinned image is grouped by its digest but still shown, and found,
 // by the name the Pod spec gives it.
+func TestSearchFindsAScannedImageByEverySpelling(t *testing.T) {
+	a := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/frontend", tag: "1", digest: "sha256:same", scanned: "2026-11-10T10:00:00Z", vulns: []vuln{{"CVE-A", "CRITICAL", "zlib", "1", "2"}}})
+	b := vulnReport(reportSpec{name: "b", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/backend", tag: "1", digest: "sha256:same", scanned: "2026-11-09T10:00:00Z", vulns: []vuln{{"CVE-A", "CRITICAL", "zlib", "1", "2"}}})
+	targets := []target{
+		liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/frontend:1", "", checkout),
+		liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/backend:1", "", worker),
+	}
+	for _, q := range []string{"acme/backend", "acme/frontend", "sha256:same"} {
+		got := mustBuild(t, []*unstructured.Unstructured{a, b}, targets, ViewImage, Filter{Query: q})
+		if len(got.Images) != 1 || len(got.Images[0].Findings) != 1 {
+			t.Fatalf("%s: %+v", q, got.Images)
+		}
+	}
+}
+
 func TestUnscannedPinnedImageKeepsItsName(t *testing.T) {
 	ref := "registry.k8s.io/ingress-nginx/controller:v1.9.4@sha256:5b16"
 	targets := []target{liveTarget("shop", "ReplicaSet", "web-1", "nginx", ref, "", WorkloadRef{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"})}

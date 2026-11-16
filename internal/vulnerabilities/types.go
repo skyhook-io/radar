@@ -318,6 +318,10 @@ type Response struct {
 	// and fix filters: an unscanned image's findings are unknown.
 	Unscanned []Unscanned `json:"unscanned,omitempty"`
 	Coverage  Coverage    `json:"coverage"`
+	// WorkloadRuns is whether Filter.Workload names something that runs in
+	// the answer's scope, so an empty answer can't pass for "no CVEs". Not
+	// on the wire: the UI and agents learn it differently.
+	WorkloadRuns bool `json:"-"`
 }
 
 // Filter narrows the pivot. The summary is always unfiltered.
@@ -331,15 +335,17 @@ type Filter struct {
 	// package contains it (case-insensitive).
 	Query string
 	// Workload keeps the images one workload runs, still listing every
-	// workload that runs them. An empty Group matches any group.
+	// workload that runs them. The Kind matches in any case; an empty Group
+	// matches any group.
 	Workload *WorkloadRef
 }
 
 const (
 	// MaxFindings bounds how many report entries one request reads.
 	MaxFindings = 200_000
-	// MaxFindingsPerImage bounds the findings listed per image row.
-	MaxFindingsPerImage = 200
+	// MaxFindingsPerImage bounds the findings listed per image row: the
+	// worst, which is what a row is read for, and a payload the tab can poll.
+	MaxFindingsPerImage = 50
 	// MaxAffectedPerCVE bounds the images listed per CVE or fix row.
 	MaxAffectedPerCVE = 50
 	// MaxCVEsPerFix bounds the CVE IDs listed per fix row.

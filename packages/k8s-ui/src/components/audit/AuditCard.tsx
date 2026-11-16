@@ -190,7 +190,7 @@ function VulnerabilitiesRow({ imagesWithCritical, fixableCriticalHigh, certainty
           ? "Couldn't read the reports"
           : certainty === 'unknown'
           ? 'No running image scanned yet'
-          : `${bound}${imagesWithCritical} ${imagesWithCritical === 1 ? 'image' : 'images'} with Critical · ${bound}${fixableCriticalHigh} fixable`}
+          : `${bound}${imagesWithCritical} ${imagesWithCritical === 1 ? 'image' : 'images'} with Critical · ${bound}${fixableCriticalHigh} fixable Critical/High`}
       </span>
       <ArrowRight className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform group-hover/vuln:translate-x-0.5" aria-hidden />
     </button>

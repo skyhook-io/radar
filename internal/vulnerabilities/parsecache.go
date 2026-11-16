@@ -24,6 +24,16 @@ const maxCachedFindings = 2 * MaxFindings
 // report that was deleted, or one only a past namespace scope read.
 const parsedIdle = 30 * time.Minute
 
+// ResetParseCache drops every parsed report, for a context switch: the
+// previous cluster's reports would otherwise stay in memory until a read
+// misses the cache.
+func ResetParseCache() {
+	c := parsedFindings
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries, c.total = map[types.UID]parsedEntry{}, 0
+}
+
 type parseCache struct {
 	mu        sync.Mutex
 	entries   map[types.UID]parsedEntry

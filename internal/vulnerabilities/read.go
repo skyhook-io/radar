@@ -111,7 +111,7 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 
 	namespaces, namespacesKnown := clusterNamespaces(cache)
 	var gaps []resourceapi.Gap
-	if !namespacesKnown && req.Namespaces == nil && req.ReportAccess != nil {
+	if !namespacesKnown && req.Namespaces == nil && req.ReportAccess != nil && !clusterWide(req.ReportAccess, gvr) {
 		// Radar can't list namespaces to check access in each; check the
 		// ones that hold reports and say the scope is unknown.
 		all, err := list("")
@@ -332,12 +332,19 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 // per-namespace check allowed. Asked for every namespace without the
 // cluster-wide grant, it checks the cluster's namespaces, which the caller
 // may see.
+// clusterWide is whether the caller may list the reports in every namespace,
+// when no namespace list is needed to check access.
+func clusterWide(access *search.DynamicKindAccess, gvr schema.GroupVersionResource) bool {
+	allowed, _ := access.ClusterWide(gvr.Group, gvr.Resource)
+	return allowed
+}
+
 func readableNamespaces(gvr schema.GroupVersionResource, req Request, clusterNamespaces []string) (readable []string, gaps []resourceapi.Gap) {
 	access := req.ReportAccess
 	if access == nil {
 		return req.Namespaces, nil
 	}
-	if allowed, _ := access.ClusterWide(gvr.Group, gvr.Resource); allowed {
+	if clusterWide(access, gvr) {
 		return req.Namespaces, nil
 	}
 	candidates := req.Namespaces

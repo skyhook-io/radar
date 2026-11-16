@@ -1,6 +1,7 @@
 import { clsx } from 'clsx'
 import { WithTooltip } from '../ui/Tooltip'
 import { CertaintyGlyph, gapReasonText, VULN_SEVERITY_BADGE, VULN_SEVERITY_BAR, VULN_SEVERITY_TEXT, type Certainty } from '@skyhook-io/k8s-ui'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import type {
   VulnerabilitiesResponse,
   VulnerabilityCounts,
@@ -96,7 +97,7 @@ export function FixVersion({ installed, fixed, target, showInstalled = true, cla
     <WithTooltip tip={tip}>
       <span className={clsx('min-w-0 truncate font-mono', className)}>
         {showInstalled && <span className="text-theme-text-tertiary">{installed} → </span>}
-        {to ? <span className="text-emerald-700 dark:text-emerald-400">{to}</span> : <span className="text-theme-text-tertiary">no fix yet</span>}
+        {to ? <span className={SEVERITY_TEXT.success}>{to}</span> : <span className="text-theme-text-tertiary">no fix yet</span>}
       </span>
     </WithTooltip>
   )
@@ -150,12 +151,18 @@ const kindWords = (kinds: KindName[]) => kinds.map((k) => (k.kind === REPORT_KIN
 const COLLECTION_CODES = new Set(['radar_kind_not_collected', 'radar_namespace_not_collected', 'kind_sync_pending', 'kind_sync_timed_out'])
 
 /**
- * A gap that leaves every count exact: where Radar doesn't hold ReplicaSets,
- * a Deployment's containers are named by their ReplicaSet, but their
- * findings are read. A ReplicaSet the caller may not read is withheld.
+ * A gap that leaves the finding counts exact: where Radar doesn't hold
+ * ReplicaSets, a Deployment's containers are named, and counted, by their
+ * ReplicaSets, but their findings are read. A ReplicaSet the caller may not
+ * read is withheld.
  */
 function namesOnly(gap: VulnerabilityGap): boolean {
   return COLLECTION_CODES.has(gap.code) && gapKinds(gap).every((k) => k.kind === 'ReplicaSet')
+}
+
+/** Whether a Deployment may count once per ReplicaSet in the workload totals. */
+export function workloadsByReplicaSet(coverage: VulnerabilitiesResponse['coverage']): boolean {
+  return coverage.gaps.some(namesOnly)
 }
 
 /** Whether what Radar read covers the scope: unlisted rows don't count. */
@@ -208,7 +215,7 @@ function gapPart(gap: VulnerabilityGap): string {
   if (kind === REPORT_KIND) return `${part}.`
   const collection = COLLECTION_CODES.has(gap.code) && kinds.length === 1
   if (collection && kind === 'Pod') return `${part}, so what runs there is unknown and its reports aren't counted.`
-  if (namesOnly(gap)) return `${part}, so Deployments there are named by their ReplicaSets.`
+  if (namesOnly(gap)) return `${part}, so Deployments there are named and counted by their ReplicaSets.`
   if (collection && kind === 'CronJob') return `${part}, so CronJob scans there aren't counted.`
   // A Job's Pods can't be traced to the CronJob Trivy scanned them through.
   if (collection && kind === 'Job') return `${part}, so scans of Jobs and of the CronJobs they ran there aren't counted.`

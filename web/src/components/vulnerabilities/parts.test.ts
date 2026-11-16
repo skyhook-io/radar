@@ -42,7 +42,7 @@ describe('vulnerabilities helpers', () => {
       .toBe("Your access doesn't include some Pods in 1 namespace (kube-system); their scans aren't counted. Counts cover the rest.")
     // Without ReplicaSets only the workload names change; every count holds.
     expect(gapSentence([{ code: 'radar_kind_not_collected', kinds: { count: 1, names: [{ kind: 'ReplicaSet', group: 'apps' }] }, namespaces: unknown }]))
-      .toBe("Radar doesn't collect ReplicaSets, so Deployments there are named by their ReplicaSets.")
+      .toBe("Radar doesn't collect ReplicaSets, so Deployments there are named and counted by their ReplicaSets.")
     // A ReplicaSet the caller may not read withholds its scans.
     expect(gapSentence([{ code: 'user_forbidden', kinds: { count: 1, names: [{ kind: 'ReplicaSet', group: 'apps' }] }, namespaces: { count: 1, names: ['shop'] } }]))
       .toBe("Your access doesn't include some ReplicaSets in 1 namespace (shop); their scans aren't counted. Counts cover the rest.")

@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { WithTooltip } from '../ui/Tooltip'
 import { Shield } from 'lucide-react'
 import { Section } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
@@ -22,6 +22,7 @@ interface Props {
  */
 export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props) {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
   const { data: resources } = useAPIResources()
   const { support } = useRadarFeature('vulnerabilities')
   const available = hasVulnerabilityReports(resources) && support !== 'unsupported'
@@ -71,7 +72,14 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
     return !ns || ns.extent !== undefined || (ns.names ?? []).length < ns.count || (ns.names ?? []).includes(namespace)
   })
   const isThis = (w: { kind: string; namespace: string; name: string }) => w.kind === kind && w.namespace === namespace && w.name === name
-  const open = (more: Record<string, string> = {}) => navigate({ pathname: '/checks/vulnerabilities', search: new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), namespaces: namespace, ...more }).toString() })
+  // The link keeps the page's namespace view, as every page link does: the
+  // picker follows the URL, so a narrower one would change it.
+  const open = (more: Record<string, string> = {}) => {
+    const search = new URLSearchParams({ workload: workloadParam({ kind, namespace, name }), ...more })
+    const viewNamespaces = params.get('namespaces')
+    if (viewNamespaces) search.set('namespaces', viewNamespaces)
+    navigate({ pathname: '/checks/vulnerabilities', search: search.toString() })
+  }
 
   return (
     <Section title={critical > 0 ? `Vulnerabilities · ${critical} critical` : 'Vulnerabilities'} icon={Shield}>

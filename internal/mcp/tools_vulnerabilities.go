@@ -66,17 +66,26 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
+	requested, inPin := clampToNamespacePin(requested)
+	if !inPin {
+		return nil, nil, readErrorf(readreason.OutsideNamespacePin, "namespace %q is outside the namespace Radar is scoped to", input.Namespace)
+	}
 	namespaces, checkFailed := filterNamespacesForUserWithStatus(ctx, requested)
 	kindRBAC := mcpSearchKindRBAC(ctx)
+	// The inventory of what runs is a Pod list, as get_runtime_versions reads
+	// it; one cluster-wide grant spares a check per namespace.
+	canListPods := func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "list") }
+	if canReadInNamespace(ctx, "", "pods", "", "list") {
+		canListPods = nil
+	}
 	resp, err := vulnerabilities.Read(ctx, cache, vulnerabilities.Request{
 		Namespaces:           namespaces,
 		NamespaceCheckFailed: checkFailed,
 		ReportAccess:         mcpSearchKindAccess(ctx, kindRBAC),
 		CanRead:              summaryRefReader(ctx),
-		// The inventory of what runs is a Pod list, as get_runtime_versions reads it.
-		CanListPods: func(namespace string) bool { return canReadInNamespace(ctx, "", "pods", namespace, "list") },
-		View:        view,
-		Filter:      filter,
+		CanListPods:          canListPods,
+		View:                 view,
+		Filter:               filter,
 	})
 	switch {
 	case errors.Is(err, vulnerabilities.ErrNotInstalled):
@@ -90,6 +99,9 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 			return nil, nil, readErrorf(code, "%s", err.Error())
 		}
 		return nil, nil, err
+	}
+	if filter.Workload != nil && !resp.WorkloadRuns && len(resp.Coverage.Gaps) == 0 {
+		return nil, nil, fmt.Errorf("%s runs no container Radar can see here: check the kind, namespace and name, or it may be scaled to zero or outside your access", input.Workload)
 	}
 	return toJSONResult(trimVulnerabilities(resp, limit))
 }
