@@ -2,6 +2,8 @@ package topology
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/longhorn"
 )
@@ -14,6 +16,11 @@ func longhornHandle(pv *corev1.PersistentVolume) string {
 	return pv.Spec.CSI.VolumeHandle
 }
 
+// readOnlyWatchedLister is the cache's no-copy list; only names are read here.
+type readOnlyWatchedLister interface {
+	ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error)
+}
+
 // longhornVolumesNamed lists the cached Longhorn Volumes with this name;
 // more than one (a leftover second install) means a handle can't tell them apart.
 func longhornVolumesNamed(name string, dp DynamicProvider) []ResourceRef {
@@ -24,7 +31,13 @@ func longhornVolumesNamed(name string, dp DynamicProvider) []ResourceRef {
 	if !ok {
 		return nil
 	}
-	volumes, err := dp.List(gvr, "")
+	var volumes []*unstructured.Unstructured
+	var err error
+	if ro, ok := dp.(readOnlyWatchedLister); ok {
+		volumes, err = ro.ListWatchedReadOnly(gvr)
+	} else {
+		volumes, err = dp.List(gvr, "")
+	}
 	if err != nil {
 		return nil
 	}

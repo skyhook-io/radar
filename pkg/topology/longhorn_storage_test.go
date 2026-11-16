@@ -90,3 +90,33 @@ func TestLonghornAmbiguousVolumeNameLinksNothing(t *testing.T) {
 		t.Errorf("Volume consumers = %+v, want none when two Volumes share the name", rel.Consumers)
 	}
 }
+
+type readOnlyLonghornDynamic struct {
+	*genericIdentityDynamic
+	readOnlyCalls, copyingCalls int
+}
+
+func (d *readOnlyLonghornDynamic) List(gvr schema.GroupVersionResource, ns string) ([]*unstructured.Unstructured, error) {
+	d.copyingCalls++
+	return d.genericIdentityDynamic.List(gvr, ns)
+}
+
+func (d *readOnlyLonghornDynamic) ListWatchedReadOnly(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {
+	d.readOnlyCalls++
+	return d.resources[gvr], nil
+}
+
+// Matching a handle only reads names, so it uses the cache's read-only list
+// rather than copying every Volume on each PV read.
+func TestLonghornVolumeLookupReadsTheCacheWithoutCopying(t *testing.T) {
+	vol := longhornVolume("longhorn-system", "vol-1")
+	dp := &readOnlyLonghornDynamic{genericIdentityDynamic: longhornDynamic(vol)}
+	pv := csiPV("pv-a", "driver.longhorn.io", "vol-1")
+	rel := GetRelationshipsWithObject("persistentvolumes", "", "pv-a", pv, &Topology{}, &pvProvider{pvs: []*corev1.PersistentVolume{pv}}, dp, nil)
+	if rel == nil || len(rel.StorageRefs) != 1 {
+		t.Fatalf("PV storage refs = %+v, want its Volume", rel)
+	}
+	if dp.copyingCalls != 0 || dp.readOnlyCalls == 0 {
+		t.Errorf("copying List calls = %d, read-only calls = %d; want the read-only list only", dp.copyingCalls, dp.readOnlyCalls)
+	}
+}
