@@ -1,7 +1,9 @@
 package health
 
 import (
+	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -28,6 +30,10 @@ type AgentSandboxReadiness struct {
 	// as if it had been provisioning the whole time.
 	Since      time.Time
 	SinceKnown bool
+	// SuspensionRefused: the controller will not delete the Pod with the
+	// Sandbox's name because the Sandbox does not own it (Suspended=False,
+	// reason PodNotOwned), so the suspension waits until someone resolves it.
+	SuspensionRefused bool
 }
 
 var sandboxSettledReasons = map[string]string{
@@ -161,7 +167,7 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 		// Sandbox does not own, and waits. Nothing is being torn down, so this
 		// is not a suspension in progress.
 		if suspended.status == "False" && suspended.reason == "PodNotOwned" {
-			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "PodNotOwned", Message: suspended.message}}
+			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(u.GetName(), suspended.message)}, SuspensionRefused: true}
 		}
 		// Both conditions can stay False through a suspension, keeping
 		// transition times from before it began, so none marks its start. A Pod
@@ -198,4 +204,14 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 		reason = "Not Ready"
 	}
 	return AgentSandboxReadiness{Verdict: Verdict{Level: LevelUnhealthy, Reason: reason}, Mirrored: isClaim && !sandboxClaimOwnReasons[ready.reason]}
+}
+
+// suspensionRefusedMessage explains a refused suspension: the controller's own
+// words, then what unblocks it. Mirrored in k8s-ui's resource-utils-agent-runtimes.ts.
+func suspensionRefusedMessage(name, controllerMessage string) string {
+	next := fmt.Sprintf("A Pod named %q exists that this Sandbox does not own. Remove that Pod, or recreate the Sandbox under another name, so it can suspend.", name)
+	if controllerMessage == "" {
+		return next
+	}
+	return strings.TrimSuffix(controllerMessage, ".") + ". " + next
 }

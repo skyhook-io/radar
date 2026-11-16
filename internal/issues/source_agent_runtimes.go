@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/timeutil"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -54,13 +55,13 @@ func detectSandboxSuspensionBlocked(gvr schema.GroupVersionResource, kind string
 		return nil
 	}
 	r := health.ReadAgentSandbox(u)
-	if r.Verdict.Reason != "PodNotOwned" {
+	if !r.SuspensionRefused {
 		return nil
 	}
 	// Suspended stays False from the running state into the refusal, so its
 	// transition time predates the refusal: the onset is unknown.
 	message := "Suspension is blocked: " + r.Verdict.Message
-	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, r.Verdict.Reason, message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}
+	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, "PodNotOwned", message, time.Time{}, false, "", u.GetCreationTimestamp().Time)}
 }
 
 // detectWorkerPoolIssues reports each sandbox class of an Agent Substrate
@@ -156,6 +157,6 @@ func workerPoolDeploymentMissing(gvr schema.GroupVersionResource, kind string, u
 	if since.IsZero() || now.Sub(since) < workerPoolProvisionGrace {
 		return Issue{}, false
 	}
-	message := fmt.Sprintf("%d workers wanted, but no worker Deployment has appeared %s after every sandbox class resolved. Substrate's controller only logs a rejected create, so check its logs for the reason, for example an admission policy or a missing permission.", desired, now.Sub(since).Round(time.Minute))
+	message := fmt.Sprintf("%d workers wanted, but no worker Deployment has appeared; every sandbox class resolved %s ago. Substrate's controller only logs a rejected create, so check its logs for the reason, for example an admission policy or a missing permission.", desired, timeutil.FormatAgeShort(now.Sub(since)))
 	return newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityCritical, "DeploymentNotCreated", message, since, true, "", u.GetCreationTimestamp().Time), true
 }

@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestAgentSandboxReadyReasons(t *testing.T) {
 	}
 	// A refused suspension is reported at once, under the Suspended condition's reason.
 	// Suspended was False before the refusal too, so its time is not the onset.
-	if foreign := got["foreign-pod"]; foreign.Reason != "PodNotOwned" || !strings.HasPrefix(foreign.Message, "Suspension is blocked: ") || !foreign.OnsetUnknown {
+	if foreign := got["foreign-pod"]; foreign.Reason != "PodNotOwned" || !strings.HasPrefix(foreign.Message, "Suspension is blocked: ") || !strings.Contains(foreign.Message, `A Pod named "foreign-pod" exists that this Sandbox does not own`) || !foreign.OnsetUnknown {
 		t.Errorf("foreign-pod = %+v", foreign)
 	}
 }
@@ -162,6 +163,9 @@ func TestWorkerPoolDeploymentNeverCreated(t *testing.T) {
 	rejected, ok := got["rejected"]
 	if !ok || rejected.Reason != "DeploymentNotCreated" || rejected.Severity != SeverityCritical {
 		t.Fatalf("rejected = %+v, want a critical DeploymentNotCreated", rejected)
+	}
+	if !regexp.MustCompile(`every sandbox class resolved \d+[smhd] ago\.`).MatchString(rejected.Message) {
+		t.Errorf("message = %q, want the time since resolution as a short age", rejected.Message)
 	}
 	for _, quiet := range []string{"provisioned", "just-resolved", "scaled-to-zero", "stale-resolution"} {
 		if issue, ok := got[quiet]; ok {

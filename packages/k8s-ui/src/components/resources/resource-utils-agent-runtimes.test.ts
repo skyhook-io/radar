@@ -63,7 +63,11 @@ describe('Agent Sandbox refused suspension', () => {
         { type: 'Suspended', status: 'False', reason: 'PodNotOwned', message: 'Refused to delete pod because it is not owned by this sandbox' },
       ] },
     }
-    expect(getAgentRuntimeStatus(sandbox)).toMatchObject({ text: 'PodNotOwned', level: 'alert', message: 'Refused to delete pod because it is not owned by this sandbox' })
+    expect(getAgentRuntimeStatus(sandbox)).toMatchObject({
+      text: 'Suspension blocked',
+      level: 'alert',
+      message: 'Refused to delete pod because it is not owned by this sandbox. A Pod named "a" exists that this Sandbox does not own. Remove that Pod, or recreate the Sandbox under another name, so it can suspend.',
+    })
   })
 })
 

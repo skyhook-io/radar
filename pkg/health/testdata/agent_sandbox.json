@@ -148,7 +148,7 @@
     },
     "level": "degraded",
     "uiLevel": "alert",
-    "text": "PodNotOwned",
+    "text": "Suspension blocked",
     "settled": false,
     "inProgress": false,
     "mirrored": false
