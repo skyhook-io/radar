@@ -19,16 +19,19 @@ const nightly = {
   spec: { schedule: '0 1 * * *', template: { includedNamespaces: ['payments'], storageLocation: 'primary', ttl: '168h0m0s' } },
 }
 
-let host: HTMLDivElement | undefined
+// Every root is unmounted after its test: a mounted dialog keeps scheduling
+// its close animation, which would otherwise run after the environment is gone.
+const roots: ReturnType<typeof createRoot>[] = []
 function render(node: React.ReactNode) {
-  host = document.createElement('div')
+  const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
+  roots.push(root)
   act(() => root.render(node))
   return root
 }
 afterEach(() => {
-  host?.remove()
+  act(() => roots.splice(0).forEach((r) => r.unmount()))
   document.body.innerHTML = ''
   state.support = 'supported'
   state.data = undefined
