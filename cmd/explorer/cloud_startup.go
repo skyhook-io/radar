@@ -110,13 +110,9 @@ func resolveCloudStartup(f cloudStartupFlags) (cloudStartup, error) {
 // field is best effort.
 func enrollmentFacts(ctx context.Context) cloud.ClusterFacts {
 	var facts cloud.ClusterFacts
+	facts.K8sVersion = k8s.GetServerVersion()
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if client := k8s.GetClient(); client != nil {
-		if v, err := client.Discovery().ServerVersion(); err == nil && v != nil {
-			facts.K8sVersion = v.GitVersion
-		}
-	}
 	if platform, err := k8s.GetClusterPlatform(ctx); err == nil {
 		facts.Distro = platform
 	}

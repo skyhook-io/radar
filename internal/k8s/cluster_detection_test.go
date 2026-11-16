@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -40,11 +41,49 @@ func TestGetClusterPlatform(t *testing.T) {
 			nodes: corev1.NodeList{Items: []corev1.Node{{
 				Spec: corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0123"},
 			}}},
-			nkp:  true,
-			want: "nkp",
+			serverVersion: "v1.31.7+rke2r1",
+			nkp:           true,
+			want:          "nkp",
 		},
 		{
-			name: "Nutanix infrastructure without NKP",
+			name: "EKS control plane with an upstream worker",
+			nodes: corev1.NodeList{Items: []corev1.Node{{
+				Spec:   corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0123"},
+				Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.32.5"}},
+			}}},
+			serverVersion: "v1.32.5-eks-5d4a308",
+			want:          "eks",
+		},
+		{
+			name: "RKE2 control plane overrides an EKS worker label",
+			nodes: corev1.NodeList{Items: []corev1.Node{{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"eks.amazonaws.com/nodegroup": "workers"}},
+			}}},
+			serverVersion: "v1.24.17+rke2r1",
+			want:          "rke2",
+		},
+		{
+			name:          "K3s control plane without node access",
+			denyNodes:     true,
+			serverVersion: "v1.35.0+k3s3",
+			want:          "k3s",
+		},
+		{
+			name:          "GKE control plane without node access",
+			denyNodes:     true,
+			serverVersion: "v1.30.12-gke.300",
+			want:          "gke",
+		},
+		{
+			name: "Unmarked control plane on plain AWS stays generic",
+			nodes: corev1.NodeList{Items: []corev1.Node{{
+				Spec: corev1.NodeSpec{ProviderID: "aws:///us-east-1a/i-0123"},
+			}}},
+			serverVersion: "v1.32.5",
+			want:          "generic",
+		},
+		{
+			name: "Nutanix node fallback when server version is unavailable",
 			nodes: corev1.NodeList{Items: []corev1.Node{{
 				Spec: corev1.NodeSpec{ProviderID: "nutanix://99d71c41-e100-4474-601b-5dd604becea6"},
 			}}},
@@ -63,7 +102,19 @@ func TestGetClusterPlatform(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"cloud.google.com/gke-autopilot": "true"}},
 				Spec:       corev1.NodeSpec{ProviderID: "gce://project/zone/node"},
 			}}},
-			want: "gke-autopilot",
+			serverVersion: "v1.30.12-gke.300",
+			want:          "gke-autopilot",
+		},
+		{
+			name: "GKE control plane with upstream worker and Autopilot annotation",
+			nodes: corev1.NodeList{Items: []corev1.Node{{
+				Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.30.12"}},
+			}}},
+			pods: corev1.PodList{Items: []corev1.Pod{{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"autopilot.gke.io/resource-adjustment": "true"}},
+			}}},
+			serverVersion: "v1.30.12-gke.300",
+			want:          "gke-autopilot",
 		},
 		{
 			name:          "RKE2 server version fallback",
@@ -124,15 +175,21 @@ func TestGetClusterPlatformFromMixedCachedNodes(t *testing.T) {
 	}
 }
 
-func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.PodList, denyNodes bool, serverVersion string, nkp bool) {
+func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.PodList, denyNodes bool, serverVersion string, nkp bool) *atomic.Int32 {
 	t.Helper()
 
+	var versionReads atomic.Int32
 	nodes.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "NodeList"}
 	pods.TypeMeta = metav1.TypeMeta{APIVersion: "v1", Kind: "PodList"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/version":
+			versionReads.Add(1)
+			if serverVersion == "" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			_ = json.NewEncoder(w).Encode(version.Info{GitVersion: serverVersion})
 		case "/api/v1/nodes":
 			if r.URL.Query().Get("limit") != "1" {
@@ -180,6 +237,144 @@ func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.
 		InvalidateServerVersionCache()
 		InvalidatePlatformCache()
 	})
+	return &versionReads
+}
+
+func TestClusterPlatformReusesServerVersion(t *testing.T) {
+	reads := setClusterDetectionClient(t, corev1.NodeList{}, corev1.PodList{}, true, "v1.32.5-eks-5d4a308", false)
+	for range 2 {
+		info, err := GetClusterInfo(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Platform != "eks" || info.KubernetesVersion != "v1.32.5-eks-5d4a308" {
+			t.Fatalf("unexpected cluster info: platform=%q, version=%q", info.Platform, info.KubernetesVersion)
+		}
+	}
+	if got := reads.Load(); got != 1 {
+		t.Fatalf("server version requests = %d, want 1", got)
+	}
+}
+
+func TestGetServerVersionRetriesUntilSuccess(t *testing.T) {
+	var reads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch reads.Add(1) {
+		case 1:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		case 2:
+			_ = json.NewEncoder(w).Encode(version.Info{})
+		default:
+			_ = json.NewEncoder(w).Encode(version.Info{GitVersion: "v1.32.5-eks-5d4a308"})
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	InvalidateServerVersionCache()
+	previous := SetTestClient(client)
+	t.Cleanup(func() {
+		SetTestClient(previous)
+		InvalidateServerVersionCache()
+	})
+	for attempt, want := range []string{"", "", "v1.32.5-eks-5d4a308"} {
+		for range 2 {
+			if got := GetServerVersion(); got != want {
+				t.Fatalf("GetServerVersion() = %q, want %q", got, want)
+			}
+		}
+		if got := reads.Load(); got != int32(attempt+1) {
+			t.Fatalf("server version requests = %d, want %d", got, attempt+1)
+		}
+		if want == "" {
+			serverVersionMu.Lock()
+			lastServerVersionFailure = time.Now().Add(-31 * time.Second)
+			serverVersionMu.Unlock()
+		}
+	}
+}
+
+func TestClusterPlatformCancelsServerVersionRead(t *testing.T) {
+	started := make(chan struct{})
+	var reads atomic.Int32
+	var block atomic.Bool
+	block.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/version" {
+			http.NotFound(w, r)
+			return
+		}
+		if reads.Add(1) == 1 {
+			close(started)
+		}
+		if block.Load() {
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(version.Info{GitVersion: "v1.32.5-eks-5d4a308"})
+	}))
+	t.Cleanup(server.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ResetResourceCache()
+	InvalidateServerVersionCache()
+	InvalidatePlatformCache()
+	previous := SetTestClient(client)
+	t.Cleanup(func() {
+		SetTestClient(previous)
+		InvalidateServerVersionCache()
+		InvalidatePlatformCache()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan error, 1)
+	go func() {
+		_, err := GetClusterInfo(ctx)
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("version request did not start")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("GetClusterInfo() error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cluster info did not stop after cancellation")
+	}
+	block.Store(false)
+	if got, err := GetClusterPlatform(context.Background()); err != nil || got != "eks" {
+		t.Fatalf("GetClusterPlatform() after cancellation = %q, %v", got, err)
+	}
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("version requests = %d, want 2", got)
+	}
+
+	InvalidateServerVersionCache()
+	block.Store(true)
+	deadlineCtx, cancelDeadline := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	t.Cleanup(cancelDeadline)
+	if got := getServerVersion(deadlineCtx); got != "" || deadlineCtx.Err() != context.DeadlineExceeded {
+		t.Fatalf("version read at deadline = %q, %v", got, deadlineCtx.Err())
+	}
+	retryCtx, cancelRetry := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancelRetry)
+	if got := getServerVersion(retryCtx); got != "" {
+		t.Fatalf("version after deadline = %q, want empty", got)
+	}
+	if got := reads.Load(); got != 3 {
+		t.Fatalf("version requests after deadline and retry = %d, want 3", got)
+	}
 }
 
 // setNKPLookupClient serves one Nutanix node and answers the NKP namespace
@@ -209,11 +404,13 @@ func setNKPLookupClient(t *testing.T, namespaceGet func(w http.ResponseWriter, r
 		t.Fatalf("create Kubernetes client: %v", err)
 	}
 	ResetResourceCache()
+	InvalidateServerVersionCache()
 	InvalidatePlatformCache()
 	previous := SetTestClient(client)
 	t.Cleanup(func() {
 		SetTestClient(previous)
 		ResetResourceCache()
+		InvalidateServerVersionCache()
 		InvalidatePlatformCache()
 	})
 	return &reads

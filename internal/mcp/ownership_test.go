@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -20,6 +22,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -284,7 +287,22 @@ func TestResourceContextOwnerAsksNothingAboutChildren(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatal(err)
 	}
-	prev := k8s.SetTestClient(&kubernetes.Clientset{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/version" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"gitVersion":"v1.32.5"}`))
+	}))
+	defer server.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k8s.InvalidateServerVersionCache()
+	defer k8s.InvalidateServerVersionCache()
+	prev := k8s.SetTestClient(client)
 	defer k8s.SetTestClient(prev)
 	ctx := withTestUserPerms(t, "viewer", nil, nil)
 	var asked atomic.Int64
