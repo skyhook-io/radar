@@ -45,15 +45,17 @@ export function SubstrateVerdictLine({ target, onOpenMetrics }: { target: Substr
         <div className="space-y-3 text-sm">
           <div className="flex items-start gap-2">
             <span className="shrink-0 pt-px"><VerdictState verdict={verdict} /></span>
-            <p className="min-w-0 text-theme-text-secondary">
-              {meaning(verdict, pool)}
-              {qualifier && <> <span className="text-theme-text-tertiary">{sentence(qualifier)}</span></>}
-              {unverified && (
-                <Tooltip content={sentence(unverified)}>
-                  <Info aria-label="Qualified" className="ml-1 inline h-3.5 w-3.5 align-[-2px] text-theme-text-tertiary" />
-                </Tooltip>
-              )}
-            </p>
+            <div className="min-w-0 space-y-1">
+              <p className="text-theme-text-secondary">
+                {meaning(verdict, pool)}
+                {unverified && (
+                  <Tooltip content={sentence(unverified)}>
+                    <Info aria-label="Qualified" className="ml-1 inline h-3.5 w-3.5 align-[-2px] text-theme-text-tertiary" />
+                  </Tooltip>
+                )}
+              </p>
+              {qualifier && <p className="text-xs text-theme-text-tertiary">{sentence(qualifier)}</p>}
+            </div>
           </div>
           {verdict.facts.length > 0 && (
             <PropertyList>
@@ -83,7 +85,7 @@ function meaning(verdict: SubstrateVerdict, pool: boolean): string {
     case 'noSchedulableWorkers':
       return 'No worker can take an actor right now.'
     case 'freeActorSlots':
-      return 'Some worker has a free actor slot. Slots count actors only, so an actor that needs more CPU or memory than that worker has left can still fail to start.'
+      return 'Some worker has a free actor slot, though an actor that needs more CPU or memory than that worker has left can still fail to start.'
     case 'uploadsOverdue':
       return 'Some actor snapshots on this node are overdue for upload to object storage. Until Substrate confirms them stored, losing this node could lose that snapshot state.'
     case 'noUploadsOverdue':
