@@ -1,3 +1,4 @@
+import { useLocation } from 'react-router-dom'
 import type { WorkspaceScreenProps } from '../../integrations/workspaceRoute'
 import { useAPIResources } from '../../api/apiResources'
 import { useVeleroWorkspace } from '../../api/velero'
@@ -9,21 +10,26 @@ import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { VeleroScreenGate, useVeleroInstallation } from './shared'
 import { VeleroOverview } from './VeleroOverview'
 import { useVeleroSidebarWorkspace, veleroDiscovered } from './useVeleroSidebarWorkspace'
+import { parseVeleroRoute } from './routes'
+import { VeleroDetailPage } from './VeleroDetailPage'
 
 /**
- * The Velero Overview. Lives inside Resources and renders the same Resources
+ * The Velero Overview, and each Velero object's page. Lives inside Resources and renders the same Resources
  * sidebar, with the Overview above the Velero kinds; the Schedule and
  * BackupStorageLocation kinds' lists are Radar's own tables (VeleroKindLists).
  * It reads every installation the caller can see; the namespace picker does
  * not apply.
  */
 export function VeleroView({ namespaces, selectedResource, onOpenResource, onCloseResource }: WorkspaceScreenProps) {
-  const compactNavigation = useMediaQuery('(max-width: 1100px)')
+  const { detail } = parseVeleroRoute(useLocation().pathname)
+  const narrow = useMediaQuery('(max-width: 1100px)')
+  const laptop = useMediaQuery('(max-width: 1300px)')
+  const compactNavigation = narrow || (laptop && !!detail)
   const { data: apiResources, isPending: discoveryPending, isError: discoveryFailed } = useAPIResources()
   // Discovery that could not be read does not say Velero is absent; the server is asked then.
   const discovered = veleroDiscovered(apiResources) || discoveryFailed
   const query = useVeleroWorkspace({ enabled: discovered })
-  const veleroSidebar = useVeleroSidebarWorkspace({ apiResources, active: true })
+  const veleroSidebar = useVeleroSidebarWorkspace({ apiResources, active: true, child: detail ? { label: detail.name, title: `${detail.plural} ${detail.namespace}/${detail.name}` } : undefined })
   const cnpgSidebar = useCNPGSidebarWorkspace({ apiResources, namespaces })
   const sidebarWorkspace = useMergedSidebarWorkspaces(cnpgSidebar, veleroSidebar)
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
@@ -32,9 +38,13 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
 
   return (
     <WorkspaceFrame namespaces={namespaces} categoryWorkspaces={sidebarWorkspace} compactNavigation={compactNavigation}>
-      <VeleroScreenGate query={query} discoveryPending={discoveryPending} discovered={discovered}>
-        {(data) => <VeleroOverview data={data} installation={installation} onInstallation={setInstallation} onInspect={inspect} inspected={drawerTarget} />}
-      </VeleroScreenGate>
+      {detail ? (
+        <VeleroDetailPage target={detail} onOpenResource={onOpenResource} />
+      ) : (
+        <VeleroScreenGate query={query} discoveryPending={discoveryPending} discovered={discovered}>
+          {(data) => <VeleroOverview data={data} installation={installation} onInstallation={setInstallation} onInspect={inspect} inspected={drawerTarget} />}
+        </VeleroScreenGate>
+      )}
     </WorkspaceFrame>
   )
 }

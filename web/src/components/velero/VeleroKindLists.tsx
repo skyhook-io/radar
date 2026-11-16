@@ -3,6 +3,7 @@ import type { KindListProps } from '../../integrations/resourceHost'
 import { useVeleroWorkspace } from '../../api/velero'
 import { VeleroLocations } from './VeleroLocations'
 import { VeleroSchedules } from './VeleroSchedules'
+import { VeleroBackups, VeleroRestores } from './VeleroRunLists'
 import { VeleroScreenGate, useVeleroInstallation, type VeleroScreenProps } from './shared'
 
 /**
@@ -26,3 +27,5 @@ function veleroKindList(Screen: ComponentType<VeleroScreenProps>) {
 
 export const VeleroSchedulesKindList = veleroKindList(VeleroSchedules)
 export const VeleroLocationsKindList = veleroKindList(VeleroLocations)
+export const VeleroBackupsKindList = veleroKindList(VeleroBackups)
+export const VeleroRestoresKindList = veleroKindList(VeleroRestores)

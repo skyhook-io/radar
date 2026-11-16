@@ -38,7 +38,8 @@ export function useVeleroRunMessagesFetch(kind: RunKind, data: any): VeleroRunMe
   }
 }
 
-function RunMessages({ kind, resource }: { kind: RunKind; resource: any }) {
+/** A run's errors and warnings behind its counts, fetched on request. */
+export function RunMessages({ kind, resource }: { kind: RunKind; resource: any }) {
   const fetch = useVeleroRunMessagesFetch(kind, resource)
   const errors = kind === 'backups' ? getBackupErrors(resource) : getRestoreErrors(resource)
   const warnings = kind === 'backups' ? getBackupWarnings(resource) : getRestoreWarnings(resource)
