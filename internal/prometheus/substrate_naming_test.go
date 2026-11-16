@@ -235,3 +235,26 @@ func TestSubstrateSuffixCollisionRefusesOnlyItsInstrument(t *testing.T) {
 		t.Fatalf("lifecycle = %s, want ambiguous", got.state)
 	}
 }
+
+// resolveSubstrateSpelling resolves one component, for the resolution tests: the spelling, and each instrument's name in
+// it, that this Prometheus holds over the window for one component's
+// instruments. A name list holding one candidate per instrument, in one
+// spelling, is taken as it is. Otherwise each candidate is checked for series
+// of this pool or node within this cluster's scope: the one with series wins,
+// and two with series are ambiguous, since the same activity could be counted
+// under either name.
+func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpelling, string, error) {
+	held, err := substrateNamesHeld(ctx, q, window)
+	if err != nil {
+		return substrateSpelling{}, "", err
+	}
+	sp, _, ambiguous, err := resolveSpellingFrom(ctx, q, resolve, held, instruments, base, window)
+	if ambiguous == "" {
+		for _, inst := range instruments {
+			if reason := sp.ambiguousStem[inst.name]; reason != "" {
+				return sp, reason, err
+			}
+		}
+	}
+	return sp, ambiguous, err
+}

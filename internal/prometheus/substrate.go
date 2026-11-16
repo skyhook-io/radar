@@ -108,10 +108,6 @@ func (d substrateChartDef) families() []substrateInstrument {
 	return append([]substrateInstrument{d.inst}, d.also...)
 }
 
-func substrateRateWindow(step time.Duration) string {
-	return max(2*time.Minute, 2*step).Round(time.Second).String()
-}
-
 func substratePoolCharts() []substrateChartDef {
 	return []substrateChartDef{
 		{
@@ -305,7 +301,7 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 				}
 			}
 			if err != nil {
-				check.state, check.reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
+				check.state, check.reason = SubstrateChartError, queryFailed(err)
 				return check
 			}
 		}
@@ -316,7 +312,7 @@ func checkSubstrateFamilies(ctx context.Context, q seriesQuerier, resolve substr
 		}
 		res, err := strictQuerier{q}.Query(ctx, "count by (job) (count_over_time("+vectorSelector(probe(f), withScope(sel(f), matchers))+"["+window.String()+"]))")
 		if err != nil {
-			check.state, check.reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
+			check.state, check.reason = SubstrateChartError, queryFailed(err)
 			return check
 		}
 		if len(res.Series) > 1 {
@@ -345,7 +341,7 @@ func substrateFamiliesKey(families []substrateInstrument) string {
 // up to a step after the aligned end, and the first point reads a rate window
 // (or a gauge's lookback) before the start.
 func substrateProbeWindow(start, end time.Time, step time.Duration) time.Duration {
-	lookback := max(5*time.Minute, 2*time.Minute, 2*step)
+	lookback := max(5*time.Minute, 2*step)
 	return (end.Sub(start) + step + lookback).Round(time.Second)
 }
 
@@ -354,7 +350,6 @@ type substrateRequest struct {
 	// base selects the pool or node in one spelling.
 	base       func(substrateSpelling) string
 	charts     []substrateChartDef
-	rangeName  string
 	start, end time.Time
 	step       time.Duration
 }
@@ -390,13 +385,9 @@ func (r *substrateRun) expr(inst substrateInstrument, matchers, window string) s
 	return substrateExpr{sp: sp, sel: withScope(r.req.base(sp), matchers), window: window}
 }
 
-func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, req substrateRequest) []SubstrateChart {
-	return newSubstrateRun(ctx, q, resolve, req).charts()
-}
-
 func (r *substrateRun) charts() []SubstrateChart {
 	req := r.req
-	w := substrateRateWindow(req.step)
+	w := rateWindow(req.step)
 	checks := make([]substrateFamilyCheck, len(req.charts))
 	for i, d := range req.charts {
 		checks[i] = r.check(d.families())
@@ -436,7 +427,7 @@ func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef
 	for _, query := range d.queries(x) {
 		res, err := q.QueryRange(ctx, query.expr, start, end, step)
 		if err != nil {
-			c.State, c.Reason, c.Series = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200), []prom.Series{}
+			c.State, c.Reason, c.Series = SubstrateChartError, queryFailed(err), []prom.Series{}
 			return
 		}
 		if query.label != "" && !hasSample(res.Series) {
@@ -488,7 +479,7 @@ func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef
 	}
 	switch {
 	case err != nil:
-		c.State, c.Reason = SubstrateChartError, "Prometheus query failed: "+truncate(err.Error(), 200)
+		c.State, c.Reason = SubstrateChartError, queryFailed(err)
 	case found:
 		c.State, c.Reason = SubstrateChartEmpty, d.emptyReason
 	default:
@@ -682,7 +673,7 @@ func collectSubstratePool(ctx context.Context, q seriesQuerier, resolve substrat
 	if err != nil {
 		return failed(queryFailed(err))
 	}
-	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sps: sps, base: base, charts: substratePoolCharts(), rangeName: rangeName, start: start, end: end, step: step})
+	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sps: sps, base: base, charts: substratePoolCharts(), start: start, end: end, step: step})
 	charts := run.charts()
 	status, reason := substrateResponseStatus(charts)
 	resp := SubstrateHealthResponse{Status: status, Reason: reason, Range: rangeName, Charts: charts}
@@ -734,7 +725,7 @@ func collectSubstrateNode(ctx context.Context, q seriesQuerier, resolve substrat
 	if status != SubstrateAvailable {
 		return failed(status, reason)
 	}
-	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sps: sps, base: base, charts: substrateNodeCharts(), rangeName: rangeName, start: start, end: end, step: step})
+	run := newSubstrateRun(ctx, q, resolve, substrateRequest{sps: sps, base: base, charts: substrateNodeCharts(), start: start, end: end, step: step})
 	charts := run.charts()
 	markUnattributedNodeCharts(ctx, q, sp, scope.matchers, window, charts)
 	status, reason = substrateResponseStatus(charts)

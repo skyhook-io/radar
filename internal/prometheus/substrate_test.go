@@ -426,3 +426,7 @@ func TestSubstrateChartTitlesNameUnformattedUnits(t *testing.T) {
 		}
 	}
 }
+
+func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, req substrateRequest) []SubstrateChart {
+	return newSubstrateRun(ctx, q, resolve, req).charts()
+}

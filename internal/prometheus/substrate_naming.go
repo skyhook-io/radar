@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/prometheus/common/model"
 )
 
 // Substrate's instruments reach Prometheus under one of two spellings:
@@ -159,7 +161,7 @@ func (s substrateSpelling) label(attr string) string {
 // scrape adds (node, job), which has no dots in either spelling.
 func (s substrateSpelling) match(attr, op, value string) string {
 	name := s.label(attr)
-	if !isLegacyName(name) {
+	if !model.LegacyValidation.IsValidLabelName(name) {
 		name = strconv.Quote(name)
 	}
 	return name + op + strconv.Quote(value)
@@ -167,25 +169,10 @@ func (s substrateSpelling) match(attr, op, value string) string {
 
 func escapeOTelName(name string) string { return strings.ReplaceAll(name, ".", "_") }
 
-func isLegacyName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for i, r := range name {
-		switch {
-		case r == '_' || r == ':' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
-		case i > 0 && r >= '0' && r <= '9':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 // vectorSelector selects metric with sel. A UTF-8 name goes inside the braces,
 // quoted; a legacy one stays outside so older Prometheus versions parse it.
 func vectorSelector(metric, sel string) string {
-	if isLegacyName(metric) {
+	if model.LegacyValidation.IsValidMetricName(metric) {
 		return metric + "{" + sel + "}"
 	}
 	if sel == "" {
@@ -254,14 +241,14 @@ type substrateNameLister interface {
 const substrateNameMatch = `{__name__=~"(ate|atelet)[._].+"}`
 
 // resolveSubstrateSpellings resolves each component's spelling on its own
-// (resolveSubstrateSpelling), from one name list. A component whose series
+// (resolveSpellingFrom), from one name list. A component whose series
 // two names could hold is marked ambiguous, which refuses only the charts
 // that read it. A component Prometheus holds nothing for is named in the
 // spelling of one it holds, so "not found" names what this pipeline would
 // have produced.
 func resolveSubstrateSpellings(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpellings, error) {
 	held, err := substrateNamesHeld(ctx, q, window)
-	if err != nil || held == nil {
+	if err != nil {
 		return substrateSpellings{}, err
 	}
 	var components []string
@@ -298,11 +285,11 @@ func resolveSubstrateSpellings(ctx context.Context, q seriesQuerier, resolve sub
 }
 
 // substrateNamesHeld is the set of Substrate metric names Prometheus holds
-// samples for over the window, or nil when q cannot list names.
+// samples for over the window.
 func substrateNamesHeld(ctx context.Context, q seriesQuerier, window time.Duration) (map[string]bool, error) {
 	lister, ok := q.(substrateNameLister)
 	if !ok {
-		return nil, nil
+		return nil, errors.New("this Prometheus client cannot list metric names")
 	}
 	now := time.Now()
 	names, err := lister.MetricNames(ctx, []string{substrateNameMatch}, now.Add(-window), now)
@@ -316,31 +303,13 @@ func substrateNamesHeld(ctx context.Context, q seriesQuerier, window time.Durati
 	return held, nil
 }
 
-// resolveSubstrateSpelling picks the spelling, and each instrument's name in
-// it, that this Prometheus holds over the window for one component's
-// instruments. A name list holding one candidate per instrument, in one
+// resolveSpellingFrom picks the spelling, and each instrument's name in it,
+// that this Prometheus holds over the window for one component's instruments,
+// from a fetched name list. A list holding one candidate per instrument, in one
 // spelling, is taken as it is. Otherwise each candidate is checked for series
 // of this pool or node within this cluster's scope: the one with series wins,
 // and two with series are ambiguous, since the same activity could be counted
-// under either name.
-func resolveSubstrateSpelling(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (substrateSpelling, string, error) {
-	held, err := substrateNamesHeld(ctx, q, window)
-	if err != nil || held == nil {
-		return substrateSpelling{}, "", err
-	}
-	sp, _, ambiguous, err := resolveSpellingFrom(ctx, q, resolve, held, instruments, base, window)
-	if ambiguous == "" {
-		for _, inst := range instruments {
-			if reason := sp.ambiguousStem[inst.name]; reason != "" {
-				return sp, reason, err
-			}
-		}
-	}
-	return sp, ambiguous, err
-}
-
-// resolveSpellingFrom is resolveSubstrateSpelling over a fetched name list;
-// found reports whether the list holds any candidate name.
+// under either name. found reports whether the list holds any candidate name.
 func resolveSpellingFrom(ctx context.Context, q seriesQuerier, resolve substrateScopeResolver, held map[string]bool, instruments []substrateInstrument, base func(substrateSpelling) string, window time.Duration) (sp substrateSpelling, found bool, ambiguous string, err error) {
 	// present: per spelling, per instrument, the candidate stems the name list holds.
 	present := func(dotted bool) map[string][]string {
