@@ -45,9 +45,10 @@ type Counts struct {
 }
 
 // WorkloadRef names a workload, and the container in it when the reference is
-// about one image. In an image's list each entry is one container, so its
-// WorkloadsTotal counts containers: a workload running the image in two
-// containers counts twice.
+// about one image. In an image row's list each entry is one container, so
+// its WorkloadsTotal counts containers: a workload running the image in two
+// containers counts twice. A CVE's or fix's image lists each workload once,
+// without a container, as the row's own Workloads count does.
 type WorkloadRef struct {
 	Kind      string `json:"kind"`
 	Group     string `json:"group"`
@@ -243,9 +244,13 @@ type CleanImage struct {
 // most MaxWorkloadsPerRow of WorkloadsTotal; the response lists at most
 // MaxRows of Summary.ImagesUnscanned.
 type Unscanned struct {
-	Image          string        `json:"image"`
-	Workloads      []WorkloadRef `json:"workloads"`
-	WorkloadsTotal int           `json:"workloadsTotal"`
+	Image string `json:"image"`
+	// OtherBuildScanned is true when Trivy's report for the same object is of
+	// another build of this tag: Trivy Operator rescans by tag, so after a
+	// tag moves it scans the registry's build, not the one these Pods pulled.
+	OtherBuildScanned bool          `json:"otherBuildScanned,omitempty"`
+	Workloads         []WorkloadRef `json:"workloads"`
+	WorkloadsTotal    int           `json:"workloadsTotal"`
 }
 
 // Summary describes everything in scope, before the request's filters.

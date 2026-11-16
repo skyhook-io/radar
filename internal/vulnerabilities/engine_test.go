@@ -638,6 +638,9 @@ func TestDigestDecidesWhichScanDescribesAContainer(t *testing.T) {
 	if got.Summary.ImagesClean != 0 || got.Summary.ImagesUnscanned != 1 || got.Coverage.InactiveReports != 1 {
 		t.Fatalf("an older build's clean scan must not describe the new one: %+v", got.Summary)
 	}
+	if len(got.Unscanned) != 1 || !got.Unscanned[0].OtherBuildScanned {
+		t.Fatalf("the unscanned build says another build of its tag was scanned: %+v", got.Unscanned)
+	}
 
 	scanned := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/web", tag: "1", digest: "sha256:same", vulns: []vuln{{"CVE-A", "CRITICAL", "zlib", "1", "2"}}})
 	targets := []target{
@@ -659,5 +662,28 @@ func TestUnscannedBuildsOfATagAreOneImage(t *testing.T) {
 	got := mustBuild(t, nil, []target{started, pending, older}, ViewImage, Filter{})
 	if len(got.Unscanned) != 1 || got.Summary.ImagesUnscanned != 1 {
 		t.Fatalf("%+v", got.Unscanned)
+	}
+}
+
+// Pods of one workload on two builds of a tag: each build is its own
+// container entry, whichever order the Pods list in, so a build no report
+// describes keeps the workload from reading clean.
+func TestWorkloadListsEachBuild(t *testing.T) {
+	cleanA := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "latest", digest: "sha256:a"})
+	critB := vulnReport(reportSpec{name: "b", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-2", container: "app", repo: "acme/checkout", tag: "latest", digest: "sha256:b", vulns: []vuln{{"CVE-B", "CRITICAL", "zlib", "1", "2"}}})
+	onA := running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:latest", "", checkout), "sha256:a")
+	onB := running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:latest", "", checkout), "sha256:b")
+	for _, targets := range [][]target{{onA, onB}, {onB, onA}} {
+		got := mustBuild(t, []*unstructured.Unstructured{cleanA}, targets, ViewWorkload, Filter{})
+		if len(got.CleanWorkloads) != 0 || len(got.Workloads) != 1 || len(got.Workloads[0].Containers) != 2 {
+			t.Fatalf("a build no report describes isn't clean: %+v / %+v", got.Workloads, got.CleanWorkloads)
+		}
+	}
+	rolling := running(liveTarget("shop", "ReplicaSet", "checkout-2", "app", "acme/checkout:latest", "", checkout), "sha256:b")
+	for _, targets := range [][]target{{onA, rolling}, {rolling, onA}} {
+		got := mustBuild(t, []*unstructured.Unstructured{cleanA, critB}, targets, ViewWorkload, Filter{})
+		if len(got.Workloads) != 1 || got.Workloads[0].Counts.Critical != 1 || len(got.Workloads[0].Containers) != 2 {
+			t.Fatalf("both builds count: %+v", got.Workloads)
+		}
 	}
 }

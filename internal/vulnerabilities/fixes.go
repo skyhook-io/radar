@@ -49,6 +49,8 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 			continue
 		}
 		imageWorkloads[r.imageID] = workloads
+		distinct := withoutContainers(workloads)
+		shown := m.listed(distinct, MaxWorkloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		packages := map[string]*imagePackage{}
 		var order []string
@@ -100,7 +102,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 				a.images[r.imageID] = true
 				a.row.Affected = append(a.row.Affected, FixImage{
 					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), InstalledVersions: []string{p.installed},
-					Workloads: m.listed(workloads, MaxWorkloadsPerAffected), WorkloadsTotal: len(workloads),
+					Workloads: shown, WorkloadsTotal: len(distinct),
 				})
 			} else {
 				// The same package at another version in this image: one

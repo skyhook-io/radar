@@ -147,7 +147,8 @@ export interface VulnerabilitiesResponse {
   clean?: { id: string; image: string; scannedAt: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number; report: VulnerableImage['report'] }[]
   /** Workloads whose every container is scanned and clean. */
   cleanWorkloads?: VulnerabilityWorkloadRef[]
-  unscanned?: { image: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
+  /** otherBuildScanned: Trivy's report is of another build of this tag, as after the tag moved. */
+  unscanned?: { image: string; otherBuildScanned?: boolean; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
   coverage: {
     complete: boolean
     gaps: VulnerabilityGap[]

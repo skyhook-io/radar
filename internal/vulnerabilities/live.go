@@ -120,7 +120,9 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			workload := podWorkload(cache, pod)
 			running := runningDigests(pod)
 			for _, c := range podContainers(pod.Spec) {
-				digest := cmp.Or(running[c.Name], pinnedDigest(c.Image))
+				// A digest the spec pins is what runs; the kubelet can report
+				// another digest of the same image (its index, say).
+				digest := cmp.Or(pinnedDigest(c.Image), running[c.Name])
 				add(target{
 					key:          targetKey{namespace: pod.Namespace, kind: kind, name: name, container: c.Name, image: c.Image, digest: digest},
 					uid:          uid,

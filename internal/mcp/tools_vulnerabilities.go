@@ -82,7 +82,7 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		Namespaces:           namespaces,
 		NamespaceCheckFailed: checkFailed,
 		ReportAccess:         mcpSearchKindAccess(ctx, kindRBAC),
-		CanRead:              summaryRefReader(ctx),
+		CanRead:              clusterWideFirst(ctx, summaryRefReader(ctx)),
 		CanListPods:          canListPods,
 		View:                 view,
 		Filter:               filter,
@@ -104,6 +104,23 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 		return nil, nil, fmt.Errorf("%s runs no container Radar can see here: check the kind, namespace and name, or it may be scaled to zero or outside your access", input.Workload)
 	}
 	return toJSONResult(trimVulnerabilities(resp, limit))
+}
+
+// clusterWideFirst tries one cluster-wide get per workload kind before the
+// per-namespace checks read falls back to, so a caller with a cluster-wide
+// grant costs one check per kind, not one per namespace.
+func clusterWideFirst(ctx context.Context, read func(group, kind, namespace string) bool) func(group, kind, namespace string) bool {
+	wide := map[string]bool{}
+	return func(group, kind, namespace string) bool {
+		key := group + "/" + kind
+		allowed, seen := wide[key]
+		if !seen {
+			gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
+			allowed = resource != "" && canReadInNamespace(ctx, gvrGroup, resource, "", "get")
+			wide[key] = allowed
+		}
+		return allowed || read(group, kind, namespace)
+	}
 }
 
 // trimVulnerabilities caps rows, and the clean and unscanned lists, at limit,

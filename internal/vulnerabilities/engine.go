@@ -206,6 +206,9 @@ type unscannedAgg struct {
 	ref       string
 	refs      map[string]bool
 	workloads map[WorkloadRef]bool
+	// otherBuild: Trivy scanned another build of this tag for the same
+	// object, as it does when it rescans by tag after the tag moved.
+	otherBuild bool
 }
 
 // rollup is the joined state the three pivots read.
@@ -214,6 +217,7 @@ type rollup struct {
 	targetImage     map[targetKey]string
 	targets         []target
 	unscanned       map[string]*unscannedAgg
+	otherBuild      map[targetKey]bool
 	inactiveReports int
 	truncated       bool
 }
@@ -233,7 +237,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		o := targets[i].key.owner()
 		byOwner[o] = append(byOwner[o], &targets[i])
 	}
-	j := &rollup{images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]*unscannedAgg{}}
+	j := &rollup{images: map[string]*imageAgg{}, targetImage: map[targetKey]string{}, targets: targets, unscanned: map[string]*unscannedAgg{}, otherBuild: map[targetKey]bool{}}
 	reports := make([]report, 0, len(items))
 	for _, u := range items {
 		if r, ok := reportHeader(u); ok {
@@ -249,6 +253,11 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			}
 		}
 		if len(matched) == 0 {
+			for _, t := range byOwner[r.owner] {
+				if t.digest != "" && r.digest != "" && r.image != "" && normalizeImage(t.image) == normalizeImage(r.image) {
+					j.otherBuild[t.key] = true
+				}
+			}
 			j.inactiveReports++
 			continue
 		}
@@ -290,11 +299,11 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 		return slotKey{t.workload, t.container, "ref:" + canonicalImage(t.image)}
 	}
-	scannedSlot := map[slotKey]bool{}
+	scannedSlot := map[slotKey]string{}
 	for i := range targets {
-		if _, ok := j.targetImage[targets[i].key]; ok {
-			scannedSlot[slot(&targets[i])] = true
-			scannedSlot[slotKey{targets[i].workload, targets[i].container, "ref:" + canonicalImage(targets[i].image)}] = true
+		if id, ok := j.targetImage[targets[i].key]; ok {
+			scannedSlot[slot(&targets[i])] = id
+			scannedSlot[slotKey{targets[i].workload, targets[i].container, "ref:" + canonicalImage(targets[i].image)}] = id
 		}
 	}
 	for i := range targets {
@@ -312,9 +321,10 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			j.targetImage[t.key] = t.digest
 			continue
 		}
-		// A new ReplicaSet of the same image, not yet scanned, is covered by
+		// A new ReplicaSet of the same build, not yet scanned, is covered by
 		// the older one's report.
-		if scannedSlot[slot(t)] {
+		if id, ok := scannedSlot[slot(t)]; ok {
+			j.targetImage[t.key] = id
 			continue
 		}
 		// Listed by the image as its spec names it: builds of one tag that no
@@ -326,6 +336,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 		// One spelling of the image, the same whatever order Pods list in.
 		u.ref = min(u.ref, t.image)
+		u.otherBuild = u.otherBuild || j.otherBuild[t.key]
 		u.refs[t.image] = true
 		u.workloads[w] = true
 	}
@@ -601,6 +612,21 @@ func (c *cveAgg) keepAffected(a CVEImage) {
 	}
 }
 
+// withoutContainers is a list's workloads once each, in order, without the
+// container: a CVE's or fix's image counts workloads, as its row does.
+func withoutContainers(workloads []WorkloadRef) []WorkloadRef {
+	out := make([]WorkloadRef, 0, len(workloads))
+	seen := make(map[WorkloadRef]bool, len(workloads))
+	for _, w := range workloads {
+		w.Container = ""
+		if !seen[w] {
+			seen[w] = true
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
 // distinctWorkloads counts the workloads across a set of images. Rows from
 // one base image share one image set, so memo counts each distinct set once
 // rather than copying a widely shared image's workloads for every row.
@@ -637,7 +663,8 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			continue
 		}
 		imageWorkloads[r.imageID] = workloads
-		listed := m.listed(workloads, MaxWorkloadsPerAffected)
+		distinct := withoutContainers(workloads)
+		listed := m.listed(distinct, MaxWorkloadsPerAffected)
 		rowMatched := m.rowMatches(agg.searchText(), workloads)
 		// Whether an upgrade clears each CVE here: every package it's in has
 		// a fixed version, whichever findings the filters keep.
@@ -669,7 +696,7 @@ func (j *rollup) cves(ctx context.Context, f Filter) ([]CVE, error) {
 			c.keepAffected(CVEImage{
 				ImageID: r.imageID, Image: cmp.Or(r.image, r.digest),
 				Packages:  []AffectedPackage{{Package: fd.Package, InstalledVersion: fd.InstalledVersion, FixedVersion: fd.FixedVersion, FixTarget: fd.FixTarget}},
-				Workloads: listed, WorkloadsTotal: len(workloads),
+				Workloads: listed, WorkloadsTotal: len(distinct),
 			})
 		}
 	}
@@ -726,18 +753,19 @@ func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 			byRef[ref] = a
 			order = append(order, ref)
 		}
-		// A rollout can run two images in one container slot; list both. Two
-		// ReplicaSets running one image share a slot, scanned if either is.
-		slot := t.container + "\x00" + canonicalImage(t.image)
+		// One entry per container and build: a rollout, or Pods on two builds
+		// of one tag, list each scanned build apart. Builds no report
+		// describes are one entry, not scanned.
 		id, scanned := j.targetImage[t.key]
-		if i, ok := a.seen[slot]; ok {
-			if !scanned || a.row.Containers[i].Scanned {
-				continue
-			}
-		} else {
-			a.seen[slot] = len(a.row.Containers)
-			a.row.Containers = append(a.row.Containers, WorkloadContainer{Name: t.container, Image: t.image})
+		slot := t.container + "\x00?" + canonicalImage(t.image)
+		if scanned {
+			slot = t.container + "\x00" + id
 		}
+		if _, ok := a.seen[slot]; ok {
+			continue
+		}
+		a.seen[slot] = len(a.row.Containers)
+		a.row.Containers = append(a.row.Containers, WorkloadContainer{Name: t.container, Image: t.image})
 		if !scanned {
 			continue
 		}
@@ -828,7 +856,7 @@ func (j *rollup) unscannedRows(f Filter) []Unscanned {
 		if !m.workloadKept(workloads) || !matched {
 			continue
 		}
-		rows = append(rows, Unscanned{Image: u.ref, Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads)})
+		rows = append(rows, Unscanned{Image: u.ref, OtherBuildScanned: u.otherBuild, Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads)})
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
 	return rows
