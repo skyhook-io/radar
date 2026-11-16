@@ -740,6 +740,15 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
       <div className={clsx(SUB, WORKLOAD_COLS)}>
         <span className="col-span-3">{lead}</span>
       </div>
+      {fixes.length > 0 && (
+        <div className={clsx(SUB, WORKLOAD_COLS, 'text-theme-text-tertiary')}>
+          <span />
+          <span className="grid min-w-0 grid-cols-[1.75rem_2.25rem_minmax(0,1fr)] gap-2">
+            <span className="text-right">C</span><span className="text-right">H</span><span>Upgrade</span>
+          </span>
+          <span />
+        </div>
+      )}
       {fixes.slice(0, MAX_WORKLOAD_UPGRADES).map((f) => (
         <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`} className={clsx(SUB, WORKLOAD_COLS)}>
           <span className="flex min-w-0 items-baseline gap-2">
