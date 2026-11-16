@@ -20,7 +20,7 @@ import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { CopyableCommand } from '../trace/TracePanel'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { CORE_RESOURCES } from '../../utils/api-resources'
-import { SeverityRail } from '../ui/SeverityRail'
+import { SEVERITY_RAIL_HEADER_INSET_CLASS, SeverityRail } from '../ui/SeverityRail'
 
 const CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Efficiency']
 
@@ -605,7 +605,7 @@ export function CheckCardShell({
             onToggle()
           }
         }}
-        className={`group flex cursor-pointer items-center gap-3 py-3 pl-[15px] pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? SEVERITY_HEADER_BAND_CLASS[sev] : SEVERITY_ROW_HOVER_CLASS[sev]}`}
+        className={`group flex cursor-pointer items-center gap-3 py-3 ${SEVERITY_RAIL_HEADER_INSET_CLASS} pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? SEVERITY_HEADER_BAND_CLASS[sev] : SEVERITY_ROW_HOVER_CLASS[sev]}`}
       >
         <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${SEVERITY_TEXT_CLASS[sev]}`} aria-hidden />
 

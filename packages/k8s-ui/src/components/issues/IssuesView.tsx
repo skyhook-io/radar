@@ -31,7 +31,7 @@ import {
   type IssueResourceRef,
   type IssueSeverity,
 } from './types';
-import { SeverityRail } from '../ui/SeverityRail';
+import { SEVERITY_RAIL_HEADER_INSET_CLASS, SeverityRail } from '../ui/SeverityRail';
 
 // Leading severity glyph — the at-a-glance severity cue on every row: critical =
 // octagon (stop), warning = triangle.
@@ -332,7 +332,7 @@ export function IssueRow({
             onToggle();
           }
         }}
-        className={`group @container/issue flex cursor-pointer items-center gap-3 phone:flex-wrap phone:gap-y-2 py-3 pl-[15px] pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_ROW_HOVER_CLASS[severity]}`}
+        className={`group @container/issue flex cursor-pointer items-center gap-3 phone:flex-wrap phone:gap-y-2 py-3 ${SEVERITY_RAIL_HEADER_INSET_CLASS} pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent,var(--accent))]/40 ${open ? ISSUE_SEVERITY_HEADER_BAND_CLASS[severity] : ISSUE_SEVERITY_ROW_HOVER_CLASS[severity]}`}
       >
         <SeverityIcon className={`h-[18px] w-[18px] shrink-0 ${ISSUE_SEVERITY_TEXT_CLASS[severity]}`} aria-hidden />
 
