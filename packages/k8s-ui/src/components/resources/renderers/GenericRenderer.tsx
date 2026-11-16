@@ -153,7 +153,7 @@ function getHealthStatus(resource: any): HealthStatusResult | null {
     return { level: status.level, label: status.text }
   }
   const agentRuntime = getAgentRuntimeStatus(resource)
-  if (agentRuntime) return { type: BANNER_TYPE[agentRuntime.level], label: agentRuntime.text, message: agentRuntime.message }
+  if (agentRuntime) return { level: agentRuntime.level, label: agentRuntime.text, message: agentRuntime.message }
   const acknowledgedPause = getCrossplanePauseState(resource) === 'acknowledged'
   const derived = acknowledgedPause ? getCrossplaneIndependentStatus(resource) : getGenericResourceStatus(resource)
   if (!derived || (acknowledgedPause && derived.tone === 'healthy')) return null
