@@ -208,7 +208,7 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                       </>
                     )}
                     {!isHTTP && !isDNS && (
-                      <span className="text-theme-text-tertiary uppercase">{flow.protocol}:{flow.port}</span>
+                      <span className="text-theme-text-tertiary uppercase">{flow.port ? `${flow.protocol}:${flow.port}` : flow.protocol}</span>
                     )}
                   </div>
 
@@ -251,10 +251,12 @@ export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowL
                         <span className="text-theme-text-primary">{protocolLabel(flow.l7Protocol, flow.protocol)}</span>
                         {flow.httpProtocol && <span className="text-theme-text-tertiary"> ({flow.httpProtocol})</span>}
                       </div>
-                      <div>
-                        <span className="text-theme-text-tertiary">Port: </span>
-                        <span className="text-theme-text-primary">{flow.port}</span>
-                      </div>
+                      {flow.port !== 0 && (
+                        <div>
+                          <span className="text-theme-text-tertiary">Port: </span>
+                          <span className="text-theme-text-primary">{flow.port}</span>
+                        </div>
+                      )}
                       {flow.trafficDirection && (
                         <div>
                           <span className="text-theme-text-tertiary">Direction: </span>
