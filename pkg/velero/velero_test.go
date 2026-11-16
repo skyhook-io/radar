@@ -520,6 +520,10 @@ func TestServerReadyReplicasAndBackupControllerFlags(t *testing.T) {
 			t.Fatalf("unready is not down: %+v", cfg)
 		}
 		encoded, err := json.Marshal(cfg)
+		var decoded ServerConfig
+		if err := json.Unmarshal(encoded, &decoded); err != nil || decoded.BackupsDisabled != cfg.BackupsDisabled {
+			t.Fatalf("controller fact did not round-trip: %s (%v)", encoded, err)
+		}
 		if err != nil || !strings.Contains(string(encoded), `"backupsDisabled":`) || !strings.Contains(string(encoded), `"readyReplicas":0`) {
 			t.Fatalf("wire %s: %v", encoded, err)
 		}

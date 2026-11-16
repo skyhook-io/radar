@@ -53,7 +53,7 @@ type ServerConfig struct {
 	// schedule controller, so no Schedule runs.
 	SchedulingDisabled bool `json:"schedulingDisabled,omitempty"`
 	// BackupsDisabled is independent of scheduling: manual Backups need the backup controller too.
-	BackupsDisabled bool `json:"-"`
+	BackupsDisabled bool `json:"backupsDisabled,omitempty"`
 	// Replicas counts non-terminating pods, including Pending and CrashLoop.
 	// Readiness is separate: a pod can fail its readiness probe while still
 	// processing schedules. Terminating pods stop their controllers on SIGTERM.
