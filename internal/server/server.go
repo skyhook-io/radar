@@ -1153,26 +1153,26 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 		// strips the prefix at the router edge. basePath is still needed to
 		// rewrite the asset URLs inside index.html.
 		path := r.URL.Path
+		// The page and its files go out whole. The compression middleware gzips
+		// whatever is written, so a range selected here would carry a
+		// Content-Range counting uncompressed bytes the body doesn't contain.
+		r.Header.Del("Range")
 
 		if path == "/" || path == "/index.html" {
 			serveFrontendIndex(w, r, fsys, basePath)
 			return
 		}
 
-		// Try to open the file
 		f, err := fsys.Open(path)
 		if err != nil {
-			// File doesn't exist - serve index.html for client-side routing
-			serveFrontendIndex(w, r, fsys, basePath)
+			serveFrontendMissing(w, r, fsys, basePath)
 			return
 		}
 		defer f.Close()
 
-		// Check if it's a directory (and not the root)
 		stat, err := f.Stat()
 		if err != nil || (stat.IsDir() && path != "/") {
-			// For directories without index.html, serve root index.html
-			serveFrontendIndex(w, r, fsys, basePath)
+			serveFrontendMissing(w, r, fsys, basePath)
 			return
 		}
 
@@ -1183,11 +1183,22 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 	})
 }
 
+// serveFrontendMissing answers a path with no file behind it. Client-side routes
+// get the page. A missing asset gets 404: it is usually a chunk an earlier build
+// named, requested by a tab opened before an upgrade, and the page would reach
+// the browser as a 200 script it then rejects, hiding the miss from the logs.
+func serveFrontendMissing(w http.ResponseWriter, r *http.Request, fsys http.FileSystem, basePath string) {
+	if strings.HasPrefix(r.URL.Path, "/assets/") {
+		w.Header().Set("Cache-Control", "no-store")
+		http.NotFound(w, r)
+		return
+	}
+	serveFrontendIndex(w, r, fsys, basePath)
+}
+
 // immutableWhenOK marks only a complete answer as cacheable. FileServer can
 // still answer an asset URL with an error, such as 412 for a failed If-Match,
-// and that must not be kept for a year. Partial answers are left out too: the
-// compression middleware gzips the selected range, so their Content-Range
-// describes bytes the response does not contain.
+// and that must not be kept for a year.
 type immutableWhenOK struct {
 	http.ResponseWriter
 	wroteHeader bool
@@ -1239,8 +1250,7 @@ func serveFrontendIndex(w http.ResponseWriter, r *http.Request, fsys http.FileSy
 	body = rewriteFrontendIndex(body, basePath)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	// The page names the current build's chunks, so it must be fetched again
-	// after an upgrade. It also answers missing paths, including chunks a
-	// previous build named, which must not stick under that URL.
+	// after an upgrade.
 	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeContent(w, r, "index.html", stat.ModTime(), bytes.NewReader(body))
 }
