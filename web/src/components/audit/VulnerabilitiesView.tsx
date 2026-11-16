@@ -52,6 +52,7 @@ import {
   findingsCertainty,
   readsComplete,
   workloadsByReplicaSet,
+  OTHER_BUILD_TIP,
   imageParts,
   gapSentence,
   workloadSummary,
@@ -822,7 +823,11 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
             <li key={u.image} className={FOLD_ROW}>
               <span className="flex min-w-0 flex-col">
                 <ImageName image={u.image} className="text-theme-text-primary" />
-                {u.otherBuildScanned && <span className="text-xs text-theme-text-tertiary">Trivy scanned another build of this tag</span>}
+                {u.otherBuildScanned && (
+                  <WithTooltip tip={OTHER_BUILD_TIP}>
+                    <span className="self-start text-xs text-theme-text-tertiary underline decoration-dotted underline-offset-2">Trivy scanned another build of this tag</span>
+                  </WithTooltip>
+                )}
               </span>
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-4">
                 <WorkloadLinks workloads={u.workloads} onOpen={onOpen} inline />

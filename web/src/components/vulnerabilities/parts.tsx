@@ -160,6 +160,9 @@ function namesOnly(gap: VulnerabilityGap): boolean {
   return COLLECTION_CODES.has(gap.code) && gapKinds(gap).every((k) => k.kind === 'ReplicaSet')
 }
 
+/** Why a build of a moved tag stays unscanned, and the ways out: for a tooltip. */
+export const OTHER_BUILD_TIP = "These Pods pulled the tag before it moved. Trivy scans only the build the tag points to now, so this one won't be scanned. Pin the image by digest to keep scans matched, or redeploy so the Pods pull the current build."
+
 /** Whether a Deployment may count once per ReplicaSet in the workload totals. */
 export function workloadsByReplicaSet(coverage: VulnerabilitiesResponse['coverage']): boolean {
   return coverage.gaps.some(namesOnly)
