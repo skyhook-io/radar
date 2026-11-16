@@ -4947,6 +4947,11 @@ export function ResourcesView({
       setOwnerName(newFilters.ownerName)
     }
 
+    // A link into this list can carry a label filter, e.g. a schedule's runs.
+    if (newFilters.labelSelector !== labelSelector) {
+      setLabelSelector(newFilters.labelSelector)
+    }
+
     // Update search if it changed — unless this navigation is the echo of our
     // own debounced URL write (its search equals the value we just wrote), or
     // the user is mid-typing in the box. During typing the URL intentionally
