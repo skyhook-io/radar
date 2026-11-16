@@ -18,6 +18,9 @@ type Client struct {
 	t Transport
 }
 
+// MaxWorkloadQueryBytes is the longest PromQL, in raw bytes, that Radar sends
+// in one query; callers check it, since metrics stores limit query length
+// (VictoriaMetrics' default is 16 KiB) whether it is sent by GET or POST.
 const MaxWorkloadQueryBytes = 16000
 
 var ErrWorkloadQueryTooLarge = errors.New("Pod-name selection or workload size exceeds Radar's safe metrics query limit")

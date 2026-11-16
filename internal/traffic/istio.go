@@ -392,7 +392,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}
 	}
 	if ambientOverBudget {
-		response.Warning = strings.TrimSpace("Requests into ambient workloads that no waypoint observes aren't shown: this cluster has more ambient namespaces than Radar can include in its Prometheus query. " + response.Warning)
+		response.Warning = strings.TrimSpace("Request and error rates for calls into ambient workloads without a waypoint aren't shown, because this cluster has more ambient namespaces than Radar can include in its Prometheus query. Those calls can still appear as TCP edges. " + response.Warning)
 		if response.WarningKind != WarningTransient {
 			response.WarningKind = WarningIncomplete
 		}
