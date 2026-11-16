@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2671,5 +2672,69 @@ func TestSetArgoAutoSyncRemovesTheBlockWithoutAnApplicationSet(t *testing.T) {
 	setAutoSync(t, client, false)
 	if _, found := automatedOf(getTestApp(t, client)); found {
 		t.Fatalf("suspend kept the automated block on an Application no ApplicationSet owns: %#v", getTestApp(t, client).Object["spec"])
+	}
+}
+
+// refuseDryRun answers every dry-run patch with err; real writes go on.
+func refuseDryRun(client *fake.FakeDynamicClient, err error) *atomic.Int32 {
+	var probes atomic.Int32
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if len(action.(clienttesting.PatchActionImpl).GetPatchOptions().DryRun) == 0 {
+			return false, nil, nil
+		}
+		probes.Add(1)
+		return true, nil, err
+	})
+	return &probes
+}
+
+// A webhook that refuses dry runs doesn't block the suspend: Radar can't tell
+// whether enabled is kept, so it removes the block and says the
+// ApplicationSet may turn auto-sync back on.
+func TestSetArgoAutoSyncRemovesTheBlockWhenTheDryRunIsRefused(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	refuseDryRun(client, apierrors.NewBadRequest("admission webhook does not support dry run"))
+	result := setAutoSync(t, client, false)
+	if !strings.Contains(result.Message, "ApplicationSet") {
+		t.Errorf("result = %q, want the note that the ApplicationSet may turn auto-sync back on", result.Message)
+	}
+	if _, found := automatedOf(getTestApp(t, client)); found {
+		t.Fatalf("suspend kept the block after a refused dry run: %#v", getTestApp(t, client).Object["spec"])
+	}
+}
+
+// A caller denied the dry run is denied the write it precedes.
+func TestSetArgoAutoSyncFailsWhenTheDryRunIsForbidden(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	refuseDryRun(client, apierrors.NewForbidden(argoAppGVR.GroupResource(), "demo", errors.New("denied")))
+	if _, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", false); !apierrors.IsForbidden(err) {
+		t.Fatalf("err = %v, want Forbidden", err)
+	}
+	if _, found := automatedOf(getTestApp(t, client)); !found {
+		t.Fatal("a forbidden dry run still changed the Application")
+	}
+}
+
+// A conflict retry rebuilds the patch from a fresh read but doesn't ask the
+// API server again whether it keeps enabled.
+func TestSetArgoAutoSyncProbesOnceAcrossConflicts(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true}, nil)))
+	var probes, conflicts atomic.Int32
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if len(action.(clienttesting.PatchActionImpl).GetPatchOptions().DryRun) > 0 {
+			probes.Add(1)
+			return false, nil, nil
+		}
+		if conflicts.Add(1) == 1 {
+			return true, nil, apierrors.NewConflict(argoAppGVR.GroupResource(), "demo", errors.New("changed"))
+		}
+		return false, nil, nil
+	})
+	setAutoSync(t, client, false)
+	if got := probes.Load(); got != 1 {
+		t.Errorf("dry runs = %d, want 1 across the conflict retry", got)
+	}
+	if automated, _ := automatedOf(getTestApp(t, client)); automated["enabled"] != false {
+		t.Fatalf("automated = %#v, want enabled: false", automated)
 	}
 }

@@ -751,8 +751,9 @@ func stringValue(value any) string {
 // removes the block, in one write, except on an Application an ApplicationSet
 // owns, where it switches the block off in place with `enabled: false` (Argo
 // CD 3.1+) so the ApplicationSet has no prune or selfHeal to put back. A dry
-// run tells whether the API server keeps `enabled`; where it doesn't, the
-// block is removed and the result says the ApplicationSet may undo it. If auto-sync is already off
+// run, made once, tells whether the API server keeps `enabled`; where it
+// doesn't, or the dry run is refused other than as Forbidden, the block is
+// removed and the result says the ApplicationSet may undo it. If auto-sync is already off
 // it changes nothing, so a second suspend can't replace the saved settings
 // with empty ones.
 //
@@ -774,6 +775,9 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 	}
 	noChange := false
 	appSetRemoved := false
+	// The dry run answers for the API server's schema, not for the read a
+	// conflict retry rebuilds from, so it runs at most once.
+	var keepsEnabled *bool
 	err := updateArgoApp(ctx, dynClient, namespace, name, operation, func(app *unstructured.Unstructured) (map[string]any, error) {
 		if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
 			return nil, err
@@ -786,9 +790,17 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 		}
 		inPlace := false
 		if argoApplicationSetOwned(app) && ArgoAutoSyncEnabled(app) {
-			if inPlace, err = argoKeepsAutomatedEnabled(ctx, dynClient, namespace, name); err != nil {
-				return nil, fmt.Errorf("failed to check whether the Application keeps automated.enabled: %w", err)
+			if keepsEnabled == nil {
+				kept, probeErr := argoKeepsAutomatedEnabled(ctx, dynClient, namespace, name)
+				// A caller denied the dry run is denied the write. Any other
+				// refusal (a webhook that rejects dry runs) leaves the
+				// answer unknown, and removal works with every controller.
+				if apierrors.IsForbidden(probeErr) {
+					return nil, fmt.Errorf("failed to check whether the Application keeps automated.enabled: %w", probeErr)
+				}
+				keepsEnabled = &kept
 			}
+			inPlace = *keepsEnabled
 			appSetRemoved = !inPlace
 		}
 		patch, noChange, err = argoSuspendPatch(app, inPlace)
@@ -800,7 +812,7 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 
 	message := fmt.Sprintf("ArgoCD Application %s/%s auto-sync %s", namespace, name, pastAction)
 	if appSetRemoved && !noChange {
-		message += "; this Argo CD has no automated.enabled, so an ApplicationSet that manages prune or selfHeal may turn it back on"
+		message += "; Argo CD didn't confirm it keeps automated.enabled, so Radar removed the automated block, and an ApplicationSet that manages prune or selfHeal may turn auto-sync back on"
 	}
 	if noChange && enable {
 		message = fmt.Sprintf("ArgoCD Application %s/%s auto-sync is already on", namespace, name)
