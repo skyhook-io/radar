@@ -189,6 +189,8 @@ export interface FeatureCapabilities {
   veleroWorkspace?: boolean
   /** POST /api/velero/schedules/{namespace}/{name}/backup */
   veleroBackupNow?: boolean
+  /** GET /api/velero/runs/{backups|restores} */
+  veleroRuns?: boolean
   gitopsWriteEvidence?: boolean
   agentSigninCheck?: boolean
   serviceEndpointSlices?: boolean

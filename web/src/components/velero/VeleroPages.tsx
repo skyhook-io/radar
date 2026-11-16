@@ -4,7 +4,6 @@ import {
   FactGrid,
   FactRow,
   SectionHeading,
-  Tooltip,
   VeleroScheduleActivity,
   getBackupErrors,
   getBackupStatus,
@@ -24,26 +23,30 @@ import {
   type NavigateToResource,
   type VeleroLocationReading,
   type VeleroScheduleReading,
+  type VeleroWorkspaceResponse,
 } from '@skyhook-io/k8s-ui'
-import { useRadarFeature, useResources } from '../../api/client'
-import { useVeleroScheduleActivity, useVeleroWorkspace } from '../../api/velero'
+import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
+import { useRadarFeature } from '../../api/client'
+import { useVeleroRuns, useVeleroScheduleActivity, useVeleroWorkspace, type VeleroRunRow } from '../../api/velero'
 import { useVeleroStoredBackups } from '../../api/policy'
-import { RefreshFailedNotice, Segments, SectionTable } from '../workspace/layout'
-import { RunMessages } from './VeleroRunMessagesHost'
-import { VELERO_GROUP } from './routes'
+import { Notice, RefreshFailedNotice, Segments, SectionTable } from '../workspace/layout'
+import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
+import { RunMessages, veleroMessagesInIssue } from './VeleroRunMessagesHost'
+import { FAILED, KeptUntil, Outcome, RunOutcome, RunsReadNotice, When, boundedCount, durationText, expired, leftText, runsEmpty } from './runs'
 import { veleroResource } from './shared'
 
 // The pages' own sections, beside Radar's detail view: a composed Overview for
 // each Velero kind, and the tabs that list what the object relates to. Every
-// value says where it comes from or reads unknown; nothing here claims a
-// backup is restorable, since Velero never tests a restore.
+// value says where it comes from or reads unknown. Declared settings are named
+// as declared, and nothing here says a backup would restore: Velero never
+// tests a restore.
 
-const CARD = 'mb-4 last:mb-0 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
+const CARD = 'rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm'
 
-function Card({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
+function Card({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section className={CARD}>
-      <SectionHeading hint={hint}>{title}</SectionHeading>
+      {title && <SectionHeading>{title}</SectionHeading>}
       {children}
     </section>
   )
@@ -66,176 +69,154 @@ function list(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
 }
 
-function namespacesText(included: string[], excluded: string[]): string {
-  const all = included.length === 0 || included.includes('*')
-  const base = all ? 'All namespaces' : included.join(', ')
-  return excluded.length ? `${base}, except ${excluded.join(', ')}` : base
+/** A run's namespace selection as declared, and whether other filters narrow it. */
+function selectionText(spec: any, emptyMeans: string): { text: string; narrowed: boolean } {
+  const included = list(spec?.includedNamespaces)
+  const excluded = list(spec?.excludedNamespaces)
+  const base = included.length === 0 || included.includes('*') ? emptyMeans : included.join(', ')
+  const text = excluded.length ? `${base}, except ${excluded.join(', ')}` : base
+  const narrowed =
+    list(spec?.includedResources).length > 0 ||
+    list(spec?.excludedResources).length > 0 ||
+    !!spec?.labelSelector ||
+    list(spec?.orLabelSelectors).length > 0
+  return { text, narrowed }
 }
 
-export function expired(expiration: string | undefined): boolean {
-  return !!expiration && new Date(expiration).getTime() < Date.now()
-}
+const TONE_TEXT = { ok: 'text-success-text', warn: 'text-warning-text', bad: 'text-error-text', unknown: 'text-theme-text-secondary' } as const
+type Tone = keyof typeof TONE_TEXT
 
-/** How long until a time ahead, e.g. "21h left". */
-export function leftText(iso: string): string {
-  const s = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000))
-  if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m left`
-  if (s < 2 * 86400) return `${Math.round(s / 3600)}h left`
-  return `${Math.round(s / 86400)} days left`
-}
-
-export function durationText(start?: string, end?: string): string | undefined {
-  if (!start || !end) return undefined
-  const s = Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000))
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${s % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
-}
-
-export function Outcome({ badge }: { badge: { text: string; color: string } }) {
-  return <span className={`badge whitespace-nowrap ${badge.color}`}>{badge.text}</span>
-}
-
-function locationAvailability(loc: VeleroLocationReading | undefined): { text: string; tone: 'ok' | 'bad' | 'unknown' } {
-  if (!loc) return { text: 'not read', tone: 'unknown' }
-  if (loc.phase === 'Available') return { text: 'available', tone: 'ok' }
-  if (!loc.phase) return { text: 'not validated yet', tone: 'unknown' }
-  return { text: loc.phase.toLowerCase(), tone: 'bad' }
-}
-
-/** What a run's outcome means for restoring from it, in Velero's terms. */
-export function restoreVerdict(backup: any, loc: VeleroLocationReading | undefined): { text: string; detail: string; tone: 'ok' | 'warn' | 'bad' | 'unknown' } {
-  const phase: string = backup?.status?.phase ?? ''
-  const expiration: string | undefined = backup?.status?.expiration
-  if (phase === 'Deleting') return { text: 'No: Velero is deleting it', detail: '', tone: 'bad' }
-  if (phase !== 'Completed' && phase !== 'PartiallyFailed') {
-    return { text: 'No: it did not complete', detail: phase ? `Velero reports ${phase}.` : 'Velero has not reported an outcome.', tone: 'bad' }
+/**
+ * A storage location's state as a page reads it. Missing is said only when the
+ * namespace's locations were read in full; otherwise it is unread.
+ */
+export function locationState(name: string, namespace: string, workspace: VeleroWorkspaceResponse | undefined): { loc?: VeleroLocationReading; text: string; tone: Tone } {
+  const loc = workspace?.locations.find((l) => l.namespace === namespace && l.name === name)
+  if (loc) {
+    if (loc.phase === 'Available') return { loc, text: 'available', tone: 'ok' }
+    if (!loc.phase) return { loc, text: 'not validated yet', tone: 'unknown' }
+    return { loc, text: loc.phase.toLowerCase(), tone: 'bad' }
   }
-  if (expired(expiration)) return { text: 'No: past its retention', detail: 'Velero deletes expired backups on its next garbage collection.', tone: 'bad' }
-  const availability = locationAvailability(loc)
-  if (availability.tone === 'bad') return { text: `No: its storage location is ${availability.text}`, detail: 'A restore reads the backup from its location.', tone: 'bad' }
-  const partial = phase === 'PartiallyFailed'
-  const base = partial ? 'Partly: some items were not backed up' : 'Yes, as far as Velero reports'
-  const detail = [
-    'Velero reports the run finished and keeps it',
-    availability.tone === 'unknown' ? 'its location’s availability could not be read' : 'its location is available',
-    'Velero never tests a restore',
-  ].join('; ') + '.'
-  return { text: base, detail, tone: availability.tone === 'unknown' ? 'unknown' : partial ? 'warn' : 'ok' }
+  const cov = workspace?.coverage.backupStorageLocations
+  if (workspace && cov?.state === 'full') return { text: 'not found: Velero has no such location', tone: 'bad' }
+  return { text: 'not read', tone: 'unknown' }
 }
 
-const TONE_TEXT: Record<string, string> = { ok: 'text-success-text', warn: 'text-warning-text', bad: 'text-error-text', unknown: 'text-theme-text-secondary' }
+function LocationValue({ name, namespace, workspace, onNavigate }: { name: string; namespace: string; workspace: VeleroWorkspaceResponse | undefined; onNavigate?: NavigateToResource }) {
+  const state = locationState(name, namespace, workspace)
+  return (
+    <>
+      {state.loc ? <Link onClick={() => onNavigate?.(veleroResource('BackupStorageLocation', namespace, name))}>{name}</Link> : <span>{name}</span>}
+      <span className={`ml-2 text-xs ${TONE_TEXT[state.tone]}`}>{state.text}</span>
+    </>
+  )
+}
 
-function useReadings(namespace: string) {
+function useWorkspace() {
   const { support } = useRadarFeature('veleroWorkspace')
-  const workspace = useVeleroWorkspace({ enabled: support === 'supported' })
-  return {
-    workspace,
-    location: (name: string) => workspace.data?.locations.find((l) => l.namespace === namespace && l.name === name),
-    schedule: (name: string) => workspace.data?.schedules.find((s) => s.namespace === namespace && s.name === name),
-  }
+  return useVeleroWorkspace({ enabled: support === 'supported' })
 }
 
 // ---- Backup -------------------------------------------------------------
 
-export function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavigate?: NavigateToResource }) {
+export function VeleroBackupOverview({ resource, onNavigate, issuesShown }: { resource: any; onNavigate?: NavigateToResource; issuesShown: boolean }) {
   const namespace: string = resource?.metadata?.namespace ?? ''
-  const { location, schedule, workspace } = useReadings(namespace)
+  const workspace = useWorkspace()
   const status = resource?.status ?? {}
   const spec = resource?.spec ?? {}
   const locationName: string = spec.storageLocation ?? ''
-  const loc = locationName ? location(locationName) : undefined
   const scheduleName: string | undefined = resource?.metadata?.labels?.['velero.io/schedule-name']
-  const sched = scheduleName ? schedule(scheduleName) : undefined
-  const verdict = restoreVerdict(resource, loc)
-  const items = status.progress?.totalItems ? `${status.progress.itemsBackedUp ?? 0} of ${status.progress.totalItems}` : undefined
-  const snapshots = [
+  const sched = scheduleName ? workspace.data?.schedules.find((s) => s.namespace === namespace && s.name === scheduleName) : undefined
+  const selection = selectionText(spec, 'All namespaces')
+  const items = status.progress?.totalItems ? `${status.progress.itemsBackedUp ?? 0} of ${status.progress.totalItems} items backed up` : undefined
+  const volumes = [
     status.volumeSnapshotsAttempted ? `${status.volumeSnapshotsCompleted ?? 0} of ${status.volumeSnapshotsAttempted} volume snapshots` : '',
     status.csiVolumeSnapshotsAttempted ? `${status.csiVolumeSnapshotsCompleted ?? 0} of ${status.csiVolumeSnapshotsAttempted} CSI snapshots` : '',
     status.backupItemOperationsAttempted ? `${status.backupItemOperationsCompleted ?? 0} of ${status.backupItemOperationsAttempted} plugin operations${status.backupItemOperationsFailed ? `, ${status.backupItemOperationsFailed} failed` : ''}` : '',
   ].filter(Boolean)
-  const open = (kind: string, name: string) => onNavigate?.(veleroResource(kind, namespace, name))
-  const availability = locationAvailability(loc)
+  const ran = durationText(status.startTimestamp, status.completionTimestamp)
+  // A failed run's messages already sit in its issue above.
+  const messagesHere = getBackupErrors(resource) + getBackupWarnings(resource) > 0 && !veleroMessagesInIssue(resource, issuesShown)
   return (
-    <div>
-      <RefreshFailedNotice queries={[workspace]} className="mb-3" />
+    <>
+      <RefreshFailedNotice queries={[workspace]} />
       <Card title="At a glance">
         <FactGrid>
           <FactRow label="Outcome">
-            <span className="inline-flex items-center gap-2"><Outcome badge={getBackupStatus(resource)} />{durationText(status.startTimestamp, status.completionTimestamp) && <Note>ran {durationText(status.startTimestamp, status.completionTimestamp)}, {veleroMomentText(status.completionTimestamp ?? status.startTimestamp)}</Note>}</span>
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <Outcome badge={getBackupStatus(resource)} />
+              {ran && <Note>ran {ran}, {veleroMomentText(status.completionTimestamp ?? status.startTimestamp)}</Note>}
+            </span>
+            {items && <Note>{items}</Note>}
           </FactRow>
-          <FactRow label="Restore from it">
-            <span className={TONE_TEXT[verdict.tone]}>{verdict.text}</span>
-            {verdict.detail && <Note>{verdict.detail}</Note>}
+          <FactRow label="Selected">
+            {selection.text}
+            <Note>As declared on the backup{selection.narrowed ? ', narrowed by resource or label filters' : ''}; Velero counts what it actually backed up above.</Note>
           </FactRow>
-          <FactRow label="Covers">
-            {namespacesText(list(spec.includedNamespaces), list(spec.excludedNamespaces))}
-            {items && <Note>{items} items backed up</Note>}
-          </FactRow>
-          {snapshots.length > 0 && <FactRow label="Volumes">{snapshots.join(' · ')}</FactRow>}
+          {volumes.length > 0 && <FactRow label="Volumes">{volumes.join(' · ')}</FactRow>}
           <FactRow label="Stored in">
-            {locationName ? (
+            {locationName ? <LocationValue name={locationName} namespace={namespace} workspace={workspace.data} onNavigate={onNavigate} /> : <span className="text-theme-text-secondary">Not assigned yet</span>}
+          </FactRow>
+          <FactRow label="Kept until">
+            {status.expiration ? (
               <>
-                <Link onClick={() => open('BackupStorageLocation', locationName)}>{locationName}</Link>
-                <span className={`ml-2 text-xs ${TONE_TEXT[availability.tone === 'ok' ? 'ok' : availability.tone === 'bad' ? 'bad' : 'unknown']}`}>{availability.text}</span>
+                {veleroLocalTime(status.expiration)}
+                <Note>
+                  {expired(status.expiration) ? 'Past its retention: Velero deletes it at its next garbage collection' : leftText(status.expiration)}
+                  {spec.ttl ? ` · retention ${veleroRetentionText(spec.ttl)}` : ''}
+                </Note>
               </>
             ) : (
-              <span className="text-theme-text-secondary">Not assigned yet</span>
+              <span className="text-theme-text-secondary">Not reported yet</span>
             )}
           </FactRow>
           <FactRow label="Made by">
             {scheduleName ? (
               <>
-                <Link onClick={() => open('Schedule', scheduleName)}>Schedule {scheduleName}</Link>
+                <Link onClick={() => onNavigate?.(veleroResource('Schedule', namespace, scheduleName))}>Schedule {scheduleName}</Link>
                 {sched && <span className="ml-2 text-xs text-theme-text-secondary">{veleroScheduleStateLabel(sched.state)}</span>}
               </>
             ) : (
               'Created directly, not by a schedule'
             )}
           </FactRow>
-          <FactRow label="Kept until">
-            {status.expiration ? (
-              <>
-                {veleroLocalTime(status.expiration)}
-                <Note>{expired(status.expiration) ? 'Past its retention' : leftText(status.expiration)}{spec.ttl ? ` · retention ${veleroRetentionText(spec.ttl)}` : ''}</Note>
-              </>
-            ) : (
-              <span className="text-theme-text-secondary">Not reported yet</span>
-            )}
+          <FactRow label="Restore">
+            <span className="text-theme-text-secondary">Not verified</span>
+            <Note>Velero never tests a restore; a completed backup is what it reports. The Restores tab lists restores made from it.</Note>
           </FactRow>
         </FactGrid>
       </Card>
-      {getBackupErrors(resource) + getBackupWarnings(resource) > 0 && (
+      {messagesHere && (
         <Card title="What Velero reported">
           <RunMessages kind="backups" resource={resource} />
         </Card>
       )}
-    </div>
+    </>
   )
 }
 
 /** Restores made from one backup (spec.backupName). */
 export function VeleroBackupRestores({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate?: NavigateToResource }) {
-  const restores = useResources<any>('restores', namespace, VELERO_GROUP)
-  const rows = useMemo(() => (restores.data ?? []).filter((r) => getRestoreBackupName(r) === name), [restores.data, name])
+  const query = useVeleroRuns('restores', namespace)
+  const rows = useMemo(() => (query.data?.runs ?? []).filter((r) => r.backupName === name), [query.data, name])
   return (
-    <div className="p-4">
+    <div className="space-y-3 p-4">
+      <RunsReadNotice query={query} noun="restores" />
       <SectionTable
         title="Restores from this backup"
         subtitle="every Restore Velero keeps whose backup is this one"
         columns={[
-          { header: 'Restore', cell: (r: any) => <span className="font-medium">{r.metadata.name}</span> },
-          { header: 'Outcome', width: '170px', cell: (r: any) => <Outcome badge={getRestoreStatus(r)} /> },
-          { header: 'Started', width: '140px', cell: (r: any) => veleroMomentText(r.status?.startTimestamp) },
-          { header: 'Took', width: '110px', cell: (r: any) => durationText(r.status?.startTimestamp, r.status?.completionTimestamp) ?? '—' },
-          { header: 'Errors · warnings', width: '150px', cell: (r: any) => `${getRestoreErrors(r)} · ${getRestoreWarnings(r)}` },
+          { header: 'Restore', cell: (r: VeleroRunRow) => <span className="font-medium">{r.name}</span> },
+          { header: 'Outcome', width: '160px', cell: (r: VeleroRunRow) => <RunOutcome kind="Restore" phase={r.phase} /> },
+          { header: 'Started', width: '120px', cell: (r: VeleroRunRow) => <When iso={r.started} fallback="not started" /> },
+          { header: 'Took', width: '90px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
+          { header: 'Errors · warnings', width: '140px', cell: (r: VeleroRunRow) => `${r.errors} · ${r.warnings}` },
         ]}
         rows={rows}
-        rowKey={(r: any) => r.metadata.uid ?? r.metadata.name}
-        rowResource={(r: any) => veleroResource('Restore', namespace, r.metadata.name)}
+        rowKey={(r) => r.uid || r.name}
+        rowResource={(r) => veleroResource('Restore', r.namespace, r.name)}
         onInspect={onNavigate}
-        empty={restores.isPending ? 'Loading restores…' : restores.error ? `Restores could not be read: ${(restores.error as Error).message}` : 'No restores from this backup.'}
+        empty={runsEmpty(query, 'restores', 'No restores from this backup')}
       />
     </div>
   )
@@ -243,98 +224,104 @@ export function VeleroBackupRestores({ namespace, name, onNavigate }: { namespac
 
 // ---- Restore ------------------------------------------------------------
 
-export function VeleroRestoreOverview({ resource, onNavigate }: { resource: any; onNavigate?: NavigateToResource }) {
+export function VeleroRestoreOverview({ resource, onNavigate, issuesShown }: { resource: any; onNavigate?: NavigateToResource; issuesShown: boolean }) {
   const namespace: string = resource?.metadata?.namespace ?? ''
   const status = resource?.status ?? {}
   const spec = resource?.spec ?? {}
   const backupName = getRestoreBackupName(resource)
   const mapping = getRestoreNamespaceMapping(resource)
-  const progress = status.progress?.totalItems ? `${status.progress.itemsRestored ?? 0} of ${status.progress.totalItems}` : undefined
+  const selection = selectionText(spec, 'Every namespace in the backup')
+  const progress = status.progress?.totalItems ? `${status.progress.itemsRestored ?? 0} of ${status.progress.totalItems} items restored` : undefined
+  const took = durationText(status.startTimestamp, status.completionTimestamp)
+  const messagesHere = getRestoreErrors(resource) + getRestoreWarnings(resource) > 0 && !veleroMessagesInIssue(resource, issuesShown)
   return (
-    <div>
+    <>
       <Card title="At a glance">
         <FactGrid>
           <FactRow label="Outcome">
-            <span className="inline-flex items-center gap-2"><Outcome badge={getRestoreStatus(resource)} />{durationText(status.startTimestamp, status.completionTimestamp) && <Note>took {durationText(status.startTimestamp, status.completionTimestamp)}, {veleroMomentText(status.completionTimestamp ?? status.startTimestamp)}</Note>}</span>
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <Outcome badge={getRestoreStatus(resource)} />
+              {took && <Note>took {took}, {veleroMomentText(status.completionTimestamp ?? status.startTimestamp)}</Note>}
+            </span>
+            {progress && <Note>{progress}</Note>}
           </FactRow>
           <FactRow label="From backup">
             {backupName ? <Link onClick={() => onNavigate?.(veleroResource('Backup', namespace, backupName))}>{backupName}</Link> : spec.scheduleName ? `The newest backup of schedule ${spec.scheduleName}` : '—'}
           </FactRow>
-          <FactRow label="Restores">
-            {namespacesText(list(spec.includedNamespaces), list(spec.excludedNamespaces))}
-            {Object.keys(mapping).length > 0 && <Note>Into: {Object.entries(mapping).map(([from, to]) => `${from} → ${to}`).join(', ')}; other namespaces keep their names</Note>}
+          <FactRow label="Selected">
+            {selection.text}
+            {Object.keys(mapping).length > 0 && <Note>Mapped: {Object.entries(mapping).map(([from, to]) => `${from} → ${to}`).join(', ')}; other namespaces keep their names</Note>}
+            <Note>As declared on the restore{selection.narrowed ? ', narrowed by resource or label filters' : ''}.</Note>
           </FactRow>
-          {progress && <FactRow label="Items">{progress} restored</FactRow>}
-          <FactRow label="Existing objects">{spec.existingResourcePolicy === 'update' ? 'Updated to match the backup' : 'Left as they are'}</FactRow>
+          <FactRow label="Existing objects">
+            {spec.existingResourcePolicy === 'update' ? 'Update requested' : 'Left as they are (Velero’s default)'}
+            {spec.existingResourcePolicy === 'update' && <Note>Velero updates an existing object where it can, and reports a warning where it can’t.</Note>}
+          </FactRow>
         </FactGrid>
       </Card>
-      {getRestoreErrors(resource) + getRestoreWarnings(resource) > 0 && (
+      {messagesHere && (
         <Card title="What Velero reported">
           <RunMessages kind="restores" resource={resource} />
         </Card>
       )}
-    </div>
+    </>
   )
 }
 
 // ---- Schedule -----------------------------------------------------------
 
 function useScheduleRuns(namespace: string, name: string) {
-  const backups = useResources<any>('backups', namespace, VELERO_GROUP)
-  const runs = useMemo(
-    () =>
-      (backups.data ?? [])
-        .filter((b: any) => b.metadata?.labels?.['velero.io/schedule-name'] === name)
-        .sort((a: any, b: any) => (b.status?.startTimestamp ?? b.metadata?.creationTimestamp ?? '').localeCompare(a.status?.startTimestamp ?? a.metadata?.creationTimestamp ?? '')),
-    [backups.data, name],
-  )
-  return { backups, runs }
+  const query = useVeleroRuns('backups', namespace)
+  const runs = useMemo(() => (query.data?.runs ?? []).filter((r) => r.schedule === name), [query.data, name])
+  return { query, runs }
 }
-
-export const FAILED = new Set(['Failed', 'PartiallyFailed', 'FailedValidation', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed'])
 
 export function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNavigate?: NavigateToResource }) {
   const namespace: string = resource?.metadata?.namespace ?? ''
   const name: string = resource?.metadata?.name ?? ''
   const { support } = useRadarFeature('veleroWorkspace')
   const activity = useVeleroScheduleActivity(namespace, name, { enabled: support === 'supported' })
-  const { location } = useReadings(namespace)
-  const { runs, backups } = useScheduleRuns(namespace, name)
+  const workspace = useWorkspace()
+  const { runs, query } = useScheduleRuns(namespace, name)
   const reading: VeleroScheduleReading | undefined = activity.data?.reading
   const [params, setParams] = useSearchParams()
-  // Every run is on this page's Runs tab.
+  // "All N runs" opens this page's Runs tab, on all of them.
   const showRuns = () => {
     const next = new URLSearchParams(params)
     next.set('tab', 'runs')
+    next.set('runs', 'all')
     setParams(next)
   }
   const template = resource?.spec?.template ?? {}
   const locationName: string = template.storageLocation || reading?.location?.name || ''
-  const loc = locationName ? location(locationName) : undefined
-  const availability = locationAvailability(loc)
-  const counts = runs.reduce((acc: { completed: number; failed: number; other: number }, r: any) => {
-    const p: string = r.status?.phase ?? ''
-    if (p === 'Completed') acc.completed++
-    else if (FAILED.has(p)) acc.failed++
+  const selection = selectionText(template, 'All namespaces')
+  const counts = runs.reduce((acc, r) => {
+    if (r.phase === 'Completed') acc.completed++
+    else if (FAILED.has(r.phase ?? '')) acc.failed++
     else acc.other++
     return acc
   }, { completed: 0, failed: 0, other: 0 })
+  const partial = !!query.data && INCOMPLETE_COVERAGE_STATES.has(query.data.coverage.state)
   return (
-    <div>
-      <RefreshFailedNotice queries={[activity]} className="mb-3" />
-      {reading && (
-        <section className={CARD}>
+    <>
+      <RefreshFailedNotice queries={[activity]} />
+      {reading ? (
+        <Card>
           <VeleroScheduleActivity reading={reading} created={resource?.metadata?.creationTimestamp} onNavigate={(ref) => onNavigate?.(veleroResource(ref.kind, ref.namespace, ref.name))} onShowAllRuns={showRuns} />
-        </section>
-      )}
+        </Card>
+      ) : activity.error ? (
+        <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />
+      ) : null}
       <Card title="At a glance">
         <FactGrid>
-          <FactRow label="Backs up">{namespacesText(list(template.includedNamespaces), list(template.excludedNamespaces))}</FactRow>
+          <FactRow label="Selects">
+            {selection.text}
+            <Note>As declared in its template{selection.narrowed ? ', narrowed by resource or label filters' : ''}.</Note>
+          </FactRow>
           <FactRow label="Stored in">
             {locationName ? (
               <>
-                <Link onClick={() => onNavigate?.(veleroResource('BackupStorageLocation', namespace, locationName))}>{locationName}</Link>
-                <span className={`ml-2 text-xs ${TONE_TEXT[availability.tone === 'ok' ? 'ok' : availability.tone === 'bad' ? 'bad' : 'unknown']}`}>{availability.text}</span>
+                <LocationValue name={locationName} namespace={namespace} workspace={workspace.data} onNavigate={onNavigate} />
                 {!template.storageLocation && <Note>The installation’s default; the schedule names none</Note>}
               </>
             ) : (
@@ -343,54 +330,53 @@ export function VeleroScheduleOverview({ resource, onNavigate }: { resource: any
           </FactRow>
           <FactRow label="Each run kept for">{template.ttl ? veleroRetentionText(template.ttl) : 'The Velero server’s default (30 days unless it was changed)'}</FactRow>
           <FactRow label="Runs Velero keeps">
-            {backups.isPending ? 'Loading…' : backups.error ? <span className="text-theme-text-secondary">Not read: {(backups.error as Error).message}</span> : runs.length === 0 ? 'None' : (
+            {query.isPending ? 'Loading…' : !query.data ? <span className="text-theme-text-secondary">Not read: {(query.error as Error | null)?.message}</span> : runs.length === 0 && !partial ? 'None' : (
               <>
-                {runs.length}: {counts.completed} completed{counts.failed ? `, ${counts.failed} failed or partly failed` : ''}{counts.other ? `, ${counts.other} other` : ''}
-                <Note>Older runs are gone once their retention passes, so this is not a full history.</Note>
+                {partial ? `At least ${runs.length}` : runs.length}: {counts.completed} completed{counts.failed ? `, ${counts.failed} failed or partly failed` : ''}{counts.other ? `, ${counts.other} other` : ''}
+                <Note>Velero deletes each run after its retention, so this is not a full history.</Note>
               </>
             )}
           </FactRow>
         </FactGrid>
       </Card>
-    </div>
+    </>
   )
 }
 
-/** Every run of a schedule Velero still keeps, failed first when any failed. */
+/** Every run of a schedule Velero still keeps; failed first when any failed, unless asked for all. */
 export function VeleroScheduleRuns({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate?: NavigateToResource }) {
-  const { runs, backups } = useScheduleRuns(namespace, name)
-  const failed = runs.filter((r: any) => FAILED.has(r.status?.phase ?? ''))
-  const [view, setView] = useState<'failed' | 'all' | null>(null)
-  const shown = (view ?? (failed.length > 0 ? 'failed' : 'all')) === 'failed' ? failed : runs
+  const { runs, query } = useScheduleRuns(namespace, name)
+  const [params] = useSearchParams()
+  const failed = runs.filter((r) => FAILED.has(r.phase ?? ''))
+  const [view, setView] = useState<'failed' | 'all' | null>(params.get('runs') === 'all' ? 'all' : null)
+  const current = view ?? (failed.length > 0 ? 'failed' : 'all')
+  const shown = current === 'failed' ? failed : runs
   return (
     <div className="space-y-3 p-4">
       <Segments
         label="Runs"
-        value={view ?? (failed.length > 0 ? 'failed' : 'all')}
+        value={current}
         onChange={setView}
-        options={[{ id: 'failed', label: 'Failed', count: failed.length }, { id: 'all', label: 'All', count: runs.length }]}
+        options={[{ id: 'failed', label: 'Failed', count: boundedCount(failed.length, query) }, { id: 'all', label: 'All', count: boundedCount(runs.length, query) }]}
       />
+      <RunsReadNotice query={query} noun="backups" />
       <SectionTable
         columns={[
-          { header: 'Run', cell: (r: any) => <span className="font-mono text-xs">{r.metadata.name}</span> },
-          { header: 'Outcome', width: '170px', cell: (r: any) => <Outcome badge={getBackupStatus(r)} /> },
-          { header: 'Started', width: '130px', cell: (r: any) => (
-            <Tooltip content={r.status?.startTimestamp ? veleroLocalTime(r.status.startTimestamp) : 'Not started'}>
-              <span>{veleroMomentText(r.status?.startTimestamp, 'not started')}</span>
-            </Tooltip>
-          ) },
-          { header: 'Took', width: '100px', cell: (r: any) => durationText(r.status?.startTimestamp, r.status?.completionTimestamp) ?? '—' },
-          { header: 'Items', width: '110px', cell: (r: any) => (r.status?.progress?.totalItems ? `${r.status.progress.itemsBackedUp ?? 0} / ${r.status.progress.totalItems}` : '—') },
-          { header: 'Errors · warnings', width: '140px', cell: (r: any) => `${getBackupErrors(r)} · ${getBackupWarnings(r)}` },
-          { header: 'Kept until', width: '150px', cell: (r: any) => (r.status?.expiration ? (expired(r.status.expiration) ? 'past retention' : veleroLocalTime(r.status.expiration)) : '—') },
+          { header: 'Run', cell: (r: VeleroRunRow) => <span className="font-mono text-xs">{r.name}</span> },
+          { header: 'Outcome', width: '160px', cell: (r: VeleroRunRow) => <RunOutcome kind="Backup" phase={r.phase} /> },
+          { header: 'Started', width: '120px', cell: (r: VeleroRunRow) => <When iso={r.started} fallback="not started" /> },
+          { header: 'Took', width: '90px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
+          { header: 'Items', width: '100px', cell: (r: VeleroRunRow) => (r.itemsTotal ? `${r.itemsDone ?? 0} / ${r.itemsTotal}` : '—') },
+          { header: 'Errors · warnings', width: '140px', cell: (r: VeleroRunRow) => `${r.errors} · ${r.warnings}` },
+          { header: 'Kept until', width: '120px', cell: (r: VeleroRunRow) => <KeptUntil iso={r.expiration} /> },
         ]}
         rows={shown}
-        rowKey={(r: any) => r.metadata.uid ?? r.metadata.name}
-        rowResource={(r: any) => veleroResource('Backup', namespace, r.metadata.name)}
+        rowKey={(r) => r.uid || r.name}
+        rowResource={(r) => veleroResource('Backup', r.namespace, r.name)}
         onInspect={onNavigate}
         minWidth={900}
-        empty={backups.isPending ? 'Loading runs…' : backups.error ? `Backups could not be read: ${(backups.error as Error).message}` : view === 'failed' || failed.length > 0 ? 'No failed runs among those Velero keeps.' : 'No runs kept. Velero deletes each run once its retention passes.'}
-        footer="Runs are this schedule’s backups that Velero still keeps (by the velero.io/schedule-name label); older ones are gone once their retention passes."
+        empty={runsEmpty(query, 'backups', current === 'failed' ? 'No failed runs among those Velero keeps' : 'No runs kept; Velero deletes each run after its retention')}
+        footer="This schedule’s backups that Velero still keeps (by the velero.io/schedule-name label)."
       />
     </div>
   )
@@ -401,19 +387,20 @@ export function VeleroScheduleRuns({ namespace, name, onNavigate }: { namespace:
 export function VeleroLocationOverview({ resource, onNavigate }: { resource: any; onNavigate?: NavigateToResource }) {
   const namespace: string = resource?.metadata?.namespace ?? ''
   const name: string = resource?.metadata?.name ?? ''
-  const { location, workspace } = useReadings(namespace)
-  const loc = location(name)
-  const availability = locationAvailability(loc ?? { namespace, name, phase: resource?.status?.phase, default: false, defaultSource: 'unknown', schedules: null, attention: false })
+  const workspace = useWorkspace()
+  const loc = workspace.data?.locations.find((l) => l.namespace === namespace && l.name === name)
+  const phase: string | undefined = loc?.phase ?? resource?.status?.phase
+  const tone: Tone = phase === 'Available' ? 'ok' : phase ? 'bad' : 'unknown'
   const spec = resource?.spec ?? {}
   const objectStorage = spec.objectStorage ?? {}
   const def = loc ? veleroDefaultText(loc) : null
   return (
-    <div>
-      <RefreshFailedNotice queries={[workspace]} className="mb-3" />
+    <>
+      <RefreshFailedNotice queries={[workspace]} />
       <Card title="At a glance">
         <FactGrid>
           <FactRow label="Availability">
-            <span className={TONE_TEXT[availability.tone === 'ok' ? 'ok' : availability.tone === 'bad' ? 'bad' : 'unknown']}>{availability.text[0].toUpperCase() + availability.text.slice(1)}</span>
+            <span className={TONE_TEXT[tone]}>{phase ?? 'Not validated yet'}</span>
             {(loc?.message ?? resource?.status?.message) && <Note>{loc?.message ?? resource?.status?.message}</Note>}
           </FactRow>
           <FactRow label="Validation">
@@ -429,18 +416,14 @@ export function VeleroLocationOverview({ resource, onNavigate }: { resource: any
               <span className="text-theme-text-secondary">Not read</span>
             )}
           </FactRow>
-          <FactRow label="Default">
-            {def ? <>{def.text}{def.detail && <Note>{def.detail}</Note>}</> : '—'}
-          </FactRow>
+          <FactRow label="Default">{def ? <>{def.text}{def.detail && <Note>{def.detail}</Note>}</> : <span className="text-theme-text-secondary">Not read</span>}</FactRow>
           <FactRow label="Access">{spec.accessMode === 'ReadOnly' ? 'Read-only: Velero writes no backups here and deletes none' : 'Read-write'}</FactRow>
-          <FactRow label="Where">
-            {[spec.provider, objectStorage.bucket, objectStorage.prefix].filter(Boolean).join(' · ') || '—'}
-          </FactRow>
-          <FactRow label="Holds">
+          <FactRow label="Where">{[spec.provider, objectStorage.bucket, objectStorage.prefix].filter(Boolean).join(' · ') || '—'}</FactRow>
+          <FactRow label="Backups targeting it">
             {loc?.backups ? (
               <>
-                {loc.backups.targeting} backups: {loc.backups.completedNotExpired} completed and inside their retention, {loc.backups.expired} past it
-                <Note>Velero never tests a restore; completed is what it reports.</Note>
+                {loc.backups.targeting}: {loc.backups.completedNotExpired} completed and inside their retention, {loc.backups.expired} past it, the rest failed or not finished
+                <Note>Counted from the Backup objects that name this location; Velero never tests a restore.</Note>
               </>
             ) : (
               <span className="text-theme-text-secondary">Backups not read</span>
@@ -454,38 +437,42 @@ export function VeleroLocationOverview({ resource, onNavigate }: { resource: any
             ) : (
               <span className="flex flex-wrap gap-x-3">
                 {loc.schedules.map((s) => (
-                  <Link key={s.name} onClick={() => onNavigate?.(veleroResource('Schedule', namespace, s.name))}>{s.name}{s.viaDefault ? ' (as the default)' : ''}</Link>
+                  <Link key={s.name} onClick={() => onNavigate?.(veleroResource('Schedule', namespace, s.name))}>
+                    {s.name}
+                    {s.viaDefault ? ' (as the default)' : ''}
+                  </Link>
                 ))}
               </span>
             )}
           </FactRow>
         </FactGrid>
       </Card>
-    </div>
+    </>
   )
 }
 
-/** The backups a location holds, newest first. */
+/** The backups that name a location, newest first. */
 export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate?: NavigateToResource }) {
   const stored = useVeleroStoredBackups(namespace, name)
   const rows = stored.data?.backups ?? []
   return (
-    <div className="p-4">
+    <div className="space-y-3 p-4">
+      {stored.error && stored.data && <Notice>The last refresh failed ({(stored.error as Error).message}); what is shown is from before it.</Notice>}
       <SectionTable
-        title="Backups stored here"
+        title="Backups targeting this location"
         subtitle={stored.data ? `${stored.data.stored} · ${stored.data.restorable} completed and inside retention · ${stored.data.expired} past it` : undefined}
         columns={[
           { header: 'Backup', cell: (b) => <span className="font-mono text-xs">{b.name}</span> },
-          { header: 'Outcome', width: '170px', cell: (b) => <Outcome badge={getBackupStatus({ status: { phase: b.phase } })} /> },
-          { header: 'Completed', width: '150px', cell: (b) => veleroMomentText(b.completed) },
-          { header: 'Kept until', width: '170px', cell: (b) => (b.expiration ? (expired(b.expiration) ? 'past retention' : veleroLocalTime(b.expiration)) : '—') },
+          { header: 'Outcome', width: '160px', cell: (b) => <RunOutcome kind="Backup" phase={b.phase} /> },
+          { header: 'Completed', width: '140px', cell: (b) => <When iso={b.completed} fallback="—" /> },
+          { header: 'Kept until', width: '130px', cell: (b) => <KeptUntil iso={b.expiration} /> },
         ]}
         rows={rows}
         rowKey={(b) => b.name}
         rowResource={(b) => veleroResource('Backup', b.namespace, b.name)}
         onInspect={onNavigate}
-        empty={stored.isPending ? 'Loading backups…' : stored.error ? `Backups could not be read: ${(stored.error as Error).message}` : 'No backups stored here.'}
-        footer={stored.data?.truncated ? `The newest ${rows.length} of ${stored.data.stored}.` : undefined}
+        empty={stored.isPending ? 'Loading backups…' : stored.error ? `Backups could not be read: ${(stored.error as Error).message}` : 'No backups name this location.'}
+        footer={stored.data?.truncated ? `The newest ${rows.length} of ${stored.data.stored}.` : 'Counted from the Backup objects that name this location, not from what is in the bucket.'}
       />
     </div>
   )
@@ -497,12 +484,13 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
  */
 export function renderVeleroSummary({ apiKind, resource, context, onNavigate, leadContent }: { apiKind: string; resource: any; context: 'drawer' | 'expanded'; onNavigate?: NavigateToResource; leadContent?: ReactNode }) {
   if (context !== 'expanded' || !resource) return null
+  const issuesShown = !!leadContent
   const body = (() => {
     switch (apiKind) {
       case 'backups':
-        return <VeleroBackupOverview resource={resource} onNavigate={onNavigate} />
+        return <VeleroBackupOverview resource={resource} onNavigate={onNavigate} issuesShown={issuesShown} />
       case 'restores':
-        return <VeleroRestoreOverview resource={resource} onNavigate={onNavigate} />
+        return <VeleroRestoreOverview resource={resource} onNavigate={onNavigate} issuesShown={issuesShown} />
       case 'schedules':
         return <VeleroScheduleOverview resource={resource} onNavigate={onNavigate} />
       case 'backupstoragelocations':

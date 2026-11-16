@@ -1,22 +1,26 @@
 // @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { location, workspace } from './velero.fixtures'
 
-const state = vi.hoisted(() => ({ backups: [] as any[] }))
+const state = vi.hoisted(() => ({ runs: undefined as unknown, error: null as Error | null }))
 vi.mock('../../api/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../api/client')>()),
-  useResources: () => ({ data: state.backups, isPending: false, error: null }),
-  useRadarFeature: () => ({ support: 'supported' }),
+  useRadarFeature: () => ({ support: 'supported', guard: (f: () => unknown) => f(), gatedKey: [] }),
+}))
+vi.mock('../../api/velero', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/velero')>()),
+  useVeleroRuns: () => ({ data: state.runs, isPending: false, error: state.error }),
+  useVeleroWorkspace: () => ({ data: undefined }),
+  useVeleroScheduleActivity: () => ({ data: undefined }),
 }))
 
 const { parseVeleroRoute, veleroDetailKindFor, veleroDetailPath } = await import('./routes')
-const { renderVeleroSummary, restoreVerdict } = await import('./VeleroPages')
+const { locationState, renderVeleroSummary } = await import('./VeleroPages')
 const { VeleroBackups } = await import('./VeleroRunLists')
 const { veleroResourceHost } = await import('./host')
-
-const inHours = (h: number) => new Date(Date.now() + h * 3600_000).toISOString()
 
 describe('Velero page routes', () => {
   it('reads and writes an object page, and leaves the Overview alone', () => {
@@ -34,25 +38,14 @@ describe('Velero page routes', () => {
   })
 })
 
-describe('Restore from it', () => {
-  const backup = (phase: string, expiration = inHours(5)) => ({ status: { phase, expiration } })
-  const available = location({ name: 'default', phase: 'Available' })
-  it('says yes only as far as Velero reports, and never that a restore was tested', () => {
-    const v = restoreVerdict(backup('Completed'), available)
-    expect(v.text).toBe('Yes, as far as Velero reports')
-    expect(v.detail).toContain('Velero never tests a restore')
-  })
-  it('says no for what Velero cannot restore from', () => {
-    expect(restoreVerdict(backup('Failed'), available).text).toBe('No: it did not complete')
-    expect(restoreVerdict(backup('Deleting'), available).text).toBe('No: Velero is deleting it')
-    expect(restoreVerdict(backup('Completed', inHours(-1)), available).text).toBe('No: past its retention')
-    expect(restoreVerdict(backup('Completed'), location({ name: 'default', phase: 'Unavailable' })).text).toBe('No: its storage location is unavailable')
-  })
-  it('says partly for a partial run, and does not call an unread location available', () => {
-    expect(restoreVerdict(backup('PartiallyFailed'), available).text).toBe('Partly: some items were not backed up')
-    const unread = restoreVerdict(backup('Completed'), undefined)
-    expect(unread.tone).toBe('unknown')
-    expect(unread.detail).toContain('could not be read')
+describe('A backup’s storage location', () => {
+  it('is missing only when the locations were read in full', () => {
+    const read = workspace({ locations: [location({ name: 'default', phase: 'Available' })] })
+    expect(locationState('default', 'velero', read).text).toBe('available')
+    expect(locationState('gone', 'velero', read).text).toBe('not found: Velero has no such location')
+    const partial = { ...read, coverage: { ...read.coverage, backupStorageLocations: { state: 'partial' as const } } }
+    expect(locationState('gone', 'velero', partial).text).toBe('not read')
+    expect(locationState('default', 'velero', undefined).text).toBe('not read')
   })
 })
 
@@ -61,34 +54,60 @@ describe('The composed Overview', () => {
     expect(renderVeleroSummary({ apiKind: 'backups', resource: { metadata: {} }, context: 'drawer' })).toBeNull()
     expect(renderVeleroSummary({ apiKind: 'podvolumebackups', resource: { metadata: {} }, context: 'expanded' })).toBeNull()
   })
+
+  it('says a restore is not verified, and shows a failed run’s messages once, in its issue', () => {
+    const failed = { metadata: { namespace: 'velero', name: 'b' }, spec: {}, status: { phase: 'PartiallyFailed', errors: 2 } }
+    const withIssue = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter>{renderVeleroSummary({ apiKind: 'backups', resource: failed, context: 'expanded', leadContent: <div>ISSUE</div> })}</MemoryRouter></QueryClientProvider>)
+    expect(withIssue).toContain('ISSUE')
+    expect(withIssue).toContain('Not verified')
+    expect(withIssue).not.toContain('What Velero reported')
+    const noIssue = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter>{renderVeleroSummary({ apiKind: 'backups', resource: failed, context: 'expanded' })}</MemoryRouter></QueryClientProvider>)
+    expect(noIssue).toContain('What Velero reported')
+  })
 })
 
 describe('The Backups list', () => {
-  const run = (name: string, phase: string, schedule?: string) => ({
-    metadata: { name, namespace: 'velero', uid: name, labels: schedule ? { 'velero.io/schedule-name': schedule } : {} },
-    spec: { storageLocation: 'default' },
-    status: { phase, startTimestamp: '2026-11-16T10:00:00Z' },
-  })
+  const run = (name: string, phase: string, schedule?: string, namespace = 'velero') => ({ namespace, name, uid: `${namespace}/${name}`, phase, schedule, started: '2026-11-16T10:00:00Z', errors: 0, warnings: 0 })
   const render = (url: string) =>
     renderToStaticMarkup(
       <MemoryRouter initialEntries={[url]}>
-        <VeleroBackups data={workspace({ locations: [location({ name: 'default' })] })} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} />
+        <VeleroBackups data={workspace({ locations: [location({ name: 'default' })] })} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} onCreate={() => {}} />
       </MemoryRouter>,
     )
+  const response = (runs: unknown[], coverage = 'full') => ({ observedAt: '', coverage: { state: coverage }, runs, total: runs.length })
 
-  it('opens on the failed runs when any failed', () => {
-    state.backups = [run('ok-1', 'Completed'), run('bad-1', 'PartiallyFailed'), run('rejected-1', 'FailedValidation')]
+  it('opens on the failed runs when any failed, with a way to create one', () => {
+    state.runs = response([run('ok-1', 'Completed'), run('bad-1', 'PartiallyFailed'), run('rejected-1', 'FailedValidation')])
     const html = render('/resources/backups?apiGroup=velero.io')
     expect(html).toContain('bad-1')
     expect(html).toContain('rejected-1')
     expect(html).not.toContain('ok-1')
+    expect(html).toContain('Create Backup')
+    expect(html).toContain('Search backups by name')
   })
 
-  it('narrows to one schedule’s runs from a link, and says so', () => {
-    state.backups = [run('a-1', 'Completed', 'a'), run('b-1', 'Completed', 'b')]
+  it('shows every run of one schedule from a link, failed or not', () => {
+    state.runs = response([run('a-1', 'Completed', 'a'), run('a-2', 'Failed', 'a'), run('b-1', 'Completed', 'b')])
     const html = render('/resources/backups?apiGroup=velero.io&labels=velero.io/schedule-name%3Da')
     expect(html).toContain('a-1')
+    expect(html).toContain('a-2')
     expect(html).not.toContain('b-1')
     expect(html).toContain('Schedule a')
+  })
+
+  it('gives lower bounds over a partial read, and never says there are none', () => {
+    state.runs = response([run('bad-1', 'Failed')], 'partial')
+    const html = render('/resources/backups?apiGroup=velero.io')
+    expect(html).toContain('≥1')
+    expect(html).toContain('Counts are lower bounds')
+  })
+
+  it('keeps rows from before a failed refresh, and says so', () => {
+    state.runs = response([run('bad-1', 'Failed')])
+    state.error = new Error('boom')
+    const html = render('/resources/backups?apiGroup=velero.io')
+    expect(html).toContain('bad-1')
+    expect(html).toContain('The last refresh of backups failed')
+    state.error = null
   })
 })

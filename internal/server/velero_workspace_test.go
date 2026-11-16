@@ -486,3 +486,48 @@ func TestVeleroWorkspace_RestrictedCallerBeforeTheFirstBackup(t *testing.T) {
 		t.Fatalf("runs %+v, want read and none kept", s)
 	}
 }
+
+// A reader of Velero's kinds alone, with no Pod or Deployment access, gets the
+// runs through the same per-kind access as the views; what they cannot read is
+// reported as partial coverage, never as an exact list.
+func TestVeleroRuns_VeleroOnlyReader(t *testing.T) {
+	objs := append(veleroWorkspaceFixture("velero"), veleroWorkspaceFixture("kommander")...)
+	seedCNPGWorkspace(t, veleroWorkspaceTestKinds, objs...)
+	seedNamespaces(t, "velero", "kommander")
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{}}
+	for _, resource := range []string{"schedules", "backups", "backupstoragelocations", "restores", "backuprepositories"} {
+		allow(perms, veleroGroup, resource, "", false)
+		for _, ns := range allNamespaceNames() {
+			allow(perms, veleroGroup, resource, ns, ns == "velero")
+		}
+	}
+	env.srv.permCache.Set("velero-only", nil, perms)
+
+	resp := env.authGet(t, "/api/velero/runs/backups", "velero-only", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var got velerosvc.RunsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Coverage.State != integration.KindCoveragePartial {
+		t.Errorf("coverage %+v, want partial", got.Coverage)
+	}
+	if len(got.Runs) != 2 {
+		t.Fatalf("runs %+v, want the two in velero", got.Runs)
+	}
+	for _, r := range got.Runs {
+		if r.Namespace != "velero" {
+			t.Errorf("a run from an unreadable namespace: %+v", r)
+		}
+	}
+
+	bad := env.authGet(t, "/api/velero/runs/schedules", "velero-only", "")
+	defer bad.Body.Close()
+	if bad.StatusCode != http.StatusBadRequest {
+		t.Errorf("schedules: status %d, want 400", bad.StatusCode)
+	}
+}

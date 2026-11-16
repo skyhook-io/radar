@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Archive, CalendarClock, History, Unplug } from 'lucide-react'
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
@@ -35,6 +36,9 @@ export function VeleroDetailPage({ target, onOpenResource }: { target: VeleroDet
   const activeContext = connection.context
   const pinnedContext = searchParams.get('ctx')
   const spec = VELERO_DETAIL_KINDS[target.plural]
+  const queryClient = useQueryClient()
+  // The page's own reads (activity, runs, a location's backups) beside the object.
+  const refresh = useCallback(() => queryClient.refetchQueries({ type: 'active', queryKey: ['velero'] }), [queryClient])
 
   useEffect(() => {
     if (pinnedContext || !activeContext) return
@@ -104,6 +108,7 @@ export function VeleroDetailPage({ target, onOpenResource }: { target: VeleroDet
         titlePrefix={titlePrefix}
         inlineBadges
         onNavigateToResource={openRelated}
+        onRefresh={refresh}
         extraTabs={extraTabs}
       />
     </div>

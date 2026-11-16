@@ -5,6 +5,7 @@ import { useRadarFeature } from '../../../api/client'
 import { useVeleroScheduleActivity } from '../../../api/velero'
 import { RefreshFailedNotice } from '../../workspace/layout'
 import { useWorkspaceNavigate } from '../../workspace/useWorkspaceNavigate'
+import { veleroDetailPath } from '../../velero/routes'
 
 /**
  * Host wrapper leading a Velero Schedule with "Schedule activity": the server's
@@ -18,9 +19,8 @@ export function VeleroScheduleRenderer({ data, onNavigate }: { data: any; onNavi
   const activity = useVeleroScheduleActivity(namespace, name, { enabled: support === 'supported' })
   const reading = activity.data?.reading
   const navigate = useWorkspaceNavigate()
-  // Every run carries the schedule's name in this label, so the Backups list filtered by it is the schedule's history.
-  const showAllRuns = () =>
-    navigate(`/resources/backups?apiGroup=velero.io&namespaces=${encodeURIComponent(namespace)}&labels=${encodeURIComponent(`velero.io/schedule-name=${name}`)}`)
+  // Every run the schedule keeps is on its page's Runs tab.
+  const showAllRuns = () => navigate(veleroDetailPath({ plural: 'schedules', namespace, name }, undefined, 'runs') + '&runs=all')
   const activitySection = support === 'supported' && reading ? (
     <>
       {/* A failed refresh keeps the last reading; say how old it is rather than present it as current. */}

@@ -79,6 +79,36 @@ func (s *Server) handleVeleroScheduleActivity(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// handleVeleroRuns serves GET /api/velero/runs/{kind}?namespace=: every
+// Backup or Restore the caller can read, newest first, through the same
+// per-kind access as the views, so a reader of Velero's kinds alone gets them
+// without Pod or Deployment access. Coverage says what the read covered; a
+// partial read is never an exact count.
+func (s *Server) handleVeleroRuns(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	key := velerosvc.RunsKey(chi.URLParam(r, "kind"))
+	if key == "" {
+		s.writeError(w, http.StatusBadRequest, "runs are listed for backups and restores")
+		return
+	}
+	namespace := r.URL.Query().Get("namespace")
+	if namespace != "" && s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
+	reader, ok := s.veleroReader(r)
+	if !ok {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster connection is changing; try again")
+		return
+	}
+	if !reader.Observations.Installed {
+		s.writeError(w, http.StatusNotFound, "Velero is not installed")
+		return
+	}
+	s.writeJSON(w, reader.Runs(r.Context(), key, namespace))
+}
+
 // refuseOutsideVeleroPin answers 403 for a namespace Radar's --namespace-scope
 // pin excludes. A read there would find an empty cache and report absence, and
 // a write would reach past the scope Radar was started with.

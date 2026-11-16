@@ -78,3 +78,50 @@ export function useVeleroBackupNow() {
     },
   })
 }
+
+/** internal/velero Run: one Backup or Restore as its list and pages show it. */
+export interface VeleroRunRow {
+  namespace: string
+  name: string
+  uid: string
+  phase?: string
+  created?: string
+  started?: string
+  completed?: string
+  expiration?: string
+  schedule?: string
+  storageLocation?: string
+  itemsDone?: number
+  itemsTotal?: number
+  errors: number
+  warnings: number
+  backupName?: string
+  scheduleName?: string
+  namespaceMapping?: Record<string, string>
+}
+
+export interface VeleroRunsResponse {
+  observedAt: string
+  coverage: import('@skyhook-io/k8s-ui').VeleroKindCoverage
+  runs: VeleroRunRow[]
+  total: number
+  truncated?: boolean
+}
+
+// GET /api/velero/runs/{backups|restores}?namespace=
+//
+// Every Backup or Restore the caller can read, newest first, read through the
+// same per-kind access as the Velero views; `coverage` says what it covered.
+export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string) {
+  const { guard, gatedKey } = useRadarFeature('veleroRuns')
+  const base = getApiBase()
+  return useQuery<VeleroRunsResponse>({
+    queryKey: ['velero', 'runs', base, kind, namespace ?? '', ...gatedKey],
+    queryFn: ({ signal }) =>
+      guard(() => fetchJSON<VeleroRunsResponse>(`/velero/runs/${kind}${namespace ? `?namespace=${encodeURIComponent(namespace)}` : ''}`, signal)),
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === base && prevQuery?.queryKey[3] === kind && prevQuery?.queryKey[4] === (namespace ?? '') ? prev : undefined),
+    retry: shouldRetryRadarQuery,
+  })
+}

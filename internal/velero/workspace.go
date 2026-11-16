@@ -320,3 +320,129 @@ func (r *Reader) ScheduleActivity(ctx context.Context, namespace, name string) (
 	resp.ServerStopped = inst.Server.Down()
 	return resp, true, true
 }
+
+// maxRuns bounds a runs response; the newest are kept.
+const maxRuns = 5000
+
+// Run is one Backup or Restore as its list and its pages show it.
+type Run struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	UID       string `json:"uid"`
+	Phase     string `json:"phase,omitempty"`
+	Created   string `json:"created,omitempty"`
+	Started   string `json:"started,omitempty"`
+	Completed string `json:"completed,omitempty"`
+	// Expiration is a Backup's; Velero deletes it at the next garbage collection after it.
+	Expiration string `json:"expiration,omitempty"`
+	// Schedule is the Backup's velero.io/schedule-name label.
+	Schedule        string `json:"schedule,omitempty"`
+	StorageLocation string `json:"storageLocation,omitempty"`
+	// ItemsDone and ItemsTotal: items backed up, or restored; absent until Velero counts them.
+	ItemsDone  *int64 `json:"itemsDone,omitempty"`
+	ItemsTotal *int64 `json:"itemsTotal,omitempty"`
+	Errors     int64  `json:"errors"`
+	Warnings   int64  `json:"warnings"`
+	// BackupName and NamespaceMapping are a Restore's.
+	BackupName       string            `json:"backupName,omitempty"`
+	ScheduleName     string            `json:"scheduleName,omitempty"`
+	NamespaceMapping map[string]string `json:"namespaceMapping,omitempty"`
+}
+
+// RunsResponse is GET /api/velero/runs/{backups|restores}.
+type RunsResponse struct {
+	ObservedAt time.Time                `json:"observedAt"`
+	Coverage   integration.KindCoverage `json:"coverage"`
+	Runs       []Run                    `json:"runs"`
+	// Total counts the runs read before the cap; Runs holds the newest.
+	Total     int  `json:"total"`
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// RunsKey is the workspace kind key for a runs route's kind, or "".
+func RunsKey(plural string) string {
+	switch plural {
+	case "backups":
+		return backupsKey
+	case "restores":
+		return restoresKey
+	}
+	return ""
+}
+
+// Runs lists one kind's runs the caller can read, newest first: in one
+// namespace, or across the request scope when namespace is "". Read through
+// the same per-kind access as the views, so a Velero-only reader gets them;
+// Coverage says what that read covered.
+func (r *Reader) Runs(ctx context.Context, key, namespace string) RunsResponse {
+	var scope []string
+	if namespace != "" {
+		scope = []string{namespace}
+	} else if r.Observations.Namespaces != nil {
+		scope = r.Observations.Namespaces
+	}
+	var kind integration.WorkspaceKind
+	for _, k := range workspaceKinds {
+		if k.Key == key {
+			kind = k
+		}
+	}
+	access, items := r.Observations.WorkspaceRead(ctx, kind, scope)
+	resp := RunsResponse{ObservedAt: r.now(), Coverage: access.Coverage(), Runs: []Run{}}
+	for _, u := range integration.KeepGroups(items, groups) {
+		if namespace != "" && u.GetNamespace() != namespace {
+			continue
+		}
+		resp.Runs = append(resp.Runs, runOf(u, key == restoresKey))
+	}
+	sort.Slice(resp.Runs, func(i, j int) bool {
+		a, b := runStart(resp.Runs[i]), runStart(resp.Runs[j])
+		if a != b {
+			return a > b
+		}
+		return resp.Runs[i].Name < resp.Runs[j].Name
+	})
+	resp.Total = len(resp.Runs)
+	if len(resp.Runs) > maxRuns {
+		resp.Runs, resp.Truncated = resp.Runs[:maxRuns], true
+	}
+	return resp
+}
+
+func runStart(r Run) string {
+	if r.Started != "" {
+		return r.Started
+	}
+	return r.Created
+}
+
+func runOf(u *unstructured.Unstructured, restore bool) Run {
+	str := func(fields ...string) string { v, _, _ := unstructured.NestedString(u.Object, fields...); return v }
+	num := func(fields ...string) int64 { v, _, _ := unstructured.NestedInt64(u.Object, fields...); return v }
+	opt := func(fields ...string) *int64 {
+		if v, found, _ := unstructured.NestedInt64(u.Object, fields...); found {
+			return &v
+		}
+		return nil
+	}
+	run := Run{
+		Namespace: u.GetNamespace(), Name: u.GetName(), UID: string(u.GetUID()),
+		Phase: str("status", "phase"), Created: u.GetCreationTimestamp().UTC().Format(time.RFC3339),
+		Started: str("status", "startTimestamp"), Completed: str("status", "completionTimestamp"),
+		Expiration: str("status", "expiration"), Schedule: u.GetLabels()[domain.ScheduleNameLabel],
+		StorageLocation: str("spec", "storageLocation"),
+		ItemsTotal:      opt("status", "progress", "totalItems"),
+		Errors:          num("status", "errors"), Warnings: num("status", "warnings"),
+		BackupName: str("spec", "backupName"), ScheduleName: str("spec", "scheduleName"),
+	}
+	if restore {
+		run.ItemsDone = opt("status", "progress", "itemsRestored")
+		run.Schedule = ""
+		if m, found, _ := unstructured.NestedStringMap(u.Object, "spec", "namespaceMapping"); found && len(m) > 0 {
+			run.NamespaceMapping = m
+		}
+	} else {
+		run.ItemsDone = opt("status", "progress", "itemsBackedUp")
+	}
+	return run
+}

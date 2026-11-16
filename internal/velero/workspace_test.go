@@ -124,3 +124,58 @@ func BenchmarkWorkspace10kBackups(b *testing.B) {
 		_ = r.Workspace(context.Background())
 	}
 }
+
+func TestRuns(t *testing.T) {
+	at := func(h int) string { return testNow.Add(time.Duration(-h) * time.Hour).Format(time.RFC3339) }
+	backups := []*unstructured.Unstructured{
+		obj("Backup", "velero", "older", map[string]any{domain.ScheduleNameLabel: "daily"}, map[string]any{"storageLocation": "default"},
+			map[string]any{"phase": "Completed", "startTimestamp": at(5), "progress": map[string]any{"totalItems": int64(10), "itemsBackedUp": int64(10)}}),
+		obj("Backup", "velero", "newer", nil, map[string]any{}, map[string]any{"phase": "PartiallyFailed", "startTimestamp": at(1), "errors": int64(2)}),
+		obj("Backup", "other", "elsewhere", nil, map[string]any{}, map[string]any{"phase": "Completed", "startTimestamp": at(2)}),
+	}
+	restore := obj("Restore", "velero", "copy", nil, map[string]any{"backupName": "older", "namespaceMapping": map[string]any{"app": "app-copy"}},
+		map[string]any{"phase": "Completed", "startTimestamp": at(1), "progress": map[string]any{"totalItems": int64(4), "itemsRestored": int64(4)}})
+
+	t.Run("newest first, with what the lists show", func(t *testing.T) {
+		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}.reader().Runs(context.Background(), RunsKey("backups"), "")
+		if len(resp.Runs) != 3 || resp.Runs[0].Name != "newer" || resp.Runs[2].Name != "older" {
+			t.Fatalf("runs %+v", resp.Runs)
+		}
+		old := resp.Runs[2]
+		if old.Schedule != "daily" || old.StorageLocation != "default" || old.ItemsDone == nil || *old.ItemsDone != 10 || *old.ItemsTotal != 10 {
+			t.Errorf("run %+v", old)
+		}
+		if resp.Runs[0].Errors != 2 || resp.Runs[0].ItemsTotal != nil {
+			t.Errorf("an uncounted run must not read as zero items: %+v", resp.Runs[0])
+		}
+	})
+
+	t.Run("one installation", func(t *testing.T) {
+		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}.reader().Runs(context.Background(), RunsKey("backups"), "velero")
+		if len(resp.Runs) != 2 || resp.Total != 2 {
+			t.Fatalf("runs %+v", resp.Runs)
+		}
+	})
+
+	t.Run("a restore's source and mapping", func(t *testing.T) {
+		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"restores": {restore}}}.reader().Runs(context.Background(), RunsKey("restores"), "")
+		r := resp.Runs[0]
+		if r.BackupName != "older" || r.NamespaceMapping["app"] != "app-copy" || r.ItemsDone == nil || *r.ItemsDone != 4 {
+			t.Errorf("restore %+v", r)
+		}
+	})
+
+	t.Run("a denied kind says so, with no runs", func(t *testing.T) {
+		resp := fakeRead{
+			objects: map[string][]*unstructured.Unstructured{"backups": backups},
+			access:  map[string]integration.KindAccess{"backups": {State: integration.KindCoverageDenied}},
+		}.reader().Runs(context.Background(), RunsKey("backups"), "")
+		if resp.Coverage.State != integration.KindCoverageDenied || len(resp.Runs) != 0 {
+			t.Errorf("coverage %+v runs %d", resp.Coverage, len(resp.Runs))
+		}
+	})
+
+	if RunsKey("schedules") != "" {
+		t.Error("only backups and restores are runs")
+	}
+}

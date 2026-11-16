@@ -27,6 +27,8 @@ export interface VeleroScreenProps {
   onInstallation: (namespace: string | null) => void
   onInspect: (resource: SelectedResource) => void
   inspected: SelectedResource | null
+  /** Create one of the screen's kind, where the screen is a kind's list. */
+  onCreate?: () => void
 }
 
 const KIND_LABEL: Record<VeleroWorkspaceKey, string> = {
