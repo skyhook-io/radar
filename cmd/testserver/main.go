@@ -115,6 +115,9 @@ func main() {
 		if err := k8s.InitLoadTestResourceCache(fakeClient); err != nil {
 			log.Fatalf("InitLoadTestResourceCache: %v", err)
 		}
+		if err := installCensusDiscovery(fakeClient); err != nil {
+			log.Fatalf("installCensusDiscovery: %v", err)
+		}
 	} else if err := k8s.InitTestResourceCache(fakeClient); err != nil {
 		log.Fatalf("InitTestResourceCache: %v", err)
 	}
