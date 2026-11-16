@@ -182,9 +182,10 @@ func TestSameImage(t *testing.T) {
 	}
 }
 
-// One image run by two workloads is one row. The newest report's findings
-// win whole: a CVE fixed in the newer scan doesn't linger from the older one.
-func TestOneRowPerImageNewestReportWins(t *testing.T) {
+// One image run by two workloads is one row, linked to the newest report,
+// with both reports' findings: each scan of a build can leave out what the
+// other lists.
+func TestOneRowPerImageMergesItsReports(t *testing.T) {
 	items := []*unstructured.Unstructured{
 		vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/base", tag: "1", digest: "sha256:base", scanned: "2026-11-01T00:00:00Z", vulns: []vuln{{"CVE-OLD", "CRITICAL", "zlib", "1", "2"}}}),
 		vulnReport(reportSpec{name: "b", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/base", tag: "1", digest: "sha256:base", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{{"CVE-NEW", "HIGH", "curl", "7", ""}}}),
@@ -198,7 +199,7 @@ func TestOneRowPerImageNewestReportWins(t *testing.T) {
 		t.Fatalf("images: %+v", resp.Images)
 	}
 	img := resp.Images[0]
-	if len(img.Workloads) != 2 || img.Counts.Critical != 0 || img.Counts.High != 1 || img.Report.Name != "b" {
+	if len(img.Workloads) != 2 || img.Counts.Critical != 1 || img.Counts.High != 1 || img.Report.Name != "b" {
 		t.Fatalf("image: %+v", img)
 	}
 	if resp.Summary.ImagesScanned != 1 || resp.Summary.Workloads != 2 || resp.Summary.WorkloadsWithCriticalOrHigh != 2 {
@@ -746,37 +747,44 @@ func TestRunningBuildWinsAndPendingSpellingSearches(t *testing.T) {
 	}
 }
 
-// A report whose object no longer runs competes for its build like any other:
-// the newest wins, ties by name, whatever order the reports list in.
-func TestIdleReportCompetesForItsBuild(t *testing.T) {
+// A report whose object no longer runs still describes its build: its
+// findings merge with the running owner's, and the newest report (by name on
+// a tie) is the one the row links to, whatever order the reports list in.
+func TestIdleReportJoinsItsBuild(t *testing.T) {
 	spec := func(name, owner, scanned string, vulns ...vuln) *unstructured.Unstructured {
 		return vulnReport(reportSpec{name: name, ns: "shop", ownerKind: "ReplicaSet", ownerName: owner, container: "app", repo: "acme/web", tag: "1", digest: "sha256:d", scanned: scanned, vulns: vulns})
 	}
 	active := running(liveTarget("shop", "ReplicaSet", "web-1", "app", "acme/web:1", "", checkout), "sha256:d")
 	fresh := running(liveTarget("shop", "ReplicaSet", "web-3", "app", "acme/web:1", "", checkout), "sha256:d")
-	critical := func(items ...*unstructured.Unstructured) int {
+	activeReport := spec("a", "web-1", "2026-11-17T10:00:00Z", vuln{"CVE-Y", "HIGH", "zlib", "1", "2"})
+	idleReport := spec("b", "web-2", "2026-11-16T10:00:00Z", vuln{"CVE-X", "CRITICAL", "zlib", "1", "2"})
+	for _, items := range [][]*unstructured.Unstructured{{activeReport, idleReport}, {idleReport, activeReport}} {
 		got := mustBuild(t, items, []target{active, fresh}, ViewImage, Filter{})
-		if len(got.Images)+len(got.Clean) != 1 {
-			t.Fatalf("one image: %+v %+v", got.Images, got.Clean)
+		if len(got.Images) != 1 || got.Summary.Counts.Critical != 1 || got.Summary.Counts.High != 1 || got.Images[0].Report.Name != "a" || got.Coverage.InactiveReports != 0 {
+			t.Fatalf("merged, linked to the newest: %+v %+v", got.Summary, got.Coverage)
 		}
-		return got.Summary.Counts.Critical
-	}
-	olderActive := spec("a", "web-1", "2026-11-10T10:00:00Z")
-	newerIdle := spec("b", "web-2", "2026-11-16T10:00:00Z", vuln{"CVE-X", "CRITICAL", "zlib", "1", "2"})
-	if critical(olderActive, newerIdle) != 1 || critical(newerIdle, olderActive) != 1 {
-		t.Fatal("the newer idle report wins")
-	}
-	newerActive := spec("a", "web-1", "2026-11-17T10:00:00Z", vuln{"CVE-Y", "HIGH", "zlib", "1", "2"})
-	if critical(newerActive, newerIdle) != 0 {
-		t.Fatal("an older idle report loses")
 	}
 	tieA := spec("a", "web-2", "2026-11-16T10:00:00Z", vuln{"CVE-Y", "HIGH", "zlib", "1", "2"})
-	tieB := spec("b", "web-4", "2026-11-16T10:00:00Z", vuln{"CVE-X", "CRITICAL", "zlib", "1", "2"})
+	tieB := spec("b", "web-4", "2026-11-16T10:00:00Z", vuln{"CVE-Y", "HIGH", "zlib", "1", "2"}, vuln{"CVE-X", "CRITICAL", "zlib", "1", "2"})
 	only := running(liveTarget("shop", "ReplicaSet", "web-3", "app", "acme/web:1", "", checkout), "sha256:d")
 	for _, items := range [][]*unstructured.Unstructured{{tieA, tieB}, {tieB, tieA}} {
 		got := mustBuild(t, items, []target{only}, ViewImage, Filter{})
-		if got.Summary.Counts.Critical != 0 {
-			t.Fatalf("a tie goes to the lower name, in either order: %+v", got.Summary)
+		if got.Summary.Counts.Critical != 1 || got.Summary.Counts.High != 1 || got.Images[0].Report.Name != "a" {
+			t.Fatalf("a tie links the lower name, findings counted once: %+v", got.Summary)
+		}
+	}
+}
+
+// Two filtered scans of one build list different subsets: every known
+// finding counts, once.
+func TestCrossingScansOfABuildBothCount(t *testing.T) {
+	a := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/shared", tag: "1", digest: "sha256:d", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{{"CVE-CRIT", "CRITICAL", "lib", "1", "2"}, {"CVE-HIGH", "HIGH", "lib", "1", "2"}}})
+	b := vulnReport(reportSpec{name: "b", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/shared", tag: "1", digest: "sha256:d", scanned: "2026-11-11T00:00:00Z", vulns: []vuln{{"CVE-HIGH", "HIGH", "lib", "1", "2"}, {"CVE-MED", "MEDIUM", "lib", "1", "2"}, {"CVE-LOW", "LOW", "lib", "1", "2"}}})
+	targets := []target{running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/shared:1", "", checkout), "sha256:d"), running(liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/shared:1", "", worker), "sha256:d")}
+	for _, order := range [][]*unstructured.Unstructured{{a, b}, {b, a}} {
+		got := mustBuild(t, order, targets, ViewImage, Filter{Workload: &checkout})
+		if c := got.Summary.Counts; c.Critical != 1 || c.High != 1 || c.Medium != 1 || c.Low != 1 {
+			t.Fatalf("every known finding, once: %+v", c)
 		}
 	}
 }
@@ -832,9 +840,9 @@ func TestEmptyScanDoesNotClearAnotherWorkloadsFindings(t *testing.T) {
 	}
 }
 
-// Two non-empty scans of one build: the one listing more wins, so a policy
-// that drops a Critical for one workload doesn't drop it for another.
-func TestFullerScanOfABuildWins(t *testing.T) {
+// Two non-empty scans of one build: a policy that drops a Critical for one
+// workload doesn't drop it for another.
+func TestFilteredScanKeepsAnotherWorkloadsCritical(t *testing.T) {
 	full := vulnReport(reportSpec{name: "full", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/shared", tag: "1", digest: "sha256:d", scanned: "2026-11-10T00:00:00Z", vulns: []vuln{{"CVE-CRIT", "CRITICAL", "lib", "1", "2"}, {"CVE-HIGH", "HIGH", "lib", "1", "2"}}})
 	filtered := vulnReport(reportSpec{name: "filtered", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/shared", tag: "1", digest: "sha256:d", scanned: "2026-11-11T00:00:00Z", vulns: []vuln{{"CVE-HIGH", "HIGH", "lib", "1", "2"}}})
 	targets := []target{running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/shared:1", "", checkout), "sha256:d"), running(liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/shared:1", "", worker), "sha256:d")}

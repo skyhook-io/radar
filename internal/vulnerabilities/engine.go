@@ -153,16 +153,29 @@ func newer(a, b *report) bool {
 	return a.scannedAt.After(b.scannedAt) || (a.scannedAt.Equal(b.scannedAt) && a.ref.Namespace+"/"+a.ref.Name < b.ref.Namespace+"/"+b.ref.Name)
 }
 
-// preferred is whether report a should describe an image over report b,
-// both scans of it: the one listing more findings, else the newer. One
-// build's scans list fewer only when the scanner was told to leave some
-// out (an ignore policy scoped to one workload, unfixed or low findings),
-// so a shorter list doesn't show that another workload's CVEs went away.
-func preferred(a, b *report) bool {
-	if na, nb := findingCount(a.u), findingCount(b.u); na != nb {
-		return na > nb
+// mergeFindings is one build's findings across its current reports, each
+// once. Scans of one build differ only by what the scanner was told to
+// leave out (an ignore policy scoped to one workload, unfixed or low
+// findings) or by when they ran, so each lists findings the others may
+// not; none shows another's went away. The newest report's copy of a
+// finding comes first, so its metadata wins.
+func mergeFindings(reports []*report) []Finding {
+	if len(reports) == 1 {
+		return parsedFindings.get(reports[0].u)
 	}
-	return newer(a, b)
+	var merged []Finding
+	seen := map[string]bool{}
+	for _, r := range reports {
+		for _, f := range parsedFindings.get(r.u) {
+			key := f.ID + "\x00" + f.ecosystem + "\x00" + f.Package + "\x00" + f.InstalledVersion
+			if !seen[key] {
+				seen[key] = true
+				merged = append(merged, f)
+			}
+		}
+	}
+	slices.SortFunc(merged, compareFindings)
+	return merged
 }
 
 // sameImage reports whether a report scanned what a container runs. A
@@ -216,11 +229,38 @@ type slotKey struct {
 }
 
 type imageAgg struct {
+	// report is the newest current report about the image, the one a row
+	// links to; others are the rest, whose findings merge with its.
 	report    *report
+	others    []*report
 	workloads map[WorkloadRef]bool
 	// refs are the spellings the running Pods give the image, which a
 	// search finds it by beside the report's own.
 	refs map[string]bool
+}
+
+// add records another current report about the image; the newest leads.
+func (a *imageAgg) add(r *report) {
+	if newer(r, a.report) {
+		r, a.report = a.report, r
+	}
+	a.others = append(a.others, r)
+}
+
+// reports are the image's current reports, newest first, the order its
+// findings merge in whatever order the reports were listed.
+func (a *imageAgg) reports() []*report {
+	others := slices.Clone(a.others)
+	slices.SortFunc(others, func(x, y *report) int {
+		if newer(x, y) {
+			return -1
+		}
+		if newer(y, x) {
+			return 1
+		}
+		return 0
+	})
+	return append([]*report{a.report}, others...)
 }
 
 // searchText is what a search matches an image row against: every spelling
@@ -258,7 +298,7 @@ type rollup struct {
 // scanned. A report about another image of the same object (a StatefulSet
 // before Trivy rescanned its new image) describes nothing that runs; the
 // running image stays unscanned rather than borrowing its findings. Of
-// several reports about one image the preferred one wins, whole (see preferred). Findings are read
+// several reports about one image the findings merge (see mergeFindings). Findings are read
 // only for the winners, at most MaxFindings in all; an image past that is
 // marked unread, never shown as clean.
 // join matches reports to targets and reads the chosen reports' findings
@@ -277,7 +317,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			reports = append(reports, r)
 		}
 	}
-	idle := map[string]*report{}
+	idle := map[string][]*report{}
 	inactive := 0
 	for i := range reports {
 		r := &reports[i]
@@ -297,8 +337,8 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if len(matched) == 0 {
 			// Its object no longer runs, but its build may: after a restart,
 			// the new ReplicaSet runs the build the old one's report scanned.
-			if prev := idle[r.digest]; r.digest != "" && (prev == nil || preferred(r, prev)) {
-				idle[r.digest] = r
+			if r.digest != "" {
+				idle[r.digest] = append(idle[r.digest], r)
 			}
 			inactive++
 			continue
@@ -307,8 +347,8 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if agg == nil {
 			agg = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
 			j.images[r.imageID] = agg
-		} else if preferred(r, agg.report) {
-			agg.report = r
+		} else {
+			agg.add(r)
 		}
 		for _, t := range matched {
 			w := t.workload
@@ -319,9 +359,8 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 	}
 	// A report whose object no longer runs still describes its build where
-	// a container runs it (a restarted ReplicaSet), and competes for the
-	// image like any other (see preferred).
-	// Only for a container the digest's image would hold.
+	// a container runs it (a restarted ReplicaSet), and joins the image's
+	// other reports. Only for a container the digest's image would hold.
 	runs := map[string]bool{}
 	for i := range targets {
 		t := &targets[i]
@@ -329,18 +368,18 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			runs[t.digest] = true
 		}
 	}
-	for d, r := range idle {
+	for d, rs := range idle {
 		if !runs[d] {
 			continue
 		}
-		if agg := j.images[d]; agg == nil {
-			j.images[d] = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
-		} else if preferred(r, agg.report) {
-			agg.report = r
-		} else {
-			continue
+		for _, r := range rs {
+			if agg := j.images[d]; agg == nil {
+				j.images[d] = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
+			} else {
+				agg.add(r)
+			}
+			inactive--
 		}
-		inactive--
 	}
 	// A scanned build counts for every container that runs it: another
 	// workload, a namespace Trivy doesn't scan, or a restarted ReplicaSet.
@@ -378,7 +417,11 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		n := findingCount(agg.report.u)
+		reports := agg.reports()
+		n := 0
+		for _, r := range reports {
+			n += findingCount(r.u)
+		}
 		if read+n > MaxFindings {
 			j.truncated = true
 			agg.report.findings = nil
@@ -386,7 +429,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			continue
 		}
 		read += n
-		agg.report.findings = parsedFindings.get(agg.report.u)
+		agg.report.findings = mergeFindings(reports)
 	}
 	// A slot is a workload's container running one build: by digest once
 	// the container has started, by reference before.
