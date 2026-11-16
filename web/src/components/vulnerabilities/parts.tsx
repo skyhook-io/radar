@@ -162,6 +162,15 @@ function namesOnly(gap: VulnerabilityGap): boolean {
   return COLLECTION_CODES.has(gap.code) && gapKinds(gap).every((k) => k.kind === 'ReplicaSet')
 }
 
+/**
+ * How many CVEs an upgrade clears at one severity, right-aligned for a
+ * column of them; a dash for none. Upgrade lists show Critical and High
+ * only: those decide which upgrade comes first.
+ */
+export function ClearedCount({ count, severity }: { count: number; severity: 'critical' | 'high' }) {
+  return <span className={clsx('text-right font-mono tabular-nums', count > 0 ? VULN_SEVERITY_TEXT[upper(severity)] : 'text-theme-text-tertiary')}>{count > 0 ? count : '–'}</span>
+}
+
 /** Why a build of a moved tag stays unscanned, and the ways out: for a tooltip. */
 export const OTHER_BUILD_TIP = "These Pods pulled the tag before it moved. Trivy scans only the build the tag points to now, so this one won't be scanned. Pin the image by digest to keep scans matched, or redeploy so the Pods pull the current build."
 

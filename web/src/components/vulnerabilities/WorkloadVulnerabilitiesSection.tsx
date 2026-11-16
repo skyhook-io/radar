@@ -1,7 +1,5 @@
 import { Fragment } from 'react'
-import { clsx } from 'clsx'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { VULN_SEVERITY_TEXT } from '@skyhook-io/k8s-ui'
 import { WithTooltip } from '../ui/Tooltip'
 import { ChevronRight, Shield } from 'lucide-react'
 import { Section } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
@@ -10,7 +8,7 @@ import { useAPIResources } from '../../api/apiResources'
 import { useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { hasVulnerabilityReports, isKindUnknown, useVulnerabilities, workloadParam } from '../../api/vulnerabilities'
-import { FixVersion, ImageName, OTHER_BUILD_TIP, SeverityCounts, gapSentence } from './parts'
+import { ClearedCount, FixVersion, ImageName, OTHER_BUILD_TIP, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
   kind: string
@@ -141,8 +139,8 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
                   {f.to
                     ? <span className="flex min-w-0 items-baseline gap-1 font-mono"><span className="text-theme-text-tertiary">→</span><FixVersion installed={f.from.join(', ')} target={f.to} showInstalled={false} /></span>
                     : <span className="truncate font-mono text-theme-text-tertiary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
-                  <Cleared count={f.counts.critical} tone={VULN_SEVERITY_TEXT.CRITICAL} />
-                  <Cleared count={f.counts.high} tone={VULN_SEVERITY_TEXT.HIGH} />
+                  <ClearedCount count={f.counts.critical} severity="critical" />
+                  <ClearedCount count={f.counts.high} severity="high" />
                 </Fragment>
               ))}
               {upgrades.length > UPGRADES_SHOWN && (
@@ -160,11 +158,6 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
 
 // Upgrades shown in the drawer; the rest are one click away in By fix.
 const UPGRADES_SHOWN = 3
-
-// A count of CVEs an upgrade clears at one severity, right-aligned in its column.
-function Cleared({ count, tone }: { count: number; tone: string }) {
-  return <span className={clsx('text-right font-mono tabular-nums', count > 0 ? tone : 'text-theme-text-tertiary')}>{count > 0 ? count : '–'}</span>
-}
 
 // The same image in other workloads: one rebuild fixes them all.
 // partial: the response lists only some of the image's workloads.

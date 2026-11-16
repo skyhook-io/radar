@@ -57,6 +57,7 @@ import {
   findingsCertainty,
   readsComplete,
   workloadsByReplicaSet,
+  ClearedCount,
   OTHER_BUILD_TIP,
   imageParts,
   gapSentence,
@@ -745,8 +746,10 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
             <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
             {f.packageType && <span className="truncate text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
           </span>
-          <span className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-baseline gap-2">
-            <SeverityCounts counts={f.counts} />
+          {/* Critical and High cleared, in fixed columns so rows line up. */}
+          <span className="grid min-w-0 grid-cols-[1.75rem_2.25rem_minmax(0,1fr)] items-baseline gap-2">
+            <ClearedCount count={f.counts.critical} severity="critical" />
+            <ClearedCount count={f.counts.high} severity="high" />
             {f.to
               ? <FixVersion installed={f.from.join(', ')} target={f.to} />
               : <span className="truncate font-mono text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
