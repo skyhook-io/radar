@@ -32,7 +32,7 @@ function chart(overrides: Partial<SubstrateHealth['charts'][number]>): Substrate
       { labels: { series: 'idle (gvisor)' }, dataPoints: [{ timestamp: 4600, value: 1.5 }] },
       { labels: { series: 'partial (gvisor)' }, dataPoints: [{ timestamp: 4600, value: 1.5 }] },
     ],
-    steps: 61, covered: 1, ...overrides,
+    ...overrides,
   }
 }
 

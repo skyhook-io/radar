@@ -56,9 +56,8 @@ type SubstrateChart struct {
 	// Population says which observations the chart counts.
 	Population string `json:"population"`
 	// Source names the metrics read, in the spelling Prometheus holds them.
-	Source   string `json:"source"`
-	SeriesBy string `json:"seriesBy,omitempty"`
-	State    string `json:"state"`
+	Source string `json:"source"`
+	State  string `json:"state"`
 	// Reason says why a chart has no series; on an ok chart, which of its
 	// named series has no data.
 	Reason    string          `json:"reason,omitempty"`
@@ -67,8 +66,6 @@ type SubstrateChart struct {
 	Series []prom.Series `json:"series"`
 	// Omitted counts the series beyond the first 12.
 	Omitted int `json:"omitted,omitempty"`
-	Steps   int `json:"steps"`
-	Covered int `json:"covered"`
 }
 
 // SubstrateHealthResponse is the curated Substrate chart set for one WorkerPool or Node.
@@ -95,8 +92,8 @@ type substrateQuery struct {
 }
 
 type substrateChartDef struct {
-	id, title, unit, population, seriesBy string
-	inst                                  substrateInstrument
+	id, title, unit, population string
+	inst                        substrateInstrument
 	// also: other instruments the chart's queries read. Each is checked like
 	// inst; the chart is drawn only when all of them resolve to one scope.
 	also        []substrateInstrument
@@ -118,7 +115,7 @@ func substrateRateWindow(step time.Duration) string {
 func substratePoolCharts() []substrateChartDef {
 	return []substrateChartDef{
 		{
-			id: "workers", title: "Workers by state", unit: "workers", seriesBy: "state",
+			id: "workers", title: "Workers by state", unit: "workers",
 			population:  "Every worker Pod of this pool, by how many actor slots are in use and by sandbox class. A worker is a Pod, not an actor slot. Each API replica reports the whole pool, so the counts are averaged across replicas and can be fractional while they disagree. Workers of class unknown are not capacity.",
 			inst:        instWorkers,
 			emptyReason: "Substrate's API reported no workers for this pool in this range",
@@ -128,7 +125,7 @@ func substratePoolCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "readiness", title: "Ready and desired workers", unit: "count", seriesBy: "series",
+			id: "readiness", title: "Ready and desired workers", unit: "count",
 			population: "The pool's desired and ready worker counts as Substrate's controller recorded them over time.",
 			inst:       instDesired,
 			also:       []substrateInstrument{instReady},
@@ -141,7 +138,7 @@ func substratePoolCharts() []substrateChartDef {
 			emptyReason: "Substrate's controller exported no worker counts in this range",
 		},
 		{
-			id: "resumeTime", bucketed: true, title: "Resume time", unit: "seconds", seriesBy: "series",
+			id: "resumeTime", bucketed: true, title: "Resume time", unit: "seconds",
 			population:  "Successful resumes of actors placed on this pool. A resume that failed before a worker was assigned carries no pool and is not counted.",
 			inst:        instLifecycle,
 			emptyReason: "no actor resumed on this pool in this range",
@@ -163,7 +160,7 @@ func substratePoolCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "placementTime", bucketed: true, title: "Placement time", unit: "seconds", seriesBy: "series",
+			id: "placementTime", bucketed: true, title: "Placement time", unit: "seconds",
 			population:  "How long the scheduler took to place an actor on a worker of this pool. Placements that found no capacity name no pool, so they are not counted here.",
 			inst:        instAssignment,
 			emptyReason: "no actor was placed on this pool in this range",
@@ -195,7 +192,7 @@ func substrateNodeCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "overdueUploads", title: "Actors with overdue uploads", unit: "count", seriesBy: "band",
+			id: "overdueUploads", title: "Actors with overdue uploads", unit: "count",
 			population:  "Actors whose snapshot upload to object storage is late, by how late.",
 			inst:        instOverdue,
 			emptyReason: "atelet reported no overdue uploads on this node in this range",
@@ -204,7 +201,7 @@ func substrateNodeCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "uploadTime", bucketed: true, title: "Snapshot upload time", unit: "seconds", seriesBy: "series",
+			id: "uploadTime", bucketed: true, title: "Snapshot upload time", unit: "seconds",
 			population:  "Successful snapshot uploads from this node to object storage.",
 			inst:        instUpload,
 			emptyReason: "no snapshot was uploaded from this node in this range",
@@ -222,7 +219,7 @@ func substrateNodeCharts() []substrateChartDef {
 			},
 		},
 		{
-			id: "restoreTime", bucketed: true, title: "Restore and checkpoint time", unit: "seconds", seriesBy: "series",
+			id: "restoreTime", bucketed: true, title: "Restore and checkpoint time", unit: "seconds",
 			population:  "Whole restores and checkpoints of actors on this node. The two overlap in time and are not added together.",
 			inst:        instRestore,
 			also:        []substrateInstrument{instCheckpoint},
@@ -400,7 +397,6 @@ func querySubstrateCharts(ctx context.Context, q seriesQuerier, resolve substrat
 func (r *substrateRun) charts() []SubstrateChart {
 	req := r.req
 	w := substrateRateWindow(req.step)
-	steps := max(0, int(req.end.Sub(req.start)/req.step)+1)
 	checks := make([]substrateFamilyCheck, len(req.charts))
 	for i, d := range req.charts {
 		checks[i] = r.check(d.families())
@@ -412,7 +408,7 @@ func (r *substrateRun) charts() []SubstrateChart {
 	for i, d := range req.charts {
 		check := checks[i]
 		c := &charts[i]
-		*c = SubstrateChart{ID: d.id, Title: d.title, Unit: d.unit, Population: d.population, Source: req.sps.source(d.families()), SeriesBy: d.seriesBy, Isolation: check.isolation, Series: []prom.Series{}, Steps: steps}
+		*c = SubstrateChart{ID: d.id, Title: d.title, Unit: d.unit, Population: d.population, Source: req.sps.source(d.families()), Isolation: check.isolation, Series: []prom.Series{}}
 		if check.state != "" {
 			c.State, c.Reason = check.state, check.reason
 			continue
@@ -455,16 +451,8 @@ func runSubstrateChart(ctx context.Context, q seriesQuerier, d substrateChartDef
 		c.Omitted = len(series) - substrateMaxSeries
 		series = series[:substrateMaxSeries]
 	}
-	covered := map[int64]bool{}
-	for _, s := range series {
-		for _, p := range s.DataPoints {
-			if !math.IsNaN(p.Value) && !math.IsInf(p.Value, 0) {
-				covered[p.Timestamp] = true
-			}
-		}
-	}
-	c.Series, c.Covered = series, len(covered)
-	if c.Covered > 0 {
+	c.Series = series
+	if hasSample(series) {
 		c.State = SubstrateChartOK
 		// A chart of several series must not pass for complete with one missing.
 		if len(missing) > 0 {

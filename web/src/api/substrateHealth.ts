@@ -19,7 +19,6 @@ export interface SubstrateChart {
   population: string
   /** The metrics read, in the spelling Prometheus holds them. */
   source: string
-  seriesBy?: string
   state: SubstrateChartState
   /** Why there are no series; on an ok chart, which named series has no data. */
   reason?: string
@@ -28,8 +27,6 @@ export interface SubstrateChart {
   series: { labels: Record<string, string>; dataPoints: { timestamp: number; value: number | null }[] }[]
   /** Series beyond the first 12. */
   omitted?: number
-  steps: number
-  covered: number
 }
 
 export type SubstrateVerdictState =

@@ -52,7 +52,7 @@ describe('SubstrateVerdictLine', () => {
     withVerdict({ state: 'freeActorSlots', reason: "Radar cannot tell whether the pool is short of workers: Substrate's controller reported no desired worker count", facts: [] })
     expect(render(pool)).toContain('aria-label="Qualified"')
     const unverified = { isolation: { mode: 'unverified' as const, note: "Radar couldn't confirm these Substrate series belong to this exact cluster" } }
-    health = { data: { ...base, status: 'available', verdict: { state: 'noFreeActorSlots', facts: [] }, charts: [{ id: 'workers', title: '', unit: 'workers', population: '', source: '', state: 'ok', series: [], steps: 0, covered: 0, ...unverified }] } }
+    health = { data: { ...base, status: 'available', verdict: { state: 'noFreeActorSlots', facts: [] }, charts: [{ id: 'workers', title: '', unit: 'workers', population: '', source: '', state: 'ok', series: [], ...unverified }] } }
     expect(render(pool)).toContain('aria-label="Qualified"')
   })
 
