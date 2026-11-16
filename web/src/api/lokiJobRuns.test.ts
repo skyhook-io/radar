@@ -51,9 +51,11 @@ describe('withLokiRunFallback', () => {
       calls.fail = false
     }
   })
-  it('keeps to the chosen container', async () => {
+  it('keeps to the chosen container, asking Loki for it', async () => {
+    calls.urls = []
     const got = await withLokiRunFallback('job', 'team', 'nightly-1', gone, true, undefined, 'sidecar')
     expect(got.logs).toEqual([])
+    expect(calls.urls).toEqual(['/loki/jobs/team/nightly-1/logs?container=sidecar'])
   })
   it('shows a run Loki can\'t split by container, whatever container is chosen', async () => {
     calls.container = '(all containers)'

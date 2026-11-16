@@ -113,13 +113,16 @@ export async function withLokiRunFallback(kind: string, namespace: string, name:
   if (!ready || data.emptyReason !== 'pods-gone' || !['job', 'jobs'].includes(kind.toLowerCase())) return data
   let run: LokiJobLogs
   try {
-    run = await fetchJSON<LokiJobLogs>(`/loki/jobs/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`, signal)
+    const query = container ? `?${new URLSearchParams({ container })}` : ''
+    run = await fetchJSON<LokiJobLogs>(`/loki/jobs/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs${query}`, signal)
   } catch (err) {
     if (signal?.aborted) throw err
     // Loki is the logging system the message points to: say why it didn't answer.
     return { ...data, notice: `Couldn't read this run from Loki: ${err instanceof Error ? err.message : String(err)}` }
   }
-  // Without a container label every line is the whole pod's: keep them all.
+  // Loki narrows to the container when it labels containers (an older Radar
+  // ignores the parameter, hence the filter). Without a container label every
+  // line is the whole pod's: keep them all.
   const wholePod = run.logs.length > 0 && run.logs.every(l => l.container === ALL_CONTAINERS)
   const logs = container && !wholePod ? run.logs.filter(l => l.container === container) : run.logs
   if (logs.length === 0) return data
