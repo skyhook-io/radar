@@ -158,3 +158,33 @@ func TestOutputFromRedactsSchemelessCredentials(t *testing.T) {
 		}
 	}
 }
+
+// The operator watches every namespace when watchNamespaceSelector is present
+// but empty, and the namespaces it resolved are in status.watchNamespaces
+// ("*" for all), which wins over Radar's reading of the spec.
+func TestWatchedSelectorAndStatus(t *testing.T) {
+	for _, c := range []struct {
+		name             string
+		spec, status     map[string]any
+		watched, certain bool
+	}{
+		{"empty selector watches all", map[string]any{"watchNamespaces": []any{"a"}, "watchNamespaceSelector": map[string]any{}}, nil, true, true},
+		{"status lists the namespace", map[string]any{"watchNamespaceSelector": map[string]any{"matchLabels": map[string]any{"logs": "on"}}}, map[string]any{"watchNamespaces": []any{"a", "team"}}, true, true},
+		{"status omits the namespace", map[string]any{"watchNamespaceSelector": map[string]any{"matchLabels": map[string]any{"logs": "on"}}}, map[string]any{"watchNamespaces": []any{"a"}}, false, true},
+		{"status says all", map[string]any{"watchNamespaces": []any{"a"}}, map[string]any{"watchNamespaces": []any{"*"}}, true, true},
+	} {
+		l := LoggingFrom(obj("Logging", "", "l", c.spec, c.status))
+		if w, sure := Watched(Flow{Namespace: "team"}, []Logging{l}); w != c.watched || sure != c.certain {
+			t.Errorf("%s: Watched = %v,%v want %v,%v", c.name, w, sure, c.watched, c.certain)
+		}
+	}
+}
+
+func TestLoggingAndOutputFlags(t *testing.T) {
+	if l := LoggingFrom(obj("Logging", "", "l", map[string]any{"skipInvalidResources": true}, nil)); !l.SkipInvalidResources {
+		t.Error("skipInvalidResources not read")
+	}
+	if o := OutputFrom(obj("ClusterOutput", "logging", "audit", map[string]any{"protected": true, "loki": map[string]any{}}, nil)); !o.Protected || o.Type != "loki" {
+		t.Errorf("protected output = %+v", o)
+	}
+}

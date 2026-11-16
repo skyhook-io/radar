@@ -1993,8 +1993,10 @@ export interface LogRoute {
   selected: boolean
   uncertain: boolean
   ignored: boolean
-  /** Why the operator rejects the route; it never renders it. */
+  /** Why the operator can't render the route; empty when valid. */
   invalid?: string
+  /** The route's shipper has an invalid route and doesn't skip invalid ones, so it renders none of its configuration: what still runs is unknown. */
+  renderBlocked?: boolean
   /** Receives what no other route of its shipper selects (a Logging's defaultFlow). */
   fallback?: boolean
   excluded: boolean
@@ -2012,4 +2014,6 @@ export interface LogShipping {
   shipped: boolean
   uncertain: boolean
   readErrors: LogReadError[]
+  /** The pod's annotation asking the collector to drop its logs; while set, never "shipped". */
+  excludeAnnotation?: string
 }

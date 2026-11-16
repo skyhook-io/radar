@@ -41,6 +41,7 @@ function RouteLine({ flow, unreadKinds, onNavigate }: { flow: LogRoute; unreadKi
         ))}
       </div>
       {flow.selected && flow.hasFilters && <div className="text-xs text-theme-text-tertiary">This {flow.fallback ? 'default flow' : flow.kind} filters records; some lines may be dropped.</div>}
+      {flow.renderBlocked && !flow.invalid && <div className="text-xs text-theme-text-tertiary">Its Logging has an invalid route and skipInvalidResources is off, so the operator can't render the Logging's configuration; Radar can't tell whether the configuration still running includes this route.</div>}
     </div>
   )
 }
@@ -70,10 +71,11 @@ export function PodLogShippingSection({ data, loading, error, onNavigate }: PodL
   return (
     <Section title="Log shipping" defaultExpanded={true}>
       <div className="space-y-2 text-sm">
+        {data.excludeAnnotation && <AlertBanner variant="info" title={`This pod sets ${data.excludeAnnotation}`} message="Fluent Bit drops the logs of a pod with this annotation while its K8S-Logging.Exclude is on, the Logging operator's default. Radar doesn't read the collector's setting." className="mb-0" />}
         {unread.length > 0 && <AlertBanner variant="info" title={`Radar could not read ${unread.join(', ')}`} message={`Whether this pod's logs are shipped can't be told from what Radar read.${data.readErrors.some((e) => e.group === LOGGING_GROUP) ? ' In-cluster, the chart collects Logging operator kinds only with rbac.crdGroups.logging enabled.' : ''}`} className="mb-0" />}
         {delivering.length > 0 && (
           <div className="space-y-1">
-            <div className="text-theme-text-secondary">Shipped by</div>
+            <div className="text-theme-text-secondary">Routed to an active output by</div>
             {delivering.map(line)}
           </div>
         )}
@@ -89,11 +91,11 @@ export function PodLogShippingSection({ data, loading, error, onNavigate }: PodL
             {line(f)}
           </div>
         ))}
+        {data.routes.filter((f) => f.invalid).map((f) => <div key={`i-${f.namespace}/${f.name}`} className="text-theme-text-secondary">{routeLabel(f)} is invalid: {f.invalid}.{f.renderBlocked && ' Until it is fixed, the operator renders none of its Logging\'s configuration.'}</div>)}
         {delivering.length + maybe.length + nowhere.length === 0 && unread.length === 0 && (
           <div className="space-y-1">
             <div className="text-theme-text-primary">No Logging operator Flow selects this pod.</div>
             {excluded.map((f) => <div key={`x-${f.namespace}/${f.name}`} className="text-theme-text-secondary">Excluded by {f.name}</div>)}
-            {data.routes.filter((f) => f.invalid).map((f) => <div key={`i-${f.namespace}/${f.name}`} className="text-theme-text-secondary">{routeLabel(f)} is rejected by the operator: {f.invalid}</div>)}
             {closest && (
               <div className="text-theme-text-secondary">
                 Closest match: {closest.name}{closest.unmet.length > 0 && <> needs {closest.unmet.join(' and ')}</>}

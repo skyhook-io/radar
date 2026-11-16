@@ -14,7 +14,7 @@ const render = (data: LogShipping | null, error: Error | null = null) =>
 describe('PodLogShippingSection', () => {
   it('lists selecting Flows first with outputs', () => {
     const html = render(answer({ shipped: true, routes: [flow({ selected: true, delivers: true })] }))
-    expect(html).toContain('Shipped by')
+    expect(html).toContain('Routed to an active output by')
     expect(html).toContain('optin')
     expect(html).toContain('loki')
   })
@@ -45,7 +45,7 @@ describe('PodLogShippingSection', () => {
     const html = render(answer({ routes: [flow({ selected: true, delivers: false, active: false })] }))
     expect(html).toContain('Selected, but its logs go nowhere')
     expect(html).toContain('the ClusterFlow is inactive')
-    expect(html).not.toContain('Shipped by')
+    expect(html).not.toContain('Routed to an active output by')
     expect(html).not.toContain('No Logging operator Flow selects')
     const missing = render(answer({ routes: [flow({ selected: true, delivers: false, destinations: [{ kind: 'ClusterOutput', name: 'loki', found: false }] })] }))
     expect(missing).toContain('no destination it names exists and is active')
@@ -86,11 +86,24 @@ describe('PodLogShippingSection', () => {
       flow({ kind: 'Logging', namespace: '', name: 'default', fallback: true, selected: true, delivers: true }),
       flow({ name: 'optin', unmet: ['label x=1'] }),
     ] }))
-    expect(html).toContain('Shipped by')
+    expect(html).toContain('Routed to an active output by')
     expect(html).toContain('default flow of Logging default')
     expect(html).not.toContain('No Logging operator Flow selects')
   })
-  it('says why the operator rejects an invalid Flow', () => {
-    expect(render(answer({ routes: [flow({ ignored: true, invalid: 'match and selectors are both set' })] }))).toContain('ClusterFlow optin is rejected by the operator: match and selectors are both set')
+  it('says why a Flow is invalid', () => {
+    const html = render(answer({ routes: [flow({ ignored: true, invalid: 'match and selectors are both set' })] }))
+    expect(html).toContain('ClusterFlow optin is invalid: match and selectors are both set')
+    expect(html).not.toContain('rejected')
+  })
+  it('says a route of a Logging the operator cannot render may ship', () => {
+    const html = render(answer({ uncertain: true, routes: [flow({ uncertain: true, renderBlocked: true }), flow({ name: 'bad', ignored: true, invalid: 'it names Output gone', renderBlocked: true })] }))
+    expect(html).toContain('May be shipped by')
+    expect(html).toContain('skipInvalidResources')
+    expect(html).toContain('ClusterFlow bad is invalid: it names Output gone')
+  })
+  it('says the pod asks the collector to drop its logs', () => {
+    const html = render(answer({ uncertain: true, excludeAnnotation: 'fluentbit.io/exclude', routes: [flow({ selected: true, delivers: true })] }))
+    expect(html).toContain('fluentbit.io/exclude')
+    expect(html).toContain('K8S-Logging.Exclude')
   })
 })
