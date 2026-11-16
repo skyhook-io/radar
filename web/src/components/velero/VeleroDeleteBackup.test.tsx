@@ -13,16 +13,18 @@ const state = vi.hoisted(() => ({
   workspace: undefined as unknown,
   deletion: undefined as unknown,
   deletionError: null as Error | null,
+  mutationData: undefined as { request: string } | undefined,
+  fetching: false,
   success: vi.fn(),
   failure: vi.fn(),
 }))
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
 vi.mock('../../api/velero', () => ({
-  useVeleroDeleteBackup: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false, error: state.error, data: state.deletion ? { request: 'nightly-1-abc' } : undefined }),
-  useVeleroBackupDeletion: (_ns: string, _name: string, started: unknown) => ({
+  useVeleroDeleteBackup: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false, error: state.error, data: state.mutationData }),
+  useVeleroBackupDeletion: (_ns: string, _name: string, _uid: unknown) => ({
     data: state.deletion,
     error: state.deletionError,
-    isFetching: false,
+    isFetching: state.fetching,
   }),
   useVeleroWorkspace: () => ({ data: state.workspace }),
 }))
@@ -53,7 +55,7 @@ function render(node: React.ReactNode) {
 afterEach(() => {
   act(() => roots.splice(0).forEach((r) => r.unmount()))
   document.body.innerHTML = ''
-  Object.assign(state, { support: 'supported', error: null, workspace: undefined, deletion: undefined, deletionError: null })
+  Object.assign(state, { support: 'supported', error: null, workspace: undefined, deletion: undefined, deletionError: null, mutationData: undefined, fetching: false })
   client = new QueryClient()
   state.mutate.mockReset()
   state.success.mockReset()
@@ -151,10 +153,27 @@ describe('Delete backup', () => {
   })
 
   it('says the deletion was requested when its status can’t be read, without offering it again', () => {
-    state.deletionError = new Error('no access to read Velero delete requests')
+    state.mutationData = { request: 'nightly-1-abc' }
+    state.fetching = true
+    state.deletionError = new Error('no access to list Velero delete requests')
     render(<VeleroDeleteBackup backup={backup()} />)
     expect(document.body.textContent).toContain('Deletion requested')
     expect(buttons('Delete backup')).toHaveLength(0)
+  })
+
+  it('does not claim a deletion was requested when the initial lookup is denied', () => {
+    state.deletionError = new Error('no access to list Velero delete requests')
+    render(<VeleroDeleteBackup backup={backup()} />)
+    expect(document.body.textContent).toContain('Deletion status unreadable')
+    expect(document.body.textContent).not.toContain('Deletion requested')
+  })
+
+  it('keeps a recorded reading while a refresh fails', () => {
+    state.deletion = { state: 'inProgress', request: 'nightly-1-abc' }
+    state.deletionError = new Error('temporarily unavailable')
+    render(<VeleroDeleteBackup backup={backup()} />)
+    expect(document.body.textContent).toContain('Deleting…')
+    expect(document.body.textContent).not.toContain('Deletion requested')
   })
 
   it('announces a failed request only once across remounts', () => {

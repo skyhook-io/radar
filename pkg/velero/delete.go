@@ -58,12 +58,6 @@ func DeleteBackupRequestFor(namespace, backup, uid string) *unstructured.Unstruc
 	}}
 }
 
-// DeleteBackupRequestSpecName is the backup a DeleteBackupRequest names.
-func DeleteBackupRequestSpecName(request *unstructured.Unstructured) string {
-	name, _, _ := unstructured.NestedString(request.Object, "spec", "backupName")
-	return name
-}
-
 // DeletionRefusal is why Velero would refuse to delete a backup now, or "".
 // The location is the backup's own (spec.storageLocation); nil when it could
 // not be read, in which case only the backup's phase is checked.

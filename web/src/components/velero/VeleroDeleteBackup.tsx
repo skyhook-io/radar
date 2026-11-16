@@ -96,7 +96,9 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
   if ((deletion.error && !deletion.data) || (started && !(state && SETTLED.has(state)))) {
     const unreadable = deletion.error && !deletion.data
     const tooltip = unreadable
-      ? `Velero was asked to delete this backup (request ${request ?? 'unread'}), but Radar can’t read how it is going: ${deletion.error.message}`
+      ? started
+        ? `Velero was asked to delete this backup, but Radar can’t read how it is going: ${deletion.error.message}`
+        : `Radar can’t read this backup’s deletion requests: ${deletion.error.message}`
       : deletion.data
         ? stateText(deletion.data)
         : 'Velero was asked to delete this backup.'
@@ -104,7 +106,7 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
       <Tooltip content={tooltip} position="bottom">
         <span>
           {unreadable ? (
-            <Badge severity="warning">Deletion requested</Badge>
+            <Badge severity="warning">{started ? 'Deletion requested' : 'Deletion status unreadable'}</Badge>
           ) : (
             <Badge severity="neutral">
               <Loader2 className="mr-1 inline h-3 w-3 animate-spin" aria-hidden />
