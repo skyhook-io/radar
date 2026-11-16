@@ -200,7 +200,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
       const failures: unknown[] = []
       const fetchResourceList = async (kind: string, group: string, namespacesParam: string): Promise<any[]> => {
         try {
-          const result = await fetchCoveredResourceList<any>(kind, { group, namespaces: namespacesParam ? namespacesParam.split(',') : [] })
+          // Summary drops status.resources / status.inventory, which the rows
+          // never read and which dominate the payload on large fleets.
+          const result = await fetchCoveredResourceList<any>(kind, { group, namespaces: namespacesParam ? namespacesParam.split(',') : [], summary: true })
           coverage.push(result.coverage)
           return result.items
         } catch (error) {
