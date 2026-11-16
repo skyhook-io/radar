@@ -30,8 +30,8 @@ type AgentSandboxReadiness struct {
 	// as if it had been provisioning the whole time.
 	Since      time.Time
 	SinceKnown bool
-	// SuspensionRefused: the controller will not delete the Pod with the
-	// Sandbox's name because the Sandbox does not own it (Suspended=False,
+	// SuspensionRefused: the controller will not delete the Pod it tracks
+	// for the Sandbox because the Sandbox does not own it (Suspended=False,
 	// reason PodNotOwned), so the suspension waits until someone resolves it.
 	SuspensionRefused bool
 }
@@ -163,8 +163,8 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 			r.Mirrored = isClaim
 			return r
 		}
-		// The controller refuses to delete a Pod with the Sandbox's name that the
-		// Sandbox does not own, and waits. Nothing is being torn down, so this
+		// The controller refuses to delete the Pod it tracks for the Sandbox when
+		// the Sandbox does not own it, and waits. Nothing is being torn down, so this
 		// is not a suspension in progress.
 		if suspended.status == "False" && suspended.reason == "PodNotOwned" {
 			return AgentSandboxReadiness{Verdict: Verdict{Level: LevelDegraded, Reason: "Suspension blocked", Message: suspensionRefusedMessage(sandboxPodName(u), suspended.message)}, SuspensionRefused: true}

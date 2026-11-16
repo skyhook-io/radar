@@ -34,8 +34,8 @@ function findCondition(conditions: unknown, type: string): any | undefined {
   return Array.isArray(conditions) ? conditions.find((c: any) => c?.type === type) : undefined
 }
 
-// The controller refuses to delete a Pod with the Sandbox's name that the
-// Sandbox does not own. Ready keeps its suspension reason; Suspended says why.
+// The controller refuses to delete the Pod it tracks for the Sandbox when the
+// Sandbox does not own it. Ready keeps its suspension reason; Suspended says why.
 function isSuspensionRefused(conditions: unknown): boolean {
   const ready = findCondition(conditions, 'Ready')
   const suspended = findCondition(conditions, 'Suspended')
@@ -202,7 +202,7 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
   const reason = typeof ready.reason === 'string' ? ready.reason : ''
   if (reason === 'SandboxSuspended') {
     // The Suspended condition says when the Pod is actually gone, and whether
-    // the controller refused to delete a Pod with the Sandbox's name that it
+    // the controller refused to delete the Pod it tracks for the Sandbox, which it
     // does not own.
     const suspended = findCondition(conditions, 'Suspended')
     if (isClaim || suspended?.status === 'True') return badge('Suspended', 'neutral')

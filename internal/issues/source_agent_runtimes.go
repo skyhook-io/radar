@@ -47,7 +47,7 @@ func agentSandboxSuppressesGenericConditions(group, kind string, u *unstructured
 }
 
 // detectSandboxSuspensionBlocked reports a Sandbox whose suspension the
-// controller refuses to carry out because the Pod with its name belongs to
+// controller refuses to carry out because the Pod it tracks for the Sandbox belongs to
 // something else. Ready keeps its ordinary suspension reason, so only the
 // Suspended condition says why nothing happens.
 func detectSandboxSuspensionBlocked(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
