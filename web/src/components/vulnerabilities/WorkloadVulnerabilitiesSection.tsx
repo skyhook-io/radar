@@ -8,7 +8,7 @@ import { useAPIResources } from '../../api/apiResources'
 import { useRadarFeature } from '../../api/client'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { hasVulnerabilityReports, isKindUnknown, useVulnerabilities, workloadParam } from '../../api/vulnerabilities'
-import { ClearedCount, FixVersion, ImageName, OTHER_BUILD_TIP, SeverityCounts, gapSentence } from './parts'
+import { ClearedCount, FixVersion, ImageName, SeverityCounts, gapSentence } from './parts'
 
 interface Props {
   kind: string
@@ -103,13 +103,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
                 {containerName(u.workloads)}
                 <ImageName image={u.image} className="text-xs text-theme-text-tertiary" />
               </span>
-              {u.otherBuildScanned ? (
-                <WithTooltip tip={OTHER_BUILD_TIP}>
-                  <span className="self-start text-xs text-warning-text underline decoration-dotted underline-offset-2">No scan of this build: Trivy scanned another build of its tag.</span>
-                </WithTooltip>
-              ) : (
-                <span className="text-xs text-warning-text">No scan yet of the build this container runs.</span>
-              )}
+              <span className="text-xs text-warning-text">Not scanned</span>
             </>
           )))}
           {clean.map((img) => card(img.id, (
