@@ -191,8 +191,9 @@ func TestLokiJobLogsContainerAndMultiLine(t *testing.T) {
 func TestLokiJobLogsShareTheReadLimit(t *testing.T) {
 	seedJob(t)
 	rec := newLokiRecorder(t, twoPods)
+	hold := make(chan struct{})
 	rec.mu.Lock()
-	rec.hold = make(chan struct{})
+	rec.hold = hold
 	rec.mu.Unlock()
 	first := make(chan int)
 	go func() {
@@ -203,7 +204,7 @@ func TestLokiJobLogsShareTheReadLimit(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	resp, _, raw := lokiJobLogs(t, "/api/loki/jobs/team/nightly-29905990/logs")
-	close(rec.hold)
+	close(hold)
 	<-first
 	if resp.StatusCode != http.StatusTooManyRequests || rec.count() != 1 {
 		t.Fatalf("%d %s, %d queries", resp.StatusCode, raw, rec.count())
