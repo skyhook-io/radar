@@ -295,9 +295,14 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 	// A report whose object no longer runs still describes its build where
 	// a container runs it (a restarted ReplicaSet), and competes for the
 	// image like any other: the newest wins.
+	// Only for a container the digest's image would hold: not one already
+	// matched by reference to a report that recorded no digest.
 	runs := map[string]bool{}
 	for i := range targets {
-		runs[targets[i].digest] = targets[i].digest != ""
+		t := &targets[i]
+		if id, ok := j.targetImage[t.key]; t.digest != "" && (!ok || id == t.digest) {
+			runs[t.digest] = true
+		}
 	}
 	for d, r := range idle {
 		if !runs[d] {

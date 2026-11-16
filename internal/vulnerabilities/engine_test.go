@@ -772,3 +772,15 @@ func TestIdleReportCompetesForItsBuild(t *testing.T) {
 		}
 	}
 }
+
+// A container matched by reference to a report that recorded no digest keeps
+// that report; a newer idle report of its digest adds no image of its own.
+func TestIdleReportLeavesAReferenceMatchAlone(t *testing.T) {
+	byRef := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-1", container: "app", repo: "acme/web", tag: "1", scanned: "2026-11-10T10:00:00Z"})
+	idle := vulnReport(reportSpec{name: "b", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-2", container: "app", repo: "acme/web", tag: "1", digest: "sha256:d", scanned: "2026-11-16T10:00:00Z", vulns: []vuln{{"CVE-X", "CRITICAL", "zlib", "1", "2"}}})
+	web := running(liveTarget("shop", "ReplicaSet", "web-1", "app", "acme/web:1", "", checkout), "sha256:d")
+	got := mustBuild(t, []*unstructured.Unstructured{byRef, idle}, []target{web}, ViewImage, Filter{})
+	if got.Summary.ImagesScanned != 1 || got.Coverage.InactiveReports != 1 {
+		t.Fatalf("%+v / %d", got.Summary, got.Coverage.InactiveReports)
+	}
+}
