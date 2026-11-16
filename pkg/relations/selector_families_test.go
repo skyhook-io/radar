@@ -179,6 +179,19 @@ func TestAWorkloadRefRolloutIsChosenByItsWorkloadsTemplate(t *testing.T) {
 	}
 }
 
+// A workloadRef whose API group isn't the kind's own names no workload, even
+// when a workload of that kind and name exists in its real group.
+func TestAWorkloadRefInTheWrongGroupNamesNoWorkload(t *testing.T) {
+	template := labelled(deployment("web-template", mounts()), map[string]string{"app": "web"})
+	rollout := object("argoproj.io/v1alpha1", "Rollout", "web", map[string]any{"workloadRef": map[string]any{"apiVersion": "v1", "kind": "Deployment", "name": "web-template"}})
+	svc := typed(&corev1.Service{ObjectMeta: meta("web"), Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}, "", "v1", "Service")
+	checkSelects(t, ServiceSelectors, []runtime.Object{template, rollout, svc}, svc, template)
+	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{template, rollout, svc}}}, ownership.Unrestricted())
+	if got := v.SelectedBy(ServiceSelectors, refOf(rollout), nil); len(got.Matches) != 0 {
+		t.Errorf("a Rollout with a wrong-group workloadRef is selected by %v", got.Matches)
+	}
+}
+
 func TestAnExternalNameServiceSelectsNothing(t *testing.T) {
 	web := labelled(deployment("web", mounts()), map[string]string{"app": "web"})
 	ext := typed(&corev1.Service{ObjectMeta: meta("ext"), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: "example.org", Selector: map[string]string{"app": "web"}}}, "", "v1", "Service")
