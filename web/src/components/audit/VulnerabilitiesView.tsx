@@ -17,6 +17,11 @@ import {
   useDebouncedValue,
   useDisclosure,
   VULN_SEVERITY_TEXT,
+  VULN_SEVERITY_BAR,
+  DistributionBar,
+  DistributionLegendChip,
+  FilterPill,
+  Input,
 } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { formatRelativeAgeTime } from '@skyhook-io/k8s-ui/utils/format'
@@ -72,7 +77,6 @@ const VIEWS: { key: VulnerabilityView; label: string }[] = [
 
 const CHIP = 'min-h-8 rounded-full border px-3 text-xs font-medium transition-colors'
 const CHIP_ON = 'selection-strong border-accent text-theme-text-primary'
-const CHIP_OFF = 'border-theme-border text-theme-text-secondary hover:bg-theme-hover'
 
 // Each table's columns, shared by its header, rows and expanded sub-rows so
 // detail lines up under the column it belongs to. Short values get fixed
@@ -94,7 +98,7 @@ const toResource = (w: VulnerabilityWorkloadRef): SelectedResource => ({ kind: w
 export function VulnerabilitiesView({ namespaces, onNavigateToResource }: VulnerabilitiesViewProps) {
   const [params, setParams] = useSearchParams()
   const view = (VIEWS.find((v) => v.key === params.get('by'))?.key ?? 'image') as VulnerabilityView
-  const severities = (params.get('severity') ?? '').split(',').filter((s): s is VulnerabilitySeverity => SEVERITIES.some((x) => x.key === s))
+  const severities = (params.get('severity') ?? '').split(',').filter((s): s is VulnerabilitySeverity => LEGEND.some((x) => x.key === s))
   const fixableOnly = params.get('fixable') === '1'
   const queryDraft = params.get('q') ?? ''
   const workload = parseWorkloadParam(params.get('workload'))
@@ -151,75 +155,78 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
         actions={<FreshnessControl mode="auto" dataUpdatedAt={dataUpdatedAt} isFetching={isFetching} onRefresh={() => refetch()} connectionState={connection.state} />}
       />
 
-      <div className={clsx('flex flex-col gap-4 transition-opacity', isPlaceholderData && 'opacity-60')}>
-        <SummaryTiles data={data} />
-        <CoverageNotes data={data} filtered={filtered} />
-        {error && <p className="text-xs text-warning-text">Couldn't refresh: {error instanceof Error ? error.message : 'request failed'}. Showing the last answer.</p>}
+      {/* Triage header, as on Best practices: the headline, the severity
+          distribution, and its legend as the severity filters. */}
+      <div className={clsx('flex flex-col gap-3.5 rounded-2xl border border-theme-border bg-theme-surface p-4 shadow-theme-sm transition-opacity', isPlaceholderData && 'opacity-60')}>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <SummaryHeadline data={data} />
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-tertiary" aria-hidden />
+            <Input
+              type="search"
+              aria-label="Search"
+              value={queryDraft}
+              onChange={(e) => update((p) => (e.target.value ? p.set('q', e.target.value) : p.delete('q')))}
+              placeholder="Image, CVE, package or workload"
+              className="w-72 rounded-lg border border-theme-border-light bg-theme-base py-1.5 pl-9 pr-3 text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-[var(--color-radar-accent,var(--accent))]"
+            />
+          </div>
+        </div>
+
+        <DistributionBar
+          ariaLabel="Findings by severity"
+          segments={LEGEND.map((s) => ({ key: s.key, count: data.summary.counts[s.key], fillClass: VULN_SEVERITY_BAR[s.key.toUpperCase()] }))}
+        />
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          {LEGEND.map((s) => (
+            <DistributionLegendChip
+              key={s.key}
+              label={s.label}
+              count={data.summary.counts[s.key]}
+              fillClass={VULN_SEVERITY_BAR[s.key.toUpperCase()]}
+              textClass={VULN_SEVERITY_TEXT[s.key.toUpperCase()]}
+              active={severities.includes(s.key)}
+              onClick={() => toggleSeverity(s.key)}
+            />
+          ))}
+          {view !== 'fix' && (
+            <>
+              <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />
+              <FilterPill label="Has a fix" active={fixableOnly} onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))} />
+            </>
+          )}
+          {workload && (
+            <>
+              <span aria-hidden className="mx-1.5 h-5 w-px bg-theme-border" />
+              <span className={clsx(CHIP, CHIP_ON, 'inline-flex items-center gap-1.5 pr-1.5')}>
+                {workload.name}
+                <span className="font-normal text-theme-text-tertiary">{workload.kind} · {workload.namespace}</span>
+                <button type="button" aria-label="Show every workload" onClick={() => update((p) => p.delete('workload'))} className="rounded-full p-0.5 hover:bg-theme-hover">
+                  <X className="h-3 w-3" aria-hidden />
+                </button>
+              </span>
+            </>
+          )}
+          <div role="group" aria-label="Group by" className="ml-auto flex rounded-md border border-theme-border bg-theme-elevated p-0.5">
+            {VIEWS.map((v) => (
+              <button
+                key={v.key}
+                type="button"
+                aria-pressed={view === v.key}
+                onClick={() => update((p) => (v.key === 'image' ? p.delete('by') : p.set('by', v.key)), true)}
+                className={clsx('min-h-7 rounded px-3 text-xs font-medium transition-colors', view === v.key ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary')}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="flex min-h-9 max-w-sm flex-1 basis-64 items-center gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5">
-          <Search className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" aria-hidden />
-          <span className="sr-only">Search</span>
-          <input
-            type="search"
-            value={queryDraft}
-            onChange={(e) => update((p) => (e.target.value ? p.set('q', e.target.value) : p.delete('q')))}
-            placeholder="Image, CVE, package or workload"
-            className="w-full bg-transparent text-sm text-theme-text-primary outline-none placeholder:text-theme-text-tertiary"
-          />
-        </label>
-        {workload && (
-          <span className={clsx(CHIP, CHIP_ON, 'inline-flex items-center gap-1.5 pr-1.5')}>
-            {workload.name}
-            <span className="font-normal text-theme-text-tertiary">{workload.kind} · {workload.namespace}</span>
-            <button type="button" aria-label="Show every workload" onClick={() => update((p) => p.delete('workload'))} className="rounded-full p-0.5 hover:bg-theme-hover">
-              <X className="h-3 w-3" aria-hidden />
-            </button>
-          </span>
-        )}
-        <div role="group" aria-label="Severity" className="flex flex-wrap gap-1.5">
-          {SEVERITIES.map((s) => {
-            const on = severities.includes(s.key)
-            return (
-              <button
-                key={s.key}
-                type="button"
-                aria-pressed={on}
-                onClick={() => toggleSeverity(s.key)}
-                className={clsx(CHIP, on ? CHIP_ON : CHIP_OFF)}
-              >
-                {s.label}
-              </button>
-            )
-          })}
-        </div>
-        {view !== 'fix' && (
-          <>
-            <span aria-hidden className="h-5 w-px bg-theme-border" />
-            <button
-              type="button"
-              aria-pressed={fixableOnly}
-              onClick={() => update((p) => (fixableOnly ? p.delete('fixable') : p.set('fixable', '1')))}
-              className={clsx(CHIP, fixableOnly ? CHIP_ON : CHIP_OFF)}
-            >
-              Has a fix
-            </button>
-          </>
-        )}
-        <div role="group" aria-label="Group by" className="ml-auto flex rounded-md border border-theme-border bg-theme-elevated p-0.5">
-          {VIEWS.map((v) => (
-            <button
-              key={v.key}
-              type="button"
-              aria-pressed={view === v.key}
-              onClick={() => update((p) => (v.key === 'image' ? p.delete('by') : p.set('by', v.key)), true)}
-              className={clsx('min-h-8 rounded px-3 text-xs font-medium transition-colors', view === v.key ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary')}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
+      <div className="flex flex-col gap-1.5">
+        <CoverageNotes data={data} filtered={filtered} />
+        {error && <p className="text-xs text-warning-text">Couldn't refresh: {error instanceof Error ? error.message : 'request failed'}. Showing the last answer.</p>}
       </div>
 
       {rows.length === 0 ? (
@@ -304,31 +311,35 @@ function VulnerabilitiesError({ error }: { error: unknown }) {
   )
 }
 
-function SummaryTiles({ data }: { data: VulnerabilitiesResponse }) {
+// Severities in the legend, unrated last: each is also a filter.
+const LEGEND: { key: VulnerabilitySeverity; label: string }[] = [...SEVERITIES.map(({ key, label }) => ({ key, label })), { key: 'unknown', label: 'Unrated' }]
+
+// The headline: images with Critical CVEs, then the other totals in a line.
+// Every total is a lower bound while anything is unscanned or unread.
+function SummaryHeadline({ data }: { data: VulnerabilitiesResponse }) {
   const s = data.summary
   const certainty = findingsCertainty(data)
-  const nothing = certainty === 'unknown'
-  const tiles = [
-    { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : readsComplete(data.coverage) ? 'every running image has a report' : 'none unscanned where Radar could read', tone: '' },
-    { label: 'Images with Critical CVEs', value: s.imagesWithCritical, certainty, sub: nothing ? 'nothing scanned yet' : `of ${s.imagesScanned} scanned`, tone: s.imagesWithCritical > 0 ? VULN_SEVERITY_TEXT.CRITICAL : '' },
-    { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'a fixed release is reported', tone: s.fixableCriticalHighCves > 0 ? VULN_SEVERITY_TEXT.HIGH : '' },
-    { label: 'Workloads with Critical or High', value: s.workloadsWithCriticalOrHigh, certainty, sub: workloadsByReplicaSet(data.coverage) ? `of ${s.workloads}; a Deployment may count once per ReplicaSet` : `of ${s.workloads} running or scheduled`, tone: '' },
-  ]
+  if (certainty === 'unknown') {
+    return <span className="text-sm text-theme-text-secondary">No running image is scanned yet{s.imagesUnscanned > 0 ? ` · ${s.imagesUnscanned} not scanned` : ''}</span>
+  }
+  const bound = certainty === 'lower_bound' ? '≥ ' : ''
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      {tiles.map((t) => (
-        <div key={t.label} className="card-inner flex min-w-0 flex-col gap-0.5">
-          <span className="text-xs text-theme-text-tertiary">{t.label}</span>
-          <FindingTotal value={t.value} certainty={t.certainty} className={clsx('text-2xl font-medium text-theme-text-primary', t.tone)} />
-          <span className="text-xs text-theme-text-tertiary">{t.sub}</span>
-        </div>
-      ))}
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <FindingTotal value={s.imagesWithCritical} certainty={certainty} className="text-2xl font-semibold text-theme-text-primary" />
+        <span className="text-sm text-theme-text-secondary">
+          {s.imagesWithCritical === 1 ? 'image' : 'images'} with Critical CVEs
+          <span className="text-theme-text-tertiary">{` · of ${s.imagesScanned} scanned${s.imagesUnscanned > 0 ? `, ${s.imagesUnscanned} not scanned yet` : ''}`}</span>
+        </span>
+      </div>
+      <span className="text-xs text-theme-text-tertiary">
+        {`${bound}${s.fixableCriticalHighCves} Critical and High CVEs with a fix · ${bound}${s.workloadsWithCriticalOrHigh} of ${s.workloads} workloads with Critical or High`}
+        {workloadsByReplicaSet(data.coverage) && ' (a Deployment may count once per ReplicaSet)'}
+      </span>
     </div>
   )
 }
 
-// filtered: the totals ignore the filters, which a filtered list beside them
-// can make look like a contradiction.
 function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filtered: boolean }) {
   const gaps = gapSentence(data.coverage.gaps)
   const scan = data.summary.newestScan
