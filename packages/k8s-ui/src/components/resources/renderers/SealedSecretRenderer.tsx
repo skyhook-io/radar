@@ -6,7 +6,7 @@ import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList, 
 export interface SealedSecretsController {
   installed: boolean
   controller?: { kind: string; namespace: string; name: string; ready: boolean }
-  controllerState: 'ok' | 'denied' | 'notFound' | 'notCollected' | 'loading' | 'failed'
+  controllerState: 'ok' | 'denied' | 'notFound' | 'notCollected' | 'loading' | 'failed' | 'ambiguous'
   keys?: { name: string; createdAt: string; notBefore?: string; notAfter?: string; active: boolean; notUsed?: boolean }[]
   keysState: 'ok' | 'denied' | 'notCollected' | 'loading' | 'failed' | 'unknown'
   counts?: { total: number; synced: number; notSynced: number; partial: boolean }
@@ -54,6 +54,7 @@ function ControllerSection({ controller, offerReseal, onNavigate }: { controller
       : controller.controllerState === 'notCollected' ? 'Radar does not collect Deployments where the controller may run'
       : controller.controllerState === 'loading' ? 'Deployments are still loading'
       : controller.controllerState === 'failed' ? 'Radar could not load Deployments'
+      : controller.controllerState === 'ambiguous' ? "Several Deployments look like the sealed-secrets controller; Radar can't tell which one it is"
       : 'No sealed-secrets controller found'
   const counts = controller.counts
   return (

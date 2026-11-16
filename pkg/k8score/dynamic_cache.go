@@ -2292,6 +2292,17 @@ func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, nam
 // watch holds so far; callers that need a complete read check
 // IsNamespaceSynced afterwards.
 func (d *DynamicResourceCache) ListBlockingContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
+	return d.listBlocking(ctx, gvr, namespace, timeout, true)
+}
+
+// ListBlockingReadOnlyContext is ListBlockingContext without the per-object
+// copy, under ListReadOnly's rules: callers must not mutate the returned
+// objects or retain them beyond the synchronous computation.
+func (d *DynamicResourceCache) ListBlockingReadOnlyContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
+	return d.listBlocking(ctx, gvr, namespace, timeout, false)
+}
+
+func (d *DynamicResourceCache) listBlocking(ctx context.Context, gvr schema.GroupVersionResource, namespace string, timeout time.Duration, copyItems bool) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
@@ -2325,7 +2336,10 @@ func (d *DynamicResourceCache) ListBlockingContext(ctx context.Context, gvr sche
 	result := make([]*unstructured.Unstructured, 0, len(items))
 	for _, item := range items {
 		if u, ok := item.(*unstructured.Unstructured); ok {
-			result = append(result, StripUnstructuredFields(u))
+			if copyItems {
+				u = StripUnstructuredFields(u)
+			}
+			result = append(result, u)
 		}
 	}
 

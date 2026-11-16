@@ -105,6 +105,7 @@ it('keeps the re-seal hint when the controller status could not be loaded', () =
 it('names a controller lookup that is still loading or failed', () => {
   expect(render('False', controller({ controller: undefined, controllerState: 'loading', keys: undefined, keysState: 'unknown' }))).toContain('Deployments are still loading')
   expect(render('False', controller({ controller: undefined, controllerState: 'failed', keys: undefined, keysState: 'unknown' }))).toContain('could not load Deployments')
+  expect(render('False', controller({ controller: undefined, controllerState: 'ambiguous', keys: undefined, keysState: 'unknown' }))).toContain('look like the sealed-secrets controller')
 })
 
 it('opens the section on a synced SealedSecret too', () => {

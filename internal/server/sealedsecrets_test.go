@@ -111,20 +111,29 @@ func deploy(ns, name string, labels map[string]string, replicas *int32, ready in
 
 func TestFindSealedSecretsController(t *testing.T) {
 	label := map[string]string{"app.kubernetes.io/name": "sealed-secrets"}
-	byName := deploy("a", "sealed-secrets-controller", nil, nil, 1)
-	byLabel := deploy("b", "controller", label, nil, 1)
-	if got := findSealedSecretsController([]*appsv1.Deployment{byName, byLabel}); got != byLabel {
-		t.Errorf("label match should win over a name match, got %v", got)
-	}
-	if got := findSealedSecretsController([]*appsv1.Deployment{byName, deploy("c", "other", nil, nil, 1)}); got != byName {
-		t.Errorf("name match expected, got %v", got)
-	}
-	ax, bx := deploy("a", "x", label, nil, 1), deploy("b", "x", label, nil, 1)
-	if got := findSealedSecretsController([]*appsv1.Deployment{bx, ax}); got != ax {
-		t.Errorf("first by namespace/name expected a/x, got %v", got)
-	}
-	if got := findSealedSecretsController([]*appsv1.Deployment{deploy("c", "other", nil, nil, 1), nil}); got != nil {
-		t.Errorf("no match expected, got %v", got)
+	canonical := deploy("kube-system", "sealed-secrets-controller", nil, nil, 1)
+	system := deploy("kube-system", "sealed-secrets", label, nil, 1)
+	early := deploy("aaa", "sealed-secrets-controller", label, nil, 1)
+	helm := deploy("sealed-secrets", "sealed-secrets", label, nil, 1)
+	other := deploy("c", "other", nil, nil, 1)
+	for _, tc := range []struct {
+		name          string
+		in            []*appsv1.Deployment
+		want          *appsv1.Deployment
+		wantAmbiguous bool
+	}{
+		// kubeseal's defaults: --controller-namespace kube-system, --controller-name sealed-secrets-controller.
+		{"canonical wins over an earlier-sorting namespace", []*appsv1.Deployment{early, system, canonical}, canonical, false},
+		{"a single kube-system match wins over others", []*appsv1.Deployment{early, system}, system, false},
+		{"a single match anywhere", []*appsv1.Deployment{helm, other}, helm, false},
+		{"several outside kube-system are ambiguous", []*appsv1.Deployment{early, helm}, nil, true},
+		{"several in kube-system are ambiguous", []*appsv1.Deployment{system, deploy("kube-system", "b", label, nil, 1)}, nil, true},
+		{"none", []*appsv1.Deployment{other, nil}, nil, false},
+	} {
+		got, ambiguous := findSealedSecretsController(tc.in)
+		if got != tc.want || ambiguous != tc.wantAmbiguous {
+			t.Errorf("%s: got %v ambiguous=%v, want %v ambiguous=%v", tc.name, got, ambiguous, tc.want, tc.wantAmbiguous)
+		}
 	}
 
 	one, zero := int32(1), int32(0)
@@ -376,5 +385,31 @@ func TestSealingKeysIncludeTheLegacyKeySecret(t *testing.T) {
 	})
 	if len(got) != 2 || got[0].Name != "sealed-secrets-key" || !got[0].Active || got[0].NotUsed {
 		t.Fatalf("keys = %+v", got)
+	}
+}
+
+// A labelled Deployment in an early-sorting namespace must not stand in for
+// the controller, nor have its namespace's Secrets read as sealing keys.
+func TestSealedSecretsControllerAmbiguous(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	label := map[string]string{"app.kubernetes.io/name": "sealed-secrets"}
+	now := time.Now().UTC()
+	client := fake.NewClientset(
+		deploy("aaa", "sealed-secrets-controller", label, nil, 1),
+		deploy("sealed-secrets", "sealed-secrets", label, nil, 1),
+		sealingKeySecret("sealed-secrets-keyx", "aaa", "active", sealingKeyPEM(t, now), now),
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("init cache: %v", err)
+	}
+	seedCNPGWorkspace(t, sealedSecretKinds)
+	resp, err := http.Get(testServer.URL + "/api/sealedsecrets/controller")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, raw := getSealedSecretsController(t, resp)
+	if got.ControllerState != "ambiguous" || got.Controller != nil || got.KeysState != "unknown" || len(got.Keys) != 0 {
+		t.Fatalf("got %+v (%s), want ambiguous with no controller or keys", got, raw)
 	}
 }

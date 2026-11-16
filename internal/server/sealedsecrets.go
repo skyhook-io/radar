@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/topology"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -44,35 +45,42 @@ type sealingKey struct {
 	NotUsed   bool      `json:"notUsed,omitempty"`
 }
 
-// findSealedSecretsController picks the controller Deployment: one labelled
-// app.kubernetes.io/name=sealed-secrets, else one named
-// sealed-secrets-controller; several → the first by namespace/name.
-func findSealedSecretsController(deployments []*appsv1.Deployment) *appsv1.Deployment {
-	var labelled, named []*appsv1.Deployment
+// findSealedSecretsController picks the controller Deployment among those
+// labelled app.kubernetes.io/name=sealed-secrets or named
+// sealed-secrets-controller: kube-system/sealed-secrets-controller (kubeseal's
+// defaults), else the only match in kube-system, else the only match anywhere.
+// Anyone who can create a Deployment can match, so several candidates are
+// reported as ambiguous rather than resolved by sort order, which would let an
+// early-sorting namespace stand in for the controller and have its Secrets
+// shown as sealing keys.
+func findSealedSecretsController(deployments []*appsv1.Deployment) (controller *appsv1.Deployment, ambiguous bool) {
+	var system, elsewhere []*appsv1.Deployment
 	for _, d := range deployments {
-		if d == nil {
+		if d == nil || (d.Labels["app.kubernetes.io/name"] != "sealed-secrets" && d.Name != sealedSecretsControllerName) {
 			continue
 		}
-		if d.Labels["app.kubernetes.io/name"] == "sealed-secrets" {
-			labelled = append(labelled, d)
-		} else if d.Name == "sealed-secrets-controller" {
-			named = append(named, d)
-		}
-	}
-	for _, set := range [][]*appsv1.Deployment{labelled, named} {
-		if len(set) == 0 {
+		if d.Namespace != metav1.NamespaceSystem {
+			elsewhere = append(elsewhere, d)
 			continue
 		}
-		sort.Slice(set, func(i, j int) bool {
-			if set[i].Namespace != set[j].Namespace {
-				return set[i].Namespace < set[j].Namespace
-			}
-			return set[i].Name < set[j].Name
-		})
-		return set[0]
+		if d.Name == sealedSecretsControllerName {
+			return d, false
+		}
+		system = append(system, d)
 	}
-	return nil
+	for _, set := range [][]*appsv1.Deployment{system, elsewhere} {
+		switch len(set) {
+		case 0:
+			continue
+		case 1:
+			return set[0], false
+		}
+		return nil, true
+	}
+	return nil, false
 }
+
+const sealedSecretsControllerName = "sealed-secrets-controller"
 
 func sealedSecretsControllerRefFor(d *appsv1.Deployment) sealedSecretsControllerRef {
 	desired := int32(1)
@@ -202,7 +210,8 @@ var sealedSecretsKind = integration.WorkspaceKind{Key: "sealedSecrets", Group: "
 //
 // In shared no-auth mode the names and dates are Radar's own read and carry
 // no secret material. A caller denied the controller learns only that one
-// exists (controllerState "denied", not "notFound"), never where.
+// exists (controllerState "denied", not "notFound"), never where. Several
+// candidate controllers read "ambiguous", with no controller and no keys.
 func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -227,7 +236,9 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 	} else if deployments, err := lister.List(labels.Everything()); err != nil {
 		log.Printf("[sealedsecrets] Failed to list Deployments: %v", err)
 		resp.ControllerState = "notCollected"
-	} else if d := findSealedSecretsController(deployments); d == nil {
+	} else if d, ambiguous := findSealedSecretsController(deployments); ambiguous {
+		resp.ControllerState = "ambiguous"
+	} else if d == nil {
 		resp.ControllerState = absentControllerState(cache.AssessKindRead("deployments", nil), cache.KindNamespaces("deployments") != nil)
 	} else {
 		ns := d.Namespace
@@ -246,13 +257,17 @@ func (s *Server) handleSealedSecretsController(w http.ResponseWriter, r *http.Re
 		}
 	}
 
-	access, items := s.readWorkspaceKind(r, cache, sealedSecretsKind, s.parseNamespacesForUser(r), []string{"bitnami.com"}, newSyncBudget(r.Context()))
+	// Counting reads only status; the copy would include every encryptedData.
+	budget := newSyncBudget(r.Context())
+	budget.readOnly = true
+	access, items := s.readWorkspaceKind(r, cache, sealedSecretsKind, s.parseNamespacesForUser(r), []string{"bitnami.com"}, budget)
 	if access.State == integration.KindCoverageFull || access.State == integration.KindCoveragePartial {
 		counts := &sealedSecretCounts{Partial: !access.All || access.State == integration.KindCoveragePartial}
 		for _, it := range items {
 			counts.Total++
-			conds, _, _ := unstructured.NestedSlice(it.Object, "status", "conditions")
-			for _, c := range conds {
+			conds, _, _ := unstructured.NestedFieldNoCopy(it.Object, "status", "conditions")
+			list, _ := conds.([]any)
+			for _, c := range list {
 				cm, _ := c.(map[string]any)
 				if cm["type"] != "Synced" {
 					continue
