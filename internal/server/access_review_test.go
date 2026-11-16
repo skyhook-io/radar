@@ -15,7 +15,7 @@ func accessReviewServer(t *testing.T, decide func(authv1.ResourceAttributes) boo
 	t.Helper()
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	user := &auth.User{Username: "reader", Groups: []string{"viewers"}}
-	s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{ExpiresAt: time.Now().Add(time.Minute)})
+	s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{})
 	return s, user, fakeSARServer(t, decide)
 }
 
@@ -99,5 +99,35 @@ func TestCanReadUserDecision_CallerDeadlineEndsTheWait(t *testing.T) {
 	}
 	if _, cached := s.permCache.Get(user.Username, user.Groups).CanI("get", "", "secrets", "team"); cached {
 		t.Fatal("a caller giving up must not cache a verdict")
+	}
+}
+
+// A caller whose permissions entry was replaced while another caller's review
+// ran keeps the shared answer, so its next identical check sends no review.
+func TestCanReadUserDecision_JoinerKeepsSharedAnswer(t *testing.T) {
+	release := make(chan struct{})
+	s, user, reviews := accessReviewServer(t, func(authv1.ResourceAttributes) bool {
+		<-release
+		return true
+	})
+	var wg sync.WaitGroup
+	ask := func() {
+		defer wg.Done()
+		s.canReadUserDecision(context.Background(), user, "", "nodes", "", "list")
+	}
+	wg.Add(1)
+	go ask()
+	time.Sleep(50 * time.Millisecond)
+	s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{})
+	wg.Add(1)
+	go ask()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	if ok, _ := s.canReadUserDecision(context.Background(), user, "", "nodes", "", "list"); !ok {
+		t.Fatal("denied after the shared review allowed")
+	}
+	if len(*reviews) != 1 {
+		t.Fatalf("reviews = %d, want the joiner to reuse the shared answer", len(*reviews))
 	}
 }

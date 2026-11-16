@@ -1893,7 +1893,15 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	}
 	type verdict struct{ allowed, authoritative bool }
 	key := strings.Join([]string{k8s.GetContextName(), pkgauth.IdentityCacheKey(user.Username, user.Groups), verb, group, resource, namespace}, "\x00")
-	review := s.accessReviews.DoChan(key, func() (any, error) {
+	review := s.accessReviews.DoChan(key, func() (v any, err error) {
+		// The review runs on its own goroutine, where a panic would end the
+		// process instead of failing one request.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[auth] access review panicked: %v", r)
+				v, err = verdict{}, nil
+			}
+		}()
 		// Callers that didn't start the review share it, so it runs on its own
 		// clock rather than the first caller's: a SubjectAccessReview is a POST,
 		// which the client's request deadlines leave unbounded.
@@ -1911,6 +1919,11 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 	select {
 	case r := <-review:
 		v := r.Val.(verdict)
+		// A caller that joined another's review keeps the answer in its own
+		// permissions too; after a cache expiry they can be different entries.
+		if v.authoritative && perms != nil {
+			perms.SetCanI(verb, group, resource, namespace, v.allowed)
+		}
 		return v.allowed, v.authoritative
 	case <-ctx.Done():
 		// This caller gave up; the review carries on for the others.
