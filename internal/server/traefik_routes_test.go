@@ -1,8 +1,8 @@
 package server
 
 import (
-	"slices"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
