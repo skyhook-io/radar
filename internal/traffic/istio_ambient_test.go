@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	promclient "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -312,7 +313,7 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 		istioSeries("istio_requests_total", "waypoint", "ns-0002", "curl", "ns-0002", "httpbin", "200", 1),
 	}
 	var many []string
-	for i := 0; len(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many)) <= istioQueryBudget; i++ {
+	for i := 0; len(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many, rateWindowFor(0))) <= istioQueryBudget; i++ {
 		many = append(many, fmt.Sprintf("ns-%04d", i))
 	}
 	useConfiguredStore(t)
@@ -471,5 +472,35 @@ func TestIstioGetFlows_SaysWhenZtunnelIsNotScraped(t *testing.T) {
 				t.Errorf("the note must not cost the flows")
 			}
 		})
+	}
+}
+
+// The view's time range sets the window every rate is taken over, and byte
+// totals are that window's.
+func TestIstioGetFlows_UsesTheRequestedWindow(t *testing.T) {
+	raw := []istioRawSeries{
+		istioSeries("istio_requests_total", "waypoint", "amb", "curl", "amb", "httpbin", "200", 2),
+		istioSeries("istio_request_bytes_sum", "waypoint", "amb", "curl", "amb", "httpbin", "200", 100),
+		istioSeries("istio_response_bytes_sum", "waypoint", "amb", "curl", "amb", "httpbin", "200", 400),
+	}
+	inner := fakeIstioProm(raw, nil)
+	var queries []string
+	src := newTestIstio(func(ctx context.Context, q string) (*prom.QueryResult, error) {
+		queries = append(queries, q)
+		return inner(ctx, q)
+	})
+	opts := DefaultFlowOptions()
+	opts.Since = time.Hour
+	resp, err := src.GetFlows(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range queries {
+		if strings.Contains(q, "rate(") && (!strings.Contains(q, "[3600s]") || strings.Contains(q, "[5m]")) {
+			t.Errorf("rate query not over the requested hour: %s", q)
+		}
+	}
+	if len(resp.Flows) != 1 || resp.Flows[0].BytesSent != 100*3600 || resp.Flows[0].BytesRecv != 400*3600 {
+		t.Errorf("want one flow with an hour of bytes, got %+v", resp.Flows)
 	}
 }
