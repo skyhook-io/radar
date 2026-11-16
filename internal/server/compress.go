@@ -77,9 +77,65 @@ func compressMiddleware() func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			compressed.ServeHTTP(w, r)
+			vw := &varyAcceptEncoding{ResponseWriter: w}
+			// The compressor gzips whatever the handler writes, so a range the file
+			// server selected would go out compressed under a Content-Range that
+			// counts uncompressed bytes. Ranges are served uncompressed instead.
+			if r.Header.Get("Range") != "" {
+				next.ServeHTTP(vw, r)
+				return
+			}
+			compressed.ServeHTTP(vw, r)
 		})
 	}
+}
+
+// varyAcceptEncoding declares that the response depends on Accept-Encoding even
+// when it goes out uncompressed. The compressor adds Vary only to the responses
+// it compresses, so a shared cache that first stored an uncompressed copy, for
+// a client that did not accept gzip, could hand that copy to every browser.
+type varyAcceptEncoding struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *varyAcceptEncoding) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		if !varies(w.Header(), "Accept-Encoding") {
+			w.Header().Add("Vary", "Accept-Encoding")
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *varyAcceptEncoding) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *varyAcceptEncoding) Flush() {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *varyAcceptEncoding) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func varies(h http.Header, field string) bool {
+	for _, v := range h.Values("Vary") {
+		for _, f := range strings.Split(v, ",") {
+			if f = strings.TrimSpace(f); f == "*" || strings.EqualFold(f, field) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // isStreamingRequest reports requests that open a long-lived response (SSE), a

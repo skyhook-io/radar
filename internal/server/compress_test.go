@@ -128,3 +128,23 @@ func TestIsStreamingRequest(t *testing.T) {
 		})
 	}
 }
+
+// Handlers that stream without an SSE route or header still pass through the
+// compressor, and their flushes must reach the client.
+func TestCompressMiddlewareKeepsFlush(t *testing.T) {
+	t.Setenv("RADAR_COMPRESS_LEVEL", "")
+	h := compressMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"partial":true}`)
+		http.NewResponseController(w).Flush()
+	}))
+	for _, enc := range []string{"gzip", ""} {
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.Header.Set("Accept-Encoding", enc)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if !rec.Flushed {
+			t.Errorf("Accept-Encoding %q: flush did not reach the client", enc)
+		}
+	}
+}
