@@ -209,6 +209,24 @@ describe('ResourcesSidebar category workspaces', () => {
     expect(html).toContain('Overview')
   })
 
+  it('keeps a workspace category first while one of its kinds is open, as on its views', () => {
+    const deployment: APIResource = { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['list'] }
+    const render = (selectedKind: { name: string; kind: string; group: string }) =>
+      renderToString(
+        <ResourcesSidebar
+          selectedKind={selectedKind}
+          onSelectedKindChange={() => {}}
+          apiResources={[deployment, cnpgCluster]}
+          resourceCounts={{ 'apps/Deployment': 3, 'postgresql.cnpg.io/Cluster': 2 }}
+          categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }] } }}
+        />,
+      )
+    const onKind = render({ name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' })
+    expect(onKind.indexOf('CloudNativePG')).toBeLessThan(onKind.indexOf('Workloads'))
+    const elsewhere = render({ name: 'deployments', kind: 'Deployment', group: 'apps' })
+    expect(elsewhere.indexOf('Workloads')).toBeLessThan(elsewhere.indexOf('CloudNativePG'))
+  })
+
   it('labels API groups when a workspace category spans several', () => {
     const html = renderToString(
       <ResourcesSidebar
