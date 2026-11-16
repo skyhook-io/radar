@@ -1,6 +1,6 @@
 import { cnpgDimensions } from './ha'
 import { describe, it, expect } from 'vitest'
-import { buildCNPGFleet, cnpgReadyInstances, cnpgRecoveryMatchesCluster, getCNPGRestoreValidation, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
+import { applyCNPGDisk, buildCNPGFleet, cnpgMatchesPostureFilter, cnpgPostureFlags, cnpgReadyInstances, cnpgRecoveryMatchesCluster, getCNPGRestoreValidation, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
 
 const G = 'postgresql.cnpg.io/v1'
 
@@ -689,4 +689,36 @@ it('a single-instance replica cluster does not read its replication as calm', ()
   const solo = (replica?: any) => buildCNPGFleet(resp({ clusters: [cluster('pg', 'db', { spec: { instances: 1, ...(replica ? { replica } : {}) } })] })).rows[0].replication
   expect(solo()).toMatchObject({ text: 'Single instance', tone: 'neutral' })
   expect(solo({ enabled: true, source: 'origin' })).toMatchObject({ text: 'Single instance · upstream feed not assessed', tone: 'unknown' })
+})
+
+describe('fleet posture', () => {
+  const barman = { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }
+  const clusters = [
+    cluster('bare', 'db', { spec: { instances: 1 } }),
+    cluster('snap', 'db', { spec: { instances: 2, backup: { volumeSnapshot: {} } } }),
+    cluster('intree', 'db', { spec: { backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }),
+    // barman-cloud archives WAL whether or not it is marked isWALArchiver
+    cluster('plugin', 'db', { spec: { instances: 1, plugins: [barman] } }),
+    // a third-party plugin not marked isWALArchiver may archive: not judged on WAL
+    cluster('vendor', 'db', { spec: { plugins: [{ name: 'backup.example.com' }] } }),
+    cluster('unset', 'db', { spec: { instances: undefined, plugins: [barman] } }),
+  ]
+  const fleet = buildCNPGFleet(resp({ clusters }))
+
+  it('counts Clusters the way the Checks define each cause', () => {
+    expect(fleet.posture).toEqual({ total: 6, noDestination: 1, noWalArchiving: 1, singleInstance: 3, inTree: 1, withDestination: 5 })
+  })
+
+  it('filters rows by each posture value, matching the flags', () => {
+    const names = (f: Parameters<typeof cnpgMatchesPostureFilter>[1]) => fleet.rows.filter((r) => cnpgMatchesPostureFilter(r, f)).map((r) => r.name).sort()
+    expect(names('none')).toEqual(['bare'])
+    expect(names('nowal')).toEqual(['snap'])
+    expect(names('single')).toEqual(['bare', 'plugin', 'unset'])
+    expect(names('intree')).toEqual(['intree'])
+    expect(cnpgPostureFlags(clusters[4])).toEqual({ noDestination: false, noWalArchiving: false, singleInstance: false, inTree: false })
+  })
+
+  it('keeps the counts after applyCNPGDisk rebuilds the fleet', () => {
+    expect(applyCNPGDisk(fleet, []).posture).toEqual(fleet.posture)
+  })
 })
