@@ -80,8 +80,10 @@ in the JobSet overview.
 The climb first follows the controller chain's top, then readable owner
 references (including non-controller references), ordered by group, kind,
 namespace and name. Recording managers stop the climb in this order: Argo CD
-Application, Flux Kustomization, Flux HelmRelease; within one kind the sorted-first
-recording manager wins. A local HelmRelease without readable inventory retains
+Application, Flux Kustomization, Flux HelmRelease. Within one kind, the recording
+manager the workload's own metadata names wins (an Argo CD tracking ID or instance
+label, or Flux labels; a copied tracking ID names nothing), and otherwise the
+sorted-first one, so the key doesn't depend on read order. A local HelmRelease without readable inventory retains
 its matching origin labels ahead of recorded managers. Attachments come from
 one request-local family batch; the ten-second row cache is shared, and each
 caller's access filters its copy afterward. Cold builds share one process-wide

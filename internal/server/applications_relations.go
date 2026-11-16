@@ -311,14 +311,39 @@ func applicationStructuralRoot(session relations.Session, view *ownership.View, 
 				}
 			}
 			if len(refs) > 0 {
-				slices.SortFunc(refs, func(a, b resourceid.Ref) int { return strings.Compare(a.Key(), b.Key()) })
-				return refs[0]
+				return pickRecordingManager(session, cur, refs)
 			}
 		}
 
 		break
 	}
 	return cur
+}
+
+// pickRecordingManager chooses among managers of one kind that all record
+// subject. The manager subject's own metadata names (an Argo CD tracking ID or
+// instance label, Flux labels) wins, since it applied the object last;
+// otherwise the first by key, so the choice doesn't depend on read order.
+func pickRecordingManager(session relations.Session, subject resourceid.Ref, refs []resourceid.Ref) resourceid.Ref {
+	slices.SortFunc(refs, func(a, b resourceid.Ref) int { return strings.Compare(a.Key(), b.Key()) })
+	if len(refs) == 1 || session == nil {
+		return refs[0]
+	}
+	read := session.Object(subject)
+	if read.State != ownership.Present {
+		return refs[0]
+	}
+	for _, c := range read.Object.Claims {
+		if c.Copied {
+			continue
+		}
+		for _, r := range refs {
+			if c.Manager.GroupKind() == r.GroupKind() && c.Manager.Name == r.Name && (c.Manager.Namespace == "" || c.Manager.Namespace == r.Namespace) {
+				return r
+			}
+		}
+	}
+	return refs[0]
 }
 
 type applicationInventory struct {

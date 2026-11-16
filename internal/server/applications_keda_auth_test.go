@@ -27,7 +27,7 @@ func TestApplicationAuthenticationReferencesAreFilteredWithoutChangingSharedRows
 		s.permCache.Set("viewer", nil, permissions)
 		r := httptest.NewRequest(http.MethodGet, "/api/applications", nil)
 		r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "viewer"}))
-		response := s.filterApplicationAttachments(r, shared)
+		response := s.filterApplicationAuthenticationRefs(r, shared)
 		expected := 21
 		for _, yes := range allowed {
 			if yes {
@@ -48,7 +48,7 @@ func TestApplicationAuthenticationReferencesAreFilteredWithoutChangingSharedRows
 		}
 	}
 	anonymous := httptest.NewRequest(http.MethodGet, "/api/applications", nil)
-	if s.filterApplicationAttachments(anonymous, shared) != shared {
+	if s.filterApplicationAuthenticationRefs(anonymous, shared) != shared {
 		t.Fatal("local no-auth response was copied or changed")
 	}
 }
