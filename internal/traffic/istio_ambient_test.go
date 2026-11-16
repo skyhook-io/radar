@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	promclient "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -255,7 +256,7 @@ func TestIstioScopeCheckCoversClientReportsWhenAmbient(t *testing.T) {
 	var mu sync.Mutex
 	selectors := map[string]string{}
 	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, selector string) (string, promclient.SeriesIsolation, error) {
+	resolveTrafficScope = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		mu.Lock()
 		selectors[metric] = selector
 		mu.Unlock()
@@ -312,13 +313,13 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 		istioSeries("istio_requests_total", "waypoint", "ns-0002", "curl", "ns-0002", "httpbin", "200", 1),
 	}
 	var many []string
-	for i := 0; len(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many)) <= istioQueryBudget; i++ {
+	for i := 0; len(istioHTTPQuery("istio_requests_total", istio5xxSelector, "", clusterScope{}, many, rateWindowFor(0))) <= istioQueryBudget; i++ {
 		many = append(many, fmt.Sprintf("ns-%04d", i))
 	}
 	useConfiguredStore(t)
 	var httpScopeSelectors []string
 	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, selector string) (string, promclient.SeriesIsolation, error) {
+	resolveTrafficScope = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		if metric == "istio_requests_total" {
 			httpScopeSelectors = append(httpScopeSelectors, selector)
 		}
@@ -471,5 +472,130 @@ func TestIstioGetFlows_SaysWhenZtunnelIsNotScraped(t *testing.T) {
 				t.Errorf("the note must not cost the flows")
 			}
 		})
+	}
+}
+
+// The view's time range sets the window every rate is taken over, and byte
+// totals are that window's.
+func TestIstioGetFlows_UsesTheRequestedWindow(t *testing.T) {
+	raw := []istioRawSeries{
+		istioSeries("istio_requests_total", "waypoint", "amb", "curl", "amb", "httpbin", "200", 2),
+		istioSeries("istio_request_bytes_sum", "waypoint", "amb", "curl", "amb", "httpbin", "200", 100),
+		istioSeries("istio_response_bytes_sum", "waypoint", "amb", "curl", "amb", "httpbin", "200", 400),
+	}
+	inner := fakeIstioProm(raw, nil)
+	var queries []string
+	src := newTestIstio(func(ctx context.Context, q string) (*prom.QueryResult, error) {
+		queries = append(queries, q)
+		return inner(ctx, q)
+	})
+	opts := DefaultFlowOptions()
+	opts.Since = time.Hour
+	resp, err := src.GetFlows(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range queries {
+		if strings.Contains(q, "rate(") && (!strings.Contains(q, "[3600s]") || strings.Contains(q, "[5m]")) {
+			t.Errorf("rate query not over the requested hour: %s", q)
+		}
+	}
+	if len(resp.Flows) != 1 || resp.Flows[0].BytesSent != 100*3600 || resp.Flows[0].BytesRecv != 400*3600 {
+		t.Errorf("want one flow with an hour of bytes, got %+v", resp.Flows)
+	}
+}
+
+// The view's range also reaches the cluster-scope checks and the empty-map
+// explanation, so traffic another cluster sent within the range is found.
+func TestIstioGetFlows_ScopeChecksUseTheRequestedWindow(t *testing.T) {
+	useConfiguredStore(t)
+	var mu sync.Mutex
+	var windows []time.Duration
+	prev := resolveTrafficScope
+	resolveTrafficScope = func(_ context.Context, _, _ string, w time.Duration) (string, promclient.SeriesIsolation, error) {
+		mu.Lock()
+		windows = append(windows, w)
+		mu.Unlock()
+		return `cluster="a"`, promclient.SeriesIsolation{Labels: map[string]string{"cluster": "a"}}, nil
+	}
+	t.Cleanup(func() { resolveTrafficScope = prev })
+	var queries []string
+	src := newTestIstio(func(_ context.Context, q string) (*prom.QueryResult, error) {
+		mu.Lock()
+		queries = append(queries, q)
+		mu.Unlock()
+		return &prom.QueryResult{}, nil
+	})
+	opts := DefaultFlowOptions()
+	opts.Since = time.Hour
+	if _, err := src.GetFlows(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) == 0 {
+		t.Fatal("no scope check ran")
+	}
+	for _, w := range windows {
+		if w != time.Hour {
+			t.Errorf("scope check over %v, want the requested hour", w)
+		}
+	}
+	for _, q := range queries {
+		if strings.Contains(q, "last_over_time(") && !strings.Contains(q, "[3600s]") {
+			t.Errorf("empty-map check not over the requested hour: %s", q)
+		}
+	}
+}
+
+// A range shorter than two scrape intervals leaves rate nothing to work with:
+// the map comes back empty although the metrics are there, and says why.
+func TestIstioGetFlows_SaysWhenTheRangeHasTooFewSamples(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		since   time.Duration
+		samples float64
+		want    bool
+	}{
+		{"one sample per series in a minute", time.Minute, 1, true},
+		{"two samples: genuinely idle", time.Minute, 2, false},
+		{"no metrics at all", time.Minute, 0, false},
+		{"default range is not checked", 5 * time.Minute, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := newTestIstio(func(_ context.Context, q string) (*prom.QueryResult, error) {
+				if strings.HasPrefix(q, "max(count_over_time(") && tc.samples > 0 {
+					return &prom.QueryResult{Series: []prom.Series{{DataPoints: []prom.DataPoint{{Value: tc.samples}}}}}, nil
+				}
+				return &prom.QueryResult{}, nil
+			})
+			opts := DefaultFlowOptions()
+			opts.Since = tc.since
+			resp, err := src.GetFlows(context.Background(), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resp.Warning == istioTooFewSamplesNote; got != tc.want {
+				t.Errorf("warning %q, want the too-few-samples note: %v", resp.Warning, tc.want)
+			}
+			if tc.want && resp.WarningKind != WarningIncomplete {
+				t.Errorf("kind %q, want incomplete", resp.WarningKind)
+			}
+		})
+	}
+}
+
+// A fractional range is rounded to whole seconds once, so the cluster check's
+// window is valid PromQL and matches the rates' window.
+func TestRateWindowForRoundsToWholeSeconds(t *testing.T) {
+	w := rateWindowFor(90*time.Second + 500*time.Millisecond)
+	if w.promQL != "90s" || w.seconds != 90 || w.span() != 90*time.Second {
+		t.Errorf("got %q / %v / %v, want 90s throughout", w.promQL, w.seconds, w.span())
+	}
+}
+
+// A range beyond the view's longest is read as the longest, so no request can
+// make Prometheus read days of samples.
+func TestRateWindowForCapsAtAnHour(t *testing.T) {
+	if w := rateWindowFor(72 * time.Hour); w.promQL != "3600s" || w.seconds != 3600 {
+		t.Errorf("got %q / %v, want an hour", w.promQL, w.seconds)
 	}
 }

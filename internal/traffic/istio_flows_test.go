@@ -22,7 +22,7 @@ type istioRawSeries struct {
 }
 
 var (
-	istioSumByRe  = regexp.MustCompile(`^sum by \(([^)]*)\) \(rate\(([a-z_]+)\{([^}]*)\}\[5m\]\)\)$`)
+	istioSumByRe  = regexp.MustCompile(`^sum by \(([^)]*)\) \(rate\(([a-z_]+)\{([^}]*)\}\[([0-9a-z]+)\]\)\)$`)
 	istioCountRe  = regexp.MustCompile(`^count\(([a-z_]+)\{([^}]*)\}\)$`)
 	promMatcherRe = regexp.MustCompile(`([a-z_]+)(=~|!=|=)"([^"]*)"`)
 )
