@@ -60,6 +60,8 @@ it('restarts the first active badges request, rejects its late result, and does 
   expect(h.requests.map(r => r.url)).toEqual(['/api/audit?include=badges&namespaces=shop', '/api/audit?namespaces=shop'])
   await h.respond(1, 'new-full')
   expect(h.requests).toHaveLength(3)
+  expect(h.requests[0].signal?.aborted).toBe(true)
+  expect(h.requests[2].signal?.aborted).toBe(false)
   expect(h.client.getQueryState(badgeKey)).toMatchObject({ data: undefined, status: 'pending', fetchStatus: 'fetching' })
   await h.respond(0, 'old-badges')
   expect(h.client.getQueryData(badgeKey)).toBeUndefined()

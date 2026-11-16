@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
@@ -58,6 +59,42 @@ func TestHandleAuditIncludeBadges(t *testing.T) {
 		if f.Namespace == "default" {
 			t.Errorf("finding in the ignored namespace leaked into the badges response: %+v", f)
 		}
+	}
+
+	// The shared fixture has no badge-worthy finding, so the comparison above
+	// can pass on two empty answers. Seed the cached scan with findings the
+	// settings must keep and drop, and check exactly what arrives.
+	t.Setenv("HOME", t.TempDir())
+	if _, err := settings.Update(func(s *settings.Settings) {
+		s.Audit = &settings.AuditConfig{IgnoredNamespaces: []string{"default"}, DisabledChecks: []string{"ingressNoMatchingService"}}
+	}); err != nil {
+		t.Fatalf("settings.Update: %v", err)
+	}
+	t.Cleanup(func() {
+		auditCache.mu.Lock()
+		auditCache.results = nil
+		auditCache.mu.Unlock()
+	})
+	auditCache.mu.Lock()
+	seeded := *auditCache.results
+	keep := bp.Finding{Kind: "Service", Namespace: "shop", Name: "web", CheckID: "serviceNoMatchingPods"}
+	seeded.Findings = append(slices.Clone(seeded.Findings),
+		keep,
+		bp.Finding{Kind: "Service", Namespace: "default", Name: "ignored", CheckID: "serviceNoMatchingPods"},
+		bp.Finding{Kind: "Ingress", Namespace: "shop", Name: "web", CheckID: "ingressNoMatchingService"},
+		bp.Finding{Kind: "Deployment", Namespace: "shop", Name: "web", CheckID: "runAsRoot"},
+	)
+	auditCache.results = &seeded
+	auditCache.mu.Unlock()
+	var seededBadges auditBadges
+	if err := json.Unmarshal(get("/api/audit?include=badges"), &seededBadges); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(seededBadges.Findings, []bp.Finding{keep}) {
+		t.Fatalf("include=badges findings = %+v, want only %+v", seededBadges.Findings, keep)
+	}
+	if got := slices.Sorted(maps.Keys(seededBadges.Checks)); !reflect.DeepEqual(got, []string{"serviceNoMatchingPods"}) || !seededBadges.Checks["serviceNoMatchingPods"].BadgeWorthy {
+		t.Fatalf("include=badges checks = %+v, want the serviceNoMatchingPods entry only", seededBadges.Checks)
 	}
 }
 

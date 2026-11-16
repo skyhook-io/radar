@@ -791,7 +791,8 @@ export function useAuditBadges(
   const connected = useClusterConnected();
   return useQuery<AuditBadges>({
     queryKey: ["audit", namespaces, "badges"],
-    queryFn: async () => projectAuditBadges(await fetchJSON<AuditBadges>(`/audit?${params}`)),
+    // The signal lets a superseded request stop downloading, not just lose.
+    queryFn: async ({ signal }) => projectAuditBadges(await fetchJSON<AuditBadges>(`/audit?${params}`, signal)),
     enabled: connected && (options.enabled ?? true),
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
