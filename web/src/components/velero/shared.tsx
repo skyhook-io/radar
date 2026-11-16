@@ -119,6 +119,12 @@ export function namesAndMore(names: string[], shown = 3): string {
   return head.length > 1 ? `${head.slice(0, -1).join(', ')} and ${head.at(-1)}` : (head[0] ?? '')
 }
 
+// Velero's own messages often end without a full stop; a sentence after one needs it.
+function sentence(text: string | undefined): string {
+  const trimmed = (text ?? '').replace(/[\s:;,]+$/, '')
+  return trimmed && !/[.!?…)]$/.test(trimmed) ? `${trimmed}.` : trimmed
+}
+
 function rejectedRuns(issue: VeleroIssue): string | undefined {
   const runs = issue.affected ?? []
   if (runs.length === 0) return undefined
@@ -133,7 +139,7 @@ export function veleroIssueProblem(issue: VeleroIssue): WorkspaceProblem {
     id: issue.id,
     category: issue.category,
     title,
-    detail: [message, issue.cause?.trim(), rejectedRuns(issue)].filter(Boolean).join(' ') || undefined,
+    detail: [message, issue.cause?.trim(), rejectedRuns(issue)].filter(Boolean).map(sentence).join(' ') || undefined,
     subject: { kind: issue.kind, group: issue.group ?? VELERO_GROUP, namespace: issue.namespace ?? '', name: issue.name },
     source: 'issue',
     tone: issue.severity === 'critical' ? 'unhealthy' : 'degraded',

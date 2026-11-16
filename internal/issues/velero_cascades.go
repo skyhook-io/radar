@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"regexp"
 	"slices"
+
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // One Velero fault can stop every schedule, or fail every run that writes to
@@ -89,6 +91,10 @@ func withAffectedRuns(iss Issue, factType, message string, refs []Ref) Issue {
 	refs = slices.Clone(refs)
 	slices.SortFunc(refs, func(a, b Ref) int { return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Name, b.Name)) })
 	iss.AffectedRefs = append(slices.Clone(iss.AffectedRefs), refs...)
+	// The issue stands for what it covers: a rollup, not a candidate cause of it.
+	if iss.DiagnosticContext == nil {
+		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleRollup}
+	}
 	iss.DiagnosticContext = withFact(iss.DiagnosticContext, affectedRefsFact(factType, message, refs))
 	return iss
 }

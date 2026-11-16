@@ -147,6 +147,7 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
     case 'possiblyLate':
       return 'Past its estimated time, but Radar couldn’t confirm the Velero server’s time zone, so it may not be due yet.'
     case 'due':
+      if (serverDown !== null) return serverDown ? 'Due now, but the Velero server has no running replicas, so nothing will submit it.' : 'Due now, but nothing submits it until the server starts.'
       return 'Due now. Velero normally submits it within a few minutes.'
     case 'onSchedule':
       return 'On schedule.'

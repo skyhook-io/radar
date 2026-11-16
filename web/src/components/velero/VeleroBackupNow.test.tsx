@@ -6,11 +6,11 @@ import { schedule as reading } from './velero.fixtures'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const state = vi.hoisted(() => ({ support: 'supported', mutate: vi.fn(), reading: undefined as unknown, toast: vi.fn() }))
+const state = vi.hoisted(() => ({ support: 'supported', mutate: vi.fn(), reading: undefined as unknown, serverStopped: false, toast: vi.fn() }))
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
 vi.mock('../../api/velero', () => ({
   useVeleroBackupNow: () => ({ mutate: state.mutate, reset: vi.fn(), isPending: false }),
-  useVeleroScheduleActivity: () => ({ data: state.reading ? { reading: state.reading } : undefined }),
+  useVeleroScheduleActivity: () => ({ data: state.reading ? { reading: state.reading, serverStopped: state.serverStopped } : undefined }),
 }))
 vi.mock('../ui/Toast', () => ({ showApiSuccess: state.toast }))
 
@@ -37,6 +37,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   state.support = 'supported'
   state.reading = undefined
+  state.serverStopped = false
   state.toast.mockReset()
   state.mutate.mockReset()
 })
@@ -92,8 +93,9 @@ describe('Back up now', () => {
   })
 
   // A stopped server would only queue it, so "now" would not be true.
-  it('is unavailable while the Velero server is stopped', () => {
-    state.reading = reading({ name: 'nightly', state: 'late', attention: true, reason: 'serverDown' })
+  it('is unavailable while the Velero server is stopped, whatever the schedule reads', () => {
+    state.reading = reading({ name: 'nightly', state: 'due' })
+    state.serverStopped = true
     render(<VeleroBackupNow schedule={nightly} />)
     expect(buttonNamed('Back up now')!.disabled).toBe(true)
   })
@@ -103,4 +105,17 @@ describe('Back up now', () => {
     render(<VeleroBackupNow schedule={nightly} />)
     expect(buttonNamed('Back up now')).toBeUndefined()
   })
+
+  // The server can stop while the confirmation is open.
+  it('refuses to confirm once the server has stopped', () => {
+    state.reading = reading({ name: 'nightly', state: 'onSchedule' })
+    const root = render(<VeleroBackupNow schedule={nightly} />)
+    act(() => buttonNamed('Back up now')!.click())
+    state.serverStopped = true
+    act(() => root.render(<VeleroBackupNow schedule={{ ...nightly }} />))
+    const confirm = [...document.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Back up now').at(-1)!
+    expect(confirm.disabled).toBe(true)
+    expect(document.body.textContent).toContain('Start it first')
+  })
 })
+

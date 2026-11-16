@@ -68,7 +68,7 @@ describe('an unavailable storage location on the Overview', () => {
       issues: [{ ...issue('BackupStorageLocation', 'dr'), message: 'bucket not found', affected: [{ kind: 'Backup', name: 'a-1' }, { kind: 'Backup', name: 'b-1' }] }],
       issueTotals: { velero: 1 },
     })
-    expect(veleroAttention(data, null)[0].detail).toBe('bucket not found Velero rejected 2 runs because of it: a-1 and b-1.')
+    expect(veleroAttention(data, null)[0].detail).toBe('bucket not found. Velero rejected 2 runs because of it: a-1 and b-1.')
   })
 })
 

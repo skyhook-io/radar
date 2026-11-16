@@ -110,5 +110,10 @@ describe('Recent runs', () => {
     // Without somewhere to go, there is no link.
     expect(renderToStaticMarkup(<VeleroScheduleActivity reading={reading({ runs: { read: 'full', kept: 23, newest: recent[0], newestCompleted: recent[0], recent } })} />)).not.toContain('All 23 runs')
   })
+
+  it('does not promise a submission while the server is stopped', () => {
+    expect(veleroScheduleReasonText(reading({ state: 'due', reason: 'serverDown' }))).toBe('Due now, but the Velero server has no running replicas, so nothing will submit it.')
+    expect(veleroScheduleReasonText(reading({ state: 'due' }))).toBe('Due now. Velero normally submits it within a few minutes.')
+  })
 })
 

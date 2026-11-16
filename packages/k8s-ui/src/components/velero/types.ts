@@ -223,4 +223,6 @@ export interface VeleroScheduleActivityResponse {
   observedAt: string
   reading: VeleroScheduleReading
   coverage: Partial<Record<VeleroWorkspaceKey, VeleroKindCoverage>>
+  /** The server Deployment was read and has no running replicas. Absent from an older Radar. */
+  serverStopped?: boolean
 }

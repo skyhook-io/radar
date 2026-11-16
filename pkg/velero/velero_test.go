@@ -147,6 +147,11 @@ func TestServerDownExplainsLateSchedulesAndOverdueValidation(t *testing.T) {
 	if onTime.Reason == ReasonServerDown {
 		t.Fatal("a schedule that is not late takes no server-down reason")
 	}
+	// Due expects a submission within minutes; a stopped server won't make one.
+	due := read(schedule("nightly", "0 * * * *", lastBackup(at("11:00"))), nil, down, at("12:02"))
+	if due.State != StateDue || due.Reason != ReasonServerDown || due.Attention {
+		t.Fatalf("due: got %s %s attention=%v", due.State, due.Reason, due.Attention)
+	}
 	loc := ReadLocation(LocationInput{Location: location("l", func(o map[string]any) {
 		o["status"].(map[string]any)["lastValidationTime"] = ts(at("11:00"))
 	}), Server: down, Now: at("12:00")})

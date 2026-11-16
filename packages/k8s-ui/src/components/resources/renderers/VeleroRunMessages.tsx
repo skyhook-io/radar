@@ -72,6 +72,10 @@ export interface VeleroMessageRow {
   variants: string[]
 }
 
+// A word that names an object: data-pg-0, name=x, "app-config", ns/pod. A
+// plain word (Unauthorized, Forbidden) is a different reason, never folded.
+const IDENTITY_LIKE = /[\d"'=/:_.-]/
+
 function commonAffixes(values: string[]): [number, number] {
   let pre = 0
   while (values.every((v) => pre < v.length && v[pre] === values[0][pre])) pre++
@@ -99,13 +103,27 @@ export function veleroMessageRows(messages: { errors: VeleroMessage[]; warnings:
       // key differ at most there.
       const keyOf = (tokens: string[], i: number) => `${tokens.length}\u0000${i}\u0000${tokens.map((t, j) => (j === i ? '' : t)).join(' ')}`
       const counts = new Map<string, number>()
-      for (const tokens of here) tokens.forEach((_, i) => counts.set(keyOf(tokens, i), (counts.get(keyOf(tokens, i)) ?? 0) + 1))
+      const variantsAt = new Map<string, string[]>()
+      for (const tokens of here) {
+        tokens.forEach((t, i) => {
+          const key = keyOf(tokens, i)
+          counts.set(key, (counts.get(key) ?? 0) + 1)
+          variantsAt.set(key, [...(variantsAt.get(key) ?? []), t])
+        })
+      }
+      // Only a position where every variant names an object folds; the same
+      // message repeated always does.
+      const foldable = (key: string) => {
+        const vs = variantsAt.get(key) ?? []
+        return vs.every((v) => v === vs[0]) || vs.every((v) => IDENTITY_LIKE.test(v))
+      }
       const groups = new Map<string, { tokens: string[]; at: number; variants: string[] }>()
       const order: (string | string[])[] = []
       for (const tokens of here) {
         let best = -1
         let bestCount = 1
         tokens.forEach((_, i) => {
+          if (!foldable(keyOf(tokens, i))) return
           const n = counts.get(keyOf(tokens, i)) ?? 0
           if (n > bestCount) {
             best = i

@@ -177,6 +177,11 @@ func ReadSchedule(in ScheduleInput) ScheduleReading {
 		if r.Attention && in.Server.Down() {
 			r.Reason = ReasonServerDown
 		}
+	case StateDue:
+		// Due needs no attention while the server runs; stopped, nothing submits it.
+		if in.Server.Down() {
+			r.Reason = ReasonServerDown
+		}
 	}
 	return r
 }

@@ -59,7 +59,7 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
       ? 'This schedule’s name is longer than 63 characters, so Velero cannot label a backup from it and the backup would fail.'
       : reading?.state === 'cannotRun'
         ? veleroScheduleReasonText(reading)
-        : reading?.reason === 'serverDown'
+        : activity.data?.serverStopped || reading?.reason === 'serverDown'
           ? 'The Velero server isn’t running, so nothing would be backed up now. Start it first.'
           : !resourceVersion
             ? 'The schedule hasn’t loaded yet.'
@@ -112,7 +112,7 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
         confirmLabel="Back up now"
         variant="default"
         isLoading={backupNow.isPending}
-        confirmDisabled={changed}
+        confirmDisabled={changed || unavailable !== null}
       >
         <div className="space-y-3 px-4 pb-1 text-sm">
           <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
@@ -127,6 +127,7 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
           {changed && (
             <p className="text-warning-text">This schedule changed while this was open. Close it and review the schedule again.</p>
           )}
+          {!changed && unavailable && <p className="text-warning-text">{unavailable}</p>}
         </div>
       </ConfirmDialog>
     </>

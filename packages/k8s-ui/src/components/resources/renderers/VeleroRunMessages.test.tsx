@@ -177,5 +177,14 @@ describe('telling an error from a warning without seeing it', () => {
     expect(html.match(/unique failure number/g)).toHaveLength(10)
     expect(html).toContain('Namespace ns-0 · 10 errors')
   })
+
+  // Two different reasons are two rows, however alike the rest of the text.
+  it('never folds messages that differ in a reason rather than a name', () => {
+    const rows = veleroMessageRows({ errors: [{ scope: 'velero', message: 'backup failed: Unauthorized' }, { scope: 'velero', message: 'backup failed: Forbidden' }], warnings: [] })
+    expect(rows.map((r) => r.text)).toEqual(['backup failed: Unauthorized', 'backup failed: Forbidden'])
+    const same = veleroMessageRows({ errors: [{ scope: 'velero', message: 'backup failed: Forbidden' }, { scope: 'velero', message: 'backup failed: Forbidden' }], warnings: [] })
+    expect(same).toHaveLength(1)
+    expect(same[0].variants).toHaveLength(2)
+  })
 })
 
