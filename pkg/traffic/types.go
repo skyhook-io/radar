@@ -249,6 +249,12 @@ type FlowsResponse struct {
 	// the map to this cluster in a metrics store shared by several, so a client
 	// can link to how that works and how to set this cluster's label.
 	WarningClusterScope bool `json:"warningClusterScope,omitempty"`
+	// DataNote qualifies how the flows' byte (Data) figures were measured, for
+	// example two reports that may cover the same calls. It is not a warning:
+	// the figures are what the source reports. Clients show it quietly beside
+	// the map and never retry for it. Like a partial warning, it describes the
+	// flows it came with and goes when they are all filtered away.
+	DataNote string `json:"dataNote,omitempty"`
 	// CoveredSince is when Flows start being complete, set when a source read
 	// only its newest records and some of the window did not fit: Hubble
 	// returns at most NodeFlowLimit flows per node. Before it, traffic may be

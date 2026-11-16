@@ -108,3 +108,13 @@ func withoutWaypointHops(flows []Flow, waypoints map[istioWorkload]bool) []Flow 
 	}
 	return kept
 }
+
+// workloadPairOf keys a flow by its workloads alone. ztunnel infers the Service
+// of plaintext traffic from the target port, so its label can differ from the
+// calling proxy's for the same calls, and edges are merged by workloads anyway.
+func workloadPairOf(f Flow) flowKey {
+	return flowKey{
+		srcWorkload: f.Source.Workload, srcNs: f.Source.Namespace,
+		dstWorkload: f.Destination.Workload, dstNs: f.Destination.Namespace,
+	}
+}

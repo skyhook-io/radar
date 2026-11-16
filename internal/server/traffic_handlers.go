@@ -292,6 +292,7 @@ func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow, 
 	}
 	addFlowsCoverage(result, response)
 	addFlowsWarning(result, response, flows)
+	addFlowsDataNote(result, response, flows)
 	return result
 }
 
@@ -305,6 +306,12 @@ func addFlowsCoverage(result map[string]any, response *traffic.FlowsResponse) {
 	}
 	if response.FlowLimit > 0 {
 		result["flowLimit"] = response.FlowLimit
+	}
+}
+
+func addFlowsDataNote(result map[string]any, response *traffic.FlowsResponse, flows []traffic.Flow) {
+	if response.DataNote != "" && !(len(flows) == 0 && len(response.Flows) > 0) {
+		result["dataNote"] = response.DataNote
 	}
 }
 
@@ -393,6 +400,10 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	flows := s.visibleFlows(r, resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows), namespaces, opts)
+	s.writeJSON(w, trafficRecordsPayload(response, flows))
+}
+
+func trafficRecordsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) map[string]any {
 	result := map[string]any{
 		"source":                    response.Source,
 		"timestamp":                 response.Timestamp,
@@ -402,7 +413,8 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 	}
 	addFlowsCoverage(result, response)
 	addFlowsWarning(result, response, flows)
-	s.writeJSON(w, result)
+	addFlowsDataNote(result, response, flows)
+	return result
 }
 
 // handleTrafficFlowsStream provides SSE stream of traffic flows

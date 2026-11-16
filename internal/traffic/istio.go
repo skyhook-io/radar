@@ -164,7 +164,7 @@ const istioReporterSelector = `reporter=~"destination|waypoint"`
 // those too are kept to this cluster's series.
 const istioAllReportsSelector = `reporter=~"destination|waypoint|source"`
 
-const istioTCPMetric = "istio_tcp_connections_opened_total"
+const istioTCPMetric = "istio_tcp_received_bytes_total"
 
 // istioScopes keeps each Istio metric family to this cluster's series: HTTP
 // (istio_requests_total and its byte sums, reported by the same proxies) and
@@ -333,15 +333,23 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	httpCount := len(httpFlows)
 	tcpFlows, tcpErr := []Flow(nil), errIstioTCPUnchecked
 	ztunnelReported := false
+	byteOverlap := false
 	if !scopes.tcpUnchecked {
 		var reportedInto []string
-		tcpFlows, reportedInto, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
+		var destinationTCP map[flowKey]bool
+		tcpFlows, reportedInto, destinationTCP, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
 		ztunnelReported = slices.ContainsFunc(reportedInto, func(ns string) bool { return slices.Contains(ambientKnown, ns) })
 		tcpFlows = withoutWaypointHops(tcpFlows, waypoints)
+		if tcpErr == nil {
+			byteOverlap = slices.ContainsFunc(httpFlows, func(f Flow) bool {
+				return f.BytesSent+f.BytesRecv > 0 && slices.Contains(ambientNamespaces, f.Destination.Namespace) &&
+					destinationTCP[workloadPairOf(f)] && !opts.Excludes(f) && opts.Match.Matches(f)
+			})
+		}
 	}
 	if tcpErr != nil {
 		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", tcpErr)
-		missing = append(missing, "TCP connections")
+		missing = append(missing, "TCP traffic")
 	} else {
 		httpFlows = append(httpFlows, tcpFlows...)
 	}
@@ -353,7 +361,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		Flows:     httpFlows,
 	}
 	// With no flows a missing enrichment qualifies nothing, but missing TCP
-	// connections can be why there are no flows: a TCP-only mesh whose query
+	// traffic can be why there are no flows: a TCP-only mesh whose query
 	// failed must not read as idle.
 	if len(missing) > 0 && (len(httpFlows) > 0 || tcpErr != nil) {
 		// Without this the edges read as measured: a failed 5xx query shows as no
@@ -363,12 +371,15 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 			response.Warning += " " + uncheckedFamilyNote
 			response.WarningClusterScope = true
 		}
-		// Missing figures qualify the edges shown. Missing TCP connections are
+		// Missing figures qualify the edges shown. Missing TCP traffic means
 		// edges that may not be shown at all, which holds whatever is filtered.
 		response.WarningKind = WarningPartial
 		if tcpErr != nil {
 			response.WarningKind = WarningTransient
 		}
+	}
+	if byteOverlap {
+		noteIstioByteOverlap(response)
 	}
 	mismatch := ""
 	switch {
@@ -377,11 +388,11 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 			mismatch = s.familyMismatch(ctx, opts, scopes.tcp, istioTCPMetric, istioReporterSelector)
 		}
 	case httpCount == 0:
-		// TCP connections drew, but the cluster filter may have removed every
+		// TCP edges drew, but the cluster filter may have removed every
 		// HTTP series. Say so, or the map reads as carrying no requests.
 		s.noteFamilyMismatch(ctx, opts, response, scopes.http, "istio_requests_total", scopes.httpSelector, "HTTP requests aren't shown on this map.")
 	case len(tcpFlows) == 0 && tcpErr == nil:
-		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, istioReporterSelector, "TCP connections aren't shown on this map.")
+		s.noteFamilyMismatch(ctx, opts, response, scopes.tcp, istioTCPMetric, istioReporterSelector, "TCP traffic isn't shown on this map.")
 	}
 	// Without a TCP read there is no evidence either way, and the TCP
 	// warning already says so.
@@ -492,7 +503,7 @@ func (s *IstioSource) ztunnelScraped(ctx context.Context) bool {
 
 // noteFamilyMismatch adds why one family is missing while the other drew.
 // Its edges are missing, not figures on the edges shown, so the warning holds
-// whatever a viewer's filters leave, as missing TCP connections do.
+// whatever a viewer's filters leave, as missing TCP traffic does.
 func (s *IstioSource) noteFamilyMismatch(ctx context.Context, opts FlowOptions, response *FlowsResponse, sc clusterScope, metric, reporters, lead string) {
 	reason := s.familyMismatch(ctx, opts, sc, metric, reporters)
 	if reason == "" {
@@ -598,6 +609,12 @@ func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (m
 		rates[istioSeriesKeyFrom(series.Labels)] += series.DataPoints[0].Value
 	}
 	return rates, nil
+}
+
+const istioByteOverlapNote = "Data on some edges may count the same calls twice: when no waypoint receives a call into an ambient workload, Radar can show both the calling proxy's HTTP bytes and ztunnel's TCP bytes."
+
+func noteIstioByteOverlap(response *FlowsResponse) {
+	response.DataNote = istioByteOverlapNote
 }
 
 // queryHTTPFlows queries istio_requests_total for HTTP/gRPC traffic.
@@ -706,75 +723,79 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc c
 	return flows, nil
 }
 
-// queryTCPFlows queries istio_tcp_connections_opened_total for TCP traffic.
-// reportedInto is every destination namespace a series names, idle ones
-// included: a long-lived connection opens none in the window, yet its series
-// shows the reporting proxy is scraped.
-func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) (flows []Flow, reportedInto []string, err error) {
-	query := istioRateQuery("source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name", istioTCPMetric, istioReporterSelector, opts.Namespace, sc, rateWindowFor(opts.Since))
-
-	result, err := s.queryFn(ctx, query)
-	if err != nil {
-		return nil, nil, err
+// queryTCPFlows reads TCP traffic from istio_tcp_received_bytes_total and
+// istio_tcp_sent_bytes_total. reportedInto includes idle series: their presence
+// still shows the reporting proxy is scraped even when no bytes moved.
+// destinationTCP holds the workload pairs whose wire bytes may also cover HTTP.
+func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) (flows []Flow, reportedInto []string, destinationTCP map[flowKey]bool, err error) {
+	w := rateWindowFor(opts.Since)
+	const groupBy = "source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter"
+	type tcpSeriesKey struct {
+		istioSeriesKey
+		reporter string
+	}
+	volumes := make(map[tcpSeriesKey][2]float64)
+	var keys []tcpSeriesKey
+	// Both selected reporters observe the server side, so received bytes
+	// travel client→server and sent bytes travel server→client.
+	for direction, metric := range []string{istioTCPMetric, "istio_tcp_sent_bytes_total"} {
+		result, err := s.queryFn(ctx, istioRateQuery(groupBy, metric, istioReporterSelector, opts.Namespace, sc, w))
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		for _, series := range result.Series {
+			reportedInto = append(reportedInto, series.Labels["destination_workload_namespace"])
+			if len(series.DataPoints) == 0 || series.DataPoints[0].Value <= 0 {
+				continue
+			}
+			key := tcpSeriesKey{istioSeriesKeyFrom(series.Labels), series.Labels["reporter"]}
+			volume, exists := volumes[key]
+			if !exists {
+				keys = append(keys, key)
+			}
+			volume[direction] += series.DataPoints[0].Value * w.seconds
+			volumes[key] = volume
+		}
 	}
 
-	flows = make([]Flow, 0, len(result.Series))
-	for _, series := range result.Series {
-		labels := series.Labels
-		reportedInto = append(reportedInto, labels["destination_workload_namespace"])
-
-		if len(series.DataPoints) == 0 {
-			continue
+	destinationTCP = make(map[flowKey]bool)
+	flows = make([]Flow, 0, len(keys))
+	for _, key := range keys {
+		volume := volumes[key]
+		if key.reporter == "destination" {
+			destinationTCP[key.flowKey] = true
 		}
-		val := series.DataPoints[0].Value
-		if val <= 0 {
-			continue
-		}
-
-		srcWorkload := labels["source_workload"]
-		srcNs := labels["source_workload_namespace"]
-		dstWorkload := labels["destination_workload"]
-		dstNs := labels["destination_workload_namespace"]
-		dstService := labels["destination_service_name"]
-
 		flow := Flow{
 			Source: Endpoint{
-				Name:      srcWorkload,
-				Namespace: srcNs,
-				Kind:      "Pod",
-				Workload:  srcWorkload,
+				Name: key.srcWorkload, Namespace: key.srcNs,
+				Kind: "Pod", Workload: key.srcWorkload,
 			},
 			Destination: Endpoint{
-				Name:      dstWorkload,
-				Namespace: dstNs,
-				Kind:      "Pod",
-				Workload:  dstWorkload,
+				Name: key.dstWorkload, Namespace: key.dstNs,
+				Kind: "Pod", Workload: key.dstWorkload,
 			},
 			Protocol:    "tcp",
-			DestService: dstService,
-			Connections: RoundRate(val),
+			DestService: key.dstService,
+			BytesSent:   int64(volume[0]),
+			BytesRecv:   int64(volume[1]),
 			Verdict:     "forwarded",
 			LastSeen:    time.Now(),
 		}
-
 		if flow.Destination.Name == "" || flow.Destination.Name == "unknown" {
-			if dstService != "" {
-				flow.Destination.Name = dstService
+			if key.dstService != "" {
+				flow.Destination.Name = key.dstService
 				flow.Destination.Kind = "Service"
 			}
 		}
-
 		if flow.Source.Namespace == "" && flow.Source.Name != "" {
 			flow.Source.Kind = "External"
 		}
 		if flow.Destination.Namespace == "" && flow.Destination.Name != "" {
 			flow.Destination.Kind = "External"
 		}
-
 		flows = append(flows, flow)
 	}
-
-	return flows, reportedInto, nil
+	return flows, reportedInto, destinationTCP, nil
 }
 
 // StreamFlows returns a channel of flows for real-time updates

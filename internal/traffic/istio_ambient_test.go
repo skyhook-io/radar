@@ -407,6 +407,7 @@ func TestIstioGetFlows_SaysWhenZtunnelIsNotScraped(t *testing.T) {
 	ztunnelTCP := istioSeries(istioTCPMetric, "destination", "side", "curl", "amb", "db", "", 1)
 	ztunnelHop := istioSeries(istioTCPMetric, "destination", "amb", "waypoint", "amb", "httpbin", "", 1)
 	ztunnelIdle := istioSeries(istioTCPMetric, "destination", "side", "curl", "amb", "db", "", 0)
+	ztunnelIdleSent := istioSeries("istio_tcp_sent_bytes_total", "destination", "side", "curl", "amb", "db", "", 0)
 	ztunnelBuild := istioRawSeries{"istio_build", map[string]string{"component": "ztunnel", "tag": "1.30.3"}, 1}
 	proxyBuild := istioRawSeries{"istio_build", map[string]string{"component": "proxy", "tag": "1.30.3"}, 1}
 	for _, tc := range []struct {
@@ -423,7 +424,8 @@ func TestIstioGetFlows_SaysWhenZtunnelIsNotScraped(t *testing.T) {
 		{name: "viewing a client namespace that calls into one", raw: []istioRawSeries{sidecarIntoAmbient, sidecarOnly}, ambient: []string{"amb"}, namespaces: []string{"side"}, want: true},
 		{name: "ztunnel build info present", raw: []istioRawSeries{waypointFlow, ztunnelBuild}, ambient: []string{"amb"}},
 		{name: "ztunnel TCP drawn without build info", raw: []istioRawSeries{waypointFlow, ztunnelTCP}, ambient: []string{"amb"}},
-		{name: "an idle ztunnel TCP series without build info", raw: []istioRawSeries{waypointFlow, ztunnelIdle}, ambient: []string{"amb"}},
+		{name: "an idle ztunnel TCP series without build info", raw: []istioRawSeries{waypointFlow, ztunnelIdle, ztunnelIdleSent}, ambient: []string{"amb"}},
+		{name: "only an idle sent series without build info", raw: []istioRawSeries{waypointFlow, ztunnelIdleSent}, ambient: []string{"amb"}},
 		{name: "only a waypoint hop reported by ztunnel", raw: []istioRawSeries{waypointFlow, ztunnelHop}, ambient: []string{"amb"}},
 		{name: "no ambient namespaces", raw: []istioRawSeries{waypointFlow}},
 		{name: "a view with no ambient traffic", raw: []istioRawSeries{waypointFlow, sidecarOnly}, ambient: []string{"amb"}, namespaces: []string{"side", "other"}},
