@@ -119,6 +119,8 @@ The Schedule drawer's activity section shows the five most recent runs, one line
 
 A Backup or Restore's error and warning text is not on the object: **Show 9 errors and 3 warnings** asks Velero for its results file (at most 500 messages). On a failed or partially failed run whose Issue the drawer shows, the button sits inside that Issue's *What's wrong*; otherwise in Status. The list is grouped by scope (Velero, cluster-scoped, or a namespace) with counts, folds messages that differ only in one word (one error per failed item, so forty PVCs read as one line "× 40" with the names on expanding), and shows the first 10 rows with **Show all N** for the rest.
 
+Downloads enforce the destination policy at dial time on the resolved IP, so a DNS change cannot bypass it. Link-local (`169.254.0.0/16`, `fe80::/10`), unspecified and multicast addresses are always refused. Loopback is allowed only in local mode with a loopback listener, for a laptop's object-store port-forward; shared listeners and in-cluster Radar refuse it. Private addresses remain allowed for stores such as MinIO. Downloads use no proxy and follow no redirect. A refusal returns 503 with a destination-policy explanation and no signed URL.
+
 ## Limits
 
 - **Completed is not restorable.** "Completed, not expired" is what Velero reports; it does not say the data is in the bucket or that a restore would succeed.

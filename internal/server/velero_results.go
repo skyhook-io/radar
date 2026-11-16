@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -84,11 +86,12 @@ type veleroResults struct {
 // strings. The reader is sent somewhere different by each one, and the handler
 // needs to distinguish them without matching on error text.
 var (
-	errStorageUnreachable = errors.New("the object store did not answer")
-	errStorageRefused     = errors.New("the object store refused the request")
-	errStorageRedirected  = errors.New("the object store redirected, which is not followed")
-	errNotAResultsFile    = errors.New("what came back is not a Velero results file")
-	errMalformedURL       = errors.New("Velero returned a URL that cannot be parsed")
+	errStorageUnreachable  = errors.New("the object store did not answer")
+	errStorageRefused      = errors.New("the object store refused the request")
+	errStorageRedirected   = errors.New("the object store redirected, which is not followed")
+	errNotAResultsFile     = errors.New("what came back is not a Velero results file")
+	errDownloadDestination = errors.New("download destination is not allowed")
+	errMalformedURL        = errors.New("Velero returned a URL that cannot be parsed")
 )
 
 // urlSafeCause strips the URL out of an HTTP client error.
@@ -243,7 +246,8 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	results, err := fetchVeleroResults(r.Context(), downloadURL)
+	allowLoopback := !k8s.IsInCluster() && !s.sharedListener()
+	results, err := fetchVeleroResults(r.Context(), downloadURL, func(ip net.IP) bool { return veleroDownloadAddressAllowed(ip, allowLoopback) })
 	if err != nil {
 		log.Printf("[velero] Failed to fetch results for %s %s/%s: %v",
 			target.kind, sanitizeForLog(namespace), sanitizeForLog(name), err)
@@ -265,6 +269,8 @@ func (s *Server) handleVeleroRunMessages(w http.ResponseWriter, r *http.Request)
 func veleroFetchMessage(err error) string {
 	const reach = "Radar reaches the object store directly, so it has to be reachable from wherever Radar runs."
 	switch {
+	case errors.Is(err, errDownloadDestination):
+		return "Radar refused the messages download destination: link-local, unspecified and multicast addresses are never allowed, and loopback is allowed only on a local private listener."
 	case errors.Is(err, errStorageUnreachable):
 		return "Velero returned a link to the messages, but the object store did not answer. " + reach
 	case errors.Is(err, errStorageRefused):
@@ -311,19 +317,9 @@ func awaitDownloadURL(ctx context.Context, client dynamic.Interface, namespace, 
 	}
 }
 
-// fetchVeleroResults reads the gzipped JSON the pre-signed URL points at.
-//
-// The URL comes from Velero's status, which comes from the storage location a
-// cluster administrator configured — the same trust boundary as every other
-// field Radar reads. It is still bounded: http(s) only, one timeout, one size
-// cap, and redirects are not followed at all.
-//
-// Not following them is the point. Radar is not always run by whoever
-// administers the cluster — in a hosted deployment this process sits on a
-// different network — and a redirect is how a location's URL reaches a host the
-// caller never named. Object storage answers a pre-signed GET directly; it has
-// no reason to bounce us elsewhere.
-func fetchVeleroResults(ctx context.Context, rawURL string) (VeleroRunMessagesResponse, error) {
+// Signed object-store links must answer directly. Redirects and proxies could
+// reach a destination that the dial-time policy never checked.
+func fetchVeleroResults(ctx context.Context, rawURL string, destinationAllowed func(net.IP) bool) (VeleroRunMessagesResponse, error) {
 	var out VeleroRunMessagesResponse
 
 	parsed, err := url.Parse(rawURL)
@@ -343,14 +339,27 @@ func fetchVeleroResults(ctx context.Context, rawURL string) (VeleroRunMessagesRe
 		// line it costs. NewRequest wraps its parse failure in *url.Error.
 		return out, errMalformedURL
 	}
+	dialer := &net.Dialer{Timeout: 30 * time.Second, Control: func(network, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil || !destinationAllowed(net.ParseIP(host)) {
+			return errDownloadDestination
+		}
+		return nil
+	}}
+	transport := &http.Transport{DialContext: dialer.DialContext, TLSHandshakeTimeout: 10 * time.Second, ForceAttemptHTTP2: true}
+	defer transport.CloseIdleConnections()
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Transport: transport,
+		Timeout:   30 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, errDownloadDestination) {
+			return out, errDownloadDestination
+		}
 		return out, fmt.Errorf("%w: %v", errStorageUnreachable, urlSafeCause(err))
 	}
 	defer resp.Body.Close()
@@ -408,4 +417,10 @@ func flattenVeleroResult(r veleroResults) ([]VeleroMessage, bool) {
 		return out[:maxMessages], true
 	}
 	return out, false
+}
+
+// Control receives the resolved dial address, so DNS changes cannot bypass this
+// check. The transport does not use proxies, which would hide that destination.
+func veleroDownloadAddressAllowed(ip net.IP, allowLoopback bool) bool {
+	return ip != nil && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast() && (allowLoopback || !ip.IsLoopback())
 }
