@@ -591,3 +591,11 @@ func TestRateWindowForRoundsToWholeSeconds(t *testing.T) {
 		t.Errorf("got %q / %v / %v, want 90s throughout", w.promQL, w.seconds, w.span())
 	}
 }
+
+// A range beyond the view's longest is read as the longest, so no request can
+// make Prometheus read days of samples.
+func TestRateWindowForCapsAtAnHour(t *testing.T) {
+	if w := rateWindowFor(72 * time.Hour); w.promQL != "3600s" || w.seconds != 3600 {
+		t.Errorf("got %q / %v, want an hour", w.promQL, w.seconds)
+	}
+}

@@ -9,6 +9,9 @@ import (
 // than a minute: the traffic view's own default.
 const defaultRateWindowSeconds = 300
 
+// maxRateWindow is the longest window a metrics query reads.
+const maxRateWindow = time.Hour
+
 // rateWindow is the span every query of a metrics source rates over, and the span the
 // byte totals are derived for. Both have to come from the same place: a rate is
 // per-second, so turning it back into a total means multiplying by exactly the
@@ -32,6 +35,9 @@ func rateWindowFor(since time.Duration) rateWindow {
 	if since < time.Minute {
 		return rateWindow{promQL: "5m", seconds: defaultRateWindowSeconds}
 	}
+	// The view's longest range. The API takes any duration, and each request
+	// runs several range queries, so a caller must not be able to ask for days.
+	since = min(since, maxRateWindow)
 	// Whole seconds, so any duration the caller asks for is valid PromQL
 	// (time.Duration's own format renders 90.5s as "1m30.5s", which PromQL
 	// rejects) and the rate, byte totals and scope checks all use one span.
