@@ -820,9 +820,9 @@ function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen
         <ul className="flex flex-col">
           {unscanned.map((u) => (
             <li key={u.image} className={FOLD_ROW}>
-              <span className="flex min-w-0 items-baseline gap-2">
+              <span className="flex min-w-0 flex-col">
                 <ImageName image={u.image} className="text-theme-text-primary" />
-                {u.otherBuildScanned && <span className="shrink-0 text-theme-text-tertiary">Trivy scanned another build of this tag</span>}
+                {u.otherBuildScanned && <span className="text-xs text-theme-text-tertiary">Trivy scanned another build of this tag</span>}
               </span>
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-4">
                 <WorkloadLinks workloads={u.workloads} onOpen={onOpen} inline />
