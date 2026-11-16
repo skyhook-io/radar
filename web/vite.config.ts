@@ -42,13 +42,13 @@ export default defineConfig({
               name: 'vendor',
               // Trailing slashes keep react/ and react-dom/ from matching
               // react-resizable and the like; react-router covers -dom too.
-              test: /node_modules\/(react\/|react-dom\/|react-router)|vite\/preload-helper/,
+              test: /node_modules[\\/](react[\\/]|react-dom[\\/]|react-router)|vite[\\/]preload-helper/,
               priority: 30,
             },
-            { name: 'ui', test: /node_modules\/(@xyflow|@xterm)\//, priority: 20 },
+            { name: 'ui', test: /node_modules[\\/](@xyflow|@xterm)[\\/]/, priority: 20 },
             // Only the editor itself. The React wrapper is imported statically
             // and must stay out, or the editor becomes a startup dependency.
-            { name: 'monaco', test: /node_modules\/monaco-editor\//, priority: 10 },
+            { name: 'monaco', test: /node_modules[\\/]monaco-editor[\\/]/, priority: 10 },
           ],
         },
       },

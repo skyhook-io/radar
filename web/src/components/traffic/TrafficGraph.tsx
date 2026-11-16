@@ -18,12 +18,14 @@ import '@xyflow/react/dist/style.css'
 import type { ELK } from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
-import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
+import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair, RotateCw } from 'lucide-react'
+import { AlertBanner, PaneLoader } from '@skyhook-io/k8s-ui'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, type TrafficFocus } from './trafficFilters'
+import { TrafficConnectionsTable } from './TrafficConnectionsTable'
 
 // ELK is 1.5 MB; load it with the first traffic layout, not with the app.
 let elkPromise: Promise<ELK> | null = null
@@ -33,7 +35,7 @@ function loadElk(): Promise<ELK> {
     .catch((err) => {
       // Let a later layout try again where the browser refetches failed
       // modules. Chromium caches the failure until reload, so there the
-      // graph keeps the fallback grid, as with any lazy chunk that failed.
+      // graph stays unavailable until the user reloads.
       elkPromise = null
       throw err
     })
@@ -1153,6 +1155,52 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
+/**
+ * Stands in for the map when its layout engine could not be fetched, which is
+ * what a tab opened before an upgrade gets: says so, offers the reload that
+ * fixes it, and lists the connections so the view still answers something.
+ */
+function TrafficLayoutUnavailable({ flows, isRateBased, selection, onSelect, onFocus, focusedId }: {
+  flows: AggregatedFlow[]
+  isRateBased: boolean
+  selection: TrafficGraphSelection | null
+  onSelect: (selection: TrafficGraphSelection | null) => void
+  onFocus?: (focus: TrafficFocus) => void
+  focusedId?: string
+}) {
+  return (
+    <div className="absolute inset-x-0 bottom-0 top-12 flex flex-col px-3 pb-3 gap-2">
+      <AlertBanner
+        variant="warning"
+        className="mb-0"
+        title="The traffic map could not load its layout engine"
+        message={`Radar was probably updated since this page was opened. Reload to draw the map${onFocus ? '; the connections are listed below.' : '.'}`}
+        action={
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="btn-brand-muted inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-md"
+          >
+            <RotateCw className="h-3.5 w-3.5" /> Reload
+          </button>
+        }
+      />
+      {onFocus && (
+        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-theme-border bg-theme-surface">
+          <TrafficConnectionsTable
+            flows={flows}
+            isRateBased={isRateBased}
+            selection={selection}
+            onSelect={onSelect}
+            onFocus={onFocus}
+            focusedId={focusedId}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
@@ -1161,6 +1209,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   const [layoutedNodes, setLayoutedNodes] = useState<Node<TrafficNodeData>[]>([])
   const [layoutedEdges, setLayoutedEdges] = useState<Edge[]>([])
   const [selection, setSelection] = useState<Selection | null>(null)
+  const [elkUnavailable, setElkUnavailable] = useState(false)
 
   // Store flow data by edge ID for click handler lookup
   const flowByEdgeId = useMemo(() => {
@@ -1452,10 +1501,11 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   }, [flows, hotPathThreshold, showNamespaceGroups, serviceCategories, addonMode, isRateBased, connLabel])
 
   // Apply ELK layout
-  const applyLayout = useCallback(async () => {
+  const applyLayout = useCallback(async (claim: () => boolean) => {
     if (rawNodes.length === 0) {
       setLayoutedNodes([])
       setLayoutedEdges([])
+      setElkUnavailable(false)
       return
     }
 
@@ -1478,8 +1528,21 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     const groupEdgeInfo = addonGroupEdge
     const groupOutEdgeInfo = addonGroupOutEdge
 
+    let elk: ELK
     try {
-      const layoutResult = await (await loadElk()).layout(elkGraph)
+      elk = await loadElk()
+    } catch (error) {
+      if (!claim()) return
+      // A grid of the raw nodes would drop the grouped-addon edges and read as
+      // the real traffic, so the map says it is unavailable instead.
+      console.error('ELK failed to load:', error)
+      setElkUnavailable(true)
+      return
+    }
+
+    try {
+      const layoutResult = await elk.layout(elkGraph)
+      if (!claim()) return
 
       // Index ELK's positioned children by id once — a .find() per node here is
       // O(nodes²) and bites on dense traffic graphs.
@@ -1634,7 +1697,9 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       setLayoutedNodes(finalNodes as any)
       setLayoutedEdges(finalEdges)
+      setElkUnavailable(false)
     } catch (error) {
+      if (!claim()) return
       console.error('ELK layout error:', error)
       // Fallback to simple layout
       const positionedNodes = rawNodes.map((node, index) => ({
@@ -1646,13 +1711,32 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       }))
       setLayoutedNodes(positionedNodes)
       setLayoutedEdges(rawEdges)
+      setElkUnavailable(false)
     }
   }, [rawNodes, rawEdges, addonMode, addonGroupEdge, addonGroupOutEdge, hotPathThreshold, isRateBased])
 
-  // Run layout when flows change
+  // Run layout when flows change. Runs install their results in the order
+  // they started, so a fast-changing graph still lands each layout instead of
+  // a newer run discarding every one in flight; a run that finishes after a
+  // newer one already installed, or after unmount, is dropped.
+  const layoutRunRef = useRef(0)
+  const installedRunRef = useRef(0)
+  const mountedRef = useRef(true)
   useEffect(() => {
-    applyLayout()
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+  useEffect(() => {
+    const run = ++layoutRunRef.current
+    applyLayout(() => {
+      if (!mountedRef.current || run < installedRunRef.current) return false
+      installedRunRef.current = run
+      return true
+    })
   }, [applyLayout])
+
+  // The first layout waits for the ELK chunk; later ones keep the drawn graph.
+  const firstLayoutPending = rawNodes.length > 0 && layoutedNodes.length === 0 && !elkUnavailable
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges)
@@ -1730,6 +1814,21 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     onSelectionChange?.(null)
   }, [onSelectionChange])
 
+  if (elkUnavailable) {
+    return (
+      <div className="w-full h-full relative">
+        <TrafficLayoutUnavailable
+          flows={flows}
+          isRateBased={isRateBased}
+          selection={viewSelection ?? null}
+          onSelect={sel => onSelectionChange?.(sel)}
+          onFocus={onFocus}
+          focusedId={focusedId}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="w-full h-full relative">
       <ReactFlow
@@ -1757,6 +1856,8 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         <Controls />
         <FitViewOnChange shouldFitViewRef={shouldFitViewRef} layoutedNodes={layoutedNodes} />
       </ReactFlow>
+
+      {firstLayoutPending && <PaneLoader label="Laying out traffic…" className="absolute inset-0" />}
 
       {/* Legend */}
       <TrafficLegend />
