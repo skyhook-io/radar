@@ -44,11 +44,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
           variant={BANNER_VARIANT[healthStatus.level]}
           icon={BANNER_ICON[healthStatus.level]}
           title={healthStatus.label}
-          message={healthStatus.message && (
-            // AlertBanner's tinted message tone falls below 4.5:1 for this
-            // 12px line on its light backgrounds.
-            <span className="text-theme-text-secondary">{healthStatus.message}</span>
-          )}
+          message={healthStatus.message}
         />
       )}
 

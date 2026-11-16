@@ -22,8 +22,8 @@ describe('GenericRenderer status banner', () => {
 
   it('keeps the detail line in neutral text, readable on every tint', () => {
     const html = renderToString(<GenericRenderer data={widget({ conditions: [{ type: 'Ready', status: 'False', reason: 'BackendDown', message: 'the backend is down' }] })} />)
-    const banner = html.slice(0, html.indexOf('</div></div></div>'))
-    expect(banner).toMatch(/<span class="text-theme-text-secondary">[^<]+<\/span>/)
+    expect(html).toMatch(/<div class="[^"]*text-theme-text-secondary[^"]*">the backend is down</)
+    expect(html).not.toMatch(/text-red-600\/80/)
   })
 
   it('renders no detail line when the status has no message', () => {
