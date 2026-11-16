@@ -51,6 +51,34 @@ describe('ResourceIssuesSection', () => {
   })
 })
 
+// Under its own subject's drawer the header already names the resource, so
+// the collapsed row does not repeat it; under any other resource it must.
+describe('the collapsed row under the issue subject', () => {
+  const crashing: Issue = { ...issue, kind: 'Deployment', namespace: 'gl-crash-config', name: 'api', reason: 'CrashLoopBackOff', affected: { pods: 2 } }
+  const row = (subjectResource: { kind: string; namespace: string; name: string }) =>
+    renderToString(<ResourceIssuesSection issues={[crashing]} subjectResource={subjectResource} />)
+
+  it('leaves out the kind and name the drawer header shows', () => {
+    const html = row({ kind: 'deployments', namespace: 'gl-crash-config', name: 'api' })
+    expect(html).not.toContain('gl-crash-config / ')
+    expect(html).not.toContain('>Deployment<')
+    expect(html).toContain('Affects 2 pods')
+  })
+
+  it('names the subject under another resource', () => {
+    const html = row({ kind: 'pods', namespace: 'gl-crash-config', name: 'api-7c6f9c7bb9-jnv72' })
+    expect(html).toContain('gl-crash-config / <!-- -->api')
+    expect(html).toContain('>Deployment<')
+    expect(html).not.toContain('Affects')
+  })
+
+  it('drops the line when nothing else is on it', () => {
+    const html = renderToString(<IssueRow issue={{ ...crashing, affected: undefined }} open={false} onToggle={() => {}} hideSubject />)
+    expect(html).not.toContain('>·<')
+    expect(html).not.toContain('gl-crash-config')
+  })
+})
+
 describe('sameResource', () => {
   const subject = { kind: 'PersistentVolumeClaim', namespace: 'demo', name: 'data' }
 

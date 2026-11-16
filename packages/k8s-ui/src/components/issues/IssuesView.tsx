@@ -1,6 +1,6 @@
 import { IssueGuidance, issueGuidanceSummary } from './IssueGuidance'
 import { summarizeSchedulerMessage } from '../resources/resource-utils'
-import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { Fragment, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, Eraser, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
 import { CardSection, ClusterName, Disclosure, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
@@ -174,9 +174,9 @@ export interface IssueRowProps {
   compact?: boolean;
   className?: string;
   dimmed?: boolean;
-  /** Suppress the "Subject" deep-link in the expanded body — set by hosts that
-   *  embed the row under the very resource that IS the subject (the drawer header
-   *  already names it), so it doesn't echo back redundantly. */
+  /** Set by hosts that embed the row under the very resource that IS the
+   *  subject (the drawer header already names it): the collapsed row leaves out
+   *  its kind and name, and the expanded body its "Subject" deep-link. */
   hideSubject?: boolean;
   renderBadges?: (ctx: IssueRowSlotContext) => ReactNode;
   renderMeta?: (ctx: IssueRowSlotContext) => ReactNode;
@@ -257,6 +257,46 @@ export function IssueRow({
     </div>
   );
 
+  // The resource line under the title. Embedded under the resource that is
+  // the issue's subject, it leaves out the kind and name the drawer header
+  // already shows, and says what the rest is.
+  const meta = renderMeta?.(slotCtx);
+  const resourceLine: ReactNode[] = [];
+  if (!hideSubject) {
+    resourceLine.push(
+      <>
+        <span className={KIND_CHIP_CLASS}>{issue.kind}</span>
+        <span className="min-w-0 truncate font-medium text-theme-text-secondary">
+          {issue.namespace ? `${issue.namespace} / ` : ''}
+          {issue.name}
+        </span>
+      </>,
+    );
+  }
+  if (cluster) {
+    resourceLine.push(
+      <span className="max-w-[160px] shrink-0 truncate">
+        <ClusterName name={cluster} />
+      </span>,
+    );
+  }
+  if (affected) {
+    resourceLine.push(<span className="shrink-0 tabular-nums">{hideSubject ? `Affects ${affected}` : affected}</span>);
+  }
+  if (issue.incident_parent) {
+    const parent = issue.incident_parent;
+    resourceLine.push(
+      // Non-interactive signal (the header is the toggle — a nested button
+      // would be invalid); the clickable link lives in the body.
+      <Tooltip content={confidenceTitle(parent.confidence ?? '')} delay={200} wrapperClassName="min-w-0">
+        <span className="truncate text-theme-text-tertiary">
+          ↳ {incidentParentLabel(parent.fact_type, parent.confidence)}{' '}
+          <span className="font-medium text-theme-text-secondary">{parent.ref.kind} / {parent.ref.name}</span>
+        </span>
+      </Tooltip>,
+    );
+  }
+
   return (
     <Container
       className={[
@@ -317,41 +357,17 @@ export function IssueRow({
             ) : null}
           </div>
           {schedulingCause && <div className="break-words text-xs text-theme-text-secondary">{schedulingCause}</div>}
-          <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
-            <span className={KIND_CHIP_CLASS}>{issue.kind}</span>
-            <span className="min-w-0 truncate font-medium text-theme-text-secondary">
-              {issue.namespace ? `${issue.namespace} / ` : ''}
-              {issue.name}
-            </span>
-            {cluster ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="max-w-[160px] shrink-0 truncate">
-                  <ClusterName name={cluster} />
-                </span>
-              </>
-            ) : null}
-            {affected ? (
-              <>
-                <span aria-hidden>·</span>
-                <span className="shrink-0 tabular-nums">{affected}</span>
-              </>
-            ) : null}
-            {issue.incident_parent ? (
-              <>
-                <span aria-hidden>·</span>
-                {/* Non-interactive signal (the header is the toggle — a nested
-                    button would be invalid); the clickable link lives in the body. */}
-                <Tooltip content={confidenceTitle(issue.incident_parent.confidence ?? '')} delay={200} wrapperClassName="min-w-0">
-                  <span className="truncate text-theme-text-tertiary">
-                    ↳ {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}{' '}
-                    <span className="font-medium text-theme-text-secondary">{issue.incident_parent.ref.kind} / {issue.incident_parent.ref.name}</span>
-                  </span>
-                </Tooltip>
-              </>
-            ) : null}
-            {renderMeta?.(slotCtx)}
-          </div>
+          {resourceLine.length > 0 || meta ? (
+            <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
+              {resourceLine.map((part, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <span aria-hidden>·</span>}
+                  {part}
+                </Fragment>
+              ))}
+              {meta}
+            </div>
+          ) : null}
           {/* Narrow container: the meta chips drop to their own line here rather
               than stealing width from the title on the row above. Hidden once the
               row is wide enough to hold them inline in the right cluster. */}
