@@ -2135,7 +2135,8 @@ func TestSetArgoAutoSyncLifecycle(t *testing.T) {
 	original := map[string]any{"prune": true, "selfHeal": false, "allowEmpty": true}
 
 	t.Run("resume restores every field suspend removed", func(t *testing.T) {
-		client := newFakeArgo(appWithAutomated(original, nil))
+		// Removal is the path for an Argo CD that prunes automated.enabled.
+		client := newFakeArgoPre31(appWithAutomated(original, nil))
 		setAutoSync(t, client, false)
 		suspended := getTestApp(t, client)
 		if _, found := automatedOf(suspended); found {
@@ -2536,5 +2537,93 @@ func TestArgoSyncOperationUsesHydratedSyncSource(t *testing.T) {
 	}
 	if _, err := SyncArgoApp(context.Background(), newFakeArgo(app), "argocd", "demo", ArgoSyncOptions{Revision: "environments/prod"}); err != nil {
 		t.Fatalf("revision on a hydrated Application with leftover sources: %v", err)
+	}
+}
+
+// newFakeArgoPre31 serves Applications the way an Argo CD older than 3.1 does:
+// its CRD schema has no syncPolicy.automated.enabled, so the API server
+// prunes the field from every write.
+func newFakeArgoPre31(objs ...runtime.Object) *fake.FakeDynamicClient {
+	client := newFakeArgo(objs...)
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		patchAction := action.(clienttesting.PatchAction)
+		var patch map[string]any
+		if err := json.Unmarshal(patchAction.GetPatch(), &patch); err != nil {
+			return true, nil, err
+		}
+		current, err := client.Tracker().Get(argoAppGVR, patchAction.GetNamespace(), patchAction.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		app := current.(*unstructured.Unstructured).DeepCopy()
+		app.Object = jsonMergePatch(app.Object, patch)
+		if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found {
+			delete(automated, "enabled")
+			_ = unstructured.SetNestedMap(app.Object, automated, "spec", "syncPolicy", "automated")
+		}
+		app.SetResourceVersion("")
+		if err := client.Tracker().Update(argoAppGVR, app, patchAction.GetNamespace()); err != nil {
+			return true, nil, err
+		}
+		return true, app, nil
+	})
+	return client
+}
+
+// jsonMergePatch applies an RFC 7386 merge patch: null deletes, objects merge.
+func jsonMergePatch(target, patch map[string]any) map[string]any {
+	if target == nil {
+		target = map[string]any{}
+	}
+	for key, value := range patch {
+		switch v := value.(type) {
+		case nil:
+			delete(target, key)
+		case map[string]any:
+			existing, _ := target[key].(map[string]any)
+			target[key] = jsonMergePatch(existing, v)
+		default:
+			target[key] = v
+		}
+	}
+	return target
+}
+
+// Argo CD 3.1+ switches auto-sync off in place with automated.enabled: false,
+// so an ApplicationSet that manages prune and selfHeal has nothing to put
+// back, and Argo CD stops syncing automatically.
+func TestSetArgoAutoSyncSuspendsInPlaceWhereArgoKeepsEnabled(t *testing.T) {
+	original := map[string]any{"prune": true, "selfHeal": true}
+	client := newFakeArgo(appWithAutomated(original, nil))
+	setAutoSync(t, client, false)
+	suspended := getTestApp(t, client)
+	automated, found := automatedOf(suspended)
+	if !found || automated["enabled"] != false || automated["prune"] != true || automated["selfHeal"] != true {
+		t.Fatalf("suspended automated = %#v, want prune and selfHeal kept with enabled: false", automated)
+	}
+	if ArgoAutoSyncEnabled(suspended) {
+		t.Fatal("auto-sync still reads as on after suspend")
+	}
+	setAutoSync(t, client, true)
+	resumed := getTestApp(t, client)
+	if automated, _ := automatedOf(resumed); !reflect.DeepEqual(automated, original) {
+		t.Fatalf("resumed automated = %#v, want %#v", automated, original)
+	}
+	if len(resumed.GetAnnotations()) != 0 {
+		t.Fatalf("resume left suspension annotations: %#v", resumed.GetAnnotations())
+	}
+}
+
+// Before 3.1 the API server prunes enabled, so the in-place write changes
+// nothing; suspend then removes the block as it always has.
+func TestSetArgoAutoSyncFallsBackToRemovalWhereArgoPrunesEnabled(t *testing.T) {
+	client := newFakeArgoPre31(appWithAutomated(map[string]any{"prune": true, "selfHeal": false}, nil))
+	setAutoSync(t, client, false)
+	suspended := getTestApp(t, client)
+	if _, found := automatedOf(suspended); found {
+		t.Fatalf("suspend left automated in place on an Argo CD that prunes enabled: %#v", suspended.Object["spec"])
+	}
+	if suspended.GetAnnotations()[ArgoSuspendedPruneAnnotation] != "true" {
+		t.Fatalf("suspend didn't save the settings: %#v", suspended.GetAnnotations())
 	}
 }
