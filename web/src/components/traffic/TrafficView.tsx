@@ -1069,6 +1069,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       if (!data) return undefined
       const parts: string[] = []
       if (data.warning) parts.push(data.warning)
+      if (data.dataNote) parts.push(data.dataNote)
       if (data.matched > data.flows.length) {
         parts.push(`Newest ${data.flows.length.toLocaleString()} of ${data.matched.toLocaleString()} records for this selection`)
       }
@@ -1417,7 +1418,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                     </button>
                     </Tooltip>
                   )}
-                  <TrafficDataNote dataNote={flowsData?.dataNote} />
+                  <TrafficDataNote dataNote={finalFlows.length > 0 ? flowsData?.dataNote : undefined} />
                   {coverage && (
                     // Not a warning: a busy cluster reaches the limit on every
                     // fetch. It says which part of the window the map shows.

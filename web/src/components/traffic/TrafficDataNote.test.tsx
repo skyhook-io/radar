@@ -27,7 +27,9 @@ describe('TrafficDataNote', () => {
     const dataNote = 'Data on some edges may count the same calls twice.'
     act(() => root.render(<TrafficDataNote dataNote={dataNote} />))
     const chip = container.querySelector<HTMLElement>('[tabindex="0"]')!
-    expect(chip.textContent).toBe(' Data may double-count')
+    expect(chip.textContent).toContain('Data may double-count')
+    const description = document.getElementById(chip.getAttribute('aria-describedby')!)
+    expect(description?.textContent).toBe(dataNote)
     vi.spyOn(chip.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 100, 160, 24))
     act(() => {
       chip.focus()
