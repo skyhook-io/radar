@@ -27,8 +27,8 @@ const GRID = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_5rem_
 // "no errors" rather than "not measured".
 const GRID_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_5rem_4.5rem] items-center gap-x-3'
 
-const GRID_PROTOCOL_DATA = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_14rem_4.5rem_4.5rem] items-center gap-x-3'
-const GRID_PROTOCOL_DATA_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_14rem_4.5rem] items-center gap-x-3'
+const GRID_PROTOCOL_DATA = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_6.5rem_4.5rem_4.5rem] items-center gap-x-3'
+const GRID_PROTOCOL_DATA_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_6.5rem_4.5rem] items-center gap-x-3'
 
 const GRID_NO_DATA = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem_4.5rem] items-center gap-x-3'
 const GRID_NO_DATA_OR_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem] items-center gap-x-3'
@@ -140,7 +140,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
               </span>
               {showData && (
                 <span className="text-right tabular-nums text-theme-text-secondary">
-                  <TrafficData entries={dataByProtocol(flow)} compact />
+                  <TrafficData entries={dataByProtocol(flow)} compact stacked />
                 </span>
               )}
               {showStatus && (

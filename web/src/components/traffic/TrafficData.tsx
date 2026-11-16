@@ -1,9 +1,11 @@
 import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { isPayloadProtocol, protocolName, type ProtocolData } from './trafficFilters'
 
-export function TrafficData({ entries, compact = false, directional = false, explainOverlap = false }: {
+export function TrafficData({ entries, compact = false, stacked = false, directional = false, explainOverlap = false }: {
   entries: ProtocolData[]
   compact?: boolean
+  /** One figure per line, for narrow columns. */
+  stacked?: boolean
   directional?: boolean
   explainOverlap?: boolean
 }) {
@@ -16,7 +18,8 @@ export function TrafficData({ entries, compact = false, directional = false, exp
   const figures = entries.map(e => `${protocolName(e.protocol ?? '')} ${directional
     ? `${formatBytes(e.sent)} sent · ${formatBytes(e.recv)} received`
     : formatBytes(e.sent + e.recv)}`)
-  if (compact) return <>{figures.join(' · ')}</>
+  if (compact && !stacked) return <>{figures.join(' · ')}</>
+  if (compact) return <>{figures.map((figure, index) => <div key={entries[index].protocol} className="whitespace-nowrap">{figure}</div>)}</>
   return <>
     {figures.map((figure, index) => <div key={entries[index].protocol}>{figure}</div>)}
     {caption && <div className="mt-1 text-theme-text-tertiary font-normal">{caption}</div>}

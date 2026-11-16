@@ -82,10 +82,12 @@ describe('TrafficConnectionsTable protocol data', () => {
       http: { bytesSent: 5969, bytesRecv: 260965 }, tcp: { bytesSent: 32699, bytesRecv: 391439 },
     } }
     act(() => root.render(<TrafficConnectionsTable flows={[mixed, tcp]} isRateBased selection={null} onSelect={vi.fn()} onFocus={vi.fn()} />))
-    expect(container.textContent).toContain('HTTP 260.7 KB · TCP 414.2 KB')
+    const lines = Array.from(container.querySelector('[role="row"]')!.querySelectorAll('div.whitespace-nowrap')).map(line => line.textContent)
+    expect(lines).toEqual(['HTTP 260.7 KB', 'TCP 414.2 KB'])
     const gridClasses = Array.from(container.querySelectorAll('[role="row"]')).map(row => row.className.split(' ').find(c => c.startsWith('grid-cols-')))
     expect(new Set(gridClasses).size).toBe(1)
-    expect(gridClasses[0]).toContain('14rem')
+    // One figure per line keeps the Data column narrow, so the endpoint columns keep their room.
+    expect(gridClasses[0]).toContain('_5rem_6.5rem_')
     expect(container.firstElementChild!.firstElementChild!.className).toContain(gridClasses[0]!)
     expect(container.textContent).not.toMatch(/674\.9 KB|691,?072/)
   })
