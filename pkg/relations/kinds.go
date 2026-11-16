@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/rollouts"
 )
 
 // Kinds is the bounded collection dependency set for relationship answers.
@@ -48,8 +49,8 @@ func Kinds() []resourceid.GroupKind {
 	}
 	// Auxiliary selector reads and projection/manager producers aren't family edges.
 	add(resourceid.GroupKind{Kind: "Namespace"}, resourceid.GroupKind{Kind: "ServiceAccount"})
-	for kind, group := range rolloutWorkloadGroups {
-		add(resourceid.GroupKind{Group: group, Kind: kind})
+	for _, gk := range rollouts.WorkloadRefKinds() {
+		add(resourceid.GroupKind{Group: gk.Group, Kind: gk.Kind})
 	}
 	for _, kind := range []string{"Service", "Configuration", "DomainMapping", "Revision", "Route"} {
 		add(knative("serving.knative.dev", kind))
