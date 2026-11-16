@@ -193,6 +193,9 @@ type Server struct {
 	yamlSchemaCacheBytes  int
 	yamlSchemaFetchGroup  singleflight.Group
 
+	// accessReviews collapses identical access reviews in flight at once.
+	accessReviews singleflight.Group
+
 	// aiMu guards aiDiagnoser and aiRuns: refreshAIEngine turns the engine on
 	// when an agent CLI is installed while Radar runs. Read them through
 	// aiEngine / aiRunManager.
@@ -1888,14 +1891,31 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 			return v, true
 		}
 	}
-	allowed, authoritative := s.canReadUserSAR(ctx, user, group, resource, namespace, verb)
-	// Cache only a real apiserver verdict. A transient failure (no client, SAR
-	// error, timeout) fails closed for this call but must NOT be memoized, or a
-	// momentary blip would deny the tuple for the whole cache TTL.
-	if authoritative && perms != nil {
-		perms.SetCanI(verb, group, resource, namespace, allowed)
+	type verdict struct{ allowed, authoritative bool }
+	key := strings.Join([]string{k8s.GetContextName(), pkgauth.IdentityCacheKey(user.Username, user.Groups), verb, group, resource, namespace}, "\x00")
+	review := s.accessReviews.DoChan(key, func() (any, error) {
+		// Callers that didn't start the review share it, so it runs on its own
+		// clock rather than the first caller's: a SubjectAccessReview is a POST,
+		// which the client's request deadlines leave unbounded.
+		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
+		defer cancel()
+		allowed, authoritative := s.canReadUserSAR(reviewCtx, user, group, resource, namespace, verb)
+		// Cache only a real apiserver verdict. A transient failure (no client, SAR
+		// error, timeout) fails closed for this call but must NOT be memoized, or a
+		// momentary blip would deny the tuple for the whole cache TTL.
+		if authoritative && perms != nil {
+			perms.SetCanI(verb, group, resource, namespace, allowed)
+		}
+		return verdict{allowed, authoritative}, nil
+	})
+	select {
+	case r := <-review:
+		v := r.Val.(verdict)
+		return v.allowed, v.authoritative
+	case <-ctx.Done():
+		// This caller gave up; the review carries on for the others.
+		return false, false
 	}
-	return allowed, authoritative
 }
 
 // canReadUserSAR runs a single fresh SubjectAccessReview for (group, resource,
@@ -5795,6 +5815,9 @@ const (
 	// sseChangeAuthSARTimeout caps a single authorization SAR issued from the
 	// broadcast goroutine, so one hung apiserver call can't stall broadcasts.
 	sseChangeAuthSARTimeout = 5 * time.Second
+	// accessReviewTimeout caps a review shared by the callers asking the same
+	// question at once; each caller still stops waiting when its own request ends.
+	accessReviewTimeout = 10 * time.Second
 	// sseChangeAuthNegativeTTL caps how long a transient SAR failure (apiserver
 	// unreachable, error, or timeout) is remembered as a fail-closed deny. Short
 	// so a momentary blip clears within seconds, but non-zero so a degraded
