@@ -66,6 +66,9 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 	if launch != nil {
 		launches[config.IntegrationMetrics] = connections.Bundle{Settings: config.IntegrationSettings{Prometheus: launch}}
 	}
+	if cfg.LokiCluster != "" {
+		return cfg, errors.New("--loki-cluster applies to shared installations; a local Radar reads Loki with the connection you saved")
+	}
 	if cfg.LokiURLFlag || cfg.LokiHeaderFlag {
 		if !cfg.LokiURLFlag {
 			return cfg, errors.New("local Loki header flags require --loki-url in the same launch")

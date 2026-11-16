@@ -58,7 +58,13 @@ func TestLokiSaveThenProbe(t *testing.T) {
 	t.Cleanup(func() { loki.Retire(nil) })
 	srv := fakeLokiServer(t)
 
-	rec, got := putLoki(t, s, srv.URL, nil)
+	// Discovery saved no URL or headers to check.
+	rec, got := putLoki(t, s, "", nil)
+	if rec.Code != http.StatusOK || got.Connected || !strings.HasPrefix(got.Error, "Saved, but Radar couldn't find or reach Loki in this cluster") {
+		t.Fatalf("discovery: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec, got = putLoki(t, s, srv.URL, nil)
 	if rec.Code != http.StatusOK || !got.Connected || !got.Checked || got.Error != "" {
 		t.Fatalf("live Loki: %d %s", rec.Code, rec.Body.String())
 	}

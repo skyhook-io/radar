@@ -70,6 +70,11 @@ var (
 	namedPodPort = cachedNamedPodPort
 )
 
+// forwardProbeTimeout bounds one candidate's probe through its forward, so
+// a pod that accepts the connection and never answers can't use up the whole
+// discovery budget.
+var forwardProbeTimeout = 8 * time.Second
+
 const (
 	directProbeTimeout = 2 * time.Second
 	discoveryTimeout   = 30 * time.Second
@@ -94,6 +99,26 @@ var client struct {
 	failedAt    time.Time          // when the last attempt failed
 	attemptGen  int                // the generation the running attempt connects for
 	generation  int                // bumped by Configure, Retire and each new connection
+	// cluster* come from --loki-cluster and outlive Configure and Retire.
+	clusterLabel, clusterValue string
+	clusterRequired            bool
+}
+
+// SetCluster sets this cluster's value for Loki's cluster label (label ""
+// uses the detected one); required refuses History when Loki has a cluster
+// label and no value is set.
+func SetCluster(label, value string, required bool) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	client.clusterLabel, client.clusterValue, client.clusterRequired = label, value, required
+}
+
+func withClusterLocked(l StreamLabels) StreamLabels {
+	if client.clusterLabel != "" {
+		l.Cluster = client.clusterLabel
+	}
+	l.ClusterValue, l.ClusterRequired = client.clusterValue, client.clusterRequired
+	return l
 }
 
 // Configure replaces the connection: rawURL set means that Loki, empty means
@@ -140,9 +165,9 @@ func CurrentStatus() Status {
 	address := client.manualURL
 	if connectedLocked() {
 		st.Connected, st.Source, address = true, client.source, client.baseURL
-		st.Labels = client.labels
 		if client.labels != nil {
-			st.HistoryReason = client.labels.HistoryReason()
+			l := withClusterLocked(*client.labels)
+			st.Labels, st.HistoryReason = &l, l.HistoryReason()
 		}
 	}
 	if address != "" {
@@ -247,9 +272,13 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 	if len(headers) > 0 {
 		return "", "", found, ErrHeadersRequireURL
 	}
-	candidates := Candidates(listServices())
+	services, ok := listServices()
+	if !ok {
+		return "", "", found, errors.New("Radar can't list Services, so it can't find Loki; set the Loki URL")
+	}
+	candidates := Candidates(services)
 	if len(candidates) == 0 {
-		return "", "", found, errors.New("no Loki Service found in the cluster")
+		return "", "", found, errors.New("no Loki Service among the Services Radar can read; set the Loki URL")
 	}
 	var lastErr error
 	for _, c := range candidates {
@@ -265,7 +294,10 @@ func connect(ctx context.Context, manual string, headers map[string]string, cont
 			lastErr = fmt.Errorf("%s/%s: %w", c.Namespace, c.Name, ferr)
 			continue
 		}
-		if found, err = probe(ctx, address, headers); err == nil {
+		probeCtx, cancel = context.WithTimeout(ctx, forwardProbeTimeout)
+		found, err = probe(probeCtx, address, headers)
+		cancel()
+		if err == nil {
 			return address, "discovered", found, nil
 		}
 		stopForward()
@@ -352,7 +384,7 @@ func Labels() (StreamLabels, bool) {
 	if !connectedLocked() || client.labels == nil {
 		return StreamLabels{}, false
 	}
-	return *client.labels, true
+	return withClusterLocked(*client.labels), true
 }
 
 // minScrubbedLength: shorter header values (a numeric tenant ID) aren't
@@ -389,20 +421,21 @@ func forwardLost(_ portforward.Owner, address string) {
 	}
 }
 
-func cachedServices() []corev1.Service {
+// cachedServices: ok is false when Radar can't list Services at all.
+func cachedServices() ([]corev1.Service, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil || cache.Services() == nil {
-		return nil
+		return nil, false
 	}
 	list, err := cache.Services().List(labels.Everything())
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	out := make([]corev1.Service, 0, len(list))
 	for _, s := range list {
 		out = append(out, *s)
 	}
-	return out
+	return out, true
 }
 
 // DefaultLimit is the most lines one read returns.

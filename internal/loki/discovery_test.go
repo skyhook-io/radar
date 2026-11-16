@@ -36,6 +36,10 @@ func TestCandidates(t *testing.T) {
 			svc("obs", "logs", map[string]string{"app.kubernetes.io/name": "loki", "app.kubernetes.io/component": "query-frontend"}, port("http", 3100)),
 		}, []Candidate{{Namespace: "obs", Name: "logs", Port: 3100, Score: 35}}},
 		{"only a headless match is kept", []corev1.Service{headless}, []Candidate{{Namespace: "logging", Name: "loki-headless", Port: 3100, Score: 20}}},
+		{"a known Loki namespace outranks a better name elsewhere", []corev1.Service{
+			svc("team-a", "loki-gateway", nil, port("http", 80)),
+			svc("loki", "loki-read", nil, port("http-metrics", 3100)),
+		}, []Candidate{{Namespace: "loki", Name: "loki-read", Port: 3100, Score: 30}, {Namespace: "team-a", Name: "loki-gateway", Port: 80, Score: 40}}},
 		{"no named port falls back to 3100", []corev1.Service{svc("logging", "loki", nil, port("", 8080))}, []Candidate{{Namespace: "logging", Name: "loki", Port: 3100, Score: 20}}},
 	} {
 		if got := Candidates(tc.in); !reflect.DeepEqual(got, tc.want) {
