@@ -29,6 +29,13 @@ describe('TraefikIngressRouteRenderer request path', () => {
     expect(html).toContain('used by 212 routes')
     expect(html).not.toContain('0 of 0')
   })
+  it('draws several services as alternatives Traefik load-balances across, not a chain', () => {
+    const svc = (name: string) => ({ namespace: 'shop', name, port: '80', kind: 'Service' as const, exists: true, readyPods: 1, totalPods: 1 })
+    const html = render([facts({ middlewares: [], services: [svc('blue'), svc('green')] })])
+    // entry point → match → services: one arrow before the services, not one per service.
+    expect(html.match(/lucide-arrow-right/g)).toHaveLength(2)
+    expect(html).toContain('load-balances')
+  })
   it('never shows 0 of 0 for unknown pod counts', () => {
     const html = render([facts({ services: [{ namespace: 'shop', name: 'ui', port: '80', kind: 'Service', exists: null, readyPods: null, totalPods: null }] })])
     expect(html).not.toContain('0 of 0')

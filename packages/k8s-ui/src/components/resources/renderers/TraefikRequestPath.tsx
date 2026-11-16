@@ -83,9 +83,10 @@ export function TraefikRequestPath({ facts, middlewareUse, onNavigate }: { facts
                 </span>
               )
             })}
-            {row.services.map((s) => (
+            {row.services.length > 0 && <Arrow />}
+            {row.services.map((s, i) => (
               <span key={`${s.kind}/${s.namespace}/${s.name}`} className="inline-flex items-center gap-1">
-                <Arrow />
+                {i > 0 && <span className="text-theme-text-tertiary" title="Traefik load-balances across these services (weighted round robin)">/</span>}
                 <RefLink refTo={s.kind === 'TraefikService' ? { kind: 'traefikservices', group, namespace: s.namespace, name: s.name } : { kind: 'services', namespace: s.namespace, name: s.name }} onNavigate={onNavigate}>
                   {s.name}{s.port ? `:${s.port}` : ''}
                 </RefLink>
