@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -149,6 +150,9 @@ func isHelmReleaseValueDigest(value []byte) bool {
 //     cluster-wide would be a meaningful memory regression to power a
 //     per-page diagnostic.
 //
+// For Longhorn Engines, also strips the status maps in
+// longhornEngineUnreadStatus.
+//
 // For CustomResourceDefinitions specifically, also strips:
 //   - spec.versions[].schema — the OpenAPI v3 schema. On operator-heavy
 //     clusters a single CRD's schema is 50-100KB (ArgoCD, cert-manager,
@@ -161,6 +165,12 @@ func isHelmReleaseValueDigest(value []byte) bool {
 //   - spec.versions[].name and served/storage/deprecated flags
 //   - spec.versions[].additionalPrinterColumns — drives column hints
 //   - spec.group, spec.names, spec.scope, status.*
+//
+// longhornEngineUnreadStatus are the Engine status maps Radar never reads: one
+// entry per snapshot, backup, restore, purge or clone, rewritten on each of
+// them. Replica modes and addresses and rebuild progress stay.
+var longhornEngineUnreadStatus = []string{"snapshots", "backupStatus", "restoreStatus", "purgeStatus", "cloneStatus", "replicaTransitionTimeMap"}
+
 func DropUnstructuredManagedFields(obj any) (any, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
@@ -172,6 +182,12 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 
 	unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
 	unstructured.RemoveNestedField(u.Object, "metadata", "annotations", lastAppliedAnnotation)
+
+	if u.GetKind() == "Engine" && strings.HasPrefix(u.GetAPIVersion(), "longhorn.io/") {
+		for _, field := range longhornEngineUnreadStatus {
+			unstructured.RemoveNestedField(u.Object, "status", field)
+		}
+	}
 
 	if u.GetKind() == "CustomResourceDefinition" {
 		// Strip .schema from each version entry. Preserve everything
