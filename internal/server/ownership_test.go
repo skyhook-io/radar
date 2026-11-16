@@ -499,7 +499,13 @@ func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, hidden := range []string{"hidden-pod", "hidden-claim", "hidden-volume", "hidden-secret", `"name":"fast"`} {
+		// hidden-secret is named by the subject's own spec, so it appears only
+		// marked denied.
+		named := `{"kind":"Secret","namespace":"alpha","name":"hidden-secret","access":"denied"}`
+		if strings.Count(string(data), "hidden-secret") != strings.Count(string(data), named) {
+			t.Fatalf("hidden-secret appears unmarked in %s", data)
+		}
+		for _, hidden := range []string{"hidden-pod", "hidden-claim", "hidden-volume", `"name":"fast"`} {
 			if hidden == `"name":"fast"` && obj.GetObjectKind().GroupVersionKind().Kind == "StorageClass" {
 				continue
 			}

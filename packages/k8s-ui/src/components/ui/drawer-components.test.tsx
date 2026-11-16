@@ -539,3 +539,16 @@ describe('PodTemplateSection pod-level resources', () => {
     expect(renderToString(<PodTemplateSection template={{ spec: { resources: { requests: {}, limits: {} }, containers: [container] } }} />)).not.toContain('Pod (aggregate)')
   })
 })
+
+describe('references the viewer may not read', () => {
+  it('lists a referenced Secret by name without a link', () => {
+    const configMap = { kind: 'ConfigMap', namespace: 'shop', name: 'web-config' }
+    const secret = { kind: 'Secret', namespace: 'shop', name: 'web-tls', access: 'denied' as const }
+    const html = renderToString(<RelatedResourcesSection relationships={{ configRefs: [configMap, secret] }} onNavigate={() => {}} />)
+    const buttons = html.match(/<button[\s\S]*?<\/button>/g) ?? []
+    expect(html).toContain('web-tls')
+    expect(html).toContain('not viewable')
+    expect(buttons.some((b) => b.includes('web-config'))).toBe(true)
+    expect(buttons.some((b) => b.includes('web-tls'))).toBe(false)
+  })
+})

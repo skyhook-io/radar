@@ -4009,11 +4009,10 @@ function ConfigurationInputsCard({
   ])
   if (!serviceAccountName && configRefs.length === 0 && policyRefs.length === 0) return null
   const navigateRef = onNavigate ? (ref: ResourceRef) => onNavigate(refToSelectedResource(ref)) : undefined
-  const serviceAccountRef: ResourceRef = {
-    kind: 'ServiceAccount',
-    namespace,
-    name: serviceAccountName || 'default',
-  }
+  // The relationships' own ref carries whether the viewer may open it.
+  const serviceAccountRef: ResourceRef = relationships?.serviceAccount?.name === (serviceAccountName || 'default')
+    ? relationships.serviceAccount
+    : { kind: 'ServiceAccount', namespace, name: serviceAccountName || 'default' }
 
   return (
     <OverviewCard

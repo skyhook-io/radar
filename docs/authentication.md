@@ -42,6 +42,13 @@ answers can be narrower than the UI's. A manager the caller can't read contribut
 own metadata stays as a `withheld` claim, and the answer says it is `narrowed`. These reference checks do not support
 `resourceNames`-only grants. See the [ownership contract](ownership.md#what-manages-an-object).
 
+Related Resources, the AI resource context and MCP `get_resource` name the ConfigMaps, Secrets, PVCs and ServiceAccount
+a readable object's pod template references, an Ingress's TLS Secrets and a ServiceAccount's Secrets, even when you
+can't read them, since the object's own YAML already shows those names. Such a reference carries `access: "denied"` (or `"unverified"` when Radar couldn't check your access), says
+nothing about whether the object exists or its state, and opens nothing. Workload history never follows it. Objects
+Radar finds by searching, such as a policy or monitor elsewhere that selects the object, are still withheld when you
+can't read them; the answer says only that something related was withheld.
+
 Deletion-impact previews fetch the root as the caller and use caller-readable ownership data. Permission and collection gaps make the result partial; remote or unknown GitOps destinations expose no local inventory. See [Shared deletion preview](mcp.md#shared-deletion-preview). Policy coverage metadata is filtered alongside its referenced workloads; it does not reveal names from hidden namespaces.
 
 ### Image inspection

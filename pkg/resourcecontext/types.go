@@ -202,6 +202,10 @@ type ContextRef struct {
 	Group     string `json:"group,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
+	// Access marks a reference the subject declares whose target the caller
+	// may not read: "denied", or "unverified" when the check couldn't be
+	// made. The target's existence and state are unknown then.
+	Access string `json:"access,omitempty"`
 }
 
 // ScalerRef is one scaledBy entry: the scaler's identity plus, when the

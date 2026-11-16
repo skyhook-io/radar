@@ -3,7 +3,7 @@ import { gapReasonText } from '../../utils/read-actions'
 import { customResourceDefinitionRef, getCRDDefinitionsSnapshot, subscribeCRDDefinitions } from '../../utils/navigation'
 import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState, useSyncExternalStore } from 'react'
-import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
+import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatDuration, formatResources } from '../resources/resource-utils'
 import { getEffectiveResources } from '../../utils/extended-resources'
@@ -1311,6 +1311,22 @@ export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: Reso
     ? 'badge max-w-full min-w-0 flex-wrap items-center whitespace-normal text-left leading-tight'
     : 'badge'
   const tooltip = `${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`
+
+  if (resourceRef.access) {
+    // Named by this resource's spec, but not readable by the viewer: show the
+    // name without implying it exists or can be opened.
+    const why = resourceRef.access === 'denied'
+      ? `You can't view this ${resourceRef.kind}.`
+      : `Radar couldn't check whether you can view this ${resourceRef.kind}.`
+    return (
+      <Tooltip content={`${why} It's listed because this resource references it; whether it exists isn't shown.`} delay={150}>
+        <span className={clsx(layoutClass, kindClass, 'opacity-70')} aria-label={`${tooltip}, not viewable`}>
+          <Lock className="w-3 h-3 shrink-0" aria-hidden="true" />
+          {content}
+        </span>
+      </Tooltip>
+    )
+  }
 
   if (onClick) {
     return (

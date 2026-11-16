@@ -450,7 +450,17 @@ type ResourceRef struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Group     string `json:"group,omitempty"` // API group for CRDs (e.g., "cert-manager.io")
+	// Access is set on a reference the subject's own spec declares when the
+	// caller may not read its target: ResourceAccessDenied, or
+	// ResourceAccessUnverified when the check couldn't be made. Only the name
+	// is known then, not whether the target exists or its state.
+	Access string `json:"access,omitempty"`
 }
+
+const (
+	ResourceAccessDenied     = "denied"
+	ResourceAccessUnverified = "unverified"
+)
 
 type ReflectionRelationships struct {
 	Source                *ResourceRef  `json:"source,omitempty"`

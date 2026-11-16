@@ -448,7 +448,10 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 		rel.Services, rel.Ingresses, rel.Routes, rel.ConfigRefs, rel.Scalers, rel.PDBs, rel.NetworkPolicies, rel.StagedPolicies, rel.StorageRefs,
 	} {
 		for _, ref := range list {
-			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" {
+			// A reference named only because the workload's spec declares it
+			// carries Access; its target's history is the caller's to read
+			// only if they may read the target.
+			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" || ref.Access != "" {
 				continue
 			}
 			group := ref.Group

@@ -775,6 +775,15 @@ docker run -p 127.0.0.1:9280:9280 \
 
 The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
 
+## References you can't read
+
+A `resourceContext.uses` entry, or a Related Resources reference, may carry `access`: `"denied"` when the subject's
+own spec names an object the caller may not read (a pod template's ConfigMaps, Secrets, PVCs and ServiceAccount, an
+Ingress's TLS Secrets, a ServiceAccount's Secrets), or `"unverified"` when Radar couldn't check the caller's
+access. The name comes from the subject's spec, which the caller reads; Radar never reads the target for it, so
+neither its existence nor its state is known. Treat it as a declared dependency to verify with someone who has access,
+not as a missing or a healthy one.
+
 ## Crossplane pause context
 
 `list_resources` summaries, list/search `summaryContext`, and `get_resource`'s `resourceContext` carry optional `crossplanePause` for CRDs (identities in Radar's built-in registry are excluded, including typed objects converted for generic reads): `requested` for the exact `crossplane.io/paused: "true"` annotation, or `acknowledged` when the stored `Synced=False/ReconcilePaused` condition corroborates it. A request alone does not establish that a controller has stopped. Acknowledgement is a recorded observation, not a fresh external check or a claim about child controllers. No timestamp is inferred. An omitted field does not rule out other pause mechanisms.

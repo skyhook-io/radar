@@ -14,7 +14,8 @@ import (
 
 // RelationshipExtras is request-local evidence for context readers, never a
 // wire payload. Fields uses Relationships field names and retains coverage
-// even when no reference was emitted. Denied declarations are never retained.
+// even when no reference was emitted. Declarations are everything the
+// subject's spec names, including targets the caller may not read.
 type RelationshipExtras struct {
 	Subject        resourceid.Ref                    `json:"-"`
 	Coverage       map[string]relations.Coverage     `json:"-"`

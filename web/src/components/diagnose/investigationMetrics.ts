@@ -258,7 +258,8 @@ function producerRelatives(
           };
           if (!sameResource(ref, subject)) break;
           const uses = data.resourceContext?.uses;
-          relatives.push(...(uses?.configMaps ?? []), ...(uses?.secrets ?? []));
+          // A reference the caller may not read is named only; its history isn't theirs to follow.
+          relatives.push(...[...(uses?.configMaps ?? []), ...(uses?.secrets ?? [])].filter((r) => !r.access));
           if (data.resourceContext?.owner) {
             relatives.push(data.resourceContext.owner);
           }

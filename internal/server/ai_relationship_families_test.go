@@ -48,15 +48,18 @@ func TestAIContextFamiliesExactGetAndHiddenExistence(t *testing.T) {
 			t.Fatalf("readable ingress behind hidden Service lost: %+v", rc.ExposedBy)
 		}
 		raw, _ := json.Marshal(rc)
-		if strings.Contains(string(raw), "hidden-service") || strings.Contains(string(raw), "hidden-secret") {
-			t.Fatalf("hidden identity leaked: %s", raw)
+		// The Deployment's own spec names hidden-secret, so it is listed, marked
+		// denied; the Service it doesn't name stays hidden.
+		named := `{"kind":"Secret","namespace":"app","name":"hidden-secret","access":"denied"}`
+		if strings.Contains(string(raw), "hidden-service") || strings.Count(string(raw), "hidden-secret") != strings.Count(string(raw), named) || !strings.Contains(string(raw), named) {
+			t.Fatalf("hidden identity leaked, or the declared Secret not named: %s", raw)
 		}
 		// Deny the entire source kind: narrowing notes must not depend on matches.
 		perms.SetCanI("get", "networking.k8s.io", "ingresses", "app", false)
 		rc = env.srv.buildAIResourceContext(req, dep, "Deployment", "app", "web")
 		raw, _ = json.Marshal(rc)
-		if !hasContextOmission(rc, "exposedBy", resourcecontext.OmittedRBACDenied) || !hasContextOmission(rc, "uses.secrets", resourcecontext.OmittedRBACDenied) {
-			t.Fatalf("missing policy narrowing notes: %s", raw)
+		if !hasContextOmission(rc, "exposedBy", resourcecontext.OmittedRBACDenied) || hasContextOmission(rc, "uses.secrets", resourcecontext.OmittedRBACDenied) || !strings.Contains(string(raw), `"access":"denied"`) {
+			t.Fatalf("want exposedBy narrowed and the declared Secret named, not withheld: %s", raw)
 		}
 		if before != nil && string(before) != string(raw) {
 			t.Fatalf("hidden existence changed context:\n%s\n%s", before, raw)

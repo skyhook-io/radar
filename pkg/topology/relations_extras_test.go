@@ -129,26 +129,33 @@ func TestRelationsContextWithholdsOnlyWhatIsThere(t *testing.T) {
 	}
 }
 
-// One withheld Secret narrows the field that lists it, not the family's other
-// fields, and a target whose permission check failed is not passed on.
-func TestRelationsContextWithheldTargetNarrowsItsOwnField(t *testing.T) {
+// A Secret the subject's own spec names is passed on by name, marked, without
+// narrowing any field, whether the caller is denied it or the check failed.
+func TestRelationsContextDeclaredUnreadableTargetIsNamed(t *testing.T) {
 	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "shop"}, Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "creds", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "credential"}}}}}}, "", "Pod")
 	s := newProjectionSession(t, pod)
 	denied := projectionAccess{denied: []string{"Secret"}}
 	_, extras := RelationsContextAnswer(s, denied, ownership.Unrestricted(), ownership.NewView(s, denied), projectionRef(pod), pod, "", nil, nil)
-	if !extras.Fields["ConfigRefs"].Narrowed || extras.Fields["StorageRefs"].Narrowed || extras.Fields["ServiceAccount"].Narrowed {
-		t.Fatalf("fields = %+v, want only ConfigRefs narrowed", extras.Fields)
+	for field, c := range extras.Fields {
+		if c.Narrowed {
+			t.Fatalf("field %q narrowed although its Secret is named: %+v", field, extras.Fields)
+		}
 	}
-	if got := extras.WithheldKinds["ConfigRefs"]; len(got) != 1 || got[0].Kind != "Secret" {
+	if len(extras.WithheldKinds) != 0 {
 		t.Fatalf("withheld kinds = %v", extras.WithheldKinds)
+	}
+	if !slices.ContainsFunc(extras.Declarations, func(d relations.Declared) bool {
+		return d.Ref.Kind == "Secret" && DeclaredAccess(d) == ResourceAccessDenied
+	}) {
+		t.Fatalf("the denied Secret wasn't passed on: %+v", extras.Declarations)
 	}
 
 	undecided := undecidedKinds{"Secret"}
 	_, extras = RelationsContextAnswer(s, undecided, ownership.Unrestricted(), ownership.NewView(s, undecided), projectionRef(pod), pod, "", nil, nil)
-	for _, d := range extras.Declarations {
-		if d.Ref.Kind == "Secret" {
-			t.Fatalf("a Secret whose check failed was passed on: %+v", d)
-		}
+	if !slices.ContainsFunc(extras.Declarations, func(d relations.Declared) bool {
+		return d.Ref.Kind == "Secret" && DeclaredAccess(d) == ResourceAccessUnverified
+	}) {
+		t.Fatalf("the Secret whose check failed wasn't passed on as unverified: %+v", extras.Declarations)
 	}
 }
 

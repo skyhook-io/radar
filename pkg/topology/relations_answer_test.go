@@ -134,7 +134,9 @@ func TestRelationsAnswerDirectAccess(t *testing.T) {
 	s := newProjectionSession(t, pod)
 	denied := projectionAccess{denied: []string{"ServiceAccount", "Node", "ResourceClaim"}}
 	rel := projectionAnswer(t, s, pod, denied, ownership.Unrestricted())
-	if rel.ServiceAccount != nil || rel.Node != nil || len(rel.ResourceClaims) > 0 {
+	// The Pod's own spec names its ServiceAccount, so it is listed, marked;
+	// the Node and ResourceClaims stay hidden.
+	if rel.ServiceAccount == nil || *rel.ServiceAccount != (ResourceRef{Kind: "ServiceAccount", Namespace: "shop", Name: "sa", Access: ResourceAccessDenied}) || rel.Node != nil || len(rel.ResourceClaims) > 0 {
 		t.Fatalf("hidden spec references: %+v", rel)
 	}
 	for _, read := range s.reads {

@@ -85,6 +85,9 @@ type neighborhood struct {
 	coverage map[string]relations.Coverage
 	access   ownership.Access
 	extras   *RelationshipExtras
+	// unreadable are the subject's declared references the caller may not
+	// read, listed by name.
+	unreadable []ResourceRef
 }
 
 // familyNodeID is a node ID parseNodeID can't read, so a node's identity
@@ -104,6 +107,65 @@ func (n *neighborhood) node(r resourceid.Ref) string {
 		n.topo.Nodes = append(n.topo.Nodes, Node{ID: id, Kind: NodeKind(r.Kind), Name: r.Name, Data: map[string]any{"namespace": r.Namespace, "apiVersion": apiVersion}})
 	}
 	return id
+}
+
+// DeclaredAccess is how a declared reference reads when the caller may not
+// read its target: ResourceAccessDenied, or ResourceAccessUnverified when the
+// check couldn't be made; empty otherwise.
+func DeclaredAccess(d relations.Declared) string {
+	switch {
+	case d.State == relations.TargetWithheld:
+		return ResourceAccessDenied
+	case d.State == relations.TargetUnread && d.Gap.Reason == readreason.UserPermissionCheckFailed:
+		return ResourceAccessUnverified
+	}
+	return ""
+}
+
+// nameUnreadable sets aside the declarations whose targets the caller may not
+// read, to list them by name, and returns the rest of the answer. Their
+// withholding no longer narrows the answer, and a failed check on one is
+// carried by its marker instead of a gap.
+func (n *neighborhood) nameUnreadable(a relations.ReferencesAnswer) relations.ReferencesAnswer {
+	out := relations.ReferencesAnswer{Coverage: a.Coverage}
+	out.Coverage.NotChecked = nil
+	var named []ownership.Gap
+	for _, d := range a.Declared {
+		access := DeclaredAccess(d)
+		if access == "" {
+			out.Declared = append(out.Declared, d)
+			continue
+		}
+		n.unreadable = append(n.unreadable, ResourceRef{Kind: d.Ref.Kind, Group: d.Ref.Group, Namespace: d.Ref.Namespace, Name: d.Ref.Name, Access: access})
+		if access == ResourceAccessUnverified {
+			named = append(named, d.Gap)
+		}
+	}
+	for _, gap := range a.Coverage.NotChecked {
+		if !slices.Contains(named, gap) {
+			out.Coverage.NotChecked = append(out.Coverage.NotChecked, gap)
+		}
+	}
+	out.Coverage.Narrowed = slices.ContainsFunc(out.Declared, func(d relations.Declared) bool { return d.State == relations.TargetWithheld })
+	return out
+}
+
+// listUnreadable adds the subject's unreadable declared references to the
+// fields their kinds fill.
+func (n *neighborhood) listUnreadable(rel *Relationships) {
+	for _, r := range n.unreadable {
+		switch {
+		case r.Group == "" && r.Kind == "ServiceAccount":
+			if rel.ServiceAccount == nil {
+				ref := r
+				rel.ServiceAccount = &ref
+			}
+		case r.Group == "" && r.Kind == "PersistentVolumeClaim":
+			rel.StorageRefs = appendResourceRef(rel.StorageRefs, r)
+		default:
+			rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, r)
+		}
+	}
 }
 
 func (n *neighborhood) edge(from, to resourceid.Ref, e relationEdge, partial bool) {
@@ -146,17 +208,15 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 			continue
 		}
 		refs := v.References(f, subject, obj)
+		if f == relations.ConfigReferences && subject == n.extras.Subject {
+			// The subject's own spec names these, and the caller reads the
+			// subject, so the names are shown, marked unreadable, rather
+			// than withheld. Nothing is read about the targets themselves.
+			n.extras.Declarations = append(n.extras.Declarations, refs.Declared...)
+			refs = n.nameUnreadable(refs)
+		}
 		n.cover(f.Name, refs.Coverage)
 		n.extras.projectReferences(disposition, gk, refs)
-		if f == relations.ConfigReferences && subject == n.extras.Subject {
-			for _, d := range refs.Declared {
-				// A target whose permission check failed is no more readable
-				// than a withheld one; its field says it couldn't be checked.
-				if d.State != relations.TargetWithheld && (d.State != relations.TargetUnread || d.Gap.Reason != readreason.UserPermissionCheckFailed) {
-					n.extras.Declarations = append(n.extras.Declarations, d)
-				}
-			}
-		}
 		for _, d := range refs.Declared {
 			if d.State == relations.TargetPresent {
 				if e, ok := edgeFor(f.Name, subject, d.Ref); ok {
@@ -292,6 +352,7 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 		rel = &Relationships{}
 	}
 	n.networkEntrypoints(session, access, traverse, subject, obj, istioDomain, rel)
+	n.listUnreadable(rel)
 	if rel != nil && subject.Kind == "Deployment" && subject.Group == "apps" {
 		// The graph's shortcut to a Deployment's Pods, through its ReplicaSets.
 		for _, rs := range children.Children {
