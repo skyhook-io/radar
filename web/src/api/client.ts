@@ -90,6 +90,7 @@ import {
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
 import { apiVersionToGroup } from '../utils/navigation'
+import { isBadgeWorthy } from '../utils/auditBadges'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -739,7 +740,8 @@ export function useDashboard(
 export function useAudit(namespaces: string[] = []) {
   const params =
     namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
-  // Mounted app-wide, so without this it keeps polling a cluster that is down.
+  // Without the connection check a mounted view keeps polling a cluster that
+  // is down.
   const connected = useClusterConnected();
   return useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
@@ -751,22 +753,31 @@ export function useAudit(namespaces: string[] = []) {
   });
 }
 
-export type AuditFindings = Pick<AuditResponse, "findings" | "checks">;
+export type AuditBadges = Pick<AuditResponse, "findings" | "checks">;
 
-// The findings and check catalog alone, for views that only badge resources.
-// The full response is about four times the size: it repeats every finding
-// per resource and per check for the Checks page. A Radar that predates
-// include=findings answers with the full response, which carries both fields.
-export function useAuditFindings(
+// Keeps only what a badge view shows: findings of badge-worthy checks and
+// those checks' catalog entries. A Radar that predates include=badges answers
+// with the full response, which this cuts down rather than retaining.
+export function projectAuditBadges(response: AuditBadges): AuditBadges {
+  const findings = (response.findings ?? []).filter((f) => isBadgeWorthy(f, response.checks));
+  const checks: AuditBadges["checks"] = {};
+  for (const f of findings) checks[f.checkID] = response.checks[f.checkID];
+  return { findings, checks };
+}
+
+// The audit as resource badges need it (topology, resource lists): the
+// badge-worthy findings only, a small fraction of the full scan, which repeats
+// every finding per resource and per check for the Checks page.
+export function useAuditBadges(
   namespaces: string[] = [],
   options: { enabled?: boolean } = {},
 ) {
-  const params = new URLSearchParams({ include: "findings" });
+  const params = new URLSearchParams({ include: "badges" });
   if (namespaces.length > 0) params.set("namespaces", namespaces.join(","));
   const connected = useClusterConnected();
-  return useQuery<AuditFindings>({
-    queryKey: ["audit", namespaces, "findings"],
-    queryFn: () => fetchJSON(`/audit?${params}`),
+  return useQuery<AuditBadges>({
+    queryKey: ["audit", namespaces, "badges"],
+    queryFn: async () => projectAuditBadges(await fetchJSON<AuditBadges>(`/audit?${params}`)),
     enabled: connected && (options.enabled ?? true),
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,

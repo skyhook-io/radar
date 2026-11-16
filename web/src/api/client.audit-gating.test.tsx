@@ -4,14 +4,14 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ClusterConnectedContext } from '../context/clusterConnected'
-import { useAudit, useAuditFindings } from './client'
+import { projectAuditBadges, useAudit, useAuditBadges } from './client'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-let probe: () => void = () => useAudit([])
+let useProbe: () => void = () => useAudit([])
 
 function AuditProbe() {
-  probe()
+  useProbe()
   return null
 }
 
@@ -41,33 +41,55 @@ async function renderWith(connected: boolean) {
 
 describe('useAudit', () => {
   it('does not ask a disconnected cluster for checks', async () => {
-    probe = () => useAudit([])
+    useProbe = () => useAudit([])
     expect(await renderWith(false)).toHaveLength(0)
   })
 
   it('fetches checks while connected', async () => {
-    probe = () => useAudit([])
+    useProbe = () => useAudit([])
     expect(await renderWith(true)).toHaveLength(1)
   })
 })
 
-describe('useAuditFindings', () => {
-  it('asks only for findings and the check catalog, in the picked namespaces', async () => {
-    probe = () => useAuditFindings(['shop', 'web'])
+describe('useAuditBadges', () => {
+  it('asks only for badge findings, in the picked namespaces', async () => {
+    useProbe = () => useAuditBadges(['shop', 'web'])
     const [url, ...rest] = await renderWith(true)
     expect(rest).toHaveLength(0)
     const params = new URL(url, 'http://radar').searchParams
-    expect(params.get('include')).toBe('findings')
+    expect(params.get('include')).toBe('badges')
     expect(params.get('namespaces')).toBe('shop,web')
   })
 
   it('does not ask a disconnected cluster', async () => {
-    probe = () => useAuditFindings([])
+    useProbe = () => useAuditBadges([])
     expect(await renderWith(false)).toHaveLength(0)
   })
 
   it('stays idle while disabled', async () => {
-    probe = () => useAuditFindings([], { enabled: false })
+    useProbe = () => useAuditBadges([], { enabled: false })
     expect(await renderWith(true)).toHaveLength(0)
+  })
+})
+
+describe('projectAuditBadges', () => {
+  const check = (id: string, badgeWorthy: boolean) => ({ id, title: id, description: '', remediation: '', category: 'Reliability', severity: 'warning', badgeWorthy }) as never
+  const finding = (checkID: string, name: string) => ({ kind: 'Service', group: '', namespace: 'shop', name, checkID, category: 'Reliability', severity: 'warning', message: name }) as never
+
+  it('cuts an older server\'s full response down to badge-worthy findings and their checks', () => {
+    const full = {
+      findings: [finding('noEndpoints', 'a'), finding('runAsRoot', 'b'), finding('noEndpoints', 'c')],
+      checks: { noEndpoints: check('noEndpoints', true), runAsRoot: check('runAsRoot', false), unused: check('unused', true) },
+      groups: [{ findings: [] }],
+      groupedChecks: [],
+    }
+    const out = projectAuditBadges(full)
+    expect(Object.keys(out).sort()).toEqual(['checks', 'findings'])
+    expect(out.findings.map((f) => f.name)).toEqual(['a', 'c'])
+    expect(Object.keys(out.checks)).toEqual(['noEndpoints'])
+  })
+
+  it('tolerates an empty audit', () => {
+    expect(projectAuditBadges({ findings: null as never, checks: {} })).toEqual({ findings: [], checks: {} })
   })
 })
