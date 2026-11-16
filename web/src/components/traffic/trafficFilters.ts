@@ -1,3 +1,4 @@
+import { formatBytes } from '@skyhook-io/k8s-ui/utils/format'
 import type { AggregatedFlow, TrafficFlow, TrafficWarningKind } from '../../types'
 import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
 import type { TrafficGraphSelection } from './TrafficGraph'
@@ -108,6 +109,27 @@ export function dataByProtocol(flow: ByteFigures): ProtocolData[] {
   return Object.entries(flow.bytesByProtocol)
     .map(([protocol, bytes]) => ({ protocol, sent: bytes.bytesSent, recv: bytes.bytesRecv }))
     .sort((a, b) => Number(isPayloadProtocol(b.protocol)) - Number(isPayloadProtocol(a.protocol)) || a.protocol.localeCompare(b.protocol))
+}
+
+/** The span a rate-based source's byte totals cover, in seconds: the view's
+ *  range, five minutes when it is under a minute, at most an hour — the same
+ *  rule the server's rate window follows. */
+export function rateWindowSeconds(timeRange: string): number {
+  const m = /^(\d+)([smh])$/.exec(timeRange)
+  const seconds = m ? Number(m[1]) * ({ s: 1, m: 60, h: 3600 } as const)[m[2] as 's' | 'm' | 'h'] : 0
+  return seconds < 60 ? 300 : Math.min(seconds, 3600)
+}
+
+/** Label for an edge a rate-based source measured only in bytes: its
+ *  throughput per protocol over the window, never added across protocols. */
+export function throughputLabel(flow: ByteFigures & Pick<AggregatedFlow, 'protocol'>, windowSeconds: number): string {
+  return dataByProtocol(flow)
+    .filter(e => e.sent + e.recv > 0)
+    .map(e => {
+      const perSecond = (e.sent + e.recv) / windowSeconds
+      return `${protocolName(e.protocol ?? flow.protocol)} · ${perSecond < 1 ? '<1 B' : formatBytes(perSecond)}/s`
+    })
+    .join(' · ')
 }
 
 /** Data across several edges, added only within each protocol. */

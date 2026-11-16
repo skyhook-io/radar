@@ -25,7 +25,7 @@ import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { TrafficData } from './TrafficData'
-import { dataByProtocol, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
+import { dataByProtocol, throughputLabel, totalDataByProtocol, protocolName, isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, edgesOnPort, protocolLabel, type TrafficFocus } from './trafficFilters'
 
 // ELK is 1.5 MB; load it with the first traffic layout, not with the app.
 let elkPromise: Promise<ELK> | null = null
@@ -84,6 +84,9 @@ interface TrafficGraphProps {
   /** Whether the layout engine failed to load, in which case the graph draws
    *  nothing and the view lists the connections in its place. */
   onLayoutUnavailable: (unavailable: boolean) => void
+  /** Seconds the byte figures cover, so an edge measured only in bytes can be
+   *  labelled with its throughput. */
+  windowSeconds: number
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
@@ -1156,7 +1159,7 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId, onLayoutUnavailable, windowSeconds }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
   const isRateBased = isRateBasedSource(trafficSource)
@@ -1399,8 +1402,10 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       // A source that measures rates has no count for an edge with no requests on
       // it — a plain TCP conversation, or one whose direction is unknown. Printing
       // "0/s" there reads as no traffic, on an edge that may be carrying megabytes.
-      const countLabel = isRateBased && !flow.connections ? '' : connStr
-      const edgeLabel = [l7Label + countLabel, latencyLabel, errorLabel]
+      const bytesOnly = isRateBased && !flow.connections
+      const countLabel = bytesOnly ? '' : connStr
+      const throughput = bytesOnly ? throughputLabel(flow, windowSeconds) : ''
+      const edgeLabel = [throughput || l7Label + countLabel, latencyLabel, errorLabel]
         .join('')
         .replace(/^ · /, '')
 
@@ -1454,7 +1459,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       addonGroupEdge, // Pass this for adding after group is created
       addonGroupOutEdge, // Pass this for adding group → kubernetes edge
     }
-  }, [flows, hotPathThreshold, showNamespaceGroups, serviceCategories, addonMode, isRateBased, connLabel])
+  }, [flows, hotPathThreshold, showNamespaceGroups, serviceCategories, addonMode, isRateBased, connLabel, windowSeconds])
 
   // Apply ELK layout
   const applyLayout = useCallback(async (claim: () => boolean) => {
@@ -1593,7 +1598,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: 'addon-group',
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased && !connections ? '' : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
+          label: isRateBased && !connections ? throughputLabel(groupFlow, windowSeconds) : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1627,7 +1632,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: targetId,
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased && !connections ? '' : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
+          label: isRateBased && !connections ? throughputLabel(groupFlow, windowSeconds) : isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1669,7 +1674,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       setLayoutedEdges(rawEdges)
       setElkUnavailable(false)
     }
-  }, [rawNodes, rawEdges, addonMode, addonGroupEdge, addonGroupOutEdge, hotPathThreshold, isRateBased])
+  }, [rawNodes, rawEdges, addonMode, addonGroupEdge, addonGroupOutEdge, hotPathThreshold, isRateBased, windowSeconds])
 
   // Run layout when flows change. Runs install their results in the order
   // they started, so a fast-changing graph still lands each layout instead of

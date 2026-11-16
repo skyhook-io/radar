@@ -62,6 +62,7 @@ const props = (flows: AggregatedFlow[]): ComponentProps<typeof TrafficGraphType>
   onSelectionChange: vi.fn(),
   onFocus: vi.fn(),
   onLayoutUnavailable,
+  windowSeconds: 300,
 })
 
 async function render(flows: AggregatedFlow[]) {

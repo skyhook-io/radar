@@ -70,16 +70,17 @@ describe('TrafficGraph addon group edges', () => {
       it(`shows Data without a rate when selecting ${edgeId} from ${source}`, async () => {
         const grouped = groupAddonFlows([{ ...flow, rawPairs: [endpointPair(flow)] }], (_name, ns) => ns === 'monitoring')
         const onSelectionChange = vi.fn()
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onSelectionChange={onSelectionChange} onLayoutUnavailable={vi.fn()} />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onSelectionChange={onSelectionChange} onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
         const edge = container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!
         expect(edge).not.toBeNull()
-        expect(edge.textContent).toBe('')
+        // 300 bytes over the 300s window, with no request rate to show.
+        expect(edge.textContent).toBe('TCP · 1 B/s')
         act(() => edge.click())
         expect(container.textContent).toContain('Data300 B')
         expect(container.textContent).not.toContain('Request Rate')
         expect(container.textContent).not.toContain('0/s')
         expect(onSelectionChange.mock.calls[0][0]).toMatchObject({ type: 'edge', port, directionUnknown: false })
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" selection={onSelectionChange.mock.calls[0][0]} onLayoutUnavailable={vi.fn()} />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" selection={onSelectionChange.mock.calls[0][0]} onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
         expect(container.textContent).toContain('Data300 B')
       })
     }
@@ -93,7 +94,7 @@ describe('TrafficGraph addon group edges', () => {
       const http = { ...flow, protocol: 'http', l7Protocol: 'HTTP', bytesByProtocol: { http: { bytesSent: 100, bytesRecv: 200 } }, port: 0, connections: 2, requestRate: 1.7 }
       const grouped = groupAddonFlows([{ ...http, rawPairs: [endpointPair(http)] }], (_name, ns) => ns === 'monitoring')
       const onSelectionChange = vi.fn()
-      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onSelectionChange={onSelectionChange} onLayoutUnavailable={vi.fn()} />))
+      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onSelectionChange={onSelectionChange} onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
       act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
       expect(container.textContent).toContain('ProtocolHTTP')
       expect(container.textContent).not.toContain('Port')
@@ -108,7 +109,7 @@ describe('TrafficGraph addon group edges', () => {
     it(`shows mixed metadata in ${edgeId} details`, async () => {
       const http = { ...flow, protocol: 'http', l7Protocol: 'HTTP', bytesByProtocol: { http: { bytesSent: 100, bytesRecv: 200 } }, port: 8080 }
       const grouped = groupAddonFlows([http, flow].map(f => ({ ...f, rawPairs: [endpointPair(f)] })), (_name, ns) => ns === 'monitoring')
-      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onLayoutUnavailable={vi.fn()} />))
+      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
       act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
       expect(container.textContent).toContain('Port443')
       expect(container.textContent).toContain('ProtocolHTTP + TCP')
@@ -127,7 +128,7 @@ describe('TrafficGraph addon group node accounting', () => {
     ] as const) {
       it(`counts Data once when selecting ${nodeId} from ${source}`, async () => {
         const grouped = groupAddonFlows([{ ...flow, rawPairs: [endpointPair(flow)] }], (_name, ns) => ns === 'monitoring')
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onLayoutUnavailable={vi.fn()} />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
         const node = container.querySelector<HTMLButtonElement>(`[data-node="${nodeId}"]`)!
         expect(node).not.toBeNull()
         expect(node.dataset.connections).toBe('1')
@@ -145,7 +146,7 @@ describe('TrafficGraph addon group node accounting', () => {
       it(`counts node volume and ports once at ${nodeId} from ${source}`, async () => {
         const measured = { ...flow, connections: 2, requestRate: 1.7 }
         const grouped = groupAddonFlows([{ ...measured, rawPairs: [endpointPair(measured)] }], (_name, ns) => ns === 'monitoring')
-        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onLayoutUnavailable={vi.fn()} />))
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
         const volume = source === 'hubble' ? 2 : 1.7
         for (const id of [nodeId, 'monitoring/prometheus']) {
           const node = container.querySelector<HTMLButtonElement>(`[data-node="${id}"]`)!
@@ -170,7 +171,7 @@ describe('TrafficGraph protocol data', () => {
   ] as const) {
     it(`keeps both protocols at the virtual edge and both ends of ${edgeId}`, async () => {
       const grouped = groupAddonFlows([{ ...flow, ...sample, rawPairs: [endpointPair(flow)] }], (_name, ns) => ns === 'monitoring')
-      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onLayoutUnavailable={vi.fn()} />))
+      await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource="istio" addonMode="group" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
       act(() => container.querySelector<HTMLButtonElement>(`[data-edge="${edgeId}"]`)!.click())
       expect(container.textContent).toContain('ProtocolHTTP + TCP')
       expect(container.textContent).toContain('Data by protocolHTTP 5.8 KB sent · 254.8 KB receivedTCP 31.9 KB sent · 382.3 KB received')
@@ -194,7 +195,7 @@ describe('TrafficGraph protocol data', () => {
       { ...incoming, ...sample, source: client, destination: server, port: 80 },
       { ...incoming, ...sample, source: server, destination: addon, port: 443 },
     ]
-    await act(async () => root.render(<TrafficGraph flows={flows} trafficSource="istio" onLayoutUnavailable={vi.fn()} />))
+    await act(async () => root.render(<TrafficGraph flows={flows} trafficSource="istio" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
     act(() => container.querySelector<HTMLButtonElement>('[data-node="demo/server"]')!.click())
     expect(container.textContent).toContain('Data transferredHTTP 521.4 KBTCP 828.4 KB')
     expect(container.textContent?.match(/HTTP 260\.7 KB · TCP 414\.2 KB/g)).toHaveLength(2)
@@ -207,7 +208,7 @@ describe('TrafficGraph protocol data', () => {
 
 it('keeps a released HTTP/gRPC aggregate scalar unlabelled in node details', async () => {
   const legacy = { ...incoming, bytesByProtocol: undefined, protocol: 'http', l7Protocol: 'HTTP' }
-  await act(async () => root.render(<TrafficGraph flows={[legacy]} trafficSource="istio" onLayoutUnavailable={vi.fn()} />))
+  await act(async () => root.render(<TrafficGraph flows={[legacy]} trafficSource="istio" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
   act(() => container.querySelector<HTMLButtonElement>('[data-node="monitoring/prometheus"]')!.click())
   expect(container.textContent).toContain('Data transferred300 B')
   expect(container.textContent).not.toContain('HTTP 300 B')
@@ -216,7 +217,33 @@ it('keeps a released HTTP/gRPC aggregate scalar unlabelled in node details', asy
 
 it('retains the application protocol over multiple transports in edge details', async () => {
   const dns = { ...outgoing, port: 53, protocol: 'udp', l7Protocol: 'DNS', bytesByProtocol: { udp: { bytesSent: 100, bytesRecv: 100 }, tcp: { bytesSent: 0, bytesRecv: 100 } } }
-  await act(async () => root.render(<TrafficGraph flows={[dns]} trafficSource="hubble" onLayoutUnavailable={vi.fn()} />))
+  await act(async () => root.render(<TrafficGraph flows={[dns]} trafficSource="hubble" onLayoutUnavailable={vi.fn()} windowSeconds={300} />))
   act(() => container.querySelector<HTMLButtonElement>('[data-edge]')!.click())
   expect(container.textContent).toContain('ProtocolDNS / TCP + UDP')
+})
+
+describe('TrafficGraph edge labels for traffic measured only in bytes', () => {
+  const client = { name: 'curl', namespace: 'demo', kind: 'Pod' }
+  const server = { name: 'httpbin', namespace: 'demo', kind: 'Pod' }
+  const tcpOnly: AggregatedFlow = {
+    ...incoming, source: server, destination: client, port: 0, protocol: 'tcp', connections: 0,
+    bytesSent: 29999, bytesRecv: 119999, bytesByProtocol: { tcp: { bytesSent: 29999, bytesRecv: 119999 } },
+  }
+  const http: AggregatedFlow = {
+    ...incoming, source: client, destination: server, port: 0, protocol: 'http', l7Protocol: 'HTTP', connections: 2, requestRate: 1.9,
+    bytesSent: 38668, bytesRecv: 652404, bytesByProtocol: { http: { bytesSent: 5969, bytesRecv: 260965 }, tcp: { bytesSent: 32699, bytesRecv: 391439 } },
+  }
+
+  it('labels a TCP-only edge with its throughput and leaves an edge with a request rate as it was', async () => {
+    await act(async () => root.render(<TrafficGraph flows={[tcpOnly, http]} trafficSource="istio" onLayoutUnavailable={vi.fn()} windowSeconds={60} />))
+    expect(container.querySelector('[data-edge="demo/httpbin->demo/curl:0"]')!.textContent).toBe('TCP · 2.4 KB/s')
+    const httpLabel = container.querySelector('[data-edge="demo/curl->demo/httpbin:0"]')!.textContent!
+    expect(httpLabel).toBe('HTTP · 1.9/s')
+  })
+
+  it('gives each transport its own throughput rather than their sum', async () => {
+    const both = { ...tcpOnly, bytesByProtocol: { tcp: { bytesSent: 29999, bytesRecv: 119999 }, udp: { bytesSent: 30, bytesRecv: 0 } } }
+    await act(async () => root.render(<TrafficGraph flows={[both]} trafficSource="beyla" onLayoutUnavailable={vi.fn()} windowSeconds={60} />))
+    expect(container.querySelector('[data-edge]')!.textContent).toBe('TCP · 2.4 KB/s · UDP · <1 B/s')
+  })
 })

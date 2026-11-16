@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { dataByProtocol, totalDataByProtocol, protocolName, matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
+import { dataByProtocol, totalDataByProtocol, rateWindowSeconds, throughputLabel, protocolName, matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, groupAddonFlows, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -866,5 +866,20 @@ describe('protocol byte figures', () => {
     expect(merged.bytesByProtocol).toBeUndefined()
     expect(dataByProtocol(merged)).toEqual([{ protocol: null, sent: 200, recv: 400 }])
     expect(totalDataByProtocol([merged, legacy])).toEqual([{ protocol: null, sent: 300, recv: 600 }])
+  })
+})
+
+describe('rateWindowSeconds', () => {
+  it('follows the server: the range, five minutes under a minute, at most an hour', () => {
+    expect([ '1m', '5m', '15m', '1h', '30s', '2h', 'bogus' ].map(rateWindowSeconds)).toEqual([60, 300, 900, 3600, 300, 3600, 300])
+  })
+})
+
+describe('throughputLabel', () => {
+  it('divides the bytes of each protocol by the window and skips protocols that moved nothing', () => {
+    const base = { protocol: 'tcp', bytesSent: 0, bytesRecv: 0 }
+    expect(throughputLabel({ ...base, bytesByProtocol: { tcp: { bytesSent: 29999, bytesRecv: 119999 }, udp: { bytesSent: 0, bytesRecv: 0 } } }, 60)).toBe('TCP · 2.4 KB/s')
+    expect(throughputLabel({ ...base, bytesSent: 600, bytesRecv: 0 }, 300)).toBe('TCP · 2 B/s')
+    expect(throughputLabel({ ...base, bytesByProtocol: { tcp: { bytesSent: 0, bytesRecv: 0 } } }, 60)).toBe('')
   })
 })
