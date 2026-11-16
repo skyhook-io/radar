@@ -169,3 +169,36 @@ it('uses an unknown sidebar count and tooltip for zero over partial coverage', (
   expect(result.value!.CloudNativePG.destinations.find((d) => d.id === 'protection')!.count).toBe(0)
   sidebar.data = undefined
 })
+
+describe('CNPGOverview posture summary', () => {
+  const withSpec = (name: string, spec: { instances: number } & Record<string, unknown>) => ({ ...cluster('pg', name), spec })
+  const count = (html: string, label: string) => html.match(new RegExp(`${label}</span><span[^>]*>([^<]+)<`))?.[1]
+
+  it('counts what CNPG is configured to do above the table', () => {
+    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })]))
+    expect(count(html, 'No backup destination')).toBe('2')
+    expect(count(html, 'Single instance')).toBe('2')
+    expect(count(html, 'Have a destination')).toBe('0')
+    expect(count(html, 'No WAL archiving')).toBe('0')
+  })
+
+  it('narrows the table to one posture value, with a chip to clear it', () => {
+    const html = render(response([withSpec('bare', { instances: 3 }), withSpec('intree', { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } })]), 'protect=none')
+    expect(html).toContain('bare')
+    expect(html).not.toContain('>intree<')
+    expect(html).toContain('Posture: No backup destination')
+    expect(html).toMatch(/aria-pressed="true"[^>]*><span>No backup destination/)
+  })
+
+  it('shows counts as lower bounds when Clusters were partly read', () => {
+    const html = render(response([withSpec('a', { instances: 1 }), withSpec('b', { instances: 1 })], { state: 'partial', allowedNamespaces: ['pg'] } as CNPGKindCoverage))
+    expect(count(html, 'Single instance')).toBe('≥2')
+  })
+
+  it('ignores an unknown protect value', () => {
+    const html = render(response([withSpec('bare', { instances: 3 }), withSpec('intree', { instances: 3, backup: { barmanObjectStore: { destinationPath: 's3://b' } } })]), 'protect=bogus')
+    expect(html).toContain('bare')
+    expect(html).toContain('intree')
+    expect(html).not.toContain('Posture:')
+  })
+})
