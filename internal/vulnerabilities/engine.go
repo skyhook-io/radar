@@ -575,17 +575,10 @@ func (m matcher) listed(workloads []WorkloadRef, n int) []WorkloadRef {
 	if m.f.Workload != nil {
 		workloads = slices.Clone(workloads)
 		slices.SortStableFunc(workloads, func(a, b WorkloadRef) int {
-			return cmp.Compare(boolRank(!m.wanted(a)), boolRank(!m.wanted(b)))
+			return compareBool(!m.wanted(a), !m.wanted(b))
 		})
 	}
 	return workloads[:min(len(workloads), n)]
-}
-
-func boolRank(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 func (j *rollup) sortedImages() []*imageAgg {
