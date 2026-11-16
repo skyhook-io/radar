@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
-	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -29,9 +28,5 @@ func TestHelmProjectionRetainsLabelledNonWorkloadKinds(t *testing.T) {
 	}
 	for _, obj := range []struct{ group, kind string }{{"", "ConfigMap"}, {"example.io", "Widget"}} {
 		assertNodeRole(t, tree, ResourceRef{Group: obj.group, Kind: obj.kind, Namespace: "demo", Name: "settings"}, RoleDeclared)
-	}
-	family := relations.NewView(session.(relations.Session), ownership.Unrestricted()).Referrers(relations.FluxHelmOrigins, release.Ref, hr)
-	if len(family.Referrers) != 2 {
-		t.Logf("cutover blocked: the tree retains labelled ConfigMap and Widget roots; FluxHelmOrigins returns %d of them", len(family.Referrers))
 	}
 }

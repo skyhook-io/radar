@@ -271,7 +271,6 @@ type appWorkload struct {
 	// declaration (authoritative, portable). Resolver input, not on the wire.
 	appAnnotation string
 	jobSetParent  string
-	relationships *appRelationships
 }
 
 type appBatchSummary struct {
@@ -794,7 +793,6 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				Namespace:        ns,
 				Name:             name,
 				WorkloadClass:    classifyWorkload(kind, rels),
-				relationships:    rels,
 				Image:            image,
 				Version:          imageutil.ImageTag(image),
 				AppVersion:       lbls["app.kubernetes.io/version"],
