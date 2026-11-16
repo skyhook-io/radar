@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Play } from 'lucide-react'
-import { ConfirmDialog, Tooltip, type ResourceRef, type VeleroScheduleReading } from '@skyhook-io/k8s-ui'
+import { ConfirmDialog, Tooltip, veleroRetentionText, type ResourceRef, type VeleroScheduleReading } from '@skyhook-io/k8s-ui'
 import { useRadarFeature } from '../../api/client'
 import { useVeleroBackupNow } from '../../api/velero'
 import { VELERO_GROUP } from './routes'
@@ -11,15 +11,6 @@ const MAX_LABEL_VALUE = 63
 /** The name Velero's CLI gives a backup from a schedule: <schedule>-<UTC timestamp>. */
 function backupNameAt(schedule: string, at: Date): string {
   return `${schedule}-${at.toISOString().replace(/[-:T]/g, '').slice(0, 14)}`
-}
-
-/** A Go duration as people say it: "720h0m0s" is "30 days". Anything else is shown as written. */
-function retentionText(ttl: string): string {
-  const m = /^(\d+)h(\d+)m(\d+)s$/.exec(ttl)
-  if (!m || m[2] !== '0' || m[3] !== '0') return ttl
-  const hours = Number(m[1])
-  if (hours % 24 === 0) return `${hours / 24} ${hours === 24 ? 'day' : 'days'}`
-  return `${hours} ${hours === 1 ? 'hour' : 'hours'}`
 }
 
 function list(values: unknown): string[] {
@@ -119,7 +110,7 @@ export function VeleroBackupNow({ schedule, reading, onNavigate }: {
             <dt className="text-theme-text-tertiary">Stored in</dt>
             <dd className="break-words">{location ? location : 'The default storage location'}</dd>
             <dt className="text-theme-text-tertiary">Kept for</dt>
-            <dd>{template.ttl ? retentionText(template.ttl) : "The Velero server's default (30 days unless it was changed)"}</dd>
+            <dd>{template.ttl ? veleroRetentionText(template.ttl) : "The Velero server's default (30 days unless it was changed)"}</dd>
           </dl>
           <p className="text-theme-text-secondary">
             The schedule's next run waits while this backup is queued or running.

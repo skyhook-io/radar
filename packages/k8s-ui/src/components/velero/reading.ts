@@ -208,6 +208,15 @@ export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: st
   return { text: formatRelativeAgeTime(runs.newestCompleted.completed ?? runs.newestCompleted.ranAt), run: runs.newestCompleted }
 }
 
+/** A retention as people say it: Velero writes Go durations, so "720h0m0s" is "30 days". Anything else shows as written. */
+export function veleroRetentionText(ttl: string): string {
+  const m = /^(\d+)h(\d+)m(\d+)s$/.exec(ttl)
+  if (!m || m[2] !== '0' || m[3] !== '0') return ttl
+  const hours = Number(m[1])
+  if (hours > 0 && hours % 24 === 0) return `${hours / 24} ${hours === 24 ? 'day' : 'days'}`
+  return `${hours} ${hours === 1 ? 'hour' : 'hours'}`
+}
+
 /** A validation frequency in the shared duration tiers ("1m", "12h"). */
 export function veleroFrequencyText(seconds: number): string {
   return formatDuration(seconds * 1000)

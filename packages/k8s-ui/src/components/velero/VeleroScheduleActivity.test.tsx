@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { VeleroScheduleActivity } from './VeleroScheduleActivity'
-import { veleroMomentText, veleroScheduleReasonText, veleroScheduleTone } from './reading'
+import { veleroMomentText, veleroScheduleReasonText, veleroScheduleTone, veleroRetentionText } from './reading'
 import type { VeleroScheduleReading } from './types'
 
 const ago = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
@@ -67,4 +67,11 @@ describe('VeleroScheduleActivity', () => {
     expect(veleroMomentText(ahead(125))).toBe('in 2h')
     expect(veleroMomentText(ago(5))).toBe('5m ago')
   })
+})
+
+it('says retention the way people do', () => {
+  expect(veleroRetentionText('720h0m0s')).toBe('30 days')
+  expect(veleroRetentionText('24h0m0s')).toBe('1 day')
+  expect(veleroRetentionText('36h0m0s')).toBe('36 hours')
+  expect(veleroRetentionText('1h30m0s')).toBe('1h30m0s')
 })

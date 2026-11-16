@@ -10,6 +10,7 @@ import {
   getScheduleValidationErrors,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
+import { veleroRetentionText } from '../../velero/reading'
 import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroScheduleRendererProps {
@@ -98,7 +99,7 @@ export function VeleroScheduleRenderer({ data, onNavigate, activity }: VeleroSch
             } />
           )}
           {template.ttl && (
-            <Property label="TTL" value={template.ttl} />
+            <Property label="Kept for" value={veleroRetentionText(template.ttl)} />
           )}
           {templateIncludedNs.length > 0 && (
             <Property label="Included Namespaces" value={
