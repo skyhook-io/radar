@@ -10,9 +10,10 @@ export interface WorkspaceInvalidation {
 
 export const workspaceInvalidations: WorkspaceInvalidation[] = [
   { id: 'cnpg', matches: e => !!e.group?.endsWith('.cnpg.io'), queryKey: ['cnpg', 'workspace'] },
-  // Pods coming and going move the pipeline's counts. Status churn doesn't
-  // trigger a full pod rescan; the mounted page polls for that.
-  { id: 'logging', matches: e => e.group === 'logging.banzaicloud.io' || (e.kind === 'Pod' && !e.group && e.operation !== 'update'), queryKey: ['logging', 'pipeline'] },
+  // A running pod going away moves the pipeline's counts. A new pod is Pending
+  // (the counts take running pods only) and status churn would rescan every
+  // pod per batch; the mounted page polls for both.
+  { id: 'logging', matches: e => e.group === 'logging.banzaicloud.io' || (e.kind === 'Pod' && !e.group && e.operation === 'delete'), queryKey: ['logging', 'pipeline'] },
 ]
 
 export function pendingInvalidations(events: WorkspaceEvent[]): WorkspaceInvalidation[] {

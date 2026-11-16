@@ -18,12 +18,13 @@ describe('workspace invalidations', () => {
   })
   it('refreshes the logging pipeline on Logging operator and pod changes', () => {
     expect(pendingInvalidations([{ kind: 'ClusterFlow', group: 'logging.banzaicloud.io' }]).map(d => d.id)).toEqual(['logging'])
-    expect(pendingInvalidations([{ kind: 'Pod', group: '', operation: 'add' }]).map(d => d.id)).toEqual(['logging'])
+    // A new pod is Pending, which the counts leave out until it runs; the page polls for that.
+    expect(pendingInvalidations([{ kind: 'Pod', group: '', operation: 'add' }])).toEqual([])
     expect(pendingInvalidations([{ kind: 'Pod', group: '', operation: 'delete' }])[0].queryKey).toEqual(['logging', 'pipeline'])
     // Pod status churn alone doesn't rescan every pod; the page polls for it.
     expect(pendingInvalidations([{ kind: 'Pod', group: '', operation: 'update' }])).toEqual([])
   })
   it('lists two workspaces changed in one batch', () => {
-    expect(pendingInvalidations([{ kind: 'Pod', operation: 'add' }, { kind: 'Cluster', group: 'postgresql.cnpg.io' }]).map(d => d.id)).toEqual(['cnpg', 'logging'])
+    expect(pendingInvalidations([{ kind: 'Pod', operation: 'delete' }, { kind: 'Cluster', group: 'postgresql.cnpg.io' }]).map(d => d.id)).toEqual(['cnpg', 'logging'])
   })
 })
