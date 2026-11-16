@@ -6,10 +6,58 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// WorkerPoolProvisionGrace covers the controller's next pass: it creates the
+// workerPoolProvisionGrace covers the controller's next pass: it creates the
 // worker Deployment after writing the resolved classes, and records the
 // Deployment's selector in status only on the pass after that.
-const WorkerPoolProvisionGrace = 10 * time.Minute
+const workerPoolProvisionGrace = 10 * time.Minute
+
+// WorkerPoolClass is one sandbox class of a WorkerPool and its Resolved
+// condition, the pool's only condition.
+type WorkerPoolClass struct {
+	Name string
+	// Resolved is false when the class has no Resolved condition yet.
+	Resolved                bool
+	Status, Reason, Message string
+	ObservedGeneration      int64
+	// Stale: recorded for an older generation, so the controller has not
+	// judged the current spec yet.
+	Stale        bool
+	TransitionAt time.Time // zero when unrecorded
+}
+
+// WorkerPoolClasses reads status.sandboxClasses[] and each class's Resolved
+// condition. Mirrored by workerPoolResolvedConditions in k8s-ui.
+func WorkerPoolClasses(u *unstructured.Unstructured) []WorkerPoolClass {
+	raw, _, _ := unstructured.NestedSlice(u.Object, "status", "sandboxClasses")
+	generation := u.GetGeneration()
+	out := make([]WorkerPoolClass, 0, len(raw))
+	for _, rc := range raw {
+		class, _ := rc.(map[string]any)
+		c := WorkerPoolClass{}
+		c.Name, _ = class["name"].(string)
+		list, _ := class["conditions"].([]any)
+		for _, rawCond := range list {
+			cond, _ := rawCond.(map[string]any)
+			if cond["type"] != "Resolved" {
+				continue
+			}
+			c.Resolved = true
+			c.Status, _ = cond["status"].(string)
+			c.Reason, _ = cond["reason"].(string)
+			c.Message, _ = cond["message"].(string)
+			c.ObservedGeneration, _, _ = unstructured.NestedInt64(cond, "observedGeneration")
+			c.Stale = converging(generation, c.ObservedGeneration)
+			if ts, _ := cond["lastTransitionTime"].(string); ts != "" {
+				if at, err := time.Parse(time.RFC3339, ts); err == nil {
+					c.TransitionAt = at
+				}
+			}
+			break
+		}
+		out = append(out, c)
+	}
+	return out
+}
 
 // SubstrateWorkerPool returns the health of an Agent Substrate WorkerPool
 // (ate.dev) from its per-class Resolved conditions and its desired and ready
@@ -17,12 +65,7 @@ const WorkerPoolProvisionGrace = 10 * time.Minute
 // status.sandboxClasses[] and records the generation it was computed for.
 // Mirrored by getWorkerPoolStatus in k8s-ui; testdata/substrate_workerpool.json
 // pins both.
-func SubstrateWorkerPool(u *unstructured.Unstructured) Verdict {
-	return SubstrateWorkerPoolAt(u, time.Now())
-}
-
-// SubstrateWorkerPoolAt is SubstrateWorkerPool judged at now.
-func SubstrateWorkerPoolAt(u *unstructured.Unstructured, now time.Time) Verdict {
+func SubstrateWorkerPool(u *unstructured.Unstructured, now time.Time) Verdict {
 	if u == nil {
 		return Verdict{Level: LevelUnknown, Reason: "Not reported"}
 	}
@@ -30,46 +73,21 @@ func SubstrateWorkerPoolAt(u *unstructured.Unstructured, now time.Time) Verdict 
 		return Verdict{Level: LevelDegraded, Reason: "Terminating"}
 	}
 	status, hasStatus, _ := unstructured.NestedMap(u.Object, "status")
-	classes, _, _ := unstructured.NestedSlice(u.Object, "status", "sandboxClasses")
 	desired, hasDesired, _ := unstructured.NestedInt64(u.Object, "spec", "replicas")
 	ready, _, _ := unstructured.NestedInt64(u.Object, "status", "readyReplicas")
 	pods, _, _ := unstructured.NestedInt64(u.Object, "status", "replicas")
-	generation := u.GetGeneration()
+	classes := WorkerPoolClasses(u)
 
-	type resolved struct {
-		status, reason string
-		stale, found   bool
-	}
-	conds := make([]resolved, 0, len(classes))
-	for _, raw := range classes {
-		class, _ := raw.(map[string]any)
-		r := resolved{}
-		list, _ := class["conditions"].([]any)
-		for _, rc := range list {
-			cond, _ := rc.(map[string]any)
-			if cond["type"] != "Resolved" {
-				continue
-			}
-			r.found = true
-			r.status, _ = cond["status"].(string)
-			r.reason, _ = cond["reason"].(string)
-			if observed, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok && observed > 0 && generation > 0 && observed < generation {
-				r.stale = true
-			}
-		}
-		conds = append(conds, r)
-	}
-
-	for _, r := range conds {
-		if r.status != "False" {
+	for _, c := range classes {
+		if c.Status != "False" {
 			continue
 		}
-		reason := r.reason
+		reason := c.Reason
 		if reason == "" {
 			reason = "Unresolved"
 		}
 		// Reported for an older spec: the controller has not judged the current one.
-		if r.stale {
+		if c.Stale {
 			return Verdict{Level: LevelDegraded, Reason: reason}
 		}
 		// With no worker ready, nothing can host the pool's actors. Ready
@@ -86,11 +104,11 @@ func SubstrateWorkerPoolAt(u *unstructured.Unstructured, now time.Time) Verdict 
 		return Verdict{Level: LevelDegraded, Reason: "Scaling down"}
 	case hasDesired && desired == 0:
 		return Verdict{Level: LevelNeutral, Reason: "Scaled to zero"}
-	case !hasStatus || len(status) == 0 || len(conds) == 0:
+	case !hasStatus || len(status) == 0 || len(classes) == 0:
 		return Verdict{Level: LevelDegraded, Reason: "Pending"}
 	}
-	for _, r := range conds {
-		if r.stale || r.status != "True" {
+	for _, c := range classes {
+		if c.Stale || c.Status != "True" {
 			return Verdict{Level: LevelDegraded, Reason: "Resolving"}
 		}
 	}
@@ -105,10 +123,10 @@ func SubstrateWorkerPoolAt(u *unstructured.Unstructured, now time.Time) Verdict 
 
 // SubstrateWorkerPoolStalled reports a pool that wants workers, has every class
 // resolved on its current generation, and still has no worker Deployment past
-// WorkerPoolProvisionGrace, with the time the last class resolved (or the
-// pool's creation). The controller only logs a Deployment or ServiceAccount
-// create the API server rejects, so an empty status.selector with no worker
-// Pods is the only trace it leaves.
+// workerPoolProvisionGrace, with the time the last class resolved (or the
+// pool's creation). The controller only logs a Deployment or ServiceAccount create the
+// API server rejects, so an empty status.selector with no worker Pods is the
+// only trace it leaves.
 func SubstrateWorkerPoolStalled(u *unstructured.Unstructured, now time.Time) (time.Time, bool) {
 	if u == nil || u.GetDeletionTimestamp() != nil {
 		return time.Time{}, false
@@ -116,36 +134,20 @@ func SubstrateWorkerPoolStalled(u *unstructured.Unstructured, now time.Time) (ti
 	desired, _, _ := unstructured.NestedInt64(u.Object, "spec", "replicas")
 	selector, _, _ := unstructured.NestedString(u.Object, "status", "selector")
 	pods, _, _ := unstructured.NestedInt64(u.Object, "status", "replicas")
-	classes, _, _ := unstructured.NestedSlice(u.Object, "status", "sandboxClasses")
+	classes := WorkerPoolClasses(u)
 	if desired <= 0 || selector != "" || pods > 0 || len(classes) == 0 {
 		return time.Time{}, false
 	}
 	since := u.GetCreationTimestamp().Time
-	generation := u.GetGeneration()
-	for _, raw := range classes {
-		class, _ := raw.(map[string]any)
-		conds, _ := class["conditions"].([]any)
-		resolved := false
-		for _, rawCond := range conds {
-			cond, _ := rawCond.(map[string]any)
-			if cond["type"] != "Resolved" || cond["status"] != "True" {
-				continue
-			}
-			if observed, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok && generation > 0 && observed > 0 && observed < generation {
-				continue
-			}
-			resolved = true
-			if ts, _ := cond["lastTransitionTime"].(string); ts != "" {
-				if at, err := time.Parse(time.RFC3339, ts); err == nil && at.After(since) {
-					since = at
-				}
-			}
-		}
-		if !resolved {
+	for _, c := range classes {
+		if c.Status != "True" || c.Stale {
 			return time.Time{}, false
 		}
+		if c.TransitionAt.After(since) {
+			since = c.TransitionAt
+		}
 	}
-	if since.IsZero() || now.Sub(since) < WorkerPoolProvisionGrace {
+	if since.IsZero() || now.Sub(since) < workerPoolProvisionGrace {
 		return time.Time{}, false
 	}
 	return since, true

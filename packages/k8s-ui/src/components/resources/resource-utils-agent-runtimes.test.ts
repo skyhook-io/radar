@@ -137,29 +137,9 @@ describe('Agent Substrate WorkerPool status', () => {
     expect(getAgentRuntimeStatus(pool())?.message).toBeUndefined()
   })
 
-  it('reads the nested Resolved condition by ready workers', () => {
-    expect(getWorkerPoolStatus(pool())).toMatchObject({ text: 'Ready', level: 'healthy' })
-    expect(getWorkerPoolStatus(pool({ resolved: 'False', reason: 'SandboxConfigNotFound', ready: 0 })))
-      .toMatchObject({ text: 'SandboxConfigNotFound', level: 'unhealthy' })
-    expect(getWorkerPoolStatus(pool({ resolved: 'False', reason: 'SandboxConfigNotFound', ready: 2 })))
-      .toMatchObject({ level: 'alert' })
-    // Pods that exist but are not ready are not capacity.
-    expect(getWorkerPoolStatus(pool({ resolved: 'False', reason: 'SandboxConfigNotFound', ready: 0, pods: 3 })))
-      .toMatchObject({ level: 'unhealthy' })
-  })
-
-  it('does not trust a condition reported for an older generation', () => {
-    expect(getWorkerPoolStatus(pool({ generation: 2, observed: 1 }))).toMatchObject({ text: 'Resolving', level: 'degraded' })
+  it('says a failure was reported for an older generation', () => {
     const staleFailure = pool({ generation: 2, observed: 1, resolved: 'False', reason: 'SandboxConfigNotFound', ready: 0 })
-    expect(getWorkerPoolStatus(staleFailure)).toMatchObject({ text: 'SandboxConfigNotFound', level: 'degraded' })
     expect(getAgentRuntimeStatus(staleFailure)?.message).toMatch(/^Reported for generation 1; the pool is now at generation 2\./)
-  })
-
-  it('separates requested size from observed population', () => {
-    expect(getWorkerPoolStatus(pool({ desired: 0, ready: 0, pods: 0 }))).toMatchObject({ text: 'Scaled to zero', level: 'neutral' })
-    expect(getWorkerPoolStatus(pool({ desired: 0, ready: 1, pods: 2 }))).toMatchObject({ text: 'Scaling down', level: 'degraded' })
-    expect(getWorkerPoolStatus(pool({ desired: 3, ready: 1 }))).toMatchObject({ text: 'Scaling', level: 'degraded' })
-    expect(getWorkerPoolStatus({ apiVersion: 'ate.dev/v1', spec: { replicas: 3 } })).toMatchObject({ text: 'Pending' })
   })
 
   it('shows a config switch the controller is still confirming', () => {

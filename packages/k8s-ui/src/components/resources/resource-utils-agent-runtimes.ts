@@ -6,8 +6,8 @@ import { FATAL_WAITING_REASONS, formatDuration, healthColors } from './resource-
 import { isApiGroup } from './resource-utils-cnpg'
 
 export const SUBSTRATE_GROUP = 'ate.dev'
-export const AGENT_SANDBOX_GROUP = 'agents.x-k8s.io'
-export const AGENT_SANDBOX_EXTENSIONS_GROUP = 'extensions.agents.x-k8s.io'
+const AGENT_SANDBOX_GROUP = 'agents.x-k8s.io'
+const AGENT_SANDBOX_EXTENSIONS_GROUP = 'extensions.agents.x-k8s.io'
 
 // Set by Substrate's controller on every worker Pod of a WorkerPool. Keys under
 // ate.dev are reserved for Substrate's controllers: WorkerPool validation
@@ -34,15 +34,6 @@ function findCondition(conditions: unknown, type: string): any | undefined {
   return Array.isArray(conditions) ? conditions.find((c: any) => c?.type === type) : undefined
 }
 
-// The controller refuses to delete the Pod it tracks for the Sandbox when the
-// Sandbox does not own it. Ready keeps its suspension reason; Suspended says why.
-function isSuspensionRefused(conditions: unknown): boolean {
-  const ready = findCondition(conditions, 'Ready')
-  const suspended = findCondition(conditions, 'Suspended')
-  return ready?.status === 'False' && ready?.reason === 'SandboxSuspended'
-    && suspended?.status === 'False' && suspended?.reason === 'PodNotOwned'
-}
-
 const SUSPENSION_BLOCKED = 'Suspension blocked'
 
 // The Pod the controller looks for; mirrors pkg/health sandboxPodName.
@@ -67,6 +58,7 @@ function count(value: unknown): number | undefined {
 // AGENT SUBSTRATE — WorkerPool
 // ============================================================================
 
+// Mirrors pkg/health WorkerPoolClasses.
 function workerPoolResolvedConditions(resource: any): { condition: any; stale: boolean }[] {
   const classes: any[] = Array.isArray(resource?.status?.sandboxClasses) ? resource.status.sandboxClasses : []
   const generation = count(resource?.metadata?.generation)
@@ -77,30 +69,28 @@ function workerPoolResolvedConditions(resource: any): { condition: any; stale: b
   })
 }
 
-// Mirrors pkg/health WorkerPoolProvisionGrace.
+// Mirrors pkg/health workerPoolProvisionGrace.
 const WORKER_POOL_PROVISION_GRACE_MS = 10 * 60 * 1000
 
 /**
  * Mirrors pkg/health SubstrateWorkerPoolStalled: a pool that wants workers,
  * has every class resolved on its current generation, and still has no worker
- * Deployment past the grace period. Returns when the last class resolved (or
- * the pool's creation), or undefined.
+ * Deployment past the grace period.
  */
-function workerPoolStalledSince(resource: any, now: number): number | undefined {
-  if (resource?.metadata?.deletionTimestamp) return undefined
+function workerPoolStalled(resource: any, now: number): boolean {
+  if (resource?.metadata?.deletionTimestamp) return false
   const desired = count(resource?.spec?.replicas) ?? 0
   const pods = count(resource?.status?.replicas) ?? 0
   const resolved = workerPoolResolvedConditions(resource)
-  if (desired <= 0 || resource?.status?.selector || pods > 0 || resolved.length === 0) return undefined
+  if (desired <= 0 || resource?.status?.selector || pods > 0 || resolved.length === 0) return false
   const created = Date.parse(resource?.metadata?.creationTimestamp ?? '')
   let since = Number.isNaN(created) ? 0 : created
   for (const { condition, stale } of resolved) {
-    if (condition?.status !== 'True' || stale) return undefined
+    if (condition?.status !== 'True' || stale) return false
     const at = Date.parse(condition.lastTransitionTime ?? '')
     if (!Number.isNaN(at) && at > since) since = at
   }
-  if (since === 0 || now - since < WORKER_POOL_PROVISION_GRACE_MS) return undefined
-  return since
+  return since !== 0 && now - since >= WORKER_POOL_PROVISION_GRACE_MS
 }
 
 /**
@@ -134,7 +124,7 @@ export function getWorkerPoolStatus(resource: any, now = Date.now()): StatusBadg
   if (!status || resolved.length === 0) return badge('Pending', 'degraded')
   if (resolved.some(r => r.stale || r.condition?.status !== 'True')) return badge('Resolving', 'degraded')
   if (desired !== undefined && ready >= desired) return badge('Ready', 'healthy')
-  if (workerPoolStalledSince(resource, now) !== undefined) return badge('Provisioning stalled', 'unhealthy')
+  if (workerPoolStalled(resource, now)) return badge('Provisioning stalled', 'unhealthy')
   return badge('Scaling', 'degraded')
 }
 
@@ -165,7 +155,8 @@ function workerPoolStatusMessage(resource: any, now = Date.now()): string | unde
   return undefined
 }
 
-export function getWorkerPoolWorkers(resource: any): string {
+/** Ready of desired replicas ("3/5"), for a WorkerPool's workers or a SandboxWarmPool's sandboxes. */
+export function getReadyOfDesired(resource: any): string {
   const desired = count(resource?.spec?.replicas)
   const ready = count(resource?.status?.readyReplicas) ?? 0
   return desired === undefined ? `${ready}` : `${ready}/${desired}`
@@ -235,7 +226,7 @@ function sandboxReadyStatus(resource: any, isClaim: boolean): StatusBadge {
     // does not own.
     const suspended = findCondition(conditions, 'Suspended')
     if (isClaim || suspended?.status === 'True') return badge('Suspended', 'neutral')
-    if (isSuspensionRefused(conditions)) return badge(SUSPENSION_BLOCKED, 'alert')
+    if (suspended?.status === 'False' && suspended?.reason === 'PodNotOwned') return badge(SUSPENSION_BLOCKED, 'alert')
     return badge('Suspending', 'degraded')
   }
   if (SANDBOX_SETTLED_REASONS[reason]) return badge(SANDBOX_SETTLED_REASONS[reason], 'neutral')
@@ -305,12 +296,6 @@ export function getSandboxWarmPoolStatus(resource: any): StatusBadge {
   return ready >= desired ? badge('Ready', 'healthy') : badge('Warming', 'degraded')
 }
 
-export function getSandboxWarmPoolReady(resource: any): string {
-  const desired = count(resource?.spec?.replicas)
-  const ready = count(resource?.status?.readyReplicas) ?? 0
-  return desired === undefined ? `${ready}` : `${ready}/${desired}`
-}
-
 export function getSandboxWarmPoolTemplate(resource: any): string {
   return resource?.spec?.sandboxTemplateRef?.name || '-'
 }
@@ -364,7 +349,7 @@ export function getAgentRuntimeColumnValue(resource: any, column: string): strin
   const kind = resource?.kind
   if (kind === 'WorkerPool' && isSubstrateResource(resource)) {
     switch (column) {
-      case 'workers': return getWorkerPoolWorkers(resource)
+      case 'workers': return getReadyOfDesired(resource)
       case 'sandboxClass': return getWorkerPoolSandboxClass(resource)
       case 'sandboxConfig': return getWorkerPoolSandboxConfig(resource)
     }
@@ -382,7 +367,7 @@ export function getAgentRuntimeColumnValue(resource: any, column: string): strin
     }
   } else if (kind === 'SandboxWarmPool' && isAgentSandboxExtensionResource(resource)) {
     switch (column) {
-      case 'warmReady': return getSandboxWarmPoolReady(resource)
+      case 'warmReady': return getReadyOfDesired(resource)
       case 'template': return getSandboxWarmPoolTemplate(resource)
     }
   }

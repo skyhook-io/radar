@@ -35,7 +35,7 @@ func TestSubstrateWorkerPoolVectors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			v := SubstrateWorkerPoolAt(&tc.Object, now)
+			v := SubstrateWorkerPool(&tc.Object, now)
 			if v.Level != tc.Level || v.Reason != tc.Text {
 				t.Fatalf("got %+v, want level=%s text=%s", v, tc.Level, tc.Text)
 			}
@@ -44,5 +44,5 @@ func TestSubstrateWorkerPoolVectors(t *testing.T) {
 }
 
 // defaultVectorNow is five minutes after the vectors' recorded transitions,
-// inside WorkerPoolProvisionGrace. The UI's test uses the same default.
+// inside workerPoolProvisionGrace. The UI's test uses the same default.
 const defaultVectorNow = "2026-11-14T10:05:00Z"

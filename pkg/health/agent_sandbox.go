@@ -142,7 +142,7 @@ func ReadAgentSandbox(u *unstructured.Unstructured) AgentSandboxReadiness {
 		r.Mirrored = isClaim && !sandboxClaimOwnReasons[ready.reason]
 		return r
 	}
-	if generation := u.GetGeneration(); generation > 0 && ready.observedGeneration > 0 && ready.observedGeneration < generation {
+	if converging(u.GetGeneration(), ready.observedGeneration) {
 		return progress("Updating", ready)
 	}
 	switch ready.status {

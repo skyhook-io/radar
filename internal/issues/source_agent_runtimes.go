@@ -66,46 +66,34 @@ func detectSandboxSuspensionBlocked(gvr schema.GroupVersionResource, kind string
 // worker Deployment the pool owns, which has Issues of its own; a pool whose
 // Deployment never appears is reported here, since nothing else would.
 func detectWorkerPoolIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
-	classes, _, _ := unstructured.NestedSlice(u.Object, "status", "sandboxClasses")
 	desired, _, _ := unstructured.NestedInt64(u.Object, "spec", "replicas")
 	ready, _, _ := unstructured.NestedInt64(u.Object, "status", "readyReplicas")
-	generation := u.GetGeneration()
 	var out []Issue
-	for _, raw := range classes {
-		class, ok := raw.(map[string]any)
-		if !ok {
+	for _, c := range health.WorkerPoolClasses(u) {
+		if c.Status != "False" {
 			continue
 		}
-		className, _ := class["name"].(string)
-		conds, _ := class["conditions"].([]any)
-		for _, rawCond := range conds {
-			cond, ok := rawCond.(map[string]any)
-			if !ok || cond["type"] != "Resolved" || cond["status"] != "False" {
-				continue
-			}
-			reason, _ := cond["reason"].(string)
-			if reason == "" {
-				reason = "Resolved=False"
-			}
-			message, _ := cond["message"].(string)
-			// With no worker ready, nothing can host the pool's actors. Ready
-			// workers keep running on the last resolved config.
-			severity := SeverityWarning
-			if desired > 0 && ready == 0 {
-				severity = SeverityCritical
-			}
-			// A spec edit is not a recovery: keep a failure reported for an
-			// older generation, qualified, until the controller judges the new one.
-			if observed, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok && generation > 0 && observed > 0 && observed < generation {
-				severity = SeverityWarning
-				message = fmt.Sprintf("Reported for generation %d; the pool is now at generation %d. %s", observed, generation, message)
-			}
-			if className != "" {
-				message = fmt.Sprintf("Sandbox class %s: %s", className, message)
-			}
-			transitionAt, transitionKnown := conditionTransitionTime(cond)
-			out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, reason, message, transitionAt, transitionKnown, className, u.GetCreationTimestamp().Time))
+		reason := c.Reason
+		if reason == "" {
+			reason = "Resolved=False"
 		}
+		message := c.Message
+		// With no worker ready, nothing can host the pool's actors. Ready
+		// workers keep running on the last resolved config.
+		severity := SeverityWarning
+		if desired > 0 && ready == 0 {
+			severity = SeverityCritical
+		}
+		// A spec edit is not a recovery: keep a failure reported for an
+		// older generation, qualified, until the controller judges the new one.
+		if c.Stale {
+			severity = SeverityWarning
+			message = fmt.Sprintf("Reported for generation %d; the pool is now at generation %d. %s", c.ObservedGeneration, u.GetGeneration(), message)
+		}
+		if c.Name != "" {
+			message = fmt.Sprintf("Sandbox class %s: %s", c.Name, message)
+		}
+		out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, reason, message, c.TransitionAt, !c.TransitionAt.IsZero(), c.Name, u.GetCreationTimestamp().Time))
 	}
 	if len(out) == 0 {
 		if issue, ok := workerPoolDeploymentMissing(gvr, kind, u, desired, time.Now()); ok {
