@@ -199,6 +199,24 @@ func TestWalkNeighborhoodCustomPodGroupIsNotASyntheticGroup(t *testing.T) {
 	}
 }
 
+// A Node reached from something it owns carries its instance type, as the
+// root Node does.
+func TestWalkNeighborhoodNeighborNodeCarriesItsInstanceType(t *testing.T) {
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-a", UID: "node-a", Labels: map[string]string{"node.kubernetes.io/instance-type": "m6a.large"}}}, "", "Node")
+	cni := projectionCR("vpcresources.k8s.aws", "CNINode", "", "node-a", map[string]any{})
+	cni.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "Node", Name: "node-a", UID: "node-a"}})
+	sub := walkTestNeighborhood(t, newProjectionSession(t, node, cni), cni, NeighborhoodOptions{})
+	for _, n := range sub.Nodes {
+		if n.Kind == KindNode && n.Name == "node-a" {
+			if n.Data["instanceType"] != "m6a.large" {
+				t.Fatalf("node data = %+v", n.Data)
+			}
+			return
+		}
+	}
+	t.Fatalf("the owning Node is missing: %+v", sub.Nodes)
+}
+
 func TestWalkNeighborhoodOwnerChainStopsBeforeForbiddenReplicaSet(t *testing.T) {
 	controller := true
 	dep := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "dep", Namespace: "shop", UID: "dep"}}, "apps", "Deployment")

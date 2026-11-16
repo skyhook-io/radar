@@ -297,5 +297,8 @@ func neighborhoodStandaloneNode(r resourceid.Ref, obj runtime.Object, node Node)
 	if meta, err := apimeta.Accessor(obj); err == nil {
 		node.Data["labels"] = meta.GetLabels()
 	}
+	if n, ok := obj.(*corev1.Node); ok {
+		node.Data["instanceType"] = n.Labels["node.kubernetes.io/instance-type"]
+	}
 	return node
 }
