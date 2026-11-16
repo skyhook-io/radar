@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, edgeCarriesPort, edgesOnPort, mergedEdgePort, selectedEdgeMatcher, verdictChoices, warningRetries, warningBannerTitle, emptyWarningHeadline, protocolLabel, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -712,5 +712,19 @@ describe('flows warning kinds', () => {
   it('does not call a cluster warning a fetch failure or missing traffic', () => {
     expect(emptyWarningHeadline('cluster')).not.toBe(emptyWarningHeadline('transient'))
     expect(warningBannerTitle('cluster')).not.toBe(warningBannerTitle('transient'))
+  })
+})
+
+describe('protocolLabel', () => {
+  it('names the application and transport protocols when they differ', () => {
+    expect(protocolLabel('HTTP', 'tcp')).toBe('HTTP / tcp')
+  })
+  it('names a protocol once when a mesh reports it as both', () => {
+    expect(protocolLabel('HTTP', 'http')).toBe('HTTP')
+    expect(protocolLabel('GRPC', 'grpc')).toBe('GRPC')
+  })
+  it('falls back to the transport protocol', () => {
+    expect(protocolLabel(undefined, 'tcp')).toBe('tcp')
+    expect(protocolLabel('', 'udp')).toBe('udp')
   })
 })
