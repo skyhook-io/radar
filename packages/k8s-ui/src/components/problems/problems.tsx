@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import type { HealthLevel } from '../resources/resource-utils'
 import type { ResourceRef } from '../../types/core'
 import { healthToSeverity } from '../../utils/badge-colors'
-import { StatusDot, toneTextClass } from '../ui/status-tone'
+import { toneTextClass } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { AlertBanner } from '../ui/drawer-components'
 import { FoldSection } from '../ui/FoldSection'
@@ -152,16 +152,11 @@ export function ProblemList({ problems, rootKind, onNavigate }: { problems: Work
   return (
     <ul className="space-y-2">
       {problems.map((p) => (
-        <li key={p.id} className="flex items-start gap-2 text-sm">
-          <span className="mt-1.5 shrink-0">
-            <StatusDot tone={p.tone} size="sm" />
-          </span>
-          <div className="min-w-0">
-            <div className={clsx('font-medium break-words', toneTextClass(p.tone))}>{p.title}</div>
-            {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
-            {p.rawDetail && <FoldSection title={p.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
-            <ProblemMeta problem={p} rootKind={rootKind} onNavigate={onNavigate} />
-          </div>
+        <li key={p.id} className="min-w-0 text-sm">
+          <div className={clsx('font-medium break-words', toneTextClass(p.tone))}>{p.title}</div>
+          {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
+          {p.rawDetail && <FoldSection title={p.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
+          <ProblemMeta problem={p} rootKind={rootKind} onNavigate={onNavigate} />
         </li>
       ))}
     </ul>

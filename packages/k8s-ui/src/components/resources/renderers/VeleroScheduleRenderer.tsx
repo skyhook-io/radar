@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Clock, Archive } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getScheduleStatus,
   getScheduleCron,
@@ -31,6 +31,7 @@ export function VeleroScheduleRenderer({ data, onNavigate, activity }: VeleroSch
   const isPaused = getSchedulePaused(data)
   const template = getScheduleTemplate(data)
   const validationErrors = getScheduleValidationErrors(data)
+  const issueShown = useOperationalIssuesShown()
 
   const templateIncludedNs = template.includedNamespaces || []
   const templateExcludedNs = template.excludedNamespaces || []
@@ -49,8 +50,9 @@ export function VeleroScheduleRenderer({ data, onNavigate, activity }: VeleroSch
       )}
       {/* Gated on the errors themselves, not on the badge: a paused schedule
           badges as "Paused", which would otherwise hide the validation errors
-          the user needs to fix before resuming. */}
-      {(validationErrors.length > 0 || status.phase === 'FailedValidation') && (
+          the user needs to fix before resuming. A paused schedule raises no
+          issue, so for one the errors appear only here. */}
+      {(validationErrors.length > 0 || status.phase === 'FailedValidation') && !issueShown && (
         <AlertBanner
           variant="error"
           title="Validation Failed"

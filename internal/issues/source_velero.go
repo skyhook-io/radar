@@ -431,13 +431,16 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		}
 	case phase == "Failed":
 		severity, reason = SeverityCritical, failedReason
-		message = veleroFailureMessage(u, "phase Failed")
+		message = veleroFailureMessage(u, "Velero recorded no reason")
 	case veleroPartialPhases[phase]:
 		// Partial failure is a warning, not critical: some of the data made it.
 		// It must still surface — "partially failed" is where silent data loss
 		// hides, because the run looks like it worked.
 		severity, reason = SeverityWarning, partialReason
-		detail := "phase " + phase + " — some items were not processed"
+		detail := "some items were not restored"
+		if kind == "Backup" {
+			detail = "some items were not backed up — do not assume this backup is complete"
+		}
 		// Two of these three phases are still executing: Velero is finalizing or
 		// waiting on plugin operations while already carrying a partial failure.
 		// One of those wedged forever is exactly what the stall check exists to
@@ -446,7 +449,7 @@ func veleroRunIssue(gvr schema.GroupVersionResource, kind string, u *unstructure
 		// already raises, so it is neither duplicated nor lost.
 		if veleroInFlightPartialPhases[phase] {
 			if over, stalled := veleroStalledFor(u); stalled {
-				detail += ", and it has been in flight " + formatVeleroDuration(over) + " with nothing appearing to advance it"
+				detail += "; it has been in flight " + formatVeleroDuration(over) + " with nothing appearing to advance it"
 			}
 		}
 		message = veleroFailureMessage(u, detail)

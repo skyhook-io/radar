@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { VeleroBackupRenderer } from './VeleroBackupRenderer'
+import { OperationalIssuesShownContext } from '../../ui/drawer-components'
 
 const backup = (location: string) => ({
   metadata: { name: 'nightly', namespace: 'velero' },
@@ -148,5 +149,41 @@ describe('what the page claims before the location lookup answers', () => {
     ))
     expect(present).toContain('<button')
     expect(missing).not.toContain('<button')
+  })
+})
+
+/**
+ * The drawer lists the issue a failed run raises above the renderer. Saying it
+ * again in a box of its own showed the same failure twice, one under the other.
+ */
+describe('a failed run whose issue the drawer already shows', () => {
+  const run = (phase: string, extra: Record<string, unknown> = {}) => ({
+    metadata: { name: 'live-partial', namespace: 'velero' },
+    spec: { storageLocation: 'default' },
+    status: { phase, errors: 1, ...extra },
+  })
+  const withIssues = (data: any) =>
+    renderToString(
+      <OperationalIssuesShownContext.Provider value>
+        <VeleroBackupRenderer data={data} />
+      </OperationalIssuesShownContext.Provider>,
+    )
+
+  it('leaves the failure to the issue', () => {
+    for (const phase of ['PartiallyFailed', 'Failed', 'FailedValidation']) {
+      const html = withIssues(run(phase))
+      expect(html, phase).not.toContain('Partially Failed')
+      expect(html, phase).not.toContain('Backup Failed')
+      expect(html, phase).not.toContain('Validation Failed')
+    }
+  })
+
+  it('still describes it when no issue does', () => {
+    expect(renderToString(<VeleroBackupRenderer data={run('PartiallyFailed')} />)).toContain('Do not assume this backup is complete')
+  })
+
+  // Warnings raise no issue, so this box is the only place they are said.
+  it('keeps the warnings box', () => {
+    expect(withIssues(run('Completed', { errors: 0, warnings: 2 }))).toContain('2 Warning(s)')
   })
 })

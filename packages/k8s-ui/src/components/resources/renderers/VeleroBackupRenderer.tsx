@@ -2,7 +2,7 @@ import { VeleroRunMessages, type VeleroRunMessagesFetch } from './VeleroRunMessa
 import { Archive, Clock, HardDrive, Filter } from 'lucide-react'
 import { clsx } from 'clsx'
 import { HEALTH_BADGE_COLORS } from '../../../utils/badge-colors'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import {
   getBackupStatus,
   getBackupIncludedNamespaces,
@@ -73,6 +73,10 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
   const isFailed = backupStatus.level === 'unhealthy'
   const isValidationFailure = phase === 'FailedValidation'
   const isPartiallyFailed = isBackupPartialFailurePhase(phase)
+  // A failed, rejected or partially failed run that raises an issue is
+  // described by the Operational issues section above it. Warnings raise none,
+  // so their box always shows.
+  const issueShown = useOperationalIssuesShown()
   const isInProgress = isBackupActivePhase(phase)
   const queuePosition = getBackupQueuePosition(data)
 
@@ -85,7 +89,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
   return (
     <>
       {/* Problem alerts */}
-      {isValidationFailure && (
+      {isValidationFailure && !issueShown && (
         <AlertBanner
           variant="error"
           title="Backup Validation Failed"
@@ -93,7 +97,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {isFailed && !isValidationFailure && (
+      {isFailed && !isValidationFailure && !issueShown && (
         <AlertBanner
           variant="error"
           title="Backup Failed"
@@ -101,7 +105,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
           items={validationErrors.length > 0 ? validationErrors : undefined}
         />
       )}
-      {isPartiallyFailed && (
+      {isPartiallyFailed && !issueShown && (
         <AlertBanner
           variant="warning"
           title="Backup Partially Failed"
