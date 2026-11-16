@@ -188,3 +188,25 @@ describe('telling an error from a warning without seeing it', () => {
   })
 })
 
+it('keeps quoted failure reasons separate but folds structured object identities', () => {
+  const rows = (a: string, b: string) => veleroMessageRows({ errors: [a, b].map((message) => ({ scope: 'velero', message })), warnings: [] })
+  expect(rows('request failed: "Forbidden"', 'request failed: "Unauthorized"')).toHaveLength(2)
+  expect(rows('request failed: "Forbidden."', 'request failed: "Unauthorized."')).toHaveLength(2)
+  expect(rows('request failed: 401', 'request failed: 403')).toHaveLength(2)
+  expect(rows('request failed: "Forbidden:"', 'request failed: "Unauthorized:"')).toHaveLength(2)
+  expect(rows('cannot read name=x', 'cannot read name=y')).toHaveLength(1)
+  expect(rows('cannot read ns/first', 'cannot read ns/second')).toHaveLength(1)
+  expect(rows('cannot read persistentvolumeclaims/first', 'cannot read persistentvolumeclaims/second')).toHaveLength(1)
+  expect(rows('cannot read "data-pg-0"', 'cannot read "data-pg-1"')).toHaveLength(1)
+})
+
+it('bounds folding work for long messages, keeping their text verbatim', () => {
+  for (const common of ['word '.repeat(1000), 'x'.repeat(4096), '界'.repeat(1500)]) {
+    const messages = [common + 'name=first', common + 'name=second']
+    const rows = veleroMessageRows({ errors: messages.map((message) => ({ scope: 'velero', message })), warnings: [] })
+    expect(rows.map((row) => row.text)).toEqual(messages)
+    expect(rows.every((row) => row.variants.length === 0)).toBe(true)
+  }
+  const message = 'word '.repeat(10000)
+  expect(veleroMessageRows({ errors: [{ scope: 'velero', message }], warnings: [] })[0].text).toBe(message)
+})

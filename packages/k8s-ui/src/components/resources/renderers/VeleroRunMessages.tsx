@@ -74,7 +74,11 @@ export interface VeleroMessageRow {
 
 // A word that names an object: data-pg-0, name=x, "app-config", ns/pod. A
 // plain word (Unauthorized, Forbidden) is a different reason, never folded.
-const IDENTITY_LIKE = /[\d"'=/:_.-]/
+const OBJECT_IDENTITY_PATTERNS = [
+  /^name=["']?[a-z0-9][a-z0-9_.-]*["']?[,;:)]*$/,
+  /^["']?(?:[a-z0-9][a-z0-9_.-]*\/)+[a-z0-9][a-z0-9_.-]*["']?[,;:)]*$/,
+  /^["']?(?:[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)+|[a-z][a-z0-9]*\d[a-z0-9]*)["']?[,;:)]*$/,
+]
 
 function commonAffixes(values: string[]): [number, number] {
   let pre = 0
@@ -98,28 +102,45 @@ export function veleroMessageRows(messages: { errors: VeleroMessage[]; warnings:
   const rows: VeleroMessageRow[] = []
   for (const scope of scopes) {
     for (const severity of ['error', 'warning'] as Severity[]) {
-      const here = entries.filter((e) => e.scope === scope && e.severity === severity).map((e) => e.message.split(' '))
+      const messages = entries.filter((e) => e.scope === scope && e.severity === severity)
+      if (messages.length === 1) {
+        rows.push({ severity, scope, text: messages[0].message, variants: [] })
+        continue
+      }
+      const here = messages.map((e) => e.message.split(' '))
+      const bounded = (tokens: string[]) => {
+        if (tokens.length > 400) return false
+        const text = tokens.join(' ')
+        return text.length <= 4096 && new TextEncoder().encode(text).byteLength <= 4096
+      }
       // A key per word position, with that word left out: messages sharing a
       // key differ at most there.
       const keyOf = (tokens: string[], i: number) => `${tokens.length}\u0000${i}\u0000${tokens.map((t, j) => (j === i ? '' : t)).join(' ')}`
       const counts = new Map<string, number>()
       const variantsAt = new Map<string, string[]>()
       for (const tokens of here) {
+        if (!bounded(tokens)) continue
         tokens.forEach((t, i) => {
           const key = keyOf(tokens, i)
           counts.set(key, (counts.get(key) ?? 0) + 1)
-          variantsAt.set(key, [...(variantsAt.get(key) ?? []), t])
+          const variants = variantsAt.get(key) ?? []
+          variants.push(t)
+          variantsAt.set(key, variants)
         })
       }
       // Only a position where every variant names an object folds; the same
       // message repeated always does.
       const foldable = (key: string) => {
         const vs = variantsAt.get(key) ?? []
-        return vs.every((v) => v === vs[0]) || vs.every((v) => IDENTITY_LIKE.test(v))
+        return vs.every((v) => v === vs[0]) || vs.every((v) => OBJECT_IDENTITY_PATTERNS.some((pattern) => pattern.test(v)))
       }
       const groups = new Map<string, { tokens: string[]; at: number; variants: string[] }>()
       const order: (string | string[])[] = []
       for (const tokens of here) {
+        if (!bounded(tokens)) {
+          order.push(tokens)
+          continue
+        }
         let best = -1
         let bestCount = 1
         tokens.forEach((_, i) => {
