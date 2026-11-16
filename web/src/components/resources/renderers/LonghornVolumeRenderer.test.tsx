@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy', kubernetesStatus: { namespace: 'shop', pvcName: 'data-db-0', lastPVCRefAt: '' } } }
 
-async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean }, namespaces?: { name: string }[]) {
+async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean }, namespaces?: { name: string }[], authEnabled?: boolean) {
   vi.resetModules()
+  vi.doMock('../../../contexts/CapabilitiesContext', () => ({ useCapabilitiesContext: () => ({ authEnabled }) }))
   vi.doMock('../../../api/client', () => ({
     useResources: () => ({ data: engines.data, error: engines.error ?? null, isError: !!engines.error, isLoading: !!engines.isLoading }),
     useNamespaces: () => ({ data: namespaces }),
@@ -12,6 +13,7 @@ async function render(engines: { data?: any[]; error?: unknown; isLoading?: bool
   const { LonghornVolumeRenderer } = await import('./LonghornVolumeRenderer')
   const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume} />)
   vi.doUnmock('../../../api/client')
+  vi.doUnmock('../../../contexts/CapabilitiesContext')
   return html
 }
 
@@ -59,5 +61,11 @@ describe('LonghornVolumeRenderer (host)', () => {
     expect(await render({ data: [] }, [{ name: 'shop' }])).toContain('shop/data-db-0')
     expect(await render({ data: [] }, [{ name: 'other' }])).not.toContain('data-db-0')
     expect(await render({ data: [] })).not.toContain('data-db-0')
+  })
+
+  it('keeps the history of a deleted namespace when auth is off, and decides from the list while capabilities load', async () => {
+    expect(await render({ data: [] }, [{ name: 'other' }], false)).toContain('shop/data-db-0')
+    expect(await render({ data: [] }, [{ name: 'other' }], undefined)).not.toContain('data-db-0')
+    expect(await render({ data: [] }, [{ name: 'other' }], true)).not.toContain('data-db-0')
   })
 })

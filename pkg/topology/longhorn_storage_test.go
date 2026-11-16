@@ -75,3 +75,18 @@ func TestLonghornPVRelatesToItsVolume(t *testing.T) {
 		t.Errorf("PV whose Volume isn't there: storage refs = %+v, want none", rel.StorageRefs)
 	}
 }
+
+// Two Volumes with the PV's handle (a leftover second install): the handle
+// can't tell them apart, so neither direction claims the PV.
+func TestLonghornAmbiguousVolumeNameLinksNothing(t *testing.T) {
+	a, b := longhornVolume("longhorn-system", "vol-1"), longhornVolume("longhorn-old", "vol-1")
+	dp := longhornDynamic(a, b)
+	pv := csiPV("pv-a", "driver.longhorn.io", "vol-1")
+	provider := &pvProvider{pvs: []*corev1.PersistentVolume{pv}}
+	if rel := GetRelationshipsWithObject("persistentvolumes", "", "pv-a", pv, &Topology{}, provider, dp, nil); rel != nil && len(rel.StorageRefs) != 0 {
+		t.Errorf("PV storage refs = %+v, want none when two Volumes share the handle", rel.StorageRefs)
+	}
+	if rel := GetRelationshipsWithObject("volumes", "longhorn-old", "vol-1", b, &Topology{}, provider, dp, nil); rel != nil && len(rel.Consumers) != 0 {
+		t.Errorf("Volume consumers = %+v, want none when two Volumes share the name", rel.Consumers)
+	}
+}

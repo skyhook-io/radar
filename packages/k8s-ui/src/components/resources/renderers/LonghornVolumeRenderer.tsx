@@ -27,8 +27,9 @@ function since(timestamp?: string): string | undefined {
 }
 
 function lastSeen(timestamp?: string): string {
+  if (!timestamp) return "still referenced at Longhorn's last update"
   const ago = since(timestamp)
-  return ago ? `last seen ${ago} ago` : "still referenced at Longhorn's last update"
+  return ago ? `last seen ${ago} ago` : `last seen ${timestamp}`
 }
 
 // Names in status.kubernetesStatus are what Longhorn last recorded, not proof

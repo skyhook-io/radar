@@ -54,6 +54,15 @@ describe('LonghornVolumeRenderer', () => {
     expect(hidden).not.toContain('Last seen by Longhorn')
   })
 
+  it('never reads a recorded time it cannot place as still referenced', () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-15T12:00:00Z'))
+    const data = volume({ state: 'detached', robustness: 'unknown', kubernetesStatus: { namespace: 'shop', pvcName: 'data-db-0', lastPVCRefAt: '2026-11-15T12:00:30Z', lastPodRefAt: 'garbage', workloadsStatus: [{ podName: 'db-0' }] } })
+    const html = renderToStaticMarkup(<LonghornVolumeRenderer data={data} canReadNamespace={() => true} />)
+    vi.useRealTimers()
+    expect(html).not.toContain('still referenced')
+    expect(html).toContain('last seen 2026-11-15T12:00:30Z')
+  })
+
   it('names no PVC, pod or workload (last-seen history comes separately)', () => {
     const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'healthy' })} />)
     expect(html).not.toContain('data-db-0')
