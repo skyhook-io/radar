@@ -341,7 +341,7 @@ function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filt
       <p className="text-theme-text-tertiary">
         From Trivy Operator's VulnerabilityReports{scan ? ` · ${scan}` : ''}. A report lists what was known when the image was scanned, after the scanner's own filters.
         {" A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy's own reports."}
-        {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about workloads that don't run now (older revisions, scaled to zero or removed) and ${data.coverage.inactiveReports === 1 ? "isn't" : "aren't"} counted.`}
+        {data.coverage.inactiveReports > 0 && ` ${data.coverage.inactiveReports} ${data.coverage.inactiveReports === 1 ? 'report is' : 'reports are'} about workloads or builds that don't run now (older revisions or image builds, scaled to zero or removed) and ${data.coverage.inactiveReports === 1 ? "isn't" : "aren't"} counted.`}
       </p>
       {gaps && <p className="text-warning-text">{gaps}</p>}
       {data.coverage.truncated && <p className="text-warning-text">This request reached its findings limit, so some images' findings weren't read and are marked unread. Narrow with the namespace picker.</p>}

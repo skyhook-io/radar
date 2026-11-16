@@ -128,3 +128,18 @@ func TestLiveTargets(t *testing.T) {
 		t.Fatal("no cache: nothing can be said about what runs")
 	}
 }
+
+func TestLiveTargetsCarryTheRunningDigest(t *testing.T) {
+	p := pod("web", corev1.PodRunning, nil, "acme/web:latest")
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: p.Spec.Containers[0].Name, Image: "acme/web:latest", ImageID: "docker-pullable://acme/web@sha256:NEW"}}
+	live, ok := liveTargets(syncedCache(t, p), []string{p.Namespace}, nil, nil)
+	if !ok || len(live.targets) != 1 || live.targets[0].digest != "sha256:new" {
+		t.Fatalf("%+v", live.targets)
+	}
+	local := pod("local", corev1.PodRunning, nil, "acme/web:latest")
+	local.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: local.Spec.Containers[0].Name, ImageID: "sha256:abc"}}
+	live, _ = liveTargets(syncedCache(t, local), []string{local.Namespace}, nil, nil)
+	if len(live.targets) != 1 || live.targets[0].digest != "" {
+		t.Fatalf("a local image ID is no registry digest: %+v", live.targets)
+	}
+}

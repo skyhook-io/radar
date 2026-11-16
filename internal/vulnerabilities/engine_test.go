@@ -47,7 +47,14 @@ func vulnReport(s reportSpec) *unstructured.Unstructured {
 }
 
 func liveTarget(ns, kind, name, container, image string, uid types.UID, workload WorkloadRef) target {
-	return target{key: targetKey{namespace: ns, kind: kind, name: name, container: container, image: image}, uid: uid, image: image, workload: workload, container: container}
+	digest := pinnedDigest(image)
+	return target{key: targetKey{namespace: ns, kind: kind, name: name, container: container, image: image, digest: digest}, uid: uid, image: image, digest: digest, workload: workload, container: container}
+}
+
+// running is t once its container has started on the given registry digest.
+func running(t target, digest string) target {
+	t.digest, t.key.digest = digest, digest
+	return t
 }
 
 var (
@@ -128,28 +135,42 @@ func TestRolloutRevisionsKeepTheirOwnImage(t *testing.T) {
 // An owner running one image matches its report however the reference is
 // spelled; a pinned digest must match the report's digest.
 func TestSameImage(t *testing.T) {
+	spec := func(image string) *target {
+		tg := liveTarget("shop", "ReplicaSet", "web-1", "app", image, "", checkout)
+		return &tg
+	}
 	r := &report{image: "index.docker.io/library/nginx:1.23.4", digest: "sha256:abc"}
 	for _, pod := range []string{"nginx:1.23.4", "docker.io/library/nginx:1.23.4", "nginx@sha256:abc"} {
-		if !sameImage(pod, r) {
+		if !sameImage(spec(pod), r) {
 			t.Errorf("%s should match", pod)
 		}
 	}
 	for _, pod := range []string{"nginx:1.23.5", "nginx@sha256:def", "ghcr.io/x/nginx:1.23.4"} {
-		if sameImage(pod, r) {
+		if sameImage(spec(pod), r) {
 			t.Errorf("%s should not match", pod)
 		}
 	}
-	if !sameImage("redis", &report{image: "index.docker.io/library/redis:latest"}) {
+	if !sameImage(spec("redis"), &report{image: "index.docker.io/library/redis:latest"}) {
 		t.Error("an untagged reference is :latest")
 	}
-	if sameImage("acme/app:release", &report{image: "acme/app:Release"}) {
+	if sameImage(spec("acme/app:release"), &report{image: "acme/app:Release"}) {
 		t.Error("tags are case-sensitive")
 	}
-	if !sameImage("ACME/app:Release", &report{image: "acme/app:Release"}) {
+	if !sameImage(spec("ACME/app:Release"), &report{image: "acme/app:Release"}) {
 		t.Error("repository names compare case-insensitively")
 	}
-	if sameImage("acme/app:stable@sha256:new", &report{image: "acme/app:stable"}) {
+	if sameImage(spec("acme/app:stable@sha256:new"), &report{image: "acme/app:stable"}) {
 		t.Error("a pinned digest needs a report that recorded that digest")
+	}
+	tag := liveTarget("shop", "ReplicaSet", "web-1", "app", "nginx:1.23.4", "", checkout)
+	if fresh := running(tag, "sha256:new"); sameImage(&fresh, r) {
+		t.Error("a tag pushed again runs another build: the older build's scan doesn't describe it")
+	}
+	if same := running(tag, "sha256:abc"); !sameImage(&same, r) {
+		t.Error("the running digest the report scanned matches")
+	}
+	if started := running(tag, "sha256:new"); !sameImage(&started, &report{image: "nginx:1.23.4"}) {
+		t.Error("a report that recorded no digest matches by reference")
 	}
 }
 
@@ -604,5 +625,39 @@ func TestSummaryView(t *testing.T) {
 	}
 	if sum.Images != nil || sum.Unscanned != nil || sum.Clean != nil || sum.Summary.ImagesUnscanned != 1 {
 		t.Fatalf("no rows: %+v", sum)
+	}
+}
+
+// A container running one digest is described only by a report of that
+// digest, and by every report of it: two workloads running one build share
+// its scan whichever of them Trivy scanned.
+func TestDigestDecidesWhichScanDescribesAContainer(t *testing.T) {
+	stale := vulnReport(reportSpec{name: "web", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-1", container: "app", repo: "acme/web", tag: "latest", digest: "sha256:old"})
+	web := running(liveTarget("shop", "ReplicaSet", "web-1", "app", "acme/web:latest", "", checkout), "sha256:new")
+	got := mustBuild(t, []*unstructured.Unstructured{stale}, []target{web}, ViewImage, Filter{})
+	if got.Summary.ImagesClean != 0 || got.Summary.ImagesUnscanned != 1 || got.Coverage.InactiveReports != 1 {
+		t.Fatalf("an older build's clean scan must not describe the new one: %+v", got.Summary)
+	}
+
+	scanned := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/web", tag: "1", digest: "sha256:same", vulns: []vuln{{"CVE-A", "CRITICAL", "zlib", "1", "2"}}})
+	targets := []target{
+		running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/web:1", "", checkout), "sha256:same"),
+		running(liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/web:1", "", worker), "sha256:same"),
+	}
+	got = mustBuild(t, []*unstructured.Unstructured{scanned}, targets, ViewCVE, Filter{})
+	if len(got.CVEs) != 1 || got.CVEs[0].Workloads != 2 || len(got.Unscanned) != 0 || got.Summary.WorkloadsWithCriticalOrHigh != 2 {
+		t.Fatalf("worker runs the scanned build: %+v / %+v", got.CVEs, got.Unscanned)
+	}
+}
+
+// Builds of one tag that no report describes are one unscanned image, whether
+// or not their containers have reported a digest yet.
+func TestUnscannedBuildsOfATagAreOneImage(t *testing.T) {
+	started := running(liveTarget("kube-system", "DaemonSet", "aws-node", "cni", "acme/cni:1", "", checkout), "sha256:a")
+	pending := liveTarget("kube-system", "DaemonSet", "aws-node", "cni", "acme/cni:1", "", checkout)
+	older := running(liveTarget("kube-system", "DaemonSet", "aws-node", "cni", "acme/cni:1", "", checkout), "sha256:b")
+	got := mustBuild(t, nil, []target{started, pending, older}, ViewImage, Filter{})
+	if len(got.Unscanned) != 1 || got.Summary.ImagesUnscanned != 1 {
+		t.Fatalf("%+v", got.Unscanned)
 	}
 }

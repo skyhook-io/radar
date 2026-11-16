@@ -140,15 +140,16 @@ func artifactImage(body map[string]any) (image, digest string) {
 	return image, digest
 }
 
-// sameImage reports whether a Pod's image reference names the image a report
-// scanned: by digest when the Pod pins one, else by reference with Docker
-// Hub's implicit registry, library/ prefix and :latest tag filled in.
-func sameImage(podImage string, r *report) bool {
-	if i := strings.Index(podImage, "@"); i >= 0 {
-		// A pinned digest matches only a report that scanned that digest.
-		return r.digest != "" && strings.EqualFold(podImage[i+1:], r.digest)
+// sameImage reports whether a report scanned what a container runs: by
+// digest when both know one, so a tag pushed again doesn't carry an older
+// build's scan; else by reference, with Docker Hub's implicit registry,
+// library/ prefix and :latest tag filled in. A pinned digest matches only a
+// report that scanned that digest.
+func sameImage(t *target, r *report) bool {
+	if t.digest != "" && (r.digest != "" || strings.Contains(t.image, "@")) {
+		return strings.EqualFold(t.digest, r.digest)
 	}
-	return r.image != "" && normalizeImage(podImage) == normalizeImage(r.image)
+	return r.image != "" && normalizeImage(t.image) == normalizeImage(r.image)
 }
 
 // canonicalImage is a Pod image reference as one identity: the pinned
@@ -243,7 +244,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		r := &reports[i]
 		var matched []*target
 		for _, t := range byOwner[r.owner] {
-			if (r.uid == "" || t.uid == "" || r.uid == t.uid) && sameImage(t.image, r) {
+			if (r.uid == "" || t.uid == "" || r.uid == t.uid) && sameImage(t, r) {
 				matched = append(matched, t)
 			}
 		}
@@ -281,20 +282,43 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		read += n
 		agg.report.findings = parsedFindings.get(agg.report.u)
 	}
+	// A slot is a workload's container running one build: by digest once
+	// the container has started, by reference before.
+	slot := func(t *target) slotKey {
+		if t.digest != "" {
+			return slotKey{t.workload, t.container, t.digest}
+		}
+		return slotKey{t.workload, t.container, "ref:" + canonicalImage(t.image)}
+	}
 	scannedSlot := map[slotKey]bool{}
-	for _, t := range targets {
-		if _, ok := j.targetImage[t.key]; ok {
-			scannedSlot[slotKey{t.workload, t.container, canonicalImage(t.image)}] = true
+	for i := range targets {
+		if _, ok := j.targetImage[targets[i].key]; ok {
+			scannedSlot[slot(&targets[i])] = true
+			scannedSlot[slotKey{targets[i].workload, targets[i].container, "ref:" + canonicalImage(targets[i].image)}] = true
 		}
 	}
-	for _, t := range targets {
-		// A new ReplicaSet of the same image, not yet scanned, is covered by
-		// the older one's report.
-		if _, ok := j.targetImage[t.key]; ok || scannedSlot[slotKey{t.workload, t.container, canonicalImage(t.image)}] {
+	for i := range targets {
+		t := &targets[i]
+		if _, ok := j.targetImage[t.key]; ok {
 			continue
 		}
 		w := t.workload
 		w.Container = t.container
+		// The same digest scanned for another object (another workload, or
+		// a namespace Trivy doesn't scan) is what this container runs.
+		if agg := j.images[t.digest]; t.digest != "" && agg != nil {
+			agg.workloads[w] = true
+			agg.refs[t.image] = true
+			j.targetImage[t.key] = t.digest
+			continue
+		}
+		// A new ReplicaSet of the same image, not yet scanned, is covered by
+		// the older one's report.
+		if scannedSlot[slot(t)] {
+			continue
+		}
+		// Listed by the image as its spec names it: builds of one tag that no
+		// report describes are one thing to scan.
 		u := j.unscanned[canonicalImage(t.image)]
 		if u == nil {
 			u = &unscannedAgg{ref: t.image, refs: map[string]bool{}, workloads: map[WorkloadRef]bool{}}

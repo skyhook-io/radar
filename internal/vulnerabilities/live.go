@@ -1,8 +1,10 @@
 package vulnerabilities
 
 import (
+	"cmp"
 	"maps"
 	"slices"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -22,16 +24,22 @@ type target struct {
 	key   targetKey
 	uid   types.UID
 	image string
+	// digest is the registry digest of what runs: the kubelet's, once the
+	// container has started, else one the spec pins; empty when neither
+	// says. Trivy Operator records the same digest, so it, not the tag,
+	// decides which scan describes the container.
+	digest string
 	// scannedGroup is the API group of key.kind, for the caller's access.
 	scannedGroup string
 	workload     WorkloadRef
 	container    string
 }
 
-// targetKey identifies the scanned object and container; image tells apart
-// two revisions of one StatefulSet or DaemonSet running side by side.
+// targetKey identifies the scanned object and container; image and digest
+// tell apart two revisions of one StatefulSet or DaemonSet running side by
+// side, and Pods of one controller that pulled different builds of a tag.
 type targetKey struct {
-	namespace, kind, name, container, image string
+	namespace, kind, name, container, image, digest string
 }
 
 func (k targetKey) owner() ownerKey {
@@ -110,11 +118,14 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			}
 			kind, group, name, uid := scannedOwner(cache, pod)
 			workload := podWorkload(cache, pod)
+			running := runningDigests(pod)
 			for _, c := range podContainers(pod.Spec) {
+				digest := cmp.Or(running[c.Name], pinnedDigest(c.Image))
 				add(target{
-					key:          targetKey{namespace: pod.Namespace, kind: kind, name: name, container: c.Name, image: c.Image},
+					key:          targetKey{namespace: pod.Namespace, kind: kind, name: name, container: c.Name, image: c.Image, digest: digest},
 					uid:          uid,
 					image:        c.Image,
+					digest:       digest,
 					scannedGroup: group,
 					workload:     workload,
 					container:    c.Name,
@@ -137,9 +148,10 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			workload := WorkloadRef{Kind: "CronJob", Group: "batch", Namespace: cj.Namespace, Name: cj.Name}
 			for _, c := range podContainers(cj.Spec.JobTemplate.Spec.Template.Spec) {
 				add(target{
-					key:          targetKey{namespace: cj.Namespace, kind: "CronJob", name: cj.Name, container: c.Name, image: c.Image},
+					key:          targetKey{namespace: cj.Namespace, kind: "CronJob", name: cj.Name, container: c.Name, image: c.Image, digest: pinnedDigest(c.Image)},
 					uid:          cj.UID,
 					image:        c.Image,
+					digest:       pinnedDigest(c.Image),
 					scannedGroup: "batch",
 					workload:     workload,
 					container:    c.Name,
@@ -160,6 +172,29 @@ type liveSet struct {
 	podDenied   []string
 	withheld    map[ownerKey]bool
 	deniedKinds []resourceapi.KindRef
+}
+
+// runningDigests are the registry digests the kubelet reports for a Pod's
+// started containers, by name. A bare "sha256:…" imageID is a local image
+// ID, not a registry digest, and says nothing a report can be matched to.
+func runningDigests(pod *corev1.Pod) map[string]string {
+	digests := map[string]string{}
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
+		for _, s := range statuses {
+			if _, digest, ok := strings.Cut(s.ImageID, "@"); ok && strings.HasPrefix(digest, "sha256:") {
+				digests[s.Name] = strings.ToLower(digest)
+			}
+		}
+	}
+	return digests
+}
+
+// pinnedDigest is the digest an image reference pins, if any.
+func pinnedDigest(ref string) string {
+	if _, digest, ok := strings.Cut(ref, "@"); ok {
+		return strings.ToLower(digest)
+	}
+	return ""
 }
 
 func podContainers(spec corev1.PodSpec) []corev1.Container {

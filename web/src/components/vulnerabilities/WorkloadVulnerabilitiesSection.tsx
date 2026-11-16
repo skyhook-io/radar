@@ -107,7 +107,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
                 <span className="font-medium text-theme-text-primary">{[...new Set(u.workloads.filter(isThis).map((w) => w.container))].join(', ')}</span>
                 <ImageName image={u.image} className="text-xs text-theme-text-tertiary" />
               </span>
-              <span className="text-xs text-warning-text">No report yet: Trivy hasn't scanned this image.</span>
+              <span className="text-xs text-warning-text">No scan yet of the build this container runs.</span>
             </div>
           ))}
           {clean.map((img) => (
