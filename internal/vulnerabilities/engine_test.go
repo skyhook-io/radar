@@ -687,3 +687,53 @@ func TestWorkloadListsEachBuild(t *testing.T) {
 		}
 	}
 }
+
+// The flag that Trivy scanned another build of a tag: set for an object's
+// Pods on a build its report doesn't describe, even when its other Pods match,
+// and only for the workloads whose own scanned object has that report.
+func TestOtherBuildScannedIsPerWorkload(t *testing.T) {
+	onlyA := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "latest", digest: "sha256:a"})
+	onA := running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:latest", "", checkout), "sha256:a")
+	onB := running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:latest", "", checkout), "sha256:b")
+	other := running(liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/checkout:latest", "", worker), "sha256:c")
+	targets := []target{onA, onB, other}
+	got := mustBuild(t, []*unstructured.Unstructured{onlyA}, targets, ViewImage, Filter{})
+	if len(got.Unscanned) != 1 || !got.Unscanned[0].OtherBuildScanned {
+		t.Fatalf("checkout's Pods on build B: %+v", got.Unscanned)
+	}
+	w := worker
+	got = mustBuild(t, []*unstructured.Unstructured{onlyA}, targets, ViewImage, Filter{Workload: &w})
+	if len(got.Unscanned) != 1 || got.Unscanned[0].OtherBuildScanned {
+		t.Fatalf("worker's object has no report of another build: %+v", got.Unscanned)
+	}
+}
+
+// After a restart, the old ReplicaSet's report still describes the build the
+// new one runs.
+func TestRestartedReplicaSetKeepsItsBuildsScan(t *testing.T) {
+	old := vulnReport(reportSpec{name: "old", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/checkout", tag: "2", digest: "sha256:c", vulns: []vuln{{"CVE-A", "HIGH", "zlib", "1", "2"}}})
+	fresh := running(liveTarget("shop", "ReplicaSet", "checkout-2", "app", "acme/checkout:2", "", checkout), "sha256:c")
+	got := mustBuild(t, []*unstructured.Unstructured{old}, []target{fresh}, ViewImage, Filter{})
+	if len(got.Images) != 1 || len(got.Unscanned) != 0 || got.Coverage.InactiveReports != 0 {
+		t.Fatalf("%+v / %+v / %d", got.Images, got.Unscanned, got.Coverage.InactiveReports)
+	}
+}
+
+// A Pod whose spec moved to a new digest still runs the old one until its
+// container restarts; and a Pending Pod's spelling of a scanned image finds it.
+func TestRunningBuildWinsAndPendingSpellingSearches(t *testing.T) {
+	critA := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "Pod", ownerName: "web", container: "app", repo: "acme/web", digest: "sha256:a", vulns: []vuln{{"CVE-A", "CRITICAL", "zlib", "1", "2"}}})
+	moved := running(liveTarget("shop", "Pod", "web", "app", "acme/web@sha256:b", "", checkout), "sha256:a")
+	got := mustBuild(t, []*unstructured.Unstructured{critA}, []target{moved}, ViewImage, Filter{})
+	if len(got.Images) != 1 || got.Images[0].Counts.Critical != 1 {
+		t.Fatalf("the build that runs is the kubelet's: %+v", got.Images)
+	}
+
+	nginx := vulnReport(reportSpec{name: "n", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-1", container: "app", repo: "library/nginx", tag: "1.25", digest: "sha256:n", vulns: []vuln{{"CVE-N", "HIGH", "zlib", "1", "2"}}})
+	old := running(liveTarget("shop", "ReplicaSet", "web-1", "app", "nginx:1.25", "", checkout), "sha256:n")
+	pending := liveTarget("shop", "ReplicaSet", "web-2", "app", "docker.io/library/nginx:1.25", "", checkout)
+	got = mustBuild(t, []*unstructured.Unstructured{nginx}, []target{old, pending}, ViewImage, Filter{Query: "docker.io/library/nginx"})
+	if len(got.Images) != 1 {
+		t.Fatalf("the pending Pod's spelling finds the image: %+v", got.Images)
+	}
+}

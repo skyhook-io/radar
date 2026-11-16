@@ -245,9 +245,11 @@ type CleanImage struct {
 // MaxRows of Summary.ImagesUnscanned.
 type Unscanned struct {
 	Image string `json:"image"`
-	// OtherBuildScanned is true when Trivy's report for the same object is of
-	// another build of this tag: Trivy Operator rescans by tag, so after a
-	// tag moves it scans the registry's build, not the one these Pods pulled.
+	// OtherBuildScanned is true when, for one of these workloads (the
+	// filtered one, under a workload filter), Trivy's report of the object
+	// it scanned is of another build of this tag: Trivy Operator scans by
+	// tag, so after a tag moves it scans the registry's build, not the one
+	// these Pods pulled.
 	OtherBuildScanned bool          `json:"otherBuildScanned,omitempty"`
 	Workloads         []WorkloadRef `json:"workloads"`
 	WorkloadsTotal    int           `json:"workloadsTotal"`

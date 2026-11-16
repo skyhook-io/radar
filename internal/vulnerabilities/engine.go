@@ -206,9 +206,9 @@ type unscannedAgg struct {
 	ref       string
 	refs      map[string]bool
 	workloads map[WorkloadRef]bool
-	// otherBuild: Trivy scanned another build of this tag for the same
-	// object, as it does when it rescans by tag after the tag moved.
-	otherBuild bool
+	// otherBuild are the workload containers whose own scanned object has a
+	// report of another build of this tag, as after the tag moved.
+	otherBuild map[WorkloadRef]bool
 }
 
 // rollup is the joined state the three pivots read.
@@ -244,6 +244,8 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			reports = append(reports, r)
 		}
 	}
+	idle := map[string]*report{}
+	inactive := 0
 	for i := range reports {
 		r := &reports[i]
 		var matched []*target
@@ -252,13 +254,20 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 				matched = append(matched, t)
 			}
 		}
-		if len(matched) == 0 {
-			for _, t := range byOwner[r.owner] {
-				if t.digest != "" && r.digest != "" && r.image != "" && normalizeImage(t.image) == normalizeImage(r.image) {
-					j.otherBuild[t.key] = true
-				}
+		// The object's other builds of this tag: Trivy Operator scans by tag,
+		// so it won't scan the build these containers pulled.
+		for _, t := range byOwner[r.owner] {
+			if t.digest != "" && r.digest != "" && r.image != "" && !strings.EqualFold(t.digest, r.digest) && normalizeImage(t.image) == normalizeImage(r.image) {
+				j.otherBuild[t.key] = true
 			}
-			j.inactiveReports++
+		}
+		if len(matched) == 0 {
+			// Its object no longer runs, but its build may: after a restart,
+			// the new ReplicaSet runs the build the old one's report scanned.
+			if prev := idle[r.digest]; r.digest != "" && (prev == nil || r.scannedAt.After(prev.scannedAt)) {
+				idle[r.digest] = r
+			}
+			inactive++
 			continue
 		}
 		agg := j.images[r.imageID]
@@ -276,6 +285,31 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 			j.targetImage[t.key] = r.imageID
 		}
 	}
+	// A scanned build counts for every container that runs it: another
+	// workload, a namespace Trivy doesn't scan, or a restarted ReplicaSet
+	// whose older one's report scanned it.
+	for i := range targets {
+		t := &targets[i]
+		if _, ok := j.targetImage[t.key]; ok || t.digest == "" {
+			continue
+		}
+		agg := j.images[t.digest]
+		if agg == nil && idle[t.digest] != nil {
+			agg = &imageAgg{report: idle[t.digest], workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
+			j.images[t.digest] = agg
+			delete(idle, t.digest)
+			inactive--
+		}
+		if agg == nil {
+			continue
+		}
+		w := t.workload
+		w.Container = t.container
+		agg.workloads[w] = true
+		agg.refs[t.image] = true
+		j.targetImage[t.key] = t.digest
+	}
+	j.inactiveReports = inactive
 	read := 0
 	for _, agg := range j.sortedImages() {
 		if err := ctx.Err(); err != nil {
@@ -313,30 +347,25 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 		w := t.workload
 		w.Container = t.container
-		// The same digest scanned for another object (another workload, or
-		// a namespace Trivy doesn't scan) is what this container runs.
-		if agg := j.images[t.digest]; t.digest != "" && agg != nil {
-			agg.workloads[w] = true
-			agg.refs[t.image] = true
-			j.targetImage[t.key] = t.digest
-			continue
-		}
 		// A new ReplicaSet of the same build, not yet scanned, is covered by
 		// the older one's report.
 		if id, ok := scannedSlot[slot(t)]; ok {
 			j.targetImage[t.key] = id
+			j.images[id].refs[t.image] = true
 			continue
 		}
 		// Listed by the image as its spec names it: builds of one tag that no
 		// report describes are one thing to scan.
 		u := j.unscanned[canonicalImage(t.image)]
 		if u == nil {
-			u = &unscannedAgg{ref: t.image, refs: map[string]bool{}, workloads: map[WorkloadRef]bool{}}
+			u = &unscannedAgg{ref: t.image, refs: map[string]bool{}, workloads: map[WorkloadRef]bool{}, otherBuild: map[WorkloadRef]bool{}}
 			j.unscanned[canonicalImage(t.image)] = u
 		}
 		// One spelling of the image, the same whatever order Pods list in.
 		u.ref = min(u.ref, t.image)
-		u.otherBuild = u.otherBuild || j.otherBuild[t.key]
+		if j.otherBuild[t.key] {
+			u.otherBuild[w] = true
+		}
 		u.refs[t.image] = true
 		u.workloads[w] = true
 	}
@@ -856,7 +885,8 @@ func (j *rollup) unscannedRows(f Filter) []Unscanned {
 		if !m.workloadKept(workloads) || !matched {
 			continue
 		}
-		rows = append(rows, Unscanned{Image: u.ref, OtherBuildScanned: u.otherBuild, Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads)})
+		otherBuild := slices.ContainsFunc(slices.Collect(maps.Keys(u.otherBuild)), func(w WorkloadRef) bool { return m.f.Workload == nil || m.wanted(w) })
+		rows = append(rows, Unscanned{Image: u.ref, OtherBuildScanned: otherBuild, Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads)})
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
 	return rows
