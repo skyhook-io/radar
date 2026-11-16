@@ -42,3 +42,7 @@ func VolumeHealth(v *unstructured.Unstructured) Health {
 	}
 	return HealthUnknown
 }
+
+// CSIDriver is the driver a Longhorn PersistentVolume names; its
+// spec.csi.volumeHandle is the Volume's name.
+const CSIDriver = "driver.longhorn.io"

@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/longhorn"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -207,7 +208,7 @@ func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string,
 // withholdDirectLookups drops what the user may not list from the
 // relationships read straight from the shared caches rather than the
 // user's graph: a StorageClass's volumes and claims, a claim's volume and
-// class, a volume's claim and class, and the Pods on a Node.
+// class, a volume's claim, class and Longhorn Volume, and the Pods on a Node.
 func (s *Server) withholdDirectLookups(r *http.Request, rel *topology.Relationships) {
 	isClaim := func(c topology.ResourceRef) bool { return c.Kind == "PersistentVolumeClaim" && c.Group == "" }
 	if len(rel.Pods) > 0 || slices.ContainsFunc(rel.Consumers, isClaim) {
@@ -221,6 +222,9 @@ func (s *Server) withholdDirectLookups(r *http.Request, rel *topology.Relationsh
 		rel.Consumers = slices.DeleteFunc(rel.Consumers, isVolume)
 		rel.StorageRefs = slices.DeleteFunc(rel.StorageRefs, isVolume)
 	}
+	rel.StorageRefs = slices.DeleteFunc(rel.StorageRefs, func(c topology.ResourceRef) bool {
+		return c.Kind == "Volume" && c.Group == longhorn.Group && !s.canRead(r, longhorn.Group, "volumes", c.Namespace, "list")
+	})
 	isClass := func(c topology.ResourceRef) bool { return c.Kind == "StorageClass" && c.Group == "storage.k8s.io" }
 	if slices.ContainsFunc(rel.ConfigRefs, isClass) && !s.canRead(r, "storage.k8s.io", "storageclasses", "", "list") {
 		rel.ConfigRefs = slices.DeleteFunc(rel.ConfigRefs, isClass)

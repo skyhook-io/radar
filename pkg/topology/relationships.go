@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
+	"github.com/skyhook-io/radar/pkg/longhorn"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -665,6 +666,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					enrichRef(&scRef, dp)
 					rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 				}
+				if ref := longhornVolumeRef(pv, dp); ref != nil {
+					rel.StorageRefs = append(rel.StorageRefs, *ref)
+				}
 			}
 		case "storageclass", "storageclasses", "sc":
 			pvs, _ := provider.PersistentVolumes()
@@ -703,6 +707,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		}
+	}
+
+	// A Longhorn Volume's PVs, proven by their CSI handle (a direct lookup,
+	// not a topology edge).
+	if provider != nil && resourceGroup == longhorn.Group && resourceKind == "Volume" {
+		rel.Consumers = append(rel.Consumers, longhornVolumePVs(name, provider, dp)...)
 	}
 
 	// Hygiene fields (T2): ServiceAccount + Node from Pod.Spec, ManagedBy from

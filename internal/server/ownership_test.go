@@ -508,6 +508,32 @@ func TestDirectLookupsWithholdClusterScopedStorageTheUserMayNotList(t *testing.T
 	}
 }
 
+// A PV's Longhorn Volume lives in Longhorn's namespace; it shows only to a
+// user who may list Longhorn Volumes there.
+func TestDirectLookupsWithholdLonghornVolumeTheUserMayNotList(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("dev", nil, &auth.UserPermissions{})
+	env.srv.permCache.Get("dev", nil).SetCanI("list", "", "persistentvolumes", "", true)
+	env.srv.permCache.Get("dev", nil).SetCanI("list", "longhorn.io", "volumes", "longhorn-system", false)
+	env.srv.permCache.Set("ops", nil, &auth.UserPermissions{})
+	env.srv.permCache.Get("ops", nil).SetCanI("list", "", "persistentvolumes", "", true)
+	env.srv.permCache.Get("ops", nil).SetCanI("list", "longhorn.io", "volumes", "longhorn-system", true)
+	for _, tc := range []struct {
+		user string
+		want []string
+	}{
+		{"dev", nil},
+		{"ops", []string{"Volume longhorn-system/vol-1"}},
+	} {
+		rel := &topology.Relationships{StorageRefs: []topology.ResourceRef{{Kind: "Volume", Group: "longhorn.io", Namespace: "longhorn-system", Name: "vol-1"}}}
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		env.srv.withholdDirectLookups(r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: tc.user})), rel)
+		if got := ownershipRefNames(rel.StorageRefs); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: storageRefs = %v, want %v", tc.user, got, tc.want)
+		}
+	}
+}
+
 // A recorded member of a kind no served resource names, as when its CRD was
 // removed, is one Radar can't check, not one the user may not see.
 func TestRelationshipAccessCountsAnUnservedMemberAsUnknown(t *testing.T) {
