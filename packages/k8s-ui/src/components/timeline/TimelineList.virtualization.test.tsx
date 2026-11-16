@@ -169,10 +169,11 @@ it('mounts every row of a short list and keeps them mounted while scrolling', as
   expect(container.querySelectorAll('[data-event-id]').length).toBe(250)
   await scroll(20_000)
   expect(container.querySelectorAll('[data-event-id]').length).toBe(250)
-  // One header row plus 300 cards is past the threshold, so it windows.
-  await act(async () => root.unmount())
-  root = createRoot(container)
+  // One header row plus 300 cards is past the threshold, so it windows, even
+  // though the list was scrolled and every row was already mounted.
   await render({ events: events.slice(0, 300) })
+  expect(container.querySelectorAll('[data-event-id]').length).toBeLessThan(20)
+  await scroll(25_000)
   expect(container.querySelectorAll('[data-event-id]').length).toBeLessThan(20)
 })
 
@@ -307,4 +308,47 @@ it('reports no lens until a jump requested at mount has landed', async () => {
   onVisibleWindowChange.mockClear()
   await render({ onVisibleWindowChange, events: [...newer(5), ...events], scrollToMs: now - 6000 })
   for (const [window] of onVisibleWindowChange.mock.calls) expect(window.fromMs).toBeLessThanOrEqual(now - 5999)
+})
+
+it('windows again when clearing a search grows the list, keeping the reader on their card', async () => {
+  const list = events.slice(0, 1000)
+  await render({ events: list, search: 'pod-1' })
+  // event-1, event-10…19, event-100…199: short enough to mount in full.
+  expect(container.querySelectorAll('[data-event-id]').length).toBe(111)
+  // Row 30 at the top: the 30th match, event-118.
+  await scroll(3000)
+  await render({ events: list, search: '' })
+  expect(container.querySelectorAll('[data-event-id]').length).toBeLessThan(20)
+  // event-118 is row 119 of the full list, still at the top.
+  expect(scroller().scrollTop).toBe(11_900)
+  expect(container.querySelector('[data-event-id="event-118"]')).not.toBeNull()
+  await scroll(20_000)
+  expect(container.querySelectorAll('[data-event-id]').length).toBeLessThan(20)
+})
+
+it('keeps focus on the same card when its row is re-rendered on leaving full-mount mode', async () => {
+  const list = events.slice(0, 1000)
+  await render({ events: list, search: 'pod-1' })
+  await scroll(3000)
+  container.querySelector<HTMLButtonElement>('[data-event-id="event-118"] button')!.focus()
+  await render({ events: list, search: '' })
+  await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+  expect(document.activeElement?.closest('[data-event-id]')?.getAttribute('data-event-id')).toBe('event-118')
+})
+
+it('holds a jump requested while a fold opens until all its rows are listed', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const fold = events.slice(0, 600).map(event => ({ ...event, name: 'crash-looping-pod' }))
+    await render({ events: fold, foldPerResource: () => true })
+    await act(async () => [...container.querySelectorAll('button')].find(b => b.textContent?.includes('599 more'))!.click())
+    await render({ events: fold, foldPerResource: () => true, scrollToMs: now - 120 })
+    expect(container.querySelector('[data-event-id="event-120"]')).toBeNull()
+    await act(async () => { vi.advanceTimersByTime(300) })
+    // Rows: the header, the fold head, then its children from event-1.
+    expect(scroller().scrollTop).toBe(121 * 100)
+    expect(container.querySelector('[data-event-id="event-120"]')).not.toBeNull()
+  } finally {
+    vi.useRealTimers()
+  }
 })

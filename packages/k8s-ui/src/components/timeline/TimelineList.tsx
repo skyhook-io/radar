@@ -526,10 +526,13 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     anchor.current = null
   }, [])
   const visibleWindowRaf = useRef<number | null>(null)
+  // Set while the range is re-derived on leaving full-mount mode; the
+  // intermediate positions are not the reader's.
+  const rewindowing = useRef(false)
   const scrolledToRef = useRef<number | null>(null)
   const reportedWindow = useRef<{ callback: typeof onVisibleWindowChange; fromMs: number; toMs: number } | null>(null)
   const reportVisibleWindow = useCallback(() => {
-    if (!onVisibleWindowChange) return
+    if (!onVisibleWindowChange || rewindowing.current) return
     // Until a requested jump has landed, the rows on screen are not the ones
     // the host asked to see.
     if (scrollToMs != null && scrolledToRef.current !== scrollToMs && (isLoading || listRows.length > 0)) return
@@ -567,8 +570,9 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       }
     }
   }, [scroller])
-  // A re-measured row above the reader (a fold whose newest card got longer)
-  // moves the anchor without any scroll. Only while the scroll position is the
+  // A re-measured row above the reader (a fold whose newest card got longer, a
+  // narrower window wrapping text) moves the anchor without any scroll, far
+  // enough to leave the rendered range. Only while the scroll position is the
   // one the anchor was taken at: any scroll, the user's or a jump, re-captures.
   const holdAnchor = useCallback(() => {
     const place = anchor.current
@@ -576,17 +580,26 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (!place || !rows || !scroller) return false
     const top = scroller.scrollTop
     if (top <= 0 || top !== place.scrollTop) return false
-    const item = renderedItems.current.find((rendered) => rendered.data && rows[rendered.index] === rendered.data && anchorId(rendered.data) === place.id)
-    if (!item) return false
-    if (Math.abs(item.offset - top - place.delta) >= 1) {
-      virtuosoRef.current?.scrollToIndex({ index: item.index, align: 'start', offset: -place.delta })
+    // Rows not yet committed here: the layout effect below handles that change.
+    if (renderedItems.current.some((rendered) => rows[rendered.index] !== rendered.data)) return true
+    const item = renderedItems.current.find((rendered) => rendered.data && anchorId(rendered.data) === place.id)
+    const index = item ? item.index : rows.findIndex((row) => anchorId(row) === place.id)
+    if (index < 0) return false
+    if (!item) {
+      virtuosoRef.current?.scrollToIndex({ index, align: 'start', offset: -place.delta })
+      anchor.current = { ...place, scrollTop: scroller.scrollTop }
+    } else if (Math.abs(item.offset - top - place.delta) >= 1) {
+      // A plain scroll: scrollToIndex keeps re-aiming for a while as rows are
+      // measured, which would undo a scroll the user starts meanwhile.
+      virtuosoRef.current?.scrollTo({ top: item.offset - place.delta })
       anchor.current = { ...place, scrollTop: scroller.scrollTop }
     }
     return true
   }, [scroller])
   // A focused card that scrolls out of the mounted range is removed from the
-  // DOM and focus falls to the body; keep it in the list instead. Checked a
-  // frame later: Chromium blurs the card before removing it, and the rows
+  // DOM and focus falls to the body. Focus the same control in the card's new
+  // copy if there is one (it can be remounted at once), else the list. Checked
+  // a frame later: Chromium blurs the card before removing it, and the rows
   // Virtuoso reports are committed after its callback.
   const focusedInList = useRef<HTMLElement | null>(null)
   const restoreFocusLater = useCallback(() => {
@@ -600,12 +613,18 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
         return
       }
       focusedInList.current = null
-      if (document.activeElement === document.body || !document.activeElement) scroller.focus({ preventScroll: true })
+      if (document.activeElement !== document.body && document.activeElement) return
+      const card = focused.closest<HTMLElement>('[data-event-id]')
+      const position = card ? [...card.querySelectorAll('button')].indexOf(focused as HTMLButtonElement) : -1
+      const copy = card && [...scroller.querySelectorAll<HTMLElement>('[data-event-id]')].find((element) => element.dataset.eventId === card.dataset.eventId)
+      const replacement = position >= 0 ? copy?.querySelectorAll('button')[position] : undefined
+      ;(replacement ?? scroller).focus({ preventScroll: true })
     })
   }, [scroller])
   const handleItemsRendered = useCallback((items: ListItem<ListRow>[]) => {
     renderedItems.current = items
     setListReady(items.some((row) => row.size > 0))
+    if (rewindowing.current) return
     if (!holdAnchor()) captureAnchor()
     reportVisibleWindow()
     restoreFocusLater()
@@ -626,13 +645,16 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     }
   }, [scroller, restoreFocusLater])
   const handleListScroll = useCallback(() => {
-    captureAnchor()
+    if (rewindowing.current) return
+    // The event for a position this list set itself arrives late; only a real
+    // move takes a new anchor, else a stale layout could replace the reader's.
+    if (!scroller || scroller.scrollTop !== anchor.current?.scrollTop) captureAnchor()
     if (!onVisibleWindowChange || visibleWindowRaf.current != null) return
     visibleWindowRaf.current = requestAnimationFrame(() => {
       visibleWindowRaf.current = null
       reportVisibleWindow()
     })
-  }, [captureAnchor, onVisibleWindowChange, reportVisibleWindow])
+  }, [captureAnchor, onVisibleWindowChange, reportVisibleWindow, scroller])
   useEffect(() => {
     reportVisibleWindow()
     return () => {
@@ -662,7 +684,8 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   // the row nearest `scrollToMs` sits at the top. Applied once per `scrollToMs`
   // (a fresh view switch), so it never fights the user's own scrolling after.
   useEffect(() => {
-    if (isLoading || !scroller || !listReady || scrollToMs == null || scrolledToRef.current === scrollToMs) return
+    // While a fold opens only its first rows are listed; the target may be later.
+    if (isLoading || !scroller || !listReady || scrollToMs == null || scrolledToRef.current === scrollToMs || foldMotion.size > 0) return
     let bestIndex = -1
     let bestDelta = Infinity
     listRows.forEach((row, index) => {
@@ -679,7 +702,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       // still the old ones until Virtuoso re-renders, which reports by itself.
       if (scroller.scrollTop === before) reportVisibleWindow()
     }
-  }, [scrollToMs, listRows, listReady, scroller, isLoading, reportVisibleWindow])
+  }, [scrollToMs, listRows, listReady, scroller, isLoading, reportVisibleWindow, foldMotion])
 
   // Bidirectional sync: when the selection changes externally (a swimlane marker
   // click), scroll the matching card into view, mounted or not. Re-runs on the
@@ -696,6 +719,31 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   }, [selectedEventId, listRows, listReady, scroller, isLoading])
 
   const mountAllRows = compact || listRows.length <= FULL_MOUNT_MAX_ROWS
+  // Virtuoso only re-derives its rendered range when the viewport nears that
+  // range's edge, so leaving full-mount mode while scrolled would keep every row
+  // mounted. A scroll to the top and straight back, in one task so nothing in
+  // between paints, makes it window around the reader again. (Remounting it
+  // instead blanks the list for four frames.)
+  const wasMountAll = useRef(mountAllRows)
+  useLayoutEffect(() => {
+    const was = wasMountAll.current
+    wasMountAll.current = mountAllRows
+    if (!was || mountAllRows || !scroller) return
+    // After the commit, once Virtuoso has rendered the new rows.
+    queueMicrotask(() => {
+      const top = scroller.scrollTop
+      if (top <= 0 || !scroller.isConnected) return
+      rewindowing.current = true
+      scroller.scrollTop = 0
+      scroller.dispatchEvent(new Event('scroll'))
+      scroller.scrollTop = top
+      scroller.dispatchEvent(new Event('scroll'))
+      rewindowing.current = false
+      if (!holdAnchor()) captureAnchor()
+      reportVisibleWindow()
+      restoreFocusLater()
+    })
+  }, [mountAllRows, scroller, holdAnchor, captureAnchor, reportVisibleWindow, restoreFocusLater])
 
   const listComponents = useMemo(() => ({
     Footer: () => (
