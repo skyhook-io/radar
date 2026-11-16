@@ -153,14 +153,32 @@ func newer(a, b *report) bool {
 	return a.scannedAt.After(b.scannedAt) || (a.scannedAt.Equal(b.scannedAt) && a.ref.Namespace+"/"+a.ref.Name < b.ref.Namespace+"/"+b.ref.Name)
 }
 
-// sameImage reports whether a report scanned what a container runs: by
-// digest when both know one, so a tag pushed again doesn't carry an older
-// build's scan; else by reference, with Docker Hub's implicit registry,
-// library/ prefix and :latest tag filled in. A pinned digest matches only a
-// report that scanned that digest.
+// preferred is whether report a should describe an image over report b,
+// both scans of it: the newer, except that a report listing nothing never
+// replaces one listing findings. One build's scans differ only by what the
+// scanner was told to leave out (an ignore policy scoped to one workload,
+// unfixed or low findings), so an empty one doesn't show that another
+// workload's reported CVEs went away.
+func preferred(a, b *report) bool {
+	if ea, eb := findingCount(a.u) == 0, findingCount(b.u) == 0; ea != eb {
+		return eb
+	}
+	return newer(a, b)
+}
+
+// sameImage reports whether a report scanned what a container runs. A
+// container with a digest (the kubelet's once it has started, else one its
+// spec pins) matches only a report of that digest, so a tag pushed again
+// doesn't carry another build's scan. A started container with no registry
+// digest matches nothing. Only a container that hasn't started, or a
+// CronJob's template, matches by reference, with Docker Hub's implicit
+// registry, library/ prefix and :latest tag filled in.
 func sameImage(t *target, r *report) bool {
-	if t.digest != "" && (r.digest != "" || strings.Contains(t.image, "@")) {
-		return strings.EqualFold(t.digest, r.digest)
+	if t.unresolved {
+		return false
+	}
+	if t.digest != "" {
+		return r.digest != "" && strings.EqualFold(t.digest, r.digest)
 	}
 	return r.image != "" && normalizeImage(t.image) == normalizeImage(r.image)
 }
@@ -241,7 +259,7 @@ type rollup struct {
 // scanned. A report about another image of the same object (a StatefulSet
 // before Trivy rescanned its new image) describes nothing that runs; the
 // running image stays unscanned rather than borrowing its findings. Of
-// several reports about one image the newest wins, whole. Findings are read
+// several reports about one image the preferred one wins, whole. Findings are read
 // only for the winners, at most MaxFindings in all; an image past that is
 // marked unread, never shown as clean.
 func join(ctx context.Context, items []*unstructured.Unstructured, targets []target) (*rollup, error) {
@@ -277,7 +295,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if len(matched) == 0 {
 			// Its object no longer runs, but its build may: after a restart,
 			// the new ReplicaSet runs the build the old one's report scanned.
-			if prev := idle[r.digest]; r.digest != "" && (prev == nil || newer(r, prev)) {
+			if prev := idle[r.digest]; r.digest != "" && (prev == nil || preferred(r, prev)) {
 				idle[r.digest] = r
 			}
 			inactive++
@@ -287,7 +305,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		if agg == nil {
 			agg = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
 			j.images[r.imageID] = agg
-		} else if newer(r, agg.report) {
+		} else if preferred(r, agg.report) {
 			agg.report = r
 		}
 		for _, t := range matched {
@@ -300,9 +318,8 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 	}
 	// A report whose object no longer runs still describes its build where
 	// a container runs it (a restarted ReplicaSet), and competes for the
-	// image like any other: the newest wins.
-	// Only for a container the digest's image would hold: not one already
-	// matched by reference to a report that recorded no digest.
+	// image like any other (see preferred).
+	// Only for a container the digest's image would hold.
 	runs := map[string]bool{}
 	for i := range targets {
 		t := &targets[i]
@@ -316,7 +333,7 @@ func join(ctx context.Context, items []*unstructured.Unstructured, targets []tar
 		}
 		if agg := j.images[d]; agg == nil {
 			j.images[d] = &imageAgg{report: r, workloads: map[WorkloadRef]bool{}, refs: map[string]bool{}}
-		} else if newer(r, agg.report) {
+		} else if preferred(r, agg.report) {
 			agg.report = r
 		} else {
 			continue

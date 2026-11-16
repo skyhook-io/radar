@@ -736,7 +736,8 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
   else if (fixes.length === 0) lead = <span className="text-theme-text-tertiary">None of its {total} findings has a fixed release yet.</span>
   else lead = (
     <span className="text-theme-text-secondary">
-      {fixes.length} {fixes.length === 1 ? 'upgrade clears' : 'upgrades clear'} {fixable} of its {total} findings
+      {/* Without a confirmed version for every upgrade, they don't promise to clear. */}
+      {fixes.length} {fixes.every((f) => f.to) ? (fixes.length === 1 ? 'upgrade clears' : 'upgrades clear') : (fixes.length === 1 ? 'upgrade listed for' : 'upgrades listed for')} {fixable} of its {total} findings
       {total > fixable && <span className="text-theme-text-tertiary">; {total - fixable} have no fix yet</span>}
       {unknown > 0 && <span className="text-warning-text">. {unknown} {unknown === 1 ? "container's" : "containers'"} findings weren't read</span>}
     </span>

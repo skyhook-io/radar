@@ -169,8 +169,16 @@ func TestSameImage(t *testing.T) {
 	if same := running(tag, "sha256:abc"); !sameImage(&same, r) {
 		t.Error("the running digest the report scanned matches")
 	}
-	if started := running(tag, "sha256:new"); !sameImage(&started, &report{image: "nginx:1.23.4"}) {
-		t.Error("a report that recorded no digest matches by reference")
+	if started := running(tag, "sha256:new"); sameImage(&started, &report{image: "nginx:1.23.4"}) {
+		t.Error("a started container needs a report of its digest, not one that recorded none")
+	}
+	if !sameImage(&tag, &report{image: "nginx:1.23.4"}) {
+		t.Error("a container that hasn't started matches by reference")
+	}
+	local := tag
+	local.unresolved = true
+	if sameImage(&local, &report{image: "nginx:1.23.4", digest: "sha256:abc"}) {
+		t.Error("a started container with only a local image ID matches nothing")
 	}
 }
 
@@ -758,11 +766,11 @@ func TestIdleReportCompetesForItsBuild(t *testing.T) {
 	if critical(olderActive, newerIdle) != 1 || critical(newerIdle, olderActive) != 1 {
 		t.Fatal("the newer idle report wins")
 	}
-	newerActive := spec("a", "web-1", "2026-11-17T10:00:00Z")
+	newerActive := spec("a", "web-1", "2026-11-17T10:00:00Z", vuln{"CVE-Y", "HIGH", "zlib", "1", "2"})
 	if critical(newerActive, newerIdle) != 0 {
 		t.Fatal("an older idle report loses")
 	}
-	tieA := spec("a", "web-2", "2026-11-16T10:00:00Z")
+	tieA := spec("a", "web-2", "2026-11-16T10:00:00Z", vuln{"CVE-Y", "HIGH", "zlib", "1", "2"})
 	tieB := spec("b", "web-4", "2026-11-16T10:00:00Z", vuln{"CVE-X", "CRITICAL", "zlib", "1", "2"})
 	only := running(liveTarget("shop", "ReplicaSet", "web-3", "app", "acme/web:1", "", checkout), "sha256:d")
 	for _, items := range [][]*unstructured.Unstructured{{tieA, tieB}, {tieB, tieA}} {
@@ -773,15 +781,16 @@ func TestIdleReportCompetesForItsBuild(t *testing.T) {
 	}
 }
 
-// A container matched by reference to a report that recorded no digest keeps
-// that report; a newer idle report of its digest adds no image of its own.
-func TestIdleReportLeavesAReferenceMatchAlone(t *testing.T) {
+// A started container is described by the scan of its running digest, even
+// one whose object no longer runs, never by its owner's report that recorded
+// no digest.
+func TestRunningDigestBeatsATagOnlyReport(t *testing.T) {
 	byRef := vulnReport(reportSpec{name: "a", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-1", container: "app", repo: "acme/web", tag: "1", scanned: "2026-11-10T10:00:00Z"})
 	idle := vulnReport(reportSpec{name: "b", ns: "shop", ownerKind: "ReplicaSet", ownerName: "web-2", container: "app", repo: "acme/web", tag: "1", digest: "sha256:d", scanned: "2026-11-16T10:00:00Z", vulns: []vuln{{"CVE-X", "CRITICAL", "zlib", "1", "2"}}})
 	web := running(liveTarget("shop", "ReplicaSet", "web-1", "app", "acme/web:1", "", checkout), "sha256:d")
 	got := mustBuild(t, []*unstructured.Unstructured{byRef, idle}, []target{web}, ViewImage, Filter{})
-	if got.Summary.ImagesScanned != 1 || got.Coverage.InactiveReports != 1 {
-		t.Fatalf("%+v / %d", got.Summary, got.Coverage.InactiveReports)
+	if got.Summary.ImagesScanned != 1 || got.Coverage.InactiveReports != 1 || got.Summary.Counts.Critical != 1 {
+		t.Fatalf("the scan of the running digest describes it, not the tag-only one: %+v / %d", got.Summary, got.Coverage.InactiveReports)
 	}
 }
 
@@ -805,5 +814,20 @@ func TestUnratedFindingTakesItsScoresRating(t *testing.T) {
 	}
 	if f := got["CVE-3"]; f.Severity != SeverityLow || f.SeverityFromScore {
 		t.Errorf("the scanner's own rating stands: %+v", f)
+	}
+}
+
+// Two workloads run one build. A newer scan listing nothing (say, an ignore
+// policy scoped to one of them) doesn't clear the other's reported CVE.
+func TestEmptyScanDoesNotClearAnotherWorkloadsFindings(t *testing.T) {
+	prod := vulnReport(reportSpec{name: "prod", ns: "shop", ownerKind: "ReplicaSet", ownerName: "checkout-1", container: "app", repo: "acme/web", tag: "1", digest: "sha256:d", scanned: "2026-11-10T10:00:00Z", vulns: []vuln{{"CVE-X", "CRITICAL", "zlib", "1", "2"}}})
+	ignored := vulnReport(reportSpec{name: "ignored", ns: "shop", ownerKind: "ReplicaSet", ownerName: "worker-1", container: "app", repo: "acme/web", tag: "1", digest: "sha256:d", scanned: "2026-11-16T10:00:00Z"})
+	a := running(liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/web:1", "", checkout), "sha256:d")
+	b := running(liveTarget("shop", "ReplicaSet", "worker-1", "app", "acme/web:1", "", worker), "sha256:d")
+	for _, order := range [][]*unstructured.Unstructured{{prod, ignored}, {ignored, prod}} {
+		got := mustBuild(t, order, []target{a, b}, ViewImage, Filter{})
+		if got.Summary.Counts.Critical != 1 || got.Summary.ImagesClean != 0 {
+			t.Fatalf("the reported Critical stands: %+v", got.Summary)
+		}
 	}
 }

@@ -29,6 +29,10 @@ type target struct {
 	// says. Trivy Operator records the same digest, so it, not the tag,
 	// decides which scan describes the container.
 	digest string
+	// unresolved is a started container whose running build has no
+	// registry digest (a local image ID): no scan can be shown to describe
+	// it, so it reads as not scanned rather than matched by its tag.
+	unresolved bool
 	// scannedGroup is the API group of key.kind, for the caller's access.
 	scannedGroup string
 	workload     WorkloadRef
@@ -118,7 +122,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 			}
 			kind, group, name, uid := scannedOwner(cache, pod)
 			workload := podWorkload(cache, pod)
-			running := runningDigests(pod)
+			running, unresolved := runningDigests(pod)
 			for _, c := range podContainers(pod.Spec) {
 				// What the kubelet reports runs wins over the spec: a Pod's
 				// image can change in place before its container restarts.
@@ -128,6 +132,7 @@ func liveTargets(cache *k8s.ResourceCache, namespaces []string, canRead func(gro
 					uid:          uid,
 					image:        c.Image,
 					digest:       digest,
+					unresolved:   digest == "" && unresolved[c.Name],
 					scannedGroup: group,
 					workload:     workload,
 					container:    c.Name,
@@ -176,9 +181,6 @@ type liveSet struct {
 	deniedKinds []resourceapi.KindRef
 }
 
-// runningDigests are the registry digests the kubelet reports for a Pod's
-// started containers, by name. A bare "sha256:…" imageID is a local image
-// ID, not a registry digest, and says nothing a report can be matched to.
 // trivysOwnJob is whether the Pod is one of Trivy Operator's scan or node
 // collector Jobs: short-lived, never scanned, and nothing a user upgrades,
 // so they would only pad the not-scanned list.
@@ -199,16 +201,22 @@ const (
 	trivyManagedBy      = "trivy-operator"
 )
 
-func runningDigests(pod *corev1.Pod) map[string]string {
-	digests := map[string]string{}
+// runningDigests are the registry digests the kubelet reports for a Pod's
+// started containers, by name. A bare "sha256:…" imageID is a local image
+// ID, not a registry digest: such a container is unresolved, since what it
+// runs can't be matched to any scan.
+func runningDigests(pod *corev1.Pod) (digests map[string]string, unresolved map[string]bool) {
+	digests, unresolved = map[string]string{}, map[string]bool{}
 	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.InitContainerStatuses, pod.Status.ContainerStatuses} {
 		for _, s := range statuses {
 			if _, digest, ok := strings.Cut(s.ImageID, "@"); ok && strings.HasPrefix(digest, "sha256:") {
 				digests[s.Name] = strings.ToLower(digest)
+			} else if s.ImageID != "" {
+				unresolved[s.Name] = true
 			}
 		}
 	}
-	return digests
+	return digests, unresolved
 }
 
 // pinnedDigest is the digest an image reference pins, if any.
