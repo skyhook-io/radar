@@ -77,7 +77,8 @@ func (v *View) newSearchIn(namespaces []string) search {
 // that relate and the caller may read. relate records into its own coverage
 // and returns how to emit the object, or nil when it doesn't relate; what it
 // records about an object is kept only if the object is emitted, or, when
-// relate couldn't tell, if the caller may read it.
+// relate couldn't tell (a gap, or a withheld candidate that stopped its
+// resolution), if the caller may read it.
 func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o IndexedObject, c *Coverage) (emit func())) {
 	read := s.v.session.Indexed(gk, s.index, s.keys, s.scope)
 	if len(read.Gaps) > 0 && (s.across || s.v.mayRead(gk, s.namespace, c)) {
@@ -96,7 +97,7 @@ func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o Indexed
 	for _, o := range read.Objects {
 		var own Coverage
 		emit := relate(o, &own)
-		if emit == nil && len(own.NotChecked) == 0 {
+		if emit == nil && len(own.NotChecked) == 0 && !own.Narrowed {
 			continue
 		}
 		if !s.admits(gk, o.Ref.Namespace, c) {
