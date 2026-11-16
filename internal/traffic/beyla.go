@@ -61,13 +61,13 @@ func (sc beylaScopes) l7Selector() string { return sc.l7.with(beylaJobSelector()
 // resolveScopes decides each family's cluster scope. Filtering applies only to
 // a configured metrics store: one Radar discovered in the cluster holds this
 // cluster's metrics.
-func (s *BeylaSource) resolveScopes(ctx context.Context) (beylaScopes, error) {
+func (s *BeylaSource) resolveScopes(ctx context.Context, w rateWindow) (beylaScopes, error) {
 	url, _ := metricsConfig()
-	l4, err := scopeForMetric(ctx, s.flowMetricName(), beylaJobSelector(), url != "")
+	l4, err := scopeForMetric(ctx, s.flowMetricName(), beylaJobSelector(), url != "", w.span())
 	if err != nil {
 		return beylaScopes{}, err
 	}
-	l7, err := scopeForMetric(ctx, beylaL7Metric, beylaJobSelector(), url != "")
+	l7, err := scopeForMetric(ctx, beylaL7Metric, beylaJobSelector(), url != "", w.span())
 	return beylaScopes{l4: l4, l7: l7, l7Unchecked: err != nil}, nil
 }
 
@@ -414,7 +414,7 @@ type l4LabelPresence struct {
 }
 
 func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
-	scopes, err := s.resolveScopes(ctx)
+	scopes, err := s.resolveScopes(ctx, rateWindowFor(opts.Since))
 	if err != nil {
 		return scopeCheckFailed("beyla"), nil
 	}
@@ -1460,7 +1460,7 @@ func (s *BeylaSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-chan
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				scopes, err := s.resolveScopes(ctx)
+				scopes, err := s.resolveScopes(ctx, rateWindowFor(opts.Since))
 				if err != nil {
 					log.Printf("[beyla] Not streaming flows: %v", err)
 					continue

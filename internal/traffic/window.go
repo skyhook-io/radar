@@ -18,6 +18,9 @@ type rateWindow struct {
 	seconds float64
 }
 
+// span is the window as a duration, for the cluster-scope checks that read it.
+func (w rateWindow) span() time.Duration { return time.Duration(w.seconds * float64(time.Second)) }
+
 // rateWindowFor turns the caller's requested span into a window these queries can
 // use. The traffic view offers 1m to 1h and the value arrives here; ignoring it
 // leaves the control inert, which is what it was.

@@ -256,7 +256,7 @@ func TestIstioScopeCheckCoversClientReportsWhenAmbient(t *testing.T) {
 	var mu sync.Mutex
 	selectors := map[string]string{}
 	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, selector string) (string, promclient.SeriesIsolation, error) {
+	resolveTrafficScope = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		mu.Lock()
 		selectors[metric] = selector
 		mu.Unlock()
@@ -319,7 +319,7 @@ func TestIstioGetFlows_TooManyAmbientNamespacesSaysWhatIsMissing(t *testing.T) {
 	useConfiguredStore(t)
 	var httpScopeSelectors []string
 	prev := resolveTrafficScope
-	resolveTrafficScope = func(_ context.Context, metric, selector string) (string, promclient.SeriesIsolation, error) {
+	resolveTrafficScope = func(_ context.Context, metric, selector string, _ time.Duration) (string, promclient.SeriesIsolation, error) {
 		if metric == "istio_requests_total" {
 			httpScopeSelectors = append(httpScopeSelectors, selector)
 		}
@@ -502,5 +502,46 @@ func TestIstioGetFlows_UsesTheRequestedWindow(t *testing.T) {
 	}
 	if len(resp.Flows) != 1 || resp.Flows[0].BytesSent != 100*3600 || resp.Flows[0].BytesRecv != 400*3600 {
 		t.Errorf("want one flow with an hour of bytes, got %+v", resp.Flows)
+	}
+}
+
+// The view's range also reaches the cluster-scope checks and the empty-map
+// explanation, so traffic another cluster sent within the range is found.
+func TestIstioGetFlows_ScopeChecksUseTheRequestedWindow(t *testing.T) {
+	useConfiguredStore(t)
+	var mu sync.Mutex
+	var windows []time.Duration
+	prev := resolveTrafficScope
+	resolveTrafficScope = func(_ context.Context, _, _ string, w time.Duration) (string, promclient.SeriesIsolation, error) {
+		mu.Lock()
+		windows = append(windows, w)
+		mu.Unlock()
+		return `cluster="a"`, promclient.SeriesIsolation{Labels: map[string]string{"cluster": "a"}}, nil
+	}
+	t.Cleanup(func() { resolveTrafficScope = prev })
+	var queries []string
+	src := newTestIstio(func(_ context.Context, q string) (*prom.QueryResult, error) {
+		mu.Lock()
+		queries = append(queries, q)
+		mu.Unlock()
+		return &prom.QueryResult{}, nil
+	})
+	opts := DefaultFlowOptions()
+	opts.Since = time.Hour
+	if _, err := src.GetFlows(context.Background(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) == 0 {
+		t.Fatal("no scope check ran")
+	}
+	for _, w := range windows {
+		if w != time.Hour {
+			t.Errorf("scope check over %v, want the requested hour", w)
+		}
+	}
+	for _, q := range queries {
+		if strings.Contains(q, "last_over_time(") && !strings.Contains(q, "[3600s]") {
+			t.Errorf("empty-map check not over the requested hour: %s", q)
+		}
 	}
 }

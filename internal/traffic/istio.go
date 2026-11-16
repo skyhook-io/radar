@@ -183,17 +183,17 @@ type istioScopes struct {
 // resolveScopes decides each family's cluster scope. Filtering applies only to
 // a configured metrics store: one Radar discovered in the cluster holds this
 // cluster's metrics.
-func (s *IstioSource) resolveScopes(ctx context.Context, ambientNamespaces []string) (istioScopes, error) {
+func (s *IstioSource) resolveScopes(ctx context.Context, ambientNamespaces []string, w rateWindow) (istioScopes, error) {
 	url, _ := metricsConfig()
 	httpSelector := istioReporterSelector
 	if len(ambientNamespaces) > 0 {
 		httpSelector = istioAllReportsSelector
 	}
-	http, err := scopeForMetric(ctx, "istio_requests_total", httpSelector, url != "")
+	http, err := scopeForMetric(ctx, "istio_requests_total", httpSelector, url != "", w.span())
 	if err != nil {
 		return istioScopes{}, err
 	}
-	tcp, err := scopeForMetric(ctx, istioTCPMetric, istioReporterSelector, url != "")
+	tcp, err := scopeForMetric(ctx, istioTCPMetric, istioReporterSelector, url != "", w.span())
 	return istioScopes{http: http, tcp: tcp, httpSelector: httpSelector, tcpUnchecked: err != nil}, nil
 }
 
@@ -216,7 +216,7 @@ func (s *IstioSource) familyMismatch(ctx context.Context, opts FlowOptions, sc c
 		return ""
 	}
 	present := func(more string) string {
-		return fmt.Sprintf(`last_over_time(%s{%s%s}[5m])`, metric, reporters, more)
+		return fmt.Sprintf(`last_over_time(%s{%s%s}[%s])`, metric, reporters, more, rateWindowFor(opts.Since).promQL)
 	}
 	selector := present("")
 	if opts.Namespace != "" {
@@ -294,7 +294,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 
 	ambientNamespaces := s.ambientNamespaceFn()
 	ambientKnown := ambientNamespaces
-	scopes, err := s.resolveScopes(ctx, ambientNamespaces)
+	scopes, err := s.resolveScopes(ctx, ambientNamespaces, rateWindowFor(opts.Since))
 	if err != nil {
 		return scopeCheckFailed("istio"), nil
 	}
@@ -304,7 +304,7 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		log.Printf("[istio] %d ambient namespaces are too many to name in one query; client reports into them are not read", len(ambientNamespaces))
 		ambientNamespaces = nil
 		// The HTTP scope was checked against client reports that will not be read.
-		if scopes, err = s.resolveScopes(ctx, nil); err != nil {
+		if scopes, err = s.resolveScopes(ctx, nil, rateWindowFor(opts.Since)); err != nil {
 			return scopeCheckFailed("istio"), nil
 		}
 	}
