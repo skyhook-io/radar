@@ -60,7 +60,7 @@ func CountPods(cands []Candidate, pods []PodFacts) (counts []RouteCount, unroute
 			if c.Ignored || !InScope(c.Flow, p.Namespace) {
 				continue
 			}
-			d := Selects(c.Flow, p)
+			d := selects(c.Flow, p, false)
 			switch {
 			case d.Selected && !c.OnlyMaybe:
 				counts[i].Count++

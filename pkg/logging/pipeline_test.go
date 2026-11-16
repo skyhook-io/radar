@@ -86,3 +86,25 @@ func TestPipelineUncertainIsLowerBound(t *testing.T) {
 		t.Fatalf("counts=%+v unrouted=%+v uncertain=%v", counts, unrouted, uncertain)
 	}
 }
+
+// Counting decides each pod without explaining the misses: a pod that a
+// Flow's rules or legacy selector don't select costs no allocation.
+func TestCountPodsDoesNotExplainMisses(t *testing.T) {
+	cands := []Candidate{
+		{Flow: Flow{Namespace: "a", Match: []Rule{{Labels: map[string]string{"app": "x", "tier": "web"}}, {Hosts: []string{"n9"}}}}},
+		{Flow: Flow{Namespace: "a", LegacySelector: map[string]string{"app": "x"}}},
+		{Flow: Flow{Namespace: "a", Cluster: true, Match: []Rule{{NamespacesRegex: []string{"^a$"}}}}},
+	}
+	cands[2].Flow.Match[0].nsRegex, cands[2].Flow.Match[0].compiled = compileNamespaceRegex(cands[2].Flow.Match[0].NamespacesRegex), true
+	pods := make([]PodFacts, 50)
+	for i := range pods {
+		pods[i] = PodFacts{Namespace: "a", Labels: map[string]string{"app": "y"}, Containers: []string{"app"}, Node: "n1"}
+	}
+	if allocs := testing.AllocsPerRun(10, func() { CountPods(cands, pods) }); allocs > 1 {
+		t.Fatalf("CountPods allocated %v times for %d pods", allocs, len(pods))
+	}
+	counts, unrouted, _ := CountPods(cands, pods)
+	if counts[0].Count != 0 || counts[1].Count != 0 || counts[2].Count != len(pods) || len(unrouted) != 0 {
+		t.Fatalf("counts = %+v, unrouted = %d", counts, len(unrouted))
+	}
+}

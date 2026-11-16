@@ -92,12 +92,22 @@ func InScope(flow Flow, podNamespace string) bool {
 // pod's containers, as the operator evaluates spec.match: per container, the
 // first rule whose conditions all hold decides (select or exclude), and no
 // matching rule means not selected.
-func Selects(flow Flow, pod PodFacts) Decision {
+func Selects(flow Flow, pod PodFacts) Decision { return selects(flow, pod, true) }
+
+// selects is Selects; explain false leaves Unmet empty, which counting many
+// pods doesn't read.
+func selects(flow Flow, pod PodFacts, explain bool) Decision {
 	if !InScope(flow, pod.Namespace) {
+		return Decision{Rule: -1}
+	}
+	if len(flow.Match) == 0 && flow.MatchSet && !explain {
 		return Decision{Rule: -1}
 	}
 	if len(flow.Match) == 0 && flow.MatchSet {
 		return Decision{Rule: -1, Unmet: []string{"a match rule"}}
+	}
+	if len(flow.Match) == 0 && !explain {
+		return Decision{Selected: labelsHold(flow.LegacySelector, pod.Labels), Rule: -1}
 	}
 	if len(flow.Match) == 0 {
 		missing := missingLabels(flow.LegacySelector, pod.Labels)
@@ -127,6 +137,9 @@ func Selects(flow Flow, pod PodFacts) Decision {
 	}
 	if firstRule >= 0 {
 		return Decision{Rule: firstRule}
+	}
+	if !explain {
+		return Decision{Rule: -1}
 	}
 	return Decision{Rule: -1, Unmet: nearestUnmet(flow.Match, pod)}
 }
