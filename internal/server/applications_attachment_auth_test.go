@@ -12,6 +12,7 @@ import (
 	"context"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/topology"
 	appsv1 "k8s.io/api/apps/v1"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -149,5 +151,69 @@ func TestApplicationsIncompleteExposureIsNotAWorker(t *testing.T) {
 	g := &appRelationBatch{exposureIncomplete: true}
 	if got := classifyWorkload("Deployment", g.relationshipsForRef("apps", "Deployment", "team", "api")); got != "unknown" {
 		t.Fatalf("incomplete batch classified %s", got)
+	}
+}
+
+// A Service selects only in its own namespace, so a collector that holds only
+// some namespaces leaves exposure unknown outside them, not inside them.
+func TestApplicationsExposureOnNamespaceScopedServices(t *testing.T) {
+	withOwnershipDiscovery(t)
+	addApplicationTypedDiscovery()
+	selector := &metav1.LabelSelector{MatchLabels: map[string]string{"app": "api"}}
+	deployment := func(ns, name string, labels map[string]string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID(ns + "-" + name)}, Spec: appsv1.DeploymentSpec{
+			Selector: selector, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: labels}},
+		}}
+	}
+	client := fake.NewClientset(append(testNamespaces("team", "other"),
+		deployment("team", "api", map[string]string{"app": "api"}),
+		deployment("team", "worker", map[string]string{"app": "worker"}),
+		deployment("other", "worker", map[string]string{"app": "worker"}),
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "team"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "api"}}},
+	)...)
+	for _, tc := range []struct {
+		name                 string
+		deploymentsNamespace string
+		want                 map[string]string
+	}{
+		{"both kinds namespace-scoped", "team", map[string]string{"team/api": "service", "team/worker": "worker"}},
+		{"Deployments cluster-wide", "", map[string]string{"team/api": "service", "team/worker": "worker", "other/worker": "unknown"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				k8s.ResetResourceCache()
+				if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+					t.Fatalf("restore package fixture cache: %v", err)
+				}
+			})
+			k8s.ResetResourceCache()
+			if err := k8s.InitTestResourceCacheFromConfig(k8score.CacheConfig{
+				Client:         client,
+				ResourceTypes:  map[string]bool{"deployments": true, "services": true},
+				ResourceScopes: map[string]k8score.ResourceScope{"deployments": {Enabled: true, Namespace: tc.deploymentsNamespace}, "services": {Enabled: true, Namespace: "team"}},
+				DeferredTypes:  map[string]bool{},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			cache := k8s.GetResourceCache()
+			deadline := time.Now().Add(5 * time.Second)
+			for !cache.AssessKindRead("services", []string{"team"}).Complete || cache.KindReadinessFor("deployments") != k8score.KindReady {
+				if time.Now().After(deadline) {
+					t.Fatal("caches never synced")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			session, err := k8s.BeginOwnershipRead(cache)
+			if err != nil {
+				t.Fatal(err)
+			}
+			batch := buildAppRelationBatch(context.Background(), session.(relations.Session), nil)
+			for key, want := range tc.want {
+				ns, name, _ := strings.Cut(key, "/")
+				if got := classifyWorkload("Deployment", batch.relationshipsForRef("apps", "Deployment", ns, name)); got != want {
+					t.Errorf("%s classified %s, want %s", key, got, want)
+				}
+			}
+		})
 	}
 }
