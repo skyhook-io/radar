@@ -1153,6 +1153,10 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 		// strips the prefix at the router edge. basePath is still needed to
 		// rewrite the asset URLs inside index.html.
 		path := r.URL.Path
+		// The page and its files go out whole. The compression middleware gzips
+		// whatever is written, so a range selected here would carry a
+		// Content-Range counting uncompressed bytes the body doesn't contain.
+		r.Header.Del("Range")
 
 		if path == "/" || path == "/index.html" {
 			serveFrontendIndex(w, r, fsys, basePath)
@@ -1175,10 +1179,6 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 		if fingerprintedAsset.MatchString(path) {
 			w = &immutableWhenOK{ResponseWriter: w}
 		}
-		// Frontend files go out whole. The compression middleware gzips whatever
-		// is written, so a range the file server selected would carry a
-		// Content-Range counting uncompressed bytes the body doesn't contain.
-		r.Header.Del("Range")
 		fileServer.ServeHTTP(w, r)
 	})
 }

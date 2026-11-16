@@ -73,8 +73,9 @@ func TestFrontendHandlerCacheHeaders(t *testing.T) {
 func TestFrontendThroughCompression(t *testing.T) {
 	t.Setenv("RADAR_COMPRESS_LEVEL", "")
 	script := strings.Repeat(`console.log("radar");`, 100)
+	page := `<!doctype html><title>Radar</title>`
 	handler := compressMiddleware()(frontendHandler(http.FS(fstest.MapFS{
-		"index.html":               &fstest.MapFile{Data: []byte(`<!doctype html>`)},
+		"index.html":               &fstest.MapFile{Data: []byte(page)},
 		"assets/index-BcIBzLE5.js": &fstest.MapFile{Data: []byte(script)},
 		"assets/skyhook/logo.svg":  &fstest.MapFile{Data: []byte(`<svg/>`)},
 	}), ""))
@@ -135,17 +136,26 @@ func TestFrontendThroughCompression(t *testing.T) {
 		}
 	})
 
-	t.Run("a range request gets the whole file, compressed", func(t *testing.T) {
-		rec := get("/assets/index-BcIBzLE5.js", "Accept-Encoding", "gzip", "Range", "bytes=0-6")
-		if rec.Code != http.StatusOK || rec.Header().Get("Content-Range") != "" {
-			t.Fatalf("status %d, Content-Range %q, want the whole file", rec.Code, rec.Header().Get("Content-Range"))
-		}
-		zr, err := gzip.NewReader(rec.Body)
-		if err != nil {
-			t.Fatalf("not gzip: %v", err)
-		}
-		if body, _ := io.ReadAll(zr); string(body) != script {
-			t.Fatalf("body does not decode to the asset")
+	t.Run("a range request gets the whole response, compressed", func(t *testing.T) {
+		for path, want := range map[string]string{
+			"/assets/index-BcIBzLE5.js": script,
+			"/":                         page,
+			"/index.html":               page,
+			"/topology":                 page,
+		} {
+			rec := get(path, "Accept-Encoding", "gzip", "Range", "bytes=0-6")
+			if rec.Code != http.StatusOK || rec.Header().Get("Content-Range") != "" {
+				t.Errorf("%s: status %d, Content-Range %q, want the whole response", path, rec.Code, rec.Header().Get("Content-Range"))
+				continue
+			}
+			zr, err := gzip.NewReader(rec.Body)
+			if err != nil {
+				t.Errorf("%s: not gzip: %v", path, err)
+				continue
+			}
+			if body, _ := io.ReadAll(zr); string(body) != want {
+				t.Errorf("%s: body = %q, want %q", path, body, want)
+			}
 		}
 	})
 
