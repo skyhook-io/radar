@@ -79,13 +79,13 @@ function meaning(verdict: SubstrateVerdict, pool: boolean): string {
     case 'workerShortfall':
       return 'Fewer workers can take actors than the pool wants, and it has stayed that way for five minutes. New and resuming actors may wait or fail to start.'
     case 'noFreeActorSlots':
-      return 'No worker has a free actor slot. New and resuming actors wait until a slot frees or a worker is added.'
+      return 'No worker in this pool has a free actor slot. Actor starts and resumes may wait or fail until there is capacity.'
     case 'noSchedulableWorkers':
       return 'No worker can take an actor right now.'
     case 'freeActorSlots':
       return 'Some worker has a free actor slot. Slots count actors only, so an actor that needs more CPU or memory than that worker has left can still fail to start.'
     case 'uploadsOverdue':
-      return "Snapshots of idle actors on this node have not reached object storage on time. Until they do, those actors' latest state exists only on this node."
+      return 'Some actor snapshots on this node are overdue for upload to object storage. Until Substrate confirms them stored, losing this node could lose that snapshot state.'
     case 'noUploadsOverdue':
       return 'No snapshot upload is overdue on this node. Snapshots with no storage destination are not counted.'
   }

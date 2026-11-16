@@ -94,7 +94,7 @@ describe('SubstrateVerdictLine', () => {
     const html = render(node)
     expect(html).toContain('Agent Substrate snapshots')
     expect(html).toContain('Uploads overdue')
-    expect(html).toContain('have not reached object storage on time')
+    expect(html).toContain('overdue for upload to object storage')
     expect(html).toContain('3 (over 15m: 1, 1–5m: 2)')
   })
 
