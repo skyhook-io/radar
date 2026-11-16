@@ -54,8 +54,12 @@ type logPipelineRoute struct {
 	// no Logging has it.
 	Instance string `json:"instance"`
 	Ignored  bool   `json:"ignored"`
-	// Invalid: why the operator rejects the route and never renders it.
+	// Invalid: why the operator can't render the route; empty when valid.
 	Invalid string `json:"invalid,omitempty"`
+	// RenderBlocked: the route's instance has an invalid route and doesn't skip
+	// invalid ones, so the operator renders none of its configuration; the
+	// route's count is unknown (a lower bound of what Radar can confirm).
+	RenderBlocked bool `json:"renderBlocked,omitempty"`
 	// Fallback: the route receives what no other route of its instance selects
 	// (the Logging's defaultFlow).
 	Fallback     bool             `json:"fallback,omitempty"`
@@ -226,6 +230,7 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	blocked := defaultFlowsBlocking(loggings, outputs, clusterOutputNamespace, access["clusteroutputs"].State != integration.KindCoverageFull)
 	var cands []logging.Candidate
 	for _, src := range []struct {
 		kind, plural string
@@ -245,6 +250,9 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 				invalid = missingOutput(dests, unread, f.Cluster)
 			}
 			c.Ignored = c.Ignored || invalid != ""
+			if invalid != "" && invalidBlocks(f, loggings, loggingsUnread) {
+				blocked[f.LoggingRef] = true
+			}
 			cands = append(cands, c)
 			provider.Routes = append(provider.Routes, logPipelineRoute{
 				Provider: providerLoggingOperator, Kind: u.GetKind(), Group: logging.Group, Namespace: f.Namespace, Name: f.Name,
@@ -309,6 +317,14 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// What the running configuration of a Logging the operator can't render
+	// routes is unknown: its routes count only as "may be selected".
+	for i := range cands {
+		if blocked[cands[i].Flow.LoggingRef] {
+			cands[i].OnlyMaybe = true
+			provider.Routes[i].RenderBlocked = !cands[i].Ignored || provider.Routes[i].Invalid != ""
+		}
+	}
 	counts, unrouted, uncertain := logging.CountPods(cands, pods)
 	for i := range provider.Routes {
 		provider.Routes[i].SelectedPods = logPodCount{Count: counts[i].Count, LowerBound: counts[i].LowerBound || podsPartial}
@@ -347,7 +363,8 @@ func (s *Server) handleLoggingPipeline(w http.ResponseWriter, r *http.Request) {
 		route := logPipelineRoute{
 			Provider: providerLoggingOperator, Kind: "Logging", Group: logging.Group, Name: l.Name, Instance: l.Name, Fallback: true,
 			HasFilters: l.DefaultFlow.HasFilters, Destinations: []logDestination{},
-			SelectedPods: logPodCount{Count: len(caught), LowerBound: podsPartial || partial || maybe},
+			SelectedPods:  logPodCount{Count: len(caught), LowerBound: podsPartial || partial || maybe || blocked[l.LoggingRef]},
+			RenderBlocked: blocked[l.LoggingRef],
 		}
 		for _, ref := range l.DefaultFlow.GlobalOutputs {
 			route.Destinations = append(route.Destinations, outputRef(outputs, "ClusterOutput", clusterOutputNamespace[l.LoggingRef], l.LoggingRef, ref))

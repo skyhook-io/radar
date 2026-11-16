@@ -99,12 +99,27 @@ describe('LoggingView', () => {
     Object.assign(state, { data, error: null })
     expect(render()).toContain('Not found in logging-agents')
   })
-  it('says the operator rejects an invalid route, with the reason', () => {
+  it('says a route is invalid, with the reason', () => {
     const data = pipeline()
     Object.assign(data.providers[0].routes[0], { ignored: true, invalid: 'it names Output gone, which Radar didn\'t find for its Logging' })
     Object.assign(state, { data, error: null })
     const html = render()
-    expect(html).toContain('rejected by the operator')
+    expect(html).toContain('>invalid<')
     expect(html).toContain('it names Output gone')
+    expect(html).not.toContain('rejected')
+  })
+  it('says when an invalid route stops its Logging rendering', () => {
+    const data = pipeline()
+    Object.assign(data.providers[0].routes[0], { renderBlocked: true, selectedPods: { count: 0, lowerBound: true } })
+    Object.assign(state, { data, error: null })
+    expect(render()).toContain('skipInvalidResources')
+  })
+  it('does not show a destination the route could not resolve as healthy', () => {
+    const data = pipeline()
+    data.providers[0].routes[0].destinations = [{ kind: 'ClusterOutput', namespace: 'logging', name: 'loki', found: false }]
+    Object.assign(state, { data, error: null })
+    const html = render()
+    expect(html).toContain('not found')
+    expect(html).not.toContain('https://loki.example.com')
   })
 })

@@ -342,19 +342,39 @@ func TestLoggingPipelineDefaultFlow(t *testing.T) {
 	}
 }
 
-// A Flow naming an output its Logging doesn't have is rejected by the operator:
-// it routes nothing, so its pods stay unrouted.
+// A Flow naming an output its Logging doesn't have is invalid: the operator
+// can't render it, so it routes nothing and its pods stay unrouted. With
+// skipInvalidResources off (the default) the operator renders none of that
+// Logging's configuration, so its other routes' counts are unknown.
 func TestLoggingPipelineMissingOutputRejectsFlow(t *testing.T) {
 	broken := lgObj("Flow", "team", "broken", map[string]any{"localOutputRefs": []any{"gone"}}, map[string]any{"active": true})
-	seedPipelineFixtureWith(t, map[string]any{"controlNamespace": "logging-system"}, nil, nil, []runtime.Object{broken}, pipelinePods()...)
-	got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
-	var r logPipelineRoute
-	for _, x := range got.Providers[0].Routes {
-		if x.Name == "broken" {
-			r = x
-		}
-	}
-	if !r.Ignored || !strings.Contains(r.Invalid, "Output gone") || got.Unrouted.Count != 1 || got.Unrouted.Pods[0].Name != "b1" {
-		t.Fatalf("broken=%+v unrouted=%+v", r, got.Unrouted)
+	for _, c := range []struct {
+		name    string
+		spec    map[string]any
+		blocked bool
+		optin   logPodCount
+	}{
+		{"skipInvalidResources off", map[string]any{"controlNamespace": "logging-system"}, true, logPodCount{Count: 0, LowerBound: true}},
+		{"skipInvalidResources on", map[string]any{"controlNamespace": "logging-system", "skipInvalidResources": true}, false, logPodCount{Count: 3}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			seedPipelineFixtureWith(t, c.spec, nil, nil, []runtime.Object{broken}, pipelinePods()...)
+			got, _ := readPipeline(t, mustGet(t, testServer.URL+"/api/logging/pipeline"))
+			var r, optin logPipelineRoute
+			for _, x := range got.Providers[0].Routes {
+				switch x.Name {
+				case "broken":
+					r = x
+				case "optin":
+					optin = x
+				}
+			}
+			if !r.Ignored || !strings.Contains(r.Invalid, "Output gone") || r.RenderBlocked != c.blocked || got.Unrouted.Count != 1 || got.Unrouted.Pods[0].Name != "b1" {
+				t.Fatalf("broken=%+v unrouted=%+v", r, got.Unrouted)
+			}
+			if optin.RenderBlocked != c.blocked || optin.SelectedPods != c.optin {
+				t.Fatalf("optin = %+v", optin)
+			}
+		})
 	}
 }

@@ -50,7 +50,7 @@ function RouteRows({ routes, open }: { routes: LogPipelineRoute[]; open: Open })
       {routes.map((r) => (
         <div key={`${r.kind}/${r.namespace}/${r.name}`} className="flex flex-wrap items-center gap-1.5 text-sm">
           <button className="text-left text-accent-text hover:underline" onClick={() => open({ kind: PLURALS[r.kind] ?? 'flows', namespace: r.namespace, name: r.name, group: r.group })}>{r.fallback ? 'default flow' : `${r.kind} ${r.name}`}</button>
-          {r.ignored ? <Badge severity="neutral" size="sm" title={r.invalid}>{r.invalid ? 'rejected by the operator' : 'ignored by the operator'}</Badge> : <Count value={r.selectedPods} what="running pods selected" />}
+          {r.ignored ? <Badge severity="neutral" size="sm" title={r.invalid}>{r.invalid ? 'invalid' : 'ignored by the operator'}</Badge> : <Count value={r.selectedPods} what="running pods selected" />}
           {r.active === false && <Badge severity="error" size="sm">inactive</Badge>}
         </div>
       ))}
@@ -67,7 +67,10 @@ function DestinationRows({ provider, routes, gaps, open }: { provider: LogPipeli
   return (
     <>
       {[...refs.values()].map((ref) => {
-        const d = provider.destinations.find((x) => x.kind === ref.kind && x.namespace === (ref.namespace ?? '') && x.name === ref.name)
+        // A ref the server couldn't resolve for the route's Logging (another
+        // loggingRef, or outside its control namespace) is missing, even when an
+        // output of that name exists.
+        const d = ref.found ? provider.destinations.find((x) => x.kind === ref.kind && x.namespace === (ref.namespace ?? '') && x.name === ref.name) : undefined
         const key = `${ref.kind}/${ref.namespace ?? ''}/${ref.name}`
         if (!d) {
           const unread = gaps.includes(PLURALS[ref.kind] ?? '')
@@ -99,6 +102,7 @@ function Instance({ provider, instance, gaps, open }: { provider: LogPipelinePro
   const routes = provider.routes.filter((r) => r.instance === instance.name)
   return (
     <section className="card-inner space-y-3">
+      {routes.some((r) => r.renderBlocked) && <AlertBanner variant="warning" title="This Logging has an invalid Flow or default flow" message="The operator renders none of a Logging's configuration while one of its Flows is invalid (unless it sets skipInvalidResources) or its default flow names a missing ClusterOutput, so Radar can't tell what the configuration still running routes: the counts are only what Radar can confirm." className="mb-0" />}
       <div className="text-sm text-theme-text-secondary">
         Logging <span className="font-medium text-theme-text-primary">{instance.name}</span> · control namespace {instance.controlNamespace}
       </div>
