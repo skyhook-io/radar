@@ -1785,9 +1785,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // backend stamps on each node (data.auditKey). Only badge-worthy findings
   // reach the graph; the raw auditDanger/auditWarning property names remain at
   // this compatibility boundary while the node presents them as High/Medium.
-  // Only the topology graph shows these badges, so they are fetched only while
-  // that view is open.
-  const audit = useAuditBadges(namespaces, { enabled: mainView === 'topology' })
+  // Only badge-worthy findings, a few KB even on large clusters, so they stay
+  // loaded app-wide: a view that badges resources has them on arrival.
+  const audit = useAuditBadges(namespaces)
   const auditSeverityMap = useMemo(
     () => buildAuditSeverityMap(audit.data?.findings, audit.data?.checks),
     [audit.data?.findings, audit.data?.checks],

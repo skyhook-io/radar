@@ -744,21 +744,23 @@ export function useAudit(namespaces: string[] = []) {
   // is down.
   const connected = useClusterConnected();
   const queryClient = useQueryClient();
-  return useQuery<AuditResponse>({
+  const query = useQuery<AuditResponse>({
     queryKey: ["audit", namespaces],
-    queryFn: async () => {
-      const audit = await fetchJSON<AuditResponse>(`/audit${params}`);
-      // Resource badges read the same scan through their own smaller query;
-      // a fresher full scan updates them too, so the Checks page and the
-      // badges never show different answers.
-      queryClient.setQueryData<AuditBadges>(["audit", namespaces, "badges"], projectAuditBadges(audit));
-      return audit;
-    },
+    queryFn: () => fetchJSON(`/audit${params}`),
     enabled: connected,
     staleTime: 30000,
     refetchInterval: AUDIT_REFRESH_INTERVAL_MS,
     placeholderData: (prev) => prev,
   });
+  // Resource badges read the same scan through their own smaller query. A
+  // fresher full scan marks them stale so they refetch rather than show a
+  // different answer; invalidating, unlike writing the projection, can't
+  // install an older scan or one from before a context switch.
+  const { dataUpdatedAt } = query;
+  useEffect(() => {
+    if (dataUpdatedAt) void queryClient.invalidateQueries({ queryKey: ["audit", namespaces, "badges"] });
+  }, [dataUpdatedAt, queryClient, namespaces]);
+  return query;
 }
 
 export type AuditBadges = Pick<AuditResponse, "findings" | "checks">;
