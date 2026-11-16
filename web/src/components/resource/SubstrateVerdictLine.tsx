@@ -1,5 +1,5 @@
-import { Info } from 'lucide-react'
-import { Badge, Tooltip } from '@skyhook-io/k8s-ui'
+import { CloudUpload, Gauge, Info } from 'lucide-react'
+import { Badge, Property, PropertyList, Section, Tooltip } from '@skyhook-io/k8s-ui'
 import { formatMetricValue } from '@skyhook-io/k8s-ui/components/charts'
 import { isForbiddenError, usePrometheusStatus } from '../../api/client'
 import { useSubstrateHealth, type SubstrateFact, type SubstrateTarget, type SubstrateVerdict } from '../../api/substrateHealth'
@@ -12,11 +12,13 @@ const OVERDUE_BANDS: Record<string, string> = {
 }
 
 /**
- * One line on the Overview tab that judges a WorkerPool's capacity, or a
- * Node's snapshot safety, from the same response as the Metrics tab's charts.
- * Shown only when there is a verdict to read; the charts explain every other
- * state. onOpenMetrics switches to a Metrics tab; without one (the drawer,
- * which shows the charts below), the link scrolls to them.
+ * A section at the top of the Overview tab that judges a WorkerPool's
+ * capacity, or a Node's snapshot uploads, from the same response as the
+ * Metrics tab's charts. A Node is a generic page whose readers may never have
+ * heard of Agent Substrate, so the title names it and a sentence says what the
+ * state means. Shown only when there is a verdict to read; the charts explain
+ * every other state. onOpenMetrics switches to a Metrics tab; without one (the
+ * drawer, which shows the charts below), the link scrolls to them.
  */
 export function SubstrateVerdictLine({ target, onOpenMetrics }: { target: SubstrateTarget; onOpenMetrics?: () => void }) {
   const { data: status } = usePrometheusStatus()
@@ -29,62 +31,85 @@ export function SubstrateVerdictLine({ target, onOpenMetrics }: { target: Substr
       ? { state: 'unknown', reason: `Radar could not read Prometheus: ${error.message}`, facts: [] }
       : data?.status === 'available' ? data.verdict : undefined
   if (!verdict) return null
-  const title = target.kind === 'workerpool' ? 'Capacity' : 'Snapshots'
-  // What the state does not establish: a shortfall that could not be judged,
-  // and series Radar could not tie to this cluster.
-  const unverified = data?.charts.find(c => c.state === 'ok' && c.isolation.mode === 'unverified')?.isolation.note
-  const notes = [verdict.state !== 'unknown' ? verdict.reason : undefined, error ? undefined : unverified].filter((n): n is string => Boolean(n))
+  const pool = target.kind === 'workerpool'
+  const title = pool ? 'Agent Substrate capacity' : 'Agent Substrate snapshots'
   // A pool's only qualifier is a shortfall that could not be judged. On
-  // Substrate's default install that is every pool, so it can't hide in a tooltip.
-  const shortfallUnknown = target.kind === 'workerpool' && verdict.state !== 'unknown' && Boolean(verdict.reason)
+  // Substrate's default install that is every pool, so it is said in the
+  // section, not only in a tooltip.
+  const qualifier = verdict.state !== 'unknown' ? verdict.reason : undefined
+  // Series Radar could not tie to this cluster.
+  const unverified = error ? undefined : data?.charts.find(c => c.state === 'ok' && c.isolation.mode === 'unverified')?.isolation.note
   return (
-    <section aria-label={title} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-secondary">
-      <span className="font-medium text-theme-text-tertiary">{title}</span>
-      <span className="inline-flex items-center gap-1">
-        <VerdictState verdict={verdict} />
-        {shortfallUnknown && <span className="text-theme-text-tertiary">· worker shortfall unknown</span>}
-        {notes.length > 0 && (
-          <Tooltip content={notes.map(n => n.endsWith('.') ? n : `${n}.`).join(' ')}>
-            <Info aria-label="Qualified" className="h-3 w-3 text-theme-text-tertiary" />
-          </Tooltip>
-        )}
-      </span>
-      {verdict.facts.map(f => <Fact key={f.id} fact={f} />)}
-      <button type="button" onClick={e => (onOpenMetrics ? onOpenMetrics() : scrollToCharts(e.currentTarget))} className="text-theme-text-tertiary underline-offset-2 hover:text-theme-text-primary hover:underline">
-        View metrics
-      </button>
+    <section aria-label={title}>
+      <Section title={title} icon={pool ? Gauge : CloudUpload}>
+        <div className="space-y-3 text-sm">
+          <div className="flex items-start gap-2">
+            <span className="shrink-0 pt-px"><VerdictState verdict={verdict} /></span>
+            <p className="min-w-0 text-theme-text-secondary">
+              {meaning(verdict, pool)}
+              {qualifier && <> <span className="text-theme-text-tertiary">{sentence(qualifier)}</span></>}
+              {unverified && (
+                <Tooltip content={sentence(unverified)}>
+                  <Info aria-label="Qualified" className="ml-1 inline h-3.5 w-3.5 align-[-2px] text-theme-text-tertiary" />
+                </Tooltip>
+              )}
+            </p>
+          </div>
+          {verdict.facts.length > 0 && (
+            <PropertyList>
+              {verdict.facts.map(f => <Fact key={f.id} fact={f} />)}
+            </PropertyList>
+          )}
+          <button type="button" onClick={e => (onOpenMetrics ? onOpenMetrics() : scrollToCharts(e.currentTarget))} className="text-xs text-theme-text-tertiary underline-offset-2 hover:text-theme-text-primary hover:underline">
+            View metrics
+          </button>
+        </div>
+      </Section>
     </section>
   )
+}
+
+const sentence = (s: string) => (s.endsWith('.') ? s : `${s}.`)
+
+// What the state means, in the reader's terms. Claims only what the count
+// proves: a free slot is not proof the next actor fits, and zero overdue
+// uploads is not proof every snapshot is saved.
+function meaning(verdict: SubstrateVerdict, pool: boolean): string {
+  switch (verdict.state) {
+    case 'workerShortfall':
+      return 'Fewer workers can take actors than the pool wants, and it has stayed that way for five minutes. New and resuming actors may wait or fail to start.'
+    case 'noFreeActorSlots':
+      return 'No worker has a free actor slot. New and resuming actors wait until a slot frees or a worker is added.'
+    case 'noSchedulableWorkers':
+      return 'No worker can take an actor right now.'
+    case 'freeActorSlots':
+      return 'Some worker has a free actor slot. Slots count actors only, so an actor that needs more CPU or memory than that worker has left can still fail to start.'
+    case 'uploadsOverdue':
+      return "Snapshots of idle actors on this node have not reached object storage on time. Until they do, those actors' latest state exists only on this node."
+    case 'noUploadsOverdue':
+      return 'No snapshot upload is overdue on this node. Snapshots with no storage destination are not counted.'
+  }
+  return verdict.reason
+    ? sentence(verdict.reason)
+    : `Radar could not read this ${pool ? "pool's capacity" : "node's snapshot uploads"} from Prometheus.`
 }
 
 function VerdictState({ verdict }: { verdict: SubstrateVerdict }) {
   switch (verdict.state) {
     case 'workerShortfall':
-      return <Badge severity="warning" size="sm" title="Fewer schedulable workers than desired for five minutes: Substrate's own capacity alert condition">Short of workers</Badge>
+      return <Badge severity="warning" size="sm">Short of workers</Badge>
     case 'uploadsOverdue':
-      return <Badge severity="warning" size="sm" title="Some actors' snapshot uploads to object storage are overdue">Uploads overdue</Badge>
+      return <Badge severity="warning" size="sm">Uploads overdue</Badge>
     case 'noFreeActorSlots':
-      return <Badge severity="neutral" size="sm" title="No API replica sees a free actor slot">Full</Badge>
+      return <Badge severity="neutral" size="sm">Full</Badge>
     case 'noSchedulableWorkers':
       return <Badge severity="neutral" size="sm">No schedulable workers</Badge>
     case 'freeActorSlots':
-      // Slots are counted by actors alone, so a free slot is not proof that
-      // the next actor fits.
-      return (
-        <Tooltip content="Some worker has a free actor slot. Slots count actors only: an actor that needs more CPU or memory than a worker has left can still fail to place, and that failure names no pool.">
-          <span className="text-theme-text-primary">Free slots</span>
-        </Tooltip>
-      )
+      return <Badge severity="neutral" size="sm">Free slots</Badge>
     case 'noUploadsOverdue':
-      // Only what the count proves: snapshots with no storage destination are
-      // not counted as overdue, so zero overdue is not "everything is saved".
-      return <span className="text-theme-text-primary">No overdue uploads</span>
+      return <Badge severity="neutral" size="sm">No overdue uploads</Badge>
   }
-  return (
-    <Tooltip content={verdict.reason ?? 'Radar could not read this from Prometheus'}>
-      <span className="text-theme-text-tertiary">Unknown</span>
-    </Tooltip>
-  )
+  return <Badge severity="neutral" size="sm">Unknown</Badge>
 }
 
 // Facts read over the hour the charts cover; the others are now.
@@ -102,10 +127,10 @@ function Fact({ fact }: { fact: SubstrateFact }) {
   const hourly = HOURLY_FACTS.has(fact.id)
   const title = [placed && POOL_PLACED, hourly && HOURLY].filter(Boolean).join(' ') || undefined
   return (
-    <span className="tabular-nums">
-      <span className="text-theme-text-tertiary" title={title}>{fact.label}{hourly ? ' (1h)' : ''} </span>
-      <FactValue fact={fact} />
-    </span>
+    <Property
+      label={<span title={title}>{fact.label}{hourly ? ' (1h)' : ''}</span>}
+      value={<span className="tabular-nums"><FactValue fact={fact} /></span>}
+    />
   )
 }
 
