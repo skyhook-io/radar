@@ -16,6 +16,7 @@ import (
 	"net/url"
 	pathpkg "path"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -1175,9 +1176,47 @@ func frontendHandler(fsys http.FileSystem, basePath string) http.Handler {
 			return
 		}
 
+		if fingerprintedAsset.MatchString(path) {
+			w = &immutableWhenOK{ResponseWriter: w}
+		}
 		fileServer.ServeHTTP(w, r)
 	})
 }
+
+// immutableWhenOK marks only a complete answer as cacheable. FileServer can
+// still answer an asset URL with an error, such as 412 for a failed If-Match,
+// and that must not be kept for a year. Partial answers are left out too: the
+// compression middleware gzips the selected range, so their Content-Range
+// describes bytes the response does not contain.
+type immutableWhenOK struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *immutableWhenOK) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		if code == http.StatusOK {
+			w.Header().Set("Cache-Control", "max-age=31536000, immutable")
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *immutableWhenOK) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// fingerprintedAsset matches the build's content-hashed output, which a new
+// build never reuses under the same name, so browsers can keep it without
+// asking again. The embedded files carry no modification time, so anything
+// else is downloaded in full on every page load. Files copied from web/public
+// keep their names, including the logos under assets/skyhook/, and must not
+// match.
+var fingerprintedAsset = regexp.MustCompile(`^/assets/[^/]+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$`)
 
 func serveFrontendIndex(w http.ResponseWriter, r *http.Request, fsys http.FileSystem, basePath string) {
 	f, err := fsys.Open("/index.html")
@@ -1199,6 +1238,10 @@ func serveFrontendIndex(w http.ResponseWriter, r *http.Request, fsys http.FileSy
 	}
 	body = rewriteFrontendIndex(body, basePath)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// The page names the current build's chunks, so it must be fetched again
+	// after an upgrade. It also answers missing paths, including chunks a
+	// previous build named, which must not stick under that URL.
+	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeContent(w, r, "index.html", stat.ModTime(), bytes.NewReader(body))
 }
 
