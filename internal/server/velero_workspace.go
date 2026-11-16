@@ -47,6 +47,9 @@ func (s *Server) handleVeleroScheduleActivity(w http.ResponseWriter, r *http.Req
 		return
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	if s.refuseOutsideVeleroPin(w, namespace) {
+		return
+	}
 	if namespace == "" || name == "" {
 		s.writeError(w, http.StatusBadRequest, "schedule namespace and name are required")
 		return
@@ -83,7 +86,8 @@ func (s *Server) handleVeleroScheduleActivity(w http.ResponseWriter, r *http.Req
 // Backup or Restore the caller can read, newest first, through the same
 // per-kind access as the views, so a reader of Velero's kinds alone gets them
 // without Pod or Deployment access. Coverage says what the read covered; a
-// partial read is never an exact count.
+// partial read is never an exact count. schedule= filters Backups by their
+// schedule label; backup= filters Restores by spec.backupName, before the cap.
 func (s *Server) handleVeleroRuns(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -106,7 +110,7 @@ func (s *Server) handleVeleroRuns(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, "Velero is not installed")
 		return
 	}
-	s.writeJSON(w, reader.Runs(r.Context(), key, namespace))
+	s.writeJSON(w, reader.Runs(r.Context(), key, namespace, velerosvc.RunsFilter{Schedule: r.URL.Query().Get("schedule"), Backup: r.URL.Query().Get("backup")}))
 }
 
 // refuseOutsideVeleroPin answers 403 for a namespace Radar's --namespace-scope

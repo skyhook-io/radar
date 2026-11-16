@@ -138,7 +138,7 @@ func TestRuns(t *testing.T) {
 		map[string]any{"phase": "Completed", "startTimestamp": at(1), "progress": map[string]any{"totalItems": int64(4), "itemsRestored": int64(4)}})
 
 	t.Run("newest first, with what the lists show", func(t *testing.T) {
-		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}.reader().Runs(context.Background(), RunsKey("backups"), "")
+		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}.reader().Runs(context.Background(), RunsKey("backups"), "", RunsFilter{})
 		if len(resp.Runs) != 3 || resp.Runs[0].Name != "newer" || resp.Runs[2].Name != "older" {
 			t.Fatalf("runs %+v", resp.Runs)
 		}
@@ -152,14 +152,14 @@ func TestRuns(t *testing.T) {
 	})
 
 	t.Run("one installation", func(t *testing.T) {
-		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}.reader().Runs(context.Background(), RunsKey("backups"), "velero")
+		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}.reader().Runs(context.Background(), RunsKey("backups"), "velero", RunsFilter{})
 		if len(resp.Runs) != 2 || resp.Total != 2 {
 			t.Fatalf("runs %+v", resp.Runs)
 		}
 	})
 
 	t.Run("a restore's source and mapping", func(t *testing.T) {
-		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"restores": {restore}}}.reader().Runs(context.Background(), RunsKey("restores"), "")
+		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"restores": {restore}}}.reader().Runs(context.Background(), RunsKey("restores"), "", RunsFilter{})
 		r := resp.Runs[0]
 		if r.BackupName != "older" || r.NamespaceMapping["app"] != "app-copy" || r.ItemsDone == nil || *r.ItemsDone != 4 {
 			t.Errorf("restore %+v", r)
@@ -170,7 +170,7 @@ func TestRuns(t *testing.T) {
 		resp := fakeRead{
 			objects: map[string][]*unstructured.Unstructured{"backups": backups},
 			access:  map[string]integration.KindAccess{"backups": {State: integration.KindCoverageDenied}},
-		}.reader().Runs(context.Background(), RunsKey("backups"), "")
+		}.reader().Runs(context.Background(), RunsKey("backups"), "", RunsFilter{})
 		if resp.Coverage.State != integration.KindCoverageDenied || len(resp.Runs) != 0 {
 			t.Errorf("coverage %+v runs %d", resp.Coverage, len(resp.Runs))
 		}
@@ -178,6 +178,29 @@ func TestRuns(t *testing.T) {
 
 	if RunsKey("schedules") != "" {
 		t.Error("only backups and restores are runs")
+	}
+}
+
+func TestRunsFilterBeforeCapAndReasons(t *testing.T) {
+	for _, kind := range []string{"backups", "restores"} {
+		t.Run(kind, func(t *testing.T) {
+			var items []*unstructured.Unstructured
+			for i := range maxRuns + 1 {
+				items = append(items, obj("Backup", "velero", fmt.Sprintf("newer-%d", i), nil, map[string]any{"backupName": "other"}, map[string]any{"startTimestamp": testNow.Format(time.RFC3339)}))
+			}
+			match := obj("Backup", "velero", "old-match", map[string]any{domain.ScheduleNameLabel: "nightly"}, map[string]any{"backupName": "source"}, map[string]any{"phase": "FailedValidation", "validationErrors": []any{"first", "second"}})
+			items = append(items, match)
+			reader := fakeRead{objects: map[string][]*unstructured.Unstructured{kind: items}}.reader()
+			resp := reader.Runs(t.Context(), RunsKey(kind), "velero", RunsFilter{Schedule: "nightly", Backup: "source"})
+			if resp.Total != 1 || len(resp.Runs) != 1 || resp.Truncated || resp.Runs[0].Reason != "first; second" {
+				t.Fatalf("%+v", resp)
+			}
+			match.Object["status"].(map[string]any)["failureReason"] = "preferred"
+			resp = reader.Runs(t.Context(), RunsKey(kind), "velero", RunsFilter{Schedule: "nightly", Backup: "source"})
+			if resp.Runs[0].Reason != "preferred" {
+				t.Fatal(resp.Runs[0])
+			}
+		})
 	}
 }
 

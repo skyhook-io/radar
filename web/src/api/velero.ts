@@ -85,6 +85,7 @@ export interface VeleroRunRow {
   name: string
   uid: string
   phase?: string
+  reason?: string
   created?: string
   started?: string
   completed?: string
@@ -112,16 +113,22 @@ export interface VeleroRunsResponse {
 //
 // Every Backup or Restore the caller can read, newest first, read through the
 // same per-kind access as the Velero views; `coverage` says what it covered.
-export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string) {
+export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, filter?: { schedule?: string; backup?: string }) {
   const { guard, gatedKey } = useRadarFeature('veleroRuns')
   const base = getApiBase()
+  const params = new URLSearchParams()
+  if (namespace) params.set('namespace', namespace)
+  if (filter?.schedule) params.set('schedule', filter.schedule)
+  if (filter?.backup) params.set('backup', filter.backup)
+  const schedule = filter?.schedule ?? ''
+  const backup = filter?.backup ?? ''
   return useQuery<VeleroRunsResponse>({
-    queryKey: ['velero', 'runs', base, kind, namespace ?? '', ...gatedKey],
+    queryKey: ['velero', 'runs', base, kind, namespace ?? '', schedule, backup, ...gatedKey],
     queryFn: ({ signal }) =>
-      guard(() => fetchJSON<VeleroRunsResponse>(`/velero/runs/${kind}${namespace ? `?namespace=${encodeURIComponent(namespace)}` : ''}`, signal)),
+      guard(() => fetchJSON<VeleroRunsResponse>(`/velero/runs/${kind}?${params.toString()}`, signal)),
     staleTime: 10_000,
     refetchInterval: 30_000,
-    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === base && prevQuery?.queryKey[3] === kind && prevQuery?.queryKey[4] === (namespace ?? '') ? prev : undefined),
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === base && prevQuery?.queryKey[3] === kind && prevQuery?.queryKey[4] === (namespace ?? '') && prevQuery?.queryKey[5] === schedule && prevQuery?.queryKey[6] === backup ? prev : undefined),
     retry: shouldRetryRadarQuery,
   })
 }

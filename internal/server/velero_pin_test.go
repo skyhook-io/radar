@@ -83,3 +83,12 @@ func TestVeleroRoutesRefuseNamespacesOutsideThePin(t *testing.T) {
 		}
 	})
 }
+
+func TestVeleroScheduleActivityRefusesPinBeforeDiscovery(t *testing.T) {
+	pinNamespaceScope(t)
+	srv, _ := backupNowServer(t)
+	rec := serve(srv, http.MethodGet, "/api/velero/schedules/velero/nightly/activity", "")
+	if rec.Code != 403 || !strings.Contains(rec.Body.String(), "namespace scope") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}

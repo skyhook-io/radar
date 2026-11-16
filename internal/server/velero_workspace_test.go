@@ -525,6 +525,16 @@ func TestVeleroRuns_VeleroOnlyReader(t *testing.T) {
 		}
 	}
 
+	for _, path := range []string{"/api/velero/runs/backups?schedule=absent", "/api/velero/runs/restores?backup=absent"} {
+		resp := env.authGet(t, path, "velero-only", "")
+		var filtered velerosvc.RunsResponse
+		err := json.NewDecoder(resp.Body).Decode(&filtered)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != 200 || filtered.Total != 0 || len(filtered.Runs) != 0 {
+			t.Fatalf("filter %s: %+v %v", path, filtered, err)
+		}
+	}
+
 	bad := env.authGet(t, "/api/velero/runs/schedules", "velero-only", "")
 	defer bad.Body.Close()
 	if bad.StatusCode != http.StatusBadRequest {

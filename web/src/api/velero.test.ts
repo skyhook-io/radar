@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { fetchJSON } from './client'
-import { useVeleroBackupDeletion, useVeleroDeleteBackup } from './velero'
+import { useVeleroBackupDeletion, useVeleroDeleteBackup, useVeleroRuns } from './velero'
 
 vi.mock('@tanstack/react-query', () => ({ useQuery: vi.fn(), useMutation: vi.fn(), useQueryClient: vi.fn() }))
 vi.mock('./client', () => ({
@@ -12,6 +12,25 @@ vi.mock('./client', () => ({
 beforeEach(() => vi.clearAllMocks())
 
 function lastQuery() { return vi.mocked(useQuery).mock.calls.at(-1)![0] }
+
+it('puts run filters in the URL and key and never reuses another filter’s answer', async () => {
+  useVeleroRuns('backups', 'velero', { schedule: 'nightly' })
+  const first = lastQuery()
+  useVeleroRuns('backups', 'velero', { schedule: 'weekly' })
+  const second = lastQuery()
+  const request = second.queryFn as (context: { signal: AbortSignal }) => Promise<unknown>
+  await request({ signal: new AbortController().signal })
+  expect(fetchJSON).toHaveBeenCalledWith('/velero/runs/backups?namespace=velero&schedule=weekly', expect.any(AbortSignal))
+  expect(second.queryKey).not.toEqual(first.queryKey)
+  const previous = { runs: [] }
+  const placeholder = second.placeholderData as (prev: unknown, query: { queryKey: readonly unknown[] }) => unknown
+  expect(placeholder(previous, { queryKey: first.queryKey })).toBeUndefined()
+  expect(placeholder(previous, { queryKey: second.queryKey })).toBe(previous)
+  useVeleroRuns('restores', undefined, { backup: 'source' })
+  const restore = lastQuery().queryFn as typeof request
+  await restore({ signal: new AbortController().signal })
+  expect(fetchJSON).toHaveBeenLastCalledWith('/velero/runs/restores?backup=source', expect.any(AbortSignal))
+})
 
 it('looks up deletion by backup UID without a request name or browser operation store', async () => {
   useVeleroBackupDeletion('velero', 'nightly', 'uid-one')

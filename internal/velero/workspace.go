@@ -7,6 +7,7 @@ package velero
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -332,6 +333,7 @@ type Run struct {
 	Name      string `json:"name"`
 	UID       string `json:"uid"`
 	Phase     string `json:"phase,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 	Created   string `json:"created,omitempty"`
 	Started   string `json:"started,omitempty"`
 	Completed string `json:"completed,omitempty"`
@@ -372,11 +374,16 @@ func RunsKey(plural string) string {
 	return ""
 }
 
+type RunsFilter struct {
+	Schedule string
+	Backup   string
+}
+
 // Runs lists one kind's runs the caller can read, newest first: in one
 // namespace, or across the request scope when namespace is "". Read through
 // the same per-kind access as the views, so a Velero-only reader gets them;
 // Coverage says what that read covered.
-func (r *Reader) Runs(ctx context.Context, key, namespace string) RunsResponse {
+func (r *Reader) Runs(ctx context.Context, key, namespace string, filter RunsFilter) RunsResponse {
 	var scope []string
 	if namespace != "" {
 		scope = []string{namespace}
@@ -394,6 +401,15 @@ func (r *Reader) Runs(ctx context.Context, key, namespace string) RunsResponse {
 	for _, u := range integration.KeepGroups(items, groups) {
 		if namespace != "" && u.GetNamespace() != namespace {
 			continue
+		}
+		if key == backupsKey && filter.Schedule != "" && u.GetLabels()[domain.ScheduleNameLabel] != filter.Schedule {
+			continue
+		}
+		if key == restoresKey && filter.Backup != "" {
+			backup, _, _ := unstructured.NestedString(u.Object, "spec", "backupName")
+			if backup != filter.Backup {
+				continue
+			}
 		}
 		resp.Runs = append(resp.Runs, runOf(u, key == restoresKey))
 	}
@@ -436,6 +452,11 @@ func runOf(u *unstructured.Unstructured, restore bool) Run {
 		ItemsTotal:      opt("status", "progress", "totalItems"),
 		Errors:          num("status", "errors"), Warnings: num("status", "warnings"),
 		BackupName: str("spec", "backupName"), ScheduleName: str("spec", "scheduleName"),
+	}
+	run.Reason = str("status", "failureReason")
+	if run.Reason == "" {
+		validation, _, _ := unstructured.NestedStringSlice(u.Object, "status", "validationErrors")
+		run.Reason = strings.Join(validation, "; ")
 	}
 	if restore {
 		run.ItemsDone = opt("status", "progress", "itemsRestored")

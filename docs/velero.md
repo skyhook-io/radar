@@ -58,8 +58,8 @@ A Backup object is not the backup. Deleting it leaves the backup's files in the 
 ## Data
 
 - `GET /api/velero/workspace`: every installation the caller can read. Readings, not objects; every time is absolute, with `observedAt` saying when the readings were computed.
-- `GET /api/velero/schedules/{namespace}/{name}/activity`: one schedule with its recent runs, for the drawer. 403 without `list schedules` there, 404 when it does not exist.
-- `GET /api/velero/runs/{backups|restores}?namespace=`: every Backup or Restore the caller can read, newest first (at most 5,000, with the total), read through the same per-kind access as the views, so a reader of Velero's kinds alone needs no Pod or Deployment access; `coverage` says what it covered, and the lists and tabs show lower bounds (≥N) over a partial read. Behind capability `veleroRuns`.
+- `GET /api/velero/schedules/{namespace}/{name}/activity`: one schedule with its recent runs, for the drawer. 403 outside the namespace pin before discovery or inventory reads, or without `list schedules` there; 404 when it does not exist.
+- `GET /api/velero/runs/{backups|restores}?namespace=`: every Backup or Restore the caller can read, newest first (at most 5,000, with the total). `schedule=` filters Backups by `velero.io/schedule-name`; `backup=` filters Restores by `spec.backupName`. Filters run before sorting and capping, and `total` counts the filtered set. Each run carries `reason` from `status.failureReason`, else `validationErrors` joined with "; ". Lists are read through the same per-kind access as the views, so a reader of Velero's kinds alone needs no Pod or Deployment access; `coverage` says what it covered, and the lists and tabs show lower bounds (≥N) over a partial read. Behind capability `veleroRuns`.
 - Capability flag `veleroWorkspace`. An older Radar shows a "needs a newer Radar" note and the kind lists keep working.
 - Rules: `pkg/velero` (pure, no Kubernetes calls). Service: `internal/velero`. Server adapter and handlers: `internal/server/velero_workspace.go`.
 
