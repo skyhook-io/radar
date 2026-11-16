@@ -17,8 +17,17 @@ vi.mock('elkjs/lib/elk.bundled.js', () => ({
   },
 }))
 vi.mock('@xyflow/react', () => ({
-  ReactFlow: ({ edges, onEdgeClick, children }: { edges: Edge[]; onEdgeClick: (event: unknown, edge: Edge) => void; children: ReactNode }) => (
-    <div>{edges.map(edge => <button key={edge.id} data-edge={edge.id} onClick={() => onEdgeClick({}, edge)}>{edge.label as string}</button>)}{children}</div>
+  ReactFlow: ({ nodes, edges, onNodeClick, onEdgeClick, children }: {
+    nodes: Node[]; edges: Edge[]; onNodeClick: (event: unknown, node: Node) => void
+    onEdgeClick: (event: unknown, edge: Edge) => void; children: ReactNode
+  }) => (
+    <div>
+      {nodes.map(node => <button key={node.id} data-node={node.id} data-connections={node.data.connections}
+        data-total-volume={node.data.totalConnections} data-ports={JSON.stringify(node.data.ports)}
+        onClick={() => onNodeClick({}, node)}>{node.data.label as string}</button>)}
+      {edges.map(edge => <button key={edge.id} data-edge={edge.id} onClick={() => onEdgeClick({}, edge)}>{edge.label as string}</button>)}
+      {children}
+    </div>
   ),
   Background: () => null,
   Controls: () => null,
@@ -72,6 +81,48 @@ describe('TrafficGraph addon group edges', () => {
         expect(onSelectionChange.mock.calls[0][0]).toMatchObject({ type: 'edge', port, directionUnknown: false })
         await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" selection={onSelectionChange.mock.calls[0][0]} />))
         expect(container.textContent).toContain('Data300 B')
+      })
+    }
+  }
+})
+
+
+describe('TrafficGraph addon group node accounting', () => {
+  for (const source of ['istio', 'beyla', 'hubble']) {
+    for (const [flow, nodeId, direction] of [
+      [incoming, 'addon-internet', 'Outgoing'],
+      [outgoing, 'default/kubernetes', 'Incoming'],
+    ] as const) {
+      it(`counts Data once when selecting ${nodeId} from ${source}`, async () => {
+        const grouped = groupAddonFlows([{ ...flow, rawPairs: [endpointPair(flow)] }], (_name, ns) => ns === 'monitoring')
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" />))
+        const node = container.querySelector<HTMLButtonElement>(`[data-node="${nodeId}"]`)!
+        expect(node).not.toBeNull()
+        expect(node.dataset.connections).toBe('1')
+        act(() => node.click())
+        expect(container.textContent).toContain('Data transferred300 B')
+        expect(container.textContent).not.toContain('600 B')
+        expect(container.textContent).toContain(`${direction} (1)`)
+
+        const addonNode = container.querySelector<HTMLButtonElement>('[data-node="monitoring/prometheus"]')!
+        expect(addonNode.dataset.connections).toBe('1')
+        act(() => addonNode.click())
+        expect(container.textContent).toContain('Data transferred300 B')
+      })
+
+      it(`counts node volume and ports once at ${nodeId} from ${source}`, async () => {
+        const measured = { ...flow, connections: 2, requestRate: 1.7 }
+        const grouped = groupAddonFlows([{ ...measured, rawPairs: [endpointPair(measured)] }], (_name, ns) => ns === 'monitoring')
+        await act(async () => root.render(<TrafficGraph flows={grouped} trafficSource={source} addonMode="group" />))
+        const volume = source === 'hubble' ? 2 : 1.7
+        for (const id of [nodeId, 'monitoring/prometheus']) {
+          const node = container.querySelector<HTMLButtonElement>(`[data-node="${id}"]`)!
+          expect(node.dataset.connections).toBe('1')
+          expect(Number(node.dataset.totalVolume)).toBe(volume)
+          if (id === 'default/kubernetes' || (id === 'monitoring/prometheus' && direction === 'Outgoing')) {
+            expect(JSON.parse(node.dataset.ports!)).toEqual([{ port: 443, connections: volume }])
+          }
+        }
       })
     }
   }

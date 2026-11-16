@@ -335,15 +335,18 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	ztunnelReported := false
 	if !scopes.tcpUnchecked {
 		var reportedInto []string
-		tcpFlows, reportedInto, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
+		var destinationTCP map[istioSeriesKey]bool
+		tcpFlows, reportedInto, destinationTCP, tcpErr = s.queryTCPFlows(ctx, opts, scopes.tcp)
 		ztunnelReported = slices.ContainsFunc(reportedInto, func(ns string) bool { return slices.Contains(ambientKnown, ns) })
 		tcpFlows = withoutWaypointHops(tcpFlows, waypoints)
+		if tcpErr == nil {
+			reconcileAmbientHTTPBytes(httpFlows, destinationTCP, ambientKnown)
+		}
 	}
 	if tcpErr != nil {
 		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", tcpErr)
 		missing = append(missing, "TCP traffic")
 	} else {
-		tcpFlows = withoutAmbientHTTPDuplicates(tcpFlows, httpFlows, ambientKnown)
 		httpFlows = append(httpFlows, tcpFlows...)
 	}
 
@@ -710,24 +713,29 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, opts FlowOptions, sc c
 // queryTCPFlows reads TCP traffic from istio_tcp_received_bytes_total and
 // istio_tcp_sent_bytes_total. reportedInto includes idle series: their presence
 // still shows the reporting proxy is scraped even when no bytes moved.
-func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) (flows []Flow, reportedInto []string, err error) {
+// destinationTCP identifies conversations whose wire bytes may also cover HTTP.
+func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc clusterScope) (flows []Flow, reportedInto []string, destinationTCP map[istioSeriesKey]bool, err error) {
 	w := rateWindowFor(opts.Since)
-	const groupBy = "source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name"
-	volumes := make(map[istioSeriesKey][2]float64)
-	var keys []istioSeriesKey
+	const groupBy = "source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter"
+	type tcpSeriesKey struct {
+		istioSeriesKey
+		reporter string
+	}
+	volumes := make(map[tcpSeriesKey][2]float64)
+	var keys []tcpSeriesKey
 	// Both selected reporters observe the server side, so received bytes
 	// travel client→server and sent bytes travel server→client.
 	for direction, metric := range []string{istioTCPMetric, "istio_tcp_sent_bytes_total"} {
 		result, err := s.queryFn(ctx, istioRateQuery(groupBy, metric, istioReporterSelector, opts.Namespace, sc, w))
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		for _, series := range result.Series {
 			reportedInto = append(reportedInto, series.Labels["destination_workload_namespace"])
 			if len(series.DataPoints) == 0 || series.DataPoints[0].Value <= 0 {
 				continue
 			}
-			key := istioSeriesKeyFrom(series.Labels)
+			key := tcpSeriesKey{istioSeriesKeyFrom(series.Labels), series.Labels["reporter"]}
 			volume, exists := volumes[key]
 			if !exists {
 				keys = append(keys, key)
@@ -737,9 +745,13 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc cl
 		}
 	}
 
+	destinationTCP = make(map[istioSeriesKey]bool)
 	flows = make([]Flow, 0, len(keys))
 	for _, key := range keys {
 		volume := volumes[key]
+		if key.reporter == "destination" {
+			destinationTCP[key.istioSeriesKey] = true
+		}
 		flow := Flow{
 			Source: Endpoint{
 				Name: key.srcWorkload, Namespace: key.srcNs,
@@ -770,7 +782,7 @@ func (s *IstioSource) queryTCPFlows(ctx context.Context, opts FlowOptions, sc cl
 		}
 		flows = append(flows, flow)
 	}
-	return flows, reportedInto, nil
+	return flows, reportedInto, destinationTCP, nil
 }
 
 // StreamFlows returns a channel of flows for real-time updates

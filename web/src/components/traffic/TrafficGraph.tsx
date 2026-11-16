@@ -469,18 +469,19 @@ function DetailsPanel({
     ? flows.filter(f => {
         const sourceId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
         const destId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
-        return sourceId === selection.id || destId === selection.id
+        return (f.source.kind !== 'SkipEdge' && sourceId === selection.id) ||
+          (f.destination.kind !== 'SkipEdge' && destId === selection.id)
       })
     : []
 
   // Categorize flows by direction
   const incomingFlows = relatedFlows.filter(f => {
     const destId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
-    return destId === selection.id
+    return f.destination.kind !== 'SkipEdge' && destId === selection.id
   })
   const outgoingFlows = relatedFlows.filter(f => {
     const sourceId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-    return sourceId === selection.id
+    return f.source.kind !== 'SkipEdge' && sourceId === selection.id
   })
 
   // Compute aggregate stats for node
@@ -1199,24 +1200,21 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         ? `${flow.destination.namespace}/${flow.destination.name}`
         : flow.destination.name
 
-      connectionCounts.set(sourceId, (connectionCounts.get(sourceId) || 0) + 1)
-      connectionCounts.set(destId, (connectionCounts.get(destId) || 0) + 1)
-
-      // Sum total connections
-      // Display-only sums: the unrounded rate for a rate-based source.
+      // A placeholder retains volume only for the endpoint outside the virtual edge.
       const volume = displayVolume(flow, isRateBased)
-      totalConnections.set(sourceId, (totalConnections.get(sourceId) || 0) + volume)
-      totalConnections.set(destId, (totalConnections.get(destId) || 0) + volume)
+      if (flow.source.kind !== 'SkipEdge') {
+        connectionCounts.set(sourceId, (connectionCounts.get(sourceId) || 0) + 1)
+        totalConnections.set(sourceId, (totalConnections.get(sourceId) || 0) + volume)
+        if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) hotNodes.add(sourceId)
+      }
+      if (flow.destination.kind !== 'SkipEdge') {
+        connectionCounts.set(destId, (connectionCounts.get(destId) || 0) + 1)
+        totalConnections.set(destId, (totalConnections.get(destId) || 0) + volume)
 
-      // Track ports for destination nodes
-      if (!nodePorts.has(destId)) nodePorts.set(destId, new Map())
-      const portCounts = nodePorts.get(destId)!
-      portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + volume)
-
-      // Track hot path nodes (Phase 2.3)
-      if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) {
-        hotNodes.add(sourceId)
-        hotNodes.add(destId)
+        if (!nodePorts.has(destId)) nodePorts.set(destId, new Map())
+        const portCounts = nodePorts.get(destId)!
+        portCounts.set(flow.port, (portCounts.get(flow.port) || 0) + volume)
+        if (flow.connections >= hotPathThreshold && hotPathThreshold > 0) hotNodes.add(destId)
       }
     })
 

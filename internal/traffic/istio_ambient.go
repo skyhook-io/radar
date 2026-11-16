@@ -110,29 +110,24 @@ func withoutWaypointHops(flows []Flow, waypoints map[istioWorkload]bool) []Flow 
 	return kept
 }
 
-// Ambient TCP reports also observe the HTTP conversations measured by client
-// proxies. Keep the HTTP bytes alone for matching Services in those namespaces.
-func withoutAmbientHTTPDuplicates(tcp, http []Flow, ambient []string) []Flow {
-	conversation := func(f Flow) istioSeriesKey {
-		return istioSeriesKey{
+// Destination TCP reports into ambient namespaces include HTTP wire bytes and
+// may also include opaque TCP on the same Service. Keep that complete measurement
+// and the HTTP rates; waypoint TCP measures independent traffic and stays separate.
+func reconcileAmbientHTTPBytes(http []Flow, destinationTCP map[istioSeriesKey]bool, ambient []string) {
+	for i, f := range http {
+		if !slices.Contains(ambient, f.Destination.Namespace) {
+			continue
+		}
+		conversation := istioSeriesKey{
 			flowKey: flowKey{
 				srcWorkload: f.Source.Workload, srcNs: f.Source.Namespace,
 				dstWorkload: f.Destination.Workload, dstNs: f.Destination.Namespace,
 			},
 			dstService: f.DestService,
 		}
-	}
-	seen := make(map[istioSeriesKey]bool)
-	for _, f := range http {
-		if slices.Contains(ambient, f.Destination.Namespace) {
-			seen[conversation(f)] = true
+		if destinationTCP[conversation] {
+			http[i].BytesSent = 0
+			http[i].BytesRecv = 0
 		}
 	}
-	kept := tcp[:0]
-	for _, f := range tcp {
-		if !seen[conversation(f)] {
-			kept = append(kept, f)
-		}
-	}
-	return kept
 }

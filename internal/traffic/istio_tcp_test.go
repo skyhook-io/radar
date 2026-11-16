@@ -63,30 +63,31 @@ func TestIstioTCPByteActivity(t *testing.T) {
 	}
 }
 
-func TestIstioAmbientTCPDuplicate(t *testing.T) {
+func TestIstioAmbientHTTPByteReconciliation(t *testing.T) {
 	for _, tc := range []struct {
 		name, dstNs, tcpService, tcpSource, tcpSourceNs, tcpDestination string
-		wantTCP                                                         bool
+		httpReporter, tcpReporter                                       string
+		zeroHTTPBytes                                                   bool
 	}{
-		{"ambient same Service", "amb", "httpbin", "curl", "side", "httpbin", false},
-		{"sidecar same Service", "side", "httpbin", "curl", "side", "httpbin", true},
-		{"ambient other Service", "amb", "db", "curl", "side", "httpbin", true},
-		{"ambient other source", "amb", "httpbin", "other", "side", "httpbin", true},
-		{"ambient other source namespace", "amb", "httpbin", "curl", "other", "httpbin", true},
-		{"ambient other destination", "amb", "httpbin", "curl", "side", "other", true},
+		{"ambient same Service", "amb", "httpbin", "curl", "side", "httpbin", "source", "destination", true},
+		{"waypoint same Service", "amb", "httpbin", "curl", "side", "httpbin", "waypoint", "waypoint", false},
+		{"sidecar same Service", "side", "httpbin", "curl", "side", "httpbin", "destination", "destination", false},
+		{"ambient other Service", "amb", "db", "curl", "side", "httpbin", "source", "destination", false},
+		{"ambient other source", "amb", "httpbin", "other", "side", "httpbin", "source", "destination", false},
+		{"ambient other source namespace", "amb", "httpbin", "curl", "other", "httpbin", "source", "destination", false},
+		{"ambient other destination", "amb", "httpbin", "curl", "side", "other", "source", "destination", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			reporter := "destination"
-			if tc.dstNs == "amb" {
-				reporter = "source"
-			}
-			tcp := istioSeries(istioTCPMetric, "destination", tc.tcpSourceNs, tc.tcpSource, tc.dstNs, tc.tcpDestination, "", 100)
+			tcp := istioSeries(istioTCPMetric, tc.tcpReporter, tc.tcpSourceNs, tc.tcpSource, tc.dstNs, tc.tcpDestination, "", 100)
 			tcp.labels["destination_service_name"] = tc.tcpService
+			sent := istioSeries("istio_tcp_sent_bytes_total", tc.tcpReporter, tc.tcpSourceNs, tc.tcpSource, tc.dstNs, tc.tcpDestination, "", 200)
+			sent.labels["destination_service_name"] = tc.tcpService
 			raw := []istioRawSeries{
-				istioSeries("istio_requests_total", reporter, "side", "curl", tc.dstNs, "httpbin", "200", 2),
-				istioSeries("istio_request_bytes_sum", reporter, "side", "curl", tc.dstNs, "httpbin", "200", 5),
-				istioSeries("istio_response_bytes_sum", reporter, "side", "curl", tc.dstNs, "httpbin", "200", 9),
-				tcp,
+				istioSeries("istio_requests_total", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", 2),
+				istioSeries("istio_requests_total", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "503", 1),
+				istioSeries("istio_request_bytes_sum", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", 5),
+				istioSeries("istio_response_bytes_sum", tc.httpReporter, "side", "curl", tc.dstNs, "httpbin", "200", 9),
+				tcp, sent,
 			}
 			s := newTestIstio(fakeIstioProm(raw, nil))
 			s.ambientNamespaceFn = func() []string { return []string{"amb"} }
@@ -94,23 +95,69 @@ func TestIstioAmbientTCPDuplicate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := 1
-			if tc.wantTCP {
-				want++
+			if len(resp.Flows) != 2 {
+				t.Fatalf("want HTTP and TCP flows, got %+v", resp.Flows)
 			}
-			if len(resp.Flows) != want {
-				t.Fatalf("got %+v, want %d flows", resp.Flows, want)
+			wantHTTPSent, wantHTTPRecv := int64(5*300), int64(9*300)
+			if tc.zeroHTTPBytes {
+				wantHTTPSent, wantHTTPRecv = 0, 0
 			}
-			if !tc.wantTCP {
-				a := AggregateFlows(resp.Flows)
-				if len(a) != 1 || a[0].BytesSent != 5*300 || a[0].BytesRecv != 9*300 {
-					t.Errorf("duplicate TCP bytes reached aggregation: %+v", a)
+			for _, f := range resp.Flows {
+				if f.Protocol == "tcp" {
+					if f.BytesSent != 100*300 || f.BytesRecv != 200*300 {
+						t.Errorf("TCP wire bytes changed: %+v", f)
+					}
+				} else if f.BytesSent != wantHTTPSent || f.BytesRecv != wantHTTPRecv || f.RequestRate != 3 || f.ErrorRate != 1 {
+					t.Errorf("wrong HTTP bytes or rates: %+v", f)
 				}
-				if strings.Contains(resp.Warning, istioZtunnelUnscrapedNote) {
-					t.Error("de-duplication lost ztunnel scrape evidence")
+			}
+			var aggregateSent, aggregateRecv, recordsSent, recordsRecv int64
+			for _, a := range AggregateFlows(resp.Flows) {
+				aggregateSent += a.BytesSent
+				aggregateRecv += a.BytesRecv
+				match := FlowMatch{Pairs: []EndpointPair{{
+					Source:      EndpointRef{Namespace: a.Source.Namespace, Name: a.Source.Name, Kind: a.Source.Kind},
+					Destination: EndpointRef{Namespace: a.Destination.Namespace, Name: a.Destination.Name, Kind: a.Destination.Kind},
+					Port:        a.Port, DirectionUnknown: a.DirectionUnknown,
+				}}}
+				for _, f := range resp.Flows {
+					if match.Matches(f) {
+						recordsSent += f.BytesSent
+						recordsRecv += f.BytesRecv
+					}
 				}
+			}
+			if aggregateSent != 100*300+wantHTTPSent || aggregateRecv != 200*300+wantHTTPRecv || recordsSent != aggregateSent || recordsRecv != aggregateRecv {
+				t.Errorf("aggregate bytes %d/%d, records %d/%d; want %d/%d", aggregateSent, aggregateRecv, recordsSent, recordsRecv, 100*300+wantHTTPSent, 200*300+wantHTTPRecv)
+			}
+			if tc.zeroHTTPBytes && strings.Contains(resp.Warning, istioZtunnelUnscrapedNote) {
+				t.Error("reconciliation lost ztunnel scrape evidence")
 			}
 		})
+	}
+}
+
+func TestIstioTCPJoinsDirectionalSeriesByReporter(t *testing.T) {
+	raw := []istioRawSeries{
+		istioSeries(istioTCPMetric, "destination", "side", "curl", "amb", "httpbin", "", 13),
+		istioSeries("istio_tcp_sent_bytes_total", "destination", "side", "curl", "amb", "httpbin", "", 7),
+		istioSeries(istioTCPMetric, "waypoint", "side", "curl", "amb", "httpbin", "", 5),
+		istioSeries("istio_tcp_sent_bytes_total", "waypoint", "side", "curl", "amb", "httpbin", "", 3),
+	}
+	s := newTestIstio(fakeIstioProm(raw, nil))
+	flows, _, destinationTCP, err := s.queryTCPFlows(t.Context(), DefaultFlowOptions(), clusterScope{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flows) != 2 || len(destinationTCP) != 1 {
+		t.Fatalf("want two reporter flows and one destination conversation, got %+v, %+v", flows, destinationTCP)
+	}
+	volumes := map[[2]int64]bool{}
+	for _, f := range flows {
+		volumes[[2]int64{f.BytesSent, f.BytesRecv}] = true
+	}
+	if !volumes[[2]int64{13 * 300, 7 * 300}] || !volumes[[2]int64{5 * 300, 3 * 300}] {
+		t.Errorf("directional byte joins mixed reporters: %+v", flows)
 	}
 }
 
