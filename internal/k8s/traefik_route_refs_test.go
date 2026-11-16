@@ -165,6 +165,35 @@ func TestTraefikRuleRefsRefusedCrossNamespace(t *testing.T) {
 	}
 }
 
+func TestTraefikRefusesCrossNamespace(t *testing.T) {
+	route := ingressRoute("edge", "cross", nil, svcRef("web"), nil)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{"refused", traefikArgs[:len(traefikArgs)-1], true},
+		{"allowed", traefikArgs, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer ResetTestState()
+			defer ResetTestDynamicState()
+			initTraefikFixture(t, traefikPod("traefik", true, tc.args...))
+			if got := traefikAssessor(t).RefusesCrossNamespace(route); got != tc.want {
+				t.Errorf("RefusesCrossNamespace = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	t.Run("no running Traefik", func(t *testing.T) {
+		defer ResetTestState()
+		defer ResetTestDynamicState()
+		initTraefikFixture(t, nil)
+		if traefikAssessor(t).RefusesCrossNamespace(route) {
+			t.Error("can't tell must not read as refused")
+		}
+	})
+}
+
 // Two chain members reaching the same present Middleware don't turn the
 // chain into can't-tell.
 func TestTraefikRuleRefsDiamondChainIsPresent(t *testing.T) {

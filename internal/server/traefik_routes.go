@@ -100,14 +100,17 @@ type traefikRoutesInput struct {
 	// duplicate_host are computed over all of them.
 	Routes []*unstructured.Unstructured
 	// Select picks the routes that get full rows; nil selects all.
-	Select    func(*unstructured.Unstructured) bool
-	Refs      func(*unstructured.Unstructured) []k8s.TraefikRuleRefs
-	CanRead   func(issuesapi.EvidenceRead) bool
-	NSVisible func(ns string) bool
-	Service   func(ns, name string) (*corev1.Service, bool)
-	Pods      func(ns string, sel labels.Selector) ([]*corev1.Pod, error)
-	Cert      func(ns, name string) (state string, notAfter *time.Time)
-	Now       time.Time
+	Select func(*unstructured.Unstructured) bool
+	Refs   func(*unstructured.Unstructured) []k8s.TraefikRuleRefs
+	// RefusesCrossNamespace: the Traefik that loads the route refuses
+	// references to other namespaces; nil is "can't tell".
+	RefusesCrossNamespace func(*unstructured.Unstructured) bool
+	CanRead               func(issuesapi.EvidenceRead) bool
+	NSVisible             func(ns string) bool
+	Service               func(ns, name string) (*corev1.Service, bool)
+	Pods                  func(ns string, sel labels.Selector) ([]*corev1.Pod, error)
+	Cert                  func(ns, name string) (state string, notAfter *time.Time)
+	Now                   time.Time
 	// Limit caps the full rows; 0 is no cap.
 	Limit int
 }
@@ -137,17 +140,11 @@ func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []t
 	var full []int
 	for _, route := range routes {
 		ref := traefikRouteRef{Group: resourceid.GroupFromAPIVersion(route.GetAPIVersion()), Namespace: route.GetNamespace(), Name: route.GetName()}
-		for _, rule := range k8s.ParseTraefikRuleRefs(route) {
-			for _, m := range rule.Middlewares {
-				if m.Name == "" || strings.Contains(m.Name, "@") {
-					continue
-				}
-				key := [2]string{m.Namespace, m.Name}
-				if users[key] == nil {
-					users[key] = map[traefikRouteRef]bool{}
-				}
-				users[key][ref] = true
+		for _, key := range traefikAppliedMiddlewares(route, in.RefusesCrossNamespace) {
+			if users[key] == nil {
+				users[key] = map[traefikRouteRef]bool{}
 			}
+			users[key][ref] = true
 		}
 		selected := !truncated && (in.Select == nil || in.Select(route))
 		var refs []k8s.TraefikRuleRefs
@@ -208,6 +205,23 @@ func buildTraefikRoutes(in traefikRoutesInput) (rows []traefikRouteRow, uses []t
 		return uses[i].Name < uses[j].Name
 	})
 	return rows, uses, truncated
+}
+
+// traefikAppliedMiddlewares is each namespace/name Middleware the route's
+// rules name, leaving out provider-qualified names and the cross-namespace
+// references its Traefik refuses (it drops those rules).
+func traefikAppliedMiddlewares(route *unstructured.Unstructured, refuses func(*unstructured.Unstructured) bool) [][2]string {
+	var out [][2]string
+	refused := refuses != nil && refuses(route)
+	for _, rule := range k8s.ParseTraefikRuleRefs(route) {
+		for _, m := range rule.Middlewares {
+			if m.Name == "" || strings.Contains(m.Name, "@") || (refused && m.Namespace != route.GetNamespace()) {
+				continue
+			}
+			out = append(out, [2]string{m.Namespace, m.Name})
+		}
+	}
+	return out
 }
 
 func traefikPriority(v any) *int64 {
@@ -472,8 +486,9 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 	assessor := k8s.NewTraefikRouteAssessor(cache, k8s.GetDynamicResourceCache(), discovery)
 	certMemo := map[[2]string]traefikCertAnswer{}
 	in := traefikRoutesInput{
-		Routes: routes,
-		Refs:   assessor.RuleRefs,
+		Routes:                routes,
+		Refs:                  assessor.RuleRefs,
+		RefusesCrossNamespace: assessor.RefusesCrossNamespace,
 		CanRead: traefikReadGate(s.issueEvidenceAccess(r), func(group, resource, ns, verb string) bool {
 			return s.canRead(r, group, resource, ns, verb)
 		}),
@@ -515,19 +530,15 @@ func (s *Server) handleTraefikRoutes(w http.ResponseWriter, r *http.Request) {
 		// Selection stops at the cap so routes past it aren't enriched.
 		selected := 0
 		in.Select = func(u *unstructured.Unstructured) bool {
-			for _, rule := range k8s.ParseTraefikRuleRefs(u) {
-				for _, m := range rule.Middlewares {
-					if m.Namespace == mwNs && m.Name == mwName {
-						if selected >= traefikMiddlewareRouteLimit {
-							mwTruncated = true
-							return false
-						}
-						selected++
-						return true
-					}
-				}
+			if !slices.Contains(traefikAppliedMiddlewares(u, in.RefusesCrossNamespace), [2]string{mwNs, mwName}) {
+				return false
 			}
-			return false
+			if selected >= traefikMiddlewareRouteLimit {
+				mwTruncated = true
+				return false
+			}
+			selected++
+			return true
 		}
 	default:
 		in.Limit = traefikRouteRowLimit

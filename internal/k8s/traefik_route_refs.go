@@ -90,15 +90,31 @@ func ParseTraefikRuleRefs(route *unstructured.Unstructured) []TraefikRuleRefs {
 	return out
 }
 
+// RefusesCrossNamespace: a running Traefik v3 loads the route and none that
+// does allows cross-namespace references. False when Radar can't tell.
+func (a *TraefikRouteAssessor) RefusesCrossNamespace(route *unstructured.Unstructured) bool {
+	loaders := a.loaders(route)
+	for _, inst := range loaders {
+		if inst.allowCrossNamespace {
+			return false
+		}
+	}
+	return len(loaders) > 0
+}
+
+func (a *TraefikRouteAssessor) loaders(route *unstructured.Unstructured) []traefikInstance {
+	if a.cache == nil || a.dynamic == nil || a.discovery == nil || resourceid.GroupFromAPIVersion(route.GetAPIVersion()) != traefikGroup {
+		return nil
+	}
+	instances := a.scope.get("traefikInstances", func() any { return runningTraefikInstances(a.cache) }).([]traefikInstance)
+	return traefikLoaders(instances, route)
+}
+
 // RuleRefs is ParseTraefikRuleRefs with each verdict filled in from the
 // detector's evidence.
 func (a *TraefikRouteAssessor) RuleRefs(route *unstructured.Unstructured) []TraefikRuleRefs {
 	out := ParseTraefikRuleRefs(route)
-	var loaders []traefikInstance
-	if a.cache != nil && a.dynamic != nil && a.discovery != nil && resourceid.GroupFromAPIVersion(route.GetAPIVersion()) == traefikGroup {
-		instances := a.scope.get("traefikInstances", func() any { return runningTraefikInstances(a.cache) }).([]traefikInstance)
-		loaders = traefikLoaders(instances, route)
-	}
+	loaders := a.loaders(route)
 	if len(loaders) == 0 {
 		return out
 	}

@@ -244,6 +244,21 @@ func TestBuildTraefikRoutesMiddlewareUse(t *testing.T) {
 	}
 }
 
+// A Traefik that refuses cross-namespace references never applies the
+// Middleware for a route in another namespace, so that route doesn't use it.
+func TestBuildTraefikRoutesMiddlewareUseSkipsRefused(t *testing.T) {
+	rule := map[string]any{"match": "Host(`x`)", "middlewares": []any{map[string]any{"name": "redirect", "namespace": "shop"}}}
+	in := tFixture{}.input(
+		tRoute("shop", "a", nil, nil, rule),
+		tRoute("edge", "c", nil, nil, rule),
+	)
+	in.RefusesCrossNamespace = func(*unstructured.Unstructured) bool { return true }
+	_, uses, _ := buildTraefikRoutes(in)
+	if len(uses) != 1 || uses[0].UsedBy != 1 {
+		t.Fatalf("uses = %+v", uses)
+	}
+}
+
 func TestBuildTraefikRoutesTruncates(t *testing.T) {
 	in := tFixture{}.input(tRoute("shop", "a", nil, nil, tRule("Host(`a`)", nil), tRule("Host(`b`)", nil), tRule("Host(`c`)", nil)))
 	in.Limit = 2
