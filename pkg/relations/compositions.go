@@ -87,18 +87,18 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 			if len(keys) == 0 {
 				continue
 			}
-			search := v.newSearch(subject.Namespace, c.CrossNamespace, &a.Coverage)
+			search := v.newSearch(subject.Namespace, c.CrossNamespace)
 			for _, source := range c.Sources {
 				if !f.consumer(source.Kind) {
 					continue
 				}
-				search.each(source.Kind, &a.Coverage, func(o IndexedObject) {
+				search.each(source.Kind, &a.Coverage, func(o IndexedObject, _ *Coverage) func() {
 					for _, key := range declarations(c, o) {
 						if slices.Contains(keys, key) {
-							add(subject, o.Ref)
-							break
+							return func() { add(subject, o.Ref) }
 						}
 					}
+					return nil
 				})
 			}
 		}
@@ -116,15 +116,15 @@ func (v *View) Composed(f *Composition, subject resourceid.Ref, fetched runtime.
 			if len(namespaces) == 0 {
 				continue
 			}
-			search := v.newSearchIn(namespaces, &a.Coverage)
+			search := v.newSearchIn(namespaces)
 			for _, source := range f.Producer.Sources {
-				search.each(source.Kind, &a.Coverage, func(o IndexedObject) {
+				search.each(source.Kind, &a.Coverage, func(o IndexedObject, _ *Coverage) func() {
 					for _, key := range declarations(f.Producer, o) {
 						if slices.Contains(keys, key) {
-							add(o.Ref, subject)
-							break
+							return func() { add(o.Ref, subject) }
 						}
 					}
+					return nil
 				})
 			}
 		}
