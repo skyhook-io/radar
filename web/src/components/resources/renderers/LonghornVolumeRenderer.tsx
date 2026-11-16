@@ -11,9 +11,10 @@ export function LonghornVolumeRenderer({ data }: { data: any }) {
   const candidates = engines.data?.filter((e) => e?.spec?.volumeName === name) ?? []
   const engine = candidates.length === 1 ? candidates[0] : candidates.find((e) => e?.spec?.active === true)
   const engineUnknown = !!engines.error || (candidates.length > 1 && !engine)
+  const engineLookedUp = !engines.isLoading && !engines.error && engines.data !== undefined
   return (
     <>
-      <BaseLonghornVolumeRenderer data={data} engine={engine} engineUnknown={engineUnknown} />
+      <BaseLonghornVolumeRenderer data={data} engine={engine} engineUnknown={engineUnknown} engineLookedUp={engineLookedUp} />
       <LookupFailureNote errors={[engines.error]} what="this volume's engine (healthy replicas, rebuilds)" />
     </>
   )

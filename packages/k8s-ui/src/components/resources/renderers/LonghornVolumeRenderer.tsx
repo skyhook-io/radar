@@ -10,6 +10,8 @@ interface Props {
   engine?: any
   /** The host tried to read the Engine and couldn't (or couldn't tell which one is current). */
   engineUnknown?: boolean
+  /** The host finished reading Engines, so a missing engine means this volume has none. */
+  engineLookedUp?: boolean
 }
 
 function bytes(value: unknown): string | undefined {
@@ -24,7 +26,7 @@ function since(timestamp?: string): string | undefined {
 
 // Names in status.kubernetesStatus are what Longhorn last saw, not proof of
 // current use, so this drawer shows none of them.
-export function LonghornVolumeRenderer({ data, engine, engineUnknown }: Props) {
+export function LonghornVolumeRenderer({ data, engine, engineUnknown, engineLookedUp }: Props) {
   const spec = data?.spec ?? {}
   const status = data?.status ?? {}
   const health = longhornVolumeHealth(data)
@@ -35,7 +37,7 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown }: Props) {
   const rebuilding = rebuilds.some((r) => !r.error)
   const unschedulable = longhornReplicaUnschedulable(data)
   // A stopped or absent Engine has no replica modes; say why the count is unknown.
-  const engineIdle = healthy === undefined && !engineUnknown && (status.state === 'detached' || !engine)
+  const engineIdle = healthy === undefined && !engineUnknown && (status.state === 'detached' || (!!engineLookedUp && !engine))
 
   return (
     <>
@@ -55,7 +57,7 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown }: Props) {
         />
       )}
 
-      <Section title="Volume" icon={HardDrive}>
+      <Section title="Volume" icon={HardDrive} defaultExpanded>
         <PropertyList>
           <Property label="Size" value={bytes(spec.size)} />
           <Property label="Actual size" value={bytes(status.actualSize)} />
@@ -67,7 +69,7 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown }: Props) {
         </PropertyList>
       </Section>
 
-      <Section title="Health" icon={HeartPulse}>
+      <Section title="Health" icon={HeartPulse} defaultExpanded>
         <PropertyList>
           <Property label="State" value={status.state} />
           <Property label="Robustness" value={status.robustness} />
@@ -77,7 +79,7 @@ export function LonghornVolumeRenderer({ data, engine, engineUnknown }: Props) {
         </PropertyList>
       </Section>
 
-      <Section title="Backups" icon={Archive}>
+      <Section title="Backups" icon={Archive} defaultExpanded>
         <PropertyList>
           <Property label="Last backup" value={status.lastBackupAt || '-'} />
         </PropertyList>

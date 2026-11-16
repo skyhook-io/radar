@@ -24,6 +24,7 @@ describe('LonghornVolumeRenderer', () => {
   it('shows healthy replicas as unknown without the engine, never the desired count', () => {
     const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume({ state: 'attached', robustness: 'healthy' })} />)
     expect(html).toContain('? of 3')
+    expect(html).not.toContain('Engine not running')
   })
 
   it('keeps the Backups section readable when Longhorn records no backup', () => {

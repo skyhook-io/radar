@@ -3,10 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 const volume = { apiVersion: 'longhorn.io/v1beta2', kind: 'Volume', metadata: { name: 'pvc-1', namespace: 'longhorn-system' }, spec: { numberOfReplicas: 3 }, status: { state: 'attached', robustness: 'healthy' } }
 
-async function render(engines: { data?: any[]; error?: unknown }) {
+async function render(engines: { data?: any[]; error?: unknown; isLoading?: boolean }) {
   vi.resetModules()
   vi.doMock('../../../api/client', () => ({
-    useResources: () => ({ data: engines.data, error: engines.error ?? null, isError: !!engines.error }),
+    useResources: () => ({ data: engines.data, error: engines.error ?? null, isError: !!engines.error, isLoading: !!engines.isLoading }),
   }))
   const { LonghornVolumeRenderer } = await import('./LonghornVolumeRenderer')
   const html = renderToStaticMarkup(<LonghornVolumeRenderer data={volume} />)
@@ -41,5 +41,16 @@ describe('LonghornVolumeRenderer (host)', () => {
       { spec: { volumeName: 'pvc-1', active: false }, status: { replicaModeMap: { a: 'RW', b: 'RW' } } },
     ] })
     expect(ambiguous).toContain('? of 3')
+  })
+
+  it('does not call the Engine stopped while the lookup is still loading', async () => {
+    const html = await render({ isLoading: true })
+    expect(html).toContain('? of 3')
+    expect(html).not.toContain('Engine not running')
+  })
+
+  it('says the Engine is not running once the lookup finds none for this volume', async () => {
+    const html = await render({ data: [{ spec: { volumeName: 'other' }, status: { replicaModeMap: { x: 'RW' } } }] })
+    expect(html).toContain('? of 3 (Engine not running)')
   })
 })
