@@ -784,3 +784,26 @@ func TestIdleReportLeavesAReferenceMatchAlone(t *testing.T) {
 		t.Fatalf("%+v / %d", got.Summary, got.Coverage.InactiveReports)
 	}
 }
+
+// A finding the scanner left unrated takes the CVSS rating of its score, and
+// says so; one with no score stays unknown.
+func TestUnratedFindingTakesItsScoresRating(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{"report": map[string]any{"vulnerabilities": []any{
+		map[string]any{"vulnerabilityID": "CVE-1", "severity": "UNKNOWN", "resource": "x", "installedVersion": "1", "score": 8.2},
+		map[string]any{"vulnerabilityID": "CVE-2", "severity": "UNKNOWN", "resource": "y", "installedVersion": "1"},
+		map[string]any{"vulnerabilityID": "CVE-3", "severity": "LOW", "resource": "z", "installedVersion": "1", "score": 9.8},
+	}}}}
+	got := map[string]Finding{}
+	for _, f := range parseFindings(u) {
+		got[f.ID] = f
+	}
+	if f := got["CVE-1"]; f.Severity != SeverityHigh || !f.SeverityFromScore {
+		t.Errorf("rated from 8.2: %+v", f)
+	}
+	if f := got["CVE-2"]; f.Severity != SeverityUnknown || f.SeverityFromScore {
+		t.Errorf("no score stays unknown: %+v", f)
+	}
+	if f := got["CVE-3"]; f.Severity != SeverityLow || f.SeverityFromScore {
+		t.Errorf("the scanner's own rating stands: %+v", f)
+	}
+}

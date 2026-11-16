@@ -468,7 +468,7 @@ function FindingsList({ findings, total, unread }: { findings: VulnerableImage['
           ) : (
             <WithTooltip tip={f.title}><span className="truncate font-mono text-theme-text-primary">{f.id}</span></WithTooltip>
           )}
-          <SeverityBadge severity={f.severity} />
+          <SeverityBadge severity={f.severity} fromScore={f.severityFromScore} score={f.score} />
           <span className="truncate font-mono text-theme-text-secondary">{f.package}</span>
           <FixVersion installed={f.installedVersion} fixed={f.fixedVersion} target={f.fixTarget} />
         </div>

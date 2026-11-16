@@ -29,6 +29,8 @@ export interface VulnerabilityWorkloadRef {
 export interface VulnerabilityFinding {
   id: string
   severity: VulnerabilitySeverity
+  /** The scanner gave no severity; this is the CVSS rating of score. */
+  severityFromScore?: boolean
   score?: number
   package: string
   installedVersion: string

@@ -100,6 +100,12 @@ func parseFindings(u *unstructured.Unstructured) []Finding {
 		seen[key] = true
 		if score, ok := number(v["score"]); ok {
 			f.Score = &score
+			// Trivy takes severity from one vendor database per package type,
+			// which often has none (Go modules especially) while the score
+			// from another is right there.
+			if f.Severity == SeverityUnknown && score > 0 {
+				f.Severity, f.SeverityFromScore = cvssSeverity(score), true
+			}
 		}
 		f.FixTarget, _ = fixTarget(f.ecosystem, f.InstalledVersion, f.FixedVersion)
 		findings = append(findings, f)
@@ -984,6 +990,20 @@ func compareScore(a, b *float64) int {
 		return 1
 	}
 	return cmp.Compare(*a, *b)
+}
+
+// cvssSeverity is CVSS v3's qualitative rating for a score.
+func cvssSeverity(score float64) Severity {
+	switch {
+	case score >= 9:
+		return SeverityCritical
+	case score >= 7:
+		return SeverityHigh
+	case score >= 4:
+		return SeverityMedium
+	default:
+		return SeverityLow
+	}
 }
 
 func severityOf(s string) Severity {

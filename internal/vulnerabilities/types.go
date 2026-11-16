@@ -61,6 +61,9 @@ type WorkloadRef struct {
 type Finding struct {
 	ID       string   `json:"id"`
 	Severity Severity `json:"severity"`
+	// SeverityFromScore is true when the scanner gave no severity and
+	// Severity is the CVSS v3 rating of Score.
+	SeverityFromScore bool `json:"severityFromScore,omitempty"`
 	// Score is the scanner's numeric score, as reported; absent when it gave
 	// none.
 	Score            *float64 `json:"score,omitempty"`

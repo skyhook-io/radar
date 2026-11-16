@@ -140,7 +140,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
                       ? <a href={f.link} target="_blank" rel="noreferrer" className="truncate font-mono text-accent-text hover:underline">{f.id}</a>
                       : <span className="truncate font-mono text-theme-text-primary">{f.id}</span>}
                   </WithTooltip>
-                  <SeverityBadge severity={f.severity} />
+                  <SeverityBadge severity={f.severity} fromScore={f.severityFromScore} score={f.score} />
                   <span className="flex min-w-0 gap-1.5"><span className="shrink-0 font-mono text-theme-text-secondary">{f.package}</span><FixVersion installed={f.installedVersion} fixed={f.fixedVersion} target={f.fixTarget} showInstalled={false} /></span>
                 </div>
               ))}

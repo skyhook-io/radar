@@ -79,9 +79,11 @@ export function SeverityCounts({ counts }: { counts: VulnerabilityCounts }) {
   )
 }
 
-export function SeverityBadge({ severity }: { severity: VulnerabilitySeverity }) {
+// fromScore: the scanner gave no severity; Radar rated the CVSS score.
+export function SeverityBadge({ severity, fromScore, score }: { severity: VulnerabilitySeverity; fromScore?: boolean; score?: number }) {
   const label = SEVERITIES.find((s) => s.key === severity)?.label ?? 'Unknown'
-  return <span className={clsx('badge-sm w-fit justify-self-start border', VULN_SEVERITY_BADGE[upper(severity)])}>{label}</span>
+  const badge = <span className={clsx('badge-sm w-fit justify-self-start border', VULN_SEVERITY_BADGE[upper(severity)])}>{label}</span>
+  return fromScore ? <WithTooltip tip={`Trivy gave no severity; rated from its CVSS score${score !== undefined ? ` (${score.toFixed(1)})` : ''}`}>{badge}</WithTooltip> : badge
 }
 
 /**
