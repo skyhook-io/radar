@@ -13,21 +13,14 @@ import (
 // a pod template the way a Deployment does.
 const ArgoRolloutsGroup = "argoproj.io"
 
-// ObjectReferences returns the ConfigMaps, Secrets, PersistentVolumeClaims
-// and ServiceAccount an object declares for its Pods: a Pod's spec, the pod
-// template of a Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob
-// or Argo Rollout, or an Ingress's TLS Secrets. Repeated declarations are
-// returned separately, each with its path. ok is false for any other object.
-// A Rollout whose template doesn't decode returns the declarations that can
-// still be read, with the decoding error; one with no template declares
-// nothing.
-func ObjectReferences(obj any) (refs []PodSpecReference, ok bool, err error) {
-	ok, err = VisitObjectReferences(obj, func(ref PodSpecReference) { refs = append(refs, ref) })
-	return refs, ok, err
-}
-
-// VisitObjectReferences is ObjectReferences without collecting: it visits
-// each declaration as it reads it.
+// VisitObjectReferences visits the ConfigMaps, Secrets,
+// PersistentVolumeClaims and ServiceAccount an object declares for its Pods,
+// as it reads each: a Pod's spec, the pod template of a Deployment,
+// StatefulSet, DaemonSet, ReplicaSet, Job, CronJob or Argo Rollout, or an
+// Ingress's TLS Secrets. Repeated declarations are visited separately, each
+// with its path. ok is false for any other object. A Rollout whose template
+// doesn't decode visits the declarations that can still be read and returns
+// the decoding error; one with no template declares nothing.
 func VisitObjectReferences(obj any, visit func(PodSpecReference)) (ok bool, err error) {
 	switch o := obj.(type) {
 	case *corev1.Pod:
