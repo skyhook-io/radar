@@ -209,6 +209,18 @@ func TestTrimVulnerabilitiesMarksIncomplete(t *testing.T) {
 	}
 }
 
+func TestTrimVulnerabilitiesCountsCleanAndUnscanned(t *testing.T) {
+	resp := vulnerabilities.Response{
+		CleanWorkloads: make([]vulnerabilities.WorkloadRef, 3),
+		Unscanned:      make([]vulnerabilities.Unscanned, 4),
+		Coverage:       vulnerabilities.Coverage{Complete: true},
+	}
+	got := trimVulnerabilities(resp, 2)
+	if c := got.Coverage; c.Complete || c.RowsOmitted != 0 || c.CleanOmitted != 1 || c.UnscannedOmitted != 2 || len(got.CleanWorkloads) != 2 || len(got.Unscanned) != 2 {
+		t.Fatalf("%+v", got.Coverage)
+	}
+}
+
 // setupCronAndJob runs, in shop, an unsuspended CronJob nightly between runs
 // (its report matches its template) and a Pod of an unrelated Job batch-1,
 // with only the given typed kinds collected.

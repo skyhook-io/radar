@@ -322,7 +322,8 @@ func Read(ctx context.Context, cache *k8s.ResourceCache, req Request) (Response,
 		return Response{}, ErrConnectionChanged
 	}
 	resp.Coverage.Gaps = append([]resourceapi.Gap{}, gaps...)
-	resp.Coverage.Complete = len(gaps) == 0 && !resp.Coverage.Truncated && resp.Coverage.RowsOmitted == 0
+	c := resp.Coverage
+	resp.Coverage.Complete = len(gaps) == 0 && !c.Truncated && c.RowsOmitted == 0 && c.CleanOmitted == 0 && c.UnscannedOmitted == 0
 	return resp, nil
 }
 

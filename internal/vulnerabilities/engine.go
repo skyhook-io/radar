@@ -307,7 +307,7 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 	}
 	resp := Response{Source: SourceTrivyOperator, View: view, Summary: j.summary()}
 	if view != ViewSummary {
-		resp.Unscanned = j.unscannedRows(f)
+		resp.Unscanned, resp.Coverage.UnscannedOmitted = capRows(j.unscannedRows(f))
 	}
 	switch view {
 	case ViewSummary:
@@ -327,12 +327,12 @@ func build(ctx context.Context, items []*unstructured.Unstructured, targets []ta
 	case ViewWorkload:
 		rows, clean := j.workloads(f)
 		resp.Workloads, resp.Coverage.RowsOmitted = capRows(rows)
-		resp.CleanWorkloads = clean
+		resp.CleanWorkloads, resp.Coverage.CleanOmitted = capRows(clean)
 	default:
 		resp.View = ViewImage
 		rows, clean := j.imageRows(f)
 		resp.Images, resp.Coverage.RowsOmitted = capRows(rows)
-		resp.Clean = clean
+		resp.Clean, resp.Coverage.CleanOmitted = capRows(clean)
 	}
 	resp.Coverage.InactiveReports = j.inactiveReports
 	resp.Coverage.Truncated = j.truncated
@@ -386,7 +386,7 @@ func (j *rollup) summary() Summary {
 	}
 	s.ImagesUnscanned = len(j.unscanned)
 	s.FixableCriticalHighCVEs = len(fixableCH)
-	s.WorkloadsAffected = len(affected)
+	s.WorkloadsWithCriticalOrHigh = len(affected)
 	s.Workloads = len(running)
 	return s
 }
@@ -524,7 +524,7 @@ func (j *rollup) imageRows(f Filter) (rows []Image, clean []CleanImage) {
 		return cmp.Or(compareCounts(b.Counts, a.Counts), cmp.Compare(b.WorkloadsTotal, a.WorkloadsTotal), cmp.Compare(a.Image, b.Image))
 	})
 	slices.SortFunc(clean, func(a, b CleanImage) int { return cmp.Compare(a.Image, b.Image) })
-	return rows, clean[:min(len(clean), MaxRows)]
+	return rows, clean
 }
 
 type cveAgg struct {
@@ -769,7 +769,7 @@ func (j *rollup) workloads(f Filter) (rows []Workload, clean []WorkloadRef) {
 	slices.SortFunc(clean, func(a, b WorkloadRef) int {
 		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.Name, b.Name))
 	})
-	return rows, clean[:min(len(clean), MaxRows)]
+	return rows, clean
 }
 
 func totalCount(c Counts) int { return c.Critical + c.High + c.Medium + c.Low + c.Unknown }
@@ -790,7 +790,7 @@ func (j *rollup) unscannedRows(f Filter) []Unscanned {
 		rows = append(rows, Unscanned{Image: u.ref, Workloads: m.listed(workloads, MaxWorkloadsPerRow), WorkloadsTotal: len(workloads)})
 	}
 	slices.SortFunc(rows, func(a, b Unscanned) int { return cmp.Compare(a.Image, b.Image) })
-	return rows[:min(len(rows), MaxRows)]
+	return rows
 }
 
 func countFindings(findings []Finding) (all, fixable Counts) {

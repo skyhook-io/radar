@@ -145,7 +145,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       />
 
       <SummaryTiles data={data} />
-      <CoverageNotes data={data} />
+      <CoverageNotes data={data} filtered={filtered} />
 
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex min-h-9 max-w-sm flex-1 basis-64 items-center gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5">
@@ -247,7 +247,7 @@ export function VulnerabilitiesView({ namespaces, onNavigateToResource }: Vulner
       {!severities.length && !fixableOnly && (view === 'image' || view === 'workload') && (
         <CleanList data={data} view={view} onOpen={(w) => onNavigateToResource(toResource(w))} />
       )}
-      <UnscannedList data={data} narrowed={query !== '' || !!workload} onOpen={(w) => onNavigateToResource(toResource(w))} />
+      <UnscannedList data={data} onOpen={(w) => onNavigateToResource(toResource(w))} />
     </div>
   )
 }
@@ -302,7 +302,7 @@ function SummaryTiles({ data }: { data: VulnerabilitiesResponse }) {
     { label: 'Running images scanned', value: s.imagesScanned, certainty: 'exact' as const, sub: s.imagesUnscanned > 0 ? `${s.imagesUnscanned} not scanned yet` : readsComplete(data.coverage) ? 'every running image has a report' : 'none unscanned where Radar could read', tone: '' },
     { label: 'Images with Critical CVEs', value: s.imagesWithCritical, certainty, sub: nothing ? 'nothing scanned yet' : `of ${s.imagesScanned} scanned`, tone: s.imagesWithCritical > 0 ? 'text-red-700 dark:text-red-400' : '' },
     { label: 'Critical and High CVEs with a fix', value: s.fixableCriticalHighCves, certainty, sub: nothing ? 'nothing scanned yet' : 'a fixed release is reported', tone: s.fixableCriticalHighCves > 0 ? 'text-orange-700 dark:text-orange-400' : '' },
-    { label: 'Workloads with Critical or High', value: s.workloadsAffected, certainty, sub: `of ${s.workloads} running or scheduled`, tone: '' },
+    { label: 'Workloads with Critical or High', value: s.workloadsWithCriticalOrHigh, certainty, sub: `of ${s.workloads} running or scheduled`, tone: '' },
   ]
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -317,7 +317,9 @@ function SummaryTiles({ data }: { data: VulnerabilitiesResponse }) {
   )
 }
 
-function CoverageNotes({ data }: { data: VulnerabilitiesResponse }) {
+// filtered: the totals ignore the filters, which a filtered list beside them
+// can make look like a contradiction.
+function CoverageNotes({ data, filtered }: { data: VulnerabilitiesResponse; filtered: boolean }) {
   const gaps = gapSentence(data.coverage.gaps)
   const scan = data.summary.newestScan
     ? data.summary.oldestScan && data.summary.oldestScan !== data.summary.newestScan
@@ -326,6 +328,7 @@ function CoverageNotes({ data }: { data: VulnerabilitiesResponse }) {
     : null
   return (
     <div className="flex flex-col gap-1.5 text-xs">
+      {filtered && <p className="text-theme-text-secondary">The totals above cover everything in this scope; the filters narrow only the list below.</p>}
       <p className="text-theme-text-tertiary">
         From Trivy Operator's VulnerabilityReports{scan ? ` · ${scan}` : ''}. A report lists what was known when the image was scanned, after the scanner's own filters.
         {" A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy's own reports."}
@@ -480,7 +483,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
             const several = f.from.length > 1
             return (
               <Disclosure
-                key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.listed ?? []).join('|')}`}
+                key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`}
                 flush
                 summary={
                   <div className={clsx('grid flex-1 items-center gap-4 text-sm', FIX_COLS)}>
@@ -493,7 +496,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                         <span className="text-theme-text-tertiary">{f.from.join(', ')} → </span>
                         {f.to
                           ? <span className="text-emerald-700 dark:text-emerald-400">{f.to}</span>
-                          : <span className="text-theme-text-secondary">fixed in {(f.listed ?? []).join(', ')}</span>}
+                          : <span className="text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
                       </span>
                     </WithTooltip>
                     <SeverityCounts counts={f.counts} />
@@ -515,7 +518,7 @@ function FixTable({ fixes, onOpen, onShowCVE }: { fixes: VulnerabilityFix[]; onO
                 {f.affected.map((a) => (
                   <div key={a.imageId} className={clsx(SUB, FIX_COLS)}>
                     <ImageName image={a.image} className="text-theme-text-primary" />
-                    <span className="truncate font-mono text-theme-text-tertiary">{several ? a.installedVersion : ''}</span>
+                    <span className="truncate font-mono text-theme-text-tertiary">{several ? a.installedVersions.join(', ') : ''}</span>
                     <span />
                     <WorkloadLinks workloads={a.workloads} onOpen={onOpen} inline />
                     <span />
@@ -704,7 +707,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
         <span className="col-span-3">{lead}</span>
       </div>
       {fixes.slice(0, MAX_WORKLOAD_UPGRADES).map((f) => (
-        <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.listed ?? []).join('|')}`} className={clsx(SUB, WORKLOAD_COLS)}>
+        <div key={`${f.packageType ?? ''}/${f.package}/${f.to ?? (f.fixedVersions ?? []).join('|')}`} className={clsx(SUB, WORKLOAD_COLS)}>
           <span className="flex min-w-0 items-baseline gap-2">
             <span className="truncate font-mono text-theme-text-primary">{f.package}</span>
             {f.packageType && <span className="truncate text-theme-text-tertiary">{ecosystemLabel(f.packageType)}</span>}
@@ -713,7 +716,7 @@ function WorkloadUpgrades({ workload: w, active, severities, query, namespaces, 
             <SeverityCounts counts={f.counts} />
             {f.to
               ? <FixVersion installed={f.from.join(', ')} target={f.to} />
-              : <span className="truncate font-mono text-theme-text-secondary">fixed in {(f.listed ?? []).join(', ')}</span>}
+              : <span className="truncate font-mono text-theme-text-secondary">fixed in {(f.fixedVersions ?? []).join(', ')}</span>}
           </span>
           <span className="flex min-w-0 flex-wrap gap-x-3">
             {several && f.affected.map((a) => <ImageName key={a.imageId} image={a.image} className="text-theme-text-tertiary" />)}
@@ -750,8 +753,8 @@ function WorkloadFindings({ workload }: { workload: VulnerabilityWorkload }) {
 function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view: VulnerabilityView; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
   const images = view === 'image' ? data.clean ?? [] : []
   const workloads = view === 'workload' ? data.cleanWorkloads ?? [] : []
-  const count = images.length + workloads.length
-  if (count === 0) return null
+  if (images.length + workloads.length === 0) return null
+  const count = images.length + workloads.length + (data.coverage.cleanOmitted ?? 0)
   return (
     <div className="shrink-0 rounded-lg border border-theme-border bg-theme-surface">
       <Disclosure
@@ -788,12 +791,12 @@ function CleanList({ data, view, onOpen }: { data: VulnerabilitiesResponse; view
   )
 }
 
-// narrowed: a search or workload filter picked these rows, so the summary's
-// count of every unscanned image doesn't describe them.
-function UnscannedList({ data, narrowed, onOpen }: { data: VulnerabilitiesResponse; narrowed: boolean; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
+// The rows follow a search or workload filter, so they're counted here, not
+// by the summary's unfiltered total.
+function UnscannedList({ data, onOpen }: { data: VulnerabilitiesResponse; onOpen: (w: VulnerabilityWorkloadRef) => void }) {
   const unscanned = data.unscanned ?? []
   if (unscanned.length === 0) return null
-  const count = narrowed ? unscanned.length : data.summary.imagesUnscanned
+  const count = unscanned.length + (data.coverage.unscannedOmitted ?? 0)
   return (
     <div className="shrink-0 rounded-lg border border-theme-border bg-theme-surface">
       <Disclosure

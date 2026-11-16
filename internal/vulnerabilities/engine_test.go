@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -171,7 +172,7 @@ func TestOneRowPerImageNewestReportWins(t *testing.T) {
 	if len(img.Workloads) != 2 || img.Counts.Critical != 0 || img.Counts.High != 1 || img.Report.Name != "b" {
 		t.Fatalf("image: %+v", img)
 	}
-	if resp.Summary.ImagesScanned != 1 || resp.Summary.Workloads != 2 || resp.Summary.WorkloadsAffected != 2 {
+	if resp.Summary.ImagesScanned != 1 || resp.Summary.Workloads != 2 || resp.Summary.WorkloadsWithCriticalOrHigh != 2 {
 		t.Fatalf("summary: %+v", resp.Summary)
 	}
 }
@@ -454,7 +455,7 @@ func TestFixView(t *testing.T) {
 		t.Fatalf("one bump clears both CVEs in both images: %+v", top)
 	}
 	other := resp.Fixes[1]
-	if other.Package != "libfoo" || other.To != "" || len(other.Listed) != 1 || other.Listed[0] != "1.1" {
+	if other.Package != "libfoo" || other.To != "" || len(other.FixedVersions) != 1 || other.FixedVersions[0] != "1.1" {
 		t.Fatalf("an ecosystem Radar can't order keeps the scanner's list: %+v", other)
 	}
 	crit := mustBuild(t, items, targets, ViewFix, Filter{Severities: []Severity{SeverityCritical}})
@@ -514,7 +515,7 @@ func TestFixRowListsEveryInstalledVersion(t *testing.T) {
 	}
 	targets := []target{liveTarget("shop", "ReplicaSet", "checkout-1", "app", "acme/checkout:2", "", checkout)}
 	resp := mustBuild(t, []*unstructured.Unstructured{u}, targets, ViewFix, Filter{})
-	if len(resp.Fixes) != 1 || len(resp.Fixes[0].Affected) != 1 || resp.Fixes[0].Affected[0].InstalledVersion != "4.17.19, 4.17.20" {
+	if len(resp.Fixes) != 1 || len(resp.Fixes[0].Affected) != 1 || !slices.Equal(resp.Fixes[0].Affected[0].InstalledVersions, []string{"4.17.19", "4.17.20"}) {
 		t.Fatalf("both installed versions: %+v", resp.Fixes)
 	}
 }

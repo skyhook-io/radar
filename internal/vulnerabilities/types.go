@@ -94,10 +94,10 @@ type Fix struct {
 	// read with the package's own version ordering and on each CVE's
 	// release lines. Empty when no such release can be chosen (the versions
 	// can't be ordered, or no listed release is above the installed one);
-	// Listed then holds each distinct FixedVersion text as the scanner wrote
-	// it.
-	To     string   `json:"to,omitempty"`
-	Listed []string `json:"listed,omitempty"`
+	// FixedVersions then holds each distinct FixedVersion text as the
+	// scanner wrote it.
+	To            string   `json:"to,omitempty"`
+	FixedVersions []string `json:"fixedVersions,omitempty"`
 	// From are the installed versions it replaces.
 	From []string `json:"from"`
 	// Severity is the worst of the CVEs it clears.
@@ -117,11 +117,13 @@ type Fix struct {
 
 // FixImage is one image a fix applies to.
 type FixImage struct {
-	ImageID          string        `json:"imageId"`
-	Image            string        `json:"image"`
-	InstalledVersion string        `json:"installedVersion"`
-	Workloads        []WorkloadRef `json:"workloads"`
-	WorkloadsTotal   int           `json:"workloadsTotal"`
+	ImageID string `json:"imageId"`
+	Image   string `json:"image"`
+	// InstalledVersions are the versions of the package in this image the
+	// fix replaces, sorted.
+	InstalledVersions []string      `json:"installedVersions"`
+	Workloads         []WorkloadRef `json:"workloads"`
+	WorkloadsTotal    int           `json:"workloadsTotal"`
 }
 
 // Image is one scanned image (by digest when the scanner recorded one) and
@@ -255,9 +257,8 @@ type Summary struct {
 	ImagesWithCritical int `json:"imagesWithCritical"`
 	// FixableCriticalHighCVEs counts distinct Critical and High CVE IDs that
 	// have a fixed version in at least one affected image.
-	FixableCriticalHighCVEs int `json:"fixableCriticalHighCves"`
-	// WorkloadsAffected counts workloads with a Critical or High finding.
-	WorkloadsAffected int `json:"workloadsAffected"`
+	FixableCriticalHighCVEs     int `json:"fixableCriticalHighCves"`
+	WorkloadsWithCriticalOrHigh int `json:"workloadsWithCriticalOrHigh"`
 	// Workloads counts the workloads in scope: those with a Pod that isn't
 	// finished, and CronJobs that aren't suspended.
 	Workloads int `json:"workloads"`
@@ -275,7 +276,7 @@ type Summary struct {
 // CronJobs, Jobs, ReplicaSets, Namespaces). Counts cover the rest.
 type Coverage struct {
 	// Complete is true when there are no gaps, no image's findings went
-	// unread and no row was left out. Images with no report yet don't make
+	// unread and no row, clean or unscanned entry was left out. Images with no report yet don't make
 	// it false: see Summary.ImagesUnscanned.
 	Complete bool              `json:"complete"`
 	Gaps     []resourceapi.Gap `json:"gaps"`
@@ -290,6 +291,10 @@ type Coverage struct {
 	// request's limit. Lists inside a row are capped separately, each beside
 	// its total.
 	RowsOmitted int `json:"rowsOmitted,omitempty"`
+	// CleanOmitted and UnscannedOmitted count what the same caps left out of
+	// Clean or CleanWorkloads, and of Unscanned.
+	CleanOmitted     int `json:"cleanOmitted,omitempty"`
+	UnscannedOmitted int `json:"unscannedOmitted,omitempty"`
 }
 
 // Response is GET /api/vulnerabilities and the MCP list_vulnerabilities

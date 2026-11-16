@@ -101,7 +101,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 					a.workloads[w] = true
 				}
 				a.row.Affected = append(a.row.Affected, FixImage{
-					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), InstalledVersion: p.installed,
+					ImageID: r.imageID, Image: cmp.Or(r.image, r.digest), InstalledVersions: []string{p.installed},
 					Workloads: m.listed(workloads, MaxWorkloadsPerAffected), WorkloadsTotal: len(workloads),
 				})
 			} else {
@@ -109,8 +109,9 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 				// upgrade replaces both, and the image lists both.
 				for i := range a.row.Affected {
 					fi := &a.row.Affected[i]
-					if fi.ImageID == r.imageID && !slices.Contains(strings.Split(fi.InstalledVersion, ", "), p.installed) {
-						fi.InstalledVersion += ", " + p.installed
+					if fi.ImageID == r.imageID && !slices.Contains(fi.InstalledVersions, p.installed) {
+						fi.InstalledVersions = append(fi.InstalledVersions, p.installed)
+						slices.Sort(fi.InstalledVersions)
 					}
 				}
 			}
@@ -122,7 +123,7 @@ func (j *rollup) fixes(ctx context.Context, f Filter) ([]Fix, error) {
 		row := a.row
 		row.From = sortedKeys(a.from)
 		if row.To == "" {
-			row.Listed = sortedKeys(a.listed)
+			row.FixedVersions = sortedKeys(a.listed)
 		}
 		ids := make([]string, 0, len(a.cves))
 		for id, sev := range a.cves {

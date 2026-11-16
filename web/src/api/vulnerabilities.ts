@@ -86,8 +86,8 @@ export interface VulnerabilityFix {
   packageType?: string
   /** The lowest listed release that fixes every listed CVE; absent when none can be chosen from the scanner's versions. */
   to?: string
-  /** The scanner's fixed versions, when there is no target. */
-  listed?: string[]
+  /** Each distinct fixed-version text the scanner wrote, when there is no target. */
+  fixedVersions?: string[]
   from: string[]
   severity: VulnerabilitySeverity
   counts: VulnerabilityCounts
@@ -95,7 +95,7 @@ export interface VulnerabilityFix {
   cvesTotal: number
   images: number
   workloads: number
-  affected: { imageId: string; image: string; installedVersion: string; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
+  affected: { imageId: string; image: string; installedVersions: string[]; workloads: VulnerabilityWorkloadRef[]; workloadsTotal: number }[]
 }
 
 export interface VulnerabilityWorkloadContainer {
@@ -125,7 +125,7 @@ export interface VulnerabilitySummary {
   imagesUnscanned: number
   imagesWithCritical: number
   fixableCriticalHighCves: number
-  workloadsAffected: number
+  workloadsWithCriticalOrHigh: number
   workloads: number
   counts: VulnerabilityCounts
   newestScan?: string
@@ -154,6 +154,8 @@ export interface VulnerabilitiesResponse {
     inactiveReports: number
     truncated?: boolean
     rowsOmitted?: number
+    cleanOmitted?: number
+    unscannedOmitted?: number
   }
 }
 

@@ -94,8 +94,9 @@ func handleListVulnerabilities(ctx context.Context, _ *mcp.CallToolRequest, inpu
 	return toJSONResult(trimVulnerabilities(resp, limit))
 }
 
-// trimVulnerabilities caps rows at limit and each row's findings or images
-// at vulnerabilityDetailsPerRow; rowsOmitted says how many rows were left.
+// trimVulnerabilities caps rows, and the clean and unscanned lists, at limit,
+// and each row's findings, images and workloads at vulnerabilityDetailsPerRow;
+// the coverage's omitted counts say how many rows and entries were left.
 func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabilities.Response {
 	omitted := 0
 	if len(resp.Images) > limit {
@@ -121,15 +122,18 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 		omitted, resp.Workloads = len(resp.Workloads)-limit, resp.Workloads[:limit]
 	}
 	if len(resp.Unscanned) > limit {
+		resp.Coverage.UnscannedOmitted += len(resp.Unscanned) - limit
 		resp.Unscanned = resp.Unscanned[:limit]
 	}
 	if len(resp.Clean) > limit {
+		resp.Coverage.CleanOmitted += len(resp.Clean) - limit
 		resp.Clean = resp.Clean[:limit]
 	}
 	for i := range resp.Clean {
 		resp.Clean[i].Workloads = resp.Clean[i].Workloads[:min(len(resp.Clean[i].Workloads), vulnerabilityDetailsPerRow)]
 	}
 	if len(resp.CleanWorkloads) > limit {
+		resp.Coverage.CleanOmitted += len(resp.CleanWorkloads) - limit
 		resp.CleanWorkloads = resp.CleanWorkloads[:limit]
 	}
 	for i := range resp.Unscanned {
@@ -139,7 +143,7 @@ func trimVulnerabilities(resp vulnerabilities.Response, limit int) vulnerabiliti
 		resp.Images[i].Workloads = resp.Images[i].Workloads[:min(len(resp.Images[i].Workloads), vulnerabilityDetailsPerRow)]
 	}
 	resp.Coverage.RowsOmitted += omitted
-	if omitted > 0 {
+	if c := resp.Coverage; c.RowsOmitted > 0 || c.CleanOmitted > 0 || c.UnscannedOmitted > 0 {
 		resp.Coverage.Complete = false
 	}
 	return resp

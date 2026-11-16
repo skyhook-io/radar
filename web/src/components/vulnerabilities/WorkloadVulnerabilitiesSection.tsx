@@ -58,9 +58,10 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
     }
   }
   const fixFirst = [...worst.values()].sort(worse)
-  // An image lists its worst findings only up to a cap: past it, fixable
-  // Critical and High findings may not have arrived.
-  const fixableUnlisted = images.some((img) => {
+  // Fix first shows three; an image also lists its worst findings only up to
+  // a cap, past which fixable Critical and High findings may not have
+  // arrived.
+  const fixableUnlisted = fixFirst.length > FIX_FIRST || images.some((img) => {
     const listed = img.findings.filter((f) => (f.severity === 'critical' || f.severity === 'high') && f.fixedVersion).length
     return !img.findingsUnread && img.findings.length < img.findingsTotal && listed < img.fixable.critical + img.fixable.high
   })
@@ -118,7 +119,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
           {fixFirst.length > 0 && (
             <div className="flex flex-col gap-1">
               <span className="text-xs font-medium text-theme-text-secondary">Fix first</span>
-              {fixFirst.slice(0, 3).map((f) => (
+              {fixFirst.slice(0, FIX_FIRST).map((f) => (
                 <div key={f.id} className="grid grid-cols-[136px_70px_minmax(0,1fr)] items-center gap-2 text-xs">
                   <WithTooltip tip={f.title}>
                     {f.link
@@ -133,7 +134,7 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
           )}
           {fixableUnlisted && (
             <button type="button" onClick={() => open({ severity: 'critical,high', fixable: '1' })} className="self-start text-xs text-accent-text hover:underline">
-              More Critical and High findings with a fix than listed here
+              All Critical and High with a fix
             </button>
           )}
           <button type="button" onClick={() => open()} className="self-start text-xs text-accent-text hover:underline">Open in Vulnerabilities</button>
@@ -142,6 +143,8 @@ export function WorkloadVulnerabilitiesSection({ kind, namespace, name }: Props)
     </Section>
   )
 }
+
+const FIX_FIRST = 3
 
 // The same image in other workloads: one rebuild fixes them all.
 // partial: the response lists only some of the image's workloads.
