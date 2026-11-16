@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/clusterreplay"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -57,6 +58,11 @@ func loadReplay(path string) (*replayState, error) {
 			gvr := gv.WithResource(r.Name)
 			kinds[gvr] = r.Kind + "List"
 			byGVK[gv.WithKind(r.Kind)] = gvr
+			// Production serves built-in kinds from typed informers and starts
+			// dynamic ones only for custom resources and DRA, so replay does too.
+			if k8score.IsBuiltInAPIGroup(gv.Group) && gv.Group != "resource.k8s.io" {
+				continue
+			}
 			canWatch := false
 			for _, verb := range r.Verbs {
 				if verb == "watch" {

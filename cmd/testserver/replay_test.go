@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -19,6 +20,7 @@ func TestReplayTypedAndDynamic(t *testing.T) {
 		t.Fatal(err)
 	}
 	data = []byte(strings.Replace(string(data), `"context_hash":`, `"failed_groups":["broken.io"],"skipped":[{"resource":"secrets","error":"forbidden"}],"context_hash":`, 1))
+	data = []byte(strings.Replace(string(data), `{"groupVersion":"argoproj.io/v1alpha1"`, `{"groupVersion":"resource.k8s.io/v1","resources":[{"name":"resourceclaims","kind":"ResourceClaim","namespaced":true,"verbs":["create","delete","deletecollection","get","list","patch","update","watch"]}]},{"groupVersion":"argoproj.io/v1alpha1"`, 1))
 	path := filepath.Join(t.TempDir(), "capture.gz")
 	f, err := os.Create(path)
 	if err != nil {
@@ -63,6 +65,14 @@ func TestReplayTypedAndDynamic(t *testing.T) {
 	}
 	if len(s.unsupported) != 0 {
 		t.Fatal(s.unsupported)
+	}
+	watched := map[string]bool{}
+	for _, gvr := range k8s.GetDynamicResourceCache().GetWatchedResources() {
+		watched[gvr.Group+"/"+gvr.Resource] = true
+	}
+	want := map[string]bool{"example.io/widgets": true, "argoproj.io/applications": true, "resource.k8s.io/resourceclaims": true}
+	if !reflect.DeepEqual(watched, want) {
+		t.Fatalf("dynamic informers = %v, want custom resources and DRA only", watched)
 	}
 	if got := k8s.GetResourceCache().GetKindObjectCounts()["Pod"]; got != 1 {
 		t.Fatalf("pods=%d", got)
