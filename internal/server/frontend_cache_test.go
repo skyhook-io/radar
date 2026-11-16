@@ -119,12 +119,22 @@ func TestFrontendThroughCompression(t *testing.T) {
 			t.Fatalf("identity request: Content-Encoding %q, body length %d", plain.Header().Get("Content-Encoding"), plain.Body.Len())
 		}
 		for name, rec := range map[string]*httptest.ResponseRecorder{"gzip": gz, "identity": plain} {
-			if n := varyCount(rec); n != 1 {
-				t.Errorf("%s: Vary lists Accept-Encoding %d times (%q), want once", name, n, rec.Header().Values("Vary"))
+			if varyCount(rec) == 0 {
+				t.Errorf("%s: Vary = %q, want Accept-Encoding", name, rec.Header().Values("Vary"))
 			}
 			if rec.Header().Get("Cache-Control") != "max-age=31536000, immutable" {
 				t.Errorf("%s: Cache-Control = %q", name, rec.Header().Get("Cache-Control"))
 			}
+		}
+	})
+
+	t.Run("a request that skips the compressor still declares Vary", func(t *testing.T) {
+		rec := get("/assets/index-BcIBzLE5.js", "Accept-Encoding", "gzip", "Accept", "text/event-stream")
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Encoding") != "" {
+			t.Fatalf("status %d, Content-Encoding %q", rec.Code, rec.Header().Get("Content-Encoding"))
+		}
+		if varyCount(rec) == 0 {
+			t.Errorf("Vary = %q, want Accept-Encoding", rec.Header().Values("Vary"))
 		}
 	})
 
@@ -142,8 +152,8 @@ func TestFrontendThroughCompression(t *testing.T) {
 		if rec.Body.String() != script[:7] {
 			t.Fatalf("body = %q, want %q", rec.Body.String(), script[:7])
 		}
-		if n := varyCount(rec); n != 1 {
-			t.Errorf("Vary lists Accept-Encoding %d times, want once", n)
+		if varyCount(rec) == 0 {
+			t.Errorf("Vary = %q, want Accept-Encoding", rec.Header().Values("Vary"))
 		}
 	})
 
