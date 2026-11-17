@@ -429,7 +429,7 @@ func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref, obj me
 	}
 	o = o.DeepCopyObject()
 	k8s.SetTypeMeta(o)
-	return attachedRefs(s.relationshipsFor(r, key.Kind, key.Namespace, key.Name, o), key.Namespace)
+	return attachedRefs(s.relationshipsFor(r, o), key.Namespace)
 }
 
 // attachedRefs lists the resources whose own history belongs with a

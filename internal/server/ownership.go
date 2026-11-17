@@ -166,7 +166,7 @@ func (a *requestAccess) Namespaces() ([]string, bool) {
 // relationshipsFor answers a fetched resource's Related Resources within the
 // request's namespace and kind access. Missing or replaced caches leave the
 // answer unavailable so the write guard cannot mistake it for no manager.
-func (s *Server) relationshipsFor(r *http.Request, kind, namespace, name string, resource any) *topology.Relationships {
+func (s *Server) relationshipsFor(r *http.Request, resource any) *topology.Relationships {
 	obj, ok := resource.(runtime.Object)
 	if !ok {
 		return nil

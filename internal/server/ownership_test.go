@@ -281,7 +281,7 @@ func TestResourceGetAnswersOwnershipFromOwnerReferences(t *testing.T) {
 }
 
 func TestDrawerWithoutCapturedObjectSendsNoRelationships(t *testing.T) {
-	if rel := testServerSrv.relationshipsFor(httptest.NewRequest(http.MethodGet, "/", nil), "Deployment", "default", "nginx", nil); rel != nil {
+	if rel := testServerSrv.relationshipsFor(httptest.NewRequest(http.MethodGet, "/", nil), nil); rel != nil {
 		t.Fatalf("relationships = %+v; want none without a captured object", rel)
 	}
 }
@@ -294,7 +294,7 @@ func TestDrawerDoesNotRequireABroadcasterGraph(t *testing.T) {
 	}
 	k8s.SetTypeMeta(obj)
 	s := &Server{}
-	rel := s.relationshipsFor(httptest.NewRequest(http.MethodGet, "/", nil), "Deployment", "default", "nginx", obj)
+	rel := s.relationshipsFor(httptest.NewRequest(http.MethodGet, "/", nil), obj)
 	if rel == nil || rel.Ownership == nil || len(rel.Children) != 1 || rel.Children[0].Name != "nginx-abc" {
 		t.Fatalf("family answer without a broadcaster = %+v", rel)
 	}
@@ -491,7 +491,7 @@ func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
 	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "drawer"}))
 	answer := func(obj runtime.Object) *topology.Relationships {
 		k8s.SetTypeMeta(obj)
-		rel := env.srv.relationshipsFor(r, "", "", "", obj)
+		rel := env.srv.relationshipsFor(r, obj)
 		if rel == nil {
 			t.Fatal("missing family answer")
 		}
@@ -530,7 +530,7 @@ func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
 	}
 	perms.SetCanI("list", "", "secrets", "alpha", true)
 	k8s.SetTypeMeta(objects[1])
-	rel := env.srv.relationshipsFor(r, "", "", "", objects[1])
+	rel := env.srv.relationshipsFor(r, objects[1])
 	if rel == nil || !slices.ContainsFunc(rel.ConfigRefs, func(ref topology.ResourceRef) bool { return ref.Kind == "Secret" && ref.Name == "hidden-secret" }) {
 		t.Fatalf("allowed Secret missing: %+v", rel)
 	}

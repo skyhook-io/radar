@@ -3049,7 +3049,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Pass the already-fetched resource so ManagedBy synthesis
 		// disambiguates by group (avoids kind/plural collisions like Knative
 		// Service vs core Service).
-		relationships := s.relationshipsFor(r, kind, namespace, name, resource)
+		relationships := s.relationshipsFor(r, resource)
 		if readCache() != cache {
 			s.writeCollectionFailure(w, kind, errReadHandlesChanged)
 			return
@@ -3292,7 +3292,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	response := topology.ResourceWithRelationships{
 		RelatedFindings: issues.CachedStrimziEvidence(resource, s.issueRelatedResourceAccess(r), func(c *ownership.Catalog) ownership.Access { return s.ownershipAccess(r, c) }),
 		Resource:        resource,
-		Relationships:   s.relationshipsFor(r, kind, namespace, name, resource),
+		Relationships:   s.relationshipsFor(r, resource),
 		HPADiagnosis:    hpaDiagnosisFor(resource),
 	}
 
