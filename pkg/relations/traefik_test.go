@@ -61,7 +61,13 @@ func TestTraefikFamilies(t *testing.T) {
 					apiVersion = "v1"
 				}
 				target := inNamespace(object(apiVersion, tc.targetKind, "target", nil), tc.targetNS)
-				checkFamily(t, tc.family, []runtime.Object{source, target}, source, refOf(target), tc.path)
+				// A cluster serving both groups reads a legacy-only target
+				// as legacy_group_only; this one predates traefik.io.
+				var s Session = allNamespaces{cluster: cluster{objects: []runtime.Object{source, target}}}
+				if group == configrefs.TraefikLegacyGroup {
+					s = legacyTraefik{s.(allNamespaces)}
+				}
+				checkFamilyIn(t, s, tc.family, source, refOf(target), tc.path)
 			})
 		}
 	}
@@ -184,16 +190,21 @@ func TestTraefikSecretsStayInTheDeclarersNamespace(t *testing.T) {
 	}
 }
 
-func TestATraefikReferenceIsReadFromEitherGroup(t *testing.T) {
+// Where both groups are served, Traefik 2.10 and 2.11 read a Middleware
+// found only in the legacy group and Traefik 3 ignores it, so the reference
+// names it with legacy_group_only rather than as present.
+func TestATraefikReferenceFoundOnlyInTheLegacyGroupIsUnconfirmed(t *testing.T) {
 	route := object("traefik.io/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"middlewares": []any{map[string]any{"name": "auth"}}}}})
 	legacy := object("traefik.containo.us/v1alpha1", "Middleware", "auth", nil)
+	gap := ownership.Gap{Kind: refOf(legacy).GroupKind(), Namespace: "shop", Reason: readreason.LegacyGroupOnly}
 	v := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{route, legacy}}}, ownership.Unrestricted())
 	refs := v.References(TraefikRouteConfig, refOf(route), route)
-	if len(refs.Declared) != 1 || refs.Declared[0].Ref != refOf(legacy) || refs.Declared[0].State != TargetPresent {
-		t.Errorf("a traefik.io route's Middleware in traefik.containo.us reads as %+v", refs.Declared)
+	if len(refs.Declared) != 1 || refs.Declared[0].Ref != refOf(legacy) || refs.Declared[0].State != TargetUnread || refs.Declared[0].Gap != gap || !slices.Contains(refs.Coverage.NotChecked, gap) {
+		t.Errorf("a traefik.io route's Middleware only in traefik.containo.us reads as %+v", refs)
 	}
-	if got := referrerRefs(v.Referrers(TraefikRouteConfig, refOf(legacy), nil)); len(got) != 1 || got[0] != refOf(route) {
-		t.Errorf("the legacy Middleware's referrers = %v; want the traefik.io route", got)
+	reverse := v.Referrers(TraefikRouteConfig, refOf(legacy), nil)
+	if got := referrerRefs(reverse); len(got) != 1 || got[0] != refOf(route) || !slices.Contains(reverse.Coverage.NotChecked, gap) {
+		t.Errorf("the legacy Middleware's referrers = %+v; want the traefik.io route, with the gap", reverse)
 	}
 
 	missing := NewView(allNamespaces{cluster: cluster{objects: []runtime.Object{route}}}, ownership.Unrestricted()).References(TraefikRouteConfig, refOf(route), route)
@@ -240,7 +251,7 @@ type legacyTraefik struct{ allNamespaces }
 
 func (legacyTraefik) Catalog() *ownership.Catalog {
 	var served []ownership.ServedResource
-	for _, kind := range []string{"IngressRoute", "TraefikService"} {
+	for _, kind := range []string{"IngressRoute", "IngressRouteTCP", "IngressRouteUDP", "TraefikService", "Middleware", "MiddlewareTCP", "ServersTransport", "ServersTransportTCP", "TLSOption", "TLSStore"} {
 		served = append(served, ownership.ServedResource{Group: "traefik.containo.us", Version: "v1alpha1", Kind: kind, Resource: strings.ToLower(kind) + "s", Namespaced: true, Verbs: []string{"list", "watch", "get"}})
 	}
 	return ownership.NewCatalog(served, true)
