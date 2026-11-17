@@ -18,7 +18,7 @@ describe('a title kept on one line', () => {
       <WorkloadView kind="backups" group="velero.io" namespace="velero" name="live-partial" resource={backup} onBack={() => {}} activeTab="overview" expanded inlineBadges truncateName />,
     )
     expect(html).not.toContain('min-w-[')
-    expect(html).toMatch(/class="flex min-w-0 shrink-\[100\] flex-wrap items-center gap-x-3 gap-y-1"[^>]*>.*Namespace: /)
+    expect(html).toMatch(/class="flex shrink-\[100\] flex-wrap items-center gap-x-3 gap-y-1"[^>]*>.*Namespace: /)
     expect(html).not.toContain('flex shrink-0 items-center gap-x-3')
   })
 })
