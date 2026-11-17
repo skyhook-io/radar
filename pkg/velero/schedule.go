@@ -158,6 +158,11 @@ type ScheduleReading struct {
 	// recreates a run's object with a new creation time, so expiry less
 	// creation is not its TTL.
 	TTL string `json:"ttl"`
+	// IncludedNamespaces and ExcludedNamespaces are the template's namespace
+	// selection as written, always sent: an empty or "*" include list is every
+	// namespace, and entries may be glob patterns, as Velero matches them.
+	IncludedNamespaces []string `json:"includedNamespaces"`
+	ExcludedNamespaces []string `json:"excludedNamespaces"`
 }
 
 // DeclaredTTL is a spec.ttl as Velero applies it: "" when the server's
@@ -218,6 +223,14 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	r.Location = scheduleLocation(s, in.DefaultLocation)
 	ttl, _, _ := unstructured.NestedString(s.Object, "spec", "template", "ttl")
 	r.TTL = DeclaredTTL(ttl)
+	r.IncludedNamespaces, _, _ = unstructured.NestedStringSlice(s.Object, "spec", "template", "includedNamespaces")
+	r.ExcludedNamespaces, _, _ = unstructured.NestedStringSlice(s.Object, "spec", "template", "excludedNamespaces")
+	if r.IncludedNamespaces == nil {
+		r.IncludedNamespaces = []string{}
+	}
+	if r.ExcludedNamespaces == nil {
+		r.ExcludedNamespaces = []string{}
+	}
 
 	runs := runsOf(s.GetName(), in.Backups)
 	r.Runs = summarizeRuns(runs, in.BackupsRead, in.WithRecent)
