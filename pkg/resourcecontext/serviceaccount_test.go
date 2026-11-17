@@ -26,7 +26,7 @@ func (p serviceAccountReferenceProvider) ServiceAccounts() ([]*corev1.ServiceAcc
 
 func TestBuild_ServiceAccountSecretRolesAndReverse(t *testing.T) {
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "prod"}, Secrets: []corev1.ObjectReference{{Name: "credentials"}}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: "credentials"}}}
-	rc := fixtureContext(context.Background(), sa, Options{Tier: TierBasic})
+	rc := fixtureContext(context.Background(), sa, nil, Options{Tier: TierBasic})
 	if rc.ServiceAccountSummary == nil || len(rc.ServiceAccountSummary.SecretRefs) != 1 || len(rc.ServiceAccountSummary.ImagePullSecrets) != 1 {
 		t.Fatalf("roles: %+v", rc)
 	}
@@ -37,7 +37,7 @@ func TestBuild_ServiceAccountSecretRolesAndReverse(t *testing.T) {
 	other.Namespace = "other"
 	provider := serviceAccountReferenceProvider{accounts: []*corev1.ServiceAccount{nil, other, sa}}
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
-	rc = fixtureContext(context.Background(), secret, Options{Tier: TierBasic, Provider: provider})
+	rc = fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: provider})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 {
 		t.Fatalf("reverse: %+v", rc)
 	}
@@ -45,26 +45,26 @@ func TestBuild_ServiceAccountSecretRolesAndReverse(t *testing.T) {
 	if ref.Kind != "ServiceAccount" || ref.Name != "runner" || ref.Namespace != "prod" || len(ref.Paths) != 2 {
 		t.Fatalf("reverse roles: %+v", ref)
 	}
-	rc = fixtureContext(context.Background(), secret, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "ServiceAccount", namespace: "prod"}})
+	rc = fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "ServiceAccount", namespace: "prod"}})
 	if rc.ReferencedBy != nil || !hasOmitted(rc.Omitted, "referencedBy") {
 		t.Fatalf("denied SA: %+v", rc)
 	}
-	rc = fixtureContext(context.Background(), sa, Options{Tier: TierBasic, AccessChecker: denyChecker{kind: "Secret", namespace: "prod"}})
+	rc = fixtureContext(context.Background(), sa, nil, Options{Tier: TierBasic, AccessChecker: denyChecker{kind: "Secret", namespace: "prod"}})
 	if rc.ServiceAccountSummary != nil || !hasOmitted(rc.Omitted, "serviceAccountSummary.secretRefs") || !hasOmitted(rc.Omitted, "serviceAccountSummary.imagePullSecrets") {
 		t.Fatalf("denied Secrets: %+v", rc)
 	}
 	custom := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "custom.example/v1", "kind": "Secret", "metadata": map[string]interface{}{"namespace": "prod", "name": "credentials"}}}
-	if rc := fixtureContext(context.Background(), custom, Options{Tier: TierBasic, Provider: provider}); rc.ReferencedBy != nil {
+	if rc := fixtureContext(context.Background(), custom, nil, Options{Tier: TierBasic, Provider: provider}); rc.ReferencedBy != nil {
 		t.Fatalf("custom Secret got core refs: %+v", rc)
 	}
-	if rc := fixtureContext(context.Background(), &corev1.ServiceAccount{}, Options{Tier: TierBasic}); rc.ServiceAccountSummary != nil {
+	if rc := fixtureContext(context.Background(), &corev1.ServiceAccount{}, nil, Options{Tier: TierBasic}); rc.ServiceAccountSummary != nil {
 		t.Fatalf("projected tokens fabricated: %+v", rc)
 	}
 }
 
 func TestBuild_ServiceAccountReferenceSourceUnavailable(t *testing.T) {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
-	rc := fixtureContext(context.Background(), secret, Options{Tier: TierBasic, Provider: serviceAccountReferenceProvider{err: errors.New("account source unavailable")}})
+	rc := fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: serviceAccountReferenceProvider{err: errors.New("account source unavailable")}})
 	found := false
 	for _, field := range rc.Omitted {
 		if field.Field == "referencedBy" && field.Reason == OmittedUnavailable {
@@ -83,7 +83,7 @@ func TestBuild_SecretReferenceCapRetainsDeclaringAccount(t *testing.T) {
 		provider.deploys = append(provider.deploys, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("consumer-%02d", i), Namespace: "prod"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{ImagePullSecrets: []corev1.LocalObjectReference{{Name: "credentials"}}}}}})
 	}
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
-	rc := fixtureContext(context.Background(), secret, Options{Provider: provider})
+	rc := fixtureContext(context.Background(), secret, nil, Options{Provider: provider})
 	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 26 || !rc.ReferencedBy.Truncated || len(rc.ReferencedBy.Items) != maxReferencedByItems {
 		t.Fatalf("visible count or cap changed: %+v", rc.ReferencedBy)
 	}
@@ -105,11 +105,11 @@ func TestBuild_SecretReferenceCapRetainsDeclaringAccount(t *testing.T) {
 	if slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedBudgetExceeded}) {
 		t.Fatalf("truncated flag was duplicated by an omission: %+v", rc.Omitted)
 	}
-	rc = fixtureContext(context.Background(), secret, Options{Provider: provider, AccessChecker: denyChecker{kind: "ServiceAccount", namespace: "prod"}})
+	rc = fixtureContext(context.Background(), secret, nil, Options{Provider: provider, AccessChecker: denyChecker{kind: "ServiceAccount", namespace: "prod"}})
 	if rc.ReferencedBy.Total != 25 || len(rc.ReferencedBy.Items) != maxReferencedByItems || slices.ContainsFunc(rc.ReferencedBy.Items, func(ref ReferenceUse) bool { return ref.Kind == "ServiceAccount" }) {
 		t.Fatalf("hidden account affected visible count or cap: %+v", rc.ReferencedBy)
 	}
-	rc = fixtureContext(context.Background(), secret, Options{Provider: provider, AccessChecker: denyChecker{group: "apps", kind: "Deployment", namespace: "prod"}})
+	rc = fixtureContext(context.Background(), secret, nil, Options{Provider: provider, AccessChecker: denyChecker{group: "apps", kind: "Deployment", namespace: "prod"}})
 	if rc.ReferencedBy.Total != 1 || rc.ReferencedBy.Truncated || len(rc.ReferencedBy.Items) != 1 || rc.ReferencedBy.Items[0].Kind != "ServiceAccount" {
 		t.Fatalf("denied workloads consumed slots: %+v", rc.ReferencedBy)
 	}
@@ -137,7 +137,7 @@ func (p *syncingServiceAccountProvider) AssessKindRead(_ string, namespaces []st
 
 func TestServiceAccountCoverageAssessedBeforeTheSnapshot(t *testing.T) {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
-	rc := fixtureContext(context.Background(), secret, Options{Tier: TierBasic, Provider: &syncingServiceAccountProvider{}})
+	rc := fixtureContext(context.Background(), secret, nil, Options{Tier: TierBasic, Provider: &syncingServiceAccountProvider{}})
 	if !slices.Contains(rc.Omitted, OmittedField{Field: "referencedBy", Reason: OmittedCacheCold}) {
 		t.Fatalf("snapshot taken while loading was reported complete: %+v", rc.Omitted)
 	}

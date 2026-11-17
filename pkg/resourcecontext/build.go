@@ -61,12 +61,12 @@ type Options struct {
 	AccessChecker RefAccessChecker
 
 	// Provider supplies numeric/status facts for already-authorized HPAs.
-	// Deprecated: supply Relationships and RelationshipExtras. Ignored by Build.
-	Topology *topology.Topology
-	// Deprecated: supply Relationships and RelationshipExtras. Ignored by Build.
-	RelIndex           *topology.RelationshipsIndex
-	Provider           topology.ResourceProvider
-	DynamicProv        topology.DynamicProvider
+	Provider    topology.ResourceProvider
+	DynamicProv topology.DynamicProvider
+
+	// Relationships and RelationshipExtras are the host's relationship answer
+	// for obj. Ownership may mutate Relationships, so do not share it across
+	// concurrent calls.
 	Relationships      *topology.Relationships
 	RelationshipExtras *topology.RelationshipExtras
 
@@ -648,38 +648,6 @@ func filterReferenceUses(ctx context.Context, refs []ReferenceUse, ac RefAccessC
 		Items:     filtered,
 		Truncated: visible > len(filtered),
 	}
-}
-
-type refTarget struct {
-	kind      string
-	namespace string
-	name      string
-}
-
-func referenceUseForPodSpec(kind, group, namespace, name string, spec corev1.PodSpec, pathPrefix string, target refTarget) ReferenceUse {
-	paths := podSpecReferencePaths(spec, pathPrefix, target)
-	return ReferenceUse{
-		Kind:      kind,
-		Group:     group,
-		Namespace: namespace,
-		Name:      name,
-		Paths:     paths,
-	}
-}
-
-func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTarget) []string {
-	pathSet := map[string]struct{}{}
-	for _, ref := range configrefs.PodSpecReferences(target.namespace, spec) {
-		if ref.Kind == target.kind && ref.Name == target.name {
-			pathSet[pathPrefix+"."+ref.Path] = struct{}{}
-		}
-	}
-	paths := make([]string, 0, len(pathSet))
-	for path := range pathSet {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return paths
 }
 
 func minInt(a, b int) int {

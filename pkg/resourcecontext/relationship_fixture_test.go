@@ -18,9 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// Existing projection fixtures supply graph edges and provider objects. Adapt
-// those inputs at the host boundary; Build itself only consumes the answers.
-func fixtureContext(ctx context.Context, obj runtime.Object, opts Options) *ResourceContext {
+// Existing projection fixtures supply graph edges (topo) and provider objects.
+// Adapt those inputs at the host boundary; Build itself only consumes the
+// answers.
+func fixtureContext(ctx context.Context, obj runtime.Object, topo *topology.Topology, opts Options) *ResourceContext {
 	if obj == nil {
 		return Build(ctx, obj, opts)
 	}
@@ -55,8 +56,8 @@ func fixtureContext(ctx context.Context, obj runtime.Object, opts Options) *Reso
 			}
 		}
 	}
-	if opts.Topology != nil && opts.Relationships == nil {
-		opts.Relationships = topology.GetRelationshipsWithObject(topology.KindForGVK(ident.Kind, ident.Group), ident.Namespace, ident.Name, obj, opts.Topology, opts.Provider, opts.DynamicProv, opts.RelIndex)
+	if topo != nil && opts.Relationships == nil {
+		opts.Relationships = topology.GetRelationshipsWithObject(topology.KindForGVK(ident.Kind, ident.Group), ident.Namespace, ident.Name, obj, topo, opts.Provider, opts.DynamicProv, nil)
 		if opts.Relationships == nil {
 			opts.Relationships = &topology.Relationships{}
 		}
