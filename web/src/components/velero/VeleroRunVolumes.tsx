@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Badge, Collapse, TimeValue, formatBytes, pluralize } from '@skyhook-io/k8s-ui'
 import { useVeleroRunVolumes, useVeleroVolumeOperations, isVeleroRunFinished, type VeleroVolumeRecord, type VeleroVolumeDetails, type VeleroVolumeOperation } from '../../api/velero'
 import { getApiBase } from '../../api/config'
@@ -64,7 +64,8 @@ const coverageText: Record<string, string> = {
 }
 
 export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 'restores'; namespace: string; name: string }) {
-  const record = useVeleroRunVolumes(kind, namespace, name)
+  const finishedNow = useRef<boolean | undefined>(undefined)
+  const record = useVeleroRunVolumes(kind, namespace, name, () => finishedNow.current)
   const live = useVeleroVolumeOperations(kind, namespace, name)
   const restore = kind === 'restores'
   const data = record.data
@@ -75,13 +76,16 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
   })
   const inFlight = live.data && !isVeleroRunFinished(live.data.runPhase)
   const source = JSON.stringify([getApiBase(), kind, namespace, name])
-  const recordReadAt = data ? record.dataUpdatedAt : record.errorUpdatedAt
-  const [recordRead, setRecordRead] = useState<{ source: string; at: number; phase?: string }>({ source, at: 0 })
+  const finished = isVeleroRunFinished(live.data?.runPhase)
+  useEffect(() => { finishedNow.current = live.data ? finished : undefined })
+  // Opening the tab starts both reads together, so a record requested before
+  // the operations read answered takes that first answer.
+  const [firstLive, setFirstLive] = useState<{ source: string; finished: boolean }>()
   useEffect(() => {
-    if (!recordReadAt) return
-    setRecordRead((previous) => previous.source === source && previous.at === recordReadAt ? previous : { source, at: recordReadAt, phase: live.data?.runPhase })
-  }, [source, recordReadAt, live.data?.runPhase])
-  const readBeforeCompletion = recordRead.source === source && recordRead.at === recordReadAt && recordRead.at > 0 && !isVeleroRunFinished(recordRead.phase) && isVeleroRunFinished(live.data?.runPhase)
+    if (live.data && firstLive?.source !== source) setFirstLive({ source, finished })
+  }, [live.data, source, finished, firstLive?.source])
+  const requestedAfterCompletion = data?.finishedAtRequest ?? (firstLive?.source === source ? firstLive.finished : finished)
+  const readBeforeCompletion = !!data && finished && !requestedAfterCompletion
   const coverage = Object.entries(live.data?.coverage ?? {})
   const complete = coverage.length > 0 && coverage.every(([, value]) => value.state === 'full')
   const recordedNone = data?.total === 0

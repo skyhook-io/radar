@@ -188,6 +188,36 @@ describe('Volumes tab', () => {
     await settle(() => !host.textContent!.includes('This run is now finished, but'))
   })
 
+  it('keeps the provisional note when a record requested in flight resolves after completion was seen', async () => {
+    let release!: (value: VeleroRunVolumesResponse) => void
+    const held = new Promise<VeleroRunVolumesResponse>((resolve) => { release = resolve })
+    let operations = live({ runPhase: 'InProgress' })
+    state.fetch.mockImplementation((path: string) => path.includes('volume-operations') ? Promise.resolve(operations) : held)
+    await mount(); await settle(() => host.textContent!.includes('This run is still in progress'))
+    operations = live({ runPhase: 'Completed' })
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh operations')!.click())
+    await settle(() => !host.textContent!.includes('This run is still in progress'))
+    await act(async () => { release(record()) })
+    await settle(() => host.textContent!.includes('snap-123'))
+    expect(host.textContent).toContain('This run is now finished, but the volume record was requested before completion was confirmed')
+    respond(record(), operations)
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh record')!.click())
+    await settle(() => state.fetch.mock.calls.filter(([path]) => path.endsWith('/volumes?')).length === 2)
+    await settle(() => !host.textContent!.includes('This run is now finished, but'))
+  })
+
+  it('keeps the provisional note when a refresh after completion fails', async () => {
+    respond(record(), live({ runPhase: 'InProgress' }))
+    await mount(); await settle(() => host.textContent!.includes('snap-123'))
+    respond(record(), live({ runPhase: 'Completed' }))
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh operations')!.click())
+    await settle(() => host.textContent!.includes('This run is now finished, but'))
+    state.fetch.mockImplementation((path: string) => path.includes('volume-operations') ? Promise.resolve(live()) : Promise.reject(new ApiError('record unavailable', 503)))
+    await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh record')!.click())
+    await settle(() => host.textContent!.includes('record unavailable'))
+    expect(host.textContent).toContain('This run is now finished, but the volume record was requested before completion was confirmed')
+  })
+
   it('shows truncation and retries operations independently', async () => {
     state.fetch.mockImplementation((path: string) => path.includes('volume-operations') ? Promise.reject(new ApiError('operations denied', 403)) : Promise.resolve(record({ total: 5001, truncated: true })))
     await mount(); await settle(() => host.textContent!.includes('operations denied'))
