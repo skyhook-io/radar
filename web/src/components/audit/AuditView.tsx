@@ -112,7 +112,7 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
               <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
             )}
             {annotationIgnored > 0 && (
-              <Tooltip content={`Resources that opted out of a check with the ${data.ignoreChecksAnnotation} annotation`}>
+              <Tooltip content={`Resources or namespaces that opted out of a check with the ${data.ignoreChecksAnnotation} annotation`}>
                 <span className="text-xs text-theme-text-tertiary">{annotationIgnored} {annotationIgnored === 1 ? 'finding' : 'findings'} hidden by annotation</span>
               </Tooltip>
             )}

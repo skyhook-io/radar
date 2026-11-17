@@ -780,7 +780,7 @@ function FleetCheckRow({
 
       {ignoreChecksAnnotation && (
         <CardSection icon={EyeOff} label="Skip for one resource">
-          <CardBody>Add this annotation to a resource listed below. Its findings for this check are then hidden.</CardBody>
+          <CardBody>Add this annotation to a resource listed below. Its findings for this check are then hidden. Put it on the Namespace to skip the check for the whole namespace.</CardBody>
           <CopyableCommand command={`${ignoreChecksAnnotation}: ${fc.checkID}`} />
         </CardSection>
       )}
