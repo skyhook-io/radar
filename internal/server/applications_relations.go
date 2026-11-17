@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -21,8 +22,47 @@ import (
 // appRelationBatch is request-local and policy-neutral. Each family is read
 // once; rows only join the resulting target-to-declarer maps.
 type appRelationBatch struct {
-	fields             map[string]map[resourceid.Ref][]topology.ResourceRef
+	fields map[string]map[resourceid.Ref][]topology.ResourceRef
+	// exposureIncomplete: Services went unread everywhere; exposureGaps names
+	// the namespaces they went unread in. A Service selects only in its own
+	// namespace, so a workload's exposure is unknown only when its own
+	// namespace's Services went unread.
 	exposureIncomplete bool
+	exposureGaps       map[string]bool
+	// exposureUnread answers for a namespace the Services read didn't name: a
+	// collector holding only some namespaces reports all the others as one gap.
+	exposureUnread func(namespace string) bool
+}
+
+func (b *appRelationBatch) exposureUnknown(namespace string) bool {
+	return b.exposureIncomplete || b.exposureGaps[namespace] || b.exposureUnread != nil && b.exposureUnread(namespace)
+}
+
+func (b *appRelationBatch) noteServiceGaps(session relations.Session, kind resourceid.GroupKind, gaps []ownership.Gap) {
+	for _, g := range gaps {
+		switch {
+		case g.Namespace != "":
+			if b.exposureGaps == nil {
+				b.exposureGaps = map[string]bool{}
+			}
+			b.exposureGaps[g.Namespace] = true
+		case g.Reason == readreason.RadarNamespaceNotCollected:
+			if b.exposureUnread != nil {
+				continue
+			}
+			unread := map[string]bool{}
+			b.exposureUnread = func(namespace string) bool {
+				if got, ok := unread[namespace]; ok {
+					return got
+				}
+				read := session.Indexed(kind, "", nil, ownership.SearchScope{Namespaces: []string{namespace}})
+				unread[namespace] = len(read.Gaps) > 0
+				return unread[namespace]
+			}
+		default:
+			b.exposureIncomplete = true
+		}
+	}
 }
 
 func appAttachmentField(field string) bool {
@@ -90,7 +130,13 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 	view := relations.NewView(session, ownership.Unrestricted()).WithLimit(0)
 	declarations := map[*relations.Family]map[resourceid.Ref][]resourceid.Ref{}
 	compositions := relations.Compositions()
-	deployments := objects(resourceid.GroupKind{Group: "apps", Kind: "Deployment"})
+	// The mesh domain is istiod's, wherever it runs, whatever namespaces the
+	// request names.
+	deploymentKind := resourceid.GroupKind{Group: "apps", Kind: "Deployment"}
+	deployments := objects(deploymentKind)
+	if !scope.AllNamespaces {
+		deployments = session.Indexed(deploymentKind, "", nil, ownership.SearchScope{AllNamespaces: true})
+	}
 	var controllerDeployments []*appsv1.Deployment
 	for _, o := range deployments.Objects {
 		if d, ok := o.Object.(*appsv1.Deployment); ok {
@@ -191,8 +237,8 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 		seen := map[resourceid.Ref]bool{}
 		for _, selector := range f.Selectors {
 			read := objects(selector.Kind)
-			if f == relations.ServiceSelectors && len(read.Gaps) > 0 {
-				b.exposureIncomplete = true
+			if f == relations.ServiceSelectors {
+				b.noteServiceGaps(session, selector.Kind, read.Gaps)
 			}
 			for _, o := range read.Objects {
 				if ctx.Err() != nil {
@@ -270,7 +316,7 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *appRelationships {
 	subject := resourceid.NewRef(group, kind, ns, name)
 	field := func(name string) map[string]topology.ResourceRef { return refsByKey(b.fields[name][subject]) }
-	out := &appRelationships{serviceRefs: field("Services"), ingressRefs: field("Ingresses"), routeRefs: field("Routes"), configRefs: field("ConfigRefs"), scalerRefs: field("Scalers"), storageRefs: field("StorageRefs"), pdbRefs: field("PDBs"), networkPolicyRefs: field("NetworkPolicies"), exposureIncomplete: b.exposureIncomplete}
+	out := &appRelationships{serviceRefs: field("Services"), ingressRefs: field("Ingresses"), routeRefs: field("Routes"), configRefs: field("ConfigRefs"), scalerRefs: field("Scalers"), storageRefs: field("StorageRefs"), pdbRefs: field("PDBs"), networkPolicyRefs: field("NetworkPolicies"), exposureIncomplete: b.exposureUnknown(ns)}
 	out.Configs, out.Scalers, out.Storage, out.PDBs, out.NetworkPolicies = len(out.configRefs), len(out.scalerRefs), len(out.storageRefs), len(out.pdbRefs), len(out.networkPolicyRefs)
 	out.Services = refNames(sortedRefs(out.serviceRefs, 20), 20)
 	out.Ingresses = refNames(sortedRefs(out.ingressRefs, 20), 20)

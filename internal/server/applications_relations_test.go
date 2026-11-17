@@ -28,11 +28,16 @@ import (
 
 type appCountingSession struct {
 	relations.Session
-	reads map[resourceid.GroupKind]int
+	reads map[appCountedRead]int
+}
+
+type appCountedRead struct {
+	kind          resourceid.GroupKind
+	allNamespaces bool
 }
 
 func (s *appCountingSession) Indexed(kind resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
-	s.reads[kind]++
+	s.reads[appCountedRead{kind, scope.AllNamespaces}]++
 	return s.Session.Indexed(kind, index, keys, scope)
 }
 
@@ -57,7 +62,9 @@ func TestApplicationsBatchAttachmentParity(t *testing.T) {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: meta("scale"), Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"}}}
 	pdb := &policyv1.PodDisruptionBudget{ObjectMeta: meta("budget"), Spec: policyv1.PodDisruptionBudgetSpec{Selector: &metav1.LabelSelector{MatchLabels: labels}}}
 	np := &networkingv1.NetworkPolicy{ObjectMeta: meta("network"), Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{MatchLabels: labels}}}
-	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod"), deployment, service, ingress, hpa, pdb, np, &networkingv1.NetworkPolicy{ObjectMeta: meta("all-pods")}, &corev1.ConfigMap{ObjectMeta: meta("settings")}, &corev1.PersistentVolumeClaim{ObjectMeta: meta("data")})...))
+	// istiod outside the request's namespaces still sets the mesh domain.
+	istiod := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "istio-system", Name: "istiod", Labels: map[string]string{"app": "istiod"}}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "discovery", Args: []string{"discovery", "--domain=mesh.example"}}}}}}}
+	useTestResourceCache(t, fake.NewClientset(append(testNamespaces("prod", "istio-system"), deployment, istiod, service, ingress, hpa, pdb, np, &networkingv1.NetworkPolicy{ObjectMeta: meta("all-pods")}, &corev1.ConfigMap{ObjectMeta: meta("settings")}, &corev1.PersistentVolumeClaim{ObjectMeta: meta("data")})...))
 	route := func(kind, apiVersion, name string, spec map[string]any) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]any{"apiVersion": apiVersion, "kind": kind, "metadata": map[string]any{"namespace": "prod", "name": name}, "spec": spec}}
 	}
@@ -68,6 +75,7 @@ func TestApplicationsBatchAttachmentParity(t *testing.T) {
 		route("HTTPRoute", "gateway.networking.k8s.io/v1", "http", map[string]any{"parentRefs": []any{map[string]any{"name": "gateway"}}, "rules": []any{map[string]any{"backendRefs": []any{map[string]any{"name": "api", "port": int64(80)}}}}}),
 		route("IngressRoute", "traefik.io/v1alpha1", "traefik", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"name": "api", "port": int64(80)}}}}}),
 		route("VirtualService", "networking.istio.io/v1", "istio", map[string]any{"http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "api"}}}}}}),
+		route("VirtualService", "networking.istio.io/v1", "istio-mesh", map[string]any{"http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "api.prod.svc.mesh.example"}}}}}}),
 		route("HTTPProxy", "projectcontour.io/v1", "contour", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"name": "api", "port": int64(80)}}}}}),
 	}
 	var resources []k8s.APIResource
@@ -110,22 +118,22 @@ func TestApplicationsBatchAttachmentParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	counted := &appCountingSession{Session: session.(relations.Session), reads: map[resourceid.GroupKind]int{}}
+	counted := &appCountingSession{Session: session.(relations.Session), reads: map[appCountedRead]int{}}
 	batch := buildAppRelationBatch(context.Background(), counted, []string{"prod"})
 	for kind, count := range counted.reads {
 		if count != 1 {
-			t.Fatalf("batch scanned %s %d times", kind, count)
+			t.Fatalf("batch scanned %+v %d times", kind, count)
 		}
 	}
 	ref := func(group, kind, name string) topology.ResourceRef {
 		return topology.ResourceRef{Group: group, Kind: kind, Namespace: "prod", Name: name}
 	}
 	want := &appRelationships{
-		Services: []string{"api"}, Ingresses: []string{"edge"}, Routes: []string{"HTTPProxy/contour", "HTTPRoute/http", "IngressRoute/traefik", "VirtualService/istio"},
+		Services: []string{"api"}, Ingresses: []string{"edge"}, Routes: []string{"HTTPProxy/contour", "HTTPRoute/http", "IngressRoute/traefik", "VirtualService/istio", "VirtualService/istio-mesh"},
 		Configs: 2, Scalers: 1, Storage: 1, PDBs: 1, NetworkPolicies: 2,
 		serviceRefs:       refsByKey([]topology.ResourceRef{ref("", "Service", "api")}),
 		ingressRefs:       refsByKey([]topology.ResourceRef{ref("networking.k8s.io", "Ingress", "edge")}),
-		routeRefs:         refsByKey([]topology.ResourceRef{ref("gateway.networking.k8s.io", "HTTPRoute", "http"), ref("traefik.io", "IngressRoute", "traefik"), ref("networking.istio.io", "VirtualService", "istio"), ref("projectcontour.io", "HTTPProxy", "contour")}),
+		routeRefs:         refsByKey([]topology.ResourceRef{ref("gateway.networking.k8s.io", "HTTPRoute", "http"), ref("traefik.io", "IngressRoute", "traefik"), ref("networking.istio.io", "VirtualService", "istio"), ref("networking.istio.io", "VirtualService", "istio-mesh"), ref("projectcontour.io", "HTTPProxy", "contour")}),
 		configRefs:        refsByKey([]topology.ResourceRef{ref("", "ConfigMap", "settings"), ref("bitnami.com", "SealedSecret", "sealed")}),
 		scalerRefs:        refsByKey([]topology.ResourceRef{ref("autoscaling", "HorizontalPodAutoscaler", "scale")}),
 		storageRefs:       refsByKey([]topology.ResourceRef{ref("", "PersistentVolumeClaim", "data")}),
