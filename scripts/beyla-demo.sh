@@ -420,6 +420,8 @@ YAML
 # client on the control plane, web and db on the worker: every client flow crosses
 # nodes, so both agents report it.
 pin_across_nodes() {
+  kctl get node "${CLUSTER_NAME}-worker" >/dev/null 2>&1 ||
+    fail "Cluster '${CLUSTER_NAME}' has no worker node. It was created without BEYLA_DEMO_NODES=2; run 'BEYLA_DEMO_NODES=2 $0 reset'."
   step "Pinning client to ${CLUSTER_NAME}-control-plane, web and db to ${CLUSTER_NAME}-worker"
   kctl -n "${DEMO_NS}" patch deploy client --type merge -p "{\"spec\":{\"template\":{\"spec\":{
     \"nodeSelector\":{\"kubernetes.io/hostname\":\"${CLUSTER_NAME}-control-plane\"},
@@ -740,6 +742,12 @@ cmd_query() {
   step "Radar L4 query (network flows, request direction only)"
   note "sum by (8 labels) (rate(beyla_network_flow_bytes_total{${JOB_SELECTOR}, direction=\"request\"}[5m]))"
   prom_query "sum by (k8s_src_owner_name, k8s_src_namespace, k8s_src_owner_type, k8s_dst_owner_name, k8s_dst_namespace, k8s_dst_owner_type, dst_port, transport) (rate(beyla_network_flow_bytes_total{${JOB_SELECTOR}, direction=\"request\"}[5m]))" | print_series
+
+  step "The same edges as Radar counts them: two agents' copies of a cross-node flow collapsed"
+  note "series with a node label: max without (instance, pod, node, host) before the sum; others summed as above"
+  local sel="${JOB_SELECTOR}, direction=\"request\""
+  local m="beyla_network_flow_bytes_total"
+  prom_query "sum by (k8s_src_owner_name, k8s_src_namespace, k8s_src_owner_type, k8s_dst_owner_name, k8s_dst_namespace, k8s_dst_owner_type, dst_port, transport) (max without (instance, pod, node, host) (rate(${m}{${sel}, k8s_src_node_name!=\"\"}[5m])) or max without (instance, pod, node, host) (rate(${m}{${sel}, k8s_src_node_name=\"\", k8s_dst_node_name!=\"\"}[5m])) or rate(${m}{${sel}, k8s_src_node_name=\"\", k8s_dst_node_name=\"\"}[5m]))" | print_series
 
   step "Without the direction filter (what the mirrored response edges look like)"
   note "the same query with no direction filter — every edge above gains a twin pointing the other way"
