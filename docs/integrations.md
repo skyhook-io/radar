@@ -2240,11 +2240,21 @@ Two projects run AI agents on Kubernetes, and Radar reads both: [Agent Sandbox](
 
 A claim forwards its Sandbox's reason; an in-progress or settled forwarded reason is left for the Sandbox to report, so it raises no Issue on the claim.
 
+<p align="center">
+  <img src="screenshots/integrations/agent-sandbox-list.png" alt="Sandbox list with status readings" width="800">
+  <br><em>Sandboxes: each status names the reason Agent Sandbox reports, colored by how much it needs attention</em>
+</p>
+
 **WorkerPool.** Its only condition, `Resolved`, sits per sandbox class in `status.sandboxClasses[]`, where Radar's generic condition handling never looks. A class that does not resolve to a usable SandboxConfig (`SandboxConfigNotFound`, `SandboxConfigDeleting`, `SandboxClassMismatch`, `DefaultConfigNotFound`) is an Issue, since Substrate keeps ready workers running on the last resolved config but cannot start new ones. Severity follows one rule: **critical** (red) when workers are wanted and none is ready; otherwise a warning (orange). A condition recorded for an older generation is reported as such rather than trusted, and a spec edit is not read as recovery. `pkg/health` holds this reading for AI summaries, and `pkg/health/testdata/substrate_workerpool.json` pins the UI to it. Workers that are not ready are left to the worker Deployment the pool owns. A Deployment that is never created has nothing to report it, and Substrate's controller only logs a rejected create (an admission policy, or a ServiceAccount or Deployment it may not create), so Radar raises a critical `DeploymentNotCreated` Issue when a pool wants workers, every class has resolved on the current generation, and 10 minutes later there is still no `status.selector` and no worker Pod. The pool's status then reads **Provisioning stalled** (red), from the same rule in `pkg/health`, so the badge and the Issue agree. A SandboxConfig stuck deleting because a pool still uses it is attributed to `ate-controller` (finalizer `sandboxconfig.ate.dev/workerpool-protection`).
 
 **Worker Pods.** A Pod labelled `ate.dev/worker-pool` gets a note in its drawer: Substrate places actors on it in turn, so its logs, metrics and restarts are shared by every actor it has hosted.
 
-**Agent Substrate health (Prometheus).** With Prometheus connected, a WorkerPool, and a Node that runs Substrate's `atelet`, get an Agent Substrate section at the top of their Overview tab (capacity on a WorkerPool, snapshot uploads on a Node) and charts on their Metrics tab, from the metrics Substrate exports. The section gives the verdict, a sentence saying what it means for someone who has not met Substrate before, and the facts behind it. They are aggregates: Substrate keeps actor names out of metric labels.
+**Agent Substrate health (Prometheus).** With [Prometheus connected](workload-metrics.md#what-radar-discovers-automatically), a WorkerPool, and a Node that runs Substrate's `atelet`, get an Agent Substrate section at the top of their Overview tab (capacity on a WorkerPool, snapshot uploads on a Node) and charts on their Metrics tab, from the metrics Substrate exports. The section gives the verdict, a sentence saying what it means for someone who has not met Substrate before, and the facts behind it. They are aggregates: Substrate keeps actor names out of metric labels.
+
+<p align="center">
+  <img src="screenshots/integrations/agent-substrate-workerpool.png" alt="WorkerPool drawer with the Agent Substrate capacity section" width="800">
+  <br><em>A WorkerPool short of workers: the verdict, what it means, and the facts behind it</em>
+</p>
 
 The verdict and the capacity and snapshot facts read now; resume p95, failed resumes and crashes summarize the charts' hour:
 
