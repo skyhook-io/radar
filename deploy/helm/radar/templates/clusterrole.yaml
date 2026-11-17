@@ -411,8 +411,11 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.knative }}
-  - apiGroups: ["serving.knative.dev", "eventing.knative.dev", "sources.knative.dev", "messaging.knative.dev", "flows.knative.dev", "sinks.knative.dev", "networking.internal.knative.dev"]
+  - apiGroups: ["serving.knative.dev", "eventing.knative.dev", "sources.knative.dev", "messaging.knative.dev", "flows.knative.dev", "networking.internal.knative.dev"]
     resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sinks.knative.dev"]
+    resources: ["jobsinks"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.kubeshark }}

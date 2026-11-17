@@ -38,6 +38,11 @@ grant access to the underlying Role or ClusterRole objects.
 
 ## Intentional exceptions
 
+Withholding a kind leaves it out of the user's own Kubernetes grants. It does not
+hide the kind inside Radar: a namespaced kind Radar collects is shown to anyone who
+can see its namespace, apart from the few kinds Radar checks exactly, as
+[authentication](authentication.md) describes.
+
 | Resources withheld by this add-on | Why / effect |
 |---|---|
 | Kubernetes PodTemplate | Pod templates can contain inline container credentials. Relationship collection adds no caller grants, and native visibility adds no default caller grant. |

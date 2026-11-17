@@ -744,7 +744,7 @@ retain their finite grants.
 | `istio` | `networking.istio.io`, `security.istio.io` |
 | `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp`, `eks.amazonaws.com` |
 | `keda` | `keda.sh` |
-| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `sinks.knative.dev`, `networking.internal.knative.dev` |
+| `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev`, and `jobsinks` in `sinks.knative.dev` |
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
 | `kyverno` | `kyverno.io`, `policies.kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
