@@ -8,6 +8,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/relations"
@@ -89,6 +90,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	graph := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access}
 	groups := map[string]bool{}
 	grouped := map[resourceid.Ref]string{}
+	jobUIDs := map[string]types.UID{}
 
 	for hop := 0; hop < hops; hop++ {
 		if err := ctx.Err(); err != nil {
@@ -182,7 +184,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 				pods = append(pods, pod)
 			}
 		}
-		hopGroups := GroupPods(pods, PodGroupingOptions{})
+		hopGroups := GroupPods(pods, PodGroupingOptions{JobUIDs: requestSession.jobUIDs(pods, jobUIDs)})
 		podGroups := map[resourceid.Ref]*PodGroup{}
 		for _, g := range hopGroups.Groups {
 			if len(g.Pods) <= DefaultBuildOptions().MaxIndividualPods && !groups[g.Key] {
@@ -265,7 +267,7 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 		}
 	}
 	slices.SortFunc(groupedPods, func(a, b *corev1.Pod) int { return strings.Compare(a.Namespace+"/"+a.Name, b.Namespace+"/"+b.Name) })
-	displayGroups := GroupPods(groupedPods, PodGroupingOptions{}).Groups
+	displayGroups := GroupPods(groupedPods, PodGroupingOptions{JobUIDs: requestSession.jobUIDs(groupedPods, jobUIDs)}).Groups
 	keys := make([]string, 0, len(displayGroups))
 	for key := range displayGroups {
 		keys = append(keys, key)

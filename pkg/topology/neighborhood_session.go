@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"slices"
 
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -84,15 +87,13 @@ func (s *neighborhoodSession) Indexed(gk resourceid.GroupKind, index string, key
 		// The relation search matches each object before checking the
 		// caller's access to it, and the walk admits every node it includes,
 		// so a hidden object here is read only to tell whether it relates.
-		if captured, ok := s.objects[o.Ref]; ok {
-			o.Object = captured.object
-		} else {
-			obj, got := s.borrow(o.Ref, false)
-			if got.State != ownership.Present {
-				continue
-			}
-			o.Object = obj
+		// An object this request already read as absent stays absent, even
+		// if the informer has since added it: the walk reads it from here.
+		obj, got := s.borrow(o.Ref, false)
+		if got.State != ownership.Present {
+			continue
 		}
+		o.Object = obj
 		objects = append(objects, o)
 	}
 	read.Objects = objects
@@ -109,4 +110,29 @@ type neighborhoodAuxiliarySession struct{ *neighborhoodSession }
 
 func (s neighborhoodAuxiliarySession) Borrow(r resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
 	return s.borrow(r, false)
+}
+
+// jobUIDs fills uids with the UID of the Job now cached under each name a
+// Pod's controller reference gives, so Pods of an earlier same-named run
+// group apart from the current run's, as the graph builder groups them. The
+// Job is read with Radar's identity: its UID only splits Pods already
+// admitted.
+func (s *neighborhoodSession) jobUIDs(pods []*corev1.Pod, uids map[string]types.UID) map[string]types.UID {
+	for _, pod := range pods {
+		ref := metav1.GetControllerOf(pod)
+		if ref == nil || ref.Kind != "Job" || !ownerGroupMatches(ref.Kind, ref.APIVersion) {
+			continue
+		}
+		key := pod.Namespace + "/" + ref.Name
+		if _, read := uids[key]; read {
+			continue
+		}
+		obj, got := s.borrow(resourceid.NewRef("batch", "Job", pod.Namespace, ref.Name), false)
+		if job, ok := obj.(*batchv1.Job); ok && got.State == ownership.Present {
+			uids[key] = job.UID
+		} else {
+			uids[key] = ""
+		}
+	}
+	return uids
 }
