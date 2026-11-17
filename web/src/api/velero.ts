@@ -85,7 +85,6 @@ export interface VeleroRunRow {
   name: string
   uid: string
   phase?: string
-  reason?: string
   created?: string
   started?: string
   completed?: string
@@ -96,6 +95,7 @@ export interface VeleroRunRow {
   itemsTotal?: number
   errors: number
   warnings: number
+  reason?: string
   backupName?: string
   scheduleName?: string
   namespaceMapping?: Record<string, string>
@@ -109,10 +109,12 @@ export interface VeleroRunsResponse {
   truncated?: boolean
 }
 
-// GET /api/velero/runs/{backups|restores}?namespace=
+// GET /api/velero/runs/{backups|restores}?namespace=&schedule=&backup=
 //
 // Every Backup or Restore the caller can read, newest first, read through the
 // same per-kind access as the Velero views; `coverage` says what it covered.
+// `schedule` and `backup` narrow the answer on the server: one schedule's
+// runs, or the restores made from one backup.
 export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, filter?: { schedule?: string; backup?: string }) {
   const { guard, gatedKey } = useRadarFeature('veleroRuns')
   const base = getApiBase()
@@ -120,15 +122,14 @@ export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, 
   if (namespace) params.set('namespace', namespace)
   if (filter?.schedule) params.set('schedule', filter.schedule)
   if (filter?.backup) params.set('backup', filter.backup)
-  const schedule = filter?.schedule ?? ''
-  const backup = filter?.backup ?? ''
+  const query = params.toString()
   return useQuery<VeleroRunsResponse>({
-    queryKey: ['velero', 'runs', base, kind, namespace ?? '', schedule, backup, ...gatedKey],
-    queryFn: ({ signal }) =>
-      guard(() => fetchJSON<VeleroRunsResponse>(`/velero/runs/${kind}?${params.toString()}`, signal)),
+    queryKey: ['velero', 'runs', base, kind, namespace ?? '', filter?.schedule ?? '', filter?.backup ?? '', ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<VeleroRunsResponse>(`/velero/runs/${kind}${query ? `?${query}` : ''}`, signal)),
     staleTime: 10_000,
     refetchInterval: 30_000,
-    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === base && prevQuery?.queryKey[3] === kind && prevQuery?.queryKey[4] === (namespace ?? '') && prevQuery?.queryKey[5] === schedule && prevQuery?.queryKey[6] === backup ? prev : undefined),
+    placeholderData: (prev, prevQuery) =>
+      prevQuery?.queryKey[2] === base && prevQuery?.queryKey[3] === kind && prevQuery?.queryKey[4] === (namespace ?? '') && prevQuery?.queryKey[5] === (filter?.schedule ?? '') && prevQuery?.queryKey[6] === (filter?.backup ?? '') ? prev : undefined,
     retry: shouldRetryRadarQuery,
   })
 }

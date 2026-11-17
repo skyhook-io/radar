@@ -15,8 +15,9 @@ import { VeleroDetailPage } from './VeleroDetailPage'
 
 /**
  * The Velero Overview, and each Velero object's page. Lives inside Resources and renders the same Resources
- * sidebar, with the Overview above the Velero kinds; the Schedule and
- * BackupStorageLocation kinds' lists are Radar's own tables (VeleroKindLists).
+ * sidebar, with the Overview above the Velero kinds; the Schedule,
+ * BackupStorageLocation, Backup and Restore kinds' lists are Radar's own
+ * tables (VeleroKindLists).
  * It reads every installation the caller can see; the namespace picker does
  * not apply.
  */

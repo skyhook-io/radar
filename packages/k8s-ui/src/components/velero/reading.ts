@@ -61,6 +61,32 @@ export function veleroScheduleTone(reading: Pick<VeleroScheduleReading, 'state' 
   return STATE_TONE[reading.state] ?? 'unknown'
 }
 
+// The newest run's outcomes that make an otherwise healthy schedule read "Last run failed".
+const LAST_RUN_FAILED = new Set(['Failed', 'PartiallyFailed', 'FailedValidation'])
+
+/** Whether Radar is sure of the zone the schedule's cron is read in. */
+export function veleroZoneConfirmed(zone: VeleroZone): boolean {
+  return zone.source !== 'inferred' && zone.source !== 'unknown'
+}
+
+/**
+ * How a schedule's state reads on its badge. Due within its grace, with the
+ * server running, is on schedule: Velero submits it on its next pass. A
+ * schedule that would read healthy says so only when its newest run did not
+ * fail, and only in green when its zone is confirmed.
+ */
+export function veleroScheduleBadge(
+  reading: Pick<VeleroScheduleReading, 'state' | 'attention'> & Partial<Pick<VeleroScheduleReading, 'reason' | 'zone' | 'runs'>>,
+): { label: string; tone: HealthLevel; detail?: string } {
+  const onSchedule = reading.state === 'onSchedule' || (reading.state === 'due' && reading.reason !== 'serverDown')
+  if (!onSchedule) return { label: veleroScheduleStateLabel(reading.state), tone: veleroScheduleTone(reading) }
+  const newest = reading.runs?.newest
+  if (newest && LAST_RUN_FAILED.has(newest.phase ?? '')) {
+    return { label: 'Last run failed', tone: 'alert', detail: `Its newest run, ${newest.name}, ${newest.phase === 'FailedValidation' ? 'was rejected' : newest.phase === 'Failed' ? 'failed' : 'partly failed'}.` }
+  }
+  return { label: STATE_LABEL.onSchedule, tone: reading.zone && !veleroZoneConfirmed(reading.zone) ? 'unknown' : 'healthy' }
+}
+
 /** A moment relative to now: "in 3h" for the future, "3h ago" for the past. */
 export function veleroMomentText(iso: string | undefined, fallback = '—'): string {
   if (!iso) return fallback
@@ -253,4 +279,26 @@ export function veleroDefaultText(loc: Pick<VeleroLocationReading, 'default' | '
   if (loc.default) return { text: 'Yes', detail: DEFAULT_SOURCE_DETAIL[loc.defaultSource] }
   if (loc.defaultSource === 'unknown') return { text: 'Unknown', detail: DEFAULT_SOURCE_DETAIL.unknown }
   return { text: 'No', detail: DEFAULT_SOURCE_DETAIL[loc.defaultSource] }
+}
+
+// Velero passes the object store's and the network's errors through verbatim
+// (an AWS SDK error inside a gRPC error inside a sentence), so the common ones
+// get one plain line. Credentials first: a wrong key is also a 403.
+const PLAIN_REASONS: [RegExp, string][] = [
+  [/NoSuchBucket|bucket does not exist/i, 'The bucket doesn’t exist'],
+  [/InvalidAccessKeyId|SignatureDoesNotMatch/i, 'Velero’s credentials are wrong'],
+  [/AccessDenied|Forbidden|status code:? 403/i, 'Velero’s credentials can’t access the bucket'],
+  [/no such host|i\/o timeout|TLS handshake timeout|connection refused|network is unreachable/i, 'Velero can’t reach the object store'],
+]
+
+/**
+ * One plain line for a raw Velero or object-store message, or undefined when
+ * the message is not one Radar recognises. The raw text stays the evidence;
+ * this only says what it means.
+ */
+export function veleroPlainReason(message: string | undefined): string | undefined {
+  if (!message) return undefined
+  const restarted = /found an? (backup|restore) with status "?InProgress"? during the server starting/i.exec(message)
+  if (restarted) return `Velero restarted while this ${restarted[1].toLowerCase()} ran, so it was marked Failed — run it again`
+  return PLAIN_REASONS.find(([pattern]) => pattern.test(message))?.[1]
 }

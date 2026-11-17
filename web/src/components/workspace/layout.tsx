@@ -78,7 +78,7 @@ export function Segments<T extends string>({
   label,
 }: {
   value: T
-  options: { id: T; label: string; count?: number | string }[]
+  options: { id: T; label: string; count?: ReactNode }[]
   onChange: (id: T) => void
   label: string
 }) {

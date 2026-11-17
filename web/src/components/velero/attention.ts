@@ -79,7 +79,7 @@ export function veleroAttention(data: VeleroWorkspaceResponse, installation: str
     ...inInstallation(data.locations, installation)
       .filter((l) => l.attention && !(l.reason === 'serverDown' && downIn.has(l.namespace)))
       .map(locationProblem),
-    ...issues.map(veleroIssueProblem),
+    ...issues.map((i) => veleroIssueProblem(i)),
   ]
 }
 

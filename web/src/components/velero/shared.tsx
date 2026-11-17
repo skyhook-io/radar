@@ -4,10 +4,12 @@ import { Archive } from 'lucide-react'
 import {
   PaneLoader,
   RadarUpgradeAction,
+  Tooltip,
   getRadarUpgradeRequirement,
   issueTitle,
   radarUpgradeDetail,
   radarUpgradeHeadline,
+  veleroPlainReason,
   type VeleroIssue,
   type VeleroWorkspaceKey,
   type VeleroWorkspaceResponse,
@@ -48,6 +50,37 @@ export function veleroScopeLine(namespaces: string[]): string {
   return namespaces.length === 1
     ? `Velero in namespace ${list}. The namespace filter doesn’t apply here.`
     : `Velero installations in namespaces ${list}. The namespace filter doesn’t apply here.`
+}
+
+export function list(values: unknown): string[] {
+  return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
+}
+
+/** A run's or template's namespace selection as declared, and whether resource or label filters narrow it. */
+export function selectionText(spec: any, emptyMeans: string): { text: string; narrowed: boolean } {
+  const included = list(spec?.includedNamespaces)
+  const excluded = list(spec?.excludedNamespaces)
+  const base = included.length === 0 || included.includes('*') ? emptyMeans : included.join(', ')
+  const text = excluded.length ? `${base}, except ${excluded.join(', ')}` : base
+  const narrowed =
+    list(spec?.includedResources).length > 0 ||
+    list(spec?.excludedResources).length > 0 ||
+    list(spec?.includedClusterScopedResources).length > 0 ||
+    list(spec?.excludedClusterScopedResources).length > 0 ||
+    list(spec?.includedNamespaceScopedResources).length > 0 ||
+    list(spec?.excludedNamespaceScopedResources).length > 0 ||
+    !!spec?.labelSelector ||
+    list(spec?.orLabelSelectors).length > 0
+  return { text, narrowed }
+}
+
+/** An object's name in a table: mono, one line, cut with an ellipsis and whole on hover. */
+export function VeleroName({ name }: { name: string }) {
+  return (
+    <Tooltip content={name}>
+      <span className="block min-w-0 truncate font-mono text-sm">{name}</span>
+    </Tooltip>
+  )
 }
 
 /** Opens a Velero object in the drawer. */
@@ -112,7 +145,6 @@ export function VeleroCoverageNotice({ data, kinds }: { data: VeleroWorkspaceRes
   )
 }
 
-/** An Issues row as a workspace problem, with the canonical tone for its severity. */
 /** "Name, name and 3 more": a few names, then a count. */
 export function namesAndMore(names: string[], shown = 3): string {
   const head = names.slice(0, shown)
@@ -133,20 +165,30 @@ function rejectedRuns(issue: VeleroIssue): string | undefined {
   return `Velero rejected ${runs.length === 1 ? '1 run' : `${runs.length} runs`} because of it: ${namesAndMore(runs.map((r) => r.name))}.`
 }
 
-export function veleroIssueProblem(issue: VeleroIssue): WorkspaceProblem {
+/**
+ * An Issues row as a workspace problem. A message Radar recognises reads as
+ * one plain line, with Velero's own text folded under it. `withAction` adds
+ * the next step, for a banner with room for it.
+ */
+export function veleroIssueProblem(issue: VeleroIssue, opts?: { withAction?: boolean }): WorkspaceProblem {
   const message = issue.message?.trim()
-  // The title the Issues page gives the same row.
-  const title = issueTitle(issue)
+  const plain = veleroPlainReason(message)
   return {
     id: issue.id,
     category: issue.category,
-    title,
-    detail: [message, issue.cause?.trim(), rejectedRuns(issue)].filter(Boolean).map(sentence).join(' ') || undefined,
+    // The title the Issues page gives the same row.
+    title: issueTitle(issue),
+    detail: [plain ?? message, issue.cause?.trim(), rejectedRuns(issue), opts?.withAction ? issue.action?.trim() : undefined].filter(Boolean).map(sentence).join(' ') || undefined,
+    rawDetail: plain ? message : undefined,
+    rawDetailLabel: plain ? VELERO_MESSAGE_LABEL : undefined,
     subject: { kind: issue.kind, group: issue.group ?? VELERO_GROUP, namespace: issue.namespace ?? '', name: issue.name },
     source: 'issue',
     tone: issue.severity === 'critical' ? 'unhealthy' : 'degraded',
   }
 }
+
+/** The label of a raw Velero message folded under its plain reading. */
+export const VELERO_MESSAGE_LABEL = 'Velero’s message'
 
 /**
  * Loading, error, needs-newer-Radar and not-installed states both Velero

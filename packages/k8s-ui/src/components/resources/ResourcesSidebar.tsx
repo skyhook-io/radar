@@ -456,11 +456,17 @@ export function ResourcesSidebar({
       return { ...category, total, totalLabel, visibleResources }
     })
 
+    // A category with a workspace stays first while one of its kinds is open,
+    // as it is on its views, rather than dropping back among the others.
+    const leading = activeDestinationCategory ?? withTotals.find(c =>
+      categoryWorkspaces?.[c.name] && c.resources.some(r => r.name === effectiveSelectedKind.name && r.group === effectiveSelectedKind.group),
+    )?.name
+
     // Sort: the category whose workspace is open first, then categories with
     // resources, empty ones at bottom
     const sorted = withTotals.sort((a, b) => {
-      if (a.name === activeDestinationCategory) return -1
-      if (b.name === activeDestinationCategory) return 1
+      if (a.name === leading) return -1
+      if (b.name === leading) return 1
       if (a.total === 0 && b.total > 0) return 1
       if (a.total > 0 && b.total === 0) return -1
       return 0
