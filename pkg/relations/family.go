@@ -211,11 +211,12 @@ func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Obj
 // caller may not, ends the search there, since a later one may be shadowed
 // by it: d is then unread or withheld rather than resolved to a fallback.
 // d names the candidate the search stopped at, or, absent when none
-// exists, the first candidate the cluster serves.
+// exists, the first candidate the cluster serves. One found only after
+// served candidates that lack it is unread, with the legacyGroupOnly gap.
 func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage) {
 	served := v.served(candidates)
 	d.Ref, d.State = served[0], TargetAbsent
-	for _, r := range served {
+	for i, r := range served {
 		switch v.decide(r.GroupKind(), r.Namespace) {
 		case ownership.Allowed:
 		case ownership.Undecided:
@@ -230,6 +231,10 @@ func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage)
 		switch read := v.session.Object(r); read.State {
 		case ownership.Present:
 			d.Ref, d.State = r, TargetPresent
+			if i > 0 {
+				d.State, d.Gap = TargetUnread, legacyGroupOnly(r)
+				c.addGap(d.Gap)
+			}
 			return
 		case ownership.Absent:
 		default:
@@ -238,6 +243,14 @@ func (v *View) readTarget(d *Declared, candidates []resourceid.Ref, c *Coverage)
 			return
 		}
 	}
+}
+
+// legacyGroupOnly is the gap of a declaration that resolves to r only
+// because each candidate before it is served and lacks the object: whether
+// the controller reads r's group too, as Traefik 2.10 and 2.11 do, or no
+// longer does, as Traefik 3 doesn't, decides whether it uses r.
+func legacyGroupOnly(r resourceid.Ref) ownership.Gap {
+	return ownership.Gap{Kind: r.GroupKind(), Namespace: r.Namespace, Reason: readreason.LegacyGroupOnly}
 }
 
 // served are the candidates whose kind the cluster serves, so an API group
@@ -271,8 +284,11 @@ func (v *View) served(candidates []resourceid.Ref) []resourceid.Ref {
 // candidate before it that Radar couldn't read, or the caller may not, leaves
 // that unknown, so the answer doesn't claim it and says why in c.
 func (v *View) resolvesTo(candidates []resourceid.Ref, subject resourceid.Ref, c *Coverage) bool {
-	for _, r := range v.served(candidates) {
+	for i, r := range v.served(candidates) {
 		if r == subject {
+			if i > 0 {
+				c.addGap(legacyGroupOnly(r))
+			}
 			return true
 		}
 		if !v.mayRead(r.GroupKind(), r.Namespace, c) {
