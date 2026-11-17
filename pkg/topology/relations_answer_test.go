@@ -44,19 +44,30 @@ func projectionObject(obj runtime.Object, group, kind string) runtime.Object {
 // read as production reads it.
 func recordMembers(o *ownershiptest.Object, u *unstructured.Unstructured) {
 	var list gitops.MemberList
-	var ok bool
+	var ok, here, elsewhere bool
 	switch o.Ref.GroupKind() {
 	case ownership.ArgoApplication:
 		list, ok = gitops.ArgoMembers(u)
+		name, server, _ := gitops.ArgoComparedDestination(u)
+		here, elsewhere = gitops.IsInClusterArgoDestination(name, server), gitops.ArgoAppliesElsewhere(u)
 	case ownership.FluxHelmRelease, ownership.FluxKustomization:
 		list, ok = gitops.FluxMembers(u)
+		here = gitops.FluxTargetsLocalCluster(u)
+		elsewhere = !here
 	default:
 		return
 	}
 	if !ok {
+		if elsewhere {
+			o.Membership = ownership.MembersRemote
+		}
 		return
 	}
 	o.Membership = ownership.MembersRecorded
+	if !here {
+		// A remote manager's list names another cluster's objects.
+		o.Membership = ownership.MembersRemote
+	}
 	o.DestinationNamespace = list.DestinationNamespace
 	for _, m := range list.Entries {
 		ns := m.Namespace
@@ -571,5 +582,23 @@ func TestRelationsAnswerStorageClassReverseLists(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A manager that deploys to another cluster records that cluster's objects,
+// even where its list names a local object's coordinates.
+func TestProjectionSessionLocatesManagers(t *testing.T) {
+	web := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "web"}}, "apps", "Deployment")
+	for _, tc := range []struct {
+		server string
+		want   int
+	}{{"https://kubernetes.default.svc", 1}, {"https://remote.example.com", 0}} {
+		app := charUnstructured("argoproj.io/v1alpha1", "Application", "argocd", "shop", nil,
+			map[string]any{"destination": map[string]any{"server": tc.server, "namespace": "shop"}},
+			map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "shop", "name": "web"}}})
+		s := newProjectionSession(t, app, web)
+		if got := ownership.NewView(s, ownership.Unrestricted()).RecordingManagers(projectionRef(web)).Managers; len(got) != tc.want {
+			t.Errorf("destination %s: recording managers = %v, want %d", tc.server, got, tc.want)
+		}
 	}
 }
