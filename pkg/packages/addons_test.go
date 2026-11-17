@@ -42,6 +42,50 @@ func TestClassifyAddon(t *testing.T) {
 			name: "empty", wantAddon: false, wantWhy: "",
 		},
 		{
+			name: "user service named like Gateway API", wl: "gateway-api-v2",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "user LeaderWorkerSet named like the operator", wl: "lws-storage-sample",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "LeaderWorkerSet controller installed by its chart", chart: "lws-0.7.0", wl: "lws-controller-manager",
+			wantAddon: true, wantWhy: "chart=lws",
+		},
+		{
+			name: "user model server deployed with the llm-d chart", chart: "llm-d-modelservice-0.2.1", wl: "ms-llama-decode",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "user model deployment named like a model platform", wl: "kserve-fraud", app: "kserve-fraud",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "integration without name matching needs its chart", wl: "gpu-operator",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "integration classified by its chart", chart: "gpu-operator-v24.9.0", wl: "gpu-operator",
+			wantAddon: true, wantWhy: "chart=gpu-operator",
+		},
+		{
+			name: "AMD GPU operator by its upstream chart", chart: "gpu-operator-charts-v1.3.0",
+			wantAddon: true, wantWhy: "chart=gpu-operator-charts",
+		},
+		{
+			name: "user chart named like a model platform", chart: "kserve-fraud-1.0.0", wl: "fraud-predictor",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "user chart named like a workload API", chart: "lws-storage-sample-0.1.0",
+			wantAddon: false, wantWhy: "",
+		},
+		{
+			name: "integration that accepts name matching", wl: "argo-cd-server",
+			wantAddon: true, wantWhy: "name=argo-cd-server (argo-cd)",
+		},
+		{
 			// The upstream addon-manager label is the platform declaring
 			// "managed addon" — wins regardless of catalog coverage.
 			name: "addonmanager label (GKE-managed component)", wl: "networking-dra-driver", addonMgr: "Reconcile",
@@ -83,12 +127,33 @@ func TestClassifyAddon(t *testing.T) {
 	}
 }
 
-// Every canonical chart name crdGroupToChart resolves to must classify as an
-// add-on — the catalog is derived from it, so a new CRD group joins for free.
+// Every chart name crdGroupToChart resolves to must classify as an add-on —
+// the catalog is derived from it, so a new CRD group joins for free — except
+// the names integrationsNotAddons holds back.
 func TestAddonCatalogCoversCRDGroups(t *testing.T) {
 	for group, chart := range crdGroupToChart {
-		if addon, _ := ClassifyAddon(chart, "", "", "", "", ""); !addon {
-			t.Errorf("crdGroupToChart[%q]=%q not classified as add-on", group, chart)
+		addon, _ := ClassifyAddon(chart, "", "", "", "", "")
+		if want := !integrationsNotAddons[chart]; addon != want {
+			t.Errorf("crdGroupToChart[%q]=%q classified as add-on=%v, want %v", group, chart, addon, want)
+		}
+	}
+	mapped := map[string]bool{}
+	for _, chart := range crdGroupToChart {
+		mapped[chart] = true
+	}
+	for name := range integrationsNotAddons {
+		if !mapped[name] {
+			t.Errorf("integrationsNotAddons lists %q, which no crdGroupToChart entry maps to", name)
+		}
+	}
+	for _, name := range nameMatchedIntegrations {
+		if !mapped[name] {
+			t.Errorf("nameMatchedIntegrations lists %q, which no crdGroupToChart entry maps to", name)
+		}
+	}
+	for name := range chartlessIntegrations {
+		if !mapped[name] {
+			t.Errorf("chartlessIntegrations lists %q, which no crdGroupToChart entry maps to", name)
 		}
 	}
 }

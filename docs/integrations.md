@@ -696,6 +696,28 @@ resource, including core Secrets and these excluded kinds. See the
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.
 
+### Checks › Vulnerabilities
+
+**Checks → Vulnerabilities** (REST `/api/vulnerabilities`, MCP `list_vulnerabilities`) rolls the VulnerabilityReports up to the images that run now: which images carry Critical and High CVEs, which of those have a fix, and which workloads and namespaces run them. Radar doesn't scan images itself. The tab, its line on Home's Checks card and the workload drawer's Vulnerabilities section appear only where the cluster serves the VulnerabilityReport kind. The rollup is not part of Issues or of the Best practices queue and score.
+
+- **By image** (default): one row per running image, however many workloads run it, with its findings by severity, how many have a fix, and the workloads that run it.
+- **By CVE**: each CVE with the images and workloads that carry it, and how many of its images have a fixed release.
+- **By workload**: each workload's containers and what their images carry.
+- **By fix**: the fixable findings as a list of package upgrades (below).
+
+Severity and has-a-fix filters apply to every view. A finding Trivy left unrated (common for Go modules) is rated from its CVSS score. A CVE counts once per package version in an image, so totals can be lower than the summaries in Trivy Operator's own reports.
+
+**By fix** groups an image's fixable findings by package and installed version into one upgrade, and says every CVE it clears. The target is the lowest listed release that fixes every one of those CVEs, read with the package's own versioning (Debian, Alpine, RPM, PEP 440, RubyGems, Maven, or semver for npm, Go, Cargo, NuGet and the like), and images needing the same upgrade of the same package share a row. A scanner lists one fix per maintained branch, so for `6.11.4` with `8.0.1, 7.5.5, 6.11.6` the target is `6.11.6`; a release above one CVE's fix that sits on a branch lacking another's (with `7.5.5, 6.11.6` listed, `7.5.4`) moves up to that branch's fix. The ecosystem comes from the finding's package type when Trivy Operator is configured to write it (`trivy.additionalVulnerabilityReportFields`), else from its package URL, which it writes by default. Where Radar can't order the versions (no ecosystem, one it doesn't know, or a version that doesn't parse) the row shows the scanner's listed releases and picks none.
+
+**Which reports count.** A report counts when the object it scanned (a Deployment's ReplicaSet, a CronJob, a StatefulSet, a DaemonSet, a Job, or a Pod whose controller Trivy doesn't scan through) still runs that container and image: Pods that aren't finished, and CronJobs that aren't suspended. Reports about older revisions or removed workloads are left out and counted, unless the build they scanned still runs.
+
+- Images are matched by the digest Kubernetes reports for each running container (by the reference its spec names until it starts), so a tag pushed again, such as `:latest`, doesn't carry the older build's scan, and every workload running a scanned build shares its findings. A started container whose image has no registry digest, such as a locally loaded one, reads as not scanned.
+- Of several reports about one image, every finding any of them lists counts once for every workload running it, so an ignore policy scoped to one workload doesn't clear another's CVEs. A CVE the vulnerability database later withdrew stays until the older report is rescanned.
+- One multi-platform image digest is credited with the platform Trivy scanned.
+- An image without findings reads as having no reported CVEs: Trivy Operator's own filters (`trivy.ignoreUnfixed`, `trivy.severity`, ignore policies) decide what a report lists.
+
+**Unknown is never clean.** A running image with no report is listed as not scanned yet, never as clean. While any running image is unscanned or some reports aren't readable, the totals read as lower bounds (`≥`); with nothing scanned they read as unknown. Reports are read only where the caller may list them, as everywhere else, and withheld namespaces are named.
+
 ### What Radar Shows
 
 **VulnerabilityReport Detail View:** Severity breakdown (Critical/High/Medium/Low), affected images, and CVE counts.
@@ -851,6 +873,14 @@ permits the reference or has produced an artifact.
 **Topology:** Full Istio traffic path — IstioGateway → VirtualService → Service, and DestinationRule → Service configuration edges. See how traffic flows through gateway listeners, virtual service routing rules, and into backend services.
 
 Service links accept short names in the rule's namespace or full `name.namespace.svc.<domain>` names. Radar reads a unique registry domain from standard observed Istiod Deployments' `--domain` argument, using Istio's `cluster.local` default when no override is observed. Conflicting or unresolved control-plane arguments leave FQDN links unresolved. External control planes and nonstandard launch configurations may therefore need additional domain discovery; arbitrary dotted hosts are not treated as local Services.
+
+**Live Traffic:** the Traffic view reads Istio's standard Prometheus metrics: `istio_requests_total` (with its 5xx rate and request/response bytes) for HTTP and gRPC edges, and `istio_tcp_received_bytes_total` / `istio_tcp_sent_bytes_total` for TCP edges, as rates over the view's time range (5 minutes when it is under a minute). A rate needs two samples per series, so a range shorter than two scrape intervals shows no traffic; the map then says to choose a longer range. TCP edges appear whenever bytes move in the view's range, including on long-lived connections, and show data volume (byte rates × the window) with no request rate; on the map, an edge with no request rate is labelled with its throughput per protocol (for example `TCP · 2.4 KB/s`); against an older Radar that sends no per-protocol breakdown those labels stay empty. Radar reads the receiving side's report: the destination sidecar (`reporter="destination"`) or, in ambient mode, the destination's waypoint proxy (`reporter="waypoint"`). It never adds the receiving and calling sides' reports together. In ambient mode:
+- Workloads behind a waypoint get HTTP and gRPC edges from the waypoint's metrics. ztunnel also reports the hops into and out of the waypoint. Radar recognizes waypoint Deployments by their labels, as Kiali does (`gateway.istio.io/managed=istio.io-mesh-controller`, or, without that label, a `gateway.networking.k8s.io/gateway-name` containing "waypoint"), and leaves those hops out, so the map draws client → server without the proxy in between. If Radar cannot list Deployments, it cannot recognize waypoints and the hops stay on the map.
+- A request into an ambient namespace (labeled `istio.io/dataplane-mode=ambient`) that no waypoint reported, such as an ingress gateway or sidecar calling a workload with no waypoint, is read from the calling proxy's report (`reporter="source"`), as Kiali does. Those figures are used only when the receiving side counted none of that client's requests to the same workload, Service and protocol in the view's time range. When it counted some, its figures are used, so requests that skipped the waypoint are not counted. Radar finds ambient namespaces from its Namespace cache; without it, these reports are not read and the ztunnel check below is off. The query names every ambient namespace and is sent in a POST body; when the namespaces are too many to fit Radar's 16 KB query limit (several hundred, depending on name length), Radar skips these reports and the map says so.
+- Traffic between ambient workloads without a waypoint has no L7 metrics. It appears as TCP edges from ztunnel. When a call's HTTP figures come from the calling proxy (no waypoint or sidecar received it) and ztunnel reports TCP between the same workloads, Data shows HTTP payload bytes and ztunnel TCP connection bytes side by side by protocol. These measurements can describe the same calls and are never added together.
+- Prometheus has to scrape ztunnel and the waypoint proxies. When the view includes ambient traffic but Radar finds no ztunnel metrics (no `istio_build{component="ztunnel"}` series and no ztunnel TCP reports into an ambient namespace), the map says so, because TCP traffic into ambient workloads without a waypoint is then missing rather than idle.
+
+The volume filter uses request rate: setting it above zero hides TCP-only edges. Edge sizing, sorting and the busiest-edge highlight also use request rate. Radar Hub connected to an older Radar retains its connection-open rate behavior until that Radar is upgraded.
 
 **VirtualService Detail View:**
 - HTTP/TCP/TLS routing rules with match conditions
@@ -1183,9 +1213,15 @@ A cluster asking for a major the catalog does not list reports "incomplete or in
 
 | Check | What it catches |
 |-------|-----------------|
-| `cnpgNoDeclarativeBackup` | A CNPG Cluster with no ScheduledBackup targeting it |
+| `cnpgNoDeclarativeBackup` | A CNPG Cluster with a backup destination and no ScheduledBackup targeting it |
+| `cnpgNoBackupDestination` | A CNPG Cluster that declares no backup destination: no barman-cloud plugin with an ObjectStore, no in-tree `barmanObjectStore` with a `destinationPath`, no `volumeSnapshot` (any other enabled CNPG-I plugin counts as a destination) |
+| `cnpgNoWALArchiving` | A CNPG Cluster with a destination but no WAL archiving path, for example volume snapshots only: no in-tree `destinationPath`, no barman-cloud plugin with an ObjectStore (it archives WAL whether or not it is marked `isWALArchiver`, because CNPG hands every WAL file to each enabled archive-capable plugin), and no other plugin marked `isWALArchiver`. A Cluster whose only other plugin is a third-party one not marked `isWALArchiver` is not evaluated, since it may archive. CNPG may still report ContinuousArchiving as working: with no archiver at all it accepts each WAL file without keeping it |
+| `cnpgSingleInstance` | A CNPG Cluster with `spec.instances` 1 or unset, so there is no standby to fail over to |
+| `cnpgInTreeBackupDeprecated` | A CNPG Cluster configured with the in-tree `barmanObjectStore` and a `destinationPath` (deprecated since CNPG 1.26), even beside an enabled barman-cloud plugin: CNPG accepts the plugin there only as a non-archiver |
 
-Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups, volume snapshots and external schedulers all exist), so the finding asserts only that no schedule is *declared*, at posture severity. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. The check does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable.
+All five are posture findings (warning, default severity Medium, not badge-worthy) that state what the Cluster declares to CNPG. A dump job or storage snapshots outside CNPG are invisible to them, so none says a database has no backups. One cause gives one finding: a Cluster with no destination gets `cnpgNoBackupDestination` only, and neither the WAL rule nor the schedule rule evaluates it.
+
+The schedule rule is deliberately narrow: the absence of a ScheduledBackup does not prove a cluster is unprotected (on-demand Backups and external schedulers exist), so the finding asserts only that no schedule is *declared*. All three `spec.method` values — `barmanObjectStore`, `volumeSnapshot` and `plugin` — count as a declared schedule. Suspended schedules count as present, since suspension is deliberate operator intent. It does not run at all unless a synced cluster-wide ScheduledBackup informer backs the inventory, because absence would otherwise be unprovable. The other four read only the Cluster object and need no other inventory. All five obey `radarhq.io/ignore-checks` on the Cluster.
 
 ### Supported CRDs
 

@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 )
 
@@ -26,6 +28,13 @@ func TestGetClusterPlatform(t *testing.T) {
 		nkp           bool
 		want          string
 	}{
+		{
+			name: "EKS compute label from API",
+			nodes: corev1.NodeList{Items: []corev1.Node{
+				{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"eks.amazonaws.com/compute-type": "auto"}}},
+			}},
+			want: "eks",
+		},
 		{
 			name: "NKP on AWS infrastructure",
 			nodes: corev1.NodeList{Items: []corev1.Node{{
@@ -92,6 +101,29 @@ func TestGetClusterPlatform(t *testing.T) {
 	}
 }
 
+func TestGetClusterPlatformFromMixedCachedNodes(t *testing.T) {
+	setClusterDetectionClient(t, corev1.NodeList{}, corev1.PodList{}, true, "", false)
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client: fake.NewClientset(
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "custom"}, Spec: corev1.NodeSpec{ProviderID: "aws:///zone/custom"}},
+			&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "eks", Labels: map[string]string{"eks.amazonaws.com/compute-type": "hybrid"}}},
+		),
+		ResourceTypes: map[string]bool{k8score.Nodes: true},
+		DeferredTypes: map[string]bool{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Stop)
+	previous := resourceCache.Swap(&ResourceCache{ResourceCache: core})
+	t.Cleanup(func() { resourceCache.Store(previous) })
+	for range 32 {
+		if got, err := GetClusterPlatform(context.Background()); err != nil || got != "eks" {
+			t.Fatalf("GetClusterPlatform() = %q, %v; want eks", got, err)
+		}
+	}
+}
+
 func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.PodList, denyNodes bool, serverVersion string, nkp bool) {
 	t.Helper()
 
@@ -103,6 +135,9 @@ func setClusterDetectionClient(t *testing.T, nodes corev1.NodeList, pods corev1.
 		case "/version":
 			_ = json.NewEncoder(w).Encode(version.Info{GitVersion: serverVersion})
 		case "/api/v1/nodes":
+			if r.URL.Query().Get("limit") != "1" {
+				t.Errorf("node list limit = %q, want 1", r.URL.Query().Get("limit"))
+			}
 			if denyNodes {
 				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(metav1.Status{

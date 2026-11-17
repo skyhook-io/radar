@@ -65,7 +65,7 @@ func TestTraefikFamilies(t *testing.T) {
 				// as legacy_group_only; this one predates traefik.io.
 				var s Session = allNamespaces{cluster: cluster{objects: []runtime.Object{source, target}}}
 				if group == configrefs.TraefikLegacyGroup {
-					s = legacyTraefik{s.(allNamespaces)}
+					s = legacyTraefik{allNamespaces: s.(allNamespaces)}
 				}
 				checkFamilyIn(t, s, tc.family, source, refOf(target), tc.path)
 			})
@@ -247,20 +247,40 @@ func TestAContourTCPProxyDelegates(t *testing.T) {
 
 // legacyTraefik is a cluster whose discovery, complete, serves only the
 // legacy Traefik group, as before Traefik 2.10.
-type legacyTraefik struct{ allNamespaces }
+// failed lists API groups whose discovery failed.
+type legacyTraefik struct {
+	allNamespaces
+	failed []string
+}
 
-func (legacyTraefik) Catalog() *ownership.Catalog {
+func (c legacyTraefik) Catalog() *ownership.Catalog {
 	var served []ownership.ServedResource
 	for _, kind := range []string{"IngressRoute", "IngressRouteTCP", "IngressRouteUDP", "TraefikService", "Middleware", "MiddlewareTCP", "ServersTransport", "ServersTransportTCP", "TLSOption", "TLSStore"} {
 		served = append(served, ownership.ServedResource{Group: "traefik.containo.us", Version: "v1alpha1", Kind: kind, Resource: strings.ToLower(kind) + "s", Namespaced: true, Verbs: []string{"list", "watch", "get"}})
 	}
-	return ownership.NewCatalog(served, true)
+	return ownership.NewCatalog(served, len(c.failed) == 0, c.failed...)
+}
+
+// Another API group's failed discovery doesn't make traefik.io shadow the
+// legacy group; traefik.io's own does.
+func TestAFailedGroupShadowsOnlyItsOwnKinds(t *testing.T) {
+	route := object("traefik.containo.us/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"kind": "TraefikService", "name": "split"}}}}})
+	split := object("traefik.containo.us/v1alpha1", "TraefikService", "split", nil)
+	cluster := allNamespaces{cluster: cluster{objects: []runtime.Object{route, split}, unread: map[resourceid.GroupKind]readreason.Code{{Group: "traefik.io", Kind: "TraefikService"}: readreason.KindUnknown}}}
+	other := NewView(legacyTraefik{cluster, []string{"metrics.k8s.io"}}, ownership.Unrestricted())
+	if got := other.References(TraefikBackends, refOf(route), route); len(got.Declared) != 1 || got.Declared[0].Ref != refOf(split) || got.Declared[0].State != TargetPresent {
+		t.Errorf("with metrics.k8s.io failing the route's backend reads as %+v; want the legacy TraefikService, present", got)
+	}
+	own := NewView(legacyTraefik{cluster, []string{"traefik.io"}}, ownership.Unrestricted())
+	if got := own.References(TraefikBackends, refOf(route), route); len(got.Declared) != 1 || got.Declared[0].State != TargetUnread {
+		t.Errorf("with traefik.io failing the route's backend reads as %+v; want unread", got.Declared)
+	}
 }
 
 func TestAnUnservedTraefikGroupShadowsNothing(t *testing.T) {
 	route := object("traefik.containo.us/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"kind": "TraefikService", "name": "split"}}}}})
 	split := object("traefik.containo.us/v1alpha1", "TraefikService", "split", nil)
-	c := legacyTraefik{allNamespaces{cluster: cluster{objects: []runtime.Object{route, split}, unread: map[resourceid.GroupKind]readreason.Code{{Group: "traefik.io", Kind: "TraefikService"}: readreason.KindUnknown}}}}
+	c := legacyTraefik{allNamespaces: allNamespaces{cluster: cluster{objects: []runtime.Object{route, split}, unread: map[resourceid.GroupKind]readreason.Code{{Group: "traefik.io", Kind: "TraefikService"}: readreason.KindUnknown}}}}
 	v := NewView(c, ownership.Unrestricted())
 	if got := v.References(TraefikBackends, refOf(route), route); len(got.Declared) != 1 || got.Declared[0].Ref != refOf(split) || got.Declared[0].State != TargetPresent || !got.Coverage.Complete() {
 		t.Errorf("on a legacy-only cluster the route's backend reads as %+v", got)
@@ -339,7 +359,7 @@ func TestAResolutionStoppedAtALaterCandidateNamesIt(t *testing.T) {
 
 func TestAnAbsentTargetIsNamedInAServedGroup(t *testing.T) {
 	route := object("traefik.containo.us/v1alpha1", "IngressRoute", "route", map[string]any{"routes": []any{map[string]any{"services": []any{map[string]any{"kind": "TraefikService", "name": "split"}}}}})
-	v := NewView(legacyTraefik{allNamespaces{cluster: cluster{objects: []runtime.Object{route}}}}, ownership.Unrestricted())
+	v := NewView(legacyTraefik{allNamespaces: allNamespaces{cluster: cluster{objects: []runtime.Object{route}}}}, ownership.Unrestricted())
 	got := v.References(TraefikBackends, refOf(route), route)
 	if len(got.Declared) != 1 || got.Declared[0].State != TargetAbsent || got.Declared[0].Ref != ref(configrefs.TraefikLegacyGroup, "TraefikService", "split") {
 		t.Errorf("on a legacy-only cluster a missing TraefikService reads as %+v; want absent, named in the served legacy group", got.Declared)

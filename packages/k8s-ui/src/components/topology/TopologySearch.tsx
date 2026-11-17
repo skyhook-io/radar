@@ -38,47 +38,6 @@ function getNodeIcon(kind: string) {
   return getTopologyIcon(kind)
 }
 
-// Color mapping for different resource kinds
-function getKindColor(kind: string): string {
-  switch (kind) {
-    case 'Ingress':
-    case 'Gateway':
-      return 'text-purple-400'
-    case 'HTTPRoute':
-    case 'GRPCRoute':
-    case 'TCPRoute':
-    case 'TLSRoute':
-    case 'UDPRoute':
-      return 'text-purple-300'
-    case 'Service':
-      return 'text-blue-400'
-    case 'CalicoNetworkPolicy':
-    case 'CalicoGlobalNetworkPolicy':
-      return 'text-teal-400'
-    case 'CalicoStagedNetworkPolicy':
-    case 'CalicoStagedGlobalNetworkPolicy':
-    case 'CalicoStagedKubernetesNetworkPolicy':
-      return 'text-amber-400'
-    case 'Deployment':
-    case 'Rollout':
-      return 'text-emerald-400'
-    case 'DaemonSet':
-      return 'text-teal-400'
-    case 'StatefulSet':
-      return 'text-cyan-400'
-    case 'ReplicaSet':
-      return 'text-green-400'
-    case 'Pod':
-    case 'PodGroup':
-      return 'text-lime-400'
-    case 'ConfigMap':
-      return 'text-amber-400'
-    case 'Secret':
-      return 'text-red-400'
-    default:
-      return 'text-theme-text-secondary'
-  }
-}
 
 export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, viewModeLabel, overlayContainer }: TopologySearchProps) {
   const [isOpen, setIsOpen] = useState(false)
@@ -296,7 +255,7 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, vi
                       'flex items-center justify-center w-8 h-8 rounded-lg',
                       isSelected ? 'bg-blue-500/20' : 'bg-theme-elevated/50'
                     )}>
-                      <Icon className={clsx('w-4 h-4', getKindColor(node.kind))} />
+                      <Icon className="w-4 h-4 text-theme-text-secondary" />
                     </div>
 
                     <div className="flex-1 min-w-0">

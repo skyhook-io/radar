@@ -18,6 +18,9 @@ type Client struct {
 	t Transport
 }
 
+// MaxWorkloadQueryBytes is the longest PromQL, in raw bytes, that Radar sends
+// in one query; callers check it, since metrics stores limit query length
+// (VictoriaMetrics' default is 16 KiB) whether it is sent by GET or POST.
 const MaxWorkloadQueryBytes = 16000
 
 var ErrWorkloadQueryTooLarge = errors.New("Pod-name selection or workload size exceeds Radar's safe metrics query limit")
@@ -29,12 +32,18 @@ func NewClient(t Transport) *Client {
 
 // Query executes an instant PromQL query.
 func (c *Client) Query(ctx context.Context, promQL string) (*QueryResult, error) {
-	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}})
+	return c.issueQuery(ctx, "GET", "/api/v1/query", url.Values{"query": {promQL}})
+}
+
+// QueryPost executes an instant PromQL query sent in a POST form body, for a
+// query that may be too long for a proxy's URL limit. Its result is Query's.
+func (c *Client) QueryPost(ctx context.Context, promQL string) (*QueryResult, error) {
+	return c.issueQuery(ctx, "POST", "/api/v1/query", url.Values{"query": {promQL}})
 }
 
 // QueryAt executes an instant query at a fixed evidence time.
 func (c *Client) QueryAt(ctx context.Context, promQL string, at time.Time) (*QueryResult, error) {
-	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}, "time": {strconv.FormatInt(at.Unix(), 10)}})
+	return c.issueQuery(ctx, "GET", "/api/v1/query", url.Values{"query": {promQL}, "time": {strconv.FormatInt(at.Unix(), 10)}})
 }
 
 // QueryEvidence rejects partial answers rather than inferring identity from them.
@@ -84,7 +93,7 @@ func (c *Client) queryRange(ctx context.Context, promQL string, start, end time.
 	if complete {
 		return c.issueCompleteQuery(ctx, "POST", "/api/v1/query_range", params)
 	}
-	return c.issueQuery(ctx, "/api/v1/query_range", params)
+	return c.issueQuery(ctx, "GET", "/api/v1/query_range", params)
 }
 
 var ErrPartialResponse = errors.New("metrics backend returned a partial response")
@@ -111,8 +120,8 @@ func (c *Client) issueCompleteQuery(ctx context.Context, method, path string, pa
 	return parseQueryResult(response.Data)
 }
 
-func (c *Client) issueQuery(ctx context.Context, path string, params url.Values) (*QueryResult, error) {
-	body, err := c.t.Do(ctx, "GET", path, params)
+func (c *Client) issueQuery(ctx context.Context, method, path string, params url.Values) (*QueryResult, error) {
+	body, err := c.t.Do(ctx, method, path, params)
 	if err != nil {
 		return nil, err
 	}
