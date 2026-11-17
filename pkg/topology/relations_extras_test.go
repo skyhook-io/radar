@@ -14,6 +14,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -169,3 +170,39 @@ func (u undecidedKinds) CanRead(gk resourceid.GroupKind, _ string) ownership.Dec
 	return ownership.Allowed
 }
 func (undecidedKinds) Namespaces() ([]string, bool) { return nil, true }
+
+// countingIndexedSession counts inventory reads by kind.
+type countingIndexedSession struct {
+	*projectionSession
+	reads map[string]int
+}
+
+func (s countingIndexedSession) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
+	s.reads[gk.Kind]++
+	return s.projectionSession.Indexed(gk, index, keys, scope)
+}
+
+// The drawer reads a Node's Pods and a StorageClass's volumes once, for the
+// relationship projection; only the AI context also reads the full inventories
+// it reports coverage for.
+func TestDrawerAnswerSkipsContextOnlyInventories(t *testing.T) {
+	node := projectionObject(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}, "", "Node")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "shop"}, Spec: corev1.PodSpec{NodeName: "node"}}, "", "Pod")
+	class := projectionObject(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}}, "storage.k8s.io", "StorageClass")
+	pv := projectionObject(&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "pv"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: "fast"}}, "", "PersistentVolume")
+	access := ownership.Unrestricted()
+	for _, tc := range []struct {
+		subject runtime.Object
+		related runtime.Object
+		kind    string
+	}{{node, pod, "Pod"}, {class, pv, "PersistentVolume"}} {
+		reads := func(answer func(relations.Session, ownership.Access, ownership.Access, *ownership.View, resourceid.Ref, runtime.Object, string, ResourceProvider, DynamicProvider) (*Relationships, *RelationshipExtras)) int {
+			s := countingIndexedSession{newProjectionSession(t, tc.subject, tc.related), map[string]int{}}
+			answer(s, access, access, ownership.NewView(s, access), projectionRef(tc.subject), tc.subject, "", nil, nil)
+			return s.reads[tc.kind]
+		}
+		if drawer, context := reads(RelationsAnswerWithExtras), reads(RelationsContextAnswer); drawer >= context {
+			t.Fatalf("%s: drawer read %s %d times, context %d", projectionRef(tc.subject).Kind, tc.kind, drawer, context)
+		}
+	}
+}

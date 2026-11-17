@@ -128,7 +128,7 @@ func DeclaredAccess(d relations.Declared) string {
 // carried by its marker instead of a gap.
 func (n *neighborhood) nameUnreadable(a relations.ReferencesAnswer) relations.ReferencesAnswer {
 	out := relations.ReferencesAnswer{Coverage: a.Coverage}
-	out.Coverage.NotChecked = nil
+	out.Coverage.NotChecked, out.Coverage.Narrowed = nil, false
 	var named []ownership.Gap
 	for _, d := range a.Declared {
 		access := DeclaredAccess(d)
@@ -146,7 +146,6 @@ func (n *neighborhood) nameUnreadable(a relations.ReferencesAnswer) relations.Re
 			out.Coverage.NotChecked = append(out.Coverage.NotChecked, gap)
 		}
 	}
-	out.Coverage.Narrowed = slices.ContainsFunc(out.Declared, func(d relations.Declared) bool { return d.State == relations.TargetWithheld })
 	return out
 }
 
@@ -229,7 +228,7 @@ func (n *neighborhood) answer(session relations.Session, v *relations.View, fami
 		referrers := v.Referrers(f, subject, obj)
 		n.cover(f.Name, referrers.Coverage)
 		n.extras.projectCoverage(disposition, gk, false, referrers.Coverage)
-		if (f == relations.ConfigReferences || f == relations.PodPlacement) && subject == n.extras.Subject {
+		if f == relations.ConfigReferences && subject == n.extras.Subject {
 			n.extras.Consumers = append(n.extras.Consumers, referrers.Referrers...)
 		}
 		for _, r := range referrers.Referrers {
@@ -299,7 +298,9 @@ func relationsAnswer(session relations.Session, access, traverse ownership.Acces
 	n := &neighborhood{nodes: map[resourceid.Ref]bool{}, edges: map[string]bool{}, coverage: map[string]relations.Coverage{}, access: access, extras: &RelationshipExtras{Subject: subject, Fields: map[string]relations.Coverage{}, ScalerManagers: map[resourceid.Ref]resourceid.Ref{}}}
 	families, selectors := relations.Families(istioDomain), relations.SelectorFamilies()
 	n.node(subject)
-	n.contextDirectEvidence(relations.NewView(session, access), subject, obj)
+	if contextOnly {
+		n.contextDirectEvidence(relations.NewView(session, access), subject, obj)
+	}
 	n.answer(session, v, families, selectors, subject, obj, false)
 	for _, f := range relations.Compositions() {
 		joined := v.Composed(f, subject, obj)
