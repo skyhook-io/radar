@@ -56,19 +56,53 @@ export function list(values: unknown): string[] {
   return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
 }
 
-/** A run's or template's namespace selection as declared, and whether resource or label filters narrow it. */
-export function selectionText(spec: any, emptyMeans: string): { text: string; narrowed: boolean } {
+// Exclusions Velero writes into every spec it processes (v1.18 backup and
+// restore controllers), so they say nothing about what the user chose. A
+// backup gets the CSI snapshot kinds: both in excludedResources with the old
+// filters, else split across the scoped lists. A restore gets the kinds
+// Velero never restores.
+const VELERO_SNAPSHOT = 'volumesnapshots.snapshot.storage.k8s.io'
+const VELERO_SNAPSHOT_CONTENT = 'volumesnapshotcontents.snapshot.storage.k8s.io'
+const VELERO_BACKUP_EXCLUSIONS: Record<string, readonly string[]> = {
+  excludedResources: [VELERO_SNAPSHOT, VELERO_SNAPSHOT_CONTENT],
+  excludedClusterScopedResources: [VELERO_SNAPSHOT_CONTENT],
+  excludedNamespaceScopedResources: [VELERO_SNAPSHOT],
+}
+const VELERO_NON_RESTORABLE = [
+  'nodes',
+  'events',
+  'events.events.k8s.io',
+  'backups.velero.io',
+  'restores.velero.io',
+  'resticrepositories.velero.io',
+  'csinodes.storage.k8s.io',
+  'volumeattachments.storage.k8s.io',
+  'backuprepositories.velero.io',
+]
+
+const RESOURCE_FILTERS = [
+  'includedResources',
+  'excludedResources',
+  'includedClusterScopedResources',
+  'excludedClusterScopedResources',
+  'includedNamespaceScopedResources',
+  'excludedNamespaceScopedResources',
+] as const
+
+/**
+ * A run's or template's namespace selection as declared, and whether resource
+ * or label filters narrow it. `kind` says which exclusions Velero adds on its
+ * own (a schedule's template becomes a backup's spec), so they are not counted.
+ */
+export function selectionText(spec: any, emptyMeans: string, kind: 'backup' | 'restore' = 'backup'): { text: string; narrowed: boolean } {
   const included = list(spec?.includedNamespaces)
   const excluded = list(spec?.excludedNamespaces)
   const base = included.length === 0 || included.includes('*') ? emptyMeans : included.join(', ')
   const text = excluded.length ? `${base}, except ${excluded.join(', ')}` : base
+  const injected = (field: string): readonly string[] =>
+    kind === 'restore' ? (field === 'excludedResources' ? VELERO_NON_RESTORABLE : []) : (VELERO_BACKUP_EXCLUSIONS[field] ?? [])
   const narrowed =
-    list(spec?.includedResources).length > 0 ||
-    list(spec?.excludedResources).length > 0 ||
-    list(spec?.includedClusterScopedResources).length > 0 ||
-    list(spec?.excludedClusterScopedResources).length > 0 ||
-    list(spec?.includedNamespaceScopedResources).length > 0 ||
-    list(spec?.excludedNamespaceScopedResources).length > 0 ||
+    RESOURCE_FILTERS.some((field) => list(spec?.[field]).some((v) => v !== '*' && !injected(field).includes(v))) ||
     !!spec?.labelSelector ||
     list(spec?.orLabelSelectors).length > 0
   return { text, narrowed }

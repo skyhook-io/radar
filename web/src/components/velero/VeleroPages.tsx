@@ -384,7 +384,7 @@ function VeleroRestoreOverview({ resource, onNavigate }: { resource: any; onNavi
   const spec = resource?.spec ?? {}
   const backupName = getRestoreBackupName(resource)
   const mapping = getRestoreNamespaceMapping(resource)
-  const narrowed = selectionText(spec, '').narrowed
+  const narrowed = selectionText(spec, '', 'restore').narrowed
   // Velero counts every item it went through, including those it skipped or failed.
   const progress = status.progress?.totalItems ? `${status.progress.itemsRestored ?? 0} of ${status.progress.totalItems} items processed` : undefined
   const when = whenText(status)
