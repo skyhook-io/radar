@@ -289,6 +289,7 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
   }
 
   if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
+  if (view === 'checks' && pathSegments[1] === 'vulnerabilities') return 'Vulnerabilities'
 
   // The landing view reads "Overview" rather than "Home" in the tab.
   const workspace = workspaceForView(view)
@@ -440,6 +441,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const mainView = getViewFromPath(location.pathname)
   const activeWorkspace = workspaceForView(mainView)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
+  // Checks sub-routes a Cloud host's fleet Checks pages don't have, so they
+  // render here even when the host takes over /checks.
+  const localChecksRoute = upgradeReadinessRoute || location.pathname.startsWith('/checks/vulnerabilities')
 
   // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
   const usageData = useUsageData(!navCustomization.embedded)
@@ -588,7 +592,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The host's URL for the CURRENT view, if taken over. Drives the redirect
   // effect and the "Opening…" splash.
   const viewTakeoverHref =
-    (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !upgradeReadinessRoute
+    (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !localChecksRoute
       ? takeover[mainView]
       : undefined
   useEffect(() => {
@@ -2448,7 +2452,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Checks detail view. Cloud can take over fleet best practices while
             the target-specific upgrade route continues to render locally. */}
-        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
+        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || localChecksRoute) && (
           <AuditView
             namespaces={namespaces}
             onNavigateToResource={navigateToResourceList}

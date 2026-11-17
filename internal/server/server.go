@@ -65,6 +65,7 @@ import (
 	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/internal/vulnerabilities"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/conditions"
@@ -346,6 +347,7 @@ func New(cfg Config) *Server {
 		// traffic, helm): the Argo CD connection references the previous
 		// cluster's endpoint/port-forward.
 		argocd.Reset()
+		vulnerabilities.ResetParseCache()
 	})
 	// Cancel + stale AI investigations BEFORE the client repoints at the new
 	// cluster, so an in-flight agent (especially an apply) can't write to it.
@@ -711,6 +713,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/policy/policies/{policy}", s.handlePolicyCoverage)
 			r.Get("/policy/policies/{policy}/queued", s.handlePolicyQueued)
 			r.Get("/upgrade-readiness", s.handleUpgradeReadiness)
+			// Scanner findings rolled up to the images that run now.
+			r.Get("/vulnerabilities", s.handleVulnerabilities)
 
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
@@ -1572,6 +1576,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
+		Vulnerabilities:          true,
 	}
 }
 

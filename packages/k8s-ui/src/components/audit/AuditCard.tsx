@@ -13,9 +13,25 @@ export interface AuditCardData {
   categories: Record<string, { passing: number; warning: number; danger: number }>
 }
 
+/**
+ * Known CVEs in running images, shown as a row of the Checks card when the
+ * host has them (Radar: Trivy Operator reports). Totals are lower bounds
+ * when some running images aren't scanned or some reports aren't readable,
+ * and unknown when nothing is scanned.
+ */
+export interface AuditCardVulnerabilities {
+  imagesWithCritical: number
+  fixableCriticalHigh: number
+  certainty: 'exact' | 'lower_bound' | 'unknown'
+  /** The read failed: the row says so instead of showing counts. */
+  readFailed?: boolean
+  onNavigate: () => void
+}
+
 interface AuditCardProps {
   data: AuditCardData
   onNavigate: () => void
+  vulnerabilities?: AuditCardVulnerabilities
 }
 
 type SeverityLevel = 'success' | 'high' | 'medium' | 'neutral'
@@ -34,7 +50,7 @@ const ACCENT_BG: Record<SeverityLevel, string> = {
   medium: 'bg-yellow-500/10',
 }
 
-export function AuditCard({ data, onNavigate }: AuditCardProps) {
+export function AuditCard({ data, onNavigate, vulnerabilities }: AuditCardProps) {
   const total = data.passing + data.warning + data.danger
   const issueCount = data.warning + data.danger
   const incomplete = (data.missingInputs?.length ?? 0) > 0
@@ -43,12 +59,8 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
   const accentColor = level === 'neutral' ? 'text-theme-text-secondary' : level === 'success' ? SEVERITY_TEXT.success : SEVERITY_TEXT_CLASS[level]
   const accentBg = ACCENT_BG[level]
 
-  return (
-    <button
-      onClick={onNavigate}
-      className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up"
-    >
-      <div className="flex flex-col h-full w-full">
+  const body = (
+      <div className="flex flex-col flex-1 min-h-0 h-full w-full">
         <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
           <div className="flex items-center gap-2">
             <ClipboardCheck className={clsx('w-4 h-4', accentColor)} />
@@ -65,7 +77,7 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
           </div>
         </div>
 
-        <div className="flex-1 min-h-0 flex flex-col items-center justify-center px-4 py-4">
+        <div className={clsx('flex-1 min-h-0 flex flex-col items-center px-4', vulnerabilities ? 'justify-end pt-4 pb-2' : 'justify-center py-4')}>
           {allPassing ? (
             <div className="flex flex-col items-center gap-2">
               <Check className={clsx('w-8 h-8', SEVERITY_TEXT.success)} />
@@ -128,16 +140,89 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
 
         {incomplete && issueCount > 0 && <p className="px-4 pb-2 text-xs text-warning-text">Some checks could not run.</p>}
 
-        <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end">
-          <span className={clsx(
-            'flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
-            accentColor,
-          )}>
-            View Details
-            <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-          </span>
-        </div>
       </div>
-    </button>
+  )
+
+  const footer = (
+    <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end">
+      <span className={clsx(
+        'flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
+        accentColor,
+      )}>
+        View Details
+        <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+      </span>
+    </div>
+  )
+
+  if (!vulnerabilities) {
+    return (
+      <button
+        onClick={onNavigate}
+        className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up"
+      >
+        <div className="flex h-full flex-col">
+          {body}
+          {footer}
+        </div>
+      </button>
+    )
+  }
+
+  // Two destinations on one card: the checks body and the vulnerabilities
+  // row are sibling buttons, never one inside the other.
+  return (
+    <div className="flex h-[260px] flex-col overflow-hidden rounded-xl bg-theme-surface shadow-theme-sm hover:shadow-theme-md transition-shadow duration-200 animate-fade-in-up">
+      <button onClick={onNavigate} className="group min-h-0 flex-1 text-left hover:bg-theme-hover/40 transition-colors">
+        {body}
+      </button>
+      <VulnerabilitiesRow {...vulnerabilities} />
+      <button onClick={onNavigate} className="group text-left hover:bg-theme-hover/40 transition-colors">
+        {footer}
+      </button>
+    </div>
+  )
+}
+
+// Styled as one more line of the category list: dot, label, one count. The
+// fixable count and the caveats live in the tab it opens.
+function VulnerabilitiesRow({ imagesWithCritical, fixableCriticalHigh, certainty, readFailed, onNavigate }: AuditCardVulnerabilities) {
+  const plus = certainty === 'lower_bound' ? '+' : ''
+  let text: string
+  let tone: string
+  let dot: string
+  if (readFailed) {
+    text = "Couldn't read"
+    tone = 'text-theme-text-tertiary'
+    dot = 'bg-theme-text-tertiary'
+  } else if (certainty === 'unknown') {
+    text = 'Not scanned yet'
+    tone = 'text-theme-text-tertiary'
+    dot = 'bg-theme-text-tertiary'
+  } else if (imagesWithCritical > 0) {
+    text = `${imagesWithCritical}${plus} ${imagesWithCritical === 1 ? 'image' : 'images'} with Critical`
+    tone = SEVERITY_TEXT_CLASS.high
+    dot = SEVERITY_FILL_CLASS.high
+  } else if (fixableCriticalHigh > 0) {
+    text = `${fixableCriticalHigh}${plus} fixable High`
+    tone = SEVERITY_TEXT_CLASS.medium
+    dot = SEVERITY_FILL_CLASS.medium
+  } else {
+    text = certainty === 'exact' ? 'No Critical' : 'No Critical found'
+    tone = certainty === 'exact' ? SEVERITY_TEXT.success : 'text-theme-text-secondary'
+    dot = certainty === 'exact' ? SEVERITY_DOT.success : 'bg-theme-text-tertiary'
+  }
+  return (
+    <div className="mx-4 mb-1.5 border-t border-theme-border/50 pt-1">
+      <button
+        onClick={onNavigate}
+        className="group/vuln -mx-2 flex w-[calc(100%+1rem)] items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-theme-hover transition-colors"
+      >
+        <span className={clsx('h-2 w-2 shrink-0 rounded-full', dot)} />
+        <span className="flex-1 truncate text-xs text-theme-text-secondary">Vulnerabilities</span>
+        <span className={clsx('whitespace-nowrap text-xs font-semibold tabular-nums', tone)}>{text}</span>
+        <ArrowRight className="h-3 w-3 shrink-0 text-theme-text-tertiary transition-transform group-hover/vuln:translate-x-0.5" aria-hidden />
+      </button>
+    </div>
   )
 }
