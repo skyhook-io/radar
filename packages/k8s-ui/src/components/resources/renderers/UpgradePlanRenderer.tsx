@@ -3,7 +3,7 @@ import { healthToSeverity } from '../../../utils/badge-colors'
 import { HEALTH_META } from '../../../utils/applications'
 import { Section, Property, PropertyList, ResourceLink, ConditionsSection, AlertBanner, useOperationalIssuesShown } from '../../ui/drawer-components'
 import type { ResourceRef } from '../../../types'
-import { getUpgradePlanStatus, upgradePlanProgress, upgradePlanTarget, type PlanNode, type PlanNodeState } from '../resource-utils-upgrade-plan'
+import { FAILED_REASONS, getUpgradePlanStatus, upgradePlanProgress, upgradePlanTarget, type PlanNode, type PlanNodeState } from '../resource-utils-upgrade-plan'
 
 const ROW_CAP = 50
 const STATE_BADGE: Record<PlanNodeState, { label: string; severity: 'success' | 'info' | 'neutral' }> = {
@@ -84,7 +84,11 @@ export function UpgradePlanRenderer({ data, onNavigate, nodes, nodesLoading }: {
             : nodesLoading && nodes === undefined ? <div className="text-sm text-theme-text-tertiary">Reading Nodes…</div> : <Progress data={data} nodes={nodes ?? null} onNavigate={onNavigate} />}
         </Section>
       )}
-      <ConditionsSection conditions={data.status?.conditions} />
+      {/* Complete=False is the normal state of a running upgrade: it fails only for the reasons the State badge calls Failed. */}
+      <ConditionsSection
+        conditions={data.status?.conditions}
+        getConditionTone={(c) => c?.type === 'Complete' && c?.status === 'False' ? (FAILED_REASONS.includes(c.reason) ? 'fail' : 'neutral') : undefined}
+      />
     </>
   )
 }

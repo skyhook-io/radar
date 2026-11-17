@@ -63,6 +63,8 @@ describe('upgrade Plan utils', () => {
     }
     expect(st({ reason: 'NotReady' }, [{ type: 'LatestResolved', status: 'False' }], [])).toMatchObject({ text: 'Version not resolved', level: 'degraded' })
     expect(st({ reason: 'Waiting' }, [], [])).toMatchObject({ text: 'Waiting for window', level: 'neutral' })
+    expect(st({ reason: 'NotReady' }, [{ type: 'Validated', status: 'True' }, { type: 'LatestResolved', status: 'Unknown' }], [])).toMatchObject({ text: 'Not ready', level: 'degraded' })
+    expect(st({ reason: 'NotReady' }, [{ type: 'Validated', status: 'False' }], [])).toMatchObject({ text: 'Not valid', level: 'unhealthy' })
     expect(st({ reason: 'SyncJob' })).toMatchObject({ text: 'In progress', level: 'neutral' })
   })
   it('matches applying by hostname and skips Nodes the controller excludes', () => {

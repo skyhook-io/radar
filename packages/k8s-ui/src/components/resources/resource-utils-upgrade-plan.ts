@@ -18,7 +18,7 @@ const condition = (data: any, type: string) => (data?.status?.conditions ?? []).
 
 // Complete=False reasons the controller sets when the upgrade is stuck rather
 // than running (system-upgrade-controller handle_upgrade.go / handle_batch.go).
-const FAILED_REASONS = ['JobFailed', 'SelectNodesFailed', 'ValidationFailed']
+export const FAILED_REASONS = ['JobFailed', 'SelectNodesFailed', 'ValidationFailed']
 
 export function getUpgradePlanStatus(data: any): StatusBadge {
   let text = 'Not reported'
@@ -29,6 +29,9 @@ export function getUpgradePlanStatus(data: any): StatusBadge {
   else if (complete?.status === 'False' && FAILED_REASONS.includes(complete.reason)) { text = 'Failed'; level = 'unhealthy' }
   else if (condition(data, 'LatestResolved')?.status === 'False') { text = 'Version not resolved'; level = 'degraded' }
   else if (complete?.status === 'False' && complete.reason === 'Waiting') { text = 'Waiting for window'; level = 'neutral' }
+  // NotReady with Validated and LatestResolved not False: the controller could
+  // not poll the channel before it ever resolved a version, so no Job starts.
+  else if (complete?.status === 'False' && complete.reason === 'NotReady') { text = 'Not ready'; level = 'degraded' }
   else if ((Array.isArray(applying) && applying.length > 0) || complete?.status === 'False') { text = 'In progress'; level = 'neutral' }
   else if (condition(data, 'Complete')?.status === 'True') { text = 'Complete'; level = 'healthy' }
   return { text, level, color: healthColors[level] }

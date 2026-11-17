@@ -45,4 +45,13 @@ describe('UpgradePlanRenderer', () => {
     expect(html).toContain('creds')
     expect(html).toContain('2 variables · from 1 source (values not shown)')
   })
+  it('marks Complete=False as failing only for the reasons the controller sets on a stuck upgrade', () => {
+    const withComplete = (reason: string) => ({ ...data, status: { ...data.status, conditions: [{ type: 'Validated', status: 'True' }, { type: 'Complete', status: 'False', reason }] } })
+    for (const reason of ['SyncJob', 'Resolved', 'Waiting']) {
+      const html = text(renderToString(<UpgradePlanRenderer data={withComplete(reason)} nodes={nodes} />))
+      expect(html).toContain('Conditions (2)')
+      expect(html).not.toContain('failing')
+    }
+    expect(text(renderToString(<UpgradePlanRenderer data={withComplete('JobFailed')} nodes={nodes} />))).toContain('Conditions (2) · 1 failing')
+  })
 })
