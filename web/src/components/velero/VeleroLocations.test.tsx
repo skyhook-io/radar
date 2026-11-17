@@ -65,15 +65,17 @@ describe('Velero storage locations', () => {
       ],
     }))
     expect(html).toContain('The bucket doesn’t exist')
-    // The default location named "default" reads once as its name and once as a small note, not as a badge beside it.
+    // The default location named "default" reads once as its name and once as a note on a line of its own, not as a badge beside it.
     expect(html).not.toMatch(/badge[^"]*">default</)
-    expect(html.match(/>default</g)?.length).toBe(2)
+    expect(html.match(/>default</g)?.length).toBe(1)
+    expect(html).toMatch(/<div class="mt-0\.5 text-xs[^"]*"><span[^>]*><span>the default location<\/span>/)
+    expect(html).toContain('not restorable while the location is unavailable')
   })
 
   it('marks the default location and folds a long schedule list into a count', () => {
     const schedules = ['a', 'b', 'c', 'd', 'e'].map((name) => ({ name }))
     const html = render(workspace({ locations: [location({ schedules })] }))
-    expect(html).toContain('>default<')
+    expect(html).toContain('>the default location<')
     expect(html).toContain('and 2 more')
     expect(html).not.toContain('>d<')
   })

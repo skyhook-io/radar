@@ -33,7 +33,7 @@ vi.mock('../../api/policy', async (importOriginal) => ({
 }))
 
 const { parseVeleroRoute, veleroDetailKindFor, veleroDetailPath } = await import('./routes')
-const { locationState, renderVeleroSummary } = await import('./VeleroPages')
+const { VeleroLocationBackups, locationState, renderVeleroSummary } = await import('./VeleroPages')
 const { VeleroBackups } = await import('./VeleroRunLists')
 const { VeleroScheduleStateBadge } = await import('@skyhook-io/k8s-ui')
 const { veleroResourceHost } = await import('./host')
@@ -248,9 +248,21 @@ describe('The composed Overview', () => {
     expect(html).toContain('Velero’s credentials can’t access the bucket')
     expect(html).toContain('Velero’s message')
     expect(html).toContain('last sync attempt 3m ago')
-    expect(html).toContain('No — default is the default')
+    const plain = html.replace(/<[^>]*>/g, '')
+    expect(plain).toContain('No — default is the default location')
     expect(html).toContain('aws · s3://radar-dr/velero')
-    expect(html.replace(/<[^>]*>/g, '')).toContain('2 backups · 1 usable · 0 expired · 1 failed')
+    expect(plain).toContain('2 backups · 1 completed · 0 expired · 1 failed')
+    expect(plain).toContain('None of them can be restored while the location is unavailable')
+    expect(plain).toMatch(/Last checked \d+s ago — failed/)
+    expect(plain).not.toContain('Last validated')
+    expect(plain).toMatch(/Every 1m · last sync attempt/)
+  })
+
+  it('lists a location’s backups with the failed ones a segment away', () => {
+    state.stored = { backups: [{ namespace: 'velero', name: 'x', phase: 'Failed' }, { namespace: 'velero', name: 'y', phase: 'Completed' }, { namespace: 'velero', name: 'z', phase: 'PartiallyFailed' }], restorable: 1, expired: 0, stored: 3 }
+    const html = text(renderToStaticMarkup(<MemoryRouter><VeleroLocationBackups namespace="velero" name="dr" /></MemoryRouter>)).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
+    expect(html).toContain('3 · 1 completed · 0 expired · 2 failed')
+    expect(html).toMatch(/Failed 2/)
   })
 })
 

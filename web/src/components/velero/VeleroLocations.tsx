@@ -60,9 +60,11 @@ function DefaultMark({ l }: { l: VeleroLocationReading }) {
   const d = veleroDefaultText(l)
   if (d.text === 'No') return null
   return (
-    <Tooltip content={d.detail}>
-      <Sub>{d.text === 'Yes' ? 'default' : 'default unknown'}</Sub>
-    </Tooltip>
+    <Sub>
+      <Tooltip content={d.detail}>
+        <span>{d.text === 'Yes' ? 'the default location' : 'default unknown'}</span>
+      </Tooltip>
+    </Sub>
   )
 }
 
@@ -149,12 +151,17 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
     { header: 'Backups', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.targeting} /> },
     {
       header: (
-        <Tooltip content="Completed and not yet expired.">
+        <Tooltip content="Completed and not yet expired. Velero restores only from an available location.">
           <span>Completed</span>
         </Tooltip>
       ),
       width: '10%',
-      cell: (l) => <BackupCount l={l} count={(b) => b.completedNotExpired} />,
+      cell: (l) => (
+        <>
+          <BackupCount l={l} count={(b) => b.completedNotExpired} />
+          {l.phase === 'Unavailable' && !!l.backups?.completedNotExpired && <Sub>not restorable while the location is unavailable</Sub>}
+        </>
+      ),
     },
     { header: 'Expired', width: '9%', cell: (l) => <BackupCount l={l} count={(b) => b.expired} /> },
     { header: 'Schedules writing here', width: '24%', cell: (l) => <SchedulesCell l={l} onInspect={onInspect} /> },

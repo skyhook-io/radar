@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import {
   Disclosure,
@@ -672,8 +672,8 @@ function useLocationBackups(namespace: string, name: string) {
   return { stored, failed }
 }
 
-/** "48 backups · 30 usable · 16 expired · 2 failed". */
-function LocationBackupCounts({ loc, namespace, name }: { loc?: VeleroLocationReading; namespace: string; name: string }) {
+/** "48 backups · 30 completed · 16 expired · 2 failed". */
+function LocationBackupCounts({ loc, namespace, name, unavailable }: { loc?: VeleroLocationReading; namespace: string; name: string; unavailable: boolean }) {
   const { stored, failed } = useLocationBackups(namespace, name)
   const d = stored.data
   const counts = d
@@ -686,7 +686,7 @@ function LocationBackupCounts({ loc, namespace, name }: { loc?: VeleroLocationRe
   const tail = counts.exact
     ? [failed ? <span key="f" className={toneTextClass('unhealthy')}>{failed} failed</span> : null, rest - failed > 0 ? `${rest - failed} not finished` : null]
     : [rest ? `${rest} failed or not finished` : null]
-  const parts: ReactNode[] = [plural(counts.total, 'backup'), `${counts.usable} usable`, `${counts.expired} expired`, ...tail].filter(Boolean)
+  const parts: ReactNode[] = [plural(counts.total, 'backup'), `${counts.usable} completed`, `${counts.expired} expired`, ...tail].filter(Boolean)
   return (
     <>
       {parts.map((p, i) => (
@@ -695,7 +695,10 @@ function LocationBackupCounts({ loc, namespace, name }: { loc?: VeleroLocationRe
           {p}
         </span>
       ))}
-      <Note>Counted from the Backup objects that name this location, not from what is in the bucket. Usable: completed and inside their retention.</Note>
+      {unavailable && counts.usable > 0 && (
+        <div className={`text-xs ${toneTextClass('unhealthy')}`}>None of them can be restored while the location is unavailable: Velero refuses a restore from it.</div>
+      )}
+      <Note>Counted from the Backup objects that name this location, not from what is in the bucket. Completed: completed and inside their retention.</Note>
     </>
   )
 }
@@ -731,13 +734,25 @@ function VeleroLocationOverview({ resource, onNavigate }: { resource: any; onNav
           <FactRow label="Validation">
             {loc ? (
               <>
-                {loc.lastValidation ? `Last validated ${veleroMomentText(loc.lastValidation)}` : 'Never validated'}
+                {/* Velero stamps the time of each attempt, whether or not the location passed. */}
+                {!loc.lastValidation ? (
+                  'Never validated'
+                ) : phase === 'Unavailable' ? (
+                  <>
+                    Last checked {veleroMomentText(loc.lastValidation)} — <span className={toneTextClass('unhealthy')}>failed</span>
+                  </>
+                ) : (
+                  `Last validated ${veleroMomentText(loc.lastValidation)}`
+                )}
                 <Note>
                   {!loc.frequency ? 'Validation interval not known' : loc.frequency.disabled ? 'Recurring validation is off' : `Every ${veleroFrequencyText(loc.frequency.seconds)}`}
                   {lastSynced && (
-                    <Tooltip content={`${veleroLocalTime(lastSynced)} · when Velero last tried to sync the backups in the bucket into the cluster`}>
-                      <span> · last sync attempt {formatRelativeAgeTime(lastSynced)}</span>
-                    </Tooltip>
+                    <>
+                      {' · '}
+                      <Tooltip content={`${veleroLocalTime(lastSynced)} · when Velero last tried to sync the backups in the bucket into the cluster`}>
+                        <span>last sync attempt {formatRelativeAgeTime(lastSynced)}</span>
+                      </Tooltip>
+                    </>
                   )}
                   {(loc.validationOverdue || loc.neverValidated) && ` · ${veleroLocationReasonText(loc)}`}
                 </Note>
@@ -754,9 +769,13 @@ function VeleroLocationOverview({ resource, onNavigate }: { resource: any; onNav
                 <span>Yes · {loc?.defaultSource === 'spec' ? 'set on this location' : 'named by the Velero server'}</span>
               </Tooltip>
             ) : def.text === 'No' && otherDefault ? (
-              <Tooltip content={def.detail}>
-                <span>No — {otherDefault} is the default</span>
-              </Tooltip>
+              <span>
+                No —{' '}
+                <Link onClick={() => onNavigate?.(veleroResource('BackupStorageLocation', namespace, otherDefault))}>{otherDefault}</Link>{' '}
+                <Tooltip content={def.detail}>
+                  <span>is the default location</span>
+                </Tooltip>
+              </span>
             ) : (
               <>
                 {def.text}
@@ -767,7 +786,7 @@ function VeleroLocationOverview({ resource, onNavigate }: { resource: any; onNav
           <FactRow label="Access">{spec.accessMode === 'ReadOnly' ? 'Read-only: Velero writes no backups here and deletes none' : 'Read-write'}</FactRow>
           <FactRow label="Bucket">{[spec.provider, bucketText(spec.provider, objectStorage.bucket, objectStorage.prefix)].filter(Boolean).join(' · ') || '—'}</FactRow>
           <FactRow label="Backups targeting it">
-            <LocationBackupCounts loc={loc} namespace={namespace} name={name} />
+            <LocationBackupCounts loc={loc} namespace={namespace} name={name} unavailable={phase === 'Unavailable'} />
           </FactRow>
           <FactRow label="Written to by">
             {loc?.schedules == null ? (
@@ -796,27 +815,53 @@ export function VeleroLocationBackupsMark({ namespace, name }: { namespace: stri
   return <FailedMark count={useLocationBackups(namespace, name).failed} />
 }
 
-/** The backups that name a location, newest first. */
+/** The backups that name a location, newest first, with the failed ones a segment away. */
 export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate?: NavigateToResource }) {
   const stored = useVeleroStoredBackups(namespace, name)
   const rows = stored.data?.backups ?? []
+  const failed = rows.filter((b) => FAILED.has(b.phase ?? ''))
+  const [view, setView] = useState<'all' | 'failed'>('all')
+  const shown = view === 'failed' ? failed : rows
+  const partial = !!stored.data?.truncated
+  const count = (n: number) => (partial && n > 0 ? `≥${n}` : String(n))
   return (
     <div className="space-y-3 p-4">
+      <Segments
+        label="Backups"
+        value={view}
+        onChange={setView}
+        options={[
+          { id: 'all' as const, label: 'All', count: String(stored.data?.stored ?? rows.length) },
+          { id: 'failed' as const, label: 'Failed', count: failed.length > 0 ? <span className={toneTextClass('unhealthy')}>{count(failed.length)}</span> : count(0) },
+        ]}
+      />
       {stored.error && stored.data && <Notice>The last refresh failed ({(stored.error as Error).message}); what is shown is from before it.</Notice>}
       <SectionTable
         title="Backups targeting this location"
-        subtitle={stored.data ? `${stored.data.stored ?? rows.length} · ${stored.data.restorable} usable · ${stored.data.expired ?? 0} expired` : undefined}
+        subtitle={
+          stored.data
+            ? `${stored.data.stored ?? rows.length} · ${stored.data.restorable} completed · ${stored.data.expired ?? 0} expired · ${count(failed.length)} failed`
+            : undefined
+        }
         columns={[
           { header: 'Backup', cell: (b) => <VeleroName name={b.name} /> },
           { header: 'Outcome', width: '160px', cell: (b) => <RunOutcome kind="Backup" phase={b.phase} /> },
           { header: 'Completed', width: '140px', cell: (b) => <When iso={b.completed} fallback="—" /> },
           { header: 'Expires', width: '130px', cell: (b) => <Expires iso={b.expiration} /> },
         ]}
-        rows={rows}
+        rows={shown}
         rowKey={(b) => b.name}
         rowResource={(b) => veleroResource('Backup', b.namespace, b.name)}
         onInspect={onNavigate}
-        empty={stored.isPending ? 'Loading backups…' : stored.error ? `Backups could not be read: ${(stored.error as Error).message}` : 'No backups name this location.'}
+        empty={
+          stored.isPending
+            ? 'Loading backups…'
+            : stored.error && !stored.data
+              ? `Backups could not be read: ${(stored.error as Error).message}`
+              : view === 'failed'
+                ? 'No failed backups name this location.'
+                : 'No backups name this location.'
+        }
         footer={stored.data?.truncated ? `The newest ${rows.length} of ${stored.data.stored}.` : 'Counted from the Backup objects that name this location, not from what is in the bucket.'}
       />
     </div>
