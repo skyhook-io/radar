@@ -228,6 +228,9 @@ type FeatureCapabilities struct {
 	// /api/kueue/localqueues/{namespace}/{name}/workloads
 	KueueQueueWorkloads bool `json:"kueueQueueWorkloads"`
 	PodFileUpload       bool `json:"podFileUpload"` // POST /api/pods/{namespace}/{name}/files/upload
+	// POST /api/cronjobs/{namespace}/{name}/trigger accepts {"jobName": ...};
+	// an older Radar ignores the body and names the Job itself.
+	CronJobTriggerJobName bool `json:"cronJobTriggerJobName"`
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

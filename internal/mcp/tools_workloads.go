@@ -67,6 +67,7 @@ type manageCronJobInput struct {
 	Action    string `json:"action" jsonschema:"action to perform: trigger, suspend, or resume"`
 	Namespace string `json:"namespace" jsonschema:"cronjob namespace"`
 	Name      string `json:"name" jsonschema:"cronjob name"`
+	JobName   string `json:"job_name,omitempty" jsonschema:"trigger only: the new Job's name; omit to generate one"`
 }
 
 type getWorkloadLogsInput struct {
@@ -271,7 +272,7 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 
 	switch strings.ToLower(input.Action) {
 	case "trigger":
-		job, err := k8s.TriggerCronJobWithClient(ctx, input.Namespace, input.Name, dynClient)
+		job, err := k8s.TriggerCronJobWithClient(ctx, input.Namespace, input.Name, input.JobName, dynClient)
 		if err != nil {
 			return nil, nil, fmt.Errorf("trigger failed: %w", err)
 		}

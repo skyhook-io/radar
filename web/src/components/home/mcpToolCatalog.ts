@@ -404,6 +404,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'action', required: true, desc: 'trigger, suspend, or resume' },
       { arg: 'namespace', required: true, desc: 'cronjob namespace' },
       { arg: 'name', required: true, desc: 'cronjob name' },
+      { arg: 'job_name', desc: 'trigger only: name for the new Job; omit to generate one' },
     ],
   },
   {

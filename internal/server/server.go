@@ -1572,6 +1572,7 @@ func advertisedFeatures() k8s.FeatureCapabilities {
 		PodSidecarMarks:          true,
 		KueueQueueWorkloads:      true,
 		PodFileUpload:            true,
+		CronJobTriggerJobName:    true,
 	}
 }
 
@@ -4642,10 +4643,25 @@ func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Reque
 	s.writeJSON(w, preview)
 }
 
-// handleTriggerCronJob creates a Job from a CronJob
+// handleTriggerCronJob creates a Job from a CronJob. The optional body
+// {"jobName": "..."} names the Job; without it the API server generates
+// "<cronjob>-manual-xxxxx" (advertised as features.cronJobTriggerJobName).
 func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+
+	var req struct {
+		JobName string `json:"jobName"`
+	}
+	if err := decodeBoundedJSONBody(w, r, 4096, &req); err != nil && !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "trigger request is too large")
+			return
+		}
+		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
@@ -4653,8 +4669,16 @@ func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
-	result, err := k8s.TriggerCronJobWithClient(r.Context(), namespace, name, client)
+	result, err := k8s.TriggerCronJobWithClient(r.Context(), namespace, name, req.JobName, client)
 	if err != nil {
+		if errors.Is(err, k8score.ErrInvalidJobName) {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if apierrors.IsAlreadyExists(err) {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return

@@ -102,9 +102,10 @@ func TriggerCronJob(ctx context.Context, namespace, name string) (*unstructured.
 	return getWorkloadManager().TriggerCronJob(ctx, namespace, name)
 }
 
-// TriggerCronJobWithClient creates a Job from a CronJob using the provided client.
-func TriggerCronJobWithClient(ctx context.Context, namespace, name string, client dynamic.Interface) (*unstructured.Unstructured, error) {
-	return getWorkloadManagerWithClient(client).TriggerCronJob(ctx, namespace, name)
+// TriggerCronJobWithClient creates a Job from a CronJob using the provided
+// client. An empty jobName lets the API server generate one.
+func TriggerCronJobWithClient(ctx context.Context, namespace, name, jobName string, client dynamic.Interface) (*unstructured.Unstructured, error) {
+	return getWorkloadManagerWithClient(client).TriggerCronJobNamed(ctx, namespace, name, jobName)
 }
 
 // SetCronJobSuspend sets the suspend field on a CronJob.

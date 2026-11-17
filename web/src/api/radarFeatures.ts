@@ -72,6 +72,9 @@ export const RADAR_FEATURES = {
   helmInventory: { label: 'Helm releases without Secret access', flag: 'helmInventory', flagShippedWithEndpoint: true },
   agentSigninCheck: { label: 'Agent sign-in checks', flag: 'agentSigninCheck', flagShippedWithEndpoint: true },
   podFileUpload: { label: 'Pod file uploads', flag: 'podFileUpload', flagShippedWithEndpoint: true },
+  // Never blocks a control: an older Radar ignores the request body and names
+  // the Job itself, so Trigger stays one click without the Job name dialog.
+  cronJobTriggerJobName: { label: 'Job names for manual CronJob runs', flag: 'cronJobTriggerJobName', flagShippedWithEndpoint: true },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES
