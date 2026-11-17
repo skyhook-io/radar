@@ -11,7 +11,3 @@ func (b *Builder) istioServiceDomain() string {
 	}
 	return configrefs.IstioServiceDomain(deployments)
 }
-
-func parseIstioHost(host, defaultNamespace, domain string) (string, string) {
-	return configrefs.IstioHostService(host, defaultNamespace, domain)
-}

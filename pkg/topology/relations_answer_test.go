@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/ownership"
@@ -78,7 +79,7 @@ func recordMembers(o *ownershiptest.Object, u *unstructured.Unstructured) {
 	}
 }
 
-func newProjectionSession(t *testing.T, objects ...runtime.Object) *projectionSession {
+func newProjectionSession(t testing.TB, objects ...runtime.Object) *projectionSession {
 	t.Helper()
 	w := ownershiptest.World{}
 	s := &projectionSession{objects: map[resourceid.Ref]runtime.Object{}}
@@ -158,13 +159,13 @@ func (a projectionAccess) CanRead(gk resourceid.GroupKind, ns string) ownership.
 	return ownership.Allowed
 }
 func (a projectionAccess) Namespaces() ([]string, bool) { return a.namespaces, a.namespaces == nil }
-func projectionAnswer(t *testing.T, s *projectionSession, obj runtime.Object, emit, traverse ownership.Access) *Relationships {
+func projectionAnswer(t testing.TB, s *projectionSession, obj runtime.Object, emit, traverse ownership.Access) *Relationships {
 	t.Helper()
 	captured, ok := relations.CaptureSubject(s, projectionRef(obj), obj)
 	if !ok {
 		t.Fatal("capture failed")
 	}
-	rel, _ := RelationsAnswer(captured, emit, traverse, ownership.NewView(captured, emit), projectionRef(obj), obj, "", nil, nil)
+	rel, _ := RelationsAnswer(captured, emit, traverse, ownership.NewView(captured, emit), projectionRef(obj), obj, nil, nil)
 	return rel
 }
 func projectionCR(group, kind, ns, name string, fields map[string]any) *unstructured.Unstructured {
@@ -339,12 +340,28 @@ func TestRelationsAnswerScalars(t *testing.T) {
 	if rel.Reflection == nil || rel.Reflection.SourceResourceVersion != "rv-opaque" {
 		t.Fatalf("reflection scalar: %+v", rel.Reflection)
 	}
-	vs := projectionCR("networking.istio.io", "VirtualService", "shop", "web", map[string]any{})
-	s = newProjectionSession(t, vs)
-	rel, _ = RelationsAnswer(s, ownership.Unrestricted(), ownership.Unrestricted(), ownership.NewView(s, ownership.Unrestricted()), projectionRef(vs), vs, "corp.internal", nil, nil)
+}
+
+// The answer reads Istio's service domain from istiod itself, so a
+// VirtualService naming its Service by FQDN links to it with no domain from
+// the caller.
+func TestRelationsAnswerIstioDomainFromIstiod(t *testing.T) {
+	istiod := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "istio-system", Name: "istiod", Labels: map[string]string{"app": "istiod"}}}
+	istiod.Spec.Template.Spec.Containers = []corev1.Container{{Name: "discovery", Args: []string{"discovery", "--domain", "corp.internal"}}}
+	svc := projectionObject(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web"}}, "", "Service")
+	vs := projectionCR("networking.istio.io", "VirtualService", "shop", "web", map[string]any{"spec": map[string]any{
+		"http": []any{map[string]any{"route": []any{map[string]any{"destination": map[string]any{"host": "web.shop.svc.corp.internal"}}}}},
+	}})
+	s := newProjectionSession(t, vs, svc)
+	captured, ok := relations.CaptureSubject(s, projectionRef(vs), vs)
+	if !ok {
+		t.Fatal("capture failed")
+	}
+	rel, _ := RelationsAnswer(captured, ownership.Unrestricted(), ownership.Unrestricted(), ownership.NewView(captured, ownership.Unrestricted()), projectionRef(vs), vs, &mockProvider{deployments: []*appsv1.Deployment{istiod}}, nil)
 	if rel.IstioServiceDomain != "corp.internal" {
 		t.Fatalf("Istio domain: %+v", rel)
 	}
+	requireProjectionRefs(t, rel.Backends, svc)
 }
 
 func TestRelationsAnswerManagedByControllerTop(t *testing.T) {
@@ -415,6 +432,62 @@ func TestRelationsAnswerManagedByClimbsNonControllerOwners(t *testing.T) {
 	rel = projectionAnswer(t, s, endpoint, projectionAccess{denied: []string{"ReplicaSet"}}, ownership.Unrestricted())
 	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Pod" {
 		t.Fatalf("stop below an unreadable owner: %+v", rel.ManagedBy)
+	}
+}
+
+func TestRelationsAnswerManagedByWithheldControllerKeepsPrecedence(t *testing.T) {
+	controller := true
+	deployment := projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "deployment"}}, "apps", "Deployment")
+	pod := projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod", UID: "pod"}}, "", "Pod")
+	subject := projectionObject(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "state", UID: "state", OwnerReferences: []metav1.OwnerReference{
+		{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "deployment", Controller: &controller},
+		{APIVersion: "v1", Kind: "Pod", Name: "pod", UID: "pod"},
+	}}}, "", "ConfigMap")
+	s := newProjectionSession(t, subject, deployment, pod)
+	rel := projectionAnswer(t, s, subject, ownership.Unrestricted(), ownership.Unrestricted())
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Deployment" {
+		t.Fatalf("readable controller: %+v", rel.ManagedBy)
+	}
+	s = newProjectionSession(t, subject, deployment, pod)
+	rel = projectionAnswer(t, s, subject, projectionAccess{denied: []string{"Deployment"}}, ownership.Unrestricted())
+	if len(rel.ManagedBy) != 0 {
+		t.Fatalf("a withheld controller gave way to a weaker owner: %+v", rel.ManagedBy)
+	}
+}
+
+func deploymentWithPods(replicaSets, podsPerSet int) []runtime.Object {
+	controller := true
+	objects := []runtime.Object{projectionObject(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web", UID: "deployment"}}, "apps", "Deployment")}
+	for i := range replicaSets {
+		rsName := fmt.Sprintf("web-%d", i)
+		objects = append(objects, projectionObject(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: rsName, UID: types.UID(rsName), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "deployment", Controller: &controller}}}}, "apps", "ReplicaSet"))
+		for j := range podsPerSet {
+			objects = append(objects, projectionObject(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: fmt.Sprintf("%s-%d", rsName, j), UID: types.UID(fmt.Sprintf("%s-%d", rsName, j)), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rsName, UID: types.UID(rsName), Controller: &controller}}}}, "", "Pod"))
+		}
+	}
+	return objects
+}
+
+func TestRelationsAnswerDeploymentPodsOncePerPod(t *testing.T) {
+	objects := deploymentWithPods(3, 50)
+	rel := projectionAnswer(t, newProjectionSession(t, objects...), objects[0], ownership.Unrestricted(), ownership.Unrestricted())
+	seen := map[ResourceRef]bool{}
+	for _, p := range rel.Pods {
+		if seen[p] {
+			t.Fatalf("Pod listed twice: %v", p)
+		}
+		seen[p] = true
+	}
+	if len(seen) != 150 {
+		t.Fatalf("Pods: got %d, want 150", len(seen))
+	}
+}
+
+func BenchmarkRelationsAnswerDeploymentPods(b *testing.B) {
+	objects := deploymentWithPods(5, 1000)
+	s := newProjectionSession(b, objects...)
+	for b.Loop() {
+		projectionAnswer(b, s, objects[0], ownership.Unrestricted(), ownership.Unrestricted())
 	}
 }
 
@@ -494,7 +567,7 @@ func TestRelationsAnswerNetworkingHiddenHopsHaveNoOutputLimit(t *testing.T) {
 			if !ok {
 				t.Fatal("capture failed")
 			}
-			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, "", nil, nil)
+			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, nil, nil)
 			if !slices.Equal(rel.Gateways, []ResourceRef{refOf(projectionRef(gateway))}) || len(rel.Services)+len(rel.Routes) != 0 {
 				t.Fatalf("gateways %v, services %v, routes %v", rel.Gateways, rel.Services, rel.Routes)
 			}
@@ -521,7 +594,7 @@ func TestRelationsAnswerNetworkingHiddenStoreGaps(t *testing.T) {
 			if !ok {
 				t.Fatal("capture failed")
 			}
-			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, "", nil, nil)
+			rel, coverage := RelationsAnswer(captured, emit, ownership.Unrestricted(), ownership.NewView(captured, emit), projectionRef(deployment), deployment, nil, nil)
 			key := relations.GatewayParents.Name
 			if gk.Kind == "Service" {
 				key = relations.ServiceSelectors.Name
@@ -566,7 +639,7 @@ func TestRelationsAnswerStorageClassReverseLists(t *testing.T) {
 			if !ok {
 				t.Fatal("capture failed")
 			}
-			rel, coverage := RelationsAnswer(captured, tc.emit, ownership.Unrestricted(), ownership.NewView(captured, tc.emit), projectionRef(sc), sc, "", nil, nil)
+			rel, coverage := RelationsAnswer(captured, tc.emit, ownership.Unrestricted(), ownership.NewView(captured, tc.emit), projectionRef(sc), sc, nil, nil)
 			if len(rel.Consumers) != len(tc.want) {
 				t.Fatalf("consumers %v, want %v", rel.Consumers, tc.want)
 			}
