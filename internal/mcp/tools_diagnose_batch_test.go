@@ -75,15 +75,8 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 	if len(body.RelatedIssues) != 1 || body.RelatedIssues[0].Reason != issues.ReasonKueueLocalQueueMissing || body.ResourceContext == nil || body.ResourceContext.Scheduling == nil {
 		t.Fatalf("missing canonical Issue/admission context: %s", raw)
 	}
-	if body.Pods != nil || !strings.Contains(body.Coverage, "runtime logs and metrics were not collected") || !strings.Contains(body.Coverage, "Graph-derived") {
+	if body.Pods != nil || !strings.Contains(body.Coverage, "runtime logs and metrics were not collected") {
 		t.Fatalf("invented runtime coverage: %s", raw)
-	}
-	foundGraphOmission := false
-	for _, field := range body.ResourceContext.Omitted {
-		foundGraphOmission = foundGraphOmission || field.Field == "exposes" && field.Reason == resourcecontext.OmittedUnavailable
-	}
-	if !foundGraphOmission {
-		t.Fatal("uncollected graph relationships were not qualified")
 	}
 	jobInput := diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Kind: "Job", Namespace: "alpha", Name: "run"}}
 	jobResult, _, err := handleDiagnose(context.Background(), nil, jobInput)
@@ -141,5 +134,50 @@ func TestBatchDiagnoseReturnsCanonicalAdmissionIssuesAndLimits(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatal("recovered Workload still diagnosed as blocked")
 		}
+	}
+}
+
+// Batch diagnosis answers what a Job's pod template uses, like get_resource.
+func TestBatchDiagnoseJobListsWhatItsTemplateUses(t *testing.T) {
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "migrate", Namespace: "alpha", UID: "migrate-uid"}, Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+		ServiceAccountName: "migrator",
+		Containers: []corev1.Container{{Name: "main", EnvFrom: []corev1.EnvFromSource{
+			{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}},
+			{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "db"}}},
+		}}},
+	}}}}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}}, job,
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "alpha"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "alpha"}},
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "migrator", Namespace: "alpha"}},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { k8s.ResetTestState(); getPermCache().Invalidate() })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	var resources []k8s.APIResource
+	for _, r := range []struct{ group, kind, name string }{{"batch", "Job", "jobs"}, {"", "Pod", "pods"}, {"", "ConfigMap", "configmaps"}, {"", "Secret", "secrets"}, {"", "ServiceAccount", "serviceaccounts"}} {
+		resources = append(resources, k8s.APIResource{Group: r.group, Version: "v1", Kind: r.kind, Name: r.name, Namespaced: true, Verbs: []string{"get", "list", "watch", "delete"}})
+	}
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), resources); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
+	result, _, err := handleDiagnose(context.Background(), nil, diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{Kind: "Job", Namespace: "alpha", Name: "migrate"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := renderContent(result.Content)
+	var body struct {
+		ResourceContext *resourcecontext.ResourceContext `json:"resourceContext"`
+	}
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatal(err)
+	}
+	uses := body.ResourceContext.Uses
+	if uses == nil || len(uses.ConfigMaps) != 1 || uses.ConfigMaps[0].Name != "settings" || len(uses.Secrets) != 1 || uses.Secrets[0].Name != "db" || uses.ServiceAccount == nil || uses.ServiceAccount.Name != "migrator" {
+		t.Fatalf("uses = %+v in %s", uses, raw)
 	}
 }

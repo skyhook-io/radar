@@ -323,7 +323,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.RelationshipExtras, opts.AccessChecker, omitted)
 	}
 
-	rc.Uses = buildUses(opts.RelationshipExtras)
+	rc.Uses = buildUses(ident, opts.RelationshipExtras, omitted)
 	if pod, ok := obj.(*corev1.Pod); ok {
 		rc.PodSummary = buildPodSummary(pod)
 		if rel != nil && rel.Node != nil {
@@ -516,12 +516,12 @@ func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
 // Uses (Pod-specific)
 // ---------------------------------------------------------------------------
 
-func buildUses(extras *topology.RelationshipExtras) *UsesBlock {
-	if extras == nil {
+func buildUses(ident resourceIdentity, extras *topology.RelationshipExtras, omitted *omittedTracker) *UsesBlock {
+	if !((ident.Group == "" && ident.Kind == "Pod") || (ident.Group == "apps" && slices.Contains([]string{"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}, ident.Kind)) || (ident.Group == "batch" && slices.Contains([]string{"Job", "CronJob"}, ident.Kind)) || (ident.Group == "argoproj.io" && ident.Kind == "Rollout")) {
 		return nil
 	}
-	gk := extras.Subject.GroupKind()
-	if !((gk.Group == "" && gk.Kind == "Pod") || (gk.Group == "apps" && slices.Contains([]string{"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"}, gk.Kind)) || (gk.Group == "batch" && slices.Contains([]string{"Job", "CronJob"}, gk.Kind)) || (gk.Group == "argoproj.io" && gk.Kind == "Rollout")) {
+	if extras == nil {
+		omitted.add("uses", OmittedUnavailable)
 		return nil
 	}
 	uses := &UsesBlock{}
