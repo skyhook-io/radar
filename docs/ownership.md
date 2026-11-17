@@ -97,8 +97,8 @@ with the path declaring it. The `View` answers every family the same way:
 - A declaration may name alternatives (`Declaration.Or`): the same reference in another API group its controller also
   reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
   names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
-  Radar couldn't read, or the caller may not, stops the resolution there: the answer says so rather than falling back
-  to a later one.
+  Radar couldn't read, or the caller may not, stops the resolution there: the answer names it and says so rather than
+  falling back to a later one. A target in none of them is named in the first group the cluster serves.
 - Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
   denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
 
@@ -125,8 +125,8 @@ The families so far:
 | `IstioGateways` | Istio VirtualServices → the Istio Gateways they bind to, in any namespace (`mesh` binds sidecars, not a Gateway) | `families.go` |
 | `IstioServiceHosts(domain)` | Istio VirtualServices (HTTP, TCP, TLS routes) and DestinationRules → the Services their hosts name, in any namespace. Made per request with the mesh's domain from istiod (`configrefs.IstioServiceDomain`): an FQDN resolves only with it | `families.go` |
 | `ArgoWorkflowTemplates` | Argo Workflows and CronWorkflows → the WorkflowTemplates and ClusterWorkflowTemplates their `workflowTemplateRef` and task or step `templateRef`s use | `families.go` |
-| `TraefikBackends` | Traefik IngressRoutes (HTTP, TCP, UDP) and TraefikServices → the Services and TraefikServices they route, balance or mirror to, in any namespace | `traefik.go` |
-| `TraefikRouteConfig` | Traefik routes → their Middlewares (MiddlewareTCP), ServersTransports (ServersTransportTCP) and TLSOption, and chain Middlewares → the Middlewares they run, in any namespace | `traefik.go` |
+| `TraefikBackends` | Traefik IngressRoutes and TraefikServices → the Services and TraefikServices they route, balance or mirror to; IngressRouteTCPs and IngressRouteUDPs → their Services; in any namespace | `traefik.go` |
+| `TraefikRouteConfig` | Traefik HTTP and TCP routes → their Middlewares (MiddlewareTCP), ServersTransports (ServersTransportTCP) and TLSOption, and chain Middlewares → the Middlewares they run, in any namespace | `traefik.go` |
 | `TraefikSecrets` | Traefik transports, TLSOptions, TLSStores and routes → the Secrets and ConfigMaps they read | `traefik.go` |
 | `ContourBackends` | Contour HTTPProxies → the Services they send to and the HTTPProxies they include or their TCP proxy delegates to, in any namespace | `contour.go` |
 | `ContourSecrets` | Contour HTTPProxies → the Secrets they read for TLS and validation | `contour.go` |
@@ -166,7 +166,9 @@ rather than reading as no match.
 | `CalicoPolicies`, `CalicoStagedPolicies` | Calico NetworkPolicies and GlobalNetworkPolicies, and their staged kinds that preview protection → Deployments, StatefulSets, DaemonSets, matched as Calico does (`netpol.CompileCalicoPolicyMatcher`), reading Namespace and ServiceAccount labels, with Radar's identity as the graph does (they decide a match but are never listed), only once a policy's other selectors match; a policy both Calico groups serve is listed once |
 
 Extractors live in `pkg/configrefs`, and the topology builder calls the same ones, so the topology view and the
-families can't read a reference differently.
+families read each reference's fields the same way. Resolution can still differ: topology lists one Traefik group per
+cluster, while a family resolves each reference through its candidates, so on a cluster serving both groups a
+Middleware only in `traefik.containo.us` is a family's answer but not drawn.
 
 Each declared, selector and composition family carries its Related Resources `Projection` disposition beside its extraction rule. It names the fields in both declaration directions and the graph encoding, or explains the direct read / intentional non-projection. `relations_answer.go` generates its edge maps from these declarations. `TestEveryFamilyProjectsExactlyItsDeclaredFields` projects one isolated synthetic edge for every supported kind pair and checks the exact fields after ownership; legacy `ManagedBy` and ownership coverage are checked separately.
 
