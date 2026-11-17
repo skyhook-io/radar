@@ -93,6 +93,8 @@ func (d *DynamicResourceCache) startWatchReconciler(interval time.Duration) {
 					return
 				case <-refreshed:
 					d.reconcileWatches()
+				case <-d.watchReconcileKick:
+					d.reconcileWatches()
 				case <-tick.C:
 					_ = d.config.Discovery.RefreshIfStale()
 					d.reconcileWatches()
@@ -100,6 +102,13 @@ func (d *DynamicResourceCache) startWatchReconciler(interval time.Duration) {
 			}
 		}()
 	})
+}
+
+func (d *DynamicResourceCache) kickWatchReconciler() {
+	select {
+	case d.watchReconcileKick <- struct{}{}:
+	default:
+	}
 }
 
 func (d *DynamicResourceCache) reconcileWatches() {

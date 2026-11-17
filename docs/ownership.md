@@ -67,7 +67,9 @@ The [GitOps resource tree](gitops.md#topology-tab) also uses `View.Children`, wi
 `relations.Kinds()` declares the bounded source, target, lookup and projection dependencies. Radar removes the kinds
 served by typed informers using `k8score.AllKindListers()` and gives the rest to each new dynamic cache's watch reconciler.
 It starts before the deferred-informer warmup gate, reacts to discovery refreshes and CRD add/update events, and retries
-every 75 seconds (after the 60-second denial memory expires). A context switch, reconnect or namespace rescope creates
+every 75 seconds (after the 60-second denial memory expires). CRD events only signal the reconciler's goroutine; an
+update refreshes discovery only when it changes a required CRD's served versions, and CRDs seen before startup discovery
+finishes wait for it, then get the usual small-CRD decision. A context switch, reconnect or namespace rescope creates
 and starts a new reconciler; stopping a cache cancels its requests and unregisters its discovery subscription.
 Activation is non-blocking and singleflight per resource, so a burst of discovery and CRD events starts each watch once.
 

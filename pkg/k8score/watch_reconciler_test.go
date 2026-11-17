@@ -50,7 +50,7 @@ func TestWatchReconcilerRequiresStart(t *testing.T) {
 			d.markCRDsSeen([]string{"db.example.com/dbclusters"})
 			crd := crdObject("dbclusters.db.example.com", "db.example.com", "dbclusters")
 			d.reconcileWatches()
-			d.onCRDEvent(crd)
+			d.onCRDEvent(nil, crd)
 			d.crdEventHandler().OnAdd(crd, true)
 			d.crdEventHandler().OnUpdate(crd, crd)
 			d.mu.RLock()
@@ -162,8 +162,8 @@ func TestWatchReconcilerBypassesLargeKindDeferral(t *testing.T) {
 	}
 	defer d.Stop()
 	stats := d.watchSmallCRDs([]schema.GroupVersionResource{deniedWidgets})
-	if stats.deferred != 0 {
-		t.Fatalf("required kind was deferred: %+v", stats)
+	if stats.deferred != 0 || stats.eager != 0 || stats.required != 1 {
+		t.Fatalf("required kind was not counted as required: %+v", stats)
 	}
 	waitUntilTrue(t, "required kind watch", func() bool { return d.IsSynced(deniedWidgets) })
 }
@@ -234,4 +234,115 @@ func TestRequestWatchIsNonBlockingAndSingleflight(t *testing.T) {
 	}
 	unblock()
 	waitUntilTrue(t, "requested watch sync", func() bool { return d.IsSynced(deniedWidgets) })
+}
+
+// A CRD in the CRD informer's first list that startup discovery didn't serve
+// (here its group recovers only later) still gets a watch decision, and the
+// small-CRD decision waits for startup discovery.
+func TestWatchReconcilerScansStartupCRDsDiscoveryMissed(t *testing.T) {
+	oldDelay := lateCRDScanDelay
+	lateCRDScanDelay = 10 * time.Millisecond
+	t.Cleanup(func() { lateCRDScanDelay = oldDelay })
+	clusters := schema.GroupVersionResource{Group: "db.example.com", Version: "v1alpha1", Resource: "dbclusters"}
+	for _, servedBeforeStartup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("servedBeforeStartupDiscovery=%t", servedBeforeStartup), func(t *testing.T) {
+			api := newLockedDiscovery(crdResources)
+			discovery, err := NewResourceDiscovery(api)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{crdGVR: "CustomResourceDefinitionList", deniedWidgets: "WidgetList", clusters: "DBClusterList"},
+				crdObject("dbclusters.db.example.com", "db.example.com", "dbclusters"))
+			d, err := NewDynamicResourceCache(DynamicCacheConfig{Discovery: discovery, DynamicClient: client, RequiredWatchKinds: []schema.GroupKind{{Group: "example.io", Kind: "Widget"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(d.Stop)
+			if servedBeforeStartup {
+				// Installed after Radar's discovery snapshot, before the CRD informer's first list.
+				api.serve(dbClusterResources)
+			}
+			d.StartWatchReconciler()
+			waitUntilTrue(t, "CRD informer", func() bool { return d.IsSynced(crdGVR) })
+			if servedBeforeStartup {
+				waitUntilTrue(t, "pre-startup refresh", func() bool {
+					_, ok := discovery.GetGVRWithGroup("DBCluster", "db.example.com")
+					return ok
+				})
+				time.Sleep(100 * time.Millisecond)
+				if d.HasCoveringInformer(clusters, "") {
+					t.Fatal("small-CRD watch started before startup discovery")
+				}
+			}
+			d.DiscoverAllCRDs()
+			<-d.discoveryDone
+			if !servedBeforeStartup {
+				api.serve(dbClusterResources)
+			}
+			waitUntilTrue(t, "missed CRD watched", func() bool { return d.IsSynced(clusters) })
+		})
+	}
+}
+
+// Updates that leave a required CRD's served versions alone (CA bundle,
+// status, metadata) must not refresh discovery.
+func TestRequiredCRDUpdateRescansOnlyOnServedVersionChange(t *testing.T) {
+	oldDelay := lateCRDScanDelay
+	lateCRDScanDelay = time.Hour
+	t.Cleanup(func() { lateCRDScanDelay = oldDelay })
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{Discovery: widgetDiscovery(t), DynamicClient: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{deniedWidgets: "WidgetList"}), RequiredWatchKinds: []schema.GroupKind{{Group: "example.io", Kind: "Widget"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	d.startWatchReconciler(time.Hour)
+	versioned := func(rv string, versions ...any) *unstructured.Unstructured {
+		crd := crdObject("widgets.example.io", "example.io", "widgets")
+		crd.SetResourceVersion(rv)
+		_ = unstructured.SetNestedSlice(crd.Object, versions, "spec", "versions")
+		return crd
+	}
+	old := versioned("1", map[string]any{"name": "v1", "served": true, "storage": true})
+	relabeled := versioned("2", map[string]any{"name": "v1", "served": true, "storage": true})
+	relabeled.SetAnnotations(map[string]string{"cert-manager.io/inject-ca-from": "ns/cert"})
+	scheduled := func() bool {
+		d.lateCRDMu.Lock()
+		defer d.lateCRDMu.Unlock()
+		return d.lateCRDTimer != nil
+	}
+	d.crdEventHandler().OnUpdate(old, relabeled)
+	if scheduled() {
+		t.Fatal("an update that kept the served versions scheduled a discovery refresh")
+	}
+	d.crdEventHandler().OnUpdate(relabeled, versioned("3", map[string]any{"name": "v1", "served": true}, map[string]any{"name": "v2", "served": true, "storage": true}))
+	if !scheduled() {
+		t.Fatal("a served-version change did not schedule a discovery refresh")
+	}
+}
+
+// CRD events reach the reconciler without the informer's handler doing
+// discovery lookups itself.
+func TestCRDEventHandlerDoesNotWaitOnDiscovery(t *testing.T) {
+	discovery := widgetDiscovery(t)
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{Discovery: discovery, DynamicClient: dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{deniedWidgets: "WidgetList"}), RequiredWatchKinds: []schema.GroupKind{{Group: "example.io", Kind: "Widget"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	d.startWatchReconciler(time.Hour)
+	d.markCRDsSeen([]string{"db.example.com/dbclusters"})
+	discovery.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		d.crdEventHandler().OnAdd(crdObject("dbclusters.db.example.com", "db.example.com", "dbclusters"), true)
+		close(done)
+	}()
+	select {
+	case <-done:
+		discovery.mu.Unlock()
+	case <-time.After(time.Second):
+		discovery.mu.Unlock()
+		t.Fatal("the CRD event handler waited on discovery")
+	}
 }

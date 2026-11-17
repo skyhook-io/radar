@@ -1148,6 +1148,37 @@ func TestFailedOpenWatchKeepsNamespaceWatches(t *testing.T) {
 	}
 }
 
+// An all-namespaces request whose cluster-wide check fails rather than
+// passes keeps the namespace watches a namespace read started.
+func TestEnsureWatchingKeepsNamespaceWatchesOnAFailedCheck(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	dyn.PrependReactor("list", "widgets", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() != "" {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewServiceUnavailable("proxy unavailable")
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if err := d.startWatching(gvr, "a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.EnsureWatching(gvr); err == nil {
+		t.Fatal("an all-namespaces request reported success without a cluster-wide watch")
+	}
+	d.mu.RLock()
+	_, clusterWide := d.informers[informerKey{gvr: gvr}]
+	resolved := d.fallbackResolved[gvr]
+	d.mu.RUnlock()
+	if clusterWide || resolved || !d.HasCoveringInformer(gvr, "a") {
+		t.Fatalf("a failed cluster-wide check replaced the namespace watch: clusterWide=%v resolved=%v", clusterWide, resolved)
+	}
+}
+
 // A recovery walk whose cluster-wide check fails rather than passes (here a
 // 503 from a proxy) must not replace namespace watches that work with a
 // cluster-wide one.
