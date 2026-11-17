@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Badge, Collapse, TimeValue, formatBytes } from '@skyhook-io/k8s-ui'
+import { Badge, Collapse, TimeValue, formatBytes, pluralize } from '@skyhook-io/k8s-ui'
 import { useVeleroRunVolumes, useVeleroVolumeOperations, isVeleroRunFinished, type VeleroVolumeRecord, type VeleroVolumeDetails, type VeleroVolumeOperation } from '../../api/velero'
 import { getApiBase } from '../../api/config'
 import { Notice, SectionTable } from '../workspace/layout'
@@ -84,18 +84,20 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
   const readBeforeCompletion = recordRead.source === source && recordRead.at === recordReadAt && recordRead.at > 0 && !isVeleroRunFinished(recordRead.phase) && isVeleroRunFinished(live.data?.runPhase)
   const coverage = Object.entries(live.data?.coverage ?? {})
   const complete = coverage.length > 0 && coverage.every(([, value]) => value.state === 'full')
+  const recordedNone = data?.total === 0
   return <div className="space-y-5 p-4">
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold text-theme-text-primary">Recorded volumes</h2><button type="button" className="btn-secondary px-3 py-1.5 text-sm" onClick={() => void record.refetch()}>Refresh record</button></div>
       <p className="text-sm text-theme-text-secondary">{restore ? 'How each volume was to be restored. Velero writes this record before plugin operations finish; it does not record a restore result.' : 'How Velero protected each volume, as recorded with this backup. A reported success does not verify that it can be restored.'}</p>
-      <Notice>{inFlight && <>This run is still in progress. Velero may write or update its volume record later. </>}The volume record does not update with live operations. If this run has finished since you opened or refreshed this tab, refresh the record for final results.</Notice>
+      {inFlight && <Notice>This run is still in progress. Velero may write or update its volume record later. The volume record does not update with live operations. If this run has finished since you opened or refreshed this tab, refresh the record for final results.</Notice>}
       {readBeforeCompletion && <Notice>This run is now finished, but the volume record was requested before completion was confirmed. Refresh the record for final results.</Notice>}
       {record.dataUpdatedAt > 0 && <p className="text-xs text-theme-text-tertiary">Record read: <TimeValue timestamp={new Date(record.dataUpdatedAt).toISOString()} /></p>}
       {record.error && <ArtifactError label="Velero run volumes" error={record.error} hasData={!!data} retry={() => void record.refetch()} />}
       {record.isPending && <p className="text-sm text-theme-text-secondary">Loading volume record…</p>}
       {data?.truncated && <Notice>Showing the first 5,000 of {data.total} recorded volumes.</Notice>}
-      {data && <SectionTable
-        title={`${data.total} recorded volumes`}
+      {recordedNone && <p className="text-sm text-theme-text-secondary">Velero recorded no volumes for this run.</p>}
+      {data && !recordedNone && <SectionTable
+        title={pluralize(data.total, 'recorded volume')}
         minWidth={760}
         columns={[
           { header: 'Volume', cell: (row) => <div className="space-y-1 break-all">{row.pvcName && <div>PVC {row.pvcNamespace ? row.pvcNamespace + '/' : ''}{row.pvcName}</div>}{row.pvName && <div className="text-xs text-theme-text-secondary">PV {row.pvName}</div>}{!row.pvcName && !row.pvName && <div>{row.podVolumeInfo?.podName ? `${row.podVolumeInfo.podNamespace || ''}/${row.podVolumeInfo.podName} · ${row.podVolumeInfo.volumeName || 'Volume not recorded'}` : 'Not recorded'}</div>}</div> },
@@ -113,7 +115,7 @@ export function VeleroRunVolumes({ kind, namespace, name }: { kind: 'backups' | 
       {live.error && <ArtifactError label="Velero run volumes" error={live.error} hasData={!!live.data} retry={() => void live.refetch()} />}
       {live.isPending && <p className="text-sm text-theme-text-secondary">Loading volume operations…</p>}
       {coverage.filter(([, value]) => value.state !== 'full').map(([key, value]) => <Notice key={key}>{operationNames[key] || key}: {coverageText[value.state] || 'Coverage unknown' } No conclusion about this run’s volume method can be drawn from missing operations.</Notice>)}
-      {live.data && operations.length === 0 && <Notice>{complete ? (inFlight ? 'No volume operation objects found yet for this run.' : 'No current volume operation objects found. They may have been removed; use the recorded volumes above for this run’s history.') : 'No readable volume operations found. Unavailable kinds do not mean this run used none.'}</Notice>}
+      {live.data && operations.length === 0 && !(complete && recordedNone) && <Notice>{complete ? (inFlight ? 'No volume operation objects found yet for this run.' : 'No current volume operation objects found. They may have been removed; use the recorded volumes above for this run’s history.') : 'No readable volume operations found. Unavailable kinds do not mean this run used none.'}</Notice>}
       {phases.map((phase) => <OperationGroup key={phase} phase={phase} rows={operations.filter((row) => (row.phase || 'Not recorded') === phase)} />)}
     </section>
   </div>

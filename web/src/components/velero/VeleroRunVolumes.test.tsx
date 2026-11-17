@@ -115,10 +115,21 @@ describe('Volumes tab', () => {
     expect(state.fetch).not.toHaveBeenCalled()
   })
 
-  it('distinguishes an empty recorded file and removed operations', async () => {
+  it('says once that a finished run recorded no volumes', async () => {
     respond(record({ volumes: [], total: 0 }))
-    await mount(); await settle(() => host.textContent!.includes('Velero recorded no volumes in this file'))
-    expect(host.textContent).toContain('They may have been removed')
+    await mount(); await settle(() => host.textContent!.includes('Velero recorded no volumes for this run.'))
+    expect(host.textContent!.split('Velero recorded no volumes').length).toBe(2)
+    expect(host.textContent).not.toContain('They may have been removed')
+    expect(host.textContent).not.toContain('No volume operation objects found yet')
+    expect(host.textContent).not.toContain('The volume record does not update with live operations')
+    expect(host.textContent).not.toContain('0 recorded volumes')
+  })
+
+  it('says operations may have been removed when the record names volumes', async () => {
+    respond()
+    await mount(); await settle(() => host.textContent!.includes('snap-123') && host.textContent!.includes('They may have been removed'))
+    expect(host.textContent).toContain('5 recorded volumes')
+    expect(host.textContent).not.toContain('The volume record does not update with live operations')
   })
 
   it('reports denied, missing and partial operation kinds without implying none were used', async () => {
@@ -164,11 +175,12 @@ describe('Volumes tab', () => {
     respond(record(), live({ runPhase: 'WaitingForPluginOperations' }))
     await mount(); await settle(() => host.textContent!.includes('snap-123'))
     expect(host.textContent).toContain('Velero may write or update its volume record later')
+    expect(host.textContent).toContain('The volume record does not update with live operations')
     expect(host.textContent).toContain('Record read:')
     respond(record(), live({ runPhase: 'Completed' }))
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh operations')!.click())
     await settle(() => !host.textContent!.includes('This run is still in progress'))
-    expect(host.textContent).toContain('The volume record does not update with live operations')
+    expect(host.textContent).not.toContain('The volume record does not update with live operations')
     expect(host.textContent).toContain('This run is now finished, but the volume record was requested before completion was confirmed')
     expect(state.fetch.mock.calls.filter(([path]) => path.endsWith('/volumes?'))).toHaveLength(1)
     await act(async () => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh record')!.click())
