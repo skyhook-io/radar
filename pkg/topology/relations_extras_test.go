@@ -206,3 +206,20 @@ func TestDrawerAnswerSkipsContextOnlyInventories(t *testing.T) {
 		}
 	}
 }
+
+// A volume whose class the caller may not read narrows its dependencies only:
+// its readable claim is still listed among its dependents in full.
+func TestVolumeStorageCoverageMarksOnlyTheWithheldTarget(t *testing.T) {
+	pv := projectionObject(&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk"}, Spec: corev1.PersistentVolumeSpec{StorageClassName: "fast", ClaimRef: &corev1.ObjectReference{Namespace: "shop", Name: "data"}}}, "", "PersistentVolume")
+	pvc := projectionObject(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "shop"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "disk"}}, "", "PersistentVolumeClaim")
+	class := projectionObject(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}}, "storage.k8s.io", "StorageClass")
+	s := newProjectionSession(t, pv, pvc, class)
+	denied := projectionAccess{denied: []string{"StorageClass"}}
+	rel, extras := RelationsContextAnswer(s, denied, ownership.Unrestricted(), ownership.NewView(s, denied), projectionRef(pv), pv, "", nil, nil)
+	if !extras.Fields["Dependencies"].Narrowed || extras.Fields["Dependents"].Narrowed {
+		t.Fatalf("fields = %+v", extras.Fields)
+	}
+	if !slices.ContainsFunc(rel.Consumers, func(r ResourceRef) bool { return r.Kind == "PersistentVolumeClaim" && r.Name == "data" }) {
+		t.Fatalf("readable claim not listed: %+v", rel)
+	}
+}

@@ -148,15 +148,33 @@ func (n *neighborhood) contextDirectEvidence(v *relations.View, subject resource
 	}
 	if relations.Storage.Covers(subject.GroupKind()) {
 		refs := v.References(relations.Storage, subject, obj)
-		field := "Dependencies"
-		if subject.Kind == "PersistentVolume" {
-			field = "Dependents"
+		if subject.GroupKind() == (resourceid.GroupKind{Kind: "PersistentVolume"}) {
+			// A volume's claim is listed among its dependents, its class
+			// among its dependencies.
+			claim := resourceid.GroupKind{Kind: "PersistentVolumeClaim"}
+			n.extras.cover("Dependents", targetCoverage(refs, func(gk resourceid.GroupKind) bool { return gk == claim }))
+			n.extras.cover("Dependencies", targetCoverage(refs, func(gk resourceid.GroupKind) bool { return gk != claim }))
+		} else {
+			n.extras.cover("Dependencies", refs.Coverage)
 		}
-		n.extras.cover(field, refs.Coverage)
-		n.extras.cover("Dependencies", refs.Coverage)
 		// The direct projection lists the entire inventory, independently of the
 		// per-family output cap. Its coverage must describe that same inventory.
 		consumers := v.Referrers(relations.Storage, subject, obj)
 		n.extras.cover("Dependents", consumers.Coverage)
 	}
+}
+
+// targetCoverage is the part of a references answer's coverage that concerns
+// the targets of the kinds keep selects. Gaps naming no kind concern them all.
+func targetCoverage(a relations.ReferencesAnswer, keep func(resourceid.GroupKind) bool) relations.Coverage {
+	c := relations.Coverage{SubjectState: a.Coverage.SubjectState, Truncated: a.Coverage.Truncated, Total: a.Coverage.Total}
+	for _, gap := range a.Coverage.NotChecked {
+		if gap.Kind == (resourceid.GroupKind{}) || keep(gap.Kind) {
+			c.NotChecked = append(c.NotChecked, gap)
+		}
+	}
+	c.Narrowed = slices.ContainsFunc(a.Declared, func(d relations.Declared) bool {
+		return d.State == relations.TargetWithheld && keep(d.Ref.GroupKind())
+	})
+	return c
 }
