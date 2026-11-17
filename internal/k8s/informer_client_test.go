@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,7 +60,10 @@ func TestResourceCacheIsBuiltFromInformerClients(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request client: %v", err)
 	}
-	informerClient := fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}})
+	informerClient := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "default"}},
+	)
 	requestDyn := fakeDyn(t, func(gvr schema.GroupVersionResource, _ string) bool {
 		t.Errorf("list probe for %s went through the request dynamic client", gvr.Resource)
 		return false
@@ -79,6 +83,21 @@ func TestResourceCacheIsBuiltFromInformerClients(t *testing.T) {
 	}
 	clientMu.Unlock()
 
+	// Observers live for the process, so stop recording when the test ends.
+	sources := make(chan kubernetes.Interface, 1)
+	var recording atomic.Bool
+	recording.Store(true)
+	defer recording.Store(false)
+	OnResourceObserved(func(source kubernetes.Interface, _ ResourceChange, _, _ any) {
+		if !recording.Load() {
+			return
+		}
+		select {
+		case sources <- source:
+		default:
+		}
+	})
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := InitResourceCache(ctx); err != nil {
@@ -89,6 +108,17 @@ func TestResourceCacheIsBuiltFromInformerClients(t *testing.T) {
 	}
 	if got := InformerClientFor(requestClient); got != kubernetes.Interface(informerClient) {
 		t.Errorf("InformerClientFor(request client) = %T, want the informer client", got)
+	}
+	// Observers compare source with GetClient() (Prometheus does), so the
+	// cache must report the request client even though it lists through the
+	// informer client.
+	select {
+	case got := <-sources:
+		if got != kubernetes.Interface(requestClient) {
+			t.Errorf("observer source = %T, want the request client", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("no resource observer callback during the initial sync")
 	}
 }
 
@@ -172,7 +202,7 @@ func TestDynamicCacheDirectReadsUseTheRequestClient(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	clients, err := newSharedKubernetesClients(&rest.Config{Host: srv.URL, QPS: 1, Burst: 3})
+	clients, err := newSharedKubernetesClients(&rest.Config{Host: srv.URL, QPS: 1, Burst: 4})
 	if err != nil {
 		t.Fatalf("newSharedKubernetesClients: %v", err)
 	}
@@ -184,8 +214,8 @@ func TestDynamicCacheDirectReadsUseTheRequestClient(t *testing.T) {
 		t.Fatalf("InitDynamicResourceCache: %v", err)
 	}
 	nsGVR := schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
-	// Three request reads follow, so spend all three informer tokens.
-	for range 3 {
+	// Four request reads follow, so spend all four informer tokens.
+	for range 4 {
 		if _, err := clients.informerDynamic.Resource(nsGVR).List(context.Background(), metav1.ListOptions{}); err != nil {
 			t.Fatalf("informer dynamic list: %v", err)
 		}
@@ -202,6 +232,9 @@ func TestDynamicCacheDirectReadsUseTheRequestClient(t *testing.T) {
 	}
 	if _, err := dc.CountDirectProbe(ctx, nsGVR, nil, 0, 1); err != nil {
 		t.Errorf("CountDirectProbe waited behind the informer client: %v", err)
+	}
+	if _, err := dc.ListDirectBounded(ctx, nsGVR, "", 10); err != nil {
+		t.Errorf("ListDirectBounded waited behind the informer client: %v", err)
 	}
 }
 

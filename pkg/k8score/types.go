@@ -342,9 +342,10 @@ type DynamicCacheConfig struct {
 	DynamicClient dynamic.Interface
 
 	// DirectClient serves the reads that bypass the informers (ListDirect,
-	// GetDirect, CountDirectProbe). Giving it a client with its own rate
-	// limiter keeps request-triggered reads from queuing behind informer
-	// LIST/WATCH traffic. Nil means DynamicClient.
+	// ListDirectSelected, ListDirectBounded, GetDirect, CountDirectProbe).
+	// Giving it a client with its own rate limiter keeps request-triggered
+	// reads from queuing behind informer LIST/WATCH traffic. Nil means
+	// DynamicClient.
 	DirectClient dynamic.Interface
 
 	// Discovery is used for GVR→Kind resolution and watch-verb checks.
