@@ -1,7 +1,11 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"log"
+	"net"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -18,6 +22,8 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 )
+
+var replayPath = flag.String("replay", "", "replay a frozen .ndjson.gz cluster capture")
 
 type replayState struct {
 	client       *fake.Clientset
@@ -113,6 +119,20 @@ func loadReplay(path string) (*replayState, error) {
 	return s, nil
 }
 
+func mustLoadReplay(path string) *replayState {
+	s, err := loadReplay(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return s
+}
+
+func (s *replayState) mustStart() {
+	if err := s.start(); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func (s *replayState) start() error {
 	if err := k8s.InitTestReplayClients(s.dynamic, s.discovery); err != nil {
 		return err
@@ -154,4 +174,22 @@ func (d *replayDiscovery) ServerGroups() (*metav1.APIGroupList, error) {
 		list.Groups = append(list.Groups, *g)
 	}
 	return list, nil
+}
+
+func startReplayAdmin(port int, replay *replayState) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/loadtest/status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "objects": replay.objects, "unsupported": replay.unsupported, "failed_groups": replay.failedGroups, "skipped": replay.skipped})
+	})
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Print(err)
+		}
+	}()
+	return srv
 }

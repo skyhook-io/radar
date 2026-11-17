@@ -61,7 +61,6 @@ func main() {
 	censusProfile := flag.String("census", "", "load-test: seed a named census profile (e.g. large-eks) instead of -pods")
 	censusScale := flag.Float64("census-scale", 1.0, "load-test: scale factor applied to -census counts")
 	vulnReports := flag.Bool("vulnerability-reports", false, "seed Trivy Operator VulnerabilityReports and the workloads they describe (with the default fixture)")
-	replayPath := flag.String("replay", "", "replay a frozen .ndjson.gz cluster capture")
 	flag.Parse()
 	if *replayPath != "" && (*pods != 0 || *censusProfile != "" || *vulnReports) {
 		log.Fatal("-replay cannot be combined with -pods, -census or -vulnerability-reports")
@@ -84,10 +83,7 @@ func main() {
 		replay     *replayState
 	)
 	if *replayPath != "" {
-		replay, err = loadReplay(*replayPath)
-		if err != nil {
-			log.Fatal(err)
-		}
+		replay = mustLoadReplay(*replayPath)
 		fakeClient = replay.client
 	} else if *censusProfile != "" {
 		c, ok := loadtest.Profiles[*censusProfile]
@@ -127,17 +123,12 @@ func main() {
 		if err := k8s.InitLoadTestResourceCache(fakeClient); err != nil {
 			log.Fatalf("InitLoadTestResourceCache: %v", err)
 		}
-		if err := installCensusDiscovery(fakeClient); err != nil {
-			log.Fatalf("installCensusDiscovery: %v", err)
-		}
 	} else if err := k8s.InitTestResourceCache(fakeClient); err != nil {
 		log.Fatalf("InitTestResourceCache: %v", err)
 	}
 
 	if replay != nil {
-		if err := replay.start(); err != nil {
-			log.Fatal(err)
-		}
+		replay.mustStart()
 		defer k8s.ResetTestDynamicState()
 	}
 
@@ -181,17 +172,13 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Test server ready on http://localhost:%d (fake k8s)\n", *port)
 
 	var adminSrv *http.Server
+	ap := *adminPort
+	if ap == 0 {
+		ap = *port + 1
+	}
 	if replay != nil {
-		ap := *adminPort
-		if ap == 0 {
-			ap = *port + 1
-		}
 		adminSrv = startReplayAdmin(ap, replay)
 	} else if gen != nil {
-		ap := *adminPort
-		if ap == 0 {
-			ap = *port + 1
-		}
 		adminSrv = startAdminServer(ap, gen, fakeClient)
 	}
 
@@ -412,21 +399,3 @@ func seedObjects() []runtime.Object {
 }
 
 func boolPtr(b bool) *bool { return &b }
-
-func startReplayAdmin(port int, replay *replayState) *http.Server {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/loadtest/status", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ready": true, "objects": replay.objects, "unsupported": replay.unsupported, "failed_groups": replay.failedGroups, "skipped": replay.skipped})
-	})
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		log.Fatal(err)
-	}
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() {
-		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Print(err)
-		}
-	}()
-	return srv
-}
