@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Badge, RadarUpgradeAction, getRadarUpgradeRequirement, radarUpgradeDetail, radarUpgradeHeadline } from '@skyhook-io/k8s-ui'
+import { Badge, RadarUpgradeAction, pluralize, getRadarUpgradeRequirement, radarUpgradeDetail, radarUpgradeHeadline } from '@skyhook-io/k8s-ui'
 import { useVeleroRunContents, useVeleroRunLog, type VeleroLogLevel } from '../../api/velero'
 import { Notice, SectionTable, Segments } from '../workspace/layout'
 
@@ -22,7 +22,7 @@ export function VeleroRunContents({ kind, namespace, name }: RunProps) {
   const data = query.data
   return <div className="space-y-3 p-4">
     <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); setQuery(text) }}>
-      <input aria-label="Filter contents" placeholder="Kind, namespace or name" className={inputClass} value={text} onChange={(e) => setText(e.target.value)} />
+      <input aria-label="Filter contents" placeholder="Kind, namespace or name" className={`${inputClass} w-64 max-w-full`} value={text} onChange={(e) => setText(e.target.value)} />
       <button type="submit" className="btn-secondary px-3 py-1.5 text-sm">Search</button>
       <select aria-label="Contents namespace" className={inputClass} value={selectedNamespace} onChange={(e) => setNamespace(e.target.value)}>
         <option value="">All namespaces</option>
@@ -36,7 +36,7 @@ export function VeleroRunContents({ kind, namespace, name }: RunProps) {
     {query.error && <ArtifactError error={query.error} hasData={!!data} retry={() => void query.refetch()} />}
     {query.isPending && <p className="text-sm text-theme-text-secondary">Loading contents…</p>}
     {data && <>
-      <p className="text-sm text-theme-text-secondary">{data.total} items · {data.namespaces.length} namespaces · {data.matched} matching items</p>
+      <p className="text-sm text-theme-text-secondary">{pluralize(data.total, 'item')} · {pluralize(data.namespaces.length, 'namespace')} · {pluralize(data.matched, 'matching item')}</p>
       {data.truncated && <Notice>Showing the first 5,000 matching items. Counts and filters cover the whole file.</Notice>}
       {data.matched === 0 && <Notice>{data.total === 0 ? 'Velero recorded no items in this run.' : 'No contents match these filters.'}</Notice>}
       {data.groups.filter((g) => g.matched > 0).map((group) => <SectionTable
@@ -60,11 +60,15 @@ export function VeleroRunContents({ kind, namespace, name }: RunProps) {
 export function VeleroRunLog({ kind, namespace, name }: RunProps) {
   const [text, setText] = useState('')
   const [q, setQuery] = useState('')
-  const [selected, setSelected] = useState('problems')
+  // null until the first answer: a run with errors or warnings opens on them,
+  // and a clean run opens on every level rather than an empty view.
+  const [chosen, setSelected] = useState<string | null>(null)
+  const selected = chosen ?? 'problems'
   const [wrap, setWrap] = useState(true)
   const requested = selected === 'all' ? levels.join(',') : selected === 'problems' ? 'error,warning' : selected
   const query = useVeleroRunLog(kind, namespace, name, requested, q)
   const data = query.data
+  if (chosen === null && data) setSelected(data.counts.error + data.counts.warning > 0 ? 'problems' : 'all')
   const count = (level: VeleroLogLevel) => data ? `${data.partial ? '≥' : ''}${data.counts[level]}` : undefined
   return <div className="space-y-3 p-4">
     <div className="flex flex-wrap items-center gap-2">

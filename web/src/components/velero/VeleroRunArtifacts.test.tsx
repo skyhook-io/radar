@@ -136,6 +136,13 @@ describe('Contents rows and filters', () => {
     expect(lastParams().get('q')).toBe('late-failure')
   })
 
+  it('counts in the singular when there is one', async () => {
+    state.fetch.mockResolvedValue(contents({ total: 1, matched: 1, namespaces: ['app'], truncated: false, groups: [{ kind: 'v1/ConfigMap', count: 1, matched: 1, items: [{ namespace: 'app', name: 'first', action: 'created' }] }] }))
+    await mount(<VeleroRunContents {...props} />)
+    await settle(() => host.textContent!.includes('1 item · 1 namespace · 1 matching item'))
+    expect(host.textContent).not.toContain('1 namespaces')
+  })
+
   it.each([true, false])('distinguishes an empty file from an empty filter (empty file: %s)', async (empty) => {
     state.fetch.mockResolvedValue(contents({ total: empty ? 0 : 6002, matched: 0, groups: [], truncated: false }))
     await mount(<VeleroRunContents {...props} />)
@@ -150,6 +157,20 @@ describe('Log rows and filters', () => {
     await settle(() => host.textContent!.includes('storage retry'))
     expect(lastParams().get('levels')).toBe('error,warning')
     expect(button('Info').textContent).toBe('Info9999')
+  })
+
+  it('opens a run with no errors or warnings on every level', async () => {
+    const clean = log({ counts: { error: 0, warning: 0, info: 3, debug: 0, other: 0 }, lines: [], matched: 0 })
+    state.fetch.mockResolvedValueOnce(clean)
+    state.fetch.mockResolvedValueOnce({ ...clean, lines: [{ number: 1, level: 'info', text: 'level=info msg="backup completed"' }], matched: 3 })
+    await mount(<VeleroRunLog {...props} />)
+    await settle(() => host.textContent!.includes('backup completed'))
+    expect(lastParams().get('levels')).toBe('error,warning,info,debug,other')
+    expect(button('Show all levels').getAttribute('aria-pressed')).toBe('true')
+    state.fetch.mockResolvedValue(clean)
+    await act(async () => button('Errors + warnings').click())
+    await settle(() => lastParams().get('levels') === 'error,warning' && host.textContent!.includes('No matching log lines'))
+    expect(state.fetch).toHaveBeenCalledTimes(3)
   })
 
   it('posts level and text filters and wraps on demand', async () => {
