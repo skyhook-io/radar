@@ -7,13 +7,12 @@ import (
 )
 
 // Disposition declares how a family contributes to topology.Relationships.
-// Rules use declaration direction (or selector to selected); DirectRead and
-// NotProjected explain why a family has no projected edge. Management fields
+// Rules use declaration direction (or selector to selected); DirectRead
+// explains why a family has no projected edge. Management fields
 // describe residual non-owner links; actual ownership is answered separately.
 type Disposition struct {
-	Rules        []ProjectionRule
-	DirectRead   string
-	NotProjected string
+	Rules      []ProjectionRule
+	DirectRead string
 }
 
 // ProjectionRule records the graph encoding and the resulting fields at both
