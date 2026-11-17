@@ -13,6 +13,7 @@ import (
 
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -207,6 +208,10 @@ func withOwnershipDiscovery(t *testing.T) {
 		{GroupVersion: "apps/v1", APIResources: []metav1.APIResource{
 			{Name: "deployments", Kind: "Deployment", Namespaced: true, Verbs: verbs},
 			{Name: "replicasets", Kind: "ReplicaSet", Namespaced: true, Verbs: verbs},
+		}},
+		{GroupVersion: "rbac.authorization.k8s.io/v1", APIResources: []metav1.APIResource{
+			{Name: "roles", Kind: "Role", Namespaced: true, Verbs: verbs},
+			{Name: "rolebindings", Kind: "RoleBinding", Namespaced: true, Verbs: verbs},
 		}},
 	}
 	restore, err := k8s.SetTestResourceDiscovery(fd)
@@ -533,5 +538,46 @@ func TestDrawerFamiliesUseRequestAccess(t *testing.T) {
 	rel := env.srv.relationshipsFor(r, objects[1])
 	if rel == nil || !slices.ContainsFunc(rel.ConfigRefs, func(ref topology.ResourceRef) bool { return ref.Kind == "Secret" && ref.Name == "hidden-secret" }) {
 		t.Fatalf("allowed Secret missing: %+v", rel)
+	}
+}
+
+// A resource read gates Roles and RoleBindings per namespace, so Related
+// Resources does too: namespace access alone doesn't show a Role a resource
+// owns.
+func TestDrawerWithholdsRolesWithoutRoleAccess(t *testing.T) {
+	withOwnershipDiscovery(t)
+	owner := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "operator", UID: "operator-uid"}}
+	controller := true
+	ref := []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "operator", UID: "operator-uid", Controller: &controller}}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "operator-role", OwnerReferences: ref}}
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "operator-binding", OwnerReferences: ref}, RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "operator-role"}}
+	useTestResourceCache(t, fake.NewClientset(owner, role, binding))
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
+	perms.SetCanI("list", "*", "*", "", false)
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "roles", "alpha", false)
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "rolebindings", "alpha", false)
+	env.srv.permCache.Set("viewer", nil, perms)
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "viewer"}))
+	k8s.SetTypeMeta(owner)
+	answer := func() string {
+		rel := env.srv.relationshipsFor(r, owner)
+		if rel == nil {
+			t.Fatal("missing family answer")
+		}
+		data, err := json.Marshal(rel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	if data := answer(); strings.Contains(data, "operator-role") || strings.Contains(data, "operator-binding") {
+		t.Fatalf("Role or RoleBinding shown without access: %s", data)
+	}
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "roles", "alpha", true)
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "rolebindings", "alpha", true)
+	if data := answer(); !strings.Contains(data, "operator-role") || !strings.Contains(data, "operator-binding") {
+		t.Fatalf("readable Role and RoleBinding missing: %s", data)
 	}
 }

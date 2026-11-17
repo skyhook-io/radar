@@ -5,10 +5,10 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -16,9 +16,9 @@ import (
 
 // requestAccess is what one request's user may read through Related
 // Resources and the relation families: namespace
-// access for namespaced kinds, with a list check per namespace for Secrets,
-// LimitRanges and Calico's policies in either API group, and a list check for
-// each cluster-scoped kind. Listing what an object owns enumerates names, so
+// access for namespaced kinds, with a list check per namespace for the kinds a
+// resource read gates exactly (k8s.RequiresExactNamespaceAccess) and Calico's
+// policies in either API group, and a list check for each cluster-scoped kind. Listing what an object owns enumerates names, so
 // every check is a list check.
 type requestAccess struct {
 	s       *Server
@@ -98,7 +98,7 @@ func (a *requestAccess) canList(kind resourceid.GroupKind, namespace string) own
 		return ownership.Undecided
 	case a.namespaces != nil && !slices.Contains(a.namespaces, namespace):
 		return ownership.Denied
-	case checkedInNamespace(kind):
+	case checkedInNamespace(kind.Group, resource):
 		return a.check(kind.Group, resource, namespace)
 	}
 	return ownership.Allowed
@@ -112,7 +112,7 @@ func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string)
 	switch {
 	case a.failed:
 		return ownership.Undecided
-	case !checkedInNamespace(kind):
+	case !checkedInNamespace(kind.Group, resource):
 		if a.namespaces == nil || len(a.namespaces) > 0 {
 			return ownership.Allowed
 		}
@@ -123,16 +123,12 @@ func (a *requestAccess) anyNamespace(kind resourceid.GroupKind, resource string)
 	return ownership.Undecided
 }
 
-// checkedInNamespace reports the namespaced kinds authorized per namespace
-// beyond namespace access: Secrets, Calico policies, LimitRanges and Trivy reports.
-func checkedInNamespace(kind resourceid.GroupKind) bool {
-	switch kind.Group {
-	case "":
-		return kind.Kind == "Secret" || kind.Kind == "LimitRange"
-	case "projectcalico.org", "crd.projectcalico.org", aicontext.TrivyGroup:
-		return true
-	}
-	return false
+// checkedInNamespace reports the namespaced resources authorized per
+// namespace beyond namespace access: those a resource read gates exactly, and
+// Calico's policies in either API group.
+func checkedInNamespace(group, resource string) bool {
+	return k8s.RequiresExactNamespaceAccess(schema.GroupVersionResource{Group: group, Resource: resource}) ||
+		group == "projectcalico.org" || group == "crd.projectcalico.org"
 }
 
 func (a *requestAccess) check(group, resource, namespace string) ownership.Decision {
