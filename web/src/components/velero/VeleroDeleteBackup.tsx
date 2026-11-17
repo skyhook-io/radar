@@ -241,9 +241,12 @@ export function VeleroBackupDeletionRow({ backup }: { backup: any }) {
     <FactRow label="Deletion">
       <span className={toneTextClass(d.state === 'unknown' ? 'degraded' : 'unhealthy')}>{label.page}</span>
       {ago && (
-        <Tooltip content={d.created ? veleroLocalTime(d.created) : undefined}>
-          <span className="text-theme-text-secondary"> {ago}</span>
-        </Tooltip>
+        <>
+          {' '}
+          <Tooltip content={d.created ? veleroLocalTime(d.created) : undefined}>
+            <span className="text-theme-text-secondary">{ago}</span>
+          </Tooltip>
+        </>
       )}
       {' — '}
       <Tooltip content={`Velero’s message: ${raw}`} disabled={!raw || raw === reason}>

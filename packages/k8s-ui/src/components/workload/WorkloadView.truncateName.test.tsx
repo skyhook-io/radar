@@ -13,12 +13,12 @@ const backup = { apiVersion: 'velero.io/v1', kind: 'Backup', metadata: { name: '
 // A title kept on one line still needs room to be read: on a narrow page the
 // badges beside it wrap among themselves before the name is cut to nothing.
 describe('a title kept on one line', () => {
-  it('keeps the name a readable width and lets the badges wrap', () => {
+  it('lets the badges give way and wrap before the name is cut', () => {
     const html = renderToStaticMarkup(
       <WorkloadView kind="backups" group="velero.io" namespace="velero" name="live-partial" resource={backup} onBack={() => {}} activeTab="overview" expanded inlineBadges truncateName />,
     )
-    expect(html).toContain('min-w-[min(12rem,100%)]')
-    expect(html).toMatch(/class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1"[^>]*>.*Namespace: /)
+    expect(html).not.toContain('min-w-[')
+    expect(html).toMatch(/class="flex min-w-0 shrink-\[100\] flex-wrap items-center gap-x-3 gap-y-1"[^>]*>.*Namespace: /)
     expect(html).not.toContain('flex shrink-0 items-center gap-x-3')
   })
 })
