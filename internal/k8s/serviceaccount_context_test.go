@@ -30,6 +30,11 @@ func TestServiceAccountInventoryStateReachesSecretContext(t *testing.T) {
 			}
 			release := make(chan struct{})
 			cache := newAdapterCache(t, enabled, map[string]bool{k8score.ServiceAccounts: state == "pending" || state == "failed"}, 100*time.Millisecond, func(c *fake.Clientset) {
+				// The Secret is in the cache: a subject the cache lacks would
+				// leave every answer about it incomplete, whatever the inventory.
+				if _, err := c.CoreV1().Secrets("team").Create(context.Background(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "team"}}, metav1.CreateOptions{}); err != nil {
+					t.Fatal(err)
+				}
 				switch state {
 				case "pending":
 					c.PrependReactor("list", "serviceaccounts", func(k8stesting.Action) (bool, runtime.Object, error) {
