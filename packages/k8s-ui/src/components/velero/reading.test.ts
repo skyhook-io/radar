@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { VELERO_FAILED_PHASES, veleroPlainReason, veleroScheduleBadge } from './reading'
+import { VELERO_FAILED_PHASES, veleroPlainReason, veleroReasonNextStep, veleroScheduleBadge } from './reading'
 
 describe('veleroPlainReason', () => {
   it('says what the common object-store failures mean', () => {
@@ -13,8 +13,9 @@ describe('veleroPlainReason', () => {
   })
 
   it('names a run Velero failed because it restarted', () => {
-    expect(veleroPlainReason('found a backup with status "InProgress" during the server starting, mark it as "Failed"')).toBe('Velero restarted while this backup ran, so it was marked Failed — run it again')
-    expect(veleroPlainReason('found a restore with status "InProgress" during the server starting, mark it as "Failed"')).toBe('Velero restarted while this restore ran, so it was marked Failed — run it again')
+    expect(veleroPlainReason('found a backup with status "InProgress" during the server starting, mark it as "Failed"')).toBe('Velero restarted while this backup ran, so it was marked Failed')
+    expect(veleroPlainReason('found a restore with status "InProgress" during the server starting, mark it as "Failed"')).toBe('Velero restarted while this restore ran, so it was marked Failed')
+    expect(veleroReasonNextStep('found a restore with status "InProgress" during the server starting, mark it as "Failed"')).toBe('Run the restore again')
   })
 
   it('names the storage location Velero refused a run or a deletion over, without its kind name', () => {
@@ -29,6 +30,13 @@ describe('veleroPlainReason', () => {
     expect(veleroPlainReason('backup not found')).toBe('Velero couldn’t find the backup')
     // Radar's own Issue message for an unavailable location keeps the store's reason.
     expect(veleroPlainReason('BackupStorageLocation "dr" is unavailable: some error Radar does not know')).toBeUndefined()
+  })
+
+  it('gives each recognised reason a next step', () => {
+    expect(veleroReasonNextStep('NoSuchBucket: The specified bucket does not exist')).toBe('Create the bucket, or point the storage location at an existing one')
+    expect(veleroReasonNextStep('InvalidAccessKeyId: nope')).toBe('Fix the credentials Secret Velero uses for this storage location')
+    expect(veleroReasonNextStep('backup can\'t be created because BackupStorageLocation dr is in Unavailable status.')).toBe('Make storage location dr available, then try again')
+    expect(veleroReasonNextStep('something else')).toBeUndefined()
   })
 
   it('leaves a message it does not recognise alone', () => {

@@ -36,7 +36,6 @@ import {
   VELERO_RUNS_UNKNOWN,
   type NavigateToResource,
   type StatusTone,
-  type VeleroIssue,
   type VeleroLocationReading,
   type VeleroRun,
   type VeleroScheduleReading,
@@ -55,7 +54,8 @@ import { RunMessages } from './VeleroRunMessagesHost'
 import { VeleroBackupDeletionRow } from './VeleroDeleteBackup'
 import { Expires, FAILED, Outcome, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
 import { VELERO_DETAIL_KINDS } from './routes'
-import { VELERO_MESSAGE_LABEL, VeleroName, list, selectionText, veleroIssueProblem, veleroResource } from './shared'
+import { VELERO_MESSAGE_LABEL, VeleroName, list, selectionText, veleroResource } from './shared'
+import { veleroObjectProblems } from './attention'
 
 // The pages' own sections, beside Radar's detail view: a composed Overview for
 // each Velero kind, and the tabs that list what the object relates to. Every
@@ -176,37 +176,29 @@ function CountsText({ errors, warnings }: { errors: number; warnings: number }) 
 
 // ---- Issues -------------------------------------------------------------
 
-/** Velero's issues about this object, or naming it among the runs a fault rejected. */
-function issuesFor(workspace: VeleroWorkspaceResponse, kind: string, namespace: string, name: string): VeleroIssue[] {
-  return workspace.issues.filter((i) => {
-    const ns = i.namespace ?? ''
-    if (i.kind === kind && ns === namespace && i.name === name) return true
-    return !!i.affected?.some((a) => a.kind === kind && (a.namespace ?? ns) === namespace && a.name === name)
-  })
-}
-
 /**
- * The page's lead: Velero's issues for this object as plain banners, each
- * with its next step and a way to the Issues page. The operational issues the
- * detail view found stand in when the Velero workspace isn't read or does not
- * hold the issue (it keeps the newest 50 per installation).
+ * The page's lead: what Radar has for this object, its Velero reading when that
+ * needs attention and Velero's issues about it, as plain banners, each with its
+ * next step (and, for an issue, a way to the Issues page). The operational
+ * issues the detail view found stand in when the Velero workspace isn't read
+ * or holds nothing for it (it keeps the newest 50 issues per installation).
  */
 function PageLead({ kind, namespace, name, leadContent, onNavigate }: { kind: string; namespace: string; name: string; leadContent?: ReactNode; onNavigate?: NavigateToResource }) {
   const workspace = useWorkspace()
   const navigate = useWorkspaceNavigate()
   const [params] = useSearchParams()
   const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
-  const issues = workspace.data ? issuesFor(workspace.data, kind, namespace, name) : []
-  if (issues.length === 0) return <>{leadContent}</>
+  const problems = workspace.data ? veleroObjectProblems(workspace.data, kind, namespace, name) : []
+  if (problems.length === 0) return <>{leadContent}</>
   return (
     <OpenIssueContext.Provider value={issuesTakenOver ? undefined : (p) => navigate(issuesPathForSubject(p.subject, params.get('namespaces')))}>
       <div className="space-y-3">
-        {issues.map((issue) => (
+        {problems.map((problem) => (
           <WorkspaceProblemCallout
-            key={issue.id}
-            problem={veleroIssueProblem(issue, { withAction: true })}
+            key={problem.id}
+            problem={problem}
             rootKind={kind}
-            subjectIsSelf={issue.kind === kind && issue.name === name}
+            subjectIsSelf={problem.subject.kind === kind && problem.subject.name === name}
             onNavigate={(ref) => onNavigate?.(refToSelectedResource(ref))}
           />
         ))}

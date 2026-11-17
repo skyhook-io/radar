@@ -28,6 +28,8 @@ export interface ProblemDetails<C extends string = string> {
   detail?: string
   rawDetail?: string
   rawDetailLabel?: string
+  /** What to do about it, in one plain line; a callout shows it under the detail. */
+  nextStep?: string
   /** The object the evidence is about: the workspace's root object or one of its children. */
   subject: ResourceRef & { group: string }
   /** A shorter headline for tight places (a fleet cell); `title` stays the precise one. */
@@ -143,6 +145,12 @@ export function WorkspaceProblemCallout({
   const variant = severity === 'neutral' ? 'unknown' : severity
   return (
     <AlertBanner variant={variant} title={problem.title} message={problem.detail}>
+      {problem.nextStep && (
+        <div className="mt-1 break-words text-xs text-theme-text-primary">
+          <span className="font-medium">Next step: </span>
+          {problem.nextStep}
+        </div>
+      )}
       {problem.rawDetail && <FoldSection title={problem.rawDetailLabel ?? "Original evidence"} summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{problem.rawDetail}</div></FoldSection>}
       <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf}>
         {action}

@@ -293,29 +293,49 @@ export function veleroDefaultText(loc: Pick<VeleroLocationReading, 'default' | '
 
 // Velero passes the object store's and the network's errors through verbatim
 // (an AWS SDK error inside a gRPC error inside a sentence), so the common ones
-// get one plain line. Credentials first: a wrong key is also a 403.
-const PLAIN_REASONS: [RegExp, string][] = [
-  [/NoSuchBucket|bucket does not exist/i, 'The bucket doesn’t exist'],
-  [/InvalidAccessKeyId|SignatureDoesNotMatch/i, 'Velero’s credentials are wrong'],
-  [/AccessDenied|Forbidden|status code:? 403/i, 'Velero’s credentials can’t access the bucket'],
-  [/no such host|i\/o timeout|TLS handshake timeout|connection refused|network is unreachable/i, 'Velero can’t reach the object store'],
-]
-
-// Velero's own refusals that name a storage location (v1.18.2 backup, restore
-// and deletion controllers), said without its kind name or "BSL". Checked after
-// the object store's errors, which say why a location is unavailable.
+// get one plain line and a next step. Credentials first: a wrong key is also a
+// 403. Velero's own refusals that name a storage location (v1.18.2 backup,
+// restore and deletion controllers) come after the object store's errors,
+// which say why a location is unavailable, and are said without the kind's
+// name or "BSL".
+interface Reading {
+  plain: string
+  step: string
+}
 const LOCATION_NAME = '"?([a-z0-9][a-z0-9.-]*)"?'
 const LOCATION = `(?:BackupStorageLocation|backup storage location|BSL) ${LOCATION_NAME}`
-const LOCATION_REASONS: [RegExp, (name: string) => string][] = [
-  [new RegExp(`${LOCATION} (?:is in Unavailable status|is currently in Unavailable state)|The BSL ${LOCATION_NAME} is unavailable`, 'i'), (n) => `Its storage location ${n} is unavailable`],
-  [new RegExp(`${LOCATION} is currently in read-only mode`, 'i'), (n) => `Its storage location ${n} is read-only`],
-  [new RegExp(`${LOCATION} not found`, 'i'), (n) => `Its storage location ${n} doesn’t exist`],
-  [new RegExp(`not specified at backup creation time and the (?:server )?default ${LOCATION_NAME} (?:does not exist|was not found)`, 'i'), (n) => `It names no storage location, and the default, ${n}, doesn’t exist`],
+const REASONS: [RegExp, (m: RegExpExecArray) => Reading][] = [
+  [/found an? (backup|restore) with status "?InProgress"? during the server starting/i, (m) => ({
+    plain: `Velero restarted while this ${m[1].toLowerCase()} ran, so it was marked Failed`,
+    step: `Run the ${m[1].toLowerCase()} again`,
+  })],
+  [/NoSuchBucket|bucket does not exist/i, () => ({ plain: 'The bucket doesn’t exist', step: 'Create the bucket, or point the storage location at an existing one' })],
+  [/InvalidAccessKeyId|SignatureDoesNotMatch/i, () => ({ plain: 'Velero’s credentials are wrong', step: 'Fix the credentials Secret Velero uses for this storage location' })],
+  [/AccessDenied|Forbidden|status code:? 403/i, () => ({ plain: 'Velero’s credentials can’t access the bucket', step: 'Fix the credentials Secret Velero uses for this storage location, or grant them access to the bucket' })],
+  [/no such host|i\/o timeout|TLS handshake timeout|connection refused|network is unreachable/i, () => ({ plain: 'Velero can’t reach the object store', step: 'Check the storage location’s endpoint, and that the Velero server can reach it' })],
+  [new RegExp(`${LOCATION} (?:is in Unavailable status|is currently in Unavailable state)|The BSL ${LOCATION_NAME} is unavailable`, 'i'), (m) => ({
+    plain: `Its storage location ${m[1] ?? m[2]} is unavailable`,
+    step: `Make storage location ${m[1] ?? m[2]} available, then try again`,
+  })],
+  [new RegExp(`${LOCATION} is currently in read-only mode`, 'i'), (m) => ({ plain: `Its storage location ${m[1]} is read-only`, step: `Set storage location ${m[1]} to read-write, or use another location` })],
+  [new RegExp(`${LOCATION} not found`, 'i'), (m) => ({ plain: `Its storage location ${m[1]} doesn’t exist`, step: `Create storage location ${m[1]}, or use one that exists` })],
+  [new RegExp(`not specified at backup creation time and the (?:server )?default ${LOCATION_NAME} (?:does not exist|was not found)`, 'i'), (m) => ({
+    plain: `It names no storage location, and the default, ${m[1]}, doesn’t exist`,
+    step: 'Name an existing storage location, or create the default, then create the backup again',
+  })],
+  [/^backup is still in progress$/i, () => ({ plain: 'The backup was still running', step: 'Wait for the backup to finish, then delete it again' })],
+  [/^backup not found$/i, () => ({ plain: 'Velero couldn’t find the backup', step: 'Check that the backup still exists' })],
 ]
-const FIXED_REASONS: [RegExp, string][] = [
-  [/^backup is still in progress$/i, 'The backup was still running'],
-  [/^backup not found$/i, 'Velero couldn’t find the backup'],
-]
+
+function readReason(message: string | undefined): Reading | undefined {
+  if (!message) return undefined
+  const text = message.trim()
+  for (const [pattern, read] of REASONS) {
+    const m = pattern.exec(text)
+    if (m) return read(m)
+  }
+  return undefined
+}
 
 /**
  * One plain line for a raw Velero or object-store message, or undefined when
@@ -323,14 +343,10 @@ const FIXED_REASONS: [RegExp, string][] = [
  * this only says what it means.
  */
 export function veleroPlainReason(message: string | undefined): string | undefined {
-  if (!message) return undefined
-  const restarted = /found an? (backup|restore) with status "?InProgress"? during the server starting/i.exec(message)
-  if (restarted) return `Velero restarted while this ${restarted[1].toLowerCase()} ran, so it was marked Failed — run it again`
-  const store = PLAIN_REASONS.find(([pattern]) => pattern.test(message))?.[1]
-  if (store) return store
-  for (const [pattern, text] of LOCATION_REASONS) {
-    const m = pattern.exec(message)
-    if (m) return text(m[1] ?? m[2])
-  }
-  return FIXED_REASONS.find(([pattern]) => pattern.test(message.trim()))?.[1]
+  return readReason(message)?.plain
+}
+
+/** What to do about a raw Velero or object-store message Radar recognises, as one plain line. */
+export function veleroReasonNextStep(message: string | undefined): string | undefined {
+  return readReason(message)?.step
 }

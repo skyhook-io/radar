@@ -12,10 +12,32 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { VELERO_GROUP } from './routes'
-import { inInstallation, namesAndMore, veleroIssueProblem } from './shared'
+import { VELERO_CHECK_SERVER, VELERO_SHORTEN_NAME, VELERO_START_SERVER, inInstallation, namesAndMore, veleroIssueProblem } from './shared'
 
 export function readInPart(cov: VeleroKindCoverage | undefined): boolean {
   return !cov || INCOMPLETE_COVERAGE_STATES.has(cov.state)
+}
+
+/** What to do about a schedule that needs attention, in one plain line. */
+export function veleroScheduleNextStep(s: Pick<VeleroScheduleReading, 'state' | 'reason'>): string | undefined {
+  if (s.reason === 'serverDown') return VELERO_START_SERVER
+  switch (s.state) {
+    case 'cannotRun':
+      return VELERO_SHORTEN_NAME
+    case 'alwaysDue':
+      return 'Change the cron expression to one with a future time'
+    case 'rejected':
+      return 'Fix what Velero rejected in the schedule; Velero validates it again when it changes'
+    case 'held':
+      return 'Find out why its backup hasn’t started, or delete that backup'
+    case 'late':
+    case 'probablyLate':
+    case 'lateOrHeld':
+      return 'Check that the Velero server is running with its schedule controller, and read its logs'
+    case 'notValidated':
+      return VELERO_CHECK_SERVER
+  }
+  return undefined
 }
 
 function scheduleProblem(s: VeleroScheduleReading, serverShown: boolean): WorkspaceProblem {
@@ -25,6 +47,7 @@ function scheduleProblem(s: VeleroScheduleReading, serverShown: boolean): Worksp
     category: 'schedule',
     title: veleroScheduleStateLabel(s.state),
     detail: veleroScheduleReasonText(s, { serverShown }),
+    nextStep: veleroScheduleNextStep(s),
     subject: { kind: 'Schedule', group: VELERO_GROUP, namespace: s.namespace, name: s.name },
     source: 'reading',
     tone: tone === 'healthy' ? 'neutral' : tone,
@@ -42,6 +65,7 @@ function serverProblem(namespace: string, deployment: string | undefined, late: 
     title: 'Velero server not running',
     // The subject link below names the Deployment.
     detail: `No running replicas, so no new scheduled backups are submitted and no storage location is validated.${missed}`,
+    nextStep: VELERO_START_SERVER,
     subject: { kind: 'Deployment', group: 'apps', namespace, name: deployment ?? 'velero' },
     source: 'reading',
     tone: 'unhealthy',
@@ -54,6 +78,7 @@ function locationProblem(l: VeleroLocationReading): WorkspaceProblem {
     category: 'location',
     title: l.neverValidated ? 'Never validated' : 'Validation overdue',
     detail: veleroLocationReasonText(l) || undefined,
+    nextStep: l.reason === 'serverDown' ? VELERO_START_SERVER : VELERO_CHECK_SERVER,
     subject: { kind: 'BackupStorageLocation', group: VELERO_GROUP, namespace: l.namespace, name: l.name },
     source: 'reading',
     tone: 'degraded',
@@ -81,6 +106,33 @@ export function veleroAttention(data: VeleroWorkspaceResponse, installation: str
       .map(locationProblem),
     ...issues.map((i) => veleroIssueProblem(i)),
   ]
+}
+
+/**
+ * What Radar has for one Velero object, as banners for its page: its schedule
+ * or location reading when that needs attention (with the stopped server named
+ * in it), then Velero's Issues about it or naming it among the runs a fault
+ * rejected. Each says what to do next.
+ */
+export function veleroObjectProblems(data: VeleroWorkspaceResponse, kind: string, namespace: string, name: string): WorkspaceProblem[] {
+  const out: WorkspaceProblem[] = []
+  if (kind === 'Schedule') {
+    const s = data.schedules.find((r) => r.namespace === namespace && r.name === name)
+    if (s?.attention) out.push({ ...scheduleProblem(s, false), title: `Schedule ${veleroScheduleStateLabel(s.state).toLowerCase()}` })
+  }
+  if (kind === 'BackupStorageLocation') {
+    const l = data.locations.find((r) => r.namespace === namespace && r.name === name)
+    if (l?.attention) {
+      const p = locationProblem(l)
+      out.push({ ...p, title: `Storage location ${p.title[0].toLowerCase()}${p.title.slice(1)}` })
+    }
+  }
+  const issues = data.issues.filter((i) => {
+    const ns = i.namespace ?? ''
+    if (i.kind === kind && ns === namespace && i.name === name) return true
+    return !!i.affected?.some((a) => a.kind === kind && (a.namespace ?? ns) === namespace && a.name === name)
+  })
+  return [...out, ...issues.map((i) => veleroIssueProblem(i, { withNextStep: true }))]
 }
 
 export interface VeleroAttentionCount {

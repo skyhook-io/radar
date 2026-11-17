@@ -80,3 +80,20 @@ describe('the Velero Schedule and BackupStorageLocation kind lists', () => {
     expect(veleroKindListMode('unsupported', false)).toBe('table')
   })
 })
+
+describe('Velero next steps', () => {
+  it('says what to do about every Issue reason and every attention state', async () => {
+    const { veleroIssueNextStep } = await import('./shared')
+    const { veleroScheduleNextStep } = await import('./attention')
+    for (const reason of ['BackupFailed', 'BackupPartiallyFailed', 'BackupValidationFailed', 'RestoreFailed', 'RestorePartiallyFailed', 'RestoreValidationFailed', 'ScheduleValidationFailed', 'BackupStorageLocationUnavailable', 'BackupRepositoryNotReady', 'BackupRepositoryMaintenanceFailed', 'VeleroRunStalled', 'VeleroServerNotRunning', 'VeleroScheduleLate', 'VeleroScheduleCannotRun', 'VeleroScheduleHeld', 'VeleroScheduleNotValidated', 'VeleroLocationValidationOverdue']) {
+      expect(veleroIssueNextStep({ reason }), reason).toBeTruthy()
+    }
+    expect(veleroIssueNextStep({ reason: 'BackupFailed', message: 'found a backup with status "InProgress" during the server starting, mark it as "Failed"' })).toBe('Run the backup again')
+    expect(veleroIssueNextStep({ reason: 'BackupFailed', action: 'Do the thing' })).toBe('Do the thing')
+    expect(veleroIssueNextStep({ reason: 'VeleroScheduleCannotRun', message: "This schedule's name is longer than 63 characters" })).toBe('Recreate the schedule with a name of 63 characters or fewer')
+    for (const state of ['cannotRun', 'alwaysDue', 'rejected', 'held', 'late', 'probablyLate', 'lateOrHeld', 'notValidated'] as const) {
+      expect(veleroScheduleNextStep({ state }), state).toBeTruthy()
+    }
+    expect(veleroScheduleNextStep({ state: 'late', reason: 'serverDown' })).toContain('Start the Velero server')
+  })
+})

@@ -167,9 +167,41 @@ describe('The composed Overview', () => {
     const html = page('backups', { metadata: { namespace: 'velero', name: 'r' }, spec: { storageLocation: 'dr' }, status: { phase: 'FailedValidation' } }, <div>GENERIC</div>)
     expect(html).not.toContain('GENERIC')
     expect(html).toContain('The bucket doesn’t exist.')
-    expect(html).toContain('Create the bucket or point the location at one that exists.')
+    expect(html).toContain('Next step: </span>Create the bucket or point the location at one that exists')
     expect(html).toContain('Velero’s message')
     expect(html).toContain('See in Issues →')
+  })
+
+  it('gives a banner without the Issue’s own action a next step from what its message means', () => {
+    state.workspace = workspace({
+      issues: [{
+        id: 'i1', severity: 'critical', category: 'location', kind: 'BackupStorageLocation', group: 'velero.io', namespace: 'velero', name: 'dr', reason: 'BackupStorageLocationUnavailable',
+        message: 'BackupStorageLocation "dr" is unavailable: rpc error: code = Unknown desc = NoSuchBucket: The specified bucket does not exist',
+      }],
+    })
+    const html = page('backupstoragelocations', { metadata: { namespace: 'velero', name: 'dr' }, spec: {}, status: { phase: 'Unavailable' } })
+    expect(html).toContain('Next step: </span>Create the bucket, or point the storage location at an existing one')
+  })
+
+  it('leads a schedule that cannot run with its Velero reading, not the generic issue row', () => {
+    const reading = schedule({ name: 'very-long', state: 'cannotRun', attention: true, runs: { read: 'full', kept: 0 } })
+    state.workspace = workspace({ schedules: [reading] })
+    state.activity = { reading }
+    state.runsBy = { 'backups:very-long': runsOf([]) }
+    const html = page('schedules', { metadata: { namespace: 'velero', name: 'very-long' }, spec: { template: {} } }, <div>GENERIC</div>)
+    expect(html).not.toContain('GENERIC')
+    expect(html).toContain('Schedule cannot run')
+    expect(html).toContain('longer than 63 characters')
+    expect(html).toContain('Next step: </span>Recreate the schedule with a name of 63 characters or fewer')
+    state.runsBy = {}
+  })
+
+  it('leads a location whose validation is overdue with its reading', () => {
+    state.workspace = workspace({ locations: [location({ name: 'dr', attention: true, validationOverdue: true, lastValidation: hoursAgo(5), frequency: { seconds: 60, source: 'server' } })] })
+    const html = page('backupstoragelocations', { metadata: { namespace: 'velero', name: 'dr' }, spec: {}, status: { phase: 'Available' } }, <div>GENERIC</div>)
+    expect(html).not.toContain('GENERIC')
+    expect(html).toContain('Storage location validation overdue')
+    expect(html).toContain('Next step: </span>Check that the Velero server is running, and read its logs')
   })
 
   it('reads a restore: where it went, what it processed, and its warnings', () => {

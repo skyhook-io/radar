@@ -10,6 +10,7 @@ import {
   radarUpgradeDetail,
   radarUpgradeHeadline,
   veleroPlainReason,
+  veleroReasonNextStep,
   type VeleroIssue,
   type VeleroWorkspaceKey,
   type VeleroWorkspaceResponse,
@@ -199,12 +200,51 @@ function rejectedRuns(issue: VeleroIssue): string | undefined {
   return `Velero rejected ${runs.length === 1 ? '1 run' : `${runs.length} runs`} because of it: ${namesAndMore(runs.map((r) => r.name))}.`
 }
 
+export const VELERO_START_SERVER = 'Start the Velero server Deployment, or find out why its pods don’t run'
+export const VELERO_CHECK_SERVER = 'Check that the Velero server is running, and read its logs'
+export const VELERO_SHORTEN_NAME = 'Recreate the schedule with a name of 63 characters or fewer'
+
+// The next step for each Velero Issue whose message Radar doesn't recognise.
+const ISSUE_NEXT_STEP: Record<string, string> = {
+  BackupFailed: 'Show its errors, fix the cause, and run the backup again',
+  BackupPartiallyFailed: 'Show its errors to see what was not backed up, and run the backup again once fixed',
+  BackupValidationFailed: 'Fix what Velero rejected, and create the backup again',
+  RestoreFailed: 'Show its errors, fix the cause, and run the restore again',
+  RestorePartiallyFailed: 'Show its errors to see what was not restored',
+  RestoreValidationFailed: 'Fix what Velero rejected, and create the restore again',
+  ScheduleValidationFailed: 'Fix what Velero rejected in the schedule; Velero validates it again when it changes',
+  BackupStorageLocationUnavailable: 'Check the storage location’s bucket, credentials and endpoint',
+  BackupRepositoryNotReady: 'Read the repository’s message and the Velero server’s logs',
+  BackupRepositoryMaintenanceFailed: 'Read the maintenance job’s logs',
+  VeleroRunStalled: VELERO_CHECK_SERVER,
+  VeleroServerNotRunning: VELERO_START_SERVER,
+  VeleroScheduleLate: 'Check that the Velero server is running with its schedule controller, and read its logs',
+  VeleroScheduleHeld: 'Find out why its backup hasn’t started, or delete that backup',
+  VeleroScheduleNotValidated: VELERO_CHECK_SERVER,
+  VeleroLocationValidationOverdue: VELERO_CHECK_SERVER,
+}
+
+/**
+ * What to do about a Velero Issue, in one plain line: the Issue's own action,
+ * else what its message means, else the step for its kind of fault.
+ */
+export function veleroIssueNextStep(issue: Pick<VeleroIssue, 'action' | 'message' | 'reason'>): string | undefined {
+  const action = issue.action?.trim()
+  if (action) return action
+  const fromMessage = veleroReasonNextStep(issue.message)
+  if (fromMessage) return fromMessage
+  if (issue.reason === 'VeleroScheduleCannotRun') {
+    return /63 characters/.test(issue.message ?? '') ? VELERO_SHORTEN_NAME : 'Change the cron expression to one with a future time'
+  }
+  return issue.reason ? ISSUE_NEXT_STEP[issue.reason] : undefined
+}
+
 /**
  * An Issues row as a workspace problem. A message Radar recognises reads as
- * one plain line, with Velero's own text folded under it. `withAction` adds
- * the next step, for a banner with room for it.
+ * one plain line, with Velero's own text folded under it. `withNextStep` adds
+ * what to do, for a banner with room for it.
  */
-export function veleroIssueProblem(issue: VeleroIssue, opts?: { withAction?: boolean }): WorkspaceProblem {
+export function veleroIssueProblem(issue: VeleroIssue, opts?: { withNextStep?: boolean }): WorkspaceProblem {
   const message = issue.message?.trim()
   const plain = veleroPlainReason(message)
   return {
@@ -212,9 +252,10 @@ export function veleroIssueProblem(issue: VeleroIssue, opts?: { withAction?: boo
     category: issue.category,
     // The title the Issues page gives the same row.
     title: issueTitle(issue),
-    detail: [plain ?? message, issue.cause?.trim(), rejectedRuns(issue), opts?.withAction ? issue.action?.trim() : undefined].filter(Boolean).map(sentence).join(' ') || undefined,
+    detail: [plain ?? message, issue.cause?.trim(), rejectedRuns(issue)].filter(Boolean).map(sentence).join(' ') || undefined,
     rawDetail: plain ? message : undefined,
     rawDetailLabel: plain ? VELERO_MESSAGE_LABEL : undefined,
+    nextStep: opts?.withNextStep ? veleroIssueNextStep(issue) : undefined,
     subject: { kind: issue.kind, group: issue.group ?? VELERO_GROUP, namespace: issue.namespace ?? '', name: issue.name },
     source: 'issue',
     tone: issue.severity === 'critical' ? 'unhealthy' : 'degraded',
