@@ -8,20 +8,20 @@ window.matchMedia = vi.fn().mockReturnValue({ matches: false, addEventListener: 
 let root: ReturnType<typeof createRoot>
 let host: HTMLDivElement
 afterEach(() => { act(() => root?.unmount()); host?.remove() })
-it('navigates Favorites, Views and grouped kinds in their visible order', () => {
+it('navigates Favorites, an integration\'s destinations and its other kinds in their visible order', () => {
   Element.prototype.scrollIntoView = vi.fn()
   const view = vi.fn(), kind = vi.fn()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   const cluster = { group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] }
-  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={kind} apiResources={[cluster]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} pinned={[{ name: 'pods', kind: 'Pod', group: '' }]} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Clusters view', onSelect: view }, { id: 'protection', label: 'Backups view', onSelect: () => {} }], defaultKindsCollapsed: true } }} />))
-  const category = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('CloudNativePG'))!
-  if (category.getAttribute('aria-expanded') !== 'true') act(() => category.click())
+  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={kind} apiResources={[cluster]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} pinned={[{ name: 'pods', kind: 'Pod', group: '' }]} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Clusters view', onSelect: view }, { id: 'protection', label: 'Backups view', onSelect: () => {} }] } }} />))
+  const expand = host.querySelector<HTMLButtonElement>('button[aria-label$="CloudNativePG"]')!
+  if (expand.getAttribute('aria-expanded') !== 'true') act(() => expand.click())
   const input = host.querySelector('input')!
   const key = (name: string) => act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true })))
   key('ArrowDown'); key('ArrowDown'); key('Enter')
   expect(view).toHaveBeenCalledTimes(1)
   expect(kind).not.toHaveBeenCalled()
-  act(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Resource kinds')!.click())
+  act(() => [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Other kinds'))!.click())
   key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('ArrowDown'); key('Enter')
   expect(kind).toHaveBeenCalledWith(expect.objectContaining({ name: 'clusters', group: 'postgresql.cnpg.io' }))
 })
@@ -29,7 +29,7 @@ it('opens a matching View with Enter when search finds no kind', () => {
   Element.prototype.scrollIntoView = vi.fn()
   const view = vi.fn()
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[{ group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] }]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'operator', label: 'Operator', onSelect: view }], defaultKindsCollapsed: true } }} />))
+  act(() => root.render(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}} apiResources={[{ group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] }]} resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }} categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'operator', label: 'Operator', onSelect: view }] } }} />))
   const input = host.querySelector('input')!
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'operator')
@@ -67,4 +67,34 @@ it('reads and reports display settings through the parent when it holds them', (
   expect(favorites.getAttribute('aria-expanded')).toBe('false')
   act(() => favorites.click())
   expect(onChange).toHaveBeenCalledWith({ showEmptyKinds: false, favoritesExpanded: true })
+})
+
+// One open at a time: it stays open while the user looks at other kinds, and opening another folds it.
+it('keeps the last integration open after leaving it, across a remount, until another opens', () => {
+  const kinds = [
+    { group: 'apps', version: 'v1', kind: 'Deployment', name: 'deployments', namespaced: true, isCrd: false, verbs: ['list'] },
+    { group: 'postgresql.cnpg.io', version: 'v1', kind: 'Cluster', name: 'clusters', namespaced: true, isCrd: true, verbs: ['list'] },
+    { group: 'velero.io', version: 'v1', kind: 'Backup', name: 'backups', namespaced: true, isCrd: true, verbs: ['list'] },
+  ]
+  const show = (active: 'velero' | 'cnpg' | null) => {
+    act(() => root?.unmount())
+    host?.remove()
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+    act(() => root.render(<ResourcesSidebar
+      selectedKind={{ name: 'deployments', kind: 'Deployment', group: 'apps' }}
+      onSelectedKindChange={() => {}}
+      apiResources={kinds}
+      resourceCounts={{ 'apps/Deployment': 3 }}
+      categoryWorkspaces={{
+        Velero: { label: 'Backups', destinations: [{ id: 'v', label: 'Velero overview', active: active === 'velero', onSelect: () => {} }] },
+        CloudNativePG: { label: 'Databases', destinations: [{ id: 'c', label: 'Clusters view', active: active === 'cnpg', onSelect: () => {} }] },
+      }}
+    />))
+    const open = (label: string) => host.querySelector(`button[aria-label$=" ${label}"]`)!.getAttribute('aria-expanded') === 'true'
+    return { backups: open('Backups'), databases: open('Databases') }
+  }
+  expect(show('velero')).toEqual({ backups: true, databases: false })
+  expect(show(null)).toEqual({ backups: true, databases: false })
+  expect(show('cnpg')).toEqual({ backups: false, databases: true })
+  expect(show(null)).toEqual({ backups: false, databases: true })
 })

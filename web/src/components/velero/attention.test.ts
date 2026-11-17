@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { VeleroIssue } from '@skyhook-io/k8s-ui'
-import { veleroAttention, veleroAttentionCount } from './attention'
+import { veleroAttention, veleroAttentionCount, veleroScreenCounts } from './attention'
 import { veleroKindListMode } from './routes'
 import { location, schedule, workspace } from './velero.fixtures'
 
@@ -26,6 +26,21 @@ describe('the Velero Overview badge', () => {
     expect(veleroAttentionCount(workspace())).toMatchObject({ count: 0, lowerBound: false })
     const partial = workspace({ coverage: { ...workspace().coverage, backups: { state: 'partial' } as any } })
     expect(veleroAttentionCount(partial)).toMatchObject({ count: null, lowerBound: true })
+  })
+
+  it('gives each list the rows about its kind, so the lists add up to the total', () => {
+    const data = workspace({
+      schedules: [schedule({ name: 'late', state: 'late', attention: true }), schedule()],
+      locations: [location({ name: 'dr', attention: true })],
+      issues: [issue('BackupStorageLocation', 'dr'), issue('Backup', 'nightly-1')],
+      issueTotals: { velero: 2 },
+    })
+    const screens = veleroScreenCounts(data)
+    expect(Object.fromEntries(Object.entries(screens).map(([k, v]) => [k, v.count]))).toEqual({ backups: 1, schedules: 1, restores: 0, backupstoragelocations: 2 })
+    expect(screens.schedules.title).toBe('1 schedule needs attention.')
+    const partial = veleroScreenCounts(workspace({ coverage: { ...workspace().coverage, restores: { state: 'partial' } as any } }))
+    expect(partial.restores).toMatchObject({ count: null, lowerBound: true })
+    expect(partial.backups).toMatchObject({ count: 0, lowerBound: false })
   })
 
   it('counts issues the server capped from the total it sends', () => {
