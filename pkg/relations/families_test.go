@@ -37,7 +37,13 @@ func referrerRefs(a ReferrersAnswer) []resourceid.Ref {
 // referrers must be source.
 func checkFamily(t *testing.T, f *Family, objects []runtime.Object, source runtime.Object, target resourceid.Ref, path string) {
 	t.Helper()
-	v := NewView(allNamespaces{cluster: cluster{objects: objects}}, ownership.Unrestricted())
+	checkFamilyIn(t, allNamespaces{cluster: cluster{objects: objects}}, f, source, target, path)
+}
+
+// checkFamilyIn is checkFamily on the cluster s.
+func checkFamilyIn(t *testing.T, s Session, f *Family, source runtime.Object, target resourceid.Ref, path string) {
+	t.Helper()
+	v := NewView(s, ownership.Unrestricted())
 	refs := v.References(f, refOf(source), source)
 	if len(refs.Declared) != 1 || refs.Declared[0].Ref != target || refs.Declared[0].State != TargetPresent || !slices.Equal(refs.Declared[0].Paths, []string{path}) || !refs.Coverage.Complete() {
 		t.Errorf("%s: %v declares %+v; want %v at %s, present", f.Name, refOf(source), refs, target, path)

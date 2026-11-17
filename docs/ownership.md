@@ -89,7 +89,9 @@ with the path declaring it. The `View` answers every family the same way:
   reads, in the order it tries them, as Traefik 2.10 tries `traefik.io` and then `traefik.containo.us`. `References`
   names the first that exists, and `Referrers` counts a declaration only for the target it resolves to. A candidate
   Radar couldn't read, or the caller may not, stops the resolution there: the answer names it and says so rather than
-  falling back to a later one. A target in none of them is named in the first group the cluster serves.
+  falling back to a later one. A target in none of them is named in the first group the cluster serves. A target found
+  only after served groups that lack it carries `legacy_group_only`, in both directions: Traefik 2.10 and 2.11 read
+  `traefik.containo.us` too, Traefik 3 ignores it, and Radar can't tell which controller runs.
 - Both answer nothing for a subject the caller may not read; a permission check that couldn't be made is a gap, not a
   denial; a subject the host read that the cache doesn't hold yet leaves the answer incomplete.
 
