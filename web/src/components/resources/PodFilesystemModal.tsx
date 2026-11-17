@@ -1,7 +1,7 @@
 import { createElement, useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, File, Link2, ChevronRight, ArrowLeft, AlertTriangle, Loader2, Search, Download, FolderOpen } from 'lucide-react'
-import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
+import { AlertBanner, PaneLoader, Input } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
@@ -12,7 +12,8 @@ import { isDesktopApp } from '../../utils/desktop-download'
 import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
-import { PodFilePreview, PREVIEW_BYTE_CAP } from './PodFilePreview'
+import { PodFilePreview, PREVIEW_BYTE_CAP, type PodFileEditing } from './PodFilePreview'
+import { canShowEdit, editBlockedReason, savePodFileContent } from './pod-file-edit'
 import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
 import { useRadarFeature } from '../../api/client'
 import {
@@ -157,6 +158,7 @@ export function PodFilesystemModal({
   pod,
 }: PodFilesystemModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [currentPath, setCurrentPath] = useState('/')
@@ -184,6 +186,15 @@ export function PodFilesystemModal({
   useEffect(() => { currentPathRef.current = currentPath }, [currentPath])
   const uploadRef = useRef(upload)
   useEffect(() => { uploadRef.current = upload }, [upload])
+  const { support: editSupport, guard: guardEdit } = useRadarFeature('podFileEdit')
+  const editEnabled = canShowEdit({ canExec, featureSupported: editSupport === 'supported' })
+  const [editDirty, setEditDirty] = useState(false)
+  // An exit the user started while the editor held unsaved changes; it runs
+  // only once they agree to discard them.
+  const [pendingLeave, setPendingLeave] = useState<{ run: () => void } | null>(null)
+  // A save changed the directory's sizes and times; reload it on the way back.
+  const listingStale = useRef(false)
+
   // Uploads that had sent every byte when the dialog closed or the container
   // changed. The container may already be committing them, so they run on and
   // report through a toast instead of being cancelled.
@@ -342,6 +353,48 @@ export function PodFilesystemModal({
     setUpload({ phase: 'idle' })
   }, [])
 
+  const guardLeave = useCallback((run: () => void) => {
+    if (editDirty) setPendingLeave({ run })
+    else run()
+  }, [editDirty])
+
+  const backToListing = useCallback(() => {
+    if (listingStale.current) {
+      listingStale.current = false
+      loadDirectory(currentPath)
+    } else {
+      setPreviewFile(null)
+    }
+  }, [loadDirectory, currentPath])
+
+  const close = useCallback(() => guardLeave(onClose), [guardLeave, onClose])
+
+  // Closing or reloading the tab is the one exit the dialog cannot hold.
+  useEffect(() => {
+    if (!editDirty) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault() }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [editDirty])
+
+  const editing: PodFileEditing | undefined = useMemo(() => {
+    if (!editEnabled || !previewFile) return undefined
+    const filePath = previewFile.path
+    return {
+      blockedReason: (content) => editBlockedReason(pod, selectedContainer, filePath, content),
+      save: (content, sha256) => guardEdit(() => savePodFileContent({
+        namespace, podName, container: selectedContainer, filePath, sha256, content,
+      })),
+      onDirtyChange: setEditDirty,
+      confirmDiscard: (discard) => setPendingLeave({ run: discard }),
+      onSaved: (saved) => {
+        listingStale.current = true
+        setPreviewFile((f) => (f && f.path === saved.path ? { ...f, size: saved.size } : f))
+        toast.showSuccess('File saved', saved.path)
+      },
+    }
+  }, [editEnabled, previewFile, pod, selectedContainer, guardEdit, namespace, podName, toast])
+
   const uploadHere = uploadEnabled && !previewFile && listingReady && !blockedHint && !isUploadBusy(upload)
   // A file dropped anywhere in the dialog must never reach the browser, which
   // would open it in place of Radar; only a drop on the listing uploads it.
@@ -386,13 +439,28 @@ export function PodFilesystemModal({
     if (!open) return
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // With unsaved edits, Escape inside the editor belongs to the editor
+      // (closing find or suggestions), not to leaving the file.
+      if (editDirty && (e.target as Element | null)?.closest?.('.monaco-editor')) return
       e.stopPropagation()
-      if (previewFile) setPreviewFile(null)
+      if (pendingLeave) setPendingLeave(null)
+      else if (previewFile) guardLeave(backToListing)
       else onClose()
     }
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [open, onClose, previewFile])
+  }, [open, onClose, previewFile, editDirty, pendingLeave, guardLeave, backToListing])
+
+  // An Escape the editor kept (see above) has done its job once it bubbles
+  // out of the dialog; past here the page's own Escape shortcut would leave
+  // the page, unsaved edits and all.
+  useEffect(() => {
+    const overlay = overlayRef.current
+    if (!open || !overlay) return
+    const stop = (e: KeyboardEvent) => { if (e.key === 'Escape') e.stopPropagation() }
+    overlay.addEventListener('keydown', stop)
+    return () => overlay.removeEventListener('keydown', stop)
+  }, [open, previewFile])
 
   // Focus trap
   useEffect(() => {
@@ -411,23 +479,24 @@ export function PodFilesystemModal({
   const pathSegments = breadcrumbPath === '/'
     ? ['/']
     : ['/', ...breadcrumbPath.split('/').filter(Boolean)]
-  const goToDirectory = (dirPath: string) => {
-    if (dirPath === currentPath) setPreviewFile(null)
+  const goToDirectory = (dirPath: string) => guardLeave(() => {
+    if (dirPath === currentPath) backToListing()
     else loadDirectory(dirPath)
-  }
+  })
   const downloadPreviewFile = () => {
     if (previewFile) downloadPodFile(namespace, podName, selectedContainer, previewFile, toast)
   }
 
   return createPortal(
     <div
+      ref={overlayRef}
       className="fixed inset-0 z-[100] flex items-center justify-center"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={close} />
 
       {/* Modal */}
       <div
@@ -441,7 +510,7 @@ export function PodFilesystemModal({
             <>
               <Tooltip content="Back to files">
                 <button
-                  onClick={() => setPreviewFile(null)}
+                  onClick={() => guardLeave(backToListing)}
                   className="p-2 mr-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
                 >
                   <ArrowLeft className="w-5 h-5" />
@@ -509,7 +578,7 @@ export function PodFilesystemModal({
           )}
 
           <button
-            onClick={onClose}
+            onClick={close}
             className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded ml-2"
           >
             <X className="w-5 h-5" />
@@ -559,6 +628,38 @@ export function PodFilesystemModal({
         {/* Content */}
         {previewFile ? (
           <div className="flex-1 min-h-0 flex flex-col">
+            {pendingLeave && (
+              <div className="shrink-0 px-3 pt-3">
+                <AlertBanner
+                  variant="warning"
+                  title={`Discard unsaved changes to ${previewFile.name}?`}
+                  message="Your edits have not been saved to the container."
+                  className="mb-0"
+                >
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const { run } = pendingLeave
+                        setPendingLeave(null)
+                        setEditDirty(false)
+                        run()
+                      }}
+                      className="btn-brand px-3 py-1 text-xs font-medium"
+                    >
+                      Discard changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingLeave(null)}
+                      className="px-3 py-1 text-xs rounded border border-theme-border text-theme-text-secondary hover:bg-theme-hover"
+                    >
+                      Keep editing
+                    </button>
+                  </div>
+                </AlertBanner>
+              </div>
+            )}
             <PodFilePreview
               key={previewFile.path}
               namespace={namespace}
@@ -567,6 +668,7 @@ export function PodFilesystemModal({
               filePath={previewFile.path}
               fileName={previewFile.name}
               onDownload={downloadPreviewFile}
+              edit={editing}
             />
           </div>
         ) : (
@@ -632,7 +734,7 @@ export function PodFilesystemModal({
           )}
           {onSwitchToImageFiles && (
             <button
-              onClick={() => { onClose(); onSwitchToImageFiles(selectedContainer) }}
+              onClick={() => guardLeave(() => { onClose(); onSwitchToImageFiles(selectedContainer) })}
               className="ml-auto text-blue-400 hover:text-blue-300 hover:underline"
             >
               Browse static image from registry &rarr;

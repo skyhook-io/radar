@@ -119,12 +119,13 @@ only its own setting. Contradictory flags, or contradictory settings within the
 config file, are errors. See [MCP configuration](mcp.md#enabling--disabling) for
 examples, boolean parsing and alternate entrypoints.
 
-## Pod file uploads
+## Pod file uploads and edits
 
-The pod file browser can upload a file into the directory it shows. Uploads
-run over `pods/exec`, so they follow the exec permission rather than a switch of
-their own: anyone who can exec into a pod could already write files through the
-terminal. `--disable-exec` turns uploads off along with the terminal.
+The pod file browser can upload a file into the directory it shows, and edit a
+text file it previews. Both run over `pods/exec`, so they follow the exec
+permission rather than a switch of their own: anyone who can exec into a pod
+could already write files through the terminal. `--disable-exec` turns them off
+along with the terminal, and Radar Cloud doesn't offer them.
 
 - **Who can write.** The exec runs as the requesting user, so in auth-enabled
   mode the user's own RBAC decides. Inside the container the file is written as
@@ -147,6 +148,24 @@ terminal. `--disable-exec` turns uploads off along with the terminal.
   most four uploads run at once per Radar process, and an upload whose data
   stops arriving for two minutes is ended (408). A proxy in front of Radar may
   have a smaller request size limit of its own; raise it to allow uploads.
+
+**Editing** starts from the preview: **Edit** makes it editable, **Save** writes
+the file back through the same path as an upload (so the guarantees above hold),
+and **Cancel** puts the opened contents back.
+
+- **What can be edited.** What the preview shows: UTF-8 text up to 1 MiB, empty
+  files included. The size and text checks run again on save. The byte-order
+  mark and line endings are kept as they were. A file that mixes line endings
+  stays read-only, since the editor would rewrite them one way.
+- **Changed since you opened it.** A save carries the SHA-256 of the contents
+  that were opened. Radar re-reads the file and refuses with 409 if it no longer
+  matches, was removed, or grew past the limit. The container checks the hash
+  again just before the rename, where `sha256sum` exists. Only the instant
+  between that last check and the rename is left uncovered. On a 409 the editor
+  keeps your edits.
+- **Unsaved changes.** Leaving the file with unsaved edits (back, Escape, a
+  breadcrumb, closing the browser) asks before discarding them. Closing or
+  reloading the browser tab shows the browser's own warning.
 
 Changes apply to the running container only and are lost when it is recreated,
 unless they land on a volume that outlives it.

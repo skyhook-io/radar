@@ -1064,6 +1064,9 @@ type podFilePreviewResponse struct {
 	MimeType  string `json:"mimeType"`
 	Encoding  string `json:"encoding"`
 	Code      string `json:"code,omitempty"`
+	// SHA256 is the hex digest of the bytes served. An edit sends it back so
+	// the save can refuse when the file changed since.
+	SHA256 string `json:"sha256"`
 }
 
 // podFilePreviewErrorResponse is the curated-error shape. `size` and
@@ -1313,6 +1316,7 @@ func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
 		MimeType:  classification.mimeType,
 		Encoding:  "utf-8",
 		Code:      classification.code, // empty on normal text, "empty_file" on 0-byte
+		SHA256:    sha256Hex(body),
 	}
 	s.writeJSON(w, resp)
 }

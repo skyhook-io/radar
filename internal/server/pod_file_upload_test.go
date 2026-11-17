@@ -110,6 +110,7 @@ func uploadServer(t *testing.T, enabled bool, respond func(ctx context.Context, 
 
 	router := chi.NewRouter()
 	router.Post("/api/pods/{namespace}/{name}/files/upload", h.srv.handlePodFileUpload)
+	router.Put("/api/pods/{namespace}/{name}/files/content", h.srv.handlePodFileEdit)
 	h.ts = httptest.NewServer(router)
 	t.Cleanup(h.ts.Close)
 	return h
