@@ -2,12 +2,9 @@ package topology
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -147,20 +144,13 @@ func TestWalkNeighborhoodMixedDisplayGolden(t *testing.T) {
 	}{nodes, sub}))
 }
 
-func TestNeighborhoodResponseComparison(t *testing.T) {
+// Every fixture subject's two-hop neighborhood is well formed: each node
+// once, and every edge once between nodes it returns.
+func TestWalkNeighborhoodWellFormed(t *testing.T) {
 	f := charCluster()
 	s := neighborhoodFixtureSession(t, f)
-	opts := RelationshipBuildOptions()
-	opts.IncludeSecrets = true
-	graph := charBuild(t, f, opts)
-	type comparison struct {
-		Subject   ResourceRef `json:"subject"`
-		Old, Walk *Subgraph
-	}
-	var records []comparison
 	for _, o := range f.objects {
 		options := NeighborhoodOptions{Hops: 2, Profile: ProfileAll, Allow: func(*Node) bool { return true }}
-		old := BuildNeighborhood(graph, o.ref(), options)
 		walk, err := WalkNeighborhood(context.Background(), s, o.ref(), options, f.provider, f.dynamic)
 		if err != nil {
 			t.Fatal(err)
@@ -181,15 +171,6 @@ func TestNeighborhoodResponseComparison(t *testing.T) {
 				t.Fatalf("duplicate or dangling edge %+v", e)
 			}
 			edges[e.ID] = true
-		}
-		a, _ := json.Marshal(old)
-		z, _ := json.Marshal(walk)
-		t.Logf("%s: old %d nodes/%d edges/%d bytes; walk %d nodes/%d edges/%d bytes", o.key(), len(old.Nodes), len(old.Edges), len(a), len(walk.Nodes), len(walk.Edges), len(z))
-		records = append(records, comparison{o.ref(), old, walk})
-	}
-	if dir := os.Getenv("NEIGHBORHOOD_COMPARISON_DIR"); dir != "" {
-		if err := os.WriteFile(filepath.Join(dir, "responses.json"), charJSON(t, records), 0644); err != nil {
-			t.Fatal(err)
 		}
 	}
 }
