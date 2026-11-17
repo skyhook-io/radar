@@ -388,7 +388,7 @@ func TestRelationshipReadBindsCapturedCache(t *testing.T) {
 		if _, err := BeginOwnershipRead(wrong); !errors.Is(err, ownership.ErrCachesReplaced) {
 			t.Fatalf("wrong cache: %v", err)
 		}
-		answer, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, nil, "")
+		answer, _ := AnswerRelationships(wrong, nil, func(*ownership.Catalog) ownership.Access { t.Fatal("access after cache mismatch"); return nil }, nil)
 		if answer != nil {
 			t.Fatalf("answer after cache mismatch: %+v", answer)
 		}
@@ -436,13 +436,13 @@ func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
 	obj.Kind = "Deployment"
 	obj.UID = "new-incarnation"
 	access := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-	rel, coverage := AnswerRelationships(captured, obj, access, access, "")
+	rel, coverage := AnswerRelationships(captured, obj, access, access)
 	if rel == nil || coverage["subject"].SubjectState != "replaced" || rel.Owner != nil || len(rel.Children)+len(rel.Managers)+len(rel.ConfigRefs) > 0 {
 		t.Fatalf("replaced subject: %+v, %+v", rel, coverage)
 	}
 	obj.UID = deployment.UID
 	obj.ResourceVersion = "new-version"
-	rel, coverage = AnswerRelationships(captured, obj, access, access, "")
+	rel, coverage = AnswerRelationships(captured, obj, access, access)
 	if rel == nil || coverage["subject"].SubjectState != "" {
 		t.Fatalf("same UID refused: %+v, %+v", rel, coverage)
 	}
@@ -450,7 +450,7 @@ func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {
 		current.Typed = &k8score.ResourceCache{}
 		return ownership.Unrestricted()
 	}
-	rel, coverage = AnswerRelationships(captured, obj, switched, access, "")
+	rel, coverage = AnswerRelationships(captured, obj, switched, access)
 	if rel != nil || coverage != nil {
 		t.Fatalf("published after cache replacement: %+v, %+v", rel, coverage)
 	}
@@ -486,7 +486,7 @@ func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
 					return historyPodAccess{Access: ownership.Unrestricted(), decision: decision}
 				}
 				traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
-				rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse, "")
+				rel, _ := AnswerRelationships(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
 				if rel == nil {
 					t.Fatal("answer unavailable")
 				}
