@@ -100,6 +100,31 @@ func TestDescribeResume(t *testing.T) {
 		})
 	}
 
+	t.Run("an unconfirmed zone is not a certain wait", func(t *testing.T) {
+		// Due at 09:00 in UTC, but 09:00 in a zone east of UTC has passed.
+		daily := schedule("daily", "0 9 * * *", specField("paused", true), created(at("00:00")))
+		unread := ServerConfigFromDeployments(nil, false)
+		in := ScheduleInput{Schedule: daily, BackupsRead: true, Server: unread, Now: at("08:00")}
+		got := DescribeResume(in, nil)
+		if got.Outcome != ResumeMayRunNow || !got.Due || strings.Contains(got.Summary, "No run is due") || !strings.Contains(got.Summary, "may be due") {
+			t.Fatalf("default %+v, want an uncertain may-run", got)
+		}
+		if chosen := DescribeResume(in, new(false)); chosen.Outcome != ResumeMayRunNow || chosen.Reason != ResumeReasonTiming || !chosen.Due {
+			t.Fatalf("an explicit run %+v, want the timing reason", chosen)
+		}
+		if skipping := DescribeResume(in, new(true)); skipping.Outcome != ResumeSkips || !skipping.Due {
+			t.Fatalf("skipping %+v", skipping)
+		}
+	})
+
+	t.Run("an @every schedule waits whatever the zone", func(t *testing.T) {
+		every := schedule("every", "@every 1h", specField("paused", true), lastBackup(at("11:00")))
+		got := DescribeResume(ScheduleInput{Schedule: every, BackupsRead: true, Server: ServerConfigFromDeployments(nil, false), Now: at("11:30")}, nil)
+		if got.Outcome != ResumeWaits || got.Due || !got.NextRunCertain || got.NextRun == nil || !got.NextRun.Equal(at("12:00")) {
+			t.Fatalf("got %+v, want a certain wait until 12:00", got)
+		}
+	})
+
 	t.Run("the schedule is not changed", func(t *testing.T) {
 		s := paused(phase(""))
 		DescribeResume(ScheduleInput{Schedule: s, BackupsRead: true, Server: utcServer, Now: at("12:10")}, nil)

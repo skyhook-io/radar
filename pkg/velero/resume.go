@@ -90,13 +90,26 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 	case StateCannotRun:
 		return ResumeOutlook{Outcome: ResumeWontRun, Reason: ReasonNameTooLong, Summary: "This schedule's name is longer than 63 characters, so every run Velero submits fails."}
 	case StateOnSchedule:
-		return ResumeOutlook{Outcome: ResumeWaits, Summary: "No run is due, so Velero submits the next one at its scheduled time.", NextRun: r.NextRun, NextRunCertain: r.NextRunCertain}
+		if r.NextRunCertain {
+			return ResumeOutlook{Outcome: ResumeWaits, Summary: "No run is due, so Velero submits the next one at its scheduled time.", NextRun: r.NextRun, NextRunCertain: true}
+		}
+		// Due in the zone Radar assumed is not due in every zone the
+		// controller might use.
+		due, certain = true, false
 	case StateDue, StateLate, StateProbablyLate, StateLateOrHeld, StateHeld, StateAlwaysDue:
 		due = true
 	default:
 		// StatePossiblyLate, and a cron Velero accepted that Radar cannot
 		// evaluate (StateUnknown, StateNotValidated).
 		due, certain = true, false
+	}
+	timing := r.State == StatePossiblyLate || r.State == StateOnSchedule
+	dueText := "A run is due."
+	switch {
+	case !certain && timing:
+		dueText = "A run may be due: Radar is not certain which time zone the schedule runs in."
+	case !certain:
+		dueText = "Radar cannot evaluate this schedule's cron expression, so a run may be due."
 	}
 
 	out := ResumeOutlook{Due: due}
@@ -107,20 +120,20 @@ func DescribeResume(in ScheduleInput, skip *bool) ResumeOutlook {
 	runs := runsOf(r.Name, in.Backups)
 	if b := blockerOf(runs); b != nil {
 		out.Outcome, out.Blocker = ResumeHeld, b
-		out.Summary = "A run is due, but " + b.Name + " has not finished, so Velero submits nothing while it is new or in progress."
+		out.Summary = dueText + " " + b.Name + " has not finished, so Velero submits nothing while it is new or in progress."
 		return out
 	}
 	out.Outcome = ResumeMayRunNow
 	switch {
 	case skip == nil && in.Server.ScheduleSkipImmediately == nil:
 		out.Reason = ResumeReasonSkipUnknown
-		out.Summary = "A run is due. Radar could not read whether the Velero server skips it (--schedule-skip-immediately), so Velero may submit it at once."
+		out.Summary = dueText + " Radar could not read whether the Velero server skips it (--schedule-skip-immediately), so Velero may submit it at once."
 	case skip == nil && *in.Server.ScheduleSkipImmediately:
 		out.Reason = ResumeReasonSkipOnce
-		out.Summary = "A run is due. The Velero server is set to skip it, but Velero 1.18 and earlier skip only the first such schedule after the server starts, so Velero may submit it at once."
-	case !certain && r.State == StatePossiblyLate:
+		out.Summary = dueText + " The Velero server is set to skip it, but Velero 1.18 and earlier skip only the first such schedule after the server starts, so Velero may submit it at once."
+	case !certain && timing:
 		out.Reason = ResumeReasonTiming
-		out.Summary = "A run may be due: Radar is not certain which time zone the schedule runs in. If one is, Velero submits it at once."
+		out.Summary = dueText + " If one is, Velero submits it at once."
 	case !certain:
 		out.Reason = ResumeReasonNotEvaluated
 		out.Summary = "Radar cannot evaluate this schedule's cron expression, so Velero may submit a run as soon as it resumes."
