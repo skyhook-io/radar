@@ -1,12 +1,21 @@
 package audit
 
 import (
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
+	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 type testLister[T any] struct {
@@ -48,4 +57,61 @@ func TestListNamespacedFiltersReplicaSetsAndUnknownTypesFailClosed(t *testing.T)
 	if len(unknown) != 0 {
 		t.Fatalf("unknown object type must fail closed, got %#v", unknown)
 	}
+}
+
+func TestCollectNamespacesOnlyWhenClusterWideReady(t *testing.T) {
+	replicas := int32(1)
+	objects := func() []runtime.Object {
+		return []runtime.Object{
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "a"}, Spec: appsv1.DeploymentSpec{Replicas: &replicas}},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "a", Annotations: map[string]string{bp.IgnoreChecksAnnotation: "singleReplica"}}},
+		}
+	}
+	flagged := func(r *bp.ScanResults) bool {
+		for _, f := range r.Findings {
+			if f.CheckID == "singleReplica" && f.Name == "solo" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, tc := range []struct {
+		name       string
+		namespaces bool
+		want       bool
+	}{
+		{"cluster-wide and synced", true, false},
+		{"Namespaces not listable", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scopes := map[string]k8score.ResourceScope{k8score.Deployments: {Enabled: true}, k8score.HorizontalPodAutoscalers: {Enabled: true}, k8score.Namespaces: {Enabled: tc.namespaces}}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(objects()...), scopes); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestState)
+			if got := flagged(RunFromCache(k8s.GetResourceCache(), nil, nil)); got != tc.want {
+				t.Fatalf("singleReplica flagged = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	t.Run("Namespaces not synced", func(t *testing.T) {
+		client := fake.NewClientset(objects()...)
+		client.PrependReactor("list", "namespaces", func(clienttesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("initial list unavailable")
+		})
+		core, err := k8score.NewResourceCache(k8score.CacheConfig{
+			Client:         client,
+			ResourceTypes:  map[string]bool{k8score.Deployments: true, k8score.HorizontalPodAutoscalers: true, k8score.Namespaces: true},
+			ResourceScopes: map[string]k8score.ResourceScope{k8score.Deployments: {Enabled: true}, k8score.HorizontalPodAutoscalers: {Enabled: true}, k8score.Namespaces: {Enabled: true}},
+			SyncTimeout:    20 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(core.Stop)
+		if !flagged(RunFromCache(&k8s.ResourceCache{ResourceCache: core}, nil, nil)) {
+			t.Fatal("an unsynced Namespace informer must not hide findings")
+		}
+	})
 }
