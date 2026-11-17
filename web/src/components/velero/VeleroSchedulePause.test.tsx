@@ -27,13 +27,14 @@ const state = vi.hoisted(() => ({
   error: null as Error | null,
   resume: undefined as unknown,
   serverStopped: false,
+  backupsDisabled: false,
   guardInput: {} as Record<string, unknown>,
   toast: vi.fn(),
 }))
 vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
 vi.mock('../../api/velero', () => ({
   useVeleroSchedulePause: () => ({ mutate: state.mutate, isPending: false, error: state.error }),
-  useVeleroScheduleActivity: () => ({ data: { resume: state.resume, serverStopped: state.serverStopped } }),
+  useVeleroScheduleActivity: () => ({ data: { resume: state.resume, serverStopped: state.serverStopped, backupsDisabled: state.backupsDisabled } }),
 }))
 vi.mock('../../hooks/useGitOpsWriteGuard', () => ({
   useGitOpsWriteGuard: ({ writes }: { writes: GitOpsWriteGuardInput['writes'] }) => ({
@@ -64,6 +65,7 @@ afterEach(() => {
   state.error = null
   state.resume = undefined
   state.serverStopped = false
+  state.backupsDisabled = false
   state.guardInput = {}
   state.toast.mockReset()
   state.mutate.mockReset()
@@ -85,11 +87,20 @@ describe('Pause and resume', () => {
     act(() => buttons('Pause')[0].click())
     expect(text()).toContain('Velero stops submitting this schedule’s runs until it is resumed.')
     expect(text()).toContain('A run already started continues to the end.')
+    expect(text()).toContain('Back up now still creates a backup from this schedule while it is paused.')
     act(() => buttons('Pause schedule')[0].click())
     expect(state.mutate).toHaveBeenCalledWith(
       { namespace: 'velero', name: 'nightly', paused: true, resourceVersion: '42', skipImmediately: null },
       expect.anything(),
     )
+  })
+
+  it('does not promise Back up now while Velero runs restore-only', () => {
+    state.backupsDisabled = true
+    render(<VeleroSchedulePause schedule={active} />)
+    act(() => buttons('Pause')[0].click())
+    expect(text()).toContain('Back up now stays unavailable while Velero runs restore-only.')
+    expect(text()).not.toContain('Back up now still creates a backup')
   })
 
   it('resumes with the server deciding the skip unless the user skips the due run', () => {

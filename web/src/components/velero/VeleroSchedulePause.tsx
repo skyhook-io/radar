@@ -100,7 +100,12 @@ function SchedulePauseDialog({ namespace, name, pause, reviewedVersion, changed,
     'Velero submits this schedule’s runs again. Radar could not read what it does first: a run that’s due may be submitted at once.'
   )
   const notes = pause
-    ? ['A run already started continues to the end.', 'Back up now still creates a backup from this schedule while it is paused.']
+    ? [
+        'A run already started continues to the end.',
+        activity.data?.backupsDisabled
+          ? 'Back up now stays unavailable while Velero runs restore-only.'
+          : 'Back up now still creates a backup from this schedule while it is paused.',
+      ]
     : []
   const warnings = [
     ...(activity.data?.serverStopped ? ['The Velero server isn’t running, so nothing happens until it starts.'] : []),
