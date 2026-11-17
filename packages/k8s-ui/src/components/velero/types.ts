@@ -111,6 +111,9 @@ export interface VeleroScheduleReading {
   location: VeleroScheduleLocation
   /** The template's spec.ttl as written; "" when the server's --default-backup-ttl applies (absent or a zero duration). */
   ttl: string
+  /** The template's namespace selection as written: an empty or "*" include list is every namespace; entries may be glob patterns. */
+  includedNamespaces: string[]
+  excludedNamespaces: string[]
 }
 
 /** pkg/velero ServerSource */

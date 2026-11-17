@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import type { VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
-import { VELERO_NOTHING_NEEDS_ATTENTION, VeleroOverview } from './VeleroOverview'
+import { VELERO_NOTHING_NEEDS_ATTENTION, VeleroOverview, type VeleroNamespaceList } from './VeleroOverview'
 import { VeleroSchedules } from './VeleroSchedules'
 import { hoursAgo, location, schedule, workspace } from './velero.fixtures'
 
@@ -13,16 +13,16 @@ function render(data: VeleroWorkspaceResponse, installation: string | null = nul
   const props = { data, installation, onInstallation: () => {}, onInspect: () => {}, inspected: null }
   return renderToStaticMarkup(
     <MemoryRouter>
-      <VeleroOverview {...props} />
+      <VeleroOverview {...props} namespaces={undefined} />
       <VeleroSchedules {...props} />
     </MemoryRouter>,
   )
 }
 
-function renderOverview(data: VeleroWorkspaceResponse) {
+function renderOverview(data: VeleroWorkspaceResponse, namespaces: VeleroNamespaceList = undefined) {
   return renderToStaticMarkup(
     <MemoryRouter>
-      <VeleroOverview data={data} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} />
+      <VeleroOverview data={data} installation={null} onInstallation={() => {}} onInspect={() => {}} inspected={null} namespaces={namespaces} />
     </MemoryRouter>,
   )
 }
@@ -262,5 +262,29 @@ describe('Velero overview', () => {
     const two = workspace()
     two.installations = [two.installations[0], { ...two.installations[0], namespace: 'kommander' }]
     expect(text(render(two))).toContain('Velero installations in namespaces velero and kommander.')
+  })
+})
+
+describe('Velero overview coverage', () => {
+  const two = (overrides = {}) => workspace({ schedules: [schedule({ includedNamespaces: ['shop'] }), schedule({ name: 'weekly', state: 'paused', paused: true, includedNamespaces: ['db-*'] })], ...overrides })
+
+  it('names the namespaces no schedule selects, leaving out Kubernetes’ own and Velero’s', () => {
+    const html = text(renderOverview(two(), ['shop', 'db-main', 'web', 'kube-system', 'velero']))
+    expect(html).toMatch(/Namespaces not in any schedule<\/span><\/span>:<\/span> <span[^>]*>web</)
+    expect(html).not.toMatch(/not in any schedule.*kube-system/)
+  })
+
+  it('says none when every namespace is in a schedule, and unknown when the schedules were read in part', () => {
+    expect(text(renderOverview(two(), ['shop', 'db-main']))).toMatch(/Namespaces not in any schedule<\/span><\/span>:<\/span> <span[^>]*>none</)
+    const partial = two({ coverage: { ...workspace().coverage, schedules: { state: 'partial' } } })
+    expect(text(renderOverview(partial, ['shop']))).toContain('unknown, Radar can’t read every schedule')
+    expect(text(renderOverview(two(), 'error'))).toContain('unknown, Radar couldn’t list namespaces')
+  })
+
+  it('lists paused schedules as information, outside Needs attention', () => {
+    const html = text(renderOverview(two(), ['shop']))
+    expect(html).toMatch(/Paused:<\/span> <span[^>]*><span><button[^>]*>weekly<\/button><\/span> — no backups until it is resumed/)
+    expect(html).toContain(VELERO_NOTHING_NEEDS_ATTENTION)
+    expect(html).toContain('2, 1 paused, none need attention')
   })
 })

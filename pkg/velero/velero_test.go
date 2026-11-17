@@ -2,6 +2,7 @@ package velero
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -570,5 +571,16 @@ func TestScheduleReadingAlwaysSendsTTL(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"ttl":""`) {
 		t.Fatalf("reading %s, want an explicit empty ttl for the server default", b)
+	}
+}
+
+func TestReadScheduleNamespaceSelectionFromTemplate(t *testing.T) {
+	s := schedule("nightly", "0 9 * * *", specField("template", map[string]any{"includedNamespaces": []any{"shop", "db-*"}, "excludedNamespaces": []any{"db-scratch"}}))
+	r := read(s, nil, utcServer, at("12:00"))
+	if !reflect.DeepEqual(r.IncludedNamespaces, []string{"shop", "db-*"}) || !reflect.DeepEqual(r.ExcludedNamespaces, []string{"db-scratch"}) {
+		t.Fatalf("selection %v except %v, want the template's", r.IncludedNamespaces, r.ExcludedNamespaces)
+	}
+	if r := read(schedule("all", "0 9 * * *"), nil, utcServer, at("12:00")); r.IncludedNamespaces == nil || r.ExcludedNamespaces == nil || len(r.IncludedNamespaces) != 0 {
+		t.Fatalf("an empty selection is sent as empty lists, got %#v %#v", r.IncludedNamespaces, r.ExcludedNamespaces)
 	}
 }
