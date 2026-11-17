@@ -48,7 +48,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { LookupFailureNote } from '@skyhook-io/k8s-ui/components/resources/renderers/LookupFailureNote'
 import { useRadarFeature } from '../../api/client'
-import { useVeleroRuns, useVeleroScheduleActivity, useVeleroWorkspace, type VeleroRunRow, type VeleroRunsResponse } from '../../api/velero'
+import { useVeleroRuns, useVeleroScheduleActivity, useVeleroWorkspace, type VeleroRestoreRow, type VeleroRunRow, type VeleroRunsResponse } from '../../api/velero'
 import { useVeleroStoredBackups } from '../../api/policy'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { currentPageLabel, issuesPathForSubject } from '../../utils/page-links'
@@ -398,7 +398,7 @@ export function VeleroBackupRestores({ namespace, name, onNavigate }: { namespac
         columns={[
           { header: 'Restore', cell: (r: VeleroRunRow) => <VeleroName name={r.name} middle /> },
           { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <OutcomeCell kind="Restore" run={r} counts={!wide} /> },
-          { header: 'Into', width: wide ? '200px' : '160px', cell: (r: VeleroRunRow) => <RestoreIntoCell run={r} /> },
+          { header: 'Into', width: wide ? '200px' : '160px', cell: (r: VeleroRestoreRow) => <RestoreIntoCell run={r} /> },
           { header: 'Started', width: '120px', cell: (r: VeleroRunRow) => <StartedCell run={r} folded={!wide} /> },
           ...(wide
             ? [

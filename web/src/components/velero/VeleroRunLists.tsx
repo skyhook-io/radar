@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Plus, Search } from 'lucide-react'
 import { Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
-import { useVeleroRuns, type VeleroRunRow } from '../../api/velero'
+import { useVeleroRuns, type VeleroRestoreRow, type VeleroRunRow } from '../../api/velero'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { ScreenBody, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
 import { VELERO_WIDE, VeleroName, VeleroWorkspaceHeader, WholeNames, inInstallation, restoredIntoText, veleroResource, type VeleroScreenProps } from './shared'
@@ -19,9 +19,9 @@ function SearchBox({ value, onChange, placeholder }: { value: string; onChange: 
   )
 }
 
-function RunTable({ columns, rows, kind, onInspect, inspected, empty, footer, minWidth }: {
-  columns: TableColumn<VeleroRunRow>[]
-  rows: VeleroRunRow[]
+function RunTable<R extends VeleroRunRow>({ columns, rows, kind, onInspect, inspected, empty, footer, minWidth }: {
+  columns: TableColumn<R>[]
+  rows: R[]
   kind: 'Backup' | 'Restore'
   onInspect: VeleroScreenProps['onInspect']
   inspected: VeleroScreenProps['inspected']
@@ -85,16 +85,9 @@ export function OutcomeCell({ kind, run, counts }: { kind: 'Backup' | 'Restore';
   )
 }
 
-/**
- * Where a restore put things, as its page says it: nothing for one Velero
- * rejected; only the mapping from a Radar that does not send the selection.
- */
-export function RestoreIntoCell({ run }: { run: VeleroRunRow }) {
+/** Where a restore put things, as its page says it; nothing for one Velero rejected. */
+export function RestoreIntoCell({ run }: { run: VeleroRestoreRow }) {
   if (run.phase === 'FailedValidation') return <span className="text-theme-text-secondary">Nothing — rejected</span>
-  if (run.includedNamespaces === undefined) {
-    const mapping = Object.entries(run.namespaceMapping ?? {})
-    return mapping.length ? <WholeNames text={mapping.map(([from, to]) => `${from} → ${to}`).join(', ')} /> : <span className="text-theme-text-tertiary">original namespaces</span>
-  }
   const text = restoredIntoText(run)
   return (
     <Tooltip content={text}>
@@ -251,7 +244,7 @@ export function VeleroRestores({ data, installation, onInstallation, onInspect, 
       '—'
     )
   // Narrow: the backup goes under the restore's name, and errors and warnings under its outcome.
-  const columns: TableColumn<VeleroRunRow>[] = [
+  const columns: TableColumn<VeleroRestoreRow>[] = [
     {
       header: 'Restore',
       cell: (r) => (

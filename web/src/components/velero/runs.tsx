@@ -78,7 +78,7 @@ export function RunCounts({ errors, warnings }: { errors: number; warnings: numb
 }
 
 /** All runs, newest first, or only the failed ones. Opens on all, so a run in progress is in view. */
-export function useRunView(rows: VeleroRunRow[]) {
+export function useRunView<R extends VeleroRunRow>(rows: R[]) {
   const failed = rows.filter((r) => FAILED.has(r.phase ?? ''))
   const [view, setView] = useState<'all' | 'failed'>('all')
   return { failed, view, setView, shown: view === 'failed' ? failed : rows }

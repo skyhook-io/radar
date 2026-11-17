@@ -349,8 +349,7 @@ type Run struct {
 	Warnings   int64  `json:"warnings"`
 	// BackupName, NamespaceMapping and the namespace selection are a Restore's:
 	// together they say where it restored into. The selection is always sent
-	// for a Restore, empty meaning every namespace in the backup, so a UI can
-	// tell it from a Radar that does not send it.
+	// for a Restore, empty meaning every namespace in the backup.
 	BackupName         string            `json:"backupName,omitempty"`
 	ScheduleName       string            `json:"scheduleName,omitempty"`
 	NamespaceMapping   map[string]string `json:"namespaceMapping,omitempty"`

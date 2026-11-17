@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import type { VeleroScheduleActivityResponse, VeleroWorkspaceResponse } from '@skyhook-io/k8s-ui'
 import { apiFetch, fetchJSON, useRadarFeature } from './client'
 import { readErrorBody } from './httpErrors'
@@ -99,15 +99,18 @@ export interface VeleroRunRow {
   backupName?: string
   scheduleName?: string
   namespaceMapping?: Record<string, string>
-  /** A Restore's selection, empty for every namespace in the backup; absent from an older Radar. */
-  includedNamespaces?: string[]
-  excludedNamespaces?: string[]
 }
 
-export interface VeleroRunsResponse {
+/** A Restore's row: its namespace selection is always sent, empty for every namespace in the backup. */
+export interface VeleroRestoreRow extends VeleroRunRow {
+  includedNamespaces: string[]
+  excludedNamespaces: string[]
+}
+
+export interface VeleroRunsResponse<R extends VeleroRunRow = VeleroRunRow> {
   observedAt: string
   coverage: import('@skyhook-io/k8s-ui').VeleroKindCoverage
-  runs: VeleroRunRow[]
+  runs: R[]
   total: number
   truncated?: boolean
 }
@@ -118,6 +121,8 @@ export interface VeleroRunsResponse {
 // same per-kind access as the Velero views; `coverage` says what it covered.
 // `schedule` and `backup` narrow the answer on the server: one schedule's
 // runs, or the restores made from one backup.
+export function useVeleroRuns(kind: 'restores', namespace?: string, filter?: { backup?: string }): UseQueryResult<VeleroRunsResponse<VeleroRestoreRow>>
+export function useVeleroRuns(kind: 'backups', namespace?: string, filter?: { schedule?: string }): UseQueryResult<VeleroRunsResponse>
 export function useVeleroRuns(kind: 'backups' | 'restores', namespace?: string, filter?: { schedule?: string; backup?: string }) {
   const { guard, gatedKey } = useRadarFeature('veleroRuns')
   const base = getApiBase()
