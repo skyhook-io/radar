@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
+	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -2378,5 +2379,43 @@ func TestBuild_Service_WorkloadBreakdown(t *testing.T) {
 	_, grouped = build(denyChecker{group: "", kind: "Pod", namespace: "prod"}, ServiceBackendGrouping{Workloads: workloads})
 	if len(grouped) != 0 {
 		t.Fatalf("grouped hidden pods: %v", grouped)
+	}
+}
+
+// A Pod's Node is named from its spec when the relation answer, complete,
+// found no such Node: a Pod left on a deleted Node is when the name matters.
+func TestBuild_Pod_RunsOnAbsentNodeAndDenials(t *testing.T) {
+	pod := readyPod("api-1", "prod", map[string]string{"app": "api"}, true)
+	pod.Spec.NodeName = "gone"
+	omittedRunsOn := func(rc *ResourceContext) OmittedReason {
+		for _, o := range rc.Omitted {
+			if o.Field == "runsOn" {
+				return o.Reason
+			}
+		}
+		return ""
+	}
+	for _, tc := range []struct {
+		name    string
+		fields  map[string]relations.Coverage
+		checker RefAccessChecker
+		runsOn  string
+		reason  OmittedReason
+	}{
+		{"absent node", nil, allowAllChecker{}, "gone", ""},
+		{"denied by the access check", nil, denyChecker{kind: "Node"}, "", OmittedRBACDenied},
+		{"withheld by the answer", map[string]relations.Coverage{"Node": {Narrowed: true}}, allowAllChecker{}, "", OmittedRBACDenied},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			extras := &topology.RelationshipExtras{Fields: tc.fields}
+			rc := Build(context.Background(), pod, Options{Tier: TierBasic, AccessChecker: tc.checker, Relationships: &topology.Relationships{}, RelationshipExtras: extras})
+			got := ""
+			if rc.RunsOn != nil {
+				got = rc.RunsOn.Name
+			}
+			if got != tc.runsOn || omittedRunsOn(rc) != tc.reason {
+				t.Fatalf("runsOn %q omitted %q, want %q omitted %q", got, omittedRunsOn(rc), tc.runsOn, tc.reason)
+			}
+		})
 	}
 }

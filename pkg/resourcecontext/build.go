@@ -326,10 +326,11 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.Uses = buildUses(ident, opts.RelationshipExtras, omitted)
 	if pod, ok := obj.(*corev1.Pod); ok {
 		rc.PodSummary = buildPodSummary(pod)
-		if rel != nil && rel.Node != nil {
-			candidate := toContextRef(*rel.Node)
-			if checkRef(ctx, opts.AccessChecker, &candidate) {
-				rc.RunsOn = &candidate
+		if candidate := runsOnCandidate(pod, rel, opts.RelationshipExtras); candidate != nil {
+			if checkRef(ctx, opts.AccessChecker, candidate) {
+				rc.RunsOn = candidate
+			} else {
+				omitted.add("runsOn", OmittedRBACDenied)
 			}
 		}
 	}
@@ -1440,6 +1441,28 @@ func claimContexts(e topology.ManagerEvidence, on bool) []ManagerClaimContext {
 		out = append(out, cc)
 	}
 	return out
+}
+
+// runsOnCandidate is the relation answer's Node for pod or, when the answer
+// found none, the Node pod's spec names: a Pod left on a deleted Node is when
+// its Node's name matters most. A Node the answer withheld or could not read
+// is reported by its omission instead.
+func runsOnCandidate(pod *corev1.Pod, rel *topology.Relationships, extras *topology.RelationshipExtras) *ContextRef {
+	if rel != nil && rel.Node != nil {
+		r := toContextRef(*rel.Node)
+		return &r
+	}
+	if pod.Spec.NodeName == "" {
+		return nil
+	}
+	if extras != nil {
+		for _, field := range []string{"Node", "subject"} {
+			if c, ok := extras.Fields[field]; ok && (!c.Complete() || c.Narrowed) {
+				return nil
+			}
+		}
+	}
+	return &ContextRef{Kind: "Node", Name: pod.Spec.NodeName}
 }
 
 func toContextRef(r topology.ResourceRef) ContextRef {
