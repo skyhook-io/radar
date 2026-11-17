@@ -256,6 +256,9 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
   const restore = restoreAnswer(resource, location)
   const errors = getBackupErrors(resource)
   const warnings = getBackupWarnings(resource)
+  const restores = useVeleroRuns('restores', namespace, { backup: resource?.metadata?.name ?? '' })
+  // Runs are newest first: the newest restore from this backup that Velero finished.
+  const restoredBefore = restore ? undefined : (restores.data?.runs ?? []).find((r) => RESTORABLE_PHASES.has(r.phase ?? ''))
   return (
     <>
       <RefreshFailedNotice queries={[workspace]} />
@@ -319,7 +322,22 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
           {!nothing && (
             <FactRow label="Restore">
               <span className="inline-flex flex-wrap items-baseline gap-x-2">
-                {restore ? <span>{restore}</span> : <span className="text-theme-text-secondary">Not verified — Velero never tests a restore</span>}
+                {restore ? (
+                  <span>{restore}</span>
+                ) : restoredBefore ? (
+                  <span>
+                    Restored before:{' '}
+                    <Link onClick={() => onNavigate?.(veleroResource('Restore', restoredBefore.namespace, restoredBefore.name))}>{restoredBefore.name}</Link>
+                    <span className="text-theme-text-secondary">
+                      {' · '}
+                      {getRestoreStatus({ status: { phase: restoredBefore.phase } }).text.toLowerCase()}
+                      {' · '}
+                      <When iso={restoredBefore.completed ?? restoredBefore.started} fallback="time unknown" />
+                    </span>
+                  </span>
+                ) : (
+                  <span className="text-theme-text-secondary">Not verified — Velero never tests a restore</span>
+                )}
                 <TabLink tab="restores">Restores</TabLink>
               </span>
             </FactRow>

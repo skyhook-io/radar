@@ -115,6 +115,25 @@ describe('The composed Overview', () => {
     expect(html).toContain('Not verified')
   })
 
+  it('names a restore Velero finished from the backup, where the answer is not a certain no', () => {
+    state.workspace = workspace()
+    const done = { phase: 'Completed', startTimestamp: hoursAgo(5), completionTimestamp: hoursAgo(5) }
+    const backup = { metadata: { namespace: 'velero', name: 'b' }, spec: { storageLocation: 'default' }, status: done }
+    const restore = (name: string, phase: string, completed?: string) => ({ namespace: 'velero', name, uid: name, phase, completed, errors: 0, warnings: 0 })
+    state.runsBy = { 'restores:b': runsOf([restore('r-failed', 'Failed', hoursAgo(1)), restore('r-ok', 'PartiallyFailed', hoursAgo(2)), restore('r-old', 'Completed', hoursAgo(3))]) }
+    const html = page('backups', backup).replace(/<[^>]*>/g, '')
+    expect(html).toContain('Restored before: r-ok · partially failed · 2h ago')
+    expect(html).not.toContain('Not verified')
+    state.runsBy = { 'restores:b': runsOf([restore('r-failed', 'Failed', hoursAgo(1))]) }
+    expect(page('backups', backup)).toContain('Not verified — Velero never tests a restore')
+    state.runsBy = { 'restores:b': runsOf([restore('r-ok', 'Completed', hoursAgo(2))]) }
+    state.workspace = workspace({ locations: [location({ name: 'default', phase: 'Unavailable' })] })
+    const unavailable = page('backups', backup)
+    expect(unavailable).toContain('No: its storage location is unavailable')
+    expect(unavailable).not.toContain('Restored before')
+    state.runsBy = {}
+  })
+
   it('says a rejected backup backed up nothing, and neither keeps nor restores anything', () => {
     state.workspace = workspace()
     const html = page('backups', {
