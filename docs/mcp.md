@@ -1123,6 +1123,7 @@ a miss needs a complete read.
 | `outside_namespace_pin` | The namespace, one you can see, is outside Radar's `--namespace-scope` pin. A namespace you can't see is `user_namespace_not_visible` whether or not Radar is pinned to it, so guessing names can't find the pin. | Radar's `--namespace-scope` setting |
 | `namespace_required` | A namespaced `get_resource` needs a namespace. | Pass `namespace` |
 | `object_not_found` | The object is absent from a namespace Radar read in full. | — it is an answer |
+| `legacy_group_only` | The object a reference names exists only in an older API group, while the newer group is served and lacks it. A controller that still reads the older group uses it; one that doesn't, such as Traefik 3 for `traefik.containo.us`, ignores it. | Move the object to the newer group if the controller no longer reads the older one |
 | `cluster_connecting` | Radar is still connecting. | Retry shortly |
 | `cluster_disconnected` | Radar has no working cluster connection; the explanation says why. | Radar's connection |
 | `connection_changed` | Radar's cluster connection changed during the read. | Confirm which cluster Radar is on, then retry |
