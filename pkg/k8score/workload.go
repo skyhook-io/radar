@@ -724,11 +724,29 @@ func ValidateJobName(jobName string) error {
 	return nil
 }
 
+// indexSuffixLength is the room an Indexed Job's widest Pod hostname,
+// <job>-<index>, needs beyond the Job name; 0 for other completion modes.
+func indexSuffixLength(jobSpec map[string]any) int {
+	if mode, _, _ := unstructured.NestedString(jobSpec, "completionMode"); mode != "Indexed" {
+		return 0
+	}
+	completions, found, _ := unstructured.NestedInt64(jobSpec, "completions")
+	if !found || completions < 1 {
+		completions = 1
+	}
+	return len(strconv.FormatInt(completions-1, 10)) + 1
+}
+
 // manualJobGenerateName keeps "-manual-" whole within the 58 characters the
-// API server keeps of a generateName before appending its 5 random ones.
-func manualJobGenerateName(cronJobName string) string {
+// API server keeps of a generateName before appending its 5 random ones, less
+// the room an Indexed Job's Pod hostnames need. Those hostnames are DNS
+// labels, so an Indexed Job's name has no dots.
+func manualJobGenerateName(cronJobName string, indexRoom int) string {
 	const suffix = "-manual-"
-	const maxBase = validation.LabelValueMaxLength - 5
+	maxBase := validation.LabelValueMaxLength - 5 - indexRoom
+	if indexRoom > 0 {
+		cronJobName = strings.ReplaceAll(cronJobName, ".", "-")
+	}
 	if len(cronJobName)+len(suffix) > maxBase {
 		cronJobName = strings.TrimRight(cronJobName[:maxBase-len(suffix)], "-.")
 	}
@@ -738,6 +756,7 @@ func manualJobGenerateName(cronJobName string) string {
 // TriggerCronJobNamed creates a Job from a CronJob. An empty jobName lets the
 // API server generate one from "<cronjob>-manual-".
 func (m *WorkloadManager) TriggerCronJobNamed(ctx context.Context, namespace, name, jobName string) (*unstructured.Unstructured, error) {
+	jobName = strings.TrimSpace(jobName)
 	if jobName != "" {
 		if err := ValidateJobName(jobName); err != nil {
 			return nil, err
@@ -767,6 +786,11 @@ func (m *WorkloadManager) TriggerCronJobNamed(ctx context.Context, namespace, na
 	if !found {
 		return nil, fmt.Errorf("cronjob %s/%s has no spec.jobTemplate", namespace, name)
 	}
+	jobSpec, _, _ := unstructured.NestedMap(jobTemplate, "spec")
+	indexRoom := indexSuffixLength(jobSpec)
+	if indexRoom > 0 && strings.Contains(jobName, ".") {
+		return nil, fmt.Errorf("%w %q: an Indexed Job's name becomes its Pods' hostnames, which cannot contain '.'", ErrInvalidJobName, jobName)
+	}
 
 	job := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -794,7 +818,7 @@ func (m *WorkloadManager) TriggerCronJobNamed(ctx context.Context, namespace, na
 	if jobName != "" {
 		job.SetName(jobName)
 	} else {
-		job.SetGenerateName(manualJobGenerateName(name))
+		job.SetGenerateName(manualJobGenerateName(name, indexRoom))
 	}
 
 	if spec, found, _ := unstructured.NestedMap(jobTemplate, "spec"); found {

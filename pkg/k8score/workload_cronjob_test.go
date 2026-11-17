@@ -3,6 +3,7 @@ package k8score
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -32,6 +33,10 @@ func batchDiscovery() *ResourceDiscovery {
 }
 
 func newBatchClient(cronJobName string) *dynamicfake.FakeDynamicClient {
+	return newBatchClientWithJobSpec(cronJobName, nil)
+}
+
+func newBatchClientWithJobSpec(cronJobName string, jobSpec map[string]any) *dynamicfake.FakeDynamicClient {
 	cronJob := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "batch/v1",
 		"kind":       "CronJob",
@@ -46,6 +51,9 @@ func newBatchClient(cronJobName string) *dynamicfake.FakeDynamicClient {
 			},
 		},
 	}}
+	for k, v := range jobSpec {
+		cronJob.Object["spec"].(map[string]any)["jobTemplate"].(map[string]any)["spec"].(map[string]any)[k] = v
+	}
 	return dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
 		cronJobsGVR: "CronJobList", jobsGVR: "JobList",
 	}, []runtime.Object{cronJob}...)
@@ -130,5 +138,69 @@ func TestTriggerCronJobRejectsAnInvalidName(t *testing.T) {
 				t.Errorf("issued %d API calls before validating the name", len(client.Actions()))
 			}
 		})
+	}
+}
+
+// An Indexed Job's Pods get the hostname <job>-<index>, a DNS label of at most
+// 63 characters, so the generated name leaves room for the widest index and
+// drops dots.
+func TestTriggerIndexedCronJobDefaultNameLeavesRoomForTheIndex(t *testing.T) {
+	for _, tc := range []struct {
+		cronJobName string
+		completions int64
+	}{
+		{strings.Repeat("a", 52), 1},
+		{strings.Repeat("a", 52), 10},
+		{strings.Repeat("a", 52), 1000},
+		{"report.v2", 3},
+	} {
+		t.Run(tc.cronJobName, func(t *testing.T) {
+			client := newBatchClientWithJobSpec(tc.cronJobName, map[string]any{"completionMode": "Indexed", "completions": tc.completions})
+			if _, err := NewWorkloadManager(client, batchDiscovery()).TriggerCronJobNamed(context.Background(), "prod", tc.cronJobName, ""); err != nil {
+				t.Fatalf("TriggerCronJobNamed: %v", err)
+			}
+			base := createdJob(t, client).GetGenerateName()
+			hostname := fmt.Sprintf("%sabcde-%d", base, tc.completions-1)
+			if errs := validation.IsDNS1123Label(hostname); len(errs) > 0 {
+				t.Errorf("widest Pod hostname %q is invalid: %v", hostname, errs)
+			}
+			if !strings.HasSuffix(base, "-manual-") {
+				t.Errorf("generateName = %q, want it to end in -manual-", base)
+			}
+		})
+	}
+}
+
+func TestTriggerIndexedCronJobRejectsADottedName(t *testing.T) {
+	client := newBatchClientWithJobSpec("report", map[string]any{"completionMode": "Indexed", "completions": int64(2)})
+	_, err := NewWorkloadManager(client, batchDiscovery()).TriggerCronJobNamed(context.Background(), "prod", "report", "report.rerun")
+	if !errors.Is(err, ErrInvalidJobName) {
+		t.Fatalf("err = %v, want ErrInvalidJobName", err)
+	}
+	for _, a := range client.Actions() {
+		if a.GetVerb() == "create" {
+			t.Fatal("created a Job with a dotted name for an Indexed template")
+		}
+	}
+}
+
+func TestTriggerCronJobTrimsTheGivenName(t *testing.T) {
+	client := newBatchClient("report")
+	got, err := NewWorkloadManager(client, batchDiscovery()).TriggerCronJobNamed(context.Background(), "prod", "report", "  report-rerun \n")
+	if err != nil {
+		t.Fatalf("TriggerCronJobNamed: %v", err)
+	}
+	if got.GetName() != "report-rerun" {
+		t.Errorf("name = %q, want report-rerun", got.GetName())
+	}
+}
+
+func TestTriggerCronJobBlankNameGeneratesOne(t *testing.T) {
+	client := newBatchClient("report")
+	if _, err := NewWorkloadManager(client, batchDiscovery()).TriggerCronJobNamed(context.Background(), "prod", "report", "   "); err != nil {
+		t.Fatalf("TriggerCronJobNamed: %v", err)
+	}
+	if got := createdJob(t, client).GetGenerateName(); got != "report-manual-" {
+		t.Errorf("generateName = %q, want report-manual-", got)
 	}
 }
