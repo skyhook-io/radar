@@ -395,8 +395,8 @@ func compareGaps(a, b ownership.Gap) int {
 // Indexed reads the objects of gk in scope that index files under any of
 // keys: a typed kind from the typed cache, any other kind through the same
 // version and namespace rules as DependentCandidates. A kind the catalog
-// doesn't serve, typed or not, is read as empty when discovery was complete,
-// and as a gap otherwise.
+// doesn't serve, typed or not, is read as empty when discovery covered its
+// group, and as a gap otherwise.
 func (s *session) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) relations.IndexedRead {
 	q := newSearch(index, keys, scope)
 	kind, known := s.catalog.Kind(gk)
@@ -404,7 +404,7 @@ func (s *session) Indexed(gk resourceid.GroupKind, index string, keys []string, 
 	case s.catalog.Ambiguous(gk):
 		q.gap(gk, "", readreason.ReadError)
 	case !known:
-		if !s.catalog.Complete() {
+		if !s.catalog.CoversGroup(gk.Group) {
 			q.gap(gk, "", readreason.ReadError)
 		}
 	case !scope.Searches(kind.Namespaced):

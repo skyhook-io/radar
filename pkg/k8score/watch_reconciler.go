@@ -52,7 +52,7 @@ func (d *DynamicResourceCache) requestWatch(gvr schema.GroupVersionResource) {
 	d.mu.Unlock()
 	go func() {
 		defer func() { d.mu.Lock(); delete(d.watchRequests, gvr); d.mu.Unlock() }()
-		_ = d.ensureWatchingContext(d.probeCtx, gvr, "", true)
+		_ = d.ensureWatchingContext(d.stopCtx, gvr, "", true)
 	}()
 }
 
@@ -89,7 +89,7 @@ func (d *DynamicResourceCache) startWatchReconciler(interval time.Duration) {
 			defer tick.Stop()
 			for {
 				select {
-				case <-d.stopCh:
+				case <-d.stopCtx.Done():
 					return
 				case <-refreshed:
 					d.reconcileWatches()

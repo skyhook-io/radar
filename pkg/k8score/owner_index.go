@@ -66,8 +66,9 @@ func (rc *ResourceCache) ReadableDependents(resource string, namespaces []string
 // ReadableIndexedObjects returns the objects of resource in namespaces that
 // index files under any of keys, under ReadableObjects' rules: ok is false
 // unless each namespace's store is complete now, and nil namespaces means the
-// kind's whole scope. An object filed under several keys is returned once,
-// and no keys read nothing. For one of k8score's own indexes each store is
+// kind's whole scope. An object filed under several keys is returned once.
+// With an index, no keys read nothing; an empty index reads every object.
+// For one of k8score's own indexes each store is
 // read once for all the keys; any other index, such as the namespace index,
 // is read key by key. ok is also false when the stores lack the index. The
 // objects are the cached ones: callers must not modify or keep them.
@@ -170,7 +171,8 @@ type indexQuery []string
 // under any of keys — for OwnerUIDIndex, those whose owner references name one
 // of the UIDs — from the informers serving namespace now, under
 // ReadableObject's rules. An object filed under several keys is returned
-// once, and no keys read nothing. For one of k8score's own indexes each
+// once. With an index, no keys read nothing; an empty index reads every
+// object. For one of k8score's own indexes each
 // informer's store is read once for all the keys, so an object that moves
 // from one key to another during the read is found under one of them; any
 // other index, such as the namespace index, is read key by key. namespace "" reads only a

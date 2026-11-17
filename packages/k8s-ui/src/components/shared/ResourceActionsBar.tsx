@@ -29,7 +29,7 @@ import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
-import { getDefaultContainerName, getExecContainerNames } from '../resources/resource-utils'
+import { getDefaultContainerName, getDefaultLogContainerName, getExecContainerNames, getInitContainerNames, getLogContainerNames } from '../resources/resource-utils'
 import { argoApplicationSyncOptions, argoComparedRevisionCurrent, isArgoAutoSyncEnabled, isArgoAutoSyncSwitchedOff, isArgoMultiSource, isArgoOperationInProgress } from '../resources/resource-utils-argo'
 import { SyncOptionsDialog, type ArgoSyncOpts } from '../gitops/SyncOptionsDialog'
 import { radarUpgradeNoteText } from '../ui/RadarUpgradeNote'
@@ -77,7 +77,7 @@ interface ResourceActionsBarProps {
 
   // Dock actions (injected by platform)
   onOpenTerminal?: (params: { namespace: string; podName: string; containerName: string; containers: string[] }) => void
-  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
+  onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string; initContainers?: string[] }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   onCopyCommand?: (text: string, message: string, event: React.MouseEvent) => void
 
@@ -286,6 +286,8 @@ export function ResourceActionsBar({
 
   const isRunning = kind === 'pods' ? data?.status?.phase === 'Running' : true
   const containers = data?.spec?.containers?.map((c: any) => c.name) || []
+  const logContainers = getLogContainerNames(data)
+  const initContainers = getInitContainerNames(data)
 
   const handleOpenTerminal = () => {
     if (resource.namespace && resource.name && containers.length > 0) {
@@ -299,12 +301,13 @@ export function ResourceActionsBar({
   }
 
   const handleOpenLogs = (containerName?: string) => {
-    if (resource.namespace && resource.name && containers.length > 0) {
+    if (resource.namespace && resource.name && logContainers.length > 0) {
       openLogs?.({
         namespace: resource.namespace,
         podName: resource.name,
-        containers,
-        containerName: containerName || getDefaultContainerName(data),
+        containers: logContainers,
+        containerName: containerName || getDefaultLogContainerName(data),
+        initContainers,
       })
     }
   }
@@ -324,7 +327,7 @@ export function ResourceActionsBar({
 
   const handleLogsMouseEnter = () => {
     if (logsMenuTimeout.current) clearTimeout(logsMenuTimeout.current)
-    if (containers.length > 1) setShowLogsMenu(true)
+    if (logContainers.length > 1) setShowLogsMenu(true)
   }
   const handleLogsMouseLeave = () => {
     logsMenuTimeout.current = setTimeout(() => setShowLogsMenu(false), 150)
@@ -353,16 +356,16 @@ export function ResourceActionsBar({
               onMouseLeave={handleLogsMouseLeave}
             >
               <button
-                onClick={() => handleOpenLogs(containers.length === 1 ? containers[0] : undefined)}
+                onClick={() => handleOpenLogs()}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
               >
                 <FileText className="w-3.5 h-3.5" />
                 Logs
-                {containers.length > 1 && <ChevronDown className="w-3 h-3 ml-0.5" />}
+                {logContainers.length > 1 && <ChevronDown className="w-3 h-3 ml-0.5" />}
               </button>
-              {showLogsMenu && containers.length > 1 && (
+              {showLogsMenu && logContainers.length > 1 && (
                 <div className="absolute top-full left-0 mt-1 min-w-[160px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50">
-                  {containers.map((container: string) => (
+                  {logContainers.map((container: string) => (
                     <button
                       key={container}
                       onClick={() => {
@@ -373,6 +376,7 @@ export function ResourceActionsBar({
                     >
                       <Box className="w-3 h-3 text-theme-text-tertiary shrink-0" />
                       <span className="truncate">{container}</span>
+                      {initContainers.includes(container) && <span className="ml-auto shrink-0 text-theme-text-tertiary">init</span>}
                     </button>
                   ))}
                 </div>

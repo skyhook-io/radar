@@ -134,7 +134,7 @@ func getAuditConfig() settings.AuditConfig {
 }
 
 // handleAudit returns full audit scan results.
-// GET /api/audit?namespace=X&namespaces=X,Y
+// GET /api/audit?namespace=X&namespaces=X,Y[&raw=true][&include=badges]
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -146,7 +146,12 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	namespaces := s.parseNamespacesForUser(r)
 	if readscope.NoNamespaceAccess(namespaces) {
-		s.writeJSON(w, &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}})
+		empty := &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
+		if r.URL.Query().Get("include") == "badges" {
+			s.writeJSON(w, auditBadgesResponse(empty))
+			return
+		}
+		s.writeJSON(w, empty)
 		return
 	}
 	results := getCachedResults(cache, namespaces, s.auditOptions(r))
@@ -165,6 +170,16 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	results = applyAuditSettings(results, getAuditConfig())
+	// `?include=badges` is for views that only badge resources (topology,
+	// resource lists). They show only findings from badge-worthy checks
+	// (reference integrity, lifecycle), a small fraction of the scan, while the
+	// full response repeats every finding three times for the Checks page. An
+	// unknown include value gets the full response, as it would from a Radar
+	// that predates the parameter.
+	if r.URL.Query().Get("include") == "badges" {
+		s.writeJSON(w, auditBadgesResponse(results))
+		return
+	}
 	// Attach the remediation-queue rollup for standalone + embedded per-cluster
 	// views. Build on a shallow copy: applyAuditSettings returns the shared
 	// cache object verbatim when no settings filter, so mutating it would race
@@ -173,6 +188,26 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	resp := *results
 	resp.GroupedChecks = chk.BuildChecks(bp.EffectiveFindings(results.Findings, ""), results.Checks, "", "")
 	s.writeJSON(w, &resp)
+}
+
+// auditBadges is /api/audit?include=badges: the locally filtered findings of
+// badge-worthy checks, and the catalog entries for those checks.
+type auditBadges struct {
+	Findings []bp.Finding            `json:"findings"`
+	Checks   map[string]bp.CheckMeta `json:"checks"`
+}
+
+func auditBadgesResponse(results *bp.ScanResults) auditBadges {
+	out := auditBadges{Findings: []bp.Finding{}, Checks: map[string]bp.CheckMeta{}}
+	for _, f := range results.Findings {
+		meta, ok := results.Checks[f.CheckID]
+		if !ok || !meta.BadgeWorthy {
+			continue
+		}
+		out.Findings = append(out.Findings, f)
+		out.Checks[f.CheckID] = meta
+	}
+	return out
 }
 
 // queryTrue reports whether a query param parses as a truthy boolean. Tolerant
