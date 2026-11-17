@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { VELERO_FAILED_PHASES, veleroPlainReason, veleroReasonNextStep, veleroScheduleBadge } from './reading'
+import { VELERO_FAILED_PHASES, veleroCadenceText, veleroPlainReason, veleroReasonNextStep, veleroScheduleBadge } from './reading'
 
 describe('veleroPlainReason', () => {
   it('says what the common object-store failures mean', () => {
@@ -78,5 +78,24 @@ describe('veleroScheduleBadge', () => {
 
   it('keeps a healthy state out of green when the zone is not confirmed', () => {
     expect(veleroScheduleBadge({ ...base, state: 'onSchedule', zone: { name: 'UTC+02:00', source: 'inferred' } }).tone).toBe('unknown')
+  })
+})
+
+describe('veleroCadenceText', () => {
+  it.each([
+    ['*/2 * * * *', 'Every 2 minutes'],
+    ['15 1 * * *', 'Daily at 1:15'],
+    ['15 * * * *', 'Every hour at :15'],
+    ['0 2 * * 0', 'Weekly on Sunday at 2:00'],
+    ['CRON_TZ=Europe/Berlin 0 2 * * *', 'Daily at 2:00'],
+    ['@every 6h', 'Every 6h'],
+    ['@daily', 'Daily at midnight'],
+  ])('reads %s as %s', (cron, text) => {
+    expect(veleroCadenceText(cron)).toBe(text)
+  })
+
+  it('leaves a shape it does not describe to the cron', () => {
+    expect(veleroCadenceText('15 14 1 * *')).toBeUndefined()
+    expect(veleroCadenceText('')).toBeUndefined()
   })
 })

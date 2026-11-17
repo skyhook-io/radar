@@ -1,5 +1,4 @@
 import {
-  CronValue,
   Tooltip,
   VELERO_NONE_KEPT,
   VELERO_NONE_KEPT_SHORT,
@@ -9,6 +8,7 @@ import {
   VeleroZoneValue,
   formatRelativeAgeTime,
   veleroNextRunText,
+  veleroCadenceText,
   veleroNextRunTitle,
   veleroScheduleBadge,
   veleroScheduleReasonText,
@@ -107,7 +107,7 @@ function LocationCell({ s }: { s: VeleroScheduleReading }) {
 }
 
 /** Due within its grace reads on schedule (see veleroScheduleBadge), so its next run reads "due now", not "was due". */
-function NextRunCell({ s }: { s: VeleroScheduleReading }) {
+export function NextRunCell({ s }: { s: VeleroScheduleReading }) {
   if (!s.nextRun) return <span className="text-theme-text-tertiary">—</span>
   const dueNow = s.state === 'due' && s.reason !== 'serverDown'
   return (
@@ -141,14 +141,18 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
       ),
     },
     {
-      header: zone ? `Cron (${zone})` : 'Cron',
+      header: zone ? `Runs (${zone})` : 'Runs',
       width: '16%',
-      cell: (s) => (
-        <>
-          <CronValue cron={s.cron} />
-          {!zone && <Sub><VeleroZoneValue zone={s.zone} /></Sub>}
-        </>
-      ),
+      cell: (s) => {
+        const cadence = veleroCadenceText(s.cron)
+        return (
+          <>
+            {cadence ? <span>{cadence}</span> : <span className="font-mono text-sm">{s.cron}</span>}
+            {cadence && <div className="mt-0.5 font-mono text-xs text-theme-text-tertiary">{s.cron}</div>}
+            {!zone && <Sub><VeleroZoneValue zone={s.zone} /></Sub>}
+          </>
+        )
+      },
     },
     {
       header: 'State',

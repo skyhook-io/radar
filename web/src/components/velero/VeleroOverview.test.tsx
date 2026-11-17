@@ -40,9 +40,10 @@ describe('Velero overview', () => {
   })
 
   it('shows each schedule’s protection below Needs attention, so a healthy installation has evidence', () => {
-    const run = { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2), ranAt: hoursAgo(2), expires: new Date(Date.parse(hoursAgo(2)) + 720 * 3_600_000).toISOString() }
+    // Backup sync recreated this run's object: created 2h ago, expiring a day later, while the schedule keeps runs 30 days.
+    const run = { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2), ranAt: hoursAgo(2), expires: new Date(Date.parse(hoursAgo(2)) + 24 * 3_600_000).toISOString() }
     const html = text(renderOverview(workspace({
-      schedules: [schedule({ runs: { read: 'full', kept: 1, newest: run, newestCompleted: run } })],
+      schedules: [schedule({ ttl: '720h0m0s', runs: { read: 'full', kept: 1, newest: run, newestCompleted: run } }), schedule({ name: 'weekly', runs: { read: 'full', kept: 1, newest: run, newestCompleted: run } })],
       locations: [location({ phase: 'Unavailable' })],
     })))
     const table = html.slice(html.indexOf('>Schedules</h2>'))
@@ -52,6 +53,10 @@ describe('Velero overview', () => {
     expect(table).toContain('2h ago')
     expect(table).toContain('unavailable')
     expect(table).toContain('30 days')
+    expect(table).not.toContain('1 day')
+    expect(table).toContain('server default')
+    expect(table).toContain('Next run')
+    expect(table).toMatch(/in 2[12]h/)
   })
 
   it('says the server is running only when a replica is ready', () => {

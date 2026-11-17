@@ -213,7 +213,7 @@ describe('getScheduleCronInfo', () => {
   it('leaves readable empty when cronToHuman has no phrasing for the expression', () => {
     // cronToHuman returns its input unchanged for shapes it does not recognise.
     // Rendering that would print the same string on both lines.
-    const r = getScheduleCronInfo(sched('0 3 * * 0'))
+    const r = getScheduleCronInfo(sched('15 14 1 * *'))
     expect(r.malformed).toBe(false)
     expect(r.readable).toBe('')
   })

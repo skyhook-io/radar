@@ -152,6 +152,11 @@ type ScheduleReading struct {
 	Blocker    *Run             `json:"blocker,omitempty"`
 	Runs       ScheduleRuns     `json:"runs"`
 	Location   ScheduleLocation `json:"location"`
+	// TTL is the template's spec.ttl as written, how long each run is kept;
+	// empty when the schedule leaves it to the server's --default-backup-ttl.
+	// Read from the schedule, not from a run: backup sync recreates a run's
+	// object with a new creation time, so expiry less creation is not its TTL.
+	TTL string `json:"ttl,omitempty"`
 }
 
 // ScheduleInput is what ReadSchedule needs. Backups are the namespace's
@@ -196,6 +201,7 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	r.LastSubmitted = timeField(s, "status", "lastBackup")
 	r.LastSkipped = timeField(s, "status", "lastSkipped")
 	r.Location = scheduleLocation(s, in.DefaultLocation)
+	r.TTL, _, _ = unstructured.NestedString(s.Object, "spec", "template", "ttl")
 
 	runs := runsOf(s.GetName(), in.Backups)
 	r.Runs = summarizeRuns(runs, in.BackupsRead, in.WithRecent)

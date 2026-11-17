@@ -21,6 +21,8 @@ import {
   getRestoreWarnings,
   refToSelectedResource,
   toneTextClass,
+  VeleroZoneValue,
+  veleroCadenceText,
   veleroDefaultText,
   veleroFrequencyText,
   veleroLocalTime,
@@ -516,12 +518,24 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
   const partial = readInPart(query)
   const kept = reading && reading.runs.read !== 'unknown' ? reading.runs.kept : runs.length
   const dueNow = reading?.state === 'due' && reading.reason !== 'serverDown'
+  const cron: string = reading?.cron ?? resource?.spec?.schedule ?? ''
+  const cadence = veleroCadenceText(cron)
   return (
     <>
       <RefreshFailedNotice queries={[activity]} />
       {activity.error && !reading && <LookupFailureNote errors={[activity.error]} what="this schedule’s activity" />}
       <Card title="At a glance">
         <FactGrid>
+          <FactRow label="Runs">
+            {cadence ?? <span className="font-mono text-sm">{cron || '—'}</span>}
+            {reading && (
+              <>
+                <span className="text-theme-text-tertiary"> · </span>
+                <VeleroZoneValue zone={reading.zone} />
+              </>
+            )}
+            {cadence && <div className="font-mono text-xs text-theme-text-tertiary">{cron}</div>}
+          </FactRow>
           {reading && (
             <>
               <FactRow label="Last success">

@@ -24,6 +24,7 @@ import { coverageEmpty } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { readInPart, veleroAttention } from './attention'
 import { VELERO_LOCATIONS_PATH, VELERO_SCHEDULES_PATH } from './routes'
+import { NextRunCell } from './VeleroSchedules'
 import {
   VeleroCoverageNotice,
   VeleroName,
@@ -220,13 +221,14 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
   )
 }
 
-/** How long a schedule's runs are kept, read off its newest run (expiry less creation), to the hour. */
-function keptForText(s: VeleroScheduleReading): string | undefined {
-  const run = s.runs.newest
-  if (!run?.expires) return undefined
-  const hours = Math.round((Date.parse(run.expires) - Date.parse(run.created)) / 3_600_000)
-  if (!Number.isFinite(hours) || hours <= 0) return undefined
-  return veleroRetentionText(`${hours}h0m0s`)
+/** How long each run is kept: the schedule's own setting, else the server's default. */
+function KeptForCell({ s }: { s: VeleroScheduleReading }) {
+  if (s.ttl) return <>{veleroRetentionText(s.ttl)}</>
+  return (
+    <Tooltip content="The schedule sets no retention, so the Velero server’s default applies (30 days unless it was changed).">
+      <span className="text-theme-text-secondary">server default</span>
+    </Tooltip>
+  )
 }
 
 function LastSuccessCell({ s }: { s: VeleroScheduleReading }) {
@@ -270,17 +272,18 @@ function ScheduleProtection({ schedules, locations, multi, onInspect, inspected,
         </>
       ),
     },
-    { header: 'State', width: '17%', cell: (s) => <VeleroScheduleStateBadge reading={s} /> },
-    { header: 'Last success', width: '15%', cell: (s) => <LastSuccessCell s={s} /> },
-    { header: 'Stored in', width: '24%', cell: (s) => <StoredInCell s={s} locations={locations} /> },
+    { header: 'State', width: '130px', cell: (s) => <VeleroScheduleStateBadge reading={s} /> },
+    { header: 'Last success', width: '110px', cell: (s) => <LastSuccessCell s={s} /> },
+    { header: 'Next run', width: '120px', cell: (s) => <NextRunCell s={s} /> },
+    { header: 'Stored in', width: '170px', cell: (s) => <StoredInCell s={s} locations={locations} /> },
     {
       header: (
-        <Tooltip content="Read from each schedule’s newest run: when it expires, less when it was created.">
+        <Tooltip content="The schedule’s setting: how long Velero keeps each run (spec.template.ttl).">
           <span>Kept for</span>
         </Tooltip>
       ),
-      width: '13%',
-      cell: (s) => keptForText(s) ?? <span className="text-theme-text-tertiary">—</span>,
+      width: '110px',
+      cell: (s) => <KeptForCell s={s} />,
     },
   ]
   return (
@@ -293,7 +296,7 @@ function ScheduleProtection({ schedules, locations, multi, onInspect, inspected,
       onInspect={onInspect}
       inspected={inspected}
       empty={empty}
-      minWidth={680}
+      minWidth={860}
     />
   )
 }

@@ -535,3 +535,15 @@ func TestServerReadyReplicasAndBackupControllerFlags(t *testing.T) {
 		t.Fatalf("unknown flags serialized a fact: %s", encoded)
 	}
 }
+
+func TestReadScheduleTTLFromTemplate(t *testing.T) {
+	s := schedule("nightly", "0 9 * * *", specField("template", map[string]any{"ttl": "720h0m0s"}))
+	// A run backup sync recreated: created now, expiring in 30 days less a day.
+	runs := []*unstructured.Unstructured{backup("nightly-1", "nightly", "Completed", at("11:00"), expires(at("11:00").Add(24*time.Hour)))}
+	if r := read(s, runs, utcServer, at("12:00")); r.TTL != "720h0m0s" {
+		t.Fatalf("ttl %q, want the template's", r.TTL)
+	}
+	if r := read(schedule("nightly", "0 9 * * *"), nil, utcServer, at("12:00")); r.TTL != "" {
+		t.Fatalf("ttl %q, want none when the server default applies", r.TTL)
+	}
+}

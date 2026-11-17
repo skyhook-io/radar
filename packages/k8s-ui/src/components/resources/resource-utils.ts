@@ -1695,8 +1695,22 @@ export function cronToHuman(cron: string): string {
   ) {
     return `Weekdays at ${hour}:${minute.padStart(2, '0')}`
   }
+  // A literal time on every day, or on one day of the week. Literal means a
+  // plain number: a list or range ("1,13", "9-17") is not one time.
+  const literal = (v: string, max: number) => /^\d{1,2}$/.test(v) && Number(v) <= max
+  if (literal(minute, 59) && literal(hour, 23) && dayOfMonth === '*' && month === '*') {
+    const at = `${hour}:${minute.padStart(2, '0')}`
+    if (dayOfWeek === '*') return `Daily at ${at}`
+    const day = CRON_WEEKDAYS[dayOfWeek.toUpperCase()]
+    if (day) return `Weekly on ${day} at ${at}`
+  }
 
   return cron
+}
+
+const CRON_WEEKDAYS: Record<string, string> = {
+  '0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday', '4': 'Thursday', '5': 'Friday', '6': 'Saturday',
+  SUN: 'Sunday', MON: 'Monday', TUE: 'Tuesday', WED: 'Wednesday', THU: 'Thursday', FRI: 'Friday', SAT: 'Saturday',
 }
 
 // ============================================================================

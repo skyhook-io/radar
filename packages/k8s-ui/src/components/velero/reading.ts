@@ -1,5 +1,5 @@
 import type { HealthLevel } from '../resources/resource-utils'
-import { formatAge, formatDuration } from '../resources/resource-utils'
+import { cronToHuman, formatAge, formatDuration } from '../resources/resource-utils'
 import { formatRelativeAgeTime } from '../../utils/format'
 import type {
   VeleroDefaultSource,
@@ -186,9 +186,37 @@ export function veleroScheduleReasonText(reading: VeleroScheduleReading, opts?: 
       if (serverDown !== null) return serverDown ? 'Due now, but the Velero server has no running replicas, so nothing will submit it.' : 'Due now, but nothing submits it until the server starts.'
       return 'Due now. Velero normally submits it within a few minutes.'
     case 'onSchedule':
-      return 'On schedule.'
+      return 'On schedule'
   }
   return ''
+}
+
+// robfig/cron's descriptors, which Velero accepts beside five-field expressions.
+const CRON_DESCRIPTORS: Record<string, string> = {
+  '@yearly': 'Yearly on January 1 at midnight',
+  '@annually': 'Yearly on January 1 at midnight',
+  '@monthly': 'Monthly on the 1st at midnight',
+  '@weekly': 'Weekly on Sunday at midnight',
+  '@daily': 'Daily at midnight',
+  '@midnight': 'Daily at midnight',
+  '@hourly': 'Every hour',
+}
+
+/**
+ * A schedule's cadence in plain words ("Every 2 minutes", "Weekly on Sunday at
+ * 2:00"), without its zone, which is said beside it; undefined for a shape
+ * Radar does not describe, where the cron itself is the answer.
+ */
+export function veleroCadenceText(cron: string | undefined): string | undefined {
+  const bare = (cron ?? '').trim().replace(/^(CRON_TZ|TZ)=\S+\s+/i, '')
+  if (!bare) return undefined
+  const descriptor = CRON_DESCRIPTORS[bare.toLowerCase()]
+  if (descriptor) return descriptor
+  const every = /^@every\s+(\S+)$/i.exec(bare)
+  if (every) return `Every ${every[1]}`
+  const fields = bare.split(/\s+/).join(' ')
+  const human = cronToHuman(fields)
+  return human === fields || human === '-' ? undefined : human
 }
 
 const ZONE_SOURCE_LABEL: Record<VeleroZoneSource, string> = {
