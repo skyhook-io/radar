@@ -115,17 +115,21 @@ func (s search) each(gk resourceid.GroupKind, c *Coverage, relate func(o Indexed
 }
 
 // admits decides whether the caller may read a related object of gk in
-// namespace. In the subject's namespace a check that couldn't be made leaves
-// the answer incomplete; across namespaces, saying a check failed would say
-// an object may be there, so an undecided one narrows the answer as a denied
-// one does.
+// namespace. A check that couldn't be made leaves the answer incomplete.
+// Across namespaces its gap names no namespace, so it says no more than a
+// denial's narrowing would: that a related object is somewhere the caller
+// couldn't be checked.
 func (s search) admits(gk resourceid.GroupKind, namespace string, c *Coverage) bool {
 	if !s.across {
 		return s.v.mayRead(gk, namespace, c)
 	}
-	if s.v.decide(gk, namespace) != ownership.Allowed {
+	switch s.v.decide(gk, namespace) {
+	case ownership.Allowed:
+		return true
+	case ownership.Undecided:
+		c.addGap(ownership.Gap{Kind: gk, Reason: readreason.UserPermissionCheckFailed})
+	default:
 		c.Narrowed = true
-		return false
 	}
-	return true
+	return false
 }

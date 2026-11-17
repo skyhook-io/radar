@@ -370,6 +370,18 @@ func registerTools(server *mcp.Server, includeWrites, includeExec bool, paramReg
 		Annotations: readOnly,
 	}, logToolCall("get_runtime_versions", handleGetRuntimeVersions))
 
+	// --- Vulnerabilities in deployed images (read-only) ---
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "list_vulnerabilities",
+		Description: "Which running images carry known CVEs and which workloads run them, from vulnerability " +
+			"scanner reports (Trivy Operator). view=image ranks images; view=fix ranks package upgrades by what they " +
+			"clear (target version per ecosystem); view=cve ranks CVEs; view=workload lists containers. Only images a Pod " +
+			"or unsuspended CronJob runs count. unscanned: running images with no report yet, unknown not " +
+			"clean. coverage.gaps: what wasn't read (kinds) and where.",
+		Annotations: readOnly,
+	}, logToolCall("list_vulnerabilities", handleListVulnerabilities))
+
 	// --- Helm tools (read-only) ---
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{

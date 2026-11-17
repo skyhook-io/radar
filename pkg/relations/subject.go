@@ -26,29 +26,38 @@ func CaptureSubject(s Session, subject resourceid.Ref, fetched runtime.Object) (
 	}); ok {
 		s = capture.CaptureSubject(subject, fetched)
 	}
-	return capturedSubject{Session: s, ref: subject, object: fetched, observation: ownership.Observe(subject, meta), held: read.State == ownership.Present}, true
+	return capturedSubject{Session: s, ref: subject, object: fetched, observation: ownership.Observe(subject, meta), cached: read}, true
 }
 
+// cached is the cache's read of the subject before the capture. The
+// session's own capture also answers reads of subject from fetched, so a
+// subject the cache lacks answers from cached, not from the session.
 type capturedSubject struct {
 	Session
 	ref         resourceid.Ref
 	object      runtime.Object
 	observation ownership.Observation
-	held        bool
+	cached      ownership.ObjectRead
 }
 
 func (s capturedSubject) Object(ref resourceid.Ref) ownership.ObjectRead {
-	if ref == s.ref && s.held {
+	switch {
+	case ref != s.ref:
+		return s.Session.Object(ref)
+	case s.cached.State == ownership.Present:
 		return ownership.ObjectRead{State: ownership.Present, Object: s.observation}
 	}
-	return s.Session.Object(ref)
+	return s.cached
 }
 
 func (s capturedSubject) Borrow(ref resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
-	if ref == s.ref && s.held {
+	switch {
+	case ref != s.ref:
+		return s.Session.Borrow(ref)
+	case s.cached.State == ownership.Present:
 		return s.object, s.Object(ref)
 	}
-	return s.Session.Borrow(ref)
+	return nil, s.cached
 }
 
 func (s capturedSubject) Indexed(gk resourceid.GroupKind, index string, keys []string, scope ownership.SearchScope) IndexedRead {

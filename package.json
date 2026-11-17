@@ -6,7 +6,8 @@
     "packages/*"
   ],
   "overrides": {
-    "dompurify": "3.4.17"
+    "dompurify": "3.4.17",
+    "minimatch": "11.0.4"
   },
   "devDependencies": {
     "typescript-7": "npm:typescript@^7.0.2"
