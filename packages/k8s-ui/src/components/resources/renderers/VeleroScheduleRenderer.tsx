@@ -10,7 +10,7 @@ import {
   getScheduleValidationErrors,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
-import { veleroRetentionText } from '../../velero/reading'
+import { VELERO_SERVER_DEFAULT_RETENTION, veleroDeclaredRetention } from '../../velero/reading'
 import { TimeValue } from '../../ui/ScheduleValue'
 
 interface VeleroScheduleRendererProps {
@@ -98,9 +98,7 @@ export function VeleroScheduleRenderer({ data, onNavigate, activity }: VeleroSch
               />
             } />
           )}
-          {template.ttl && (
-            <Property label="Kept for" value={veleroRetentionText(template.ttl)} />
-          )}
+          <Property label="Kept for" value={veleroDeclaredRetention(template.ttl) ?? VELERO_SERVER_DEFAULT_RETENTION} />
           {templateIncludedNs.length > 0 && (
             <Property label="Included Namespaces" value={
               <div className="flex flex-wrap gap-1">

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { VELERO_FAILED_PHASES, veleroCadenceText, veleroPlainReason, veleroReasonNextStep, veleroScheduleBadge } from './reading'
+import { VELERO_FAILED_PHASES, veleroCadenceText, veleroDeclaredRetention, veleroDeclaredTtl, veleroPlainReason, veleroReasonNextStep, veleroScheduleBadge } from './reading'
 
 describe('veleroPlainReason', () => {
   it('says what the common object-store failures mean', () => {
@@ -97,5 +97,15 @@ describe('veleroCadenceText', () => {
   it('leaves a shape it does not describe to the cron', () => {
     expect(veleroCadenceText('15 14 1 * *')).toBeUndefined()
     expect(veleroCadenceText('')).toBeUndefined()
+  })
+})
+
+describe('a declared retention', () => {
+  it('is the server default when absent or zero, as Velero applies it', () => {
+    for (const ttl of [undefined, '', '0', '0s', '0h0m0s', '0.0s']) expect(veleroDeclaredTtl(ttl)).toBeUndefined()
+    expect(veleroDeclaredRetention('0h0m0s')).toBeUndefined()
+    expect(veleroDeclaredRetention('720h0m0s')).toBe('30 days')
+    expect(veleroDeclaredTtl('1h30m')).toBe('1h30m')
+    expect(veleroDeclaredTtl('soon')).toBe('soon')
   })
 })

@@ -47,6 +47,23 @@ afterEach(() => {
 const buttonNamed = (label: string) => [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
 
 describe('Back up now', () => {
+  it('says a wildcard exclusion narrows what is backed up', () => {
+    for (const field of ['excludedNamespaceScopedResources', 'excludedClusterScopedResources']) {
+      render(<VeleroBackupNow schedule={{ ...nightly, spec: { ...nightly.spec, template: { ...nightly.spec.template, [field]: ['*'] } } }} />)
+      act(() => buttonNamed('Back up now')!.click())
+      expect(document.body.textContent).toContain('narrowed by resource or label filters')
+      act(() => roots.splice(0).forEach((r) => r.unmount()))
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('reads a zero retention as the server default, as Velero does', () => {
+    render(<VeleroBackupNow schedule={{ ...nightly, spec: { ...nightly.spec, template: { ...nightly.spec.template, ttl: '0s' } } }} />)
+    act(() => buttonNamed('Back up now')!.click())
+    expect(document.body.textContent).toContain('The Velero server’s default (30 days unless it was changed)')
+    expect(document.body.textContent).not.toContain('0 hours')
+  })
+
   it('shows what will be backed up, and binds the backup to the schedule reviewed', () => {
     render(<VeleroBackupNow schedule={nightly} />)
     act(() => buttonNamed('Back up now')!.click())

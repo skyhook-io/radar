@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Play } from 'lucide-react'
-import { ConfirmDialog, Tooltip, veleroRetentionText, veleroScheduleReasonText, type ResourceRef } from '@skyhook-io/k8s-ui'
+import { ConfirmDialog, Tooltip, VELERO_SERVER_DEFAULT_RETENTION, veleroDeclaredRetention, veleroScheduleReasonText, type ResourceRef } from '@skyhook-io/k8s-ui'
 import { showApiSuccess } from '../ui/Toast'
 import { useRadarFeature } from '../../api/client'
 import { useVeleroBackupNow, useVeleroScheduleActivity, useVeleroWorkspace } from '../../api/velero'
@@ -124,7 +124,7 @@ export function VeleroBackupNow({ schedule, onNavigate }: {
             <dt className="text-theme-text-tertiary">Stored in</dt>
             <dd className="break-words">{location ? location : 'The default storage location'}</dd>
             <dt className="text-theme-text-tertiary">Kept for</dt>
-            <dd>{template.ttl ? veleroRetentionText(template.ttl) : "The Velero server's default (30 days unless it was changed)"}</dd>
+            <dd>{veleroDeclaredRetention(template.ttl) ?? VELERO_SERVER_DEFAULT_RETENTION}</dd>
           </dl>
           <p className="text-theme-text-secondary">The schedule's next run waits while this backup is queued or running.</p>
           {changed && (

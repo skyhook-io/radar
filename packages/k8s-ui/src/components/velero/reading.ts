@@ -282,6 +282,30 @@ export function veleroNewestSuccessfulText(runs: VeleroScheduleRuns): { text: st
   return { text: formatRelativeAgeTime(runs.newestCompleted.completed ?? runs.newestCompleted.ranAt), run: runs.newestCompleted }
 }
 
+// A Go duration, the form Velero's spec.ttl takes.
+const GO_DURATION = /^(?:(?:\d+\.?\d*|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+$/
+
+/**
+ * A spec.ttl as Velero applies it: undefined when the server's
+ * --default-backup-ttl applies, which Velero's backup controller substitutes
+ * for an absent or zero duration ("0s" means the default, not no retention).
+ * pkg/velero.DeclaredTTL is the same rule for the schedule reading.
+ */
+export function veleroDeclaredTtl(ttl: unknown): string | undefined {
+  if (typeof ttl !== 'string' || ttl === '' || ttl === '0') return undefined
+  if (GO_DURATION.test(ttl) && (ttl.match(/\d*\.?\d+/g) ?? []).every((n) => Number(n) === 0)) return undefined
+  return ttl
+}
+
+/** How long a declared retention keeps each run ("30 days"), or undefined when the server's default applies. */
+export function veleroDeclaredRetention(ttl: unknown): string | undefined {
+  const declared = veleroDeclaredTtl(ttl)
+  return declared ? veleroRetentionText(declared) : undefined
+}
+
+/** What a schedule or backup that declares no retention keeps its runs for. */
+export const VELERO_SERVER_DEFAULT_RETENTION = 'The Velero server’s default (30 days unless it was changed)'
+
 /** A retention as people say it: Velero writes Go durations, so "720h0m0s" is "30 days". Anything else shows as written. */
 export function veleroRetentionText(ttl: string): string {
   const m = /^(\d+)h(\d+)m(\d+)s$/.exec(ttl)

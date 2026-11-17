@@ -15,7 +15,6 @@ import {
   getBackupErrors,
   getBackupWarnings,
   getBackupValidationErrors,
-  getBackupTTL,
   getBackupItemOperationTimeout,
   getBackupSnapshotVolumes,
   getBackupDefaultVolumesToFsBackup,
@@ -25,7 +24,7 @@ import {
   isBackupPartialFailurePhase,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
-import { veleroRetentionText } from '../../velero/reading'
+import { VELERO_SERVER_DEFAULT_RETENTION, veleroDeclaredRetention } from '../../velero/reading'
 import { getBackupStorageLocation, veleroPhaseLabel } from '../resource-utils-velero'
 import { TimeValue } from '../../ui/ScheduleValue'
 
@@ -308,7 +307,7 @@ export function VeleroBackupRenderer({ data, storageLocationPhase, storageLocati
       {/* Options section */}
       <Section title="Options" icon={Clock}>
         <PropertyList>
-          <Property label="Kept for" value={veleroRetentionText(getBackupTTL(data))} />
+          <Property label="Kept for" value={veleroDeclaredRetention(data?.spec?.ttl) ?? VELERO_SERVER_DEFAULT_RETENTION} />
           <Property label="Item Operation Timeout" value={getBackupItemOperationTimeout(data)} />
           <Property label="Snapshot Volumes" value={getBackupSnapshotVolumes(data)} />
           <Property label="Default FS Backup" value={getBackupDefaultVolumesToFsBackup(data)} />

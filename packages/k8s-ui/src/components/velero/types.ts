@@ -109,8 +109,8 @@ export interface VeleroScheduleReading {
   blocker?: VeleroRun
   runs: VeleroScheduleRuns
   location: VeleroScheduleLocation
-  /** The template's spec.ttl as written; absent when the server's --default-backup-ttl applies. */
-  ttl?: string
+  /** The template's spec.ttl as written; "" when the server's --default-backup-ttl applies (absent or a zero duration). */
+  ttl: string
 }
 
 /** pkg/velero ServerSource */

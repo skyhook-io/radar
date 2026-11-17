@@ -153,10 +153,25 @@ type ScheduleReading struct {
 	Runs       ScheduleRuns     `json:"runs"`
 	Location   ScheduleLocation `json:"location"`
 	// TTL is the template's spec.ttl as written, how long each run is kept;
-	// empty when the schedule leaves it to the server's --default-backup-ttl.
-	// Read from the schedule, not from a run: backup sync recreates a run's
-	// object with a new creation time, so expiry less creation is not its TTL.
-	TTL string `json:"ttl,omitempty"`
+	// always sent, "" when the server's --default-backup-ttl applies (see
+	// DeclaredTTL). Read from the schedule, not from a run: backup sync
+	// recreates a run's object with a new creation time, so expiry less
+	// creation is not its TTL.
+	TTL string `json:"ttl"`
+}
+
+// DeclaredTTL is a spec.ttl as Velero applies it: "" when the server's
+// --default-backup-ttl applies, which Velero's backup controller substitutes
+// for an absent or zero duration ("0s" keeps nothing for no time; it means
+// the default). Any other value is returned as written.
+func DeclaredTTL(ttl string) string {
+	if ttl == "" {
+		return ""
+	}
+	if d, err := time.ParseDuration(ttl); err == nil && d == 0 {
+		return ""
+	}
+	return ttl
 }
 
 // ScheduleInput is what ReadSchedule needs. Backups are the namespace's
@@ -201,7 +216,8 @@ func readSchedule(in ScheduleInput) ScheduleReading {
 	r.LastSubmitted = timeField(s, "status", "lastBackup")
 	r.LastSkipped = timeField(s, "status", "lastSkipped")
 	r.Location = scheduleLocation(s, in.DefaultLocation)
-	r.TTL, _, _ = unstructured.NestedString(s.Object, "spec", "template", "ttl")
+	ttl, _, _ := unstructured.NestedString(s.Object, "spec", "template", "ttl")
+	r.TTL = DeclaredTTL(ttl)
 
 	runs := runsOf(s.GetName(), in.Backups)
 	r.Runs = summarizeRuns(runs, in.BackupsRead, in.WithRecent)

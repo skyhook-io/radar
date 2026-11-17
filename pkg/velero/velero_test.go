@@ -546,4 +546,29 @@ func TestReadScheduleTTLFromTemplate(t *testing.T) {
 	if r := read(schedule("nightly", "0 9 * * *"), nil, utcServer, at("12:00")); r.TTL != "" {
 		t.Fatalf("ttl %q, want none when the server default applies", r.TTL)
 	}
+	// Velero's backup controller substitutes its default for a zero duration.
+	for _, zero := range []string{"0s", "0h0m0s", "0"} {
+		s := schedule("nightly", "0 9 * * *", specField("template", map[string]any{"ttl": zero}))
+		if r := read(s, nil, utcServer, at("12:00")); r.TTL != "" {
+			t.Fatalf("ttl %q read as %q, want the server default", zero, r.TTL)
+		}
+	}
+}
+
+func TestDeclaredTTL(t *testing.T) {
+	for in, want := range map[string]string{"": "", "0s": "", "0h0m0s": "", "0": "", "720h0m0s": "720h0m0s", "1h": "1h", "not-a-duration": "not-a-duration"} {
+		if got := DeclaredTTL(in); got != want {
+			t.Errorf("DeclaredTTL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestScheduleReadingAlwaysSendsTTL(t *testing.T) {
+	b, err := json.Marshal(read(schedule("nightly", "0 9 * * *"), nil, utcServer, at("12:00")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"ttl":""`) {
+		t.Fatalf("reading %s, want an explicit empty ttl for the server default", b)
+	}
 }

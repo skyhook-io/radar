@@ -32,7 +32,8 @@ import {
   veleroNextRunText,
   veleroNextRunTitle,
   veleroPlainReason,
-  veleroRetentionText,
+  veleroDeclaredRetention,
+  VELERO_SERVER_DEFAULT_RETENTION,
   veleroScheduleBadge,
   veleroScheduleNeverRan,
   veleroScheduleReasonText,
@@ -329,7 +330,7 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
                   {veleroLocalTime(status.expiration)}
                   <Note>
                     {expired(status.expiration) ? 'Past its retention: Velero deletes it at its next garbage collection' : veleroMomentText(status.expiration)}
-                    {spec.ttl ? ` · retention ${veleroRetentionText(spec.ttl)}` : ''}
+                    {veleroDeclaredRetention(spec.ttl) ? ` · retention ${veleroDeclaredRetention(spec.ttl)}` : ''}
                   </Note>
                 </>
               ) : (
@@ -655,7 +656,7 @@ function VeleroScheduleOverview({ resource, onNavigate }: { resource: any; onNav
               <span className="text-theme-text-secondary">The default storage location, which could not be read</span>
             )}
           </FactRow>
-          <FactRow label="Each run kept for">{template.ttl ? veleroRetentionText(template.ttl) : 'The Velero server’s default (30 days unless it was changed)'}</FactRow>
+          <FactRow label="Each run kept for">{veleroDeclaredRetention(template.ttl) ?? VELERO_SERVER_DEFAULT_RETENTION}</FactRow>
           <FactRow label="Runs Velero keeps">
             {query.isPending ? (
               'Loading…'

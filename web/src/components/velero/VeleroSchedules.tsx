@@ -13,7 +13,7 @@ import {
   veleroScheduleBadge,
   veleroScheduleReasonText,
   veleroLocalTime,
-  veleroRetentionText,
+  veleroDeclaredRetention,
   type VeleroScheduleReading,
 } from '@skyhook-io/k8s-ui'
 import { useMemo } from 'react'
@@ -113,7 +113,8 @@ const SERVER_DEFAULT_TTL = 'The schedule sets no retention, so the Velero server
 
 /** How long each run is kept: the schedule's own setting, else the server's default. */
 export function KeptForCell({ s }: { s: VeleroScheduleReading }) {
-  if (s.ttl) return <>{veleroRetentionText(s.ttl)}</>
+  const kept = veleroDeclaredRetention(s.ttl)
+  if (kept) return <>{kept}</>
   return (
     <Tooltip content={SERVER_DEFAULT_TTL}>
       <span className="text-theme-text-secondary">server default</span>
@@ -123,7 +124,8 @@ export function KeptForCell({ s }: { s: VeleroScheduleReading }) {
 
 /** KeptForCell as a line under where the runs are stored, for a narrow table. */
 export function KeptForLine({ s }: { s: VeleroScheduleReading }) {
-  if (s.ttl) return <Sub>kept for {veleroRetentionText(s.ttl)}</Sub>
+  const kept = veleroDeclaredRetention(s.ttl)
+  if (kept) return <Sub>kept for {kept}</Sub>
   return (
     <Sub>
       <Tooltip content={SERVER_DEFAULT_TTL}>
