@@ -149,3 +149,45 @@ func TestCurrentKindResolutionDoesNotInferCertaintyAfterDiscoveryFailure(t *test
 		t.Fatalf("recovered discovery: %+v", got)
 	}
 }
+
+func TestCatalogSnapshotsTheFailedGroupsOfItsResources(t *testing.T) {
+	failure := &discovery.ErrGroupDiscoveryFailed{Groups: map[schema.GroupVersion]error{
+		{Group: "metrics.k8s.io", Version: "v1beta1"}: errors.New("unavailable"),
+		{Group: "metrics.k8s.io", Version: "v1"}:      errors.New("unavailable"),
+		{Group: "", Version: "v1"}:                    errors.New("unavailable"),
+	}}
+	client := &scriptedDiscovery{lists: widgetLists(), err: failure}
+	d, err := NewResourceDiscovery(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := d.Catalog()
+	if before.Complete || !slices.Equal(before.FailedGroups, []string{"", "metrics.k8s.io"}) {
+		t.Fatalf("partial catalog = %+v", before)
+	}
+	before.FailedGroups[0] = "changed"
+	if !slices.Equal(d.Catalog().FailedGroups, []string{"", "metrics.k8s.io"}) {
+		t.Fatal("a caller's failed-group slice changed discovery")
+	}
+	client.lists = nil
+	if err := d.Refresh(); err == nil {
+		t.Fatal("a refresh returning no resources must fail")
+	}
+	if got := d.Catalog(); got.Complete || !slices.Equal(got.FailedGroups, []string{"", "metrics.k8s.io"}) || len(got.Resources) != 2 {
+		t.Fatalf("a failed refresh changed the catalog: %+v", got)
+	}
+	client.lists, client.err = widgetLists(), errors.New("discovery interrupted")
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Catalog(); got.Complete || len(got.FailedGroups) != 0 {
+		t.Fatalf("unclassified failure must cover no group: %+v", got)
+	}
+	client.err = nil
+	if err := d.Refresh(); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Catalog(); !got.Complete || len(got.FailedGroups) != 0 {
+		t.Fatalf("recovered discovery = %+v", got)
+	}
+}

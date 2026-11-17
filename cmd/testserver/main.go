@@ -60,10 +60,11 @@ func main() {
 	adminPort := flag.Int("admin-port", 0, "load-test: admin listener port for live scaling (0 = <port>+1)")
 	censusProfile := flag.String("census", "", "load-test: seed a named census profile (e.g. large-eks) instead of -pods")
 	censusScale := flag.Float64("census-scale", 1.0, "load-test: scale factor applied to -census counts")
+	vulnReports := flag.Bool("vulnerability-reports", false, "seed Trivy Operator VulnerabilityReports and the workloads they describe (with the default fixture)")
 	replayPath := flag.String("replay", "", "replay a frozen .ndjson.gz cluster capture")
 	flag.Parse()
-	if *replayPath != "" && (*pods != 0 || *censusProfile != "") {
-		log.Fatal("-replay cannot be combined with -pods or -census")
+	if *replayPath != "" && (*pods != 0 || *censusProfile != "" || *vulnReports) {
+		log.Fatal("-replay cannot be combined with -pods, -census or -vulnerability-reports")
 	}
 
 	// Isolate config/settings writes to a temp directory so e2e tests
@@ -110,7 +111,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Seeding %d pods across %d apps / %d namespaces / %d nodes (%d objects, %s)\n",
 			cfg.Pods, gen.AppCount(), cfg.Namespaces, cfg.Nodes, len(objs), time.Since(start).Round(time.Millisecond))
 	} else {
-		fakeClient = fake.NewClientset(seedObjects()...)
+		objs := seedObjects()
+		if *vulnReports {
+			typed, _ := vulnerabilityFixture()
+			objs = append(objs, typed...)
+		}
+		fakeClient = fake.NewClientset(objs...)
 	}
 
 	// --- Initialize subsystems ---
@@ -133,6 +139,13 @@ func main() {
 			log.Fatal(err)
 		}
 		defer k8s.ResetTestDynamicState()
+	}
+
+	if *vulnReports {
+		_, reports := vulnerabilityFixture()
+		if err := initVulnerabilityReports(reports); err != nil {
+			log.Fatalf("initVulnerabilityReports: %v", err)
+		}
 	}
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{

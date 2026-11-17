@@ -1,13 +1,17 @@
 package cachesource
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"slices"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/discovery"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -121,6 +125,7 @@ func TestRecordingManagersInvertMembers(t *testing.T) {
 	for seed := range uint64(10) {
 		w := ownershiptest.Generate(seed)
 		w.Partial = false
+		w.FailedGroups = nil
 		for gk, c := range w.Collection {
 			if c.State != ownershiptest.Unwatchable {
 				w.Collection[gk] = ownershiptest.Collection{OnDemand: c.OnDemand}
@@ -483,5 +488,89 @@ func TestMembershipValidationTracksInventoryObservation(t *testing.T) {
 	check(ownership.MembersUnreadable)
 	if len(s.membershipStates) != 1 {
 		t.Fatalf("retained %d observations", len(s.membershipStates))
+	}
+}
+
+func TestMissingKindsUseTheirGroupsDiscoveryCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		failed       []string
+		unclassified bool
+	}{
+		{name: "metrics failed", failed: []string{"metrics.k8s.io"}},
+		{name: "external metrics failed", failed: []string{"external.metrics.k8s.io"}},
+		{name: "Argo failed", failed: []string{"argoproj.io"}},
+		{name: "unclassified failure", unclassified: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, k8score.CacheConfig{}, nil)
+			client := &worldDiscovery{lists: discoveryLists()}
+			rd, err := k8score.NewResourceDiscovery(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.unclassified {
+				client.err = errors.New("discovery interrupted")
+			} else {
+				failed := map[schema.GroupVersion]error{}
+				for _, group := range tc.failed {
+					failed[schema.GroupVersion{Group: group, Version: "v1beta1"}] = errors.New("unavailable")
+				}
+				client.err = &discovery.ErrGroupDiscoveryFailed{Groups: failed}
+			}
+			if err := rd.Refresh(); err != nil {
+				t.Fatalf("Refresh = %v", err)
+			}
+			f.caches.Discovery = rd
+			s := begin(t, f.source())
+			application := ref("argoproj.io", "Application", "argocd", "app")
+			covered := !tc.unclassified && !slices.Contains(tc.failed, application.Group)
+			wantReason := readreason.ReadError
+			if covered {
+				wantReason = readreason.KindUnknown
+			}
+			if got := s.Object(application); got.State != ownership.Unavailable || got.Gap != (ownership.Gap{Kind: ownership.ArgoApplication, Namespace: "argocd", Reason: wantReason}) {
+				t.Fatalf("Object = %+v; want unavailable %s", got, wantReason)
+			}
+			dependent := ownership.Observation{Ref: ref("apps", "Deployment", "alpha", "web")}
+			owner := metav1.OwnerReference{APIVersion: "argoproj.io/v1alpha1", Kind: "Application", Name: "app", UID: "uid-app"}
+			if got := ownership.ResolveOwner(s, dependent, owner); got.State != ownership.OwnerUnknown || got.Gap.Reason != wantReason {
+				t.Fatalf("ResolveOwner = %+v; want unknown %s", got, wantReason)
+			}
+			cs := s.(*session)
+			keys, reason := cs.placements(application)
+			if covered && (len(keys) != 1 || reason != "") || !covered && (len(keys) != 0 || reason != readreason.ReadError) {
+				t.Fatalf("placements = %v %s; covered %v", keys, reason, covered)
+			}
+			recorders := s.RecordingManagers(dependent.Ref)
+			var wantGaps []ownership.Gap
+			for _, gk := range ownership.RecordingManagerKinds() {
+				if tc.unclassified || slices.Contains(tc.failed, gk.Group) {
+					wantGaps = append(wantGaps, ownership.Gap{Kind: gk, Reason: readreason.ReadError})
+				}
+			}
+			slices.SortFunc(wantGaps, compareGaps)
+			if !slices.Equal(recorders.Gaps, wantGaps) || recorders.Complete() != covered || len(recorders.Managers) != 0 {
+				t.Fatalf("RecordingManagers = %+v; want gaps %+v, complete %v", recorders, wantGaps, covered)
+			}
+			wantState := ownership.ManagerUnknown
+			if covered {
+				wantState = ownership.ManagerNone
+			}
+			if got := ownership.NewView(s, ownership.Unrestricted()).Manager(dependent.Ref); got.State != wantState {
+				t.Fatalf("Manager = %+v; want %s", got, wantState)
+			}
+			client.err = nil
+			client.lists = discoveryLists()
+			if err := rd.Refresh(); err != nil {
+				t.Fatal(err)
+			}
+			if s.Catalog().Complete() || s.Catalog().CoversGroup(application.Group) != covered {
+				t.Fatal("refresh changed an open session's discovery coverage")
+			}
+			if !begin(t, f.source()).Catalog().Complete() {
+				t.Fatal("a new session did not see recovered discovery")
+			}
+		})
 	}
 }
