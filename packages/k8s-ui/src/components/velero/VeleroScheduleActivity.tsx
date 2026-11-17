@@ -15,8 +15,7 @@ import {
   veleroLocalTime,
   veleroNextRunTitle,
   veleroScheduleReasonText,
-  veleroScheduleStateLabel,
-  veleroScheduleTone,
+  veleroScheduleBadge,
   veleroZoneDetail,
   veleroZoneSourceLabel,
 } from './reading'
@@ -33,11 +32,12 @@ export function VeleroRunPhase({ phase }: { phase?: string }) {
   )
 }
 
-/** A schedule's state as a badge in the shared health vocabulary. */
-export function VeleroScheduleStateBadge({ reading }: { reading: Pick<VeleroScheduleReading, 'state' | 'attention'> }) {
+/** A schedule's state as a badge in the shared health vocabulary (see veleroScheduleBadge). */
+export function VeleroScheduleStateBadge({ reading }: { reading: Parameters<typeof veleroScheduleBadge>[0] }) {
+  const badge = veleroScheduleBadge(reading)
   return (
-    <Badge severity={healthToSeverity(veleroScheduleTone(reading))} size="sm">
-      {veleroScheduleStateLabel(reading.state)}
+    <Badge severity={healthToSeverity(badge.tone)} size="sm">
+      {badge.label}
     </Badge>
   )
 }
