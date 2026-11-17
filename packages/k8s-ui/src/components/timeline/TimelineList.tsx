@@ -15,7 +15,8 @@ import {
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Virtuoso, type VirtuosoHandle, type ListItem } from 'react-virtuoso'
+import { Virtuoso, type VirtuosoHandle, type ListItem, type SizeRange } from 'react-virtuoso'
+import { rowOffset } from './timeline-row-offset'
 import { Collapse, CollapseChevron } from '../ui/Collapse'
 import { DURATION_DISCLOSURE, prefersReducedMotion } from '../../utils/animation'
 import { DiffViewer, DiffBadge } from './DiffViewer'
@@ -114,6 +115,8 @@ export interface TimelineListProps {
 const FULL_MOUNT_MAX_ROWS = 300
 const FULL_MOUNT_VIEWPORT_PX = 10_000_000
 const WINDOWED_VIEWPORT_PX = 200
+// How long after the reader's input a correction waits; see lastInputAt.
+const INPUT_SETTLE_MS = 150
 // Only the first rows of an opening or closing fold are listed while it
 // animates; the rest join once it has opened and leave as it starts to close.
 // Virtuoso mounts as many rows as fit, rows collapsed to nothing would all fit
@@ -517,6 +520,14 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   // turns off the browser's own scroll anchoring.
   const anchor = useRef<{ id: string; delta: number; scrollTop: number } | null>(null)
   const committedRows = useRef<ListRow[] | null>(null)
+  // When the reader last used the wheel, touch, a key or the pointer. WebKit
+  // animates a keyboard scroll and the position script reads stays put for its
+  // first frames, so a correction then looks safe and its scroll cancels the
+  // reader's. Corrections wait for a pause in input, then run if the reader
+  // hasn't scrolled meanwhile.
+  const lastInputAt = useRef(-Infinity)
+  const deferredHold = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const runDeferredHold = useRef<() => void>(() => {})
   const handleScrollerRef = useCallback((element: HTMLElement | Window | null) => {
     const next = element instanceof HTMLElement ? element : null
     setScroller(next)
@@ -570,6 +581,17 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       }
     }
   }, [scroller])
+  // Put row `index` `delta` px from the top of the scrollport. A plain scroll to
+  // the offset Virtuoso holds for it: scrollToIndex keeps re-aiming at its
+  // target for up to a second while rows are measured, and the reader's own
+  // scroll doesn't cancel that, so it would pull them back. What measurement
+  // then moves, holdAnchor corrects until the reader scrolls.
+  const placeRow = useCallback((index: number, delta: number) => {
+    let ranges: SizeRange[] = []
+    virtuosoRef.current?.getState((state) => { ranges = state.ranges })
+    if (ranges.length === 0) return
+    virtuosoRef.current?.scrollTo({ top: rowOffset(ranges, index) - delta })
+  }, [])
   // A re-measured row above the reader (a fold whose newest card got longer, a
   // narrower window wrapping text) moves the anchor without any scroll, far
   // enough to leave the rendered range. Only while the scroll position is the
@@ -580,22 +602,30 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (!place || !rows || !scroller) return false
     const top = scroller.scrollTop
     if (top <= 0 || top !== place.scrollTop) return false
+    const sinceInput = performance.now() - lastInputAt.current
+    if (sinceInput < INPUT_SETTLE_MS) {
+      if (deferredHold.current == null) {
+        deferredHold.current = setTimeout(() => {
+          deferredHold.current = null
+          runDeferredHold.current()
+        }, INPUT_SETTLE_MS - sinceInput)
+      }
+      return true
+    }
     // Rows not yet committed here: the layout effect below handles that change.
     if (renderedItems.current.some((rendered) => rows[rendered.index] !== rendered.data)) return true
     const item = renderedItems.current.find((rendered) => rendered.data && anchorId(rendered.data) === place.id)
     const index = item ? item.index : rows.findIndex((row) => anchorId(row) === place.id)
     if (index < 0) return false
     if (!item) {
-      virtuosoRef.current?.scrollToIndex({ index, align: 'start', offset: -place.delta })
+      placeRow(index, place.delta)
       anchor.current = { ...place, scrollTop: scroller.scrollTop }
     } else if (Math.abs(item.offset - top - place.delta) >= 1) {
-      // A plain scroll: scrollToIndex keeps re-aiming for a while as rows are
-      // measured, which would undo a scroll the user starts meanwhile.
       virtuosoRef.current?.scrollTo({ top: item.offset - place.delta })
       anchor.current = { ...place, scrollTop: scroller.scrollTop }
     }
     return true
-  }, [scroller])
+  }, [scroller, placeRow])
   // A focused card that scrolls out of the mounted range is removed from the
   // DOM and focus falls to the body. Focus the same control in the card's new
   // copy if there is one (it can be remounted at once), else the list. Checked
@@ -621,6 +651,15 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       ;(replacement ?? scroller).focus({ preventScroll: true })
     })
   }, [scroller])
+  useLayoutEffect(() => {
+    runDeferredHold.current = () => {
+      if (!holdAnchor()) captureAnchor()
+    }
+  }, [holdAnchor, captureAnchor])
+  useEffect(() => () => {
+    if (deferredHold.current != null) clearTimeout(deferredHold.current)
+    deferredHold.current = null
+  }, [scroller])
   const handleItemsRendered = useCallback((items: ListItem<ListRow>[]) => {
     renderedItems.current = items
     setListReady(items.some((row) => row.size > 0))
@@ -629,6 +668,15 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     reportVisibleWindow()
     restoreFocusLater()
   }, [holdAnchor, captureAnchor, reportVisibleWindow, restoreFocusLater])
+  useEffect(() => {
+    if (!scroller) return
+    const onInput = () => { lastInputAt.current = performance.now() }
+    const inputs = ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'] as const
+    for (const type of inputs) scroller.addEventListener(type, onInput, { capture: true, passive: true })
+    return () => {
+      for (const type of inputs) scroller.removeEventListener(type, onInput, { capture: true })
+    }
+  }, [scroller])
   useEffect(() => {
     if (!scroller) return
     const onFocusIn = (event: FocusEvent) => {
@@ -676,9 +724,11 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (!previous || previous === listRows || !place || !scroller || scroller.scrollTop <= 0) return
     const index = listRows.findIndex((row) => anchorId(row) === place.id)
     if (index < 0 || index === previous.findIndex((row) => anchorId(row) === place.id)) return
-    virtuosoRef.current?.scrollToIndex({ index, align: 'start', offset: -place.delta })
-    anchor.current = { ...place, scrollTop: scroller.scrollTop }
-  }, [listRows, scroller])
+    // A scroll whose event hasn't arrived yet is the reader's; keep it.
+    const delta = place.delta - (scroller.scrollTop - place.scrollTop)
+    placeRow(index, delta)
+    anchor.current = { id: place.id, delta, scrollTop: scroller.scrollTop }
+  }, [listRows, scroller, placeRow])
 
   // Carry the swimlane's view window into the list: once rows exist, scroll so
   // the row nearest `scrollToMs` sits at the top. Applied once per `scrollToMs`

@@ -5,6 +5,26 @@ import { VirtuosoMockContext } from 'react-virtuoso'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { TimelineEvent } from '../../types'
 import { TimelineList, type TimelineListProps } from './TimelineList'
+import { rowOffset } from './timeline-row-offset'
+
+// Records the list's scrollToIndex calls. Virtuoso keeps re-aiming at that
+// target while rows are measured, which fixed-height tests can't show.
+const scrollToIndexCalls = vi.hoisted(() => [] as unknown[])
+vi.mock('react-virtuoso', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-virtuoso')>()
+  const React = await import('react')
+  const Virtuoso = React.forwardRef((props: object, ref) => {
+    const inner = React.useRef<Record<string, (...args: unknown[]) => unknown>>(null)
+    React.useImperativeHandle(ref, () => new Proxy({}, {
+      get: (_, key: string) => (...args: unknown[]) => {
+        if (key === 'scrollToIndex') scrollToIndexCalls.push(args[0])
+        return inner.current?.[key](...args)
+      },
+    }), [])
+    return React.createElement(actual.Virtuoso as never, { ...props, ref: inner })
+  })
+  return { ...actual, Virtuoso }
+})
 
 const now = Date.now()
 const events: TimelineEvent[] = Array.from({ length: 50_000 }, (_, index) => ({
@@ -40,6 +60,7 @@ afterEach(async () => {
   else Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
   scrollTo.mockClear()
   scrollTo.mockImplementation(scrollToImpl)
+  scrollToIndexCalls.length = 0
   vi.restoreAllMocks()
 })
 
@@ -196,6 +217,33 @@ it('keeps the reader in place when events arrive above, and shows them at the ve
   expect(scroller().scrollTop).toBe(0)
   expect(scrollTo).not.toHaveBeenCalled()
   expect(container.querySelector('[data-event-id="new-5"]')).not.toBeNull()
+})
+
+it('restores the reader with a plain scroll, never scrollToIndex, so their next scroll is not undone', async () => {
+  const list = events.slice(0, 400)
+  await render({ events: list })
+  await scroll(5000)
+  await render({ events: [...newer(5), ...list] })
+  expect(scroller().scrollTop).toBe(5500)
+  expect(scrollToIndexCalls).toEqual([])
+})
+
+it('keeps a scroll whose event has not arrived yet when events arrive above', async () => {
+  const list = events.slice(0, 400)
+  await render({ events: list })
+  await scroll(5000)
+  scroller().scrollTop = 5300
+  await render({ events: [...newer(5), ...list] })
+  expect(scroller().scrollTop).toBe(5800)
+})
+
+it('computes a row offset from size ranges', () => {
+  const ranges = [{ startIndex: 0, endIndex: 2, size: 50 }, { startIndex: 3, endIndex: 3, size: 120 }, { startIndex: 4, endIndex: Infinity, size: 80 }]
+  expect(rowOffset(ranges, 0)).toBe(0)
+  expect(rowOffset(ranges, 3)).toBe(150)
+  expect(rowOffset(ranges, 4)).toBe(270)
+  expect(rowOffset(ranges, 6)).toBe(430)
+  expect(rowOffset([], 6)).toBe(0)
 })
 
 it('keeps the reader in place when arrivals open a new time group above', async () => {
