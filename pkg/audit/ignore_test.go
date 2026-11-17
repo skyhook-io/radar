@@ -353,10 +353,46 @@ func TestNilNamespacesUnchanged(t *testing.T) {
 	without := RunChecks(newInput())
 	withEmpty := newInput()
 	withEmpty.Namespaces = []*corev1.Namespace{{ObjectMeta: metav1.ObjectMeta{Name: "a"}}}
-	if got := RunChecks(withEmpty); !reflect.DeepEqual(got, without) {
+	got := RunChecks(withEmpty)
+	got.NamespaceIgnoreChecks = false
+	if !reflect.DeepEqual(got, without) {
 		t.Errorf("unannotated Namespaces changed results:\n got %+v\nwant %+v", got, without)
 	}
 	if !findingNames(without.Findings, "singleReplica")["solo-flagged"] {
 		t.Error("without Namespaces the unannotated deployment must keep its finding")
+	}
+}
+
+func TestNamespaceIgnoreSameCheckOnResourceAndNamespaceCountsOnce(t *testing.T) {
+	input := &CheckInput{
+		ServiceAccounts:          []*corev1.ServiceAccount{},
+		HorizontalPodAutoscalers: []*autoscalingv2.HorizontalPodAutoscaler{},
+		Deployments: []*appsv1.Deployment{
+			annotated(deploymentInNS("both", "a", 1, secureContainer("app", true)), "singleReplica"),
+			deploymentInNS("sibling", "b", 1, secureContainer("app", true)),
+		},
+		Namespaces: []*corev1.Namespace{annotatedNamespace("a", "singleReplica"), {ObjectMeta: metav1.ObjectMeta{Name: "b"}}},
+	}
+	results := RunChecks(input)
+
+	if got := results.CheckCounts["singleReplica"]; got != (CheckCount{Evaluated: 1, Passed: 0}) {
+		t.Errorf("singleReplica counts = %+v, want {Evaluated:1 Passed:0}", got)
+	}
+	want := map[string]map[string]int{"singleReplica": {"a": 1}}
+	if !reflect.DeepEqual(results.AnnotationIgnoredByNamespace, want) {
+		t.Errorf("AnnotationIgnoredByNamespace = %v, want %v", results.AnnotationIgnoredByNamespace, want)
+	}
+}
+
+func TestNamespaceIgnoreChecksFlag(t *testing.T) {
+	if RunChecks(&CheckInput{}).NamespaceIgnoreChecks {
+		t.Error("NamespaceIgnoreChecks must be unset without Namespaces")
+	}
+	results := RunChecks(&CheckInput{Namespaces: []*corev1.Namespace{}})
+	if !results.NamespaceIgnoreChecks {
+		t.Error("NamespaceIgnoreChecks must be set when Namespaces were provided")
+	}
+	if !ApplySettings(results, []string{"a"}, []string{"singleReplica"}).NamespaceIgnoreChecks {
+		t.Error("ApplySettings must keep NamespaceIgnoreChecks")
 	}
 }

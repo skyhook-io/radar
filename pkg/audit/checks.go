@@ -180,6 +180,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 	results := buildResults(findings, tr, missingInputs)
 	results.IgnoreChecksAnnotation = IgnoreChecksAnnotation
 	results.AnnotationIgnoredByNamespace = ignored
+	results.NamespaceIgnoreChecks = input != nil && input.Namespaces != nil
 	return results
 }
 

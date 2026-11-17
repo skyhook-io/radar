@@ -1057,6 +1057,9 @@ kubectl annotate namespace batch-jobs radarhq.io/ignore-checks=cpuLimitMissing
 It adds to any annotation on the resource itself and does not affect
 cluster-scoped resources such as PersistentVolumes. Radar applies it only when
 it can list Namespaces cluster-wide; otherwise those findings stay visible.
+With authentication on, a user who cannot read Namespace objects can still
+infer from the hidden-findings count that their namespace carries the
+annotation and which check IDs it lists.
 
 ### Storage review checks
 

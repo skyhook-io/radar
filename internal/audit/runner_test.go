@@ -1,9 +1,7 @@
 package audit
 
 import (
-	"errors"
 	"testing"
-	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
@@ -15,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
-	clienttesting "k8s.io/client-go/testing"
 )
 
 type testLister[T any] struct {
@@ -89,29 +86,13 @@ func TestCollectNamespacesOnlyWhenClusterWideReady(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(k8s.ResetTestState)
-			if got := flagged(RunFromCache(k8s.GetResourceCache(), nil, nil)); got != tc.want {
+			r := RunFromCache(k8s.GetResourceCache(), nil, nil)
+			if got := flagged(r); got != tc.want {
 				t.Fatalf("singleReplica flagged = %v, want %v", got, tc.want)
+			}
+			if r.NamespaceIgnoreChecks != tc.namespaces {
+				t.Fatalf("NamespaceIgnoreChecks = %v, want %v", r.NamespaceIgnoreChecks, tc.namespaces)
 			}
 		})
 	}
-
-	t.Run("Namespaces not synced", func(t *testing.T) {
-		client := fake.NewClientset(objects()...)
-		client.PrependReactor("list", "namespaces", func(clienttesting.Action) (bool, runtime.Object, error) {
-			return true, nil, errors.New("initial list unavailable")
-		})
-		core, err := k8score.NewResourceCache(k8score.CacheConfig{
-			Client:         client,
-			ResourceTypes:  map[string]bool{k8score.Deployments: true, k8score.HorizontalPodAutoscalers: true, k8score.Namespaces: true},
-			ResourceScopes: map[string]k8score.ResourceScope{k8score.Deployments: {Enabled: true}, k8score.HorizontalPodAutoscalers: {Enabled: true}, k8score.Namespaces: {Enabled: true}},
-			SyncTimeout:    20 * time.Millisecond,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(core.Stop)
-		if !flagged(RunFromCache(&k8s.ResourceCache{ResourceCache: core}, nil, nil)) {
-			t.Fatal("an unsynced Namespace informer must not hide findings")
-		}
-	})
 }

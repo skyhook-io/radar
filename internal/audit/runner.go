@@ -113,8 +113,9 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 }
 
 // CollectNamespaces returns the Namespace objects that carry namespace-wide
-// check opt-outs, or nil when the informer isn't synced cluster-wide: a
-// partial list must not decide which findings stay visible.
+// check opt-outs, or nil when the informer isn't synced cluster-wide. A
+// partial list could only show more findings, never hide more, but nil keeps
+// NamespaceIgnoreChecks from claiming an opt-out Radar can't fully read.
 func CollectNamespaces(cache *k8s.ResourceCache) []*corev1.Namespace {
 	if cache == nil || !typedConfigCoverage(cache, k8score.Namespaces, "") {
 		return nil
