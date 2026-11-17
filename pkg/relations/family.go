@@ -244,21 +244,20 @@ func legacyGroupOnly(r resourceid.Ref) ownership.Gap {
 
 // served are the candidates whose kind the cluster serves, so an API group
 // a cluster doesn't have, such as traefik.io before Traefik 2.10, shadows
-// nothing. It drops one only when discovery is complete and another is
-// served; otherwise every candidate is tried, and an unserved one says why.
+// nothing. It drops one only when discovery covered its group and another
+// is served; otherwise every candidate is tried, and an unserved one says
+// why.
 func (v *View) served(candidates []resourceid.Ref) []resourceid.Ref {
 	if len(candidates) < 2 {
 		return candidates
 	}
 	catalog := v.session.Catalog()
-	if !catalog.Complete() {
-		return candidates
-	}
 	var out []resourceid.Ref
 	for _, r := range candidates {
 		// An ambiguous kind is served, just not readable: it stays, so its
-		// read stops the resolution.
-		if _, known := catalog.Kind(r.GroupKind()); known || catalog.Ambiguous(r.GroupKind()) {
+		// read stops the resolution. So does one whose group discovery
+		// missed.
+		if _, known := catalog.Kind(r.GroupKind()); known || catalog.Ambiguous(r.GroupKind()) || !catalog.CoversGroup(r.Group) {
 			out = append(out, r)
 		}
 	}
