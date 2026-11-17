@@ -21,6 +21,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/ownership"
+	"github.com/skyhook-io/radar/pkg/readreason"
 	"github.com/skyhook-io/radar/pkg/relations"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -240,6 +241,59 @@ func TestApplicationsSelectorBatchScopesAndPredicates(t *testing.T) {
 	for field, refs := range want {
 		if !reflect.DeepEqual(batch.fields[field], refs) {
 			t.Fatalf("%s=%#v want=%#v", field, batch.fields[field], refs)
+		}
+	}
+}
+
+// unreadableRef reads as Unavailable for ref, as an unloaded store would.
+type unreadableRef struct {
+	relations.Session
+	ref resourceid.Ref
+}
+
+func (s unreadableRef) Borrow(ref resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
+	if ref == s.ref {
+		return nil, ownership.ObjectRead{State: ownership.Unavailable, Gap: ownership.Gap{Kind: ref.GroupKind(), Namespace: ref.Namespace, Reason: readreason.KindSyncPending}}
+	}
+	return s.Session.Borrow(ref)
+}
+
+// A Rollout whose workloadRef target couldn't be read may be selected by a
+// Service, so its exposure is unknown rather than a worker's.
+func TestApplicationsBatchKeepsAnUndecidedSelectionUnknown(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(testNamespaces("prod")...))
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "metadata": map[string]any{"namespace": "prod", "name": "web"},
+		"spec": map[string]any{"workloadRef": map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "name": "web-template"}},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "RolloutList"}, rollout)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Rollout", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	addApplicationTypedDiscovery()
+	dc := k8s.GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil || !dc.WaitForSync(gvr, 2*time.Second) {
+		t.Fatalf("watch %v: %v", gvr, err)
+	}
+	session, err := k8s.BeginOwnershipRead(k8s.GetResourceCache())
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := resourceid.NewRef("apps", "Deployment", "prod", "web-template")
+	for _, tc := range []struct {
+		name    string
+		s       relations.Session
+		unknown bool
+	}{
+		{"template absent", session.(relations.Session), false},
+		{"template unreadable", unreadableRef{session.(relations.Session), template}, true},
+	} {
+		batch := buildAppRelationBatch(context.Background(), tc.s, nil)
+		rel := batch.relationshipsForRef("argoproj.io", "Rollout", "prod", "web")
+		if got := rel != nil && rel.exposureIncomplete; got != tc.unknown {
+			t.Errorf("%s: exposure unknown = %v, want %v", tc.name, got, tc.unknown)
 		}
 	}
 }
