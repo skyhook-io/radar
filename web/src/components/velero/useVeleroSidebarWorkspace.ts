@@ -18,7 +18,8 @@ export function veleroDiscovered(apiResources: APIResource[] | undefined): boole
 /**
  * The Velero entry for the Resources sidebar: the Overview, the one screen no
  * single kind's list answers, with how much needs attention. Its kinds follow
- * as usual; Schedule and BackupStorageLocation open Radar's own tables.
+ * as usual; Schedule, BackupStorageLocation, Backup and Restore open Radar's
+ * own tables.
  * Undefined when Velero is not discovered, or the connected Radar is known to
  * predate the views. The count covers every installation: the namespace
  * filter does not apply to Velero.
