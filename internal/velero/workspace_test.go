@@ -2,7 +2,9 @@ package velero
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,7 +136,7 @@ func TestRuns(t *testing.T) {
 		obj("Backup", "velero", "newer", nil, map[string]any{}, map[string]any{"phase": "PartiallyFailed", "startTimestamp": at(1), "errors": int64(2)}),
 		obj("Backup", "other", "elsewhere", nil, map[string]any{}, map[string]any{"phase": "Completed", "startTimestamp": at(2)}),
 	}
-	restore := obj("Restore", "velero", "copy", nil, map[string]any{"backupName": "older", "namespaceMapping": map[string]any{"app": "app-copy"}},
+	restore := obj("Restore", "velero", "copy", nil, map[string]any{"backupName": "older", "namespaceMapping": map[string]any{"app": "app-copy"}, "includedNamespaces": []any{"app", "web"}, "excludedNamespaces": []any{"tmp"}},
 		map[string]any{"phase": "Completed", "startTimestamp": at(1), "progress": map[string]any{"totalItems": int64(4), "itemsRestored": int64(4)}})
 
 	t.Run("newest first, with what the lists show", func(t *testing.T) {
@@ -163,6 +165,23 @@ func TestRuns(t *testing.T) {
 		r := resp.Runs[0]
 		if r.BackupName != "older" || r.NamespaceMapping["app"] != "app-copy" || r.ItemsDone == nil || *r.ItemsDone != 4 {
 			t.Errorf("restore %+v", r)
+		}
+		if r.IncludedNamespaces == nil || strings.Join(*r.IncludedNamespaces, ",") != "app,web" || r.ExcludedNamespaces == nil || strings.Join(*r.ExcludedNamespaces, ",") != "tmp" {
+			t.Errorf("a restore's namespaces %v / %v", r.IncludedNamespaces, r.ExcludedNamespaces)
+		}
+	})
+
+	t.Run("a restore of every namespace says so, and a backup carries no selection", func(t *testing.T) {
+		every := obj("Restore", "velero", "all", nil, map[string]any{"backupName": "older"}, map[string]any{"phase": "Completed"})
+		resp := fakeRead{objects: map[string][]*unstructured.Unstructured{"restores": {every}}}.reader().Runs(context.Background(), RunsKey("restores"), "", RunsFilter{})
+		body, _ := json.Marshal(resp.Runs[0])
+		if !strings.Contains(string(body), `"includedNamespaces":[]`) || !strings.Contains(string(body), `"excludedNamespaces":[]`) {
+			t.Errorf("restore %s", body)
+		}
+		backupsResp := fakeRead{objects: map[string][]*unstructured.Unstructured{"backups": backups}}.reader().Runs(context.Background(), RunsKey("backups"), "", RunsFilter{})
+		body, _ = json.Marshal(backupsResp.Runs[0])
+		if strings.Contains(string(body), "includedNamespaces") {
+			t.Errorf("backup %s", body)
 		}
 	})
 

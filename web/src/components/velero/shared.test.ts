@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { selectionText } from './shared'
+import { restoredIntoText, selectionText } from './shared'
 
 // Specs as Velero 1.18 leaves them after processing: it writes these
 // exclusions into every Backup and Restore itself.
@@ -47,5 +47,22 @@ describe('a Velero selection', () => {
 
   it('counts a restore exclusion on a backup, where Velero does not add it', () => {
     expect(selectionText({ excludedResources: ['nodes'] }, '').narrowed).toBe(true)
+  })
+})
+
+describe('where a restore puts things', () => {
+  it('names every included namespace, with the mapped one’s destination', () => {
+    expect(restoredIntoText({ includedNamespaces: ['demo', 'shop'], namespaceMapping: { demo: 'demo-copy' } })).toBe('demo → demo-copy, shop')
+  })
+
+  it('reads all namespaces with a mapping as every namespace, with that mapping', () => {
+    expect(restoredIntoText({ includedNamespaces: ['*'], namespaceMapping: { demo: 'demo-copy' } })).toBe('Every namespace in the backup, with demo → demo-copy')
+    expect(restoredIntoText({ includedNamespaces: [], excludedNamespaces: [] })).toBe('Every namespace in the backup')
+  })
+
+  it('drops the mapping of an excluded namespace, which Velero restores nothing from', () => {
+    expect(restoredIntoText({ includedNamespaces: [], excludedNamespaces: ['demo'], namespaceMapping: { demo: 'demo-copy', shop: 'shop-copy' } })).toBe(
+      'Every namespace in the backup, with shop → shop-copy, except demo',
+    )
   })
 })

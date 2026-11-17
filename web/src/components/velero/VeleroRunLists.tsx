@@ -1,9 +1,10 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Plus, Search } from 'lucide-react'
+import { Tooltip } from '@skyhook-io/k8s-ui'
 import { useVeleroRuns, type VeleroRunRow } from '../../api/velero'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { ScreenBody, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
-import { VeleroName, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
+import { VeleroName, VeleroWorkspaceHeader, inInstallation, restoredIntoText, veleroResource, type VeleroScreenProps } from './shared'
 import { Expires, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, runViewOptions, runsEmpty, useRunView } from './runs'
 
 // Rows rendered at once; the rest are a click away, and search narrows first.
@@ -72,6 +73,20 @@ function OutcomeCell({ kind, run }: { kind: 'Backup' | 'Restore'; run: VeleroRun
       <RunOutcome kind={kind} phase={run.phase} />
       <RunReason run={run} />
     </>
+  )
+}
+
+/** Where a restore put things, as its page says it; only the mapping from a Radar that does not send the selection. */
+export function RestoreIntoCell({ run }: { run: VeleroRunRow }) {
+  if (run.includedNamespaces === undefined) {
+    const mapping = Object.entries(run.namespaceMapping ?? {})
+    return mapping.length ? <>{mapping.map(([from, to]) => `${from} → ${to}`).join(', ')}</> : <span className="text-theme-text-tertiary">original namespaces</span>
+  }
+  const text = restoredIntoText(run)
+  return (
+    <Tooltip content={text}>
+      <span className="line-clamp-2 break-words">{text}</span>
+    </Tooltip>
   )
 }
 
@@ -197,10 +212,7 @@ export function VeleroRestores({ data, installation, onInstallation, onInspect, 
     {
       header: 'Into',
       width: '170px',
-      cell: (r) => {
-        const mapping = Object.entries(r.namespaceMapping ?? {})
-        return mapping.length ? mapping.map(([from, to]) => `${from} → ${to}`).join(', ') : <span className="text-theme-text-tertiary">original namespaces</span>
-      },
+      cell: (r) => <RestoreIntoCell run={r} />,
     },
     { header: 'Started', width: wide ? '100px' : '130px', cell: (r) => <StartedCell run={r} folded={!wide} /> },
     ...(wide ? [{ header: 'Took', width: '75px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' }] : []),

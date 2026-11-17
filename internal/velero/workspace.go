@@ -347,10 +347,15 @@ type Run struct {
 	ItemsTotal *int64 `json:"itemsTotal,omitempty"`
 	Errors     int64  `json:"errors"`
 	Warnings   int64  `json:"warnings"`
-	// BackupName and NamespaceMapping are a Restore's.
-	BackupName       string            `json:"backupName,omitempty"`
-	ScheduleName     string            `json:"scheduleName,omitempty"`
-	NamespaceMapping map[string]string `json:"namespaceMapping,omitempty"`
+	// BackupName, NamespaceMapping and the namespace selection are a Restore's:
+	// together they say where it restored into. The selection is always sent
+	// for a Restore, empty meaning every namespace in the backup, so a UI can
+	// tell it from a Radar that does not send it.
+	BackupName         string            `json:"backupName,omitempty"`
+	ScheduleName       string            `json:"scheduleName,omitempty"`
+	NamespaceMapping   map[string]string `json:"namespaceMapping,omitempty"`
+	IncludedNamespaces *[]string         `json:"includedNamespaces,omitempty"`
+	ExcludedNamespaces *[]string         `json:"excludedNamespaces,omitempty"`
 }
 
 // RunsResponse is GET /api/velero/runs/{backups|restores}.
@@ -464,6 +469,15 @@ func runOf(u *unstructured.Unstructured, restore bool) Run {
 		if m, found, _ := unstructured.NestedStringMap(u.Object, "spec", "namespaceMapping"); found && len(m) > 0 {
 			run.NamespaceMapping = m
 		}
+		included, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "includedNamespaces")
+		excluded, _, _ := unstructured.NestedStringSlice(u.Object, "spec", "excludedNamespaces")
+		if included == nil {
+			included = []string{}
+		}
+		if excluded == nil {
+			excluded = []string{}
+		}
+		run.IncludedNamespaces, run.ExcludedNamespaces = &included, &excluded
 	} else {
 		run.ItemsDone = opt("status", "progress", "itemsBackedUp")
 	}

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import {
   Disclosure,
@@ -18,6 +18,7 @@ import {
   getRestoreErrors,
   getRestoreNamespaceMapping,
   getRestoreStatus,
+  getRestoreValidationErrors,
   getRestoreWarnings,
   refToSelectedResource,
   toneTextClass,
@@ -56,7 +57,8 @@ import { RunMessages } from './VeleroRunMessagesHost'
 import { VeleroBackupDeletionRow } from './VeleroDeleteBackup'
 import { Expires, FAILED, Outcome, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
 import { VELERO_DETAIL_KINDS } from './routes'
-import { VELERO_MESSAGE_LABEL, VeleroName, list, selectionText, veleroResource } from './shared'
+import { VELERO_MESSAGE_LABEL, VeleroName, restoreTargets, selectionText, veleroResource, type RestoreSelection } from './shared'
+import { RestoreIntoCell } from './VeleroRunLists'
 import { veleroObjectProblems } from './attention'
 
 // The pages' own sections, beside Radar's detail view: a composed Overview for
@@ -364,6 +366,7 @@ export function VeleroBackupRestores({ namespace, name, onNavigate }: { namespac
         columns={[
           { header: 'Restore', cell: (r: VeleroRunRow) => <VeleroName name={r.name} /> },
           { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <><RunOutcome kind="Restore" phase={r.phase} /><RunReason run={r} /></> },
+          { header: 'Into', width: '200px', cell: (r: VeleroRunRow) => <RestoreIntoCell run={r} /> },
           { header: 'Started', width: '120px', cell: (r: VeleroRunRow) => <When iso={r.started} fallback="not started" /> },
           { header: 'Took', width: '90px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
           { header: 'Errors · warnings', width: '140px', cell: (r: VeleroRunRow) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
@@ -380,16 +383,35 @@ export function VeleroBackupRestores({ namespace, name, onNavigate }: { namespac
 
 // ---- Restore ------------------------------------------------------------
 
-/** Where a restore puts things: the namespaces it selects, a mapped one as "a → b". */
-function restoredInto(spec: any, mapping: Record<string, string>): string {
-  const included = list(spec?.includedNamespaces)
-  const excluded = list(spec?.excludedNamespaces)
-  const mapped = Object.entries(mapping)
-  const base =
-    included.length === 0 || included.includes('*')
-      ? `Every namespace in the backup${mapped.length ? `, with ${mapped.map(([from, to]) => `${from} → ${to}`).join(', ')}` : ''}`
-      : included.map((ns) => (mapping[ns] ? `${ns} → ${mapping[ns]}` : ns)).join(', ')
-  return excluded.length ? `${base}, except ${excluded.join(', ')}` : base
+/** Where a restore puts things, each destination namespace a link. */
+function RestoredIntoValue({ spec, onNavigate }: { spec: RestoreSelection; onNavigate?: NavigateToResource }) {
+  const { every, entries, excluded } = restoreTargets(spec)
+  const ns = (name: string) => <Link onClick={() => onNavigate?.(refToSelectedResource({ kind: 'Namespace', group: '', namespace: '', name }))}>{name}</Link>
+  const named = entries.map((e, i) => (
+    <Fragment key={e.from}>
+      {i > 0 && ', '}
+      {e.to ? (
+        <>
+          {e.from} → {ns(e.to)}
+        </>
+      ) : (
+        ns(e.from)
+      )}
+    </Fragment>
+  ))
+  return (
+    <>
+      {every ? (
+        <>
+          Every namespace in the backup
+          {entries.length > 0 && <>, with {named}</>}
+        </>
+      ) : (
+        named
+      )}
+      {excluded.length > 0 && `, except ${excluded.join(', ')}`}
+    </>
+  )
 }
 
 function VeleroRestoreOverview({ resource, onNavigate }: { resource: any; onNavigate?: NavigateToResource }) {
@@ -399,6 +421,9 @@ function VeleroRestoreOverview({ resource, onNavigate }: { resource: any; onNavi
   const backupName = getRestoreBackupName(resource)
   const mapping = getRestoreNamespaceMapping(resource)
   const narrowed = selectionText(spec, '', 'restore').narrowed
+  const rejected = status.phase === 'FailedValidation'
+  const rawReason: string | undefined = rejected ? getRestoreValidationErrors(resource).join('; ') || undefined : undefined
+  const reason = veleroPlainReason(rawReason) ?? rawReason
   // Velero counts every item it went through, including those it skipped or failed.
   const progress = status.progress?.totalItems ? `${status.progress.itemsRestored ?? 0} of ${status.progress.totalItems} items processed` : undefined
   const when = whenText(status)
@@ -407,13 +432,22 @@ function VeleroRestoreOverview({ resource, onNavigate }: { resource: any; onNavi
   return (
     <Card title="At a glance">
       <FactGrid>
-        <FactRow label="Restored into">
-          {restoredInto(spec, mapping)}
-          <Note>
-            {declaredNote(narrowed)}
-            {Object.keys(mapping).length > 0 ? ' · unmapped namespaces keep their names' : ''}
-          </Note>
-        </FactRow>
+        {rejected ? (
+          <FactRow label="Restored">
+            <span className={toneTextClass('unhealthy')}>Nothing</span>
+            {' — Velero rejected it'}
+            {reason ? `: ${reason}` : ''}
+            {reason && rawReason && reason !== rawReason && <RawMessage message={rawReason} />}
+          </FactRow>
+        ) : (
+          <FactRow label="Restored into">
+            <RestoredIntoValue spec={spec} onNavigate={onNavigate} />
+            <Note>
+              {declaredNote(narrowed)}
+              {Object.keys(mapping).length > 0 ? ' · unmapped namespaces keep their names' : ''}
+            </Note>
+          </FactRow>
+        )}
         <FactRow label="Outcome">
           <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
             <Outcome badge={getRestoreStatus(resource)} />

@@ -33,7 +33,7 @@ vi.mock('../../api/policy', async (importOriginal) => ({
 }))
 
 const { parseVeleroRoute, veleroDetailKindFor, veleroDetailPath } = await import('./routes')
-const { VeleroLocationBackups, locationState, renderVeleroSummary } = await import('./VeleroPages')
+const { VeleroBackupRestores, VeleroLocationBackups, locationState, renderVeleroSummary } = await import('./VeleroPages')
 const { VeleroBackups } = await import('./VeleroRunLists')
 const { VeleroScheduleStateBadge } = await import('@skyhook-io/k8s-ui')
 const { veleroResourceHost } = await import('./host')
@@ -212,11 +212,33 @@ describe('The composed Overview', () => {
       status: { phase: 'PartiallyFailed', startTimestamp: hoursAgo(1), completionTimestamp: hoursAgo(1), progress: { itemsRestored: 10, totalItems: 12 }, warnings: 3, errors: 0 },
     })
     expect(html.indexOf('Restored into')).toBeLessThan(html.indexOf('Outcome'))
-    expect(html).toContain('demo → demo-copy, shop')
+    expect(html.replace(/<[^>]*>/g, '')).toContain('demo → demo-copy, shop')
+    expect(html).toMatch(/<button[^>]*>demo-copy<\/button>/)
+    expect(html).toMatch(/<button[^>]*>shop<\/button>/)
     expect(html).toContain('unmapped namespaces keep their names')
     expect(html).toContain('10 of 12 items processed')
     expect(html).toContain('3 warnings')
     expect(html).not.toContain('items restored')
+  })
+
+  it('says a rejected restore restored nothing, and why', () => {
+    state.workspace = workspace()
+    const html = page('restores', {
+      metadata: { namespace: 'velero', name: 'r' },
+      spec: { backupName: 'b', includedNamespaces: ['*'] },
+      status: { phase: 'FailedValidation', validationErrors: ['The BSL dr-replica is unavailable, cannot retrieve the backup'] },
+    })
+    expect(html).toContain('Nothing</span> — Velero rejected it: Its storage location dr-replica is unavailable')
+    expect(html).not.toContain('Restored into')
+    expect(html).not.toContain('Every namespace in the backup')
+  })
+
+  it('shows where each restore from a backup went, on its Restores tab', () => {
+    state.runsBy = { 'restores:b': runsOf([{ namespace: 'velero', name: 'r1', uid: 'r1', phase: 'Completed', errors: 0, warnings: 0, includedNamespaces: ['demo', 'shop'], excludedNamespaces: [], namespaceMapping: { demo: 'demo-copy' } }]) }
+    const html = text(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter><VeleroBackupRestores namespace="velero" name="b" /></MemoryRouter></QueryClientProvider>))
+    expect(html).toContain('>Into<')
+    expect(html).toContain('demo → demo-copy, shop')
+    state.runsBy = {}
   })
 
   it('leads a schedule with its last success, next run and recent runs, and says when its last run failed', () => {

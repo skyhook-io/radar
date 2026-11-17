@@ -109,6 +109,38 @@ export function selectionText(spec: any, emptyMeans: string, kind: 'backup' | 'r
   return { text, narrowed }
 }
 
+/** A restore's namespace selection: its spec, or a run row's copy of it. */
+export interface RestoreSelection {
+  includedNamespaces?: unknown
+  excludedNamespaces?: unknown
+  namespaceMapping?: Record<string, string>
+}
+
+/**
+ * Where a restore puts things: every namespace in the backup or the ones it
+ * includes, each mapped one with its destination, and what it excludes. A
+ * mapping for an excluded namespace does nothing, since Velero restores
+ * nothing from it.
+ */
+export function restoreTargets(spec: RestoreSelection | undefined): { every: boolean; entries: { from: string; to?: string }[]; excluded: string[] } {
+  const included = list(spec?.includedNamespaces)
+  const excluded = list(spec?.excludedNamespaces)
+  const mapping = spec?.namespaceMapping ?? {}
+  const every = included.length === 0 || included.includes('*')
+  const entries = every
+    ? Object.entries(mapping).filter(([from]) => !excluded.includes(from)).map(([from, to]) => ({ from, to }))
+    : included.map((from) => ({ from, to: mapping[from] }))
+  return { every, entries, excluded }
+}
+
+/** "Every namespace in the backup, with a → b, except c", or "a → b, shop". */
+export function restoredIntoText(spec: RestoreSelection | undefined): string {
+  const { every, entries, excluded } = restoreTargets(spec)
+  const named = entries.map((e) => (e.to ? `${e.from} → ${e.to}` : e.from)).join(', ')
+  const base = every ? `Every namespace in the backup${entries.length ? `, with ${named}` : ''}` : named
+  return excluded.length ? `${base}, except ${excluded.join(', ')}` : base
+}
+
 /** An object's name in a table: mono, one line, cut with an ellipsis and whole on hover. */
 export function VeleroName({ name }: { name: string }) {
   return (

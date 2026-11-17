@@ -99,6 +99,9 @@ export interface VeleroRunRow {
   backupName?: string
   scheduleName?: string
   namespaceMapping?: Record<string, string>
+  /** A Restore's selection, empty for every namespace in the backup; absent from an older Radar. */
+  includedNamespaces?: string[]
+  excludedNamespaces?: string[]
 }
 
 export interface VeleroRunsResponse {
