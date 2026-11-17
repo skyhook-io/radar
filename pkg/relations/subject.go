@@ -10,6 +10,8 @@ import (
 
 // CaptureSubject pins every read of subject to fetched. A different cached
 // UID refuses the capture; resourceVersion drift within an incarnation does not.
+// A subject the cache doesn't hold, or can't read, keeps that read, so the
+// answers that need the cache's copy still say it is missing.
 func CaptureSubject(s Session, subject resourceid.Ref, fetched runtime.Object) (Session, bool) {
 	meta, err := apimeta.Accessor(fetched)
 	if err != nil {
@@ -24,7 +26,7 @@ func CaptureSubject(s Session, subject resourceid.Ref, fetched runtime.Object) (
 	}); ok {
 		s = capture.CaptureSubject(subject, fetched)
 	}
-	return capturedSubject{Session: s, ref: subject, object: fetched, observation: ownership.Observe(subject, meta)}, true
+	return capturedSubject{Session: s, ref: subject, object: fetched, observation: ownership.Observe(subject, meta), held: read.State == ownership.Present}, true
 }
 
 type capturedSubject struct {
@@ -32,17 +34,18 @@ type capturedSubject struct {
 	ref         resourceid.Ref
 	object      runtime.Object
 	observation ownership.Observation
+	held        bool
 }
 
 func (s capturedSubject) Object(ref resourceid.Ref) ownership.ObjectRead {
-	if ref == s.ref {
+	if ref == s.ref && s.held {
 		return ownership.ObjectRead{State: ownership.Present, Object: s.observation}
 	}
 	return s.Session.Object(ref)
 }
 
 func (s capturedSubject) Borrow(ref resourceid.Ref) (runtime.Object, ownership.ObjectRead) {
-	if ref == s.ref {
+	if ref == s.ref && s.held {
 		return s.object, s.Object(ref)
 	}
 	return s.Session.Borrow(ref)
