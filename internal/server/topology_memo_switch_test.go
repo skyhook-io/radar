@@ -173,3 +173,22 @@ func TestTopologyMemo_NeighborhoodAfterSwitch(t *testing.T) {
 		t.Errorf("post-switch neighborhood is missing the new cluster's ReplicaSet: %+v", resp.Subgraph.Nodes)
 	}
 }
+
+// A client that leaves mid-walk is not told the service is unavailable.
+func TestNeighborhoodCancelledRequestWritesNothing(t *testing.T) {
+	withOwnershipDiscovery(t)
+	useTestResourceCache(t, clusterWithDeployment("web"))
+	s := newMemoTestServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/ai/neighborhood/Deployment/demo/web", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("kind", "Deployment")
+	rctx.URLParams.Add("namespace", "demo")
+	rctx.URLParams.Add("name", "web")
+	ctx, cancel := context.WithCancel(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	cancel()
+	rec := httptest.NewRecorder()
+	s.handleAINeighborhood(rec, req.WithContext(ctx))
+	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("cancelled request answered %d: %s", rec.Code, rec.Body)
+	}
+}

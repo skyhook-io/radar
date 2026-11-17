@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
 
+	"github.com/skyhook-io/radar/pkg/ownership"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	"github.com/go-chi/chi/v5"
@@ -118,9 +121,17 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub, err := k8s.AnswerNeighborhood(r.Context(), cache, root, opts)
-	if err != nil {
-		log.Printf("[neighborhood] Failed to answer %s %s/%s: %v", rawKind, namespace, name, err)
-		s.writeError(w, http.StatusServiceUnavailable, "Neighborhood unavailable")
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled):
+		// The client left mid-walk; there is no one to answer.
+		return
+	case errors.Is(err, ownership.ErrCachesReplaced), errors.Is(err, ownership.ErrNotConnected):
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed or is not ready; retry the neighborhood.")
+		return
+	default:
+		log.Printf("[neighborhood] Failed to answer %s %s/%s: %v", sanitizeForLog(rawKind), sanitizeForLog(namespace), sanitizeForLog(name), err)
+		s.writeError(w, http.StatusInternalServerError, "Neighborhood unavailable")
 		return
 	}
 	// A Calico policy is served by two API groups and admitted through either,
