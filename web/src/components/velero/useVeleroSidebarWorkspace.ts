@@ -27,13 +27,10 @@ export function veleroDiscovered(apiResources: APIResource[] | undefined): boole
 export function useVeleroSidebarWorkspace({
   apiResources,
   active,
-  child,
 }: {
   apiResources: APIResource[] | undefined
-  /** The Overview, or a Velero object's page, is on screen. */
+  /** The Overview is on screen. */
   active?: boolean
-  /** The object whose page is open, listed under the Overview. */
-  child?: { label: string; title?: string }
 }): Record<string, SidebarCategoryWorkspace> | undefined {
   const navigate = useWorkspaceNavigate()
   const { support } = useRadarFeature('veleroWorkspace')
@@ -53,11 +50,10 @@ export function useVeleroSidebarWorkspace({
             countLowerBound: count?.lowerBound,
             countTitle: count?.title,
             active: !!active,
-            child: active ? child : undefined,
             onSelect: () => navigate(VELERO_OVERVIEW.path),
           },
         ],
       },
     }
-  }, [available, active, child?.label, child?.title, navigate, count]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [available, active, navigate, count])
 }

@@ -15,11 +15,14 @@ import { useWorkspaceNavigate } from './useWorkspaceNavigate'
 export function WorkspaceFrame({
   namespaces,
   categoryWorkspaces,
+  selectedKind = null,
   compactNavigation,
   children,
 }: {
   namespaces: string[]
   categoryWorkspaces: Record<string, SidebarCategoryWorkspace> | undefined
+  /** The kind whose row is highlighted, when the screen is one object of it rather than a destination. */
+  selectedKind?: SelectedKindInfo | null
   compactNavigation: boolean
   children: ReactNode
 }) {
@@ -39,7 +42,7 @@ export function WorkspaceFrame({
   )
 
   const sidebar = <ResourcesSidebar
-        selectedKind={null}
+        selectedKind={selectedKind}
         onSelectedKindChange={selectKind}
         apiResources={apiResources}
         resourceCounts={counts?.counts}

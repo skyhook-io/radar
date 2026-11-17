@@ -21,6 +21,8 @@ function reading(overrides: Partial<VeleroScheduleReading> = {}): VeleroSchedule
     runs: { read: 'full', kept: 0 },
     location: { name: 'default' },
     ttl: '',
+    includedNamespaces: [],
+    excludedNamespaces: [],
     ...overrides,
   }
 }
