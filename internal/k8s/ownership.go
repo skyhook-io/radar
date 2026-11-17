@@ -221,6 +221,14 @@ func answerRelationships(cache *ResourceCache, obj runtime.Object, access, trave
 		answer = topology.RelationsContextAnswer
 	}
 	rel, extras := answer(rs, acc, traverse(session.Catalog()), ov, fetched.Ref, obj, provider, dp)
+	if extras == nil {
+		// The answer checks the caller's access to obj again; a decision
+		// that changed since the check above denies it there.
+		if session.ValidateCaches() != nil {
+			return nil, nil, nil
+		}
+		return &topology.Relationships{}, nil, nil
+	}
 	if rel == nil {
 		rel = &topology.Relationships{}
 	}

@@ -502,3 +502,51 @@ func TestRelationshipRevisionSplitRequiresReadablePods(t *testing.T) {
 		}
 	}
 }
+
+// flippingAccess allows the subject's kind on its first check only, as a
+// permission cache entry expiring between two checks would.
+type flippingAccess struct {
+	ownership.Access
+	kind   resourceid.GroupKind
+	checks *int
+}
+
+func (a flippingAccess) CanRead(gk resourceid.GroupKind, namespace string) ownership.Decision {
+	if gk != a.kind {
+		return a.Access.CanRead(gk, namespace)
+	}
+	*a.checks++
+	if *a.checks == 1 {
+		return ownership.Allowed
+	}
+	return ownership.Denied
+}
+
+func TestRelationshipAnswerSurvivesAccessChangingMidAnswer(t *testing.T) {
+	for _, contextOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("context=%v", contextOnly), func(t *testing.T) {
+			_, typed, source, deployment := historyFixture(t)
+			previous := ownershipSource
+			ownershipSource = source.(*cachesource.Source)
+			t.Cleanup(func() { ownershipSource = previous })
+			obj := deployment.DeepCopy()
+			obj.APIVersion, obj.Kind = "apps/v1", "Deployment"
+			checks := 0
+			access := func(*ownership.Catalog) ownership.Access {
+				return flippingAccess{Access: ownership.Unrestricted(), kind: resourceid.GroupKind{Group: "apps", Kind: "Deployment"}, checks: &checks}
+			}
+			traverse := func(*ownership.Catalog) ownership.Access { return ownership.Unrestricted() }
+			answer := AnswerRelationships
+			if contextOnly {
+				answer = AnswerResourceContextRelationships
+			}
+			rel, coverage, extras := answer(&ResourceCache{ResourceCache: typed}, obj, access, traverse)
+			if checks < 2 {
+				t.Fatalf("subject checked %d times; the test needs the answer's own check", checks)
+			}
+			if rel == nil || len(rel.Children)+len(rel.OlderRevisions) > 0 || rel.Owner != nil || coverage != nil || extras != nil {
+				t.Fatalf("denied subject answered: %+v %+v %+v", rel, coverage, extras)
+			}
+		})
+	}
+}
