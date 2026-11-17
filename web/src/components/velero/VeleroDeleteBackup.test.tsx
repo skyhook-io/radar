@@ -30,7 +30,7 @@ vi.mock('../../api/velero', () => ({
 }))
 vi.mock('../ui/Toast', () => ({ showApiSuccess: state.success, showApiError: state.failure }))
 
-const { VeleroDeleteBackup, deleteRefusal } = await import('./VeleroDeleteBackup')
+const { VeleroBackupDeletionRow, VeleroDeleteBackup, deleteRefusal } = await import('./VeleroDeleteBackup')
 
 const backup = (phase = 'Completed') => ({
   metadata: { namespace: 'velero', name: 'nightly-1', uid: 'uid-1' },
@@ -131,7 +131,7 @@ describe('Delete backup', () => {
     act(() => buttons('Delete backup').at(-1)!.click())
     state.deletion = { state: 'refused', request: 'nightly-1-abc', errors: ['backup storage location primary not found'] }
     act(() => root.render(<QueryClientProvider client={client}><VeleroDeleteBackup backup={{ ...backup() }} /></QueryClientProvider>))
-    expect(document.body.textContent).toContain('Velero refused')
+    expect(document.body.textContent).toContain('Delete refused')
     expect(state.failure).toHaveBeenCalledWith('Velero refused to delete backup nightly-1', 'backup storage location primary not found')
     expect(buttons('Delete backup')[0].disabled).toBe(false)
   })
@@ -144,7 +144,7 @@ describe('Delete backup', () => {
     act(() => buttons('Delete backup').at(-1)!.click())
     state.deletion = { state: 'failed', request: 'nightly-1-abc', errors: ['backup storage location primary not found'] }
     act(() => root.render(<QueryClientProvider client={client}><VeleroDeleteBackup backup={{ ...backup() }} /></QueryClientProvider>))
-    expect(document.body.textContent).toContain('Deletion failed')
+    expect(document.body.textContent).toContain('Delete failed')
     expect(state.failure).toHaveBeenCalledWith('Deleting backup nightly-1 failed', 'Some of its data may already have been removed. backup storage location primary not found')
     expect(buttons('Delete backup')[0].disabled).toBe(false)
   })
@@ -201,11 +201,40 @@ describe('Delete backup', () => {
     expect(state.failure).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a refusal found on opening the page without announcing it', () => {
+  it('shows a refusal found on opening the drawer without announcing it', () => {
     state.deletion = { state: 'refused', request: 'older-request', errors: ['backup storage location nowhere not found'] }
     render(<VeleroDeleteBackup backup={backup()} />)
-    expect(document.body.textContent).toContain('Velero refused')
+    expect(document.body.textContent).toContain('Delete refused')
     expect(state.failure).not.toHaveBeenCalled()
+  })
+
+  it('leaves a settled deletion to the page’s At a glance, not a header chip', () => {
+    state.deletion = { state: 'refused', request: 'older-request', created: new Date(Date.now() - 2 * 3_600_000).toISOString(), errors: ['backup storage location nowhere not found'] }
+    render(<VeleroDeleteBackup backup={backup()} context="expanded" />)
+    expect(document.body.textContent).not.toContain('refused')
+    expect(buttons('Delete backup')).toHaveLength(1)
+  })
+
+  it('says on the page when Velero refused, how long ago, and why in plain words', () => {
+    state.deletion = { state: 'refused', request: 'older-request', created: new Date(Date.now() - 2 * 3_600_000).toISOString(), errors: ['backup storage location nowhere not found'] }
+    render(<VeleroBackupDeletionRow backup={backup()} />)
+    expect(document.body.textContent).toContain('Deletion')
+    expect(document.body.textContent).toContain('Refused 2h ago — its storage location nowhere doesn’t exist; nothing was deleted')
+  })
+
+  it('says on the page when a deletion failed partway', () => {
+    state.deletion = { state: 'failed', request: 'r', errors: ['error deleting snapshot snap-1: throttled'] }
+    render(<VeleroBackupDeletionRow backup={backup()} />)
+    expect(document.body.textContent).toContain('Failed — Some of its data may already have been removed. error deleting snapshot snap-1: throttled')
+  })
+
+  it('has no row for a backup nobody asked Velero to delete', () => {
+    state.deletion = { state: 'unknown' }
+    render(<VeleroBackupDeletionRow backup={backup()} />)
+    expect(document.body.textContent).toBe('')
+    state.deletion = { state: 'waiting', request: 'r' }
+    render(<VeleroBackupDeletionRow backup={backup()} />)
+    expect(document.body.textContent).toBe('')
   })
 
   it('is absent on a Radar without the action', () => {

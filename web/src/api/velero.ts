@@ -138,6 +138,8 @@ export interface VeleroDeletion {
   state: 'waiting' | 'inProgress' | 'refused' | 'failed' | 'deleted' | 'unknown'
   errors?: string[]
   request?: string
+  /** When the request was made; absent from an older Radar. */
+  created?: string
   serverStopped?: boolean
 }
 

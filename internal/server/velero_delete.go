@@ -7,6 +7,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -47,6 +48,9 @@ type VeleroDeleteBackupResponse struct {
 type VeleroDeletionResponse struct {
 	veleropkg.DeletionReading
 	Request string `json:"request,omitempty"`
+	// Created is when the request was made, so a settled one can say how long
+	// ago (Velero keeps processed requests for a day).
+	Created *time.Time `json:"created,omitempty"`
 	// ServerStopped: the Velero server is not running, so a waiting request
 	// stays waiting until it starts.
 	ServerStopped bool `json:"serverStopped,omitempty"`
@@ -204,6 +208,10 @@ func (s *Server) handleVeleroBackupDeletion(w http.ResponseWriter, r *http.Reque
 	resp := VeleroDeletionResponse{DeletionReading: veleropkg.ReadDeletion(request, exists)}
 	if request != nil {
 		resp.Request = request.GetName()
+		if created := request.GetCreationTimestamp(); !created.IsZero() {
+			at := created.UTC()
+			resp.Created = &at
+		}
 	}
 	if resp.State == veleropkg.DeletionWaiting {
 		if deployments, read := s.veleroDeployments(r, k8s.GetResourceCache(), namespace); read {

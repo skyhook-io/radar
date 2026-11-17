@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Loader2, Trash2 } from 'lucide-react'
-import { ActionConfirmDialog, Badge, Tooltip } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Badge, FactRow, Tooltip, formatRelativeAgeTime, toneTextClass, veleroLocalTime, veleroPlainReason } from '@skyhook-io/k8s-ui'
 import { showApiError } from '../ui/Toast'
 import { useRadarFeature } from '../../api/client'
 import { getApiBase } from '../../api/config'
@@ -47,6 +47,27 @@ function stateText(d: VeleroDeletion): string {
   }
 }
 
+// A settled deletion's state, for the page's row and the drawer's chip.
+const SETTLED_LABEL: Partial<Record<VeleroDeletion['state'], { page: string; chip: string }>> = {
+  refused: { page: 'Refused', chip: 'Delete refused' },
+  failed: { page: 'Failed', chip: 'Delete failed' },
+  unknown: { page: 'Outcome unknown', chip: 'Deletion outcome unknown' },
+}
+
+/** Velero's reasons in plain words where Radar recognises them, as written otherwise. */
+function plainErrors(errors: string[] | undefined): string {
+  return (errors ?? []).map((e) => veleroPlainReason(e) ?? e).join('; ')
+}
+
+function lowerFirst(text: string): string {
+  return /^[A-Z][a-z]/.test(text) && !text.startsWith('Velero') ? text[0].toLowerCase() + text.slice(1) : text
+}
+
+/** "2h ago" for when the request was made, from a Radar that reports it. */
+function requestedAgo(d: VeleroDeletion): string | undefined {
+  return d.created ? formatRelativeAgeTime(d.created) : undefined
+}
+
 const deletionNoticeKey = (namespace: string, request: string) => ['velero', 'deletion-notice', getApiBase(), namespace, request]
 
 /**
@@ -56,7 +77,7 @@ const deletionNoticeKey = (namespace: string, request: string) => ['velero', 'de
  * Backup object instead removes none of that, and Velero recreates the object
  * from the bucket, so the generic Delete is not offered for these.
  */
-export function VeleroDeleteBackup({ backup }: { backup: any }) {
+export function VeleroDeleteBackup({ backup, context = 'drawer' }: { backup: any; context?: 'drawer' | 'expanded' }) {
   const { support } = useRadarFeature('veleroDeleteBackup')
   const workspaceSupport = useRadarFeature('veleroWorkspace').support
   const namespace: string = backup?.metadata?.namespace ?? ''
@@ -135,10 +156,11 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
 
   return (
     <>
-      {started && deletion.data && (state === 'refused' || state === 'failed' || state === 'unknown') && (
-        <Tooltip content={stateText(deletion.data)} position="bottom">
+      {/* The page says this in its At a glance; a chip there would read as the backup's status. */}
+      {context === 'drawer' && started && deletion.data && state && SETTLED_LABEL[state] && (
+        <Tooltip content={[requestedAgo(deletion.data) && `Requested ${requestedAgo(deletion.data)}.`, stateText(deletion.data)].filter(Boolean).join(' ')} position="bottom">
           <span>
-            <Badge severity="warning">{state === 'refused' ? 'Velero refused' : state === 'failed' ? 'Deletion failed' : 'Deletion outcome unknown'}</Badge>
+            <Badge severity="warning">{SETTLED_LABEL[state].chip}</Badge>
           </span>
         </Tooltip>
       )}
@@ -189,5 +211,44 @@ export function VeleroDeleteBackup({ backup }: { backup: any }) {
         result={actionDialogResult(deleteBackup.error, { unknown: 'Velero may already have been asked to delete this backup. Open Delete backup again to retry: it sends the same request, never a second one.' })}
       />
     </>
+  )
+}
+
+/**
+ * The page's At a glance row for a deletion Velero settled without deleting:
+ * refused, failed, or ended where Radar can't tell. Velero keeps a processed
+ * request for a day, so the row says how long ago it was asked.
+ */
+export function VeleroBackupDeletionRow({ backup }: { backup: any }) {
+  const { support } = useRadarFeature('veleroDeleteBackup')
+  const namespace: string = backup?.metadata?.namespace ?? ''
+  const name: string = backup?.metadata?.name ?? ''
+  const uid: string = backup?.metadata?.uid ?? ''
+  const deletion = useVeleroBackupDeletion(namespace, name, uid, support === 'supported')
+  const d = deletion.data
+  const label = d && SETTLED_LABEL[d.state]
+  if (support !== 'supported' || !d || !label || (d.state === 'unknown' && !d.request && backup?.status?.phase !== 'Deleting')) return null
+  const ago = requestedAgo(d)
+  const reason = plainErrors(d.errors)
+  const raw = (d.errors ?? []).join('; ')
+  const detail =
+    d.state === 'refused'
+      ? `${reason ? lowerFirst(reason) : 'Velero gave no reason'}; nothing was deleted`
+      : d.state === 'failed'
+        ? `${PARTLY} ${reason}`.trim()
+        : 'Velero no longer has the request and the backup is still here; check the backup, or delete it again'
+  return (
+    <FactRow label="Deletion">
+      <span className={toneTextClass(d.state === 'unknown' ? 'degraded' : 'unhealthy')}>{label.page}</span>
+      {ago && (
+        <Tooltip content={d.created ? veleroLocalTime(d.created) : undefined}>
+          <span className="text-theme-text-secondary"> {ago}</span>
+        </Tooltip>
+      )}
+      {' — '}
+      <Tooltip content={`Velero’s message: ${raw}`} disabled={!raw || raw === reason}>
+        <span>{detail}</span>
+      </Tooltip>
+    </FactRow>
   )
 }

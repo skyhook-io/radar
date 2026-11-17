@@ -211,6 +211,21 @@ func TestVeleroBackupDeletion(t *testing.T) {
 		})
 	}
 
+	t.Run("says when the request was made", func(t *testing.T) {
+		at := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+		r := request("Processed", "backup storage location default not found")
+		r.SetCreationTimestamp(metav1.NewTime(at))
+		srv, _ := deleteServer(t, r, deletableBackup("nightly-1", "uid-1", "Completed", "default"))
+		rec := serve(srv, http.MethodGet, path, "")
+		var got VeleroDeletionResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Created == nil || !got.Created.Equal(at) {
+			t.Fatalf("created = %v, want %v: %s", got.Created, at, rec.Body)
+		}
+	})
+
 	t.Run("a request for another backup is excluded", func(t *testing.T) {
 		other := veleropkg.DeleteBackupRequestFor("velero", "weekly-1", "uid-7")
 		other.SetName(requestName)

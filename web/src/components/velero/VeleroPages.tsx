@@ -52,6 +52,7 @@ import { Notice, RefreshFailedNotice, Segments, SectionTable } from '../workspac
 import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { RunMessages } from './VeleroRunMessagesHost'
+import { VeleroBackupDeletionRow } from './VeleroDeleteBackup'
 import { Expires, FAILED, Outcome, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
 import { VELERO_DETAIL_KINDS } from './routes'
 import { VELERO_MESSAGE_LABEL, VeleroName, list, selectionText, veleroIssueProblem, veleroResource } from './shared'
@@ -277,6 +278,7 @@ function VeleroBackupOverview({ resource, onNavigate }: { resource: any; onNavig
             )}
             <RunMessages kind="backups" resource={resource} />
           </FactRow>
+          <VeleroBackupDeletionRow backup={resource} />
           {nothing && (
             <FactRow label="Backed up">
               <span className={toneTextClass('unhealthy')}>Nothing</span>

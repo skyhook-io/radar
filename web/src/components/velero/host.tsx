@@ -64,7 +64,7 @@ export const veleroResourceHost: ResourceHost = {
     const summary: DetailSlots = { renderSummary: (props) => renderVeleroSummary(props) }
     if (detailKind(resource) === VELERO_BACKUP_KIND.name) return {
       ...summary,
-      renderHeaderActions: ({ resource: data }) => isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroDeleteBackup backup={data} /> : null,
+      renderHeaderActions: ({ resource: data, context }) => isApiGroup(data?.apiVersion, VELERO_GROUP_NAME) ? <VeleroDeleteBackup backup={data} context={context} /> : null,
     }
     if (kindToPluralWithGroup(resource.kind, resource.group ?? VELERO_GROUP_NAME) !== VELERO_SCHEDULE_KIND.name) return summary
     return {
