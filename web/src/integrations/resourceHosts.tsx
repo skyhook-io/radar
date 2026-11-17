@@ -134,6 +134,13 @@ export function resourceKindListMode(kind: Pick<HostKind, 'name' | 'group'> | nu
   return contribution?.list.mode(hostSupport(contribution.host, features), pending) ?? 'table'
 }
 
+/** The disabled picker's tooltip while a kind's own list, which ignores the namespace filter, is on screen. */
+export function resourceKindListNamespaceFilterTooltip(kind: Pick<HostKind, 'name' | 'group'> | null, features: HostFeatures, pending: boolean): string | undefined {
+  const contribution = kindListHost(kind)
+  if (!contribution?.list.namespaceFilterTooltip) return undefined
+  return contribution.list.mode(hostSupport(contribution.host, features), pending) === 'view' ? contribution.list.namespaceFilterTooltip : undefined
+}
+
 export function resourceKindListTitle(kind: Pick<HostKind, 'name' | 'group'>): string | null {
   return kindListHost(kind)?.list.title ?? null
 }

@@ -4,7 +4,7 @@ import { DrawerTrailBack } from '../workspace/DrawerTrailBack'
 import { VeleroBSLRenderer } from '../resources/renderers/VeleroBSLRenderer'
 import { VeleroBackupRenderer } from '../resources/renderers/VeleroBackupRenderer'
 import { VeleroRestoreRenderer } from '../resources/renderers/VeleroRestoreRenderer'
-import { VELERO_DETAIL_KINDS, VELERO_GROUP as VELERO_GROUP_NAME, VELERO_BACKUP_KIND, VELERO_LOCATION_KIND, VELERO_RESTORE_KIND, VELERO_SCHEDULE_KIND, veleroDetailKindFor, veleroDetailPath, veleroKindListMode } from './routes'
+import { VELERO_DETAIL_KINDS, VELERO_GROUP as VELERO_GROUP_NAME, VELERO_BACKUP_KIND, VELERO_LOCATION_KIND, VELERO_RESTORE_KIND, VELERO_SCHEDULE_KIND, veleroDetailKindFor, veleroDetailPath, veleroKindListMode, VELERO_NAMESPACE_FILTER_TOOLTIP } from './routes'
 import { renderVeleroSummary } from './VeleroPages'
 import { VeleroBackupsKindList, VeleroLocationsKindList, VeleroRestoresKindList, VeleroSchedulesKindList } from './VeleroKindLists'
 import { VeleroDeleteBackup } from './VeleroDeleteBackup'
@@ -78,9 +78,9 @@ export const veleroResourceHost: ResourceHost = {
   issueDetail: (props) => <VeleroRunIssueMessages {...props} />,
   // Radar's own tables are these kinds' lists, so none has a second entry in the sidebar.
   kindLists: [
-    { kind: VELERO_SCHEDULE_KIND, title: 'Velero schedules', mode: veleroKindListMode, Component: VeleroSchedulesKindList },
-    { kind: VELERO_LOCATION_KIND, title: 'Velero storage locations', mode: veleroKindListMode, Component: VeleroLocationsKindList },
-    { kind: VELERO_BACKUP_KIND, title: 'Velero backups', mode: veleroKindListMode, Component: VeleroBackupsKindList },
-    { kind: VELERO_RESTORE_KIND, title: 'Velero restores', mode: veleroKindListMode, Component: VeleroRestoresKindList },
+    { kind: VELERO_SCHEDULE_KIND, title: 'Velero schedules', mode: veleroKindListMode, namespaceFilterTooltip: VELERO_NAMESPACE_FILTER_TOOLTIP, Component: VeleroSchedulesKindList },
+    { kind: VELERO_LOCATION_KIND, title: 'Velero storage locations', mode: veleroKindListMode, namespaceFilterTooltip: VELERO_NAMESPACE_FILTER_TOOLTIP, Component: VeleroLocationsKindList },
+    { kind: VELERO_BACKUP_KIND, title: 'Velero backups', mode: veleroKindListMode, namespaceFilterTooltip: VELERO_NAMESPACE_FILTER_TOOLTIP, Component: VeleroBackupsKindList },
+    { kind: VELERO_RESTORE_KIND, title: 'Velero restores', mode: veleroKindListMode, namespaceFilterTooltip: VELERO_NAMESPACE_FILTER_TOOLTIP, Component: VeleroRestoresKindList },
   ],
 }

@@ -1,5 +1,5 @@
 import type { WorkspaceRoute } from '../../integrations/workspaceRoute'
-import { VELERO_OVERVIEW, parseVeleroRoute } from './routes'
+import { VELERO_NAMESPACE_FILTER_TOOLTIP, VELERO_OVERVIEW, parseVeleroRoute } from './routes'
 
 export const veleroWorkspaceRoute: WorkspaceRoute = {
   id: 'velero',
@@ -7,7 +7,7 @@ export const veleroWorkspaceRoute: WorkspaceRoute = {
   label: 'Velero',
   navView: 'resources',
   namespaceScope: 'cluster',
-  namespaceFilterTooltip: 'Velero is shown for every installation you can read — the namespace filter doesn’t apply here.',
+  namespaceFilterTooltip: VELERO_NAMESPACE_FILTER_TOOLTIP,
   pageTitle(pathname) {
     return parseVeleroRoute(pathname).detail?.name ?? VELERO_OVERVIEW.title
   },

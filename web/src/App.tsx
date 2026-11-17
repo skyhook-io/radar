@@ -38,7 +38,7 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
-import { resourceExpandedPath, resourceKindListTitle } from './integrations/resourceHosts'
+import { resourceExpandedPath, resourceKindListNamespaceFilterTooltip, resourceKindListTitle, useResourceHostFeatures } from './integrations/resourceHosts'
 import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
 import { WorkspaceScreen } from './integrations/workspaceScreens'
 import { currentPageLabel } from './utils/page-links'
@@ -64,7 +64,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo, useCapabilities } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -198,6 +198,8 @@ const CRASH_LABELS = {
 //     browsing filter.
 //   - A cluster-scoped resource kind (Nodes, PVs, ClusterRoles…) has no
 //     namespace at all.
+//   - A kind whose own list ignores the filter (Velero's lists read every
+//     installation, since Velero keeps its objects in its own namespace).
 // The pick itself is preserved so it re-applies when the user returns to a
 // namespaced view.
 function namespaceFilterDisabled(
@@ -205,6 +207,7 @@ function namespaceFilterDisabled(
   pathname: string,
   search = '',
   apiResources?: APIResource[],
+  kindListTooltip?: (kind: { name: string; group: string }) => string | undefined,
 ): { disabled: boolean; tooltip?: string } {
   if (
     view === 'cost' &&
@@ -234,6 +237,8 @@ function namespaceFilterDisabled(
     const kindSlug = segments[1]
     const group = new URLSearchParams(search).get('apiGroup') || ''
     const match = kindSlug ? findAPIResourceForRoute(apiResources, kindSlug, group) : undefined
+    const listTooltip = match ? kindListTooltip?.({ name: match.name, group: match.group }) : undefined
+    if (listTooltip) return { disabled: true, tooltip: listTooltip }
     if (match && !match.namespaced) {
       return {
         disabled: true,
@@ -451,7 +456,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
   // chip isn't a dead control next to the cluster switcher.
-  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, location.search, navApiResources)
+  // A kind whose own list ignores the filter (Velero's) disables it too, once that list is what shows.
+  const hostFeatures = useResourceHostFeatures()
+  const { isPending: capabilitiesPending } = useCapabilities()
+  const namespaceFilter = namespaceFilterDisabled(mainView, location.pathname, location.search, navApiResources,
+    (kind) => resourceKindListNamespaceFilterTooltip(kind, hostFeatures, capabilitiesPending))
 
   // One URL-derived tab title for every view (see radarPageTitle). Driving it
   // from the URL — not the mounted component. Off unless the host opts in
