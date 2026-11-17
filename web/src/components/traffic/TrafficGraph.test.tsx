@@ -288,4 +288,12 @@ describe('TrafficNode title', () => {
     expect(titles[1]).toMatch(/redis$/)
     expect(titles[0]).not.toBe(titles[1])
   })
+
+  it('gives screen readers the full name, not the cut one', () => {
+    const label = 'checkout-platform-release-engine'
+    act(() => root.render(<TrafficNode data={{ label, namespace: 'demo', kind: 'Deployment' }} />))
+    const srOnly = container.querySelector('.sr-only')
+    expect(srOnly?.textContent).toBe(label)
+    expect(container.querySelector(`[title="${label}"]`)!.closest('[aria-hidden="true"]')).not.toBeNull()
+  })
 })

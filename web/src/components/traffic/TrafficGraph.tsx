@@ -269,11 +269,15 @@ export function TrafficNode({ data }: { data: TrafficNodeData }) {
           />
         )}
         <div className="flex-1 min-w-0">
-          {/* Middle-cut: workloads of one release share a long prefix and differ only at the end. */}
-          <MiddleEllipsis text={data.label} title={data.label} className={clsx(
-            'text-sm font-medium',
-            isAddonInternet ? 'text-purple-300' : isInternet ? 'text-sky-300' : (isAddon || isAddonNode) ? 'text-purple-200' : hasNamespaceColor ? 'text-white' : 'text-theme-text-primary'
-          )} />
+          {/* Middle-cut: workloads of one release share a long prefix and differ only at the end.
+              MiddleEllipsis exposes only the cut text, so screen readers get the full name instead. */}
+          <span className="sr-only">{data.label}</span>
+          <div aria-hidden="true">
+            <MiddleEllipsis text={data.label} title={data.label} className={clsx(
+              'text-sm font-medium',
+              isAddonInternet ? 'text-purple-300' : isInternet ? 'text-sky-300' : (isAddon || isAddonNode) ? 'text-purple-200' : hasNamespaceColor ? 'text-white' : 'text-theme-text-primary'
+            )} />
+          </div>
           {data.namespace ? (
             <div className={clsx(
               'text-xs truncate',
