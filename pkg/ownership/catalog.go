@@ -51,8 +51,9 @@ type Catalog struct {
 	// lowercase maps a kind's all-lowercase spelling, where it differs, to
 	// the kinds it spells: the garbage collector's discovery RESTMapper maps
 	// it too.
-	lowercase map[resourceid.GroupKind][]resourceid.GroupKind
-	complete  bool
+	lowercase    map[resourceid.GroupKind][]resourceid.GroupKind
+	complete     bool
+	failedGroups map[string]bool
 }
 
 // AmbiguousKind is a kind two resources of one group serve, or that versions
@@ -66,11 +67,17 @@ type AmbiguousKind struct {
 }
 
 // NewCatalog builds a catalog from discovery's resources. complete says
-// discovery answered for every API group: without it, a kind missing from the
-// catalog may still be served.
-func NewCatalog(resources []ServedResource, complete bool) *Catalog {
+// discovery answered for every API group. When incomplete, failedGroups names
+// every group discovery missed; without them, no group is covered.
+func NewCatalog(resources []ServedResource, complete bool, failedGroups ...string) *Catalog {
 	byKind := map[resourceid.GroupKind][]ServedResource{}
 	c := &Catalog{lowercase: map[resourceid.GroupKind][]resourceid.GroupKind{}, complete: complete}
+	if len(failedGroups) > 0 {
+		c.failedGroups = make(map[string]bool, len(failedGroups))
+		for _, group := range failedGroups {
+			c.failedGroups[group] = true
+		}
+	}
 	for _, r := range resources {
 		gk := resourceid.GroupKind{Group: r.Group, Kind: r.Kind}
 		if byKind[gk] == nil {
@@ -249,4 +256,10 @@ func (c *Catalog) GroupsForKind(kind string) []string {
 	}
 	slices.Sort(groups)
 	return slices.Compact(groups)
+}
+
+// CoversGroup reports whether discovery answered for group, so a kind absent
+// from that group was not served when discovery ran.
+func (c *Catalog) CoversGroup(group string) bool {
+	return c.complete || len(c.failedGroups) > 0 && !c.failedGroups[group]
 }

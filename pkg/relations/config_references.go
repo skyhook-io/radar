@@ -11,7 +11,9 @@ import (
 // ConfigReferences is the family of the ConfigMaps, Secrets,
 // PersistentVolumeClaims and ServiceAccount a Pod, a pod-template workload or
 // an Ingress's TLS declares, as pkg/configrefs reads them. A ReplicaSet
-// scaled explicitly to zero declares nothing: it is an old revision.
+// scaled explicitly to zero declares nothing, as the Topology screen draws
+// none: usually it is a Deployment's old revision. A Deployment scaled to
+// zero still declares through its own template.
 var ConfigReferences = &Family{
 	Name:       "configReferences",
 	Projection: project("configures", true, "ConfigRefs", "Consumers").whenTarget(kindPVC, "uses", true, "StorageRefs", "Consumers").whenTarget(resourceid.GroupKind{Kind: "ServiceAccount"}, "configures", true, "ServiceAccount", "Consumers"),

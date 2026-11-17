@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
-import { Tooltip } from '@skyhook-io/k8s-ui'
+import { Tooltip, getDefaultLogContainerName, getInitContainerNames, getLogContainerNames } from '@skyhook-io/k8s-ui'
 import { usePodLogs, useResource } from '../../api/client'
 import type { ResourceRef } from '../../types'
 import { LogsViewer } from './LogsViewer'
@@ -40,14 +40,17 @@ export function MultiPodLogsTab({
   const { data: logsData, error: containersError } = usePodLogs(podNamespace, readable, {
     tailLines: 1,
   })
-  const containers = logsData?.containers || []
+  const serverContainers = logsData?.containers || []
 
   // A terminated pod (common for Job/CronJob children) has nothing to follow —
   // only stream live ones. Wait for the pod to load before deciding so we don't
   // briefly auto-stream a completed pod while its phase is still unknown.
-  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, readable)
+  const { data: selectedPodResource, isLoading: podLoading } = useResource<any>('Pod', podNamespace, readable)
   const phase = selectedPodResource?.status?.phase
   const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
+  // The server lists regular containers before init ones; follow the Pod's run order like the other log views.
+  const specContainers = getLogContainerNames(selectedPodResource)
+  const containers = serverContainers.length > 0 && specContainers.length > 0 ? specContainers : serverContainers
 
   // A selected Pod that left the list (deleted, replaced, or not in a newer
   // list) stays selectable so its loaded lines aren't thrown away, but is
@@ -103,14 +106,15 @@ export function MultiPodLogsTab({
       {selectedPod && !selectedPodNote && containersError && !logsData && (
         <PodLogsUnavailable podName={selectedPod} error={containersError} />
       )}
-      {selectedPod && !selectedPodNote && containers.length > 0 && (
+      {selectedPod && !selectedPodNote && containers.length > 0 && !podLoading && (
         <div className="flex-1 min-h-0">
           <LogsViewer
             key={selectedPod}
             namespace={podNamespace}
             podName={selectedPod}
             containers={containers}
-            initialContainer={initialContainer || undefined}
+            initialContainer={initialContainer || getDefaultLogContainerName(selectedPodResource)}
+            initContainers={getInitContainerNames(selectedPodResource)}
             autoStream={autoStream}
           />
         </div>
