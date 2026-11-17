@@ -238,6 +238,8 @@ func (s *Server) downloadVeleroRunArtifact(ctx context.Context, run veleroRun, a
 	case err == nil:
 	case apierrors.IsForbidden(err):
 		return nil, &veleroArtifactFailure{http.StatusForbidden, "no access to create Velero download requests"}
+	case apierrors.IsInvalid(err) && (suffix == "VolumeInfos" || suffix == "VolumeInfo"):
+		return nil, &veleroArtifactFailure{http.StatusUnprocessableEntity, "Velero rejected the volume-information DownloadRequest. Its CRD must support " + targetKind + suffix + " (Backup volumes require Velero 1.13+, Restore volumes require 1.14+)."}
 	case apierrors.IsNotFound(err):
 		// No DownloadRequest CRD — Velero is not installed, or predates it.
 		return nil, &veleroArtifactFailure{http.StatusNotFound, "this cluster has no Velero download requests"}
