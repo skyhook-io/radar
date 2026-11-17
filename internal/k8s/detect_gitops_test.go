@@ -690,8 +690,8 @@ func TestDetectArgoAppProblems_ManualDriftGate(t *testing.T) {
 		if !d.OnsetAt.Equal(base) {
 			t.Errorf("OnsetAt = %v, want exact first observation %v", d.OnsetAt, base)
 		}
-		if d.Action == "" {
-			t.Error("OutOfSyncManual should carry an Action")
+		if d.Action != "Review the desired changes and sync policy before deciding whether to sync." {
+			t.Errorf("unexpected manual drift guidance: %s", d.Action)
 		}
 	})
 
@@ -715,7 +715,7 @@ func TestDetectArgoAppProblems_ManualDriftGate(t *testing.T) {
 		if d.Message != "Last rollback deployed rev-old; the live state differs from the desired state and auto-sync is off." {
 			t.Errorf("message = %q", d.Message)
 		}
-		if d.Action != "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source first, or keep auto-sync off. Review Changes for later edits." {
+		if d.Action != "Syncing or enabling auto-sync applies the current source and can undo the rollback. Fix or revert the source before syncing again. Review Resources for later edits." {
 			t.Errorf("action = %q", d.Action)
 		}
 	})
@@ -1239,7 +1239,7 @@ func TestDetectArgoAppProblems_ManualDriftAdviceRespectsSyncHazards(t *testing.T
 		name, want string
 		mutate     func(*unstructured.Unstructured)
 	}{
-		{"plain drift", "then Sync the application", func(*unstructured.Unstructured) {}},
+		{"plain drift", "before deciding whether to sync", func(*unstructured.Unstructured) {}},
 		{"shared resources", "also tracked by Application payments", func(app *unstructured.Unstructured) {
 			_ = unstructured.SetNestedSlice(app.Object, []any{map[string]any{"type": "SharedResourceWarning", "message": "Deployment/web is part of applications argocd/billing and payments"}}, "status", "conditions")
 		}},

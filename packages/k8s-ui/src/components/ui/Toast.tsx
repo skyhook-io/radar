@@ -20,11 +20,15 @@ type ToastOptions = Omit<Toast, 'id' | 'message' | 'dismissing'> & {
   duration?: number
 }
 
+type NoticeOptions = Pick<ToastOptions, 'id' | 'duration' | 'action'>
+
 interface ToastContextType {
   showToast: (message: string, options?: ToastOptions) => void
   showCopied: (command: string, label?: string, event?: React.MouseEvent) => void
   showError: (message: string, detail?: string) => void
   showSuccess: (message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void
+  /** Removes the toast shown with this id, if it is still on screen. */
+  dismissToast: (id: string) => void
 }
 
 const ToastContext = createContext<ToastContextType | null>(null)
@@ -63,8 +67,8 @@ class ToastManager {
     this.showSuccessFn ? this.showSuccessFn(message, detail, action, onDetailClick) : console.log('[Toast]', message, detail)
   }
 
-  showNotice(message: string, detail: string | undefined, type: 'warning' | 'info') {
-    this.showToastFn ? this.showToastFn(message, { detail, type }) : console.warn('[Toast]', message, detail)
+  showNotice(message: string, detail: string | undefined, type: 'warning' | 'info', options?: NoticeOptions) {
+    this.showToastFn ? this.showToastFn(message, { ...options, detail, type }) : console.warn('[Toast]', message, detail)
   }
 }
 
@@ -78,8 +82,8 @@ export function showApiSuccess(message: string, detail?: string, action?: Toast[
   toastManager.showSuccess(message, detail, action, onDetailClick)
 }
 
-export function showApiNotice(message: string, detail: string | undefined, type: 'warning' | 'info') {
-  toastManager.showNotice(message, detail, type)
+export function showApiNotice(message: string, detail: string | undefined, type: 'warning' | 'info', options?: NoticeOptions) {
+  toastManager.showNotice(message, detail, type, options)
 }
 
 export function useToast() {
@@ -160,7 +164,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, [showError, showSuccess, showToast])
 
   return (
-    <ToastContext.Provider value={{ showToast, showCopied, showError, showSuccess }}>
+    <ToastContext.Provider value={{ showToast, showCopied, showError, showSuccess, dismissToast }}>
       {children}
 
       {/* Render toasts */}

@@ -56,6 +56,7 @@ import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
+import { AboutDialog, type AboutInfo } from './desktop/AboutDialog'
 import { useUsageData, useUsageRecording } from './api/usage-data'
 import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ProductHuntNotice } from './components/product-hunt/ProductHuntNotice'
@@ -63,7 +64,7 @@ import { useProductHuntRailEntry } from './components/product-hunt/useProductHun
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay, type DiagnosticsFocus } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, isAppliedNamespaceSwitch, useSwitchContext, useAuthMe, useAuditBadges, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -288,6 +289,7 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
   }
 
   if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
+  if (view === 'checks' && pathSegments[1] === 'vulnerabilities') return 'Vulnerabilities'
 
   // The landing view reads "Overview" rather than "Home" in the tab.
   const workspace = workspaceForView(view)
@@ -439,6 +441,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const mainView = getViewFromPath(location.pathname)
   const activeWorkspace = workspaceForView(mainView)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
+  // Checks sub-routes a Cloud host's fleet Checks pages don't have, so they
+  // render here even when the host takes over /checks.
+  const localChecksRoute = upgradeReadinessRoute || location.pathname.startsWith('/checks/vulnerabilities')
 
   // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
   const usageData = useUsageData(!navCustomization.embedded)
@@ -587,7 +592,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The host's URL for the CURRENT view, if taken over. Drives the redirect
   // effect and the "Opening…" splash.
   const viewTakeoverHref =
-    (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !upgradeReadinessRoute
+    (mainView === 'issues' || mainView === 'gitops' || mainView === 'checks') && !localChecksRoute
       ? takeover[mainView]
       : undefined
   useEffect(() => {
@@ -648,6 +653,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     window.addEventListener('radar:open-settings', handler)
     return () => window.removeEventListener('radar:open-settings', handler)
   }, [openSettings])
+
+  // Help → About Radar in the Windows desktop app (cmd/desktop/menu.go).
+  const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
+  useEffect(() => {
+    const handler = (e: Event) => setAboutInfo((e as CustomEvent<AboutInfo>).detail)
+    window.addEventListener('radar:open-about', handler)
+    return () => window.removeEventListener('radar:open-about', handler)
+  }, [])
 
   // Listen for "open-local-terminal" DOM event — the AI surface is portaled above
   // the DockProvider, so it can't call useOpenLocalTerminal directly; it dispatches
@@ -1776,7 +1789,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // backend stamps on each node (data.auditKey). Only badge-worthy findings
   // reach the graph; the raw auditDanger/auditWarning property names remain at
   // this compatibility boundary while the node presents them as High/Medium.
-  const audit = useAudit(namespaces)
+  // Only badge-worthy findings, small next to the full scan (they grow with
+  // broken references, not with the cluster), so they stay loaded app-wide: a
+  // view that badges resources has them on arrival.
+  const audit = useAuditBadges(namespaces)
   const auditSeverityMap = useMemo(
     () => buildAuditSeverityMap(audit.data?.findings, audit.data?.checks),
     [audit.data?.findings, audit.data?.checks],
@@ -2436,7 +2452,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Checks detail view. Cloud can take over fleet best practices while
             the target-specific upgrade route continues to render locally. */}
-        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
+        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || localChecksRoute) && (
           <AuditView
             namespaces={namespaces}
             onNavigateToResource={navigateToResourceList}
@@ -2625,6 +2641,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Diagnostics overlay */}
       {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} focus={diagnosticsFocus} onClose={() => { setShowDiagnostics(false); setDiagnosticsFocus(undefined) }} />}
+
+      <AboutDialog
+        info={aboutInfo}
+        onClose={() => setAboutInfo(null)}
+        onShowWhatsNew={whatsNewStatus.available ? openWhatsNew : undefined}
+        onReportIssue={() => { setDiagnosticsFocus(undefined); setShowDiagnostics(true) }}
+      />
 
       {/* Settings dialog — My permissions is rendered inline in its own section */}
       <SettingsDialog

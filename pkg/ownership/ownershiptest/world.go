@@ -17,10 +17,12 @@ import (
 type World struct {
 	// Resources are what discovery serves.
 	Resources []ownership.ServedResource
-	// Partial: discovery missed some groups, so kinds beyond Resources may
-	// exist.
+	// Partial: discovery failed without identifying every missed group, so
+	// no group can rule out kinds beyond Resources.
 	Partial bool
-	Objects []Object
+	// FailedGroups are the groups a partial response identified as missed.
+	FailedGroups []string
+	Objects      []Object
 	// Collection says how much of each kind Radar holds; a kind not listed is
 	// collected in full.
 	Collection map[resourceid.GroupKind]Collection
