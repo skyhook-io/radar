@@ -94,6 +94,8 @@ type workloadRef struct {
 
 const applicationsCacheTTL = 10 * time.Second
 
+var applicationsBuildBudget = 30 * time.Second
+
 var applicationsCacheMaxEntries = 256
 
 var (
@@ -603,15 +605,17 @@ func listApplicationsForRequest(ctx context.Context, namespaces []string, canLis
 			return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 		}
 
-		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-
+		// The wait for the slot ends with the request; the build's own budget
+		// starts once it is admitted, so a build queued behind others isn't
+		// left with what the wait didn't use.
 		select {
 		case applicationsBuildSlot <- struct{}{}:
-		case <-buildCtx.Done():
-			return nil, buildCtx.Err()
+		case <-ctx.Done():
+			return nil, fmt.Errorf("%w: waiting for another Applications build: %v", errResourceCacheUnavailable, ctx.Err())
 		}
 		defer func() { <-applicationsBuildSlot }()
+		buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), applicationsBuildBudget)
+		defer cancel()
 		session, err := k8s.BeginOwnershipRead(cache)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", errResourceCacheUnavailable, err)
