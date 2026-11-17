@@ -61,7 +61,9 @@ func WalkNeighborhood(ctx context.Context, session relations.Session, root Resou
 	rootOnly := rootOnlyEdgeTypes(opts.Profile, rootNode.Kind)
 	families := []*relations.Family{}
 	domain := ""
-	if provider != nil {
+	// The domain is read from every cached Deployment; only Istio's service
+	// hosts need it.
+	if provider != nil && neighborhoodDisposition(relations.IstioServiceHosts("").Projection, allowed) {
 		domain = NewBuilder(provider).istioServiceDomain()
 	}
 	for _, f := range relations.Families(domain) {

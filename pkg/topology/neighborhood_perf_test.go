@@ -3,6 +3,7 @@ package topology
 import (
 	"context"
 	"fmt"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"slices"
@@ -306,5 +307,36 @@ func TestWalkNeighborhoodEdgeIDsDistinguishRelationshipTypes(t *testing.T) {
 	sub := walkTestNeighborhood(t, newProjectionSession(t, cm, pod), cm, NeighborhoodOptions{Profile: ProfileAll})
 	if len(sub.Nodes) != 2 || len(sub.Edges) != 2 || sub.Edges[0].ID == sub.Edges[1].ID {
 		t.Fatalf("lost distinct relations on one pair: %+v", sub)
+	}
+}
+
+type deploymentCountingProvider struct {
+	*mockProvider
+	deploymentLists int
+}
+
+func (p *deploymentCountingProvider) Deployments() ([]*appsv1.Deployment, error) {
+	p.deploymentLists++
+	return p.mockProvider.Deployments()
+}
+
+// Istio's service domain is read from every cached Deployment; a walk whose
+// profile can't reach Istio's service hosts doesn't pay for it.
+func TestWalkNeighborhoodReadsIstioDomainOnlyForIstioHosts(t *testing.T) {
+	f := charCluster()
+	for _, tc := range []struct {
+		root  ResourceRef
+		lists int
+	}{
+		{ResourceRef{Kind: "NetworkPolicy", Group: "networking.k8s.io", Namespace: "shop", Name: "default-deny"}, 0},
+		{ResourceRef{Kind: "Service", Namespace: "shop", Name: "web"}, 1},
+	} {
+		p := &deploymentCountingProvider{mockProvider: f.provider}
+		if _, err := WalkNeighborhood(context.Background(), neighborhoodFixtureSession(t, f), tc.root, NeighborhoodOptions{}, p, f.dynamic); err != nil {
+			t.Fatal(err)
+		}
+		if p.deploymentLists != tc.lists {
+			t.Errorf("%s: listed Deployments %d times, want %d", tc.root.Kind, p.deploymentLists, tc.lists)
+		}
 	}
 }
