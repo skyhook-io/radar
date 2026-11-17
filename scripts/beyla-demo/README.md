@@ -104,7 +104,9 @@ sake of per-port edges should say what it costs.
 `client -> web` arrives as two series with identical flow labels, one per agent,
 so a consumer summing them doubles the bytes. The copies differ only in the
 scrape's own target labels: `instance`, plus the `node` label this Prometheus
-adds by relabelling. Without the node attributes (configs A-C), the copies cannot
+adds by relabelling. Radar drops `instance`, `pod`, `node` and `host` before
+collapsing the copies; any other per-agent target label would keep them apart and
+the flow would still count twice. Without the node attributes (configs A-C), the copies cannot
 be told apart from two replicas of one owner running on different nodes. The
 Service-attributed series has no destination node and comes from one agent only.
 

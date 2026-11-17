@@ -866,12 +866,16 @@ const (
 	beylaL7DetailGroupBy = `k8s_namespace_name, k8s_owner_name, k8s_pod_name, server_port`
 )
 
+// beylaAgentLabels are the scrape target labels that differ between two agents'
+// copies of one flow; any other per-agent label would keep the copies apart.
+const beylaAgentLabels = "instance, pod, node, host"
+
 // beylaRateQuery builds `sum by (groupBy) (rate(metric{job=~...,extra}[window]))`. A
 // namespace filter has to become two OR'd selectors: PromQL cannot express
 // "src OR dst namespace matches" inside a single label selector.
 //
 // A flow between two nodes is reported by both nodes' agents, identical except
-// for instance and pod. Collapsing them with max is safe only for series that
+// for beylaAgentLabels. Collapsing them with max is safe only for series that
 // carry a node label: without one, two replicas of an owner on different nodes
 // are indistinguishable from a duplicate. So the series are split three ways,
 // by which node labels they carry, and only the labelled sets are collapsed.
@@ -881,9 +885,9 @@ func beylaRateQuery(groupBy, metric, sel, namespace, extra string, w rateWindow)
 		rate := func(nodes string) string {
 			return fmt.Sprintf(`rate(%s{%s%s%s%s}[%s])`, metric, sel, extra, nodes, more, w.promQL)
 		}
-		return fmt.Sprintf(`sum by (%s) (max without (instance, pod) (%s) or max without (instance, pod) (%s) or %s)`, groupBy,
-			rate(`, k8s_src_node_name!=""`),
-			rate(`, k8s_src_node_name="", k8s_dst_node_name!=""`),
+		return fmt.Sprintf(`sum by (%s) (max without (%s) (%s) or max without (%s) (%s) or %s)`, groupBy,
+			beylaAgentLabels, rate(`, k8s_src_node_name!=""`),
+			beylaAgentLabels, rate(`, k8s_src_node_name="", k8s_dst_node_name!=""`),
 			rate(`, k8s_src_node_name="", k8s_dst_node_name=""`))
 	}
 	if namespace == "" {

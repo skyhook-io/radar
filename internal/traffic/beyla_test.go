@@ -753,8 +753,8 @@ func TestBeylaRateQuery_CountsCrossNodeFlowsOnce(t *testing.T) {
 	// without one, two replicas on different nodes look exactly like a duplicate.
 	got := beylaRateQuery("a, b", "m", `job="x"`, "", `, direction="request"`, rateWindowFor(0))
 	want := `sum by (a, b) (` +
-		`max without (instance, pod) (rate(m{job="x", direction="request", k8s_src_node_name!=""}[5m])) or ` +
-		`max without (instance, pod) (rate(m{job="x", direction="request", k8s_src_node_name="", k8s_dst_node_name!=""}[5m])) or ` +
+		`max without (instance, pod, node, host) (rate(m{job="x", direction="request", k8s_src_node_name!=""}[5m])) or ` +
+		`max without (instance, pod, node, host) (rate(m{job="x", direction="request", k8s_src_node_name="", k8s_dst_node_name!=""}[5m])) or ` +
 		`rate(m{job="x", direction="request", k8s_src_node_name="", k8s_dst_node_name=""}[5m]))`
 	assertEq(t, "query", got, want)
 }
