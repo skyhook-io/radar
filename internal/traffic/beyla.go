@@ -397,6 +397,9 @@ type l4LabelPresence struct {
 	portedDsts map[dstKey]bool
 	port       bool
 	transport  bool
+	// nodeLabelsMissing is set when the probe answered that no series carries
+	// a node label, so cross-node flows cannot be collapsed and count twice.
+	nodeLabelsMissing bool
 	// replyLossFraction is how much of the return traffic Prometheus could not
 	// measure, between 0 and 1. Exporting dst.port makes Beyla label each reply
 	// with the client's port, which is new for every connection and gone again
@@ -433,6 +436,10 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	// aggregate into a handful of stable counters and nothing is lost.
 	if presence.port {
 		presence.replyLossFraction = s.replyLossFraction(ctx, rateWindowFor(opts.Since), scopes.l4Selector())
+	}
+
+	if len(flows) > 0 {
+		presence.nodeLabelsMissing = s.nodeLabelsMissing(ctx, scopes.l4Selector())
 	}
 
 	response := &FlowsResponse{Source: "beyla", Timestamp: time.Now(), Flows: flows}
@@ -539,6 +546,11 @@ func (p l4LabelPresence) warning(flowCount int) string {
 					"client's short-lived port, and most of the return traffic could no longer be measured — so "+
 					"received-byte figures would become unreliable. It is a trade rather than a fix.")
 			}
+		}
+		if p.nodeLabelsMissing {
+			parts = append(parts, fmt.Sprintf("Flows between two nodes are reported by both nodes' Beyla agents and "+
+				"counted twice here. Add k8s.src.node.name and k8s.dst.node.name to attributes.select for %s (keep "+
+				"the default attributes in the list) and Radar will count them once.", strings.TrimSuffix(p.metric, "_total")))
 		}
 	}
 
@@ -857,9 +869,22 @@ const (
 // beylaRateQuery builds `sum by (groupBy) (rate(metric{job=~...,extra}[window]))`. A
 // namespace filter has to become two OR'd selectors: PromQL cannot express
 // "src OR dst namespace matches" inside a single label selector.
+//
+// A flow between two nodes is reported by both nodes' agents, identical except
+// for instance and pod. Collapsing them with max is safe only for series that
+// carry a node label: without one, two replicas of an owner on different nodes
+// are indistinguishable from a duplicate. So the series are split three ways,
+// by which node labels they carry, and only the labelled sets are collapsed.
+// The sets are disjoint and their label sets differ, so `or` keeps all three.
 func beylaRateQuery(groupBy, metric, sel, namespace, extra string, w rateWindow) string {
 	sum := func(more string) string {
-		return fmt.Sprintf(`sum by (%s) (rate(%s{%s%s%s}[%s]))`, groupBy, metric, sel, extra, more, w.promQL)
+		rate := func(nodes string) string {
+			return fmt.Sprintf(`rate(%s{%s%s%s%s}[%s])`, metric, sel, extra, nodes, more, w.promQL)
+		}
+		return fmt.Sprintf(`sum by (%s) (max without (instance, pod) (%s) or max without (instance, pod) (%s) or %s)`, groupBy,
+			rate(`, k8s_src_node_name!=""`),
+			rate(`, k8s_src_node_name="", k8s_dst_node_name!=""`),
+			rate(`, k8s_src_node_name="", k8s_dst_node_name=""`))
 	}
 	if namespace == "" {
 		return sum("")
@@ -958,6 +983,15 @@ func (s *BeylaSource) replyLossFraction(ctx context.Context, w rateWindow, sel s
 		return 0
 	}
 	return val
+}
+
+// nodeLabelsMissing reports whether Prometheus answered that no flow series
+// carries a node label. A failed probe reports false: it drives a warning.
+func (s *BeylaSource) nodeLabelsMissing(ctx context.Context, sel string) bool {
+	metric := s.flowMetricName()
+	result, err := s.query(ctx, fmt.Sprintf(`count(%s{%s, k8s_src_node_name!=""} or %s{%s, k8s_dst_node_name!=""})`,
+		metric, sel, metric, sel))
+	return err == nil && result != nil && len(result.Series) == 0
 }
 
 func (s *BeylaSource) queryReceivedBytes(ctx context.Context, opts FlowOptions, sel string) (map[flowKey]int64, error) {
