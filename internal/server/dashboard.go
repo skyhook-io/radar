@@ -1761,8 +1761,8 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 							policy:             policy,
 							matcher:            netpol.CompileCalicoPolicyMatcher(policy),
 							definition:         definition,
-							previewsProtection: !definition.Staged || topology.CalicoStagedActionPreviewsProtection(policy),
-							stagesRemoval:      definition.Staged && topology.CalicoStagedActionStagesRemoval(policy),
+							previewsProtection: !definition.Staged || netpol.CalicoStagedActionPreviewsProtection(policy),
+							stagesRemoval:      definition.Staged && netpol.CalicoStagedActionStagesRemoval(policy),
 						})
 					}
 				}

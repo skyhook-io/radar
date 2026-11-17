@@ -339,49 +339,9 @@ func newCalicoWorkload(id, namespace string, workloadLabels map[string]string, s
 		id:             id,
 		namespace:      namespace,
 		labels:         workloadLabels,
-		endpointLabels: CalicoEndpointLabels(namespace, workloadLabels, serviceAccount),
+		endpointLabels: netpol.CalicoEndpointLabels(namespace, workloadLabels, serviceAccount),
 		serviceAccount: serviceAccount,
 	}
-}
-
-// CalicoStagedActionPreviewsProtection is netpol.CalicoStagedActionPreviewsProtection.
-//
-// Deprecated: use netpol.CalicoStagedActionPreviewsProtection.
-func CalicoStagedActionPreviewsProtection(policy *unstructured.Unstructured) bool {
-	return netpol.CalicoStagedActionPreviewsProtection(policy)
-}
-
-// CalicoStagedActionStagesRemoval is netpol.CalicoStagedActionStagesRemoval.
-//
-// Deprecated: use netpol.CalicoStagedActionStagesRemoval.
-func CalicoStagedActionStagesRemoval(policy *unstructured.Unstructured) bool {
-	return netpol.CalicoStagedActionStagesRemoval(policy)
-}
-
-// CalicoEndpointLabels is netpol.CalicoEndpointLabels.
-//
-// Deprecated: use netpol.CalicoEndpointLabels.
-func CalicoEndpointLabels(namespace string, workloadLabels map[string]string, serviceAccount string) map[string]string {
-	return netpol.CalicoEndpointLabels(namespace, workloadLabels, serviceAccount)
-}
-
-// CalicoPolicyMatcher is netpol.CalicoPolicyMatcher.
-//
-// Deprecated: use netpol.CalicoPolicyMatcher.
-type CalicoPolicyMatcher = netpol.CalicoPolicyMatcher
-
-// CompileCalicoPolicyMatcher is netpol.CompileCalicoPolicyMatcher.
-//
-// Deprecated: use netpol.CompileCalicoPolicyMatcher.
-func CompileCalicoPolicyMatcher(policy *unstructured.Unstructured) *CalicoPolicyMatcher {
-	return netpol.CompileCalicoPolicyMatcher(policy)
-}
-
-// CalicoPolicyMatchesWorkload is netpol.CalicoPolicyMatchesWorkload.
-//
-// Deprecated: use netpol.CalicoPolicyMatchesWorkload.
-func CalicoPolicyMatchesWorkload(policy *unstructured.Unstructured, workloadLabels, namespaceLabels map[string]string, serviceAccountName string, serviceAccountLabels map[string]string) (matched, endpointSelectorValid bool) {
-	return netpol.CalicoPolicyMatchesWorkload(policy, workloadLabels, namespaceLabels, serviceAccountName, serviceAccountLabels)
 }
 
 func calicoNamespaceLabels(provider ResourceProvider) map[string]map[string]string {
@@ -595,11 +555,11 @@ func (b *Builder) addCalicoPolicyNodes(
 				}
 				nodes = append(nodes, Node{ID: nodeID, Kind: definition.nodeKind, Name: policy.GetName(), Status: status, Data: nodeData})
 
-				if definition.staged && !CalicoStagedActionPreviewsProtection(policy) {
+				if definition.staged && !netpol.CalicoStagedActionPreviewsProtection(policy) {
 					continue
 				}
 
-				matcher := CompileCalicoPolicyMatcher(policy)
+				matcher := netpol.CompileCalicoPolicyMatcher(policy)
 				endpointAll := calicoPolicyMatchesAllWorkloads(policy, definition)
 				if endpointAll {
 					nodeData["matchesAllPods"] = true

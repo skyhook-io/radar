@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/netpol"
 )
 
 type calicoTestProvider struct {
@@ -294,7 +295,7 @@ func TestCalicoEndpointSelectorsUseAutomaticLabels(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			policy := calicoTestObject("projectcalico.org", "v3", "NetworkPolicy", "demo", test.name, map[string]any{"selector": test.selector})
-			matched, valid := CompileCalicoPolicyMatcher(policy).Matches(workload.endpointLabels, nil, workload.serviceAccount, nil)
+			matched, valid := netpol.CompileCalicoPolicyMatcher(policy).Matches(workload.endpointLabels, nil, workload.serviceAccount, nil)
 			if !valid || matched != test.wantMatch {
 				t.Fatalf("selector %q matched=%v valid=%v, want matched=%v valid=true", test.selector, matched, valid, test.wantMatch)
 			}
@@ -315,7 +316,7 @@ func TestCalicoEndpointLabelsServiceAccount(t *testing.T) {
 		{"", "default", true},
 		{long, "", false},
 	} {
-		got, ok := CalicoEndpointLabels("demo", nil, test.serviceAccount)["projectcalico.org/serviceaccount"]
+		got, ok := netpol.CalicoEndpointLabels("demo", nil, test.serviceAccount)["projectcalico.org/serviceaccount"]
 		if ok != test.present || got != test.want {
 			t.Errorf("CalicoEndpointLabels(sa=%q) serviceaccount label = %q (present %v), want %q (present %v)", test.serviceAccount, got, ok, test.want, test.present)
 		}
@@ -327,7 +328,7 @@ func TestStagedKubernetesCalicoPolicyUsesRawPodLabels(t *testing.T) {
 		"podSelector": map[string]any{"matchLabels": map[string]any{"projectcalico.org/namespace": "demo"}},
 	})
 	workload := newCalicoWorkload("deployment/demo/preview", "demo", map[string]string{"app": "preview"}, "default")
-	matched, valid := CompileCalicoPolicyMatcher(policy).Matches(workload.labels, nil, workload.serviceAccount, nil)
+	matched, valid := netpol.CompileCalicoPolicyMatcher(policy).Matches(workload.labels, nil, workload.serviceAccount, nil)
 	if !valid {
 		t.Fatal("raw Kubernetes pod selector was invalid")
 	}
@@ -606,17 +607,17 @@ func TestCalicoStagedDeletionPreviewsNoProtection(t *testing.T) {
 		"stagedAction": "Ignore",
 		"selector":     "all()",
 	})
-	if CalicoStagedActionPreviewsProtection(deletion) {
+	if netpol.CalicoStagedActionPreviewsProtection(deletion) {
 		t.Error("a staged deletion was treated as previewed protection")
 	}
-	if CalicoStagedActionPreviewsProtection(ignored) {
+	if netpol.CalicoStagedActionPreviewsProtection(ignored) {
 		t.Error("an ignored staged policy was treated as previewed protection")
 	}
 	set := calicoTestObject(calicoProjectGroup, "v3", "StagedNetworkPolicy", "demo", "tighten", map[string]any{
 		"stagedAction": "Set",
 		"selector":     "app == 'frontend'",
 	})
-	if !CalicoStagedActionPreviewsProtection(set) {
+	if !netpol.CalicoStagedActionPreviewsProtection(set) {
 		t.Error("a staged Set was not treated as previewed protection")
 	}
 
@@ -814,7 +815,7 @@ func TestCalicoMatcherRejectsUnusableOptionalSelectors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			policy := calicoTestObject(calicoProjectGroup, "v3", "NetworkPolicy", "demo", test.name, test.spec)
-			matched, valid := CompileCalicoPolicyMatcher(policy).Matches(
+			matched, valid := netpol.CompileCalicoPolicyMatcher(policy).Matches(
 				workload.endpointLabels, namespaceLabels, workload.serviceAccount, serviceAccountLabels,
 			)
 			if !valid {

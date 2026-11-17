@@ -151,7 +151,9 @@ keep only when its question is frequent; the Reflector index (`ReflectsIndex`) f
 next to nothing.
 
 The synthetic fixtures carry more references per Pod than most clusters, so the graph is larger than in a
-real process of the same shape. For a process-level number, run `go run ./cmd/testserver -census large-eks`
-and take `/debug/pprof/heap?gc=1`: the graph is the part under `initCachedTopology`. The fake API server
+real process of the same shape. For a process-level number, run `go run ./cmd/testserver -census large-eks`,
+wait for the cache to sync, open the UI or a resource drawer so the graph is rebuilt over the synced cache
+(a broadcast with no browser connected only marks it stale), then take `/debug/pprof/heap?gc=1`: the graph
+is the part under the topology builder. The fake API server
 keeps its own copy of every object (`client-go/testing.(*tracker)`), which is not Radar's memory; subtract
 it.
