@@ -14,7 +14,6 @@ const (
 	KnativeEventingGroup  = "eventing.knative.dev"
 	KnativeMessagingGroup = "messaging.knative.dev"
 	KnativeSourcesGroup   = "sources.knative.dev"
-	KnativeFlowsGroup     = "flows.knative.dev"
 )
 
 // KnativeSourceKinds are the event sources Knative Eventing ships.
