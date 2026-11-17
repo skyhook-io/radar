@@ -25,7 +25,7 @@ describe('Velero storage locations', () => {
     expect(html).toContain('Unknown — no access to schedules')
     expect(html).toContain('frequency unknown')
     expect(html).toContain('default unknown')
-    expect(html).not.toMatch(/font-mono">0</)
+    expect(html).not.toMatch(/tabular-nums">0</)
     expect(html).toContain('Radar couldn’t read some of the Velero data on this screen')
   })
 
@@ -55,6 +55,19 @@ describe('Velero storage locations', () => {
   it('says when Velero never validated a location', () => {
     const html = text(render(workspace({ locations: [location({ neverValidated: true, attention: true, lastValidation: undefined })] })))
     expect(html).toContain('Not validated yet')
+  })
+
+  it('says why a location is unavailable in plain words, and marks the default once, under its name', () => {
+    const html = render(workspace({
+      locations: [
+        location(),
+        location({ name: 'dr', phase: 'Unavailable', default: false, message: 'rpc error: code = Unknown desc = NoSuchBucket: The specified bucket does not exist' }),
+      ],
+    }))
+    expect(html).toContain('The bucket doesn’t exist')
+    // The default location named "default" reads once as its name and once as a small note, not as a badge beside it.
+    expect(html).not.toMatch(/badge[^"]*">default</)
+    expect(html.match(/>default</g)?.length).toBe(2)
   })
 
   it('marks the default location and folds a long schedule list into a count', () => {

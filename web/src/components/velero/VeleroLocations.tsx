@@ -6,21 +6,26 @@ import {
   formatRelativeAgeTime,
   getBSLStatus,
   veleroDefaultText,
+  toneTextClass,
   veleroLocationReasonText,
+  veleroPlainReason,
   type VeleroLocationReading,
   veleroLocalTime,
 } from '@skyhook-io/k8s-ui'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
-import { VeleroCoverageNotice, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
+import { VeleroCoverageNotice, VeleroName, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
 
 const SCHEDULES_UNKNOWN = 'Unknown — no access to schedules'
 
+/** Availability, and under it why a location is unavailable in plain words; Velero's text on hover. */
 function AvailabilityCell({ l }: { l: VeleroLocationReading }) {
   const status = getBSLStatus({ status: { phase: l.phase ?? '' } })
+  const plain = l.phase === 'Unavailable' ? veleroPlainReason(l.message) : undefined
   return (
-    <Tooltip content={l.message} disabled={!l.message}>
+    <Tooltip content={l.message} disabled={!l.message} wrapperClassName="flex-col items-start">
       <Badge colorClass={status.color} size="sm">{status.text}</Badge>
+      {plain && <div className={`mt-0.5 text-xs ${toneTextClass('unhealthy')}`}>{plain}</div>}
     </Tooltip>
   )
 }
@@ -56,11 +61,7 @@ function DefaultMark({ l }: { l: VeleroLocationReading }) {
   if (d.text === 'No') return null
   return (
     <Tooltip content={d.detail}>
-      {d.text === 'Yes' ? (
-        <Badge tone="note" size="sm">default</Badge>
-      ) : (
-        <span className="text-xs text-theme-text-tertiary">default unknown</span>
-      )}
+      <Sub>{d.text === 'Yes' ? 'default' : 'default unknown'}</Sub>
     </Tooltip>
   )
 }
@@ -70,7 +71,7 @@ const SCHEDULES_SHOWN = 3
 
 function BackupCount({ l, count }: { l: VeleroLocationReading; count: (b: NonNullable<VeleroLocationReading['backups']>) => number }) {
   if (!l.backups) return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
-  return <span className="font-mono">{count(l.backups)}</span>
+  return <span className="tabular-nums">{count(l.backups)}</span>
 }
 
 function SchedulesCell({ l, onInspect }: { l: VeleroLocationReading; onInspect: VeleroScreenProps['onInspect'] }) {
@@ -89,9 +90,9 @@ function SchedulesCell({ l, onInspect }: { l: VeleroLocationReading; onInspect: 
               e.stopPropagation()
               onInspect(veleroResource('Schedule', l.namespace, s.name))
             }}
-            className="break-all text-left text-accent-text hover:underline"
+            className="block max-w-full text-left text-accent-text hover:underline"
           >
-            {s.name}
+            <VeleroName name={s.name} />
           </button>
           {s.viaDefault && (
             <Tooltip content="The schedule names no location, so its backups go to the installation’s default.">
@@ -129,10 +130,8 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
       width: '18%',
       cell: (l) => (
         <>
-          <span className="inline-flex flex-wrap items-center gap-1.5">
-            <span className="break-all font-medium">{l.name}</span>
-            <DefaultMark l={l} />
-          </span>
+          <VeleroName name={l.name} />
+          <DefaultMark l={l} />
           {multi && <Sub>{l.namespace}</Sub>}
           {(l.provider || l.bucket) && <Sub>{[l.provider, l.bucket].filter(Boolean).join(' · ')}</Sub>}
           {l.accessMode === 'ReadOnly' && (
@@ -145,7 +144,7 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
         </>
       ),
     },
-    { header: 'Availability', width: '11%', cell: (l) => <AvailabilityCell l={l} /> },
+    { header: 'Availability', width: '14%', cell: (l) => <AvailabilityCell l={l} /> },
     { header: 'Last validation', width: '15%', cell: (l) => <ValidationCell l={l} /> },
     { header: 'Backups', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.targeting} /> },
     {
@@ -158,7 +157,7 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
       cell: (l) => <BackupCount l={l} count={(b) => b.completedNotExpired} />,
     },
     { header: 'Expired', width: '9%', cell: (l) => <BackupCount l={l} count={(b) => b.expired} /> },
-    { header: 'Schedules writing here', width: '27%', cell: (l) => <SchedulesCell l={l} onInspect={onInspect} /> },
+    { header: 'Schedules writing here', width: '24%', cell: (l) => <SchedulesCell l={l} onInspect={onInspect} /> },
   ]
 
   return (

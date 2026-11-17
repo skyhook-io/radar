@@ -124,6 +124,8 @@ export interface VeleroServerConfig {
   schedulingDisabled?: boolean
   /** The server Deployment's running replicas (status.replicas, terminating pods excluded), when the Deployment was found. */
   replicas?: number
+  readyReplicas?: number
+  backupsDisabled?: boolean
 }
 
 /** pkg/velero DefaultSource */

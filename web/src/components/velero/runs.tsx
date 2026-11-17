@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
-import { Tooltip, formatRelativeAgeTime, getBackupStatus, getRestoreStatus, veleroLocalTime } from '@skyhook-io/k8s-ui'
-import type { VeleroRunsResponse } from '../../api/velero'
+import { useState, type ReactNode } from 'react'
+import { Tooltip, formatDuration, formatRelativeAgeTime, getBackupStatus, getRestoreStatus, toneTextClass, veleroLocalTime, veleroMomentText, veleroPlainReason } from '@skyhook-io/k8s-ui'
+import type { VeleroRunRow, VeleroRunsResponse } from '../../api/velero'
 import { Notice } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
 
@@ -10,21 +10,9 @@ export function expired(expiration: string | undefined): boolean {
   return !!expiration && new Date(expiration).getTime() < Date.now()
 }
 
-/** How long until a time ahead, e.g. "21h left". */
-export function leftText(iso: string): string {
-  const s = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000))
-  if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m left`
-  if (s < 2 * 86400) return `${Math.round(s / 3600)}h left`
-  return `${Math.round(s / 86400)} days left`
-}
-
 export function durationText(start?: string, end?: string): string | undefined {
   if (!start || !end) return undefined
-  const s = Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000))
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ${s % 60}s`
-  return `${Math.floor(m / 60)}h ${m % 60}m`
+  return formatDuration(Math.max(0, Date.parse(end) - Date.parse(start)), true)
 }
 
 export function Outcome({ badge }: { badge: { text: string; color: string } }) {
@@ -37,6 +25,19 @@ export function RunOutcome({ kind, phase }: { kind: 'Backup' | 'Restore'; phase?
 }
 
 export const FAILED = new Set(['Failed', 'PartiallyFailed', 'FailedValidation', 'FinalizingPartiallyFailed', 'WaitingForPluginOperationsPartiallyFailed'])
+// Velero refused the run or it failed outright; the rest of FAILED partly failed.
+const FAILED_OUTRIGHT = new Set(['Failed', 'FailedValidation'])
+
+/** Why a run failed, under its outcome: Radar's plain reading when it has one, Velero's text on hover. */
+export function RunReason({ run }: { run: Pick<VeleroRunRow, 'phase' | 'reason'> }) {
+  if (!run.reason || !FAILED.has(run.phase ?? '')) return null
+  const plain = veleroPlainReason(run.reason)
+  return (
+    <Tooltip content={run.reason}>
+      <div className={`mt-0.5 line-clamp-2 min-w-0 break-words text-xs ${toneTextClass(FAILED_OUTRIGHT.has(run.phase ?? '') ? 'unhealthy' : 'degraded')}`}>{plain ?? run.reason}</div>
+    </Tooltip>
+  )
+}
 
 export function When({ iso, fallback }: { iso?: string; fallback: string }) {
   if (!iso) return <span className="text-theme-text-tertiary">{fallback}</span>
@@ -47,26 +48,54 @@ export function When({ iso, fallback }: { iso?: string; fallback: string }) {
   )
 }
 
-export function KeptUntil({ iso }: { iso?: string }) {
-  if (!iso) return <>—</>
+/** When Velero deletes a run: "in 21h", or "expired" once its retention passed. */
+export function Expires({ iso }: { iso?: string }) {
+  if (!iso) return <span className="text-theme-text-tertiary">—</span>
   if (expired(iso)) {
     return (
-      <Tooltip content="Velero deletes it at its next garbage collection.">
-        <span className="text-theme-text-tertiary">past retention</span>
+      <Tooltip content={`${veleroLocalTime(iso)} · Velero deletes it at its next garbage collection`}>
+        <span className="text-theme-text-tertiary">expired</span>
       </Tooltip>
     )
   }
   return (
     <Tooltip content={veleroLocalTime(iso)}>
-      <span>{leftText(iso)}</span>
+      <span>{veleroMomentText(iso)}</span>
     </Tooltip>
   )
+}
+
+/** "0 · 2": errors and warnings, each coloured only when there are some. */
+export function RunCounts({ errors, warnings }: { errors: number; warnings: number }) {
+  return (
+    <span className="tabular-nums">
+      <span className={errors > 0 ? toneTextClass('unhealthy') : 'text-theme-text-tertiary'}>{errors}</span>
+      <span className="text-theme-text-tertiary"> · </span>
+      <span className={warnings > 0 ? toneTextClass('degraded') : 'text-theme-text-tertiary'}>{warnings}</span>
+    </span>
+  )
+}
+
+/** All runs, newest first, or only the failed ones. Opens on all, so a run in progress is in view. */
+export function useRunView(rows: VeleroRunRow[]) {
+  const failed = rows.filter((r) => FAILED.has(r.phase ?? ''))
+  const [view, setView] = useState<'all' | 'failed'>('all')
+  return { failed, view, setView, shown: view === 'failed' ? failed : rows }
 }
 
 /** A count over what was read: exact only when the read covered everything. */
 export function boundedCount(n: number, query: { data?: VeleroRunsResponse }): string {
   const partial = !query.data || INCOMPLETE_COVERAGE_STATES.has(query.data.coverage.state) || query.data.truncated
   return partial && n > 0 ? `≥${n}` : String(n)
+}
+
+/** The All and Failed segments; the failed count is red when there are any. */
+export function runViewOptions(failed: number, all: number, query: { data?: VeleroRunsResponse }) {
+  const failedCount = boundedCount(failed, query)
+  return [
+    { id: 'all' as const, label: 'All', count: boundedCount(all, query) },
+    { id: 'failed' as const, label: 'Failed', count: failed > 0 ? <span className={toneTextClass('unhealthy')}>{failedCount}</span> : failedCount },
+  ]
 }
 
 /** Why a run list is empty, or that what was read holds no match. */
@@ -87,4 +116,3 @@ export function RunsReadNotice({ query, noun }: { query: { data?: VeleroRunsResp
   if (notes.length === 0) return null
   return <Notice>{notes.map((n, i) => <div key={i}>{n}</div>)}</Notice>
 }
-

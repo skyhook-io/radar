@@ -10,6 +10,7 @@ import {
   formatRelativeAgeTime,
   veleroNextRunText,
   veleroNextRunTitle,
+  veleroScheduleBadge,
   veleroScheduleReasonText,
   veleroLocalTime,
   type VeleroScheduleReading,
@@ -17,13 +18,36 @@ import {
 import { useMemo } from 'react'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
-import { VeleroCoverageNotice, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
+import { VeleroCoverageNotice, VeleroName, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
 
-/** The newest run, and the newest success only when the newest run isn't one. */
-function NewestRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: VeleroScreenProps['onInspect'] }) {
-  if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
+/**
+ * The schedule's last run: the newest one Velero keeps, with the newest
+ * success when that run wasn't one; when the runs are not kept or not read,
+ * when Velero last submitted one.
+ */
+function LastRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: VeleroScreenProps['onInspect'] }) {
+  const submitted = s.lastSubmitted ? (
+    <Tooltip content={veleroLocalTime(s.lastSubmitted)}>
+      <span>submitted {formatRelativeAgeTime(s.lastSubmitted)}</span>
+    </Tooltip>
+  ) : null
+  if (s.runs.read === 'unknown') {
+    return (
+      <>
+        {submitted ?? <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>}
+        {submitted && <Sub>{VELERO_RUNS_UNKNOWN}</Sub>}
+      </>
+    )
+  }
   const run = s.runs.newest
-  if (!run) return <NoneKept />
+  if (!run) {
+    return (
+      <>
+        {submitted ?? <span className="text-theme-text-tertiary">Never</span>}
+        <Sub><NoneKept /></Sub>
+      </>
+    )
+  }
   const success = s.runs.newestCompleted
   return (
     <>
@@ -37,7 +61,9 @@ function NewestRunCell({ s, onInspect }: { s: VeleroScheduleReading; onInspect: 
         className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-left"
       >
         <VeleroRunPhase phase={run.phase} />
-        <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
+        <Tooltip content={veleroLocalTime(run.ranAt)}>
+          <span className="text-xs text-theme-text-tertiary">{formatRelativeAgeTime(run.ranAt)}</span>
+        </Tooltip>
       </button>
       {success?.name !== run.name && (
         <Sub>
@@ -69,20 +95,34 @@ function sharedZone(schedules: VeleroScheduleReading[]): string | null {
 }
 
 function LocationCell({ s }: { s: VeleroScheduleReading }) {
-  if (!s.location.viaDefault) return <span className="break-all">{s.location.name}</span>
+  if (!s.location.viaDefault) return <VeleroName name={s.location.name ?? ''} />
   return (
-    <Tooltip content="The schedule names no location, so its backups go to the installation’s default.">
-      <span>
-        <span className="break-all">{s.location.name || 'Unresolved'}</span>
-        <Sub>not set on the schedule</Sub>
-      </span>
-    </Tooltip>
+    <>
+      {s.location.name ? <VeleroName name={s.location.name} /> : <span className="text-theme-text-tertiary">Unresolved</span>}
+      <Tooltip content="The schedule names no location, so its backups go to the installation’s default.">
+        <Sub>the default; not set on the schedule</Sub>
+      </Tooltip>
+    </>
+  )
+}
+
+/** Due within its grace reads on schedule (see veleroScheduleBadge), so its next run reads "due now", not "was due". */
+function NextRunCell({ s }: { s: VeleroScheduleReading }) {
+  if (!s.nextRun) return <span className="text-theme-text-tertiary">—</span>
+  const dueNow = s.state === 'due' && s.reason !== 'serverDown'
+  return (
+    <>
+      <Tooltip content={veleroNextRunTitle(s)}>
+        <span>{dueNow ? 'due now' : veleroNextRunText(s)}</span>
+      </Tooltip>
+      <Sub>{veleroLocalTime(s.nextRun)}</Sub>
+    </>
   )
 }
 
 /**
- * Every schedule read against Velero's controller rules: its state, next run,
- * last submission and newest run. The Velero Schedule kind's list.
+ * Every schedule read against Velero's controller rules: its state, next run
+ * and last run. The Velero Schedule kind's list.
  */
 export function VeleroSchedules({ data, installation, onInstallation, onInspect, inspected }: VeleroScreenProps) {
   const multi = data.installations.length > 1
@@ -92,10 +132,10 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
   const columns: TableColumn<VeleroScheduleReading>[] = [
     {
       header: 'Schedule',
-      width: '15%',
+      width: '20%',
       cell: (s) => (
         <>
-          <span className="break-all font-medium">{s.name}</span>
+          <VeleroName name={s.name} />
           {multi && <Sub>{s.namespace}</Sub>}
         </>
       ),
@@ -112,42 +152,16 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
     },
     {
       header: 'State',
-      width: '12%',
+      width: '13%',
       cell: (s) => (
-        <Tooltip content={veleroScheduleReasonText(s)}>
+        <Tooltip content={veleroScheduleBadge(s).detail ?? veleroScheduleReasonText(s)}>
           <VeleroScheduleStateBadge reading={s} />
         </Tooltip>
       ),
     },
-    {
-      header: 'Next run',
-      width: '12%',
-      cell: (s) =>
-        s.nextRun ? (
-          <>
-            <Tooltip content={veleroNextRunTitle(s)}>
-              <span>{veleroNextRunText(s)}</span>
-            </Tooltip>
-            <Sub>{veleroLocalTime(s.nextRun)}</Sub>
-          </>
-        ) : (
-          <span className="text-theme-text-tertiary">—</span>
-        ),
-    },
-    {
-      header: 'Last submission',
-      width: '11%',
-      cell: (s) =>
-        s.lastSubmitted ? (
-          <Tooltip content={veleroLocalTime(s.lastSubmitted)}>
-            <span>{formatRelativeAgeTime(s.lastSubmitted)}</span>
-          </Tooltip>
-        ) : (
-          <span className="text-theme-text-tertiary">Never</span>
-        ),
-    },
-    { header: 'Newest run', width: '18%', cell: (s) => <NewestRunCell s={s} onInspect={onInspect} /> },
-    { header: 'Location', width: '13%', cell: (s) => <LocationCell s={s} /> },
+    { header: 'Next run', width: '13%', cell: (s) => <NextRunCell s={s} /> },
+    { header: 'Last run', width: '20%', cell: (s) => <LastRunCell s={s} onInspect={onInspect} /> },
+    { header: 'Location', width: '18%', cell: (s) => <LocationCell s={s} /> },
   ]
 
   return (

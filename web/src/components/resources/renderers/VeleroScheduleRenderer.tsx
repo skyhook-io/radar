@@ -20,7 +20,7 @@ export function VeleroScheduleRenderer({ data, onNavigate }: { data: any; onNavi
   const reading = activity.data?.reading
   const navigate = useWorkspaceNavigate()
   // Every run the schedule keeps is on its page's Runs tab.
-  const showAllRuns = () => navigate(veleroDetailPath({ plural: 'schedules', namespace, name }, undefined, 'runs') + '&runs=all')
+  const showAllRuns = () => navigate(veleroDetailPath({ plural: 'schedules', namespace, name }, undefined, 'runs'))
   const activitySection = support === 'supported' && reading ? (
     <>
       {/* A failed refresh keeps the last reading; say how old it is rather than present it as current. */}

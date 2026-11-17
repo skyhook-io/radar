@@ -13,7 +13,7 @@ import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { currentPageLabel } from '../../utils/page-links'
 import { kindToPluralWithGroup } from '../../utils/navigation'
 import { VELERO_DETAIL_KINDS, veleroDetailKindFor, veleroDetailPath, type VeleroDetailTarget, VELERO_GROUP } from './routes'
-import { VeleroBackupRestores, VeleroLocationBackups, VeleroScheduleRuns } from './VeleroPages'
+import { VeleroBackupRestores, VeleroBackupRestoresMark, VeleroLocationBackups, VeleroLocationBackupsMark, VeleroScheduleRuns, VeleroScheduleRunsMark } from './VeleroPages'
 
 interface ReturnState {
   returnLabel?: string
@@ -69,11 +69,11 @@ export function VeleroDetailPage({ target, onOpenResource }: { target: VeleroDet
     const { namespace, name } = target
     switch (target.plural) {
       case 'schedules':
-        return [{ id: 'runs', label: 'Runs', after: 'overview', icon: <History className="h-4 w-4" />, render: () => <VeleroScheduleRuns namespace={namespace} name={name} onNavigate={openRelated} /> }]
+        return [{ id: 'runs', label: 'Runs', after: 'overview', icon: <History className="h-4 w-4" />, badge: <VeleroScheduleRunsMark namespace={namespace} name={name} />, render: () => <VeleroScheduleRuns namespace={namespace} name={name} onNavigate={openRelated} /> }]
       case 'backups':
-        return [{ id: 'restores', label: 'Restores', after: 'overview', icon: <History className="h-4 w-4" />, render: () => <VeleroBackupRestores namespace={namespace} name={name} onNavigate={openRelated} /> }]
+        return [{ id: 'restores', label: 'Restores', after: 'overview', icon: <History className="h-4 w-4" />, badge: <VeleroBackupRestoresMark namespace={namespace} name={name} />, render: () => <VeleroBackupRestores namespace={namespace} name={name} onNavigate={openRelated} /> }]
       case 'backupstoragelocations':
-        return [{ id: 'backups', label: 'Backups', after: 'overview', icon: <Archive className="h-4 w-4" />, render: () => <VeleroLocationBackups namespace={namespace} name={name} onNavigate={openRelated} /> }]
+        return [{ id: 'backups', label: 'Backups', after: 'overview', icon: <Archive className="h-4 w-4" />, badge: <VeleroLocationBackupsMark namespace={namespace} name={name} />, render: () => <VeleroLocationBackups namespace={namespace} name={name} onNavigate={openRelated} /> }]
       default:
         return undefined
     }
@@ -107,6 +107,9 @@ export function VeleroDetailPage({ target, onOpenResource }: { target: VeleroDet
         hideBackButton
         titlePrefix={titlePrefix}
         inlineBadges
+        // The crumb names the kind.
+        hideKindBadge
+        truncateName
         onNavigateToResource={openRelated}
         onRefresh={refresh}
         extraTabs={extraTabs}

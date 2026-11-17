@@ -4,6 +4,7 @@ import { Archive } from 'lucide-react'
 import {
   PaneLoader,
   RadarUpgradeAction,
+  Tooltip,
   getRadarUpgradeRequirement,
   issueTitle,
   radarUpgradeDetail,
@@ -49,6 +50,37 @@ export function veleroScopeLine(namespaces: string[]): string {
   return namespaces.length === 1
     ? `Velero in namespace ${list}. The namespace filter doesn’t apply here.`
     : `Velero installations in namespaces ${list}. The namespace filter doesn’t apply here.`
+}
+
+export function list(values: unknown): string[] {
+  return Array.isArray(values) ? values.filter((v): v is string => typeof v === 'string') : []
+}
+
+/** A run's or template's namespace selection as declared, and whether resource or label filters narrow it. */
+export function selectionText(spec: any, emptyMeans: string): { text: string; narrowed: boolean } {
+  const included = list(spec?.includedNamespaces)
+  const excluded = list(spec?.excludedNamespaces)
+  const base = included.length === 0 || included.includes('*') ? emptyMeans : included.join(', ')
+  const text = excluded.length ? `${base}, except ${excluded.join(', ')}` : base
+  const narrowed =
+    list(spec?.includedResources).length > 0 ||
+    list(spec?.excludedResources).length > 0 ||
+    list(spec?.includedClusterScopedResources).length > 0 ||
+    list(spec?.excludedClusterScopedResources).length > 0 ||
+    list(spec?.includedNamespaceScopedResources).length > 0 ||
+    list(spec?.excludedNamespaceScopedResources).length > 0 ||
+    !!spec?.labelSelector ||
+    list(spec?.orLabelSelectors).length > 0
+  return { text, narrowed }
+}
+
+/** An object's name in a table: mono, one line, cut with an ellipsis and whole on hover. */
+export function VeleroName({ name }: { name: string }) {
+  return (
+    <Tooltip content={name}>
+      <span className="block min-w-0 truncate font-mono text-sm">{name}</span>
+    </Tooltip>
+  )
 }
 
 /** Opens a Velero object in the drawer. */
