@@ -305,21 +305,36 @@ func (v *View) candidates(found DependentCandidatesRead) (out []Observation, unr
 // read. A gap on a namespaced kind without a namespace covers every
 // namespace of the scope, and counts if the caller may read the kind in any
 // of them.
+//
+// Namespace access decides a gap on a namespaced kind that Radar's setup
+// causes (Gap.FromRadarSetup): the kind's own check would cost a permission
+// review in each namespace where Radar doesn't collect a kind gated per
+// namespace, such as Roles.
 func GapCoversReadable(access Access, catalog *Catalog, g Gap, scope SearchScope) bool {
 	if g.Kind.Kind == "" {
 		return true
 	}
+	setup := g.FromRadarSetup()
+	visible, all := access.Namespaces()
+	may := func(namespace string) bool {
+		if setup {
+			return all || slices.Contains(visible, namespace)
+		}
+		return access.CanRead(g.Kind, namespace) != Denied
+	}
 	if g.Namespace != "" {
-		return access.CanRead(g.Kind, g.Namespace) != Denied
+		return may(g.Namespace)
 	}
 	k, known := catalog.Kind(g.Kind)
-	if !known || !k.Namespaced {
+	switch {
+	case !known || !k.Namespaced:
+		return access.CanRead(g.Kind, "") != Denied
+	case scope.AllNamespaces && setup:
+		return all || len(visible) > 0
+	case scope.AllNamespaces:
 		return access.CanRead(g.Kind, "") != Denied
 	}
-	if scope.AllNamespaces {
-		return access.CanRead(g.Kind, "") != Denied
-	}
-	return slices.ContainsFunc(scope.Namespaces, func(ns string) bool { return access.CanRead(g.Kind, ns) != Denied })
+	return slices.ContainsFunc(scope.Namespaces, may)
 }
 
 // ControllerChainAnswer is the chain of controller references from an object
