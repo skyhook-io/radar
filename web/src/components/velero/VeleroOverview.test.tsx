@@ -54,7 +54,9 @@ describe('Velero overview', () => {
     expect(table).toContain('unavailable')
     expect(table).toContain('30 days')
     expect(table).not.toContain('1 day')
-    expect(table).toContain('server default')
+    // jsdom has no matchMedia: the narrow table says the retention under Stored in.
+    expect(table).toContain('kept for 30 days')
+    expect(table).toContain('kept for the server’s default')
     expect(table).toContain('Next run')
     expect(table).toMatch(/in 2[12]h/)
   })

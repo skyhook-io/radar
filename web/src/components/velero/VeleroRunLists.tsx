@@ -1,18 +1,14 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { Plus, Search } from 'lucide-react'
-import { Tooltip } from '@skyhook-io/k8s-ui'
+import { Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useVeleroRuns, type VeleroRunRow } from '../../api/velero'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { ScreenBody, SectionTable, Segments, Sub, type TableColumn } from '../workspace/layout'
-import { VeleroName, VeleroWorkspaceHeader, inInstallation, restoredIntoText, veleroResource, type VeleroScreenProps } from './shared'
-import { Expires, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, runViewOptions, runsEmpty, useRunView } from './runs'
+import { VELERO_WIDE, VeleroName, VeleroWorkspaceHeader, WholeNames, inInstallation, restoredIntoText, veleroResource, type VeleroScreenProps } from './shared'
+import { Expires, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
 
 // Rows rendered at once; the rest are a click away, and search narrows first.
 const PAGE = 200
-// Below this width Took, Items and Stored in fold into Started, so the
-// columns that answer "is it usable" (errors, when it goes) stay in view and
-// nothing is clipped.
-const WIDE = '(min-width: 1280px)'
 
 function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
   return (
@@ -68,38 +64,69 @@ function CreateButton({ onCreate, kind }: { onCreate?: () => void; kind: string 
   )
 }
 
-function OutcomeCell({ kind, run }: { kind: 'Backup' | 'Restore'; run: VeleroRunRow }) {
+function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+/** The outcome and why; on a narrow screen also its errors and warnings, said only when there are some. */
+export function OutcomeCell({ kind, run, counts }: { kind: 'Backup' | 'Restore'; run: VeleroRunRow; counts?: boolean }) {
   return (
     <>
       <RunOutcome kind={kind} phase={run.phase} />
       <RunReason run={run} />
+      {counts && (run.errors > 0 || run.warnings > 0) && (
+        <Sub>
+          {run.errors > 0 && <span className={toneTextClass('unhealthy')}>{plural(run.errors, 'error')}</span>}
+          {run.errors > 0 && run.warnings > 0 && ' · '}
+          {run.warnings > 0 && <span className={toneTextClass('degraded')}>{plural(run.warnings, 'warning')}</span>}
+        </Sub>
+      )}
     </>
   )
 }
 
-/** Where a restore put things, as its page says it; only the mapping from a Radar that does not send the selection. */
+/**
+ * Where a restore put things, as its page says it: nothing for one Velero
+ * rejected; only the mapping from a Radar that does not send the selection.
+ */
 export function RestoreIntoCell({ run }: { run: VeleroRunRow }) {
+  if (run.phase === 'FailedValidation') return <span className="text-theme-text-secondary">Nothing — rejected</span>
   if (run.includedNamespaces === undefined) {
     const mapping = Object.entries(run.namespaceMapping ?? {})
-    return mapping.length ? <>{mapping.map(([from, to]) => `${from} → ${to}`).join(', ')}</> : <span className="text-theme-text-tertiary">original namespaces</span>
+    return mapping.length ? <WholeNames text={mapping.map(([from, to]) => `${from} → ${to}`).join(', ')} /> : <span className="text-theme-text-tertiary">original namespaces</span>
   }
   const text = restoredIntoText(run)
   return (
     <Tooltip content={text}>
-      <span className="line-clamp-2 break-words">{text}</span>
+      <span className="line-clamp-2">
+        <WholeNames text={text} />
+      </span>
     </Tooltip>
   )
 }
 
-/** Started, and on a narrow screen how long it took, the items it processed and where it is stored. */
-function StartedCell({ run, folded, items, storedIn }: { run: VeleroRunRow; folded: boolean; items?: boolean; storedIn?: ReactNode }) {
+/**
+ * Started, and on a narrow screen how long it took, the items it processed,
+ * where it is stored and when Velero deletes it.
+ */
+export function StartedCell({ run, folded, items, storedIn, expires }: { run: VeleroRunRow; folded: boolean; items?: boolean; storedIn?: string; expires?: boolean }) {
   const took = durationText(run.started, run.completed)
   const extra = folded ? [took && `took ${took}`, items && run.itemsTotal ? `${run.itemsDone ?? 0} / ${run.itemsTotal} items` : ''].filter(Boolean) : []
   return (
     <>
       <When iso={run.started} fallback="not started" />
       {extra.length > 0 && <Sub>{extra.join(' · ')}</Sub>}
-      {folded && storedIn && <Sub>{storedIn}</Sub>}
+      {folded && storedIn && (
+        <Sub>
+          <WholeNames text={storedIn} />
+        </Sub>
+      )}
+      {folded && expires && run.expiration && (
+        <Sub>
+          {!expired(run.expiration) && 'expires '}
+          <Expires iso={run.expiration} />
+        </Sub>
+      )}
     </>
   )
 }
@@ -117,7 +144,7 @@ function storedInText(r: VeleroRunRow, locations: VeleroScreenProps['data']['loc
  */
 export function VeleroBackups({ data, installation, onInstallation, onInspect, inspected, onCreate }: VeleroScreenProps) {
   const query = useVeleroRuns('backups')
-  const wide = useMediaQuery(WIDE)
+  const wide = useMediaQuery(VELERO_WIDE)
   const [search, setSearch] = useState('')
   const rows = useMemo(
     () => inInstallation(query.data?.runs ?? [], installation).filter((r) => !search || r.name.toLowerCase().includes(search.toLowerCase())),
@@ -131,17 +158,17 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
       cell: (r) => (
         <>
           <VeleroName name={r.name} middle />
-          <Sub>{r.schedule ? `schedule ${r.schedule}` : 'On demand'}</Sub>
+          <Sub>{r.schedule ? <WholeNames text={`schedule ${r.schedule}`} /> : 'On demand'}</Sub>
         </>
       ),
     },
-    { header: 'Outcome', width: '170px', cell: (r) => <OutcomeCell kind="Backup" run={r} /> },
+    { header: 'Outcome', width: wide ? '170px' : '180px', cell: (r) => <OutcomeCell kind="Backup" run={r} counts={!wide} /> },
     {
       header: 'Started',
-      width: wide ? '100px' : '170px',
+      width: wide ? '100px' : '190px',
       cell: (r) => {
         const stored = storedInText(r, locations)
-        return <StartedCell run={r} folded={!wide} items storedIn={stored.name ? `in ${stored.name}${stored.state ? ` · ${stored.state}` : ''}` : stored.state} />
+        return <StartedCell run={r} folded={!wide} items expires storedIn={stored.name ? `in ${stored.name}${stored.state ? ` · ${stored.state}` : ''}` : stored.state} />
       },
     },
     ...(wide
@@ -150,9 +177,9 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
           { header: 'Items', width: '80px', cell: (r: VeleroRunRow) => (r.itemsTotal ? `${r.itemsDone ?? 0} / ${r.itemsTotal}` : '—') },
         ]
       : []),
-    { header: 'Errors · warnings', width: '130px', cell: (r) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
     ...(wide
       ? [
+          { header: 'Errors · warnings', width: '130px', cell: (r: VeleroRunRow) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
           {
             header: 'Stored in',
             width: '140px',
@@ -167,9 +194,9 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
               )
             },
           },
+          { header: 'Expires', width: '90px', cell: (r: VeleroRunRow) => <Expires iso={r.expiration} /> },
         ]
       : []),
-    { header: 'Expires', width: '90px', cell: (r) => <Expires iso={r.expiration} /> },
   ]
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -187,9 +214,9 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
           kind="Backup"
           onInspect={onInspect}
           inspected={inspected}
-          minWidth={wide ? 1000 : 720}
+          minWidth={wide ? 1000 : 520}
           empty={runsEmpty(query, 'backups', view === 'failed' ? 'No failed backups' : 'No backups match')}
-          footer="Failed counts runs that failed, partly failed or were rejected. Velero deletes each backup at the first garbage collection after its retention."
+          footer="Failed counts runs that failed, partially failed or were rejected. Velero deletes each backup at the first garbage collection after its retention."
         />
       </ScreenBody>
     </div>
@@ -199,44 +226,62 @@ export function VeleroBackups({ data, installation, onInstallation, onInspect, i
 /** The Restore kind's list: every restore, newest first, with the failed ones a segment away. */
 export function VeleroRestores({ data, installation, onInstallation, onInspect, inspected, onCreate }: VeleroScreenProps) {
   const query = useVeleroRuns('restores')
-  const wide = useMediaQuery(WIDE)
+  const wide = useMediaQuery(VELERO_WIDE)
   const [search, setSearch] = useState('')
   const rows = useMemo(
     () => inInstallation(query.data?.runs ?? [], installation).filter((r) => !search || r.name.toLowerCase().includes(search.toLowerCase()) || (r.backupName ?? '').toLowerCase().includes(search.toLowerCase())),
     [query.data, installation, search],
   )
   const { failed, view, setView, shown } = useRunView(rows)
+  const fromBackup = (r: VeleroRunRow) =>
+    r.backupName ? (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          onInspect(veleroResource('Backup', r.namespace, r.backupName!))
+        }}
+        className="block max-w-full text-left text-accent-text hover:underline"
+      >
+        <VeleroName name={r.backupName} middle />
+      </button>
+    ) : r.scheduleName ? (
+      <WholeNames text={`newest of ${r.scheduleName}`} />
+    ) : (
+      '—'
+    )
+  // Narrow: the backup goes under the restore's name, and errors and warnings under its outcome.
   const columns: TableColumn<VeleroRunRow>[] = [
-    { header: 'Restore', cell: (r) => <VeleroName name={r.name} middle /> },
-    { header: 'Outcome', width: '170px', cell: (r) => <OutcomeCell kind="Restore" run={r} /> },
     {
-      header: 'From backup',
-      cell: (r) =>
-        r.backupName ? (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onInspect(veleroResource('Backup', r.namespace, r.backupName!))
-            }}
-            className="block max-w-full text-left text-accent-text hover:underline"
-          >
-            <VeleroName name={r.backupName} middle />
-          </button>
-        ) : r.scheduleName ? (
-          `newest of ${r.scheduleName}`
-        ) : (
-          '—'
-        ),
+      header: 'Restore',
+      cell: (r) => (
+        <>
+          <VeleroName name={r.name} middle />
+          {!wide && (
+            <Sub>
+              <span className="flex min-w-0 items-baseline gap-1">
+                <span className="shrink-0">from</span>
+                <span className="min-w-0">{fromBackup(r)}</span>
+              </span>
+            </Sub>
+          )}
+        </>
+      ),
     },
+    { header: 'Outcome', width: '170px', cell: (r) => <OutcomeCell kind="Restore" run={r} counts={!wide} /> },
+    ...(wide ? [{ header: 'From backup', cell: fromBackup }] : []),
     {
       header: 'Into',
-      width: '170px',
+      width: wide ? '170px' : '150px',
       cell: (r) => <RestoreIntoCell run={r} />,
     },
-    { header: 'Started', width: wide ? '100px' : '130px', cell: (r) => <StartedCell run={r} folded={!wide} /> },
-    ...(wide ? [{ header: 'Took', width: '75px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' }] : []),
-    { header: 'Errors · warnings', width: '130px', cell: (r) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
+    { header: 'Started', width: wide ? '100px' : '120px', cell: (r) => <StartedCell run={r} folded={!wide} /> },
+    ...(wide
+      ? [
+          { header: 'Took', width: '75px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
+          { header: 'Errors · warnings', width: '130px', cell: (r: VeleroRunRow) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
+        ]
+      : []),
   ]
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -254,7 +299,7 @@ export function VeleroRestores({ data, installation, onInstallation, onInspect, 
           kind="Restore"
           onInspect={onInspect}
           inspected={inspected}
-          minWidth={wide ? 1000 : 820}
+          minWidth={wide ? 1000 : 560}
           empty={runsEmpty(query, 'restores', view === 'failed' ? 'No failed restores' : 'No restores match')}
         />
       </ScreenBody>

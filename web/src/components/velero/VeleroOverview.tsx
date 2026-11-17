@@ -9,7 +9,6 @@ import {
   VELERO_RUNS_UNKNOWN,
   VeleroScheduleStateBadge,
   formatRelativeAgeTime,
-  veleroRetentionText,
   veleroScheduleNeverRan,
   veleroScheduleTone,
   veleroLocalTime,
@@ -25,11 +24,14 @@ import { coverageEmpty } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { readInPart, veleroAttention } from './attention'
 import { VELERO_LOCATIONS_PATH, VELERO_SCHEDULES_PATH } from './routes'
-import { NextRunCell } from './VeleroSchedules'
+import { KEPT_FOR_HEADER, KeptForCell, KeptForLine, NextRunCell } from './VeleroSchedules'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
 import {
+  VELERO_WIDE,
   VeleroCoverageNotice,
   VeleroName,
   VeleroWorkspaceHeader,
+  WholeNames,
   inInstallation,
   veleroResource,
   type VeleroScreenProps,
@@ -222,16 +224,6 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
   )
 }
 
-/** How long each run is kept: the schedule's own setting, else the server's default. */
-function KeptForCell({ s }: { s: VeleroScheduleReading }) {
-  if (s.ttl) return <>{veleroRetentionText(s.ttl)}</>
-  return (
-    <Tooltip content="The schedule sets no retention, so the Velero server’s default applies (30 days unless it was changed).">
-      <span className="text-theme-text-secondary">server default</span>
-    </Tooltip>
-  )
-}
-
 function LastSuccessCell({ s }: { s: VeleroScheduleReading }) {
   if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
   const run = s.runs.newestCompleted
@@ -263,29 +255,32 @@ function StoredInCell({ s, locations }: { s: VeleroScheduleReading; locations: V
  * than only the absence of problems.
  */
 function ScheduleProtection({ schedules, locations, multi, onInspect, inspected, empty }: { schedules: VeleroScheduleReading[]; locations: VeleroLocationReading[]; multi: boolean; onInspect: VeleroScreenProps['onInspect']; inspected: VeleroScreenProps['inspected']; empty: string }) {
+  // Narrow: the retention goes under where the runs are stored.
+  const wide = useMediaQuery(VELERO_WIDE)
   const columns: TableColumn<VeleroScheduleReading>[] = [
     {
       header: 'Schedule',
       cell: (s) => (
         <>
           <VeleroName name={s.name} />
-          {multi && <Sub>{s.namespace}</Sub>}
+          {multi && <Sub><WholeNames text={s.namespace} /></Sub>}
         </>
       ),
     },
-    { header: 'State', width: '130px', cell: (s) => <VeleroScheduleStateBadge reading={s} /> },
-    { header: 'Last success', width: '110px', cell: (s) => <LastSuccessCell s={s} /> },
-    { header: 'Next run', width: '120px', cell: (s) => <NextRunCell s={s} /> },
-    { header: 'Stored in', width: '170px', cell: (s) => <StoredInCell s={s} locations={locations} /> },
+    { header: 'State', width: wide ? '130px' : '120px', cell: (s) => <VeleroScheduleStateBadge reading={s} /> },
+    { header: 'Last success', width: wide ? '110px' : '100px', cell: (s) => <LastSuccessCell s={s} /> },
+    { header: 'Next run', width: wide ? '120px' : '110px', cell: (s) => <NextRunCell s={s} /> },
     {
-      header: (
-        <Tooltip content="The schedule’s setting: how long Velero keeps each run (spec.template.ttl).">
-          <span>Kept for</span>
-        </Tooltip>
+      header: 'Stored in',
+      width: wide ? '170px' : '140px',
+      cell: (s) => (
+        <>
+          <StoredInCell s={s} locations={locations} />
+          {!wide && <KeptForLine s={s} />}
+        </>
       ),
-      width: '110px',
-      cell: (s) => <KeptForCell s={s} />,
     },
+    ...(wide ? [{ header: KEPT_FOR_HEADER, width: '110px', cell: (s: VeleroScheduleReading) => <KeptForCell s={s} /> }] : []),
   ]
   return (
     <SectionTable
@@ -297,7 +292,7 @@ function ScheduleProtection({ schedules, locations, multi, onInspect, inspected,
       onInspect={onInspect}
       inspected={inspected}
       empty={empty}
-      minWidth={860}
+      minWidth={wide ? 860 : 580}
     />
   )
 }

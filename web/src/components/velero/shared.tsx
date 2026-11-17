@@ -167,6 +167,34 @@ export function VeleroName({ name, middle }: { name: string; middle?: boolean })
   )
 }
 
+/**
+ * Text that names objects, wrapped only between words: a browser would
+ * otherwise break a name at its hyphen ("dr-" / "replica"). A name wider than
+ * its column is cut with an ellipsis; callers keep the whole text in a tooltip.
+ */
+export function WholeNames({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\s+)/).map((part, i) =>
+        part.includes('-') ? (
+          <span key={i} className="inline-block max-w-full truncate align-bottom">
+            {part}
+          </span>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  )
+}
+
+/**
+ * The width the Velero tables show every column at. Below it each table folds
+ * its secondary columns into the cell they qualify, so nothing is clipped at
+ * the right edge.
+ */
+export const VELERO_WIDE = '(min-width: 1280px)'
+
 /** Opens a Velero object in the drawer. */
 export function veleroResource(kind: string, namespace: string, name: string): SelectedResource {
   return refToSelectedResource({ kind, group: VELERO_GROUP, namespace, name })

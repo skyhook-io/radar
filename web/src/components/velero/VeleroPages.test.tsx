@@ -259,11 +259,22 @@ describe('The composed Overview', () => {
     expect(html).not.toContain('Every namespace in the backup')
   })
 
+  it('says a rejected restore restored nothing, on the Restores tab as on its page', () => {
+    state.runsBy = { 'restores:b': runsOf([{ namespace: 'velero', name: 'r2', uid: 'r2', phase: 'FailedValidation', errors: 0, warnings: 0, includedNamespaces: [], excludedNamespaces: [] }]) }
+    const html = text(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter><VeleroBackupRestores namespace="velero" name="b" /></MemoryRouter></QueryClientProvider>))
+    expect(html).toContain('Nothing — rejected')
+    expect(html).not.toContain('Every namespace in the backup')
+    state.runsBy = {}
+  })
+
   it('shows where each restore from a backup went, on its Restores tab', () => {
     state.runsBy = { 'restores:b': runsOf([{ namespace: 'velero', name: 'r1', uid: 'r1', phase: 'Completed', errors: 0, warnings: 0, includedNamespaces: ['demo', 'shop'], excludedNamespaces: [], namespaceMapping: { demo: 'demo-copy' } }]) }
     const html = text(renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter><VeleroBackupRestores namespace="velero" name="b" /></MemoryRouter></QueryClientProvider>))
     expect(html).toContain('>Into<')
-    expect(html).toContain('demo → demo-copy, shop')
+    expect(html.replace(/<[^>]*>/g, '')).toContain('demo → demo-copy, shop')
+    expect(html).not.toContain('Nothing — rejected')
+    // A name never breaks at its hyphen.
+    expect(html).toMatch(/<span class="inline-block max-w-full truncate[^"]*">demo-copy,<\/span>/)
     state.runsBy = {}
   })
 
@@ -334,16 +345,22 @@ describe('The Backups list', () => {
     expect(html).toMatch(/Failed<span[^>]*><span class="text-red[^"]*">2</)
     expect(html).toContain('Velero restarted while this backup ran')
     expect(html).toContain('On demand')
-    expect(html).toContain('Expires')
+    // jsdom has no matchMedia, so this is the narrow list: nothing past Started.
+    expect(html).toContain('>Started<')
+    expect(html).not.toContain('>Expires<')
+    expect(html).not.toContain('>Errors · warnings<')
     expect(html).toContain('Create Backup')
     expect(html).toContain('Search backups')
   })
 
-  it('on a narrow screen folds where a backup is stored into Started, and cuts run names in the middle', () => {
-    state.runs = response([{ ...run('nightly-20261117041210', 'Completed', 'nightly'), storageLocation: 'default' }])
+  it('on a narrow screen folds where a backup is stored and when it expires into Started, its counts under its outcome, and cuts run names in the middle', () => {
+    state.runs = response([{ ...run('nightly-20261117041210', 'PartiallyFailed', 'nightly'), storageLocation: 'default', errors: 1, expiration: new Date(Date.now() + 5 * 3_600_000).toISOString() }])
     const html = text(render('/resources/backups?apiGroup=velero.io'))
     expect(html).not.toContain('>Stored in<')
     expect(html).toContain('in default')
+    expect(html).toMatch(/expires <span[^>]*><span>in [45]h</)
+    expect(html).toMatch(/text-red[^"]*">1 error</)
+    expect(html).not.toContain('0 warnings')
     expect(html).toContain('<span class="min-w-0 truncate">nightly-20261117</span><span class="shrink-0">041210</span>')
   })
 

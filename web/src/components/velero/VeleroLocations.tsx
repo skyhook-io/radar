@@ -12,9 +12,10 @@ import {
   type VeleroLocationReading,
   veleroLocalTime,
 } from '@skyhook-io/k8s-ui'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
-import { VeleroCoverageNotice, VeleroName, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
+import { VELERO_WIDE, VeleroCoverageNotice, VeleroName, VeleroWorkspaceHeader, WholeNames, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
 
 const SCHEDULES_UNKNOWN = 'Unknown — no access to schedules'
 
@@ -25,15 +26,26 @@ function AvailabilityCell({ l }: { l: VeleroLocationReading }) {
   return (
     <Tooltip content={l.message} disabled={!l.message} wrapperClassName="flex-col items-start">
       <Badge colorClass={status.color} size="sm">{status.text}</Badge>
-      {plain && <div className={`mt-0.5 text-xs ${toneTextClass('unhealthy')}`}>{plain}</div>}
+      {plain && (
+        <div className={`mt-0.5 text-xs ${toneTextClass('unhealthy')}`}>
+          <WholeNames text={plain} />
+        </div>
+      )}
     </Tooltip>
   )
 }
 
+// Velero stamps the time of each attempt, whether or not the location passed.
 function ValidationCell({ l }: { l: VeleroLocationReading }) {
   const when = l.lastValidation ? (
     <Tooltip content={veleroLocalTime(l.lastValidation)}>
-      <span>{formatRelativeAgeTime(l.lastValidation)}</span>
+      {l.phase === 'Unavailable' ? (
+        <span>
+          Last checked {formatRelativeAgeTime(l.lastValidation)} — <span className={toneTextClass('unhealthy')}>failed</span>
+        </span>
+      ) : (
+        <span>{formatRelativeAgeTime(l.lastValidation)}</span>
+      )}
     </Tooltip>
   ) : (
     <span className="text-theme-text-tertiary">Not validated yet</span>
@@ -74,6 +86,35 @@ const SCHEDULES_SHOWN = 3
 function BackupCount({ l, count }: { l: VeleroLocationReading; count: (b: NonNullable<VeleroLocationReading['backups']>) => number }) {
   if (!l.backups) return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
   return <span className="tabular-nums">{count(l.backups)}</span>
+}
+
+/** Completed backups can't be restored while their location is unavailable. */
+function NotRestorable({ l }: { l: VeleroLocationReading }) {
+  if (l.phase !== 'Unavailable' || !l.backups?.completedNotExpired) return null
+  return (
+    <div className="mt-0.5">
+      <Tooltip content="Velero refuses a restore from an unavailable location, so none of these can be restored until it is available again.">
+        <span className={`whitespace-nowrap text-xs ${toneTextClass('unhealthy')}`}>not restorable</span>
+      </Tooltip>
+    </div>
+  )
+}
+
+/** The three counts in one cell, for a narrow table: "38 backups", then "27 completed · 9 expired". */
+function BackupCountsCell({ l }: { l: VeleroLocationReading }) {
+  const b = l.backups
+  if (!b) return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
+  return (
+    <>
+      <span className="tabular-nums">
+        {b.targeting} {b.targeting === 1 ? 'backup' : 'backups'}
+      </span>
+      <Sub>
+        <span className="tabular-nums">{b.completedNotExpired}</span> completed · <span className="tabular-nums">{b.expired}</span> expired
+      </Sub>
+      <NotRestorable l={l} />
+    </>
+  )
 }
 
 function SchedulesCell({ l, onInspect }: { l: VeleroLocationReading; onInspect: VeleroScreenProps['onInspect'] }) {
@@ -125,17 +166,22 @@ function SchedulesCell({ l, onInspect }: { l: VeleroLocationReading; onInspect: 
 export function VeleroLocations({ data, installation, onInstallation, onInspect, inspected }: VeleroScreenProps) {
   const multi = data.installations.length > 1
   const locations = useMemo(() => inInstallation(data.locations, installation), [data.locations, installation])
+  const wide = useMediaQuery(VELERO_WIDE)
 
   const columns: TableColumn<VeleroLocationReading>[] = [
     {
       header: 'Location',
-      width: '18%',
+      width: wide ? '18%' : '22%',
       cell: (l) => (
         <>
           <VeleroName name={l.name} />
           <DefaultMark l={l} />
-          {multi && <Sub>{l.namespace}</Sub>}
-          {(l.provider || l.bucket) && <Sub>{[l.provider, l.bucket].filter(Boolean).join(' · ')}</Sub>}
+          {multi && <Sub><WholeNames text={l.namespace} /></Sub>}
+          {(l.provider || l.bucket) && (
+            <Sub>
+              <WholeNames text={[l.provider, l.bucket].filter(Boolean).join(' · ')} />
+            </Sub>
+          )}
           {l.accessMode === 'ReadOnly' && (
             <Sub>
               <Tooltip content="Velero restores from this location but writes no new backups to it.">
@@ -146,25 +192,30 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
         </>
       ),
     },
-    { header: 'Availability', width: '14%', cell: (l) => <AvailabilityCell l={l} /> },
-    { header: 'Last validation', width: '15%', cell: (l) => <ValidationCell l={l} /> },
-    { header: 'Backups', width: '10%', cell: (l) => <BackupCount l={l} count={(b) => b.targeting} /> },
-    {
-      header: (
-        <Tooltip content="Completed and not yet expired. Velero restores only from an available location.">
-          <span>Completed</span>
-        </Tooltip>
-      ),
-      width: '10%',
-      cell: (l) => (
-        <>
-          <BackupCount l={l} count={(b) => b.completedNotExpired} />
-          {l.phase === 'Unavailable' && !!l.backups?.completedNotExpired && <Sub>not restorable while the location is unavailable</Sub>}
-        </>
-      ),
-    },
-    { header: 'Expired', width: '9%', cell: (l) => <BackupCount l={l} count={(b) => b.expired} /> },
-    { header: 'Schedules writing here', width: '24%', cell: (l) => <SchedulesCell l={l} onInspect={onInspect} /> },
+    { header: 'Availability', width: wide ? '14%' : '17%', cell: (l) => <AvailabilityCell l={l} /> },
+    { header: 'Last validation', width: wide ? '15%' : '18%', cell: (l) => <ValidationCell l={l} /> },
+    // Narrow: the three counts share one column.
+    ...(wide
+      ? [
+          { header: 'Backups', width: '10%', cell: (l: VeleroLocationReading) => <BackupCount l={l} count={(b) => b.targeting} /> },
+          {
+            header: (
+              <Tooltip content="Completed and not yet expired. Velero restores only from an available location.">
+                <span>Completed</span>
+              </Tooltip>
+            ),
+            width: '10%',
+            cell: (l: VeleroLocationReading) => (
+              <>
+                <BackupCount l={l} count={(b) => b.completedNotExpired} />
+                <NotRestorable l={l} />
+              </>
+            ),
+          },
+          { header: 'Expired', width: '9%', cell: (l: VeleroLocationReading) => <BackupCount l={l} count={(b) => b.expired} /> },
+        ]
+      : [{ header: 'Backups', width: '20%', cell: (l: VeleroLocationReading) => <BackupCountsCell l={l} /> }]),
+    { header: wide ? 'Schedules writing here' : 'Schedules', width: wide ? '24%' : '23%', cell: (l) => <SchedulesCell l={l} onInspect={onInspect} /> },
   ]
 
   return (
@@ -181,7 +232,7 @@ export function VeleroLocations({ data, installation, onInstallation, onInspect,
           onInspect={onInspect}
           inspected={inspected}
           empty={coverageEmpty(data.coverage.backupStorageLocations, 'Velero storage locations')}
-          minWidth={960}
+          minWidth={wide ? 960 : 600}
         />
       </ScreenBody>
     </div>

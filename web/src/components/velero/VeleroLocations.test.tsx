@@ -69,7 +69,11 @@ describe('Velero storage locations', () => {
     expect(html).not.toMatch(/badge[^"]*">default</)
     expect(html.match(/>default</g)?.length).toBe(1)
     expect(html).toMatch(/<div class="mt-0\.5 text-xs[^"]*"><span[^>]*><span>the default location<\/span>/)
-    expect(html).toContain('not restorable while the location is unavailable')
+    // On one line, the reason on hover; jsdom has no matchMedia, so this is the narrow table, whose counts share a column.
+    expect(html).toMatch(/whitespace-nowrap[^"]*">not restorable</)
+    expect(html).toContain('Last checked')
+    expect(html).toMatch(/— <span class="text-red[^"]*">failed</)
+    expect(html).toContain('completed · ')
   })
 
   it('marks the default location and folds a long schedule list into a count', () => {

@@ -56,10 +56,11 @@ import { INCOMPLETE_COVERAGE_STATES } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { RunMessages } from './VeleroRunMessagesHost'
 import { VeleroBackupDeletionRow } from './VeleroDeleteBackup'
-import { Expires, FAILED, Outcome, RunCounts, RunOutcome, RunReason, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
+import { Expires, FAILED, Outcome, RunCounts, RunOutcome, RunsReadNotice, When, durationText, expired, runViewOptions, runsEmpty, useRunView } from './runs'
 import { VELERO_DETAIL_KINDS, veleroDetailPath } from './routes'
-import { VELERO_MESSAGE_LABEL, VeleroName, restoreTargets, selectionText, veleroResource, type RestoreSelection } from './shared'
-import { RestoreIntoCell } from './VeleroRunLists'
+import { VELERO_MESSAGE_LABEL, VELERO_WIDE, VeleroName, restoreTargets, selectionText, veleroResource, type RestoreSelection } from './shared'
+import { OutcomeCell, RestoreIntoCell, StartedCell } from './VeleroRunLists'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { veleroObjectProblems } from './attention'
 
 // The pages' own sections, beside Radar's detail view: a composed Overview for
@@ -386,20 +387,26 @@ export function VeleroBackupRestoresMark({ namespace, name }: { namespace: strin
 export function VeleroBackupRestores({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate?: NavigateToResource }) {
   const query = useVeleroRuns('restores', namespace, { backup: name })
   const rows = query.data?.runs ?? []
+  const wide = useMediaQuery(VELERO_WIDE)
   return (
     <div className="space-y-3 p-4">
       <RunsReadNotice query={query} noun="restores" />
       <SectionTable
         title="Restores from this backup"
-        subtitle="every Restore Velero keeps whose backup is this one"
+        subtitle="Restores made from this backup that Velero still keeps"
         columns={[
           { header: 'Restore', cell: (r: VeleroRunRow) => <VeleroName name={r.name} middle /> },
-          { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <><RunOutcome kind="Restore" phase={r.phase} /><RunReason run={r} /></> },
-          { header: 'Into', width: '200px', cell: (r: VeleroRunRow) => <RestoreIntoCell run={r} /> },
-          { header: 'Started', width: '120px', cell: (r: VeleroRunRow) => <When iso={r.started} fallback="not started" /> },
-          { header: 'Took', width: '90px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
-          { header: 'Errors · warnings', width: '140px', cell: (r: VeleroRunRow) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
+          { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <OutcomeCell kind="Restore" run={r} counts={!wide} /> },
+          { header: 'Into', width: wide ? '200px' : '160px', cell: (r: VeleroRunRow) => <RestoreIntoCell run={r} /> },
+          { header: 'Started', width: '120px', cell: (r: VeleroRunRow) => <StartedCell run={r} folded={!wide} /> },
+          ...(wide
+            ? [
+                { header: 'Took', width: '90px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
+                { header: 'Errors · warnings', width: '140px', cell: (r: VeleroRunRow) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
+              ]
+            : []),
         ]}
+        minWidth={wide ? 760 : 560}
         rows={rows}
         rowKey={(r) => r.uid || r.name}
         rowResource={(r) => veleroResource('Restore', r.namespace, r.name)}
@@ -694,6 +701,7 @@ export function VeleroScheduleRuns({ namespace, name, onNavigate }: { namespace:
   const query = useVeleroRuns('backups', namespace, { schedule: name })
   const runs = query.data?.runs ?? []
   const { failed, view, setView, shown } = useRunView(runs)
+  const wide = useMediaQuery(VELERO_WIDE)
   return (
     <div className="space-y-3 p-4">
       <Segments label="Runs" value={view} onChange={setView} options={runViewOptions(failed.length, runs.length, query)} />
@@ -701,18 +709,22 @@ export function VeleroScheduleRuns({ namespace, name, onNavigate }: { namespace:
       <SectionTable
         columns={[
           { header: 'Run', cell: (r: VeleroRunRow) => <VeleroName name={r.name} middle /> },
-          { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <><RunOutcome kind="Backup" phase={r.phase} /><RunReason run={r} /></> },
-          { header: 'Started', width: '110px', cell: (r: VeleroRunRow) => <When iso={r.started} fallback="not started" /> },
-          { header: 'Took', width: '80px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
-          { header: 'Items', width: '90px', cell: (r: VeleroRunRow) => (r.itemsTotal ? `${r.itemsDone ?? 0} / ${r.itemsTotal}` : '—') },
-          { header: 'Errors · warnings', width: '130px', cell: (r: VeleroRunRow) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
-          { header: 'Expires', width: '100px', cell: (r: VeleroRunRow) => <Expires iso={r.expiration} /> },
+          { header: 'Outcome', width: '170px', cell: (r: VeleroRunRow) => <OutcomeCell kind="Backup" run={r} counts={!wide} /> },
+          { header: 'Started', width: wide ? '110px' : '170px', cell: (r: VeleroRunRow) => <StartedCell run={r} folded={!wide} items expires /> },
+          ...(wide
+            ? [
+                { header: 'Took', width: '80px', cell: (r: VeleroRunRow) => durationText(r.started, r.completed) ?? '—' },
+                { header: 'Items', width: '90px', cell: (r: VeleroRunRow) => (r.itemsTotal ? `${r.itemsDone ?? 0} / ${r.itemsTotal}` : '—') },
+                { header: 'Errors · warnings', width: '130px', cell: (r: VeleroRunRow) => <RunCounts errors={r.errors} warnings={r.warnings} /> },
+                { header: 'Expires', width: '100px', cell: (r: VeleroRunRow) => <Expires iso={r.expiration} /> },
+              ]
+            : []),
         ]}
         rows={shown}
         rowKey={(r) => r.uid || r.name}
         rowResource={(r) => veleroResource('Backup', r.namespace, r.name)}
         onInspect={onNavigate}
-        minWidth={900}
+        minWidth={wide ? 900 : 500}
         empty={runsEmpty(query, 'backups', view === 'failed' ? 'No failed runs among those Velero keeps' : 'No runs kept; Velero deletes each run after its retention')}
         footer="This schedule’s backups that Velero still keeps (by the velero.io/schedule-name label)."
       />
@@ -919,6 +931,7 @@ export function VeleroLocationBackups({ namespace, name, onNavigate }: { namespa
         rowKey={(b) => b.name}
         rowResource={(b) => veleroResource('Backup', b.namespace, b.name)}
         onInspect={onNavigate}
+        minWidth={560}
         empty={
           stored.isPending
             ? 'Loading backups…'

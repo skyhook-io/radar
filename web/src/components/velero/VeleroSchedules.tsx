@@ -13,12 +13,14 @@ import {
   veleroScheduleBadge,
   veleroScheduleReasonText,
   veleroLocalTime,
+  veleroRetentionText,
   type VeleroScheduleReading,
 } from '@skyhook-io/k8s-ui'
 import { useMemo } from 'react'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
 import { coverageEmpty } from '../workspace/coverage'
-import { VeleroCoverageNotice, VeleroName, VeleroWorkspaceHeader, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
+import { VELERO_WIDE, VeleroCoverageNotice, VeleroName, VeleroWorkspaceHeader, WholeNames, inInstallation, veleroResource, type VeleroScreenProps } from './shared'
 
 /**
  * The schedule's last run: the newest one Velero keeps, with the newest
@@ -107,6 +109,36 @@ function LocationCell({ s }: { s: VeleroScheduleReading }) {
   )
 }
 
+const SERVER_DEFAULT_TTL = 'The schedule sets no retention, so the Velero server’s default applies (30 days unless it was changed).'
+
+/** How long each run is kept: the schedule's own setting, else the server's default. */
+export function KeptForCell({ s }: { s: VeleroScheduleReading }) {
+  if (s.ttl) return <>{veleroRetentionText(s.ttl)}</>
+  return (
+    <Tooltip content={SERVER_DEFAULT_TTL}>
+      <span className="text-theme-text-secondary">server default</span>
+    </Tooltip>
+  )
+}
+
+/** KeptForCell as a line under where the runs are stored, for a narrow table. */
+export function KeptForLine({ s }: { s: VeleroScheduleReading }) {
+  if (s.ttl) return <Sub>kept for {veleroRetentionText(s.ttl)}</Sub>
+  return (
+    <Sub>
+      <Tooltip content={SERVER_DEFAULT_TTL}>
+        <span>kept for the server’s default</span>
+      </Tooltip>
+    </Sub>
+  )
+}
+
+export const KEPT_FOR_HEADER = (
+  <Tooltip content="The schedule’s setting: how long Velero keeps each run (spec.template.ttl).">
+    <span>Kept for</span>
+  </Tooltip>
+)
+
 /** Due within its grace reads on schedule (see veleroScheduleBadge), so its next run reads "due now", not "was due". */
 export function NextRunCell({ s }: { s: VeleroScheduleReading }) {
   if (!s.nextRun) return <span className="text-theme-text-tertiary">—</span>
@@ -129,44 +161,63 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
   const multi = data.installations.length > 1
   const schedules = useMemo(() => inInstallation(data.schedules, installation), [data.schedules, installation])
   const zone = sharedZone(schedules)
+  const wide = useMediaQuery(VELERO_WIDE)
 
+  const runs = (s: VeleroScheduleReading, under: boolean) => {
+    const cadence = veleroCadenceText(s.cron)
+    const lead = cadence ? <span>{cadence}</span> : <span className="font-mono text-sm">{s.cron}</span>
+    return (
+      <>
+        {under ? (
+          <Sub>
+            {cadence ?? <span className="font-mono">{s.cron}</span>}
+            {zone && ` (${zone})`}
+          </Sub>
+        ) : (
+          lead
+        )}
+        {cadence && <div className="mt-0.5 font-mono text-xs text-theme-text-tertiary">{s.cron}</div>}
+        {!zone && <Sub><VeleroZoneValue zone={s.zone} /></Sub>}
+      </>
+    )
+  }
+
+  // Narrow: the cadence goes under the schedule's name, and the retention under where it stores.
   const columns: TableColumn<VeleroScheduleReading>[] = [
     {
       header: 'Schedule',
-      width: '20%',
+      width: wide ? '18%' : '24%',
       cell: (s) => (
         <>
           <VeleroName name={s.name} />
-          {multi && <Sub>{s.namespace}</Sub>}
+          {multi && <Sub><WholeNames text={s.namespace} /></Sub>}
+          {!wide && runs(s, true)}
         </>
       ),
     },
-    {
-      header: zone ? `Runs (${zone})` : 'Runs',
-      width: '16%',
-      cell: (s) => {
-        const cadence = veleroCadenceText(s.cron)
-        return (
-          <>
-            {cadence ? <span>{cadence}</span> : <span className="font-mono text-sm">{s.cron}</span>}
-            {cadence && <div className="mt-0.5 font-mono text-xs text-theme-text-tertiary">{s.cron}</div>}
-            {!zone && <Sub><VeleroZoneValue zone={s.zone} /></Sub>}
-          </>
-        )
-      },
-    },
+    ...(wide ? [{ header: zone ? `Runs (${zone})` : 'Runs', width: '15%', cell: (s: VeleroScheduleReading) => runs(s, false) }] : []),
     {
       header: 'State',
-      width: '13%',
+      width: wide ? '12%' : '17%',
       cell: (s) => (
         <Tooltip content={veleroScheduleBadge(s).detail ?? veleroScheduleReasonText(s)}>
           <VeleroScheduleStateBadge reading={s} />
         </Tooltip>
       ),
     },
-    { header: 'Next run', width: '13%', cell: (s) => <NextRunCell s={s} /> },
-    { header: 'Last run', width: '20%', cell: (s) => <LastRunCell s={s} onInspect={onInspect} /> },
-    { header: 'Location', width: '18%', cell: (s) => <LocationCell s={s} /> },
+    { header: 'Next run', width: wide ? '12%' : '16%', cell: (s) => <NextRunCell s={s} /> },
+    { header: 'Last run', width: wide ? '17%' : '23%', cell: (s) => <LastRunCell s={s} onInspect={onInspect} /> },
+    {
+      header: 'Stored in',
+      width: wide ? '15%' : '20%',
+      cell: (s) => (
+        <>
+          <LocationCell s={s} />
+          {!wide && <KeptForLine s={s} />}
+        </>
+      ),
+    },
+    ...(wide ? [{ header: KEPT_FOR_HEADER, width: '11%', cell: (s: VeleroScheduleReading) => <KeptForCell s={s} /> }] : []),
   ]
 
   return (
@@ -183,7 +234,7 @@ export function VeleroSchedules({ data, installation, onInstallation, onInspect,
           onInspect={onInspect}
           inspected={inspected}
           empty={coverageEmpty(data.coverage.schedules, 'Velero schedules')}
-          minWidth={980}
+          minWidth={wide ? 980 : 600}
         />
       </ScreenBody>
     </div>

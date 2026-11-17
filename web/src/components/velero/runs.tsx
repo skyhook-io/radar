@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Tooltip, formatDuration, formatRelativeAgeTime, getBackupStatus, getRestoreStatus, toneTextClass, veleroLocalTime, veleroMomentText, veleroPlainReason, VELERO_FAILED_PHASES } from '@skyhook-io/k8s-ui'
 import type { VeleroRunRow, VeleroRunsResponse } from '../../api/velero'
+import { WholeNames } from './shared'
 import { Notice } from '../workspace/layout'
 import { INCOMPLETE_COVERAGE_STATES, coverageEmpty, coverageLabel } from '../workspace/coverage'
 
@@ -34,7 +35,7 @@ export function RunReason({ run }: { run: Pick<VeleroRunRow, 'phase' | 'reason'>
   const plain = veleroPlainReason(run.reason)
   return (
     <Tooltip content={run.reason}>
-      <div className={`mt-0.5 line-clamp-2 min-w-0 break-words text-xs ${toneTextClass(FAILED_OUTRIGHT.has(run.phase ?? '') ? 'unhealthy' : 'degraded')}`}>{plain ?? run.reason}</div>
+      <div className={`mt-0.5 line-clamp-2 min-w-0 break-words text-xs ${toneTextClass(FAILED_OUTRIGHT.has(run.phase ?? '') ? 'unhealthy' : 'degraded')}`}><WholeNames text={plain ?? run.reason} /></div>
     </Tooltip>
   )
 }
