@@ -103,7 +103,11 @@ func TestServiceAccountInventoryOutsideCollectedNamespaces(t *testing.T) {
 	client := fake.NewClientset(&corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "uncollected"},
 		Secrets:    []corev1.ObjectReference{{Name: "credentials"}},
-	})
+	},
+		// The Secrets are in the cache, as a real drawer's subject is.
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "uncollected"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "collected"}},
+	)
 	core, err := k8score.NewResourceCache(k8score.CacheConfig{
 		Client:                  client,
 		ResourceScopes:          scopes,
