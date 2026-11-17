@@ -814,6 +814,9 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 	if appSetRemoved && !noChange {
 		message += "; Argo CD didn't confirm it keeps automated.enabled, so Radar removed the automated block, and an ApplicationSet that manages prune or selfHeal may turn auto-sync back on"
 	}
+	if !enable && !noChange && keepsEnabled != nil && *keepsEnabled && argoAutoSyncTurnedBackOn(ctx, dynClient, namespace, name) {
+		message = fmt.Sprintf("ArgoCD Application %s/%s auto-sync was suspended, but the ApplicationSet that owns it turned auto-sync back on. To keep it off, the ApplicationSet must ignore /spec/syncPolicy/automated/enabled in ignoreApplicationDifferences, or use a create-only policy", namespace, name)
+	}
 	if noChange && enable {
 		message = fmt.Sprintf("ArgoCD Application %s/%s auto-sync is already on", namespace, name)
 	} else if noChange {
@@ -890,6 +893,34 @@ func argoKeepsAutomatedEnabled(ctx context.Context, dynClient dynamic.Interface,
 	}
 	enabled, found, _ := unstructured.NestedBool(stored.Object, "spec", "syncPolicy", "automated", "enabled")
 	return found && !enabled, nil
+}
+
+// argoAutoSyncWatchWindow is how long a suspend that switched auto-sync off in
+// place watches for the owning ApplicationSet writing its template back. The
+// ApplicationSet controller watches its Applications, so it reacts within
+// about a second.
+var argoAutoSyncWatchWindow = 2 * time.Second
+
+// argoAutoSyncTurnedBackOn reports whether auto-sync reads as on again within
+// argoAutoSyncWatchWindow. An ApplicationSet that doesn't ignore
+// automated.enabled replaces the spec with its template, which drops
+// enabled: false, so the suspend would otherwise report a success that has
+// already been undone.
+func argoAutoSyncTurnedBackOn(ctx context.Context, dynClient dynamic.Interface, namespace, name string) bool {
+	deadline := time.Now().Add(argoAutoSyncWatchWindow)
+	for {
+		if app, err := getArgoApp(ctx, dynClient, namespace, name); err == nil && ArgoAutoSyncEnabled(app) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 func argoResumePatch(app *unstructured.Unstructured) (map[string]any, bool) {

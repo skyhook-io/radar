@@ -2146,6 +2146,11 @@ func getTestApp(t *testing.T, client *fake.FakeDynamicClient) *unstructured.Unst
 
 func setAutoSync(t *testing.T, client *fake.FakeDynamicClient, enable bool) OperationResult {
 	t.Helper()
+	// An in-place suspend watches for its ApplicationSet; the fake never
+	// writes one back, so keep the watch short.
+	window := argoAutoSyncWatchWindow
+	argoAutoSyncWatchWindow = 50 * time.Millisecond
+	t.Cleanup(func() { argoAutoSyncWatchWindow = window })
 	result, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", enable)
 	if err != nil {
 		t.Fatalf("SetArgoAutoSync(%v): %v", enable, err)
@@ -2613,7 +2618,9 @@ func jsonMergePatch(target, patch map[string]any) map[string]any {
 func TestSetArgoAutoSyncSuspendsInPlaceWhereArgoKeepsEnabled(t *testing.T) {
 	original := map[string]any{"prune": true, "selfHeal": true}
 	client := newFakeArgo(appSetOwned(appWithAutomated(original, nil)))
-	setAutoSync(t, client, false)
+	if result := setAutoSync(t, client, false); strings.Contains(result.Message, "turned auto-sync back on") {
+		t.Fatalf("result = %q, want a plain suspend: nothing turned auto-sync back on", result.Message)
+	}
 	suspended := getTestApp(t, client)
 	automated, found := automatedOf(suspended)
 	if !found || automated["enabled"] != false || automated["prune"] != true || automated["selfHeal"] != true {
@@ -2656,6 +2663,37 @@ func TestSetArgoAutoSyncFallsBackToRemovalWhereArgoPrunesEnabled(t *testing.T) {
 	}
 	if suspended.GetAnnotations()[ArgoSuspendedPruneAnnotation] != "true" {
 		t.Fatalf("suspend didn't save the settings: %#v", suspended.GetAnnotations())
+	}
+}
+
+// An ApplicationSet that doesn't ignore automated.enabled writes its template
+// back right after the suspend. The result must say auto-sync is back on
+// rather than report it suspended.
+func TestSetArgoAutoSyncWarnsWhenTheApplicationSetTurnsItBackOn(t *testing.T) {
+	client := newFakeArgo(appSetOwned(appWithAutomated(map[string]any{"prune": true, "selfHeal": true}, nil)))
+	var written atomic.Bool
+	client.PrependReactor("patch", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if len(action.(clienttesting.PatchActionImpl).GetPatchOptions().DryRun) == 0 {
+			written.Store(true)
+		}
+		return false, nil, nil
+	})
+	// After the write, reads see the ApplicationSet's template again.
+	client.PrependReactor("get", "applications", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if !written.Load() {
+			return false, nil, nil
+		}
+		current, err := client.Tracker().Get(argoAppGVR, "argocd", "demo")
+		if err != nil {
+			return true, nil, err
+		}
+		app := current.(*unstructured.Unstructured).DeepCopy()
+		unstructured.RemoveNestedField(app.Object, "spec", "syncPolicy", "automated", "enabled")
+		return true, app, nil
+	})
+	result := setAutoSync(t, client, false)
+	if !strings.Contains(result.Message, "turned auto-sync back on") {
+		t.Fatalf("result = %q, want a note that the ApplicationSet turned auto-sync back on", result.Message)
 	}
 }
 
