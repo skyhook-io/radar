@@ -418,6 +418,10 @@ func TestRelationshipCaptureIncludesManagerStatus(t *testing.T) {
 	if members.Manager.State != ownership.Present || members.Membership != ownership.MembersRecorded || len(members.Members) != 1 || members.Members[0].Name != "web" {
 		t.Fatalf("captured status not used: %+v", members)
 	}
+	// The cache can't read the Application, so the capture must not hide that.
+	if read := captured.Object(ref); read.State == ownership.Present {
+		t.Fatalf("a subject the cache can't read reads as present: %+v", read)
+	}
 }
 
 func TestRelationshipSubjectReplacementAndFinalValidation(t *testing.T) {

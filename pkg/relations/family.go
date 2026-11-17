@@ -154,8 +154,13 @@ type ReferrersAnswer struct {
 }
 
 // References answers what subject declares in f. fetched is the subject as
-// the host read it, or nil to read it from the cache. A caller who may not
-// read the subject gets nothing.
+// the host read it, read instead of the cache's copy, or nil to read the
+// cache's. A caller who may not read the subject gets nothing.
+//
+// fetched means something else to Referrers and the selector answers, which
+// read the subject from the cache and take fetched only as evidence that it
+// exists. A host that wants every answer to read its copy wraps the session
+// with CaptureSubject.
 func (v *View) References(f *Family, subject resourceid.Ref, fetched runtime.Object) ReferencesAnswer {
 	var a ReferencesAnswer
 	i := f.source(subject.GroupKind())
