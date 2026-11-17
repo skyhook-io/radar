@@ -19,6 +19,9 @@ import (
 // resource a finding is ATTRIBUTED to — for the pod-spec family that is the
 // workload (Deployment/StatefulSet/...), not the Pod it generates.
 //
+// On a Namespace it opts every namespaced subject in that namespace out of the
+// named checks; cluster-scoped subjects are unaffected.
+//
 // Annotations, not Radar-side settings: the opt-out then travels with the
 // manifest, so every operator's Radar reports the same posture.
 const IgnoreChecksAnnotation = "radarhq.io/ignore-checks"
@@ -131,6 +134,28 @@ func buildIgnoreIndex(input *CheckInput) ignoreIndex {
 	return idx
 }
 
+// buildNamespaceIgnore maps namespace name → set of checkIDs the Namespace
+// object opts out of. Without Namespaces (unreadable, or a caller that doesn't
+// pass them) it is empty and findings stay visible.
+func buildNamespaceIgnore(input *CheckInput) map[string]map[string]bool {
+	if input == nil {
+		return nil
+	}
+	var nsIgnore map[string]map[string]bool
+	for _, ns := range input.Namespaces {
+		if ns == nil {
+			continue
+		}
+		if ids := parseIgnoredChecks(ns.Annotations[IgnoreChecksAnnotation]); ids != nil {
+			if nsIgnore == nil {
+				nsIgnore = make(map[string]map[string]bool)
+			}
+			nsIgnore[ns.Name] = ids
+		}
+	}
+	return nsIgnore
+}
+
 // applyIgnoreAnnotations drops findings the subject opted out of and takes the
 // same subject out of that check's evaluated denominator, so a suppressed
 // failure doesn't silently inflate the pass rate.
@@ -144,8 +169,8 @@ func buildIgnoreIndex(input *CheckInput) ignoreIndex {
 // times (one per container). The denominator is decremented once per distinct
 // pair — the same grain the tracker counts in. The same distinct pairs are
 // returned as checkID → namespace → count.
-func applyIgnoreAnnotations(findings []Finding, tr *evalTracker, idx ignoreIndex) ([]Finding, map[string]map[string]int) {
-	if len(idx) == 0 {
+func applyIgnoreAnnotations(findings []Finding, tr *evalTracker, idx ignoreIndex, nsIgnore map[string]map[string]bool) ([]Finding, map[string]map[string]int) {
+	if len(idx) == 0 && len(nsIgnore) == 0 {
 		return findings, nil
 	}
 	type checkKey struct{ resource, checkID string }
@@ -159,7 +184,7 @@ func applyIgnoreAnnotations(findings []Finding, tr *evalTracker, idx ignoreIndex
 			group = resourceid.GroupForBuiltinKind(f.Kind)
 		}
 		resource := resourceid.ResourceKey(group, f.Kind, f.Namespace, f.Name)
-		if !idx[resource][f.CheckID] {
+		if !idx[resource][f.CheckID] && (f.Namespace == "" || !nsIgnore[f.Namespace][f.CheckID]) {
 			kept = append(kept, f)
 			continue
 		}

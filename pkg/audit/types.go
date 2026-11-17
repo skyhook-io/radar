@@ -62,6 +62,9 @@ type CheckInput struct {
 	// ConfigObjectRefs lists ConfigMaps and Secrets referenced by non-core
 	// resources that the typed Kubernetes structs above do not cover.
 	ConfigObjectRefs []ConfigObjectRef
+	// Namespaces carry the namespace-wide radarhq.io/ignore-checks opt-outs.
+	// Nil means not provided: no namespace opt-out is applied.
+	Namespaces []*corev1.Namespace
 
 	// Crossplane resources arrive unstructured because every provider ships
 	// its own CRDs — there's no typed Go schema to share across them. The

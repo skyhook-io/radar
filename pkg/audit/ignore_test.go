@@ -3,6 +3,7 @@ package audit
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -258,5 +259,104 @@ func TestIgnoreAnnotation_NonWorkloadSubject(t *testing.T) {
 
 	if findingNames(results.Findings, "serviceNoMatchingPods")["headless-tool"] {
 		t.Error("serviceNoMatchingPods should be suppressed on annotated Service")
+	}
+}
+
+func annotatedNamespace(name, value string) *corev1.Namespace {
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Annotations: map[string]string{IgnoreChecksAnnotation: value}}}
+}
+
+func TestNamespaceIgnoreAnnotationDropsFindingsInThatNamespace(t *testing.T) {
+	soloA := deploymentInNS("solo-a", "a", 1, secureContainer("app", false), secureContainer("side", false))
+	soloA.Spec.Template.Spec.HostNetwork = true
+	input := &CheckInput{
+		ServiceAccounts:          []*corev1.ServiceAccount{},
+		HorizontalPodAutoscalers: []*autoscalingv2.HorizontalPodAutoscaler{},
+		Deployments: []*appsv1.Deployment{
+			soloA,
+			deploymentInNS("solo-b", "b", 1, secureContainer("app", false)),
+		},
+		Namespaces: []*corev1.Namespace{
+			annotatedNamespace("a", "singleReplica, readinessProbeMissing"),
+			{ObjectMeta: metav1.ObjectMeta{Name: "b"}},
+		},
+	}
+	results := RunChecks(input)
+
+	single := findingNames(results.Findings, "singleReplica")
+	if single["solo-a"] {
+		t.Error("singleReplica should be suppressed in the annotated namespace")
+	}
+	if !single["solo-b"] {
+		t.Error("singleReplica must still fire in the unannotated namespace")
+	}
+	if !findingNames(results.Findings, "hostNetwork")["solo-a"] {
+		t.Error("checks not named on the namespace must still fire")
+	}
+	if got := results.CheckCounts["singleReplica"]; got != (CheckCount{Evaluated: 1, Passed: 0}) {
+		t.Errorf("singleReplica counts = %+v, want {Evaluated:1 Passed:0}", got)
+	}
+	// Two containers fail readinessProbeMissing: still one subject.
+	if got := results.CheckCounts["readinessProbeMissing"]; got != (CheckCount{Evaluated: 1, Passed: 0}) {
+		t.Errorf("readinessProbeMissing counts = %+v, want {Evaluated:1 Passed:0}", got)
+	}
+	want := map[string]map[string]int{"singleReplica": {"a": 1}, "readinessProbeMissing": {"a": 1}}
+	if !reflect.DeepEqual(results.AnnotationIgnoredByNamespace, want) {
+		t.Errorf("AnnotationIgnoredByNamespace = %v, want %v", results.AnnotationIgnoredByNamespace, want)
+	}
+}
+
+func TestNamespaceIgnoreAndResourceIgnoreUnion(t *testing.T) {
+	d := deploymentInNS("hostnet", "a", 1, secureContainer("app", false))
+	d.Spec.Template.Spec.HostNetwork = true
+	input := &CheckInput{
+		ServiceAccounts:          []*corev1.ServiceAccount{},
+		HorizontalPodAutoscalers: []*autoscalingv2.HorizontalPodAutoscaler{},
+		Deployments:              []*appsv1.Deployment{annotated(d, "hostNetwork")},
+		Namespaces:               []*corev1.Namespace{annotatedNamespace("a", "singleReplica")},
+	}
+	results := RunChecks(input)
+
+	for _, id := range []string{"singleReplica", "hostNetwork"} {
+		if findingNames(results.Findings, id)["hostnet"] {
+			t.Errorf("%s should be suppressed by the union of resource and namespace annotations", id)
+		}
+	}
+	if !findingNames(results.Findings, "readinessProbeMissing")["hostnet"] {
+		t.Error("readinessProbeMissing is named on neither and must still fire")
+	}
+}
+
+func TestNamespaceIgnoreSkipsClusterScoped(t *testing.T) {
+	input := storageInput()
+	input.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+	input.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(time.Now().Add(-72 * time.Hour)))
+	input.Namespaces = []*corev1.Namespace{annotatedNamespace("app", "releasedPV"), annotatedNamespace("", "releasedPV")}
+	results := RunChecks(input)
+
+	if !findingNames(results.Findings, "releasedPV")["disk"] {
+		t.Errorf("a cluster-scoped PV finding must ignore Namespace annotations: %+v", results.Findings)
+	}
+}
+
+func TestNilNamespacesUnchanged(t *testing.T) {
+	newInput := func() *CheckInput {
+		return &CheckInput{
+			ServiceAccounts:          []*corev1.ServiceAccount{},
+			HorizontalPodAutoscalers: []*autoscalingv2.HorizontalPodAutoscaler{},
+			Deployments: []*appsv1.Deployment{
+				annotated(deploymentInNS("solo-ignored", "a", 1, secureContainer("app", false)), "singleReplica"),
+				deploymentInNS("solo-flagged", "a", 1, secureContainer("app", false)),
+			},
+		}
+	}
+	without := RunChecks(newInput())
+	withEmpty := newInput()
+	withEmpty.Namespaces = []*corev1.Namespace{{ObjectMeta: metav1.ObjectMeta{Name: "a"}}}
+	if got := RunChecks(withEmpty); !reflect.DeepEqual(got, without) {
+		t.Errorf("unannotated Namespaces changed results:\n got %+v\nwant %+v", got, without)
+	}
+	if !findingNames(without.Findings, "singleReplica")["solo-flagged"] {
+		t.Error("without Namespaces the unannotated deployment must keep its finding")
 	}
 }
