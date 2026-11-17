@@ -17,6 +17,7 @@ import (
 	pathpkg "path"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -1892,13 +1893,17 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 		}
 	}
 	type verdict struct{ allowed, authoritative bool }
-	key := strings.Join([]string{k8s.GetContextName(), pkgauth.IdentityCacheKey(user.Username, user.Groups), verb, group, resource, namespace}, "\x00")
+	// Keyed by connection generation, not context name: a reconnect under the
+	// same name can reach a different cluster, and the review must run on the
+	// client its key names.
+	client, generation := k8s.GetClientWithGeneration()
+	key := pkgauth.IdentityCacheKey(user.Username, user.Groups) + strings.Join([]string{strconv.FormatUint(generation, 10), verb, group, resource, namespace}, "\x00")
 	review := s.accessReviews.DoChan(key, func() (v any, err error) {
 		// The review runs on its own goroutine, where a panic would end the
 		// process instead of failing one request.
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[auth] access review panicked: %v", r)
+				log.Printf("[auth] access review panicked: %v\n%s", r, debug.Stack())
 				v, err = verdict{}, nil
 			}
 		}()
@@ -1907,7 +1912,7 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 		// which the client's request deadlines leave unbounded.
 		reviewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), accessReviewTimeout)
 		defer cancel()
-		allowed, authoritative := s.canReadUserSAR(reviewCtx, user, group, resource, namespace, verb)
+		allowed, authoritative := canReadUserSARWith(reviewCtx, client, user, group, resource, namespace, verb)
 		// Cache only a real apiserver verdict. A transient failure (no client, SAR
 		// error, timeout) fails closed for this call but must NOT be memoized, or a
 		// momentary blip would deny the tuple for the whole cache TTL.
@@ -1945,7 +1950,10 @@ func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group
 // because the SSE memo, not the shared cache, is what a long-lived stream reads.
 // A fresh SAR keeps the SSE staleness bounded to that memo's TTL alone.
 func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, resource, namespace, verb string) (allowed bool, authoritative bool) {
-	client := k8s.GetClient()
+	return canReadUserSARWith(ctx, k8s.GetClient(), user, group, resource, namespace, verb)
+}
+
+func canReadUserSARWith(ctx context.Context, client *kubernetes.Clientset, user *auth.User, group, resource, namespace, verb string) (allowed bool, authoritative bool) {
 	if client == nil {
 		// Fail-closed: no apiserver to ask, refuse rather than quietly
 		// serving from the cache.
