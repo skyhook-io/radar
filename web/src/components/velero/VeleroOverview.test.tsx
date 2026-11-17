@@ -31,12 +31,44 @@ function renderOverview(data: VeleroWorkspaceResponse) {
 const text = (html: string) => html.replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
 
 describe('Velero overview', () => {
-  it('leaves the schedule table to the Schedule list, and links the lists it summarises', () => {
+  it('links the lists it summarises, from their labels and their values', () => {
     const html = text(renderOverview(workspace()))
     expect(html).toContain('Needs attention')
-    expect(html).not.toContain('Last submission')
     expect(html).toContain('>Schedules</button>')
     expect(html).toContain('>Storage</button>')
+    expect(html).toMatch(/>Storage<\/button><\/span>:<\/dt><dd[^>]*><button[^>]*>1 of 1 location available/)
+  })
+
+  it('shows each schedule’s protection below Needs attention, so a healthy installation has evidence', () => {
+    const run = { name: 'nightly-1', phase: 'Completed', created: hoursAgo(2), ranAt: hoursAgo(2), expires: new Date(Date.parse(hoursAgo(2)) + 720 * 3_600_000).toISOString() }
+    const html = text(renderOverview(workspace({
+      schedules: [schedule({ runs: { read: 'full', kept: 1, newest: run, newestCompleted: run } })],
+      locations: [location({ phase: 'Unavailable' })],
+    })))
+    const table = html.slice(html.indexOf('>Schedules</h2>'))
+    expect(html.indexOf('Needs attention')).toBeLessThan(html.indexOf('>Schedules</h2>'))
+    expect(table).toContain('nightly')
+    expect(table).toContain('On schedule')
+    expect(table).toContain('2h ago')
+    expect(table).toContain('unavailable')
+    expect(table).toContain('30 days')
+  })
+
+  it('says the server is running only when a replica is ready', () => {
+    const server = (replicas: number, readyReplicas?: number) =>
+      text(renderOverview(workspace({ installations: [{ namespace: 'velero', server: { source: 'deployment', replicas, readyReplicas }, defaultSource: 'spec' }] })))
+    expect(server(1, 1)).toMatch(/Velero server:<\/dt><dd[^>]*>running/)
+    expect(server(1, 0)).toMatch(/Velero server:<\/dt><dd[^>]*>not ready/)
+    expect(server(1)).toMatch(/Velero server:<\/dt><dd[^>]*>not ready/)
+    expect(server(0)).toMatch(/Velero server:<\/dt><dd[^>]*>not running/)
+  })
+
+  it('leads an issue it recognises with a plain reason, Velero’s text folded under it', () => {
+    const html = text(renderOverview(workspace({
+      issues: [{ id: 'i1', severity: 'critical', category: 'location', kind: 'BackupStorageLocation', group: 'velero.io', namespace: 'velero', name: 'dr', reason: 'BackupStorageLocationUnavailable', message: 'BackupStorageLocation "dr" is unavailable: rpc error: code = Unknown desc = NoSuchBucket: The specified bucket does not exist' }],
+    })))
+    expect(html).toContain('The bucket doesn’t exist.')
+    expect(html).toContain('Velero’s message')
   })
 
   it('lists late, probably-late and cannot-run schedules under Needs attention, each with its reason', () => {
@@ -48,7 +80,7 @@ describe('Velero overview', () => {
         schedule({ name: 'quiet', state: 'possiblyLate', reason: 'zoneUnconfirmed', attention: false }),
       ],
     })))
-    const attention = html.slice(html.indexOf('Needs attention'), html.indexOf('>Schedules</h1>'))
+    const attention = html.slice(html.indexOf('Needs attention'), html.indexOf('>Schedules</h2>'))
     expect(attention).toContain('3 scheduled times passed. Velero does not catch up on missed runs.')
     expect(attention).toContain('No backup submitted since')
     expect(attention).toContain('Looks late, but Radar couldn’t confirm the Velero server’s time zone.')
@@ -116,8 +148,8 @@ describe('Velero overview', () => {
       schedules: [],
       locations: [],
     })))
-    expect(html).toMatch(/>Schedules<\/button><\/span>:<\/dt><dd[^>]*>unknown — not read/)
-    expect(html).toMatch(/>Storage<\/button><\/span>:<\/dt><dd[^>]*>unknown — not read/)
+    expect(html).toMatch(/>Schedules<\/button><\/span>:<\/dt><dd[^>]*><button[^>]*>unknown — not read/)
+    expect(html).toMatch(/>Storage<\/button><\/span>:<\/dt><dd[^>]*><button[^>]*>unknown — not read/)
     expect(html).not.toContain('no locations')
     expect(html).not.toContain('no schedules')
   })
@@ -157,6 +189,33 @@ describe('Velero overview', () => {
     // Named once, in its own row: the late schedule below it doesn't repeat the cause.
     expect(html).not.toContain('The Velero server has no running replicas, so nothing submits backups.')
     expect(html).not.toContain('Deployment velero in velero')
+  })
+
+  it('reads a schedule due within its grace as on schedule, not as a problem', () => {
+    const html = text(render(workspace({ schedules: [schedule({ state: 'due', nextRun: new Date(Date.now() - 30_000).toISOString() })] })))
+    const list = html.slice(html.indexOf('>Schedules</h1>'))
+    expect(list).toContain('On schedule')
+    expect(list).toContain('due now')
+    expect(list).not.toContain('>Due<')
+    expect(list).not.toContain('was due')
+  })
+
+  it('says a schedule’s last run failed instead of a green state, with that run in the merged Last run cell', () => {
+    const failed = { name: 'nightly-2', phase: 'Failed', created: hoursAgo(1), ranAt: hoursAgo(1) }
+    const ok = { name: 'nightly-1', phase: 'Completed', created: hoursAgo(25), ranAt: hoursAgo(25) }
+    const html = text(render(workspace({ schedules: [schedule({ runs: { read: 'full', kept: 2, newest: failed, newestCompleted: ok } })] })))
+    const list = html.slice(html.indexOf('>Schedules</h1>'))
+    expect(list).toContain('Last run failed')
+    expect(list).not.toContain('On schedule')
+    expect(list).toContain('>Last run<')
+    expect(list).not.toContain('Last submission')
+    expect(list).toContain('last success 1d ago')
+  })
+
+  it('keeps a healthy schedule out of green when Radar has not confirmed its zone', () => {
+    const html = text(render(workspace({ schedules: [schedule({ zone: { name: 'UTC+02:00', source: 'inferred' } })] })))
+    const list = html.slice(html.indexOf('>Schedules</h1>'))
+    expect(list).toMatch(/<span class="badge-sm [^"]*text-theme-text-secondary[^"]*">On schedule/)
   })
 
   it('says a next run in the past was due, not that it ran', () => {

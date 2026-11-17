@@ -5,7 +5,11 @@ import {
   ProblemList,
   StatusDot,
   Tooltip,
+  VELERO_NONE_KEPT_SHORT,
+  VELERO_RUNS_UNKNOWN,
+  VeleroScheduleStateBadge,
   formatRelativeAgeTime,
+  veleroRetentionText,
   veleroScheduleTone,
   veleroLocalTime,
   type ResourceRef,
@@ -15,12 +19,14 @@ import {
   type WorkspaceProblem,
 } from '@skyhook-io/k8s-ui'
 import { refToSelectedResource } from '../../utils/navigation'
-import { ScreenBody } from '../workspace/layout'
+import { ScreenBody, SectionTable, Sub, type TableColumn } from '../workspace/layout'
+import { coverageEmpty } from '../workspace/coverage'
 import { useWorkspaceNavigate } from '../workspace/useWorkspaceNavigate'
 import { readInPart, veleroAttention } from './attention'
 import { VELERO_LOCATIONS_PATH, VELERO_SCHEDULES_PATH } from './routes'
 import {
   VeleroCoverageNotice,
+  VeleroName,
   VeleroWorkspaceHeader,
   inInstallation,
   veleroResource,
@@ -79,11 +85,12 @@ interface SummaryFact {
 function serverFact(installations: VeleroScreenProps['data']['installations']): SummaryFact {
   const read = installations.filter((i) => i.server.replicas !== undefined)
   const down = read.filter((i) => i.server.replicas === 0)
+  // Kubernetes leaves readyReplicas out at zero, so absent reads as none ready.
+  const notReady = read.filter((i) => (i.server.replicas ?? 0) > 0 && !i.server.readyReplicas)
+  const where = (list: typeof installations) => (installations.length > 1 ? ` in ${list.map((i) => i.namespace).join(', ')}` : '')
   if (installations.length === 0 || read.length === 0) return { label: 'Velero server', value: 'unknown', tone: 'unknown' }
-  if (down.length > 0) {
-    const value = installations.length > 1 ? `not running in ${down.map((i) => i.namespace).join(', ')}` : 'not running'
-    return { label: 'Velero server', value, tone: 'unhealthy' }
-  }
+  if (down.length > 0) return { label: 'Velero server', value: `not running${where(down)}`, tone: 'unhealthy' }
+  if (notReady.length > 0) return { label: 'Velero server', value: `not ready${where(notReady)}`, tone: 'degraded' }
   return { label: 'Velero server', value: read.length < installations.length ? 'running where Radar can read it' : 'running', tone: 'healthy' }
 }
 
@@ -164,7 +171,15 @@ function VeleroSummary({ facts, onOpenList }: { facts: SummaryFact[]; onOpenList
             )}
             :
           </dt>
-          <dd className="font-medium text-theme-text-primary">{f.value}</dd>
+          <dd className="font-medium text-theme-text-primary">
+            {f.list ? (
+              <button type="button" onClick={() => onOpenList(f.list!.path)} className="text-left hover:underline">
+                {f.value}
+              </button>
+            ) : (
+              f.value
+            )}
+          </dd>
         </div>
       ))}
     </dl>
@@ -205,7 +220,85 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
   )
 }
 
-export function VeleroOverview({ data, installation, onInstallation, onInspect }: VeleroScreenProps) {
+/** How long a schedule's runs are kept, read off its newest run (expiry less creation), to the hour. */
+function keptForText(s: VeleroScheduleReading): string | undefined {
+  const run = s.runs.newest
+  if (!run?.expires) return undefined
+  const hours = Math.round((Date.parse(run.expires) - Date.parse(run.created)) / 3_600_000)
+  if (!Number.isFinite(hours) || hours <= 0) return undefined
+  return veleroRetentionText(`${hours}h0m0s`)
+}
+
+function LastSuccessCell({ s }: { s: VeleroScheduleReading }) {
+  if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
+  const run = s.runs.newestCompleted
+  if (!run) return <span className="text-theme-text-tertiary">{VELERO_NONE_KEPT_SHORT}</span>
+  const at = run.completed ?? run.ranAt
+  return (
+    <Tooltip content={`${run.name} · ${veleroLocalTime(at)}`}>
+      <span>{formatRelativeAgeTime(at)}</span>
+    </Tooltip>
+  )
+}
+
+function StoredInCell({ s, locations }: { s: VeleroScheduleReading; locations: VeleroLocationReading[] }) {
+  if (!s.location.name) return <span className="text-theme-text-tertiary">Unresolved</span>
+  const loc = locations.find((l) => l.namespace === s.namespace && l.name === s.location.name)
+  const tone: StatusTone = !loc ? 'unknown' : loc.phase === 'Available' ? 'healthy' : loc.phase === 'Unavailable' ? 'unhealthy' : 'unknown'
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <StatusDot tone={tone} />
+      <VeleroName name={s.location.name} />
+      {loc && loc.phase !== 'Available' && <span className="shrink-0 text-xs text-theme-text-tertiary">{loc.phase ? loc.phase.toLowerCase() : 'not validated'}</span>}
+    </span>
+  )
+}
+
+/**
+ * Each schedule's protection in one row: its state, newest success, where it
+ * writes and for how long, so a healthy installation shows its evidence rather
+ * than only the absence of problems.
+ */
+function ScheduleProtection({ schedules, locations, multi, onInspect, inspected, empty }: { schedules: VeleroScheduleReading[]; locations: VeleroLocationReading[]; multi: boolean; onInspect: VeleroScreenProps['onInspect']; inspected: VeleroScreenProps['inspected']; empty: string }) {
+  const columns: TableColumn<VeleroScheduleReading>[] = [
+    {
+      header: 'Schedule',
+      cell: (s) => (
+        <>
+          <VeleroName name={s.name} />
+          {multi && <Sub>{s.namespace}</Sub>}
+        </>
+      ),
+    },
+    { header: 'State', width: '17%', cell: (s) => <VeleroScheduleStateBadge reading={s} /> },
+    { header: 'Last success', width: '15%', cell: (s) => <LastSuccessCell s={s} /> },
+    { header: 'Stored in', width: '24%', cell: (s) => <StoredInCell s={s} locations={locations} /> },
+    {
+      header: (
+        <Tooltip content="Read from each schedule’s newest run: when it expires, less when it was created.">
+          <span>Kept for</span>
+        </Tooltip>
+      ),
+      width: '13%',
+      cell: (s) => keptForText(s) ?? <span className="text-theme-text-tertiary">—</span>,
+    },
+  ]
+  return (
+    <SectionTable
+      title="Schedules"
+      columns={columns}
+      rows={schedules}
+      rowKey={(s) => `${s.namespace}/${s.name}`}
+      rowResource={(s) => veleroResource('Schedule', s.namespace, s.name)}
+      onInspect={onInspect}
+      inspected={inspected}
+      empty={empty}
+      minWidth={680}
+    />
+  )
+}
+
+export function VeleroOverview({ data, installation, onInstallation, onInspect, inspected }: VeleroScreenProps) {
   const navigateTo = useWorkspaceNavigate()
   const schedules = useMemo(() => inInstallation(data.schedules, installation), [data.schedules, installation])
   const locations = useMemo(() => inInstallation(data.locations, installation), [data.locations, installation])
@@ -258,6 +351,14 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect }
             ))}
           </div>
         </section>
+        <ScheduleProtection
+          schedules={schedules}
+          locations={locations}
+          multi={data.installations.length > 1}
+          onInspect={onInspect}
+          inspected={inspected}
+          empty={coverageEmpty(data.coverage.schedules, 'Velero schedules')}
+        />
       </ScreenBody>
     </div>
   )
