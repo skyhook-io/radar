@@ -1,7 +1,7 @@
 // Command relparity connects to a cluster as Radar does and answers every
 // cached object's Related Resources two ways: from the all-namespace
-// relationship graph, as the drawer does today, and from the relation
-// families in pkg/relations, as the drawer will. It reports every field where
+// relationship graph, and from the relation families in pkg/relations, which
+// the drawer answers from. It reports every field where
 // the two answers differ, how long each answer took, and what the graph
 // costs to build and hold. It only reads the cluster.
 package main
@@ -116,8 +116,8 @@ func (n namespacesAccess) CanRead(_ resourceid.GroupKind, namespace string) owne
 }
 func (n namespacesAccess) Namespaces() ([]string, bool) { return n, false }
 
-// userGraph reproduces the former per-user graph filter for parity comparisons:
-// the user may read the named namespaces and every cluster-scoped kind.
+// userGraph strips a graph to what a user may read, for parity comparisons:
+// the named namespaces and every cluster-scoped kind.
 func userGraph(shared *topology.Topology, namespaces []string) *topology.Topology {
 	copied := *shared
 	copied.Nodes = append([]topology.Node(nil), shared.Nodes...)
@@ -132,8 +132,8 @@ func userGraph(shared *topology.Topology, namespaces []string) *topology.Topolog
 	return &copied
 }
 
-// withholdNamespaces reproduces the former direct-read namespace filter
-// for parity comparisons.
+// withholdNamespaces drops related objects outside namespaces from a graph
+// answer, for parity comparisons.
 func withholdNamespaces(rel *topology.Relationships, namespaces []string) {
 	rel.Pods = slices.DeleteFunc(rel.Pods, func(p topology.ResourceRef) bool { return !slices.Contains(namespaces, p.Namespace) })
 	rel.Consumers = slices.DeleteFunc(rel.Consumers, func(c topology.ResourceRef) bool {

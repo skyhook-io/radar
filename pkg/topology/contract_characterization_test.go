@@ -517,7 +517,8 @@ type charCase struct {
 
 func charCases() []charCase {
 	return []charCase{
-		// Frozen options of the former broadcast relationship graph.
+		// The all-namespace relationship graph's options, held fixed for the
+		// parity baseline.
 		{"sse-relationship-cache", charSSEOptions},
 		{"relationship-options", RelationshipBuildOptions},
 		{"resources-default", DefaultBuildOptions},

@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-// The benchmarks in this file record what the all-namespace relationship
-// graph cost before cutover, on the same fixtures the family path
-// is measured on. They change no behavior; docs/loadtest.md lists how to
-// run them and the baselines they produced.
+// The benchmarks in this file measure the all-namespace relationship graph
+// as a baseline for the family path, on the same fixtures. They change no
+// behavior; docs/loadtest.md lists how to run them and the baselines they
+// produced.
 //
 // Fixtures: L is the field census (fieldShape: 191,504 objects, 29,455 Pods);
 // XL scales every kind by 10/3, about 98,000 Pods.
@@ -112,7 +112,7 @@ func drawerSubjects(p *mockProvider) []struct {
 	}
 }
 
-// BenchmarkDrawerRelationships preserves the former graph-based drawer costs,
+// BenchmarkDrawerRelationships measures drawer answers read from the graph,
 // two ways:
 //   - shared-index: auth off, the graph's cached index answers the lookup;
 //   - per-user-copy: auth on, copying the whole graph, stripping
