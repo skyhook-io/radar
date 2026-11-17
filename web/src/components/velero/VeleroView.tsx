@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import type { WorkspaceScreenProps } from '../../integrations/workspaceRoute'
 import { useAPIResources } from '../../api/apiResources'
 import { useVeleroWorkspace } from '../../api/velero'
+import { useNamespaces } from '../../api/client'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
 import { WorkspaceFrame } from '../workspace/WorkspaceFrame'
@@ -40,6 +41,8 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
   const { drawerTarget, inspect } = useWorkspaceDrawer({ selectedResource, onOpenResource, onCloseResource })
 
   const [installation, setInstallation] = useVeleroInstallation(query.data?.installations)
+  const namespaceList = useNamespaces()
+  const namespaceNames = useMemo(() => (namespaceList.isError ? 'error' as const : namespaceList.data?.map((n) => n.name)), [namespaceList.isError, namespaceList.data])
 
   return (
     <WorkspaceFrame namespaces={namespaces} categoryWorkspaces={sidebarWorkspace} selectedKind={selectedKind} compactNavigation={compactNavigation}>
@@ -47,7 +50,7 @@ export function VeleroView({ namespaces, selectedResource, onOpenResource, onClo
         <VeleroDetailPage target={detail} onOpenResource={onOpenResource} />
       ) : (
         <VeleroScreenGate query={query} discoveryPending={discoveryPending} discovered={discovered}>
-          {(data) => <VeleroOverview data={data} installation={installation} onInstallation={setInstallation} onInspect={inspect} inspected={drawerTarget} />}
+          {(data) => <VeleroOverview data={data} installation={installation} onInstallation={setInstallation} onInspect={inspect} inspected={drawerTarget} namespaces={namespaceNames} />}
         </VeleroScreenGate>
       )}
     </WorkspaceFrame>

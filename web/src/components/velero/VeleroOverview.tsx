@@ -26,6 +26,7 @@ import { readInPart, veleroAttention } from './attention'
 import { VELERO_LOCATIONS_PATH, VELERO_SCHEDULES_PATH } from './routes'
 import { KEPT_FOR_HEADER, KeptForCell, KeptForLine, NextRunCell } from './VeleroSchedules'
 import { useMediaQuery } from '../../hooks/useMediaQuery'
+import { namespacesNoScheduleIncludes } from './coverage'
 import {
   VELERO_WIDE,
   VeleroCoverageNotice,
@@ -33,6 +34,7 @@ import {
   VeleroWorkspaceHeader,
   WholeNames,
   inInstallation,
+  namesAndMore,
   veleroResource,
   type VeleroScreenProps,
 } from './shared'
@@ -105,14 +107,16 @@ function schedulesFact(schedules: VeleroScheduleReading[], partial: boolean): Su
   }
   const of = partial ? `${schedules.length} Radar can read` : `${schedules.length}`
   const needing = schedules.filter((s) => s.attention || s.state === 'rejected')
+  const paused = schedules.filter((s) => s.state === 'paused').length
+  const ofPaused = paused > 0 ? `${of}, ${paused} paused` : of
   if (needing.length === 0) {
     // A cron Radar cannot read is not known to be fine.
     const unreadable = schedules.filter((s) => s.state === 'unknown').length
-    if (unreadable > 0) return { label: 'Schedules', value: `${of}, ${unreadable} with a cron Radar can’t read`, tone: 'unknown' }
-    return { label: 'Schedules', value: `${of}, none need attention`, tone: 'healthy' }
+    if (unreadable > 0) return { label: 'Schedules', value: `${ofPaused}, ${unreadable} with a cron Radar can’t read`, tone: 'unknown' }
+    return { label: 'Schedules', value: `${ofPaused}, none need attention`, tone: 'healthy' }
   }
   const worst = needing.some((s) => veleroScheduleTone(s) === 'unhealthy') ? 'unhealthy' : 'alert'
-  return { label: 'Schedules', value: `${needing.length} of ${of} need attention`, tone: worst }
+  return { label: 'Schedules', value: `${needing.length} of ${of} need attention${paused > 0 ? `, ${paused} paused` : ''}`, tone: worst }
 }
 
 function newestBackupFact(schedules: VeleroScheduleReading[], schedulesPartial: boolean, onInspect: VeleroScreenProps['onInspect']): SummaryFact {
@@ -224,6 +228,84 @@ function AttentionGroup({ id, title, problems, visible, onNavigate }: { id: stri
   )
 }
 
+const NAMES_SHOWN = 8
+
+function CoverageRow({ tone, label, title, children }: { tone: StatusTone; label: string; title?: string; children: ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-2 text-sm">
+      <span className="translate-y-[1px]"><StatusDot tone={tone} /></span>
+      <div className="min-w-0">
+        <span className="text-theme-text-tertiary">{title ? <Tooltip content={title}><span className="underline decoration-dotted underline-offset-2">{label}</span></Tooltip> : label}:</span>{' '}
+        <span className="text-theme-text-primary">{children}</span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * What the schedules leave out, as information: namespaces no schedule's
+ * template selects, and schedules paused on purpose. Neither counts toward the
+ * attention badge.
+ */
+function ScheduleCoverage({ data, schedules, namespaces, onInspect }: { data: VeleroScreenProps['data']; schedules: VeleroScheduleReading[]; namespaces: VeleroNamespaceList; onInspect: VeleroScreenProps['onInspect'] }) {
+  const namespaceList = Array.isArray(namespaces) ? namespaces : undefined
+  const isError = namespaces === 'error'
+  const paused = schedules.filter((s) => s.state === 'paused')
+  const coverage = useMemo(() => {
+    // Every schedule Radar can see counts, whichever installation is picked:
+    // a namespace is backed up if any installation's schedule selects it.
+    if (!namespaceList || data.forcedNamespace || readInPart(data.coverage.schedules)) return undefined
+    return namespacesNoScheduleIncludes(namespaceList, data.schedules, data.installations.map((i) => i.namespace))
+  }, [namespaceList, data])
+  const unknown = !!data.forcedNamespace || readInPart(data.coverage.schedules)
+  if (!coverage && !unknown && !isError && paused.length === 0) return null
+  const leftOut = coverage && coverage.leftOut > 0 ? ' Kubernetes’ own namespaces and Velero’s are not listed.' : ''
+  const title = `Namespaces you can see that no schedule's template selects. A schedule counts even when it is paused or failing, or selects only some resources by label or kind.${leftOut}`
+  return (
+    <section aria-labelledby="velero-coverage">
+      <h2 id="velero-coverage" className="mb-2 text-sm font-semibold text-theme-text-primary">Coverage</h2>
+      <div className="space-y-1.5 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+        {unknown ? (
+          <CoverageRow tone="unknown" label="Namespaces not in any schedule" title={title}>
+            unknown, Radar can’t read every schedule
+          </CoverageRow>
+        ) : isError ? (
+          <CoverageRow tone="unknown" label="Namespaces not in any schedule" title={title}>
+            unknown, Radar couldn’t list namespaces
+          </CoverageRow>
+        ) : coverage && coverage.uncovered.length === 0 ? (
+          <CoverageRow tone="healthy" label="Namespaces not in any schedule" title={title}>
+            none
+          </CoverageRow>
+        ) : coverage ? (
+          <CoverageRow tone="degraded" label="Namespaces not in any schedule" title={title}>
+            {coverage.uncovered.length > NAMES_SHOWN ? (
+              <Tooltip content={coverage.uncovered.join(', ')}>
+                <span><WholeNames text={namesAndMore(coverage.uncovered, NAMES_SHOWN)} /></span>
+              </Tooltip>
+            ) : (
+              <WholeNames text={namesAndMore(coverage.uncovered, NAMES_SHOWN)} />
+            )}
+          </CoverageRow>
+        ) : null}
+        {paused.length > 0 && (
+          <CoverageRow tone="neutral" label="Paused">
+            {paused.map((s, i) => (
+              <span key={`${s.namespace}/${s.name}`}>
+                {i > 0 && ', '}
+                <button type="button" onClick={() => onInspect(veleroResource('Schedule', s.namespace, s.name))} className="font-mono text-accent-text hover:underline">
+                  {s.name}
+                </button>
+              </span>
+            ))}
+            {' '}— no backups until {paused.length === 1 ? 'it is' : 'they are'} resumed
+          </CoverageRow>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function LastSuccessCell({ s }: { s: VeleroScheduleReading }) {
   if (s.runs.read === 'unknown') return <span className="text-theme-text-tertiary">{VELERO_RUNS_UNKNOWN}</span>
   const run = s.runs.newestCompleted
@@ -297,7 +379,10 @@ function ScheduleProtection({ schedules, locations, multi, onInspect, inspected,
   )
 }
 
-export function VeleroOverview({ data, installation, onInstallation, onInspect, inspected }: VeleroScreenProps) {
+/** The namespaces the caller can see, from the namespace list; undefined while it loads. */
+export type VeleroNamespaceList = string[] | 'error' | undefined
+
+export function VeleroOverview({ data, installation, onInstallation, onInspect, inspected, namespaces }: VeleroScreenProps & { namespaces?: VeleroNamespaceList }) {
   const navigateTo = useWorkspaceNavigate()
   const schedules = useMemo(() => inInstallation(data.schedules, installation), [data.schedules, installation])
   const locations = useMemo(() => inInstallation(data.locations, installation), [data.locations, installation])
@@ -350,6 +435,7 @@ export function VeleroOverview({ data, installation, onInstallation, onInspect, 
             ))}
           </div>
         </section>
+        <ScheduleCoverage data={data} schedules={schedules} namespaces={namespaces} onInspect={onInspect} />
         <ScheduleProtection
           schedules={schedules}
           locations={locations}

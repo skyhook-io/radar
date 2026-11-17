@@ -36,6 +36,9 @@ type veleroObj struct {
 	// itemOperationTimeout is the budget the backup declares. Empty means the
 	// object carries none, which is the shape most real backups have.
 	itemOperationTimeout string
+	included, excluded   []string
+	labelSelector        map[string]any
+	resourcePolicy       map[string]any
 }
 
 func (o veleroObj) build(kind string) *unstructured.Unstructured {
@@ -83,6 +86,21 @@ func (o veleroObj) build(kind string) *unstructured.Unstructured {
 	}
 	if o.itemOperationTimeout != "" {
 		spec["itemOperationTimeout"] = o.itemOperationTimeout
+	}
+	for field, vals := range map[string][]string{"includedNamespaces": o.included, "excludedNamespaces": o.excluded} {
+		if len(vals) > 0 {
+			list := make([]any, len(vals))
+			for i, v := range vals {
+				list[i] = v
+			}
+			spec[field] = list
+		}
+	}
+	if o.labelSelector != nil {
+		spec["labelSelector"] = o.labelSelector
+	}
+	if o.resourcePolicy != nil {
+		spec["resourcePolicy"] = o.resourcePolicy
 	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "velero.io/v1",
@@ -641,5 +659,68 @@ func TestVeleroIssueIdentityIsStable(t *testing.T) {
 	}
 	if first[0].ID != second[0].ID {
 		t.Errorf("issue ID is unstable: %q vs %q", first[0].ID, second[0].ID)
+	}
+}
+
+func TestVeleroAdHocFailureLowersAfterANewerSuccessOverItsNamespaces(t *testing.T) {
+	failed := veleroObj{name: "pre-upgrade", phase: "Failed", createdMinsAgo: 120, included: []string{"shop", "db"}}
+	cases := []struct {
+		name  string
+		later veleroObj
+		lower bool
+	}{
+		{"same namespaces", veleroObj{name: "retry", phase: "Completed", createdMinsAgo: 60, startedMinsAgo: 59, included: []string{"db", "shop"}}, true},
+		{"every namespace", veleroObj{name: "nightly-1", schedule: "nightly", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, true},
+		{"every namespace but one it named", veleroObj{name: "all-but-db", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, excluded: []string{"db"}}, false},
+		{"every namespace but a pattern", veleroObj{name: "all-but-d", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, excluded: []string{"d*"}}, false},
+		{"only some of them", veleroObj{name: "shop-only", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"shop"}}, false},
+		{"a pattern is not read as a match", veleroObj{name: "glob", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, included: []string{"s*", "d*"}}, false},
+		{"narrowed by label", veleroObj{name: "labelled", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, labelSelector: map[string]any{"matchLabels": map[string]any{"tier": "web"}}}, false},
+		{"narrowed by a resource policy", veleroObj{name: "policy", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29, resourcePolicy: map[string]any{"kind": "configmap", "name": "skip-pvcs"}}, false},
+		{"created before it", veleroObj{name: "older", phase: "Completed", createdMinsAgo: 180, startedMinsAgo: 179}, false},
+		{"recreated by backup sync, ran before it", veleroObj{name: "synced", phase: "Completed", createdMinsAgo: 5, startedMinsAgo: 1440}, false},
+		{"partly failed", veleroObj{name: "partial", phase: "PartiallyFailed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
+		{"another installation", veleroObj{name: "elsewhere", namespace: "velero-2", phase: "Completed", createdMinsAgo: 30, startedMinsAgo: 29}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got *Issue
+			for _, iss := range detectBackups(failed, tc.later) {
+				if iss.Name == "pre-upgrade" {
+					got = &iss
+				}
+			}
+			if got == nil {
+				t.Fatal("the failed ad-hoc backup must stay listed")
+			}
+			want := SeverityCritical
+			if tc.lower {
+				want = SeverityWarning
+			}
+			if got.Severity != want {
+				t.Fatalf("severity = %v, want %v (%s)", got.Severity, want, got.Message)
+			}
+			if tc.lower && got.Cause != "A later backup, "+tc.later.name+", completed over the same namespaces." {
+				t.Errorf("the cause should name the newer backup: %q", got.Cause)
+			}
+			if !tc.lower && got.Cause != "" {
+				t.Errorf("no cause without a covering backup: %q", got.Cause)
+			}
+			if strings.Contains(got.Message, tc.later.name) {
+				t.Errorf("Velero's message stays Velero's: %q", got.Message)
+			}
+		})
+	}
+}
+
+func TestVeleroAllNamespaceFailureLowersOnlyForAsWideASuccess(t *testing.T) {
+	failed := veleroObj{name: "manual", phase: "Failed", createdMinsAgo: 120, excluded: []string{"scratch"}}
+	wider := detectBackups(failed, veleroObj{name: "full", phase: "Completed", createdMinsAgo: 10, startedMinsAgo: 9})
+	narrower := detectBackups(failed, veleroObj{name: "most", phase: "Completed", createdMinsAgo: 10, startedMinsAgo: 9, excluded: []string{"scratch", "db"}})
+	if len(wider) != 1 || wider[0].Severity != SeverityWarning {
+		t.Fatalf("a newer backup of every namespace covers it: %+v", wider)
+	}
+	if len(narrower) != 1 || narrower[0].Severity != SeverityCritical {
+		t.Fatalf("a newer backup excluding one more namespace does not: %+v", narrower)
 	}
 }
