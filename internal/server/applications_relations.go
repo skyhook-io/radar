@@ -162,7 +162,7 @@ func buildAppRelationBatch(ctx context.Context, session relations.Session, names
 				refs := view.References(f, o.Ref, o.Object)
 				for _, d := range refs.Declared {
 					if f == relations.ConfigReferences {
-						// Applications retains the display graph's narrower config surface.
+						// Only volume and env references count as an application's configuration.
 						allowed := false
 						for _, path := range d.Paths {
 							if path == "volumes[].configMap.name" || path == "volumes[].secret.secretName" || path == "volumes[].persistentVolumeClaim.claimName" || strings.HasPrefix(path, "containers[].env") || strings.HasPrefix(path, "initContainers[].env") {
@@ -330,7 +330,7 @@ func (b *appRelationBatch) relationshipsForRef(group, kind, ns, name string) *ap
 func applicationStructuralRoot(session relations.Session, view *ownership.View, start resourceid.Ref) resourceid.Ref {
 	cur := start
 	seen := map[resourceid.Ref]bool{}
-	for len(seen) < 16 && !seen[cur] {
+	for !seen[cur] {
 		seen[cur] = true
 		if isGitOpsManagerKind(topology.NodeKind(cur.Kind), cur.Group) {
 			return cur

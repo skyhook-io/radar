@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	batchv1 "k8s.io/api/batch/v1"
@@ -92,7 +93,7 @@ func TestApplicationsStructuralPrecedenceGolden(t *testing.T) {
 		objects []ownershiptest.Object
 		links   [][2]int
 	}{
-		// The previous shared-manager key depended on informer order; pin the sorted-first recorder.
+		// Shared managers of one kind resolve to the sorted-first recorder, whatever order they are read in.
 		{"shared managers", []ownershiptest.Object{workload, argo, other}, [][2]int{{2, 0}, {1, 0}}},
 		{"disagreeing manager and claim", []ownershiptest.Object{workload, argo, other}, [][2]int{{1, 0}}},
 		{"labels without inventory", []ownershiptest.Object{workload, release}, [][2]int{{1, 0}}},
@@ -250,5 +251,24 @@ func TestApplicationsRecordingManagerKindPrecedence(t *testing.T) {
 		if root != tc.want || key != tc.want {
 			t.Fatalf("root=%s key=%s want=%s", root, key, tc.want)
 		}
+	}
+}
+
+// A workload's root is the top of its owner chain however long the chain is,
+// so workloads under one long non-controller chain group together.
+func TestApplicationsLongNonControllerChainReachesTop(t *testing.T) {
+	links := make([]ownershiptest.Object, 20)
+	for i := range links {
+		links[i] = appTestObject("example.io", "Link", "prod", fmt.Sprintf("link-%02d", i))
+	}
+	for i := 0; i+1 < len(links); i++ {
+		links[i].OwnerReferences = append(links[i].OwnerReferences, links[i+1].OwnerRef(false))
+	}
+	workload := appTestObject("apps", "Deployment", "prod", "api")
+	workload.OwnerReferences = append(workload.OwnerReferences, links[0].OwnerRef(false))
+	session := appManagerSession(t, append(links, workload)...)
+	got := applicationStructuralRoot(session.(relations.Session), ownership.NewView(session, ownership.Unrestricted()), workload.Ref)
+	if want := links[len(links)-1].Ref; got != want {
+		t.Fatalf("root = %v, want the chain's top %v", got, want)
 	}
 }

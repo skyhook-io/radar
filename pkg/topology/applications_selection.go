@@ -8,9 +8,12 @@ import (
 	"github.com/skyhook-io/radar/pkg/relations"
 )
 
-// ApplicationSelection retains the display producer's policy attachment rules.
-// Applications does not inherit the drawer's expanded policy semantics when
-// switching its inventory to families.
+// ApplicationSelection is the selector match Applications attaches policies
+// with. A policy that selects every workload in its scope (a NetworkPolicy
+// with an empty podSelector, a CiliumNetworkPolicy without endpoint
+// matchLabels, a Calico policy matching all workloads) is attached to no
+// application, and a CiliumNetworkPolicy matches on its endpoint matchLabels
+// alone.
 func ApplicationSelection(selector relations.Selector, obj runtime.Object) (relations.Selection, bool, error) {
 	if np, ok := obj.(*networkingv1.NetworkPolicy); ok && np.Spec.PodSelector.Size() == 0 {
 		return relations.Selection{}, false, nil
